@@ -47,7 +47,7 @@ Rules:
   - [x] 1.1.6.5 Read evaluation and threats to validity.
   - [x] 1.1.6.6 Extract reusable PDB adapter requirements.
   - [x] 1.1.6.7 Finalize ChatDBG notes.
-- [ ] 1.1.7 Read debug-gym fully and write research/notes/2025_debug_gym_notes.md.
+- [x] 1.1.7 Read debug-gym fully and write research/notes/2025_debug_gym_notes.md.
 - [ ] 1.1.8 Read Agentless fully and write research/notes/2024_agentless_notes.md.
 - [ ] 1.1.9 Read SWE-bench fully and write research/notes/2023_swe_bench_notes.md.
 
@@ -201,11 +201,12 @@ Rules:
 
 Current active item:
 
-- 1.1.7 Read debug-gym fully and write research/notes/2025_debug_gym_notes.md.
+- 1.1.8 Read Agentless fully and write research/notes/2024_agentless_notes.md.
 
 ## Last Updated
 
 2026-07-18
+
 
 
 
