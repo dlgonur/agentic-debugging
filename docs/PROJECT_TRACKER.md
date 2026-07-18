@@ -202,12 +202,12 @@ Rules:
 
 Current active item:
 
-- 2.1.1 Draft MVP implementation plan.
-- 2.1.1 Draft MVP implementation plan.
-- 2.1.1 Draft MVP implementation plan.
-- 2.1.1 Draft MVP implementation plan.
-- 2.1.1 Draft MVP implementation plan.
+- Draft `docs/MVP_IMPLEMENTATION_PLAN.md`.
 
+Current constraints:
+
+- Tier 3 and supporting-paper reading are deferred.
+- Do not begin prototype or source implementation until the implementation plan is reviewed and accepted.
 ## Last Updated
 
 2026-07-18
