@@ -70,10 +70,10 @@ Rules:
 
 ### 1.4 Subtasks / Log
 
-- [ ] 1.4.1 Write static vs dynamic debugging taxonomy.
-- [ ] 1.4.2 Write repository-agent vs debugger-agent comparison.
-- [ ] 1.4.3 Write fault localization vs root-cause analysis comparison.
-- [ ] 1.4.4 Write APR patch plausibility vs correctness comparison.
+- [x] 1.4.1 Write static vs dynamic debugging taxonomy.
+- [x] 1.4.2 Write repository-agent vs debugger-agent comparison.
+- [x] 1.4.3 Write fault localization vs root-cause analysis comparison.
+- [x] 1.4.4 Write APR patch plausibility vs correctness comparison.
 
 ### 1.5 Subtasks / Log
 
@@ -82,7 +82,7 @@ Rules:
 - [ ] 1.5.3 Read OpenHands architecture details.
 - [ ] 1.5.4 Read AutoCodeRover retrieval and SBFL details.
 - [ ] 1.5.5 Read Agentless localization/repair/validation details.
-- [ ] 1.5.6 Produce system capability matrix v1.
+- [x] 1.5.6 Produce system capability matrix v1.
 
 ---
 
@@ -201,15 +201,16 @@ Rules:
 
 Current active item:
 
-- 1.4.1 Write static vs dynamic debugging taxonomy.
-- 1.4.2 Write repository-agent vs debugger-agent comparison.
-- 1.4.3 Write fault localization vs root-cause analysis comparison.
-- 1.4.4 Write APR patch plausibility vs correctness comparison.
-- 1.5.6 Produce system capability matrix v1.
+- 1.2.1 Read LDB / Debug Like a Human.
+- 1.3.1 Read RepairAgent.
+- 1.5.2 Read SWE-Agent ACI details.
+- 1.5.3 Read OpenHands architecture details.
+- 1.5.4 Read AutoCodeRover retrieval and SBFL details.
 
 ## Last Updated
 
 2026-07-18
+
 
 
 
