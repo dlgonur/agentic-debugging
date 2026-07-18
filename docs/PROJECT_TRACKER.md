@@ -53,6 +53,7 @@ Rules:
 
 ### 1.2 Subtasks / Log
 
+- [x] 1.2.0 Download Tier 2 papers into research/papers/tier2_core_sections/.
 - [ ] 1.2.1 Read LDB / Debug Like a Human.
 - [ ] 1.2.2 Read Self-Debugging.
 - [ ] 1.2.3 Read DebugBench.
@@ -210,6 +211,7 @@ Current active item:
 ## Last Updated
 
 2026-07-18
+
 
 
 
