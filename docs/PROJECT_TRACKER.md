@@ -81,7 +81,7 @@ Rules:
 - [ ] 1.5.1 Read ChatDBG system details.
 - [x] 1.5.2 Read SWE-Agent ACI details.
 - [ ] 1.5.3 Read OpenHands architecture details.
-- [ ] 1.5.4 Read AutoCodeRover retrieval and SBFL details.
+- [x] 1.5.4 Read AutoCodeRover retrieval and SBFL details.
 - [ ] 1.5.5 Read Agentless localization/repair/validation details.
 - [x] 1.5.6 Produce system capability matrix v1.
 
@@ -202,15 +202,16 @@ Rules:
 
 Current active item:
 
-- 1.5.4 Read AutoCodeRover retrieval and SBFL details.
-- 1.5.4 Read AutoCodeRover retrieval and SBFL details.
-- 1.5.4 Read AutoCodeRover retrieval and SBFL details.
 - 1.5.3 Read OpenHands architecture details.
-- 1.5.4 Read AutoCodeRover retrieval and SBFL details.
+- 1.5.3 Read OpenHands architecture details.
+- 1.5.3 Read OpenHands architecture details.
+- 1.5.3 Read OpenHands architecture details.
+- 1.5.3 Read OpenHands architecture details.
 
 ## Last Updated
 
 2026-07-18
+
 
 
 
