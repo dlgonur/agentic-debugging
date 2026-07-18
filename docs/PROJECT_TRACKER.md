@@ -54,7 +54,7 @@ Rules:
 ### 1.2 Subtasks / Log
 
 - [x] 1.2.0 Download Tier 2 papers into research/papers/tier2_core_sections/.
-- [ ] 1.2.1 Read LDB / Debug Like a Human.
+- [x] 1.2.1 Read LDB / Debug Like a Human.
 - [ ] 1.2.2 Read Self-Debugging.
 - [ ] 1.2.3 Read DebugBench.
 - [ ] 1.2.4 Summarize how LLM debugging differs from static code repair.
@@ -202,7 +202,7 @@ Rules:
 
 Current active item:
 
-- 1.2.1 Read LDB / Debug Like a Human.
+- 1.3.1 Read RepairAgent.
 - 1.3.1 Read RepairAgent.
 - 1.5.2 Read SWE-Agent ACI details.
 - 1.5.3 Read OpenHands architecture details.
@@ -211,6 +211,7 @@ Current active item:
 ## Last Updated
 
 2026-07-18
+
 
 
 
