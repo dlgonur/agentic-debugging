@@ -202,15 +202,16 @@ Rules:
 
 Current active item:
 
-- 1.6.1 Write Tier 2 synthesis and MVP architecture update.
-- 1.6.1 Write Tier 2 synthesis and MVP architecture update.
-- 1.6.1 Write Tier 2 synthesis and MVP architecture update.
-- 1.6.1 Write Tier 2 synthesis and MVP architecture update.
-- 1.6.1 Write Tier 2 synthesis and MVP architecture update.
+- 2.1.1 Draft MVP implementation plan.
+- 2.1.1 Draft MVP implementation plan.
+- 2.1.1 Draft MVP implementation plan.
+- 2.1.1 Draft MVP implementation plan.
+- 2.1.1 Draft MVP implementation plan.
 
 ## Last Updated
 
 2026-07-18
+
 
 
 
