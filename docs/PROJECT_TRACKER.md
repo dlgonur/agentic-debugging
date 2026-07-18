@@ -38,7 +38,7 @@ Rules:
 - [x] 1.1.2 Collected three independent AI research reports from Gemini, ChatGPT, and Claude.
 - [x] 1.1.3 Archived raw research reports under research/reports/raw/.
 - [x] 1.1.4 Created cross-report synthesis pack under research/reports/synthesis/.
-- [ ] 1.1.5 Download Tier 1 papers into research/papers/tier1_must_read/.
+- [x] 1.1.5 Download Tier 1 papers into research/papers/tier1_must_read/.
 - [ ] 1.1.6 Read ChatDBG fully and write research/notes/2024_chatdbg_notes.md.
 - [ ] 1.1.7 Read debug-gym fully and write research/notes/2025_debug_gym_notes.md.
 - [ ] 1.1.8 Read Agentless fully and write research/notes/2024_agentless_notes.md.
@@ -194,9 +194,9 @@ Rules:
 
 Current active item:
 
-- 1.1.5 Download Tier 1 papers into research/papers/tier1_must_read/.
 - 1.1.6 Read ChatDBG fully and write research/notes/2024_chatdbg_notes.md.
 
 ## Last Updated
 
 2026-07-18
+
