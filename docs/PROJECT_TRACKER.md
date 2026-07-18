@@ -61,7 +61,7 @@ Rules:
 
 ### 1.3 Subtasks / Log
 
-- [ ] 1.3.1 Read RepairAgent.
+- [x] 1.3.1 Read RepairAgent.
 - [ ] 1.3.2 Verify debug-gym.
 - [ ] 1.3.3 Verify Debug2Fix.
 - [ ] 1.3.4 Verify FramePilot / ADI.
@@ -202,8 +202,8 @@ Rules:
 
 Current active item:
 
-- 1.3.1 Read RepairAgent.
-- 1.3.1 Read RepairAgent.
+- 1.5.2 Read SWE-Agent ACI details.
+- 1.5.2 Read SWE-Agent ACI details.
 - 1.5.2 Read SWE-Agent ACI details.
 - 1.5.3 Read OpenHands architecture details.
 - 1.5.4 Read AutoCodeRover retrieval and SBFL details.
@@ -211,6 +211,7 @@ Current active item:
 ## Last Updated
 
 2026-07-18
+
 
 
 
