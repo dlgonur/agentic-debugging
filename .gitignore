@@ -1,0 +1,29 @@
+﻿# Python
+.venv/
+__pycache__/
+*.pyc
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Logs / temp
+*.log
+tmp/
+temp/
+
+# Local paper archive - keep PDFs locally, do not commit academic PDFs
+research/papers/**/*.pdf
+
+# Large/local experiment outputs
+runs/
+outputs/
+artifacts/
+checkpoints/
+models/
+
+# Secrets
+.env
+*.env
