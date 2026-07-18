@@ -40,6 +40,13 @@ Rules:
 - [x] 1.1.4 Created cross-report synthesis pack under research/reports/synthesis/.
 - [x] 1.1.5 Download Tier 1 papers into research/papers/tier1_must_read/.
 - [ ] 1.1.6 Read ChatDBG fully and write research/notes/2024_chatdbg_notes.md.
+  - [x] 1.1.6.1 Created ChatDBG note skeleton.
+  - [ ] 1.1.6.2 Verify official bibliography and title/version differences.
+  - [ ] 1.1.6.3 Read architecture and take-the-wheel sections.
+  - [ ] 1.1.6.4 Read Python/PDB integration details.
+  - [ ] 1.1.6.5 Read evaluation and threats to validity.
+  - [ ] 1.1.6.6 Extract reusable PDB adapter requirements.
+  - [ ] 1.1.6.7 Finalize ChatDBG notes.
 - [ ] 1.1.7 Read debug-gym fully and write research/notes/2025_debug_gym_notes.md.
 - [ ] 1.1.8 Read Agentless fully and write research/notes/2024_agentless_notes.md.
 - [ ] 1.1.9 Read SWE-bench fully and write research/notes/2023_swe_bench_notes.md.
@@ -199,4 +206,5 @@ Current active item:
 ## Last Updated
 
 2026-07-18
+
 
