@@ -1,0 +1,12 @@
+[project]
+name = "agentic-debugger"
+version = "0.1.0"
+description = "Agentic debugging research prototype — Python/PDB-first debugger-assisted repair agent"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+test = ["pytest"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
