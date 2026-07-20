@@ -20,7 +20,7 @@ Rules:
 
 - [x] 0.1.1 Created initial diary draft: diary/day_01.md.
 - [x] 0.1.2 Created day 02 draft from cross-report synthesis: research/reports/synthesis/diary_day_02_draft.md.
-- [ ] 0.1.3 Normalize diary entries into final daily format.
+- [x] 0.1.3 Normalize diary entries into final daily format.
 
 ---
 
@@ -133,15 +133,18 @@ Rules:
 ### 4.x Subtasks / Log
 
 - [ ] 4.1.1 Define repository indexing strategy.
-- [ ] 4.3.1 Build deterministic file-read tool.
-- [ ] 4.3.2 Build deterministic code-search tool.
-- [ ] 4.3.3 Build deterministic test-run tool.
-- [ ] 4.3.4 Build deterministic patch-apply tool.
+- [x] 4.3.1 Build deterministic file-read tool.
+- [x] 4.3.2 Build deterministic code-search tool.
+- [x] 4.3.3 Build deterministic test-run tool.
+- [x] 4.3.4 Build deterministic patch-apply tool.
 - [ ] 4.4.1 Build single-agent controller loop.
 - [ ] 4.5.1 Add localization output.
 - [ ] 4.5.2 Add root-cause explanation output.
 - [ ] 4.5.3 Add patch proposal output.
 - [ ] 4.5.4 Add verifier pass.
+- [x] 4.6.0 MVP Task 1 — Foundation Contracts and Event Skeleton v1 (commit 347f74d)
+- [x] 4.6.1 MVP Task 2 — Workspace and Command/Test Runtime v1 (commit 778d38c)
+- [x] 4.6.2 MVP Task 3 — Source Retrieval and Deterministic Patch Lifecycle v1 (commit e396799)
 
 ---
 
@@ -202,15 +205,24 @@ Rules:
 
 Current active item:
 
-- Draft `docs/MVP_IMPLEMENTATION_PLAN.md`.
+- Task 4A — PDB Session Lifecycle and Protocol Foundation v1
+
+Notes:
+
+- The original Task 4 — PDB Session and Runtime Skills v1 is being executed as smaller sequential subtasks because the previous monolithic task exceeded the implementation agent's reliable working scope.
+- Planned decomposition:
+  - Task 4A — PDB Session Lifecycle and Protocol Foundation
+  - Task 4B — Breakpoints and Execution Control
+  - Task 4C — Stack, Frame and Locals Inspection
+  - Task 4D — Safe Evaluation and PDB Integration Hardening, only if required
 
 Current constraints:
 
 - Tier 3 and supporting-paper reading are deferred.
-- Do not begin prototype or source implementation until the implementation plan is reviewed and accepted.
+
 ## Last Updated
 
-2026-07-18
+2026-07-20
 
 
 

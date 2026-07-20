@@ -1,6 +1,6 @@
 ﻿# Agentic Debugging Staj Defteri
 
-Bu dosyada 13–17 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
+Bu dosyada 13–19 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
 
 ---
 
@@ -383,7 +383,7 @@ Ayrıca AI destekli coding sürecinde agent raporuna doğrudan güvenmek yerine 
 
 ---
 
-# Beş Günlük Çalışmanın Genel Özeti
+# İlk Beş Günlük Çalışmanın Genel Özeti
 
 13–17 Temmuz 2026 tarihleri arasında:
 
@@ -398,3 +398,93 @@ Ayrıca AI destekli coding sürecinde agent raporuna doğrudan güvenmek yerine 
 - Path safety, strict schema validation ve standards-compliant JSON problemlerini bağımsız review ile tespit edip düzelttim.
 - Toplam 171 unit test ile ilk foundation katmanını doğruladım.
 - Git branch, review, commit ve remote push sürecini kontrollü biçimde tamamladım.
+
+---
+
+## 18 Temmuz 2026
+
+**Çalışmanın Konusu:** MVP Workspace and Command/Test Runtime v1 geliştirmesi
+
+### Yapılan Çalışmalar
+
+Bugün implementation plan içindeki ikinci coding task'ı başlattım. `feature/mvp-runtime-basics-v1` branch'inde TaskWorkspace lifecycle, command request validation, subprocess execution ve test runner katmanını geliştirdim.
+
+TaskWorkspace, her görev için izole bir çalışma dizini yönetiyor ve tüm path işlemlerini bu dizinle sınırlandırıyor. Command runtime tarafında command request'lerinde schema validation, POSIX ve Windows process-group handling, bounded stdout/stderr accumulation, timeout ve descendant cleanup mekanizmaları implemente edildi. Her command sonucu structured bir result record ile döndürülüyor.
+
+Test runner, mevcut test framework'ünden bağımsız olarak test command'lerini çalıştırabilen bir katman olarak tasarlandı. Test çıktısı, çıkış kodu ve timeout bilgilerini içeren structured sonuçlar üretiyor.
+
+İlk agent çıktısı sonrasında yaptığım bağımsız incelemede aşağıdaki hardening problemlerini tespit edip düzelttim:
+
+- POSIX process-group oluşturma davranışı düzeltildi.
+- Pipe okuma sırasında bounded finalization sağlandı.
+- 20.000 karakterlik çıktı eşiğinde true head/tail preservation davranışı düzeltildi.
+- Detached inherited-pipe davranışı düzeltildi.
+- Trailing-separator symlink ve filesystem-root koruma sorunları giderildi.
+
+Test sürecinde toplam 263 test geçti, 2 test atlandı. Task 2, `778d38c Add workspace and command runtime` commit'i ile kaydedildi.
+
+### Öğrendiklerim
+
+Subprocess yönetiminde POSIX ve Windows arasındaki process-group farklarının önemini uygulamalı olarak gördüm. Özellikle timeout sonrası descendant process'lerin temizlenmesi, her iki platformda farklı mekanizmalar gerektiriyor.
+
+Bounded output accumulation'da "head" ve "tail" kısımlarını korurken ortayı kesmenin, buffer yönetimi açısından doğru eşik değerleri ve taşma durumunda deterministik davranış gerektirdiğini öğrendim.
+
+### Sonuç / Bir Sonraki Adım
+
+Workspace ve command/test runtime katmanı tamamlandı. Branch incelenip main üzerine fast-forward merge edildi. Bir sonraki adım, kaynak kod tarama ve deterministic patch lifecycle katmanını geliştirmektir.
+
+---
+
+## 19 Temmuz 2026
+
+**Çalışmanın Konusu:** MVP Source Retrieval and Deterministic Patch Lifecycle v1 geliştirmesi
+
+### Yapılan Çalışmalar
+
+Bugün implementation plan içindeki üçüncü task olan kaynak kod tarama ve deterministic patch lifecycle katmanını geliştirdim. Çalışma `feature/mvp-source-patch-lifecycle-v1` branch'inde yürütüldü.
+
+Bu task kapsamında aşağıdaki bileşenler implemente edildi:
+
+- Bounded source-file reading ve numaralandırılmış source window üretimi.
+- Deterministic literal kod arama (regex kullanılmadan satır içi literal substring eşleşmesi).
+- AST tabanlı function, async function, method, nested function, class ve nested-class keşfi.
+- Decorator dahil source retrieval.
+- Strict unified-diff parser.
+- Exact-file ve directory allow/deny policy kuralları.
+- `tests` ve `task.json` için zorunlu koruma.
+- Cumulative-offset multi-hunk uygulama.
+- Zero-count insertion/deletion handling.
+- Encoding-aware patching.
+- LF, CRLF, BOM, final-newline, permission ve hash koruması.
+- Atomic temporary-file replacement.
+- Exact byte snapshot ve rollback.
+- Structured Python syntax check (`.pyc` üretmeden).
+
+Task 3 başlangıçta implementation agent'ın güvenilir biçimde yönetemeyeceği kadar genişti. Bu nedenle birden fazla bounded review/repair round'u gerekti. Her turda diff ve test sonuçları üzerinden eksikler belirlenip düzeltildi:
+
+- Strict parser state transition doğrulaması.
+- Hunk body count validation.
+- Duplicate, overlap, ordering, malformed-header, binary, mode-only, creation, deletion ve rename rejection.
+- `---` ve `+++` header'larına benzeyen body satırlarının doğru işlenmesi.
+- Bounded search result observations.
+- AST scope classification'ın capitalization'dan bağımsız çalışması.
+- Class/function disambiguation.
+- Post-replacement verification rollback.
+- Başarısız replacement sonrası temporary file cleanup.
+- EOF parser-state validation.
+
+Test sürecinde toplam 454 test geçti, 2 test atlandı. Task 3, `e396799 Add source retrieval and patch lifecycle` commit'i ile kaydedildi.
+
+Bu deneyim sonucunda, gelecekteki implementation task'lerinin daha küçük cohesive subtask'lara bölünmesi ve dar dosya kapsamı ile kabul kriterleri belirlenmesi gerektiğine karar verdim. Task 4 bu yaklaşımla alt görevlere ayrılarak yürütülecek.
+
+### Öğrendiklerim
+
+Geniş kapsamlı bir implementation task'ini tek seferde tamamlamaya çalışmanın, birden fazla review/repair turuna yol açtığını ve toplam süreyi artırdığını gördüm. Gelecek task'ler daha küçük, cohesive ve dar kapsamlı olacak.
+
+Unified-diff parsing'in göründüğünden daha karmaşık olduğunu öğrendim. Özellikle zero-count hunk'lar, `---`/`+++` header'larına benzeyen body satırları ve binary diff'ler gibi edge case'lerin standart diff araçlarının ürettiği çıktılarda bile dikkatli işlenmesi gerekiyor.
+
+AST tabanlı source retrieval'de class/function disambiguation ve decorator handling gibi konuların, basit regex yaklaşımıyla çözülemeyecek kadar dilbilgisine bağlı olduğunu gördüm.
+
+### Sonuç / Bir Sonraki Adım
+
+Kaynak kod tarama ve patch lifecycle katmanı tamamlandı. Branch incelenip main üzerine fast-forward merge edildi. Bir sonraki adım, Task 4A — PDB Session Lifecycle and Protocol Foundation v1 geliştirmesidir.
