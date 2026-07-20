@@ -6,6 +6,22 @@ from agentic_debugger.runtime.exceptions import (
     WorkspaceError,
     CommandRequestError,
     CommandExecutionError,
+    SourceInspectionError,
+    SourceDecodeError,
+    SourceParseError,
+    PatchValidationError,
+    PatchAuthorizationError,
+    PatchApplyError,
+    PatchStateError,
+    PatchRevertError,
+)
+from agentic_debugger.runtime.patcher import (
+    PatchFileChange,
+    PatchApplyResult,
+    PatchSnapshot,
+    SyntaxFileResult,
+    SyntaxCheckResult,
+    PatchManager,
 )
 
 __all__ = [
@@ -19,4 +35,18 @@ __all__ = [
     "WorkspaceError",
     "CommandRequestError",
     "CommandExecutionError",
+    "SourceInspectionError",
+    "SourceDecodeError",
+    "SourceParseError",
+    "PatchValidationError",
+    "PatchAuthorizationError",
+    "PatchApplyError",
+    "PatchStateError",
+    "PatchRevertError",
+    "PatchFileChange",
+    "PatchApplyResult",
+    "PatchSnapshot",
+    "SyntaxFileResult",
+    "SyntaxCheckResult",
+    "PatchManager",
 ]
