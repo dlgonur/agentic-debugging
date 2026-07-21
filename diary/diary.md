@@ -670,3 +670,97 @@ protocol, concurrency and cross-platform counterexamples
 #### Sonraki Adım
 
 Task 4B1 tamamlanmıştır. Task 4B şemsiyesinin tamamı tamamlanmamıştır. Bir sonraki aktif implementation maddesi **Task 4B2 — Persistent Paused Target Lifecycle Foundation v1**'dir. Task 4B2 yalnızca bounded bir persistent paused-target lifecycle kurmalıdır; continue/resume, stepping veya inceleme özellikleri henüz implemente edilmemiştir.
+
+### Task 4B2 — Persistent Paused Target Lifecycle Foundation v1
+
+#### Amaç ve Alt Görevlere Bölme
+
+Task 4B1'in tamamlanmasının ardından sıradaki implementation adımı, kalıcı paused-target lifecycle'ı kurmaktı. Bu task'ı tek seferde yapmak yerine iki alt göreve böldüm. Task 4B2A, worker tarafında persistent pause mekanizmasını ve özel daemon thread yönetimini kurarken, Task 4B2B bu altyapıyı PdbSession üzerinden üç public method ile dışarıya açtı. Bu bölme sayesinde her bir alt görev, Task 4B1 deneyiminden sonra yönetilebilir boyutta kaldı.
+
+#### Task 4B2A — Worker-Side Persistent Pause Lifecycle
+
+Worker tarafında persistent pause, mevcut one-shot `run_to_breakpoint` mekanizmasından farklı bir yaklaşım gerektiriyordu. Target'ı ilk breakpoint'te sonlandırmak yerine, özel bir daemon thread üzerinde çalışır durumda tutmak ve protokol döngüsünün paused response sonrasında da yanıt vermeye devam etmesini sağlamak gerekiyordu.
+
+Bir `threading.Condition` ile gerçek anlamda bekleme sağlandı — target execution'ı breakpoint'te duraklatılıp condition release ile uyandırılabilecek şekilde tasarlandı. Bu yaklaşım, `time.sleep` tabanlı polling veya busy-wait içermiyor.
+
+Paused response yazıldıktan sonra protokol döngüsü tekrar request kabul edebilir hale geliyor. Bu sayede ping, status, termination ve shutdown işlemleri paused durumda da kullanılabiliyor. Worker'ın orijinal stdin/stdout/stderr stream'leri protokol başlangıcında kaydedilip target I/O'su için ayrı stream'ler oluşturuluyor. Böylece target çıktısı protokol kanalına karışmıyor.
+
+Controlled unwind için özel bir `BaseException` sentinel'i kullanıldı. Bu sentinel sıradan target `except Exception` handler'ları tarafından yakalanamıyor, fakat target `finally` blokları kontrollü biçimde çalışabiliyor. Hanging finalizer'lar için bounded timeout ve fatal worker fallback mekanizması eklendi.
+
+Terminal lifecycle state'leri, process-global state (`sys.argv`, `sys.path`, standart stream'ler, current working directory, trace state) tamamen restore edildikten sonra yayınlanıyor. Normal exit/failure path'leri target thread'ini join edip kaynakları serbest bırakıyor. Runner ve paused-frame referansları completion sonrasında release ediliyor.
+
+Task 4B2A, mevcut Task 4B1 davranışını bozmuyor. One-shot target'lar hâlâ aynı şekilde çalışıyor ve one-shot sonuçları target status üzerinden doğru biçimde yansıtılıyor.
+
+#### Task 4B2B — Public PdbSession Paused-Target API ve Lifecycle Guards
+
+Task 4B2A worker operasyonlarını PdbSession üzerinden dışarıya açmak için üç public method eklendi: `start_paused_target(script, breakpoints, argv=())`, `get_target_status()` ve `terminate_paused_target()`.
+
+Session tarafı, Task 4B1'de geliştirilen güvenli script, breakpoint ve argv doğrulamasını yeniden kullanıyor. `start_paused_target` ve `run_to_breakpoint` arasında atomic bir execution budget paylaşılıyor — aynı anda yalnızca bir target execution'ına izin veriliyor.
+
+Local lifecycle state'leri yedi değer içeriyor: `idle`, transient `starting`, `paused`, `exited`, `failed`, `terminated`, `unknown`. Worker'dan gelen public status yalnızca `idle`, `paused`, `exited`, `failed`, `terminated` değerlerini kabul ediyor. Bu ayrım sayesinde transient state'ler dışarıya sızdırılmıyor.
+
+Strict başarılı-result validation kapsamında şunlar kontrol ediliyor:
+- exact fields;
+- strict state types;
+- bool-as-int rejection;
+- matching active script;
+- positive breakpoint line;
+- active-breakpoint coherence;
+- bounded UTF-8 function/error/script fields;
+- NUL rejection;
+- canonical forward-slash script paths;
+- absolute, rooted, drive, UNC, traversal ve alternate normalized path rejection.
+
+Malformed başarılı response'lar session'ı temizliyor ve cleanup tetikliyor. Normal hatalı target/lifecycle sonuçları ise session'ı koruyor. Failed termination, local target state'ini `unknown` yapıyor ve status refresh ile authoritative state kurtarılabiliyor. Contradictory lifecycle response'lar protokol corruption olarak değerlendiriliyor.
+
+Termination yalnızca doğrulanmış `paused` state'inden lokal olarak izin veriliyor. İkinci bir termination lokal olarak reddediliyor (worker'a request gitmeden). Stop ve context-manager çıkışı, mevcut worker shutdown davranışı üzerinden paused target'ı temizliyor.
+
+Deterministic concurrency testleri, session'ın aynı anda yalnızca bir target execution request'i gönderdiğini kanıtlıyor.
+
+#### Review ve Repair Dersleri
+
+Her iki alt görev de bağımsız inceleme sonrasında önemli düzeltmeler gerektirdi:
+
+- **Çift response riski:** Shutdown veya explicit termination timeout yolunda low-level termination helper'ı ile aktif protocol handler'ın aynı request için ayrı response üretme riski tespit edildi. Response üretme sorumluluğu yalnızca aktif protocol handler'a bırakıldı. Timeout durumunda worker `unsafe` olarak işaretlenip protocol loop durdurularak daha sonra başarılı bir response gönderilmesi engellendi.
+- **Terminal state sırası:** Process-global state restoration öncesinde terminal state yayınlanması sorunu düzeltildi — restoration tamamlanmadan state yayını yapılmıyor.
+- **Target thread completion:** Target thread'in join edilmesi ve runner/paused-frame referanslarının release edilmesi için completion barrier eklendi.
+- **One-shot/status lifecycle tutarsızlığı:** One-shot sonuçları ile target status arasındaki lifecycle tutarsızlığı giderildi.
+- **Flattened diff kanıtı:** İlk evidence diff dosyasının line terminator'ları kaybolduğu için dosya tek fiziksel satıra düzleşmiş ve yeniden uygulanabilir bir unified diff olmaktan çıkmıştı. Evidence daha sonra raw Git bytes ile LF line ending'leri korunarak yeniden üretildi; diff section, encoding, NUL ve reverse-apply kontrolleriyle doğrulandı.
+- **Hanging-finally test doğruluğu:** Hanging finalizer'lar için zaman aşımı testinin gerçekten hanging durumu test ettiği doğrulandı.
+- **Failure-safe test cleanup:** Başarısız test sonrasında kaynak sızıntısını önlemek için failure-safe cleanup eklendi.
+- **Non-vacuous weak-reference assertion:** İlk weak-reference assertion'larının runner hiç oluşturulmasa bile başarılı olabildiği görüldü. Testler önce runner weakref'inin gerçekten yakalandığını, ardından target completion sonrasında referent'ın garbage collection ile serbest bırakıldığını ayrı ayrı kanıtlayacak şekilde düzeltildi.
+- **Worker public state vs session local state ayrımı:** İki state katmanı arasındaki fark netleştirildi ve transient state'lerin dışarıya sızmaması sağlandı.
+- **Gerçek UTF-8 byte bound'ları:** String alanlarının UTF-8 byte uzunluğu karakter sayısı yerine byte olarak kontrol edildi.
+- **Canonical result-path validation:** Worker'dan dönen script path'lerinin forward-slash, canonical ve workspace-relative olması zorunlu kılındı.
+- **Wrong-type state values:** Yanlış tipte state değerlerinin raw membership testinde `TypeError` fırlatması sorunu düzeltildi.
+- **Targeted vs full-suite raporlama:** Test sonuçlarının yalnızca targeted değil, full suite üzerinden de raporlanması gerektiği görüldü.
+- **Deterministic event-based concurrency test:** Thread timing yerine event bazlı concurrency testi ile race condition'ların güvenilir biçimde tespit edilmesi sağlandı.
+
+#### Validation ve Git Kayıtları
+
+**Task 4B2A:**
+- Branch: `feature/mvp-pdb-paused-lifecycle-v1`
+- Commit: `78471cf Add worker-side persistent PDB pause lifecycle`
+- Targeted: 253 passed
+- Windows full suite: 843 passed, 2 skipped
+- Files changed: 4 (pdb_protocol.py, pdb_worker.py, test_pdb_protocol.py, test_pdb_session_integration.py)
+- Diff: 2412 insertions, 15 deletions
+
+**Task 4B2B:**
+- Branch: `feature/mvp-pdb-paused-lifecycle-v1`
+- Commit: `9a921bd Add public persistent PDB session lifecycle`
+- Targeted: 414 passed
+- Windows full suite: 960 passed, 2 skipped
+- Linux full suite: 961 passed, 1 skipped
+- Files changed: 3 (pdb_session.py, test_pdb_session.py, test_pdb_session_integration.py)
+- Diff: 2312 insertions
+
+**Cumulative (c101e23..9a921bd):**
+- 6 files changed, 4724 insertions, 15 deletions
+- Compileall ve diff-check: passed
+
+Platform-specific skip farkı: Windows 2 skip, Linux 1 skip — aynı toplam 962 test sonucunu temsil ediyor. Fark, platform-specific process/path testlerinden kaynaklanıyor.
+
+#### Sonraki Adım
+
+Task 4B2 tamamlanmıştır. Task 4B şemsiyesinin tamamı tamamlanmamıştır. Bir sonraki aktif implementation maddesi **Task 4B3 — Continue/Resume and Additional Execution Control v1**'dir. Task 4B3 bounded kalmalıdır; stack/frame/locals incelemesi içermemelidir. Stack, frame ve locals incelemesi Task 4C kapsamındadır. Expression evaluation yalnızca gerekirse Task 4D kapsamında ele alınacaktır.

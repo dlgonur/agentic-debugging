@@ -147,6 +147,7 @@ Rules:
 - [x] 4.6.2 MVP Task 3 — Source Retrieval and Deterministic Patch Lifecycle v1 (commit e396799)
 - [x] 4.6.3 MVP Task 4A — PDB Session Lifecycle and Protocol Foundation v1 (feature/mvp-pdb-session-foundation-v1, commit c8539a4)
 - [x] 4.6.4 MVP Task 4B1 — One-Shot Target Run to First Breakpoint v1 (feature/mvp-pdb-breakpoints-execution-v1, commit 84fe9e2)
+- [x] 4.6.5 MVP Task 4B2 — Persistent Paused Target Lifecycle Foundation v1 (feature/mvp-pdb-paused-lifecycle-v1, commits 78471cf and 9a921bd)
 
 ---
 
@@ -207,25 +208,25 @@ Rules:
 
 Current active item:
 
-- Task 4B2 — Persistent Paused Target Lifecycle Foundation v1
+- Task 4B3 — Continue/Resume and Additional Execution Control v1
 
 Notes:
 
 - The original Task 4 — PDB Session and Runtime Skills v1 is being executed as smaller sequential subtasks because the previous monolithic task exceeded the implementation agent's reliable working scope.
-- Task 4B should remain substantially smaller than Task 4A.
-- Task 4B1 required extensive adversarial review despite its bounded scope; Task 4B2 must remain narrower and must not include continue/resume, stepping or inspection.
+- Task 4B2 is complete; Task 4B parent remains incomplete.
+- Task 4B3 must not include stack/frame/locals inspection.
+- Task 4B3 must not include expression evaluation.
+- Tier 3 and supporting-paper reading remain deferred.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - Task 4B — Breakpoints and Execution Control
     - [x] Task 4B1 — One-Shot Target Run to First Breakpoint
-    - Task 4B2 — Persistent Paused Target Lifecycle Foundation
+    - [x] Task 4B2 — Persistent Paused Target Lifecycle Foundation
+      - [x] Task 4B2A — Worker-Side Persistent Pause Lifecycle
+      - [x] Task 4B2B — Public PdbSession Paused-Target API and Lifecycle Guards
     - Task 4B3 — Continue/Resume and Additional Execution Control
   - Task 4C — Stack, Frame and Locals Inspection
   - Task 4D — Safe Evaluation and PDB Integration Hardening, only if required
-
-Current constraints:
-
-- Tier 3 and supporting-paper reading are deferred.
 
 ## Last Updated
 
