@@ -383,7 +383,37 @@ class TestSerialization:
             serialize_response(resp)
 
     def test_supported_operations(self):
-        assert SUPPORTED_OPERATIONS == frozenset({"hello", "ping", "shutdown"})
+        assert SUPPORTED_OPERATIONS == frozenset(
+            {"hello", "ping", "shutdown", "run_to_breakpoint"}
+        )
+
+    def test_run_to_breakpoint_operation_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "run_to_breakpoint"
+        m["payload"] = {
+            "script": "test.py",
+            "breakpoints": [1],
+            "argv": [],
+        }
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "run_to_breakpoint"
+        assert req.payload["script"] == "test.py"
+        assert req.payload["breakpoints"] == [1]
+        assert req.payload["argv"] == []
+
+    def test_run_to_breakpoint_payload_round_trip(self):
+        payload = {
+            "script": "subdir/target.py",
+            "breakpoints": [5, 10, 15],
+            "argv": ["arg1", "arg2"],
+        }
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "run_to_breakpoint"
+        m["payload"] = payload
+        req = PdbRequest.from_mapping(m)
+        assert req.payload["script"] == "subdir/target.py"
+        assert req.payload["breakpoints"] == [5, 10, 15]
+        assert req.payload["argv"] == ["arg1", "arg2"]
 
     def test_protocol_version(self):
         assert PROTOCOL_VERSION == 1

@@ -10,7 +10,7 @@ from agentic_debugger.runtime.exceptions import PdbProtocolError
 
 PROTOCOL_VERSION = 1
 
-SUPPORTED_OPERATIONS = frozenset({"hello", "ping", "shutdown"})
+SUPPORTED_OPERATIONS = frozenset({"hello", "ping", "shutdown", "run_to_breakpoint"})
 
 MAX_LINE_LENGTH = 65536
 

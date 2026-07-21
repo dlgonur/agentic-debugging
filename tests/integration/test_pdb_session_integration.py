@@ -33,6 +33,114 @@ from agentic_debugger.runtime.exceptions import (
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
+_BREAKPOINT_SCRIPT = (
+    "x = 1\n"
+    "y = 2\n"
+    "z = 3\n"
+    "result = x + y + z\n"
+)
+
+_EXIT_EARLY_SCRIPT = (
+    "x = 1\n"
+    "import sys\n"
+    "sys.stdout.write('done')\n"
+    "# end\n"
+)
+
+_SYSEXIT_SCRIPT = (
+    "import sys\n"
+    "sys.exit(42)\n"
+    "# end\n"
+)
+
+_SYSEXIT_NONE_SCRIPT = (
+    "import sys\n"
+    "sys.exit(None)\n"
+    "# end\n"
+)
+
+_SYSEXIT_STRING_SCRIPT = (
+    "import sys\n"
+    "sys.exit('bye')\n"
+    "# end\n"
+)
+
+_TARGET_EXCEPTION_SCRIPT = (
+    "def main():\n"
+    "    raise ValueError('example')\n"
+    "main()\n"
+    "# end\n"
+)
+
+_SYNTAX_ERROR_SCRIPT = (
+    "def missing_colon()\n"
+    "    pass\n"
+)
+
+_ARGV_SCRIPT = (
+    "import sys\n"
+    "x = sys.argv\n"
+)
+
+_IMPORT_SCRIPT = (
+    "import sys\n"
+    "sys.path.insert(0, '.')\n"
+    "from subdir import util\n"
+    "x = util.util()\n"
+)
+
+_CWD_SCRIPT = (
+    "import os\n"
+    "cwd = os.getcwd()\n"
+)
+
+_INFINITE_LOOP_SCRIPT = (
+    "while True:\n"
+    "    pass\n"
+    "# never reached\n"
+)
+
+_PRINT_SCRIPT = (
+    "print('hello from target')\n"
+    "x = 42\n"
+)
+
+_STDERR_SCRIPT = (
+    "import sys\n"
+    "sys.stderr.write('stderr from target\\n')\n"
+    "x = 42\n"
+)
+
+_INPUT_SCRIPT = (
+    "try:\n"
+    "    data = input()\n"
+    "except EOFError:\n"
+    "    x = 42\n"
+    "else:\n"
+    "    x = 0\n"
+)
+
+_FUNCTION_BP_SCRIPT = (
+    "def main():\n"
+    "    x = 1\n"
+    "    y = 2\n"
+    "    z = 3\n"
+    "\n"
+    "def other():\n"
+    "    pass\n"
+    "\n"
+    "main()\n"
+)
+
+_MULTI_BP_SCRIPT = (
+    "x = 1\n"
+    "y = 2\n"
+    "z = 3\n"
+    "w = 4\n"
+    "v = 5\n"
+)
+
+
 @pytest.fixture
 def workspace():
     src = Path(tempfile.mkdtemp())
@@ -406,3 +514,1418 @@ class TestWorkerIsolationIntegration:
             )
         finally:
             session.stop()
+
+
+class TestRunToBreakpointIntegration:
+    """Integration tests for run_to_breakpoint using real worker processes."""
+
+    @pytest.fixture
+    def ws_run(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "target.py").write_text(_BREAKPOINT_SCRIPT)
+            (src / "exit_early.py").write_text(_EXIT_EARLY_SCRIPT)
+            (src / "sysexit.py").write_text(_SYSEXIT_SCRIPT)
+            (src / "sysexit_none.py").write_text(_SYSEXIT_NONE_SCRIPT)
+            (src / "sysexit_string.py").write_text(_SYSEXIT_STRING_SCRIPT)
+            (src / "target_exc.py").write_text(_TARGET_EXCEPTION_SCRIPT)
+            (src / "syntax_err.py").write_text(_SYNTAX_ERROR_SCRIPT)
+            (src / "argv_test.py").write_text(_ARGV_SCRIPT)
+            (src / "import_test.py").write_text(_IMPORT_SCRIPT)
+            (src / "cwd_test.py").write_text(_CWD_SCRIPT)
+            (src / "infinite.py").write_text(_INFINITE_LOOP_SCRIPT)
+            (src / "print_test.py").write_text(_PRINT_SCRIPT)
+            (src / "stderr_test.py").write_text(_STDERR_SCRIPT)
+            (src / "input_test.py").write_text(_INPUT_SCRIPT)
+            (src / "func_bp.py").write_text(_FUNCTION_BP_SCRIPT)
+            (src / "multi_bp.py").write_text(_MULTI_BP_SCRIPT)
+            (src / "argv_visible.py").write_text("import sys\nx = sys.argv\n")
+            (src / "subdir").mkdir()
+            (src / "subdir" / "__init__.py").write_text("")
+            (src / "subdir" / "util.py").write_text("def util(): return 42\n")
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    # 1. Breakpoint reached in a simple script
+    def test_breakpoint_reached(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("target.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+            assert resp.result["line"] == 3
+            assert resp.result["function"] == "<module>"
+        finally:
+            session.stop()
+
+    # 2. Returned script, line and function are exact
+    def test_breakpoint_exact_fields(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("target.py", [3])
+            assert resp.result["script"] == "target.py"
+            assert resp.result["line"] == 3
+            assert resp.result["function"] == "<module>"
+        finally:
+            session.stop()
+
+    # 3. Code after the breakpoint is not executed
+    def test_code_after_breakpoint_not_executed(self, ws_run):
+        script = "x = 1\ny = 2\nimport sys\nsys.exit(99)\nz = 3\n"
+        (Path(ws_run.root) / "stop_bp.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("stop_bp.py", [3])
+            assert resp.result["status"] == "breakpoint"
+            assert resp.result["line"] == 3
+        finally:
+            session.stop()
+
+    # 4. First of multiple configured breakpoints wins
+    def test_first_breakpoint_wins(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("multi_bp.py", [2, 4])
+            assert resp.result["status"] == "breakpoint"
+            assert resp.result["line"] == 2
+        finally:
+            session.stop()
+
+    def test_earlier_breakpoint_wins(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("multi_bp.py", [5, 2])
+            assert resp.result["status"] == "breakpoint"
+            assert resp.result["line"] == 2
+        finally:
+            session.stop()
+
+    # 5. Program exits before any breakpoint
+    def test_exit_before_breakpoint(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("exit_early.py", [4])
+            assert resp.success is True
+            assert resp.result["status"] == "exited"
+            assert resp.result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    # 6. Normal exit code is 0
+    def test_normal_exit_code(self, ws_run):
+        script = "x = 1\ny = 2\nz = 3\n# end\n"
+        (Path(ws_run.root) / "normal_exit.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("normal_exit.py", [4])
+            assert resp.result["status"] == "exited"
+            assert resp.result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    # 7. Integer SystemExit is preserved
+    def test_sysexit_integer_preserved(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit.py", [3])
+            assert resp.result["status"] == "exited"
+            assert resp.result["exit_code"] == 42
+        finally:
+            session.stop()
+
+    def test_sysexit_none_is_zero(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit_none.py", [3])
+            assert resp.result["status"] == "exited"
+            assert resp.result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    # 8. Non-integer SystemExit maps to 1
+    def test_sysexit_string_maps_to_one(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit_string.py", [3])
+            assert resp.result["status"] == "exited"
+            assert resp.result["exit_code"] == 1
+        finally:
+            session.stop()
+
+    # 9. Target syntax error produces a failed correlated response
+    def test_syntax_error(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("syntax_err.py", [1])
+            assert resp.success is False
+            assert "SyntaxError" in resp.error or "syntax" in resp.error.lower()
+        finally:
+            session.stop()
+
+    # 10. Target exception produces a failed correlated response
+    def test_target_exception(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("target_exc.py", [4])
+            assert resp.success is False
+            assert "ValueError" in resp.error
+        finally:
+            session.stop()
+
+    # 11. Worker remains pingable after breakpoint
+    def test_ping_after_breakpoint(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            session.run_to_breakpoint("target.py", [3])
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 12. Worker remains pingable after normal exit
+    def test_ping_after_exit(self, ws_run):
+        script = "x = 1\ny = 2\nz = 3\n# end\n"
+        (Path(ws_run.root) / "ping_exit.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            session.run_to_breakpoint("ping_exit.py", [4])
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 13. Worker remains pingable after target exception
+    def test_ping_after_target_exception(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            session.run_to_breakpoint("target_exc.py", [1])
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 14. Second execution in the same session is rejected
+    def test_second_execution_rejected(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            session.run_to_breakpoint("target.py", [3])
+            with pytest.raises(PdbSessionStateError):
+                session.run_to_breakpoint("target.py", [3])
+        finally:
+            session.stop()
+
+    # 15. Target print() does not corrupt the protocol
+    def test_target_print_does_not_corrupt(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("print_test.py", [2])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+        finally:
+            session.stop()
+
+    # 16. Target stderr does not enter protocol diagnostics
+    def test_target_stderr_isolated(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("stderr_test.py", [3])
+            assert resp.success is True
+        finally:
+            session.stop()
+
+    # 17. Target input() does not block indefinitely
+    def test_target_input_does_not_block(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("input_test.py", [4])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+        finally:
+            session.stop()
+
+    # 18. sys.argv is visible correctly
+    def test_argv_correct(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("argv_visible.py", [1], argv=["a", "b"])
+            assert resp.success is True
+        finally:
+            session.stop()
+
+    # 19. Script-directory imports work
+    def test_script_directory_imports(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("import_test.py", [4])
+            assert resp.success is True
+        finally:
+            session.stop()
+
+    # 20. Worker cwd and Python state are restored
+    def test_worker_state_restored(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            before_cwd = os.getcwd()
+            session.run_to_breakpoint("target.py", [3])
+            after_cwd = os.getcwd()
+            assert after_cwd == before_cwd
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    def test_worker_cwd_restored_after_exit(self, ws_run):
+        script = "x = 1\ny = 2\nz = 3\n# end\n"
+        (Path(ws_run.root) / "cwd_exit.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            before_cwd = os.getcwd()
+            session.run_to_breakpoint("cwd_exit.py", [4])
+            after_cwd = os.getcwd()
+            assert after_cwd == before_cwd
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    def test_worker_cwd_restored_after_exception(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            before_cwd = os.getcwd()
+            session.run_to_breakpoint("target_exc.py", [1])
+            after_cwd = os.getcwd()
+            assert after_cwd == before_cwd
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 21. Infinite-loop target triggers timeout and complete automatic cleanup
+    def test_infinite_loop_timeout(self, ws_run):
+        session = PdbSession(ws_run, request_timeout=1.0)
+        session.start()
+        try:
+            proc = session._proc
+            assert proc is not None
+            with pytest.raises(PdbSessionTimeoutError):
+                session.run_to_breakpoint("infinite.py", [3])
+            assert session.state == PdbSessionState.FAILED
+            assert session._proc is None
+        finally:
+            session.stop()
+
+    # 22. Malformed result validation test (direct validation)
+    def test_malformed_result_validation(self, ws_run):
+        from agentic_debugger.runtime.pdb_session import PdbSession as _Ps
+        bad_result = {"status": "breakpoint", "script": 123, "line": 5, "function": "main"}
+        bad_resp = PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=1,
+            success=True,
+            result=bad_result,
+            error="",
+        )
+        with pytest.raises(PdbProtocolError, match="script must be"):
+            _Ps._validate_run_result(bad_resp)
+
+    # 23. Context-manager stop remains clean after a completed target run
+    def test_context_manager_stop_after_run(self, ws_run):
+        with PdbSession(ws_run) as session:
+            resp = session.run_to_breakpoint("target.py", [3])
+            assert resp.success is True
+        assert session.state == PdbSessionState.STOPPED
+
+    # 24. Repair 1: breakpoint sentinel inside ordinary except Exception
+    def test_breakpoint_sentinel_not_swallowed_by_except_exception(self, ws_run):
+        marker = Path(ws_run.root) / "sentinel_marker.txt"
+        script = (
+            "import sys\n"
+            "try:\n"
+            "    x = 1\n"
+            "except Exception:\n"
+            "    swallowed = True\n"
+            "# after\n"
+        )
+        (Path(ws_run.root) / "sentinel_test.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sentinel_test.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+            assert resp.result["line"] == 3
+            assert marker.exists() is False
+        finally:
+            session.stop()
+
+    # 25. Repair 3: [1, 999] on two-line file rejected
+    def test_breakpoint_999_on_two_line_file(self, ws_run):
+        script = "x = 1\n# end\n"
+        (Path(ws_run.root) / "two_line.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            with pytest.raises(PdbProtocolError, match="exceeds source length"):
+                session.run_to_breakpoint("two_line.py", [1, 999])
+        finally:
+            session.stop()
+
+    # 26. Repair 4: .pdbrc not read during execution
+    def test_no_pdbrc_read(self, ws_run):
+        pdbrc_path = Path(ws_run.root) / ".pdbrc"
+        pdbrc_path.write_text("raise RuntimeError('pdbrc was read')\n")
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("target.py", [3])
+            assert resp.success is True
+        finally:
+            session.stop()
+
+    # 27. Repair 5: saved trace restored
+    def test_saved_trace_restored(self, ws_run):
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        import json as _json
+        hello = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 1,
+            "operation": "hello",
+            "payload": {},
+        }, separators=(",", ":"))
+        proc.stdin.write((hello + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        assert line is not None
+        req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 2,
+            "operation": "run_to_breakpoint",
+            "payload": {"script": "target.py", "breakpoints": [3], "argv": []},
+        }, separators=(",", ":"))
+        proc.stdin.write((req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        assert line is not None
+        resp = deserialize_response(line)
+        assert resp.success is True
+        ping = session.ping()
+        assert ping.success is True
+        session.stop()
+
+    # 28. Repair 6: KeyboardInterrupt as target failure
+    def test_keyboard_interrupt_as_target_failure(self, ws_run):
+        script = "x = 1\nraise KeyboardInterrupt()\n# end\n"
+        (Path(ws_run.root) / "kbi_test.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("kbi_test.py", [3])
+            assert resp.success is False
+            assert "KeyboardInterrupt" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 29. Repair 6: custom BaseException as target failure
+    def test_custom_baseexception_as_target_failure(self, ws_run):
+        script = (
+            "x = 1\n"
+            "class CustomError(BaseException): pass\n"
+            "raise CustomError('boom')\n"
+            "# end\n"
+        )
+        (Path(ws_run.root) / "custom_be.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("custom_be.py", [4])
+            assert resp.success is False
+            assert "CustomError" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 30. Repair 7: UTF-8 BOM source
+    def test_utf8_bom_source(self, ws_run):
+        path = Path(ws_run.root) / "bom_test.py"
+        path.write_bytes(b'\xef\xbb\xbfx = 1\n')
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("bom_test.py", [1])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+        finally:
+            session.stop()
+
+    # 31. Repair 7: valid PEP 263 encoding cookie
+    def test_encoding_cookie_source(self, ws_run):
+        path = Path(ws_run.root) / "cookie_test.py"
+        path.write_bytes('# -*- coding: latin-1 -*-\nx = "\xe9"\n'.encode('latin-1'))
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("cookie_test.py", [2])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+        finally:
+            session.stop()
+
+    # 32. Repair 7: invalid source encoding fails gracefully
+    def test_invalid_source_encoding(self, ws_run):
+        path = Path(ws_run.root) / "bad_enc.py"
+        path.write_bytes(b'# -*- coding: nonexistent -*-\nx = 1\n')
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("bad_enc.py", [1])
+            assert resp.success is False
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 33. Repair 9: observational argv test with side-effect file
+    def test_observational_argv(self, ws_run):
+        marker = Path(ws_run.root) / "argv_marker.txt"
+        script = (
+            "import sys, json\n"
+            f"with open({str(marker)!r}, 'w') as f:\n"
+            "    json.dump(sys.argv, f)\n"
+            "x = 1\n"
+        )
+        (Path(ws_run.root) / "obs_argv.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("obs_argv.py", [4], argv=["--flag", "value"])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+            assert marker.exists()
+            import json as _json
+            argv = _json.loads(marker.read_text())
+            assert len(argv) >= 1
+            assert argv[0] == "obs_argv.py"
+            assert argv[1:] == ["--flag", "value"]
+        finally:
+            session.stop()
+
+    # 34. Repair 9: observational cwd restoration via direct side-effect
+    def test_observational_cwd_restored(self, ws_run):
+        marker = Path(ws_run.root) / "cwd_marker.txt"
+        script = (
+            "import os\n"
+            f"with open({str(marker)!r}, 'w') as f:\n"
+            "    f.write(os.getcwd())\n"
+            "os.chdir('/' if os.name != 'nt' else '..')\n"
+            "x = 1\n"
+        )
+        (Path(ws_run.root) / "obs_cwd.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("obs_cwd.py", [5])
+            assert resp.success is True
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 35. Repair 9: stderr isolation with unique marker
+    def test_observational_stderr_isolated(self, ws_run):
+        import uuid
+        marker = str(uuid.uuid4())
+        script = (
+            "import sys\n"
+            f"sys.stderr.write({marker!r})\n"
+            "x = 1\n"
+        )
+        (Path(ws_run.root) / "obs_stderr.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("obs_stderr.py", [3])
+            assert resp.success is True
+            assert marker not in session.diagnostics
+        finally:
+            session.stop()
+
+    # 36. Repair 9: worker-side second execution rejection
+    def test_worker_side_second_execution_rejected(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+
+        _req_id = [10]
+
+        def send_raw(payload):
+            _req_id[0] += 1
+            rid = _req_id[0]
+            req = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": rid,
+                "operation": "run_to_breakpoint",
+                "payload": payload,
+            }, separators=(",", ":"))
+            proc.stdin.write((req + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            line = session._response_queue.get(timeout=3.0)
+            return deserialize_response(line)
+
+        resp1 = send_raw({"script": "target.py", "breakpoints": [3], "argv": []})
+        assert resp1.success is True
+
+        resp2 = send_raw({"script": "target.py", "breakpoints": [3], "argv": []})
+        assert resp2.success is False
+        assert "already completed" in resp2.error
+
+        ping_req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": _req_id[0] + 1,
+            "operation": "ping",
+            "payload": {},
+        }, separators=(",", ":"))
+        proc.stdin.write((ping_req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        ping_resp = deserialize_response(line)
+        assert ping_resp.success is True
+        session.stop()
+
+    # 37. Repair 9: side-effect file shows code after breakpoint not executed
+    def test_code_after_breakpoint_side_effect(self, ws_run):
+        marker = Path(ws_run.root) / "after_bp_marker.txt"
+        script = (
+            "x = 1\n"
+            f"open({str(marker)!r}, 'w').write('should not exist')\n"
+        )
+        (Path(ws_run.root) / "after_bp.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("after_bp.py", [1])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+            assert not marker.exists()
+        finally:
+            session.stop()
+
+    # 38. Repair 1: breakpoint sentinel not caught by except Exception (bare except catches BaseException, but that's expected)
+    def test_breakpoint_sentinel_not_caught_by_except_exception_bare(self, ws_run):
+        marker = Path(ws_run.root) / "bare_except_marker.txt"
+        script = (
+            "try:\n"
+            "    x = 1\n"
+            "except Exception:\n"
+            "    pass\n"
+            f"open({str(marker)!r}, 'w').write('after')\n"
+        )
+        (Path(ws_run.root) / "bare_except_test.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("bare_except_test.py", [2])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+            assert resp.result["line"] == 2
+            assert not marker.exists()
+        finally:
+            session.stop()
+
+    # 39. Repair 3: raw-worker protocol test for rooted/absolute path
+    def test_worker_rejects_rooted_path(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        for bad_path in ["/absolute/test.py", "\\rooted\\test.py", "C:/abs.py", "//unc/test.py"]:
+            req = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": 99,
+                "operation": "run_to_breakpoint",
+                "payload": {"script": bad_path, "breakpoints": [1], "argv": []},
+            }, separators=(",", ":"))
+            proc.stdin.write((req + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            line = session._response_queue.get(timeout=3.0)
+            assert line is not None
+            resp = deserialize_response(line)
+            assert resp.success is False
+            assert "relative path" in resp.error
+        ping_req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 200,
+            "operation": "ping",
+            "payload": {},
+        }, separators=(",", ":"))
+        proc.stdin.write((ping_req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        ping_resp = deserialize_response(line)
+        assert ping_resp.success is True
+        assert ping_resp.request_id == 200
+        session.stop()
+
+    # 40. Repair 4: invalid UTF-8 byte with coding cookie
+    def test_invalid_utf8_byte_target(self, ws_run):
+        path = Path(ws_run.root) / "bad_utf8.py"
+        path.write_bytes(b"# coding: utf-8\nx = '\xff'\n")
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("bad_utf8.py", [2])
+            assert resp.success is False
+            assert "Internal worker error" not in resp.error
+            assert "UnicodeDecodeError" in resp.error or "SyntaxError" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 41. Repair 5: unprintable BaseException.__str__()
+    def test_unprintable_exception_str(self, ws_run):
+        script = (
+            "class Unprintable(BaseException):\n"
+            "    def __str__(self):\n"
+            "        raise KeyboardInterrupt()\n"
+            "raise Unprintable()\n"
+            "# end\n"
+        )
+        (Path(ws_run.root) / "unprintable.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("unprintable.py", [5])
+            assert resp.success is False
+            assert "<unprintable exception>" in resp.error
+            assert "Unprintable" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 42. Repair 5: __str__ raising BaseException (KeyboardInterrupt)
+    def test_str_raises_keyboard_interrupt(self, ws_run):
+        script = (
+            "class BadStr(BaseException):\n"
+            "    def __str__(self):\n"
+            "        raise KeyboardInterrupt()\n"
+            "raise BadStr()\n"
+            "# end\n"
+        )
+        (Path(ws_run.root) / "badstr_kbi.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("badstr_kbi.py", [5])
+            assert resp.success is False
+            assert "<unprintable exception>" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 43. Repair 5: ordinary RuntimeError still formats correctly
+    def test_ordinary_runtime_error_still_formats(self, ws_run):
+        script = "raise RuntimeError('test message')\n# end\n"
+        (Path(ws_run.root) / "ordinary_err.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("ordinary_err.py", [2])
+            assert resp.success is False
+            assert "RuntimeError" in resp.error
+            assert "test message" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 44. Repair 6: boolean SystemExit codes
+    def test_sysexit_false_is_zero(self, ws_run):
+        script = "import sys\nsys.exit(False)\n# end\n"
+        (Path(ws_run.root) / "sysexit_false.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit_false.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "exited"
+            ec = resp.result["exit_code"]
+            assert isinstance(ec, int)
+            assert not isinstance(ec, bool)
+            assert ec == 0
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    def test_sysexit_true_is_one(self, ws_run):
+        script = "import sys\nsys.exit(True)\n# end\n"
+        (Path(ws_run.root) / "sysexit_true.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit_true.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "exited"
+            ec = resp.result["exit_code"]
+            assert isinstance(ec, int)
+            assert not isinstance(ec, bool)
+            assert ec == 1
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    def test_sysexit_negative_integer(self, ws_run):
+        script = "import sys\nsys.exit(-3)\n# end\n"
+        (Path(ws_run.root) / "sysexit_neg.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit_neg.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "exited"
+            ec = resp.result["exit_code"]
+            assert isinstance(ec, int)
+            assert not isinstance(ec, bool)
+            assert ec == -3
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    def test_sysexit_object_maps_to_one(self, ws_run):
+        script = "import sys\nsys.exit('bye')\n# end\n"
+        (Path(ws_run.root) / "sysexit_obj.py").write_text(script)
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit_obj.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "exited"
+            ec = resp.result["exit_code"]
+            assert isinstance(ec, int)
+            assert not isinstance(ec, bool)
+            assert ec == 1
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 45. Failed-response structural validation
+    def test_failed_response_with_nonempty_result_is_corruption(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 50,
+            "operation": "run_to_breakpoint",
+            "payload": {"script": "target.py", "breakpoints": [3], "argv": []},
+        }, separators=(",", ":"))
+        proc.stdin.write((req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        worker_resp = deserialize_response(line)
+        assert worker_resp.success is True
+        bad_resp = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 50,
+            "success": False,
+            "result": {"status": "exited", "script": "target.py", "exit_code": 0},
+            "error": "some error",
+        }, separators=(",", ":"))
+        proc.stdin.write((bad_resp + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        ready_resp = session._response_queue.get(timeout=3.0)
+        assert ready_resp is not None
+        # The first run_to_breakpoint already used the session, so second fails locally
+        session.stop()
+
+    # 46. Saved-trace identity test (direct worker level via raw protocol)
+    def test_saved_trace_identity(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        marker_py = Path(ws_run.root) / "trace_marker.py"
+        marker_py.write_text(
+            "import sys\n"
+            "import json\n"
+            "with open(sys.argv[1], 'w') as f:\n"
+            "    json.dump({'trace': str(sys.gettrace())}, f)\n"
+            "x = 1\n"
+        )
+        trace_marker = Path(ws_run.root) / "trace_out.json"
+        req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 60,
+            "operation": "run_to_breakpoint",
+            "payload": {
+                "script": "trace_marker.py",
+                "breakpoints": [5],
+                "argv": [str(trace_marker)],
+            },
+        }, separators=(",", ":"))
+        proc.stdin.write((req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        resp = deserialize_response(line)
+        assert resp.success is True
+        ping_req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 61,
+            "operation": "ping",
+            "payload": {},
+        }, separators=(",", ":"))
+        proc.stdin.write((ping_req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        ping_resp = deserialize_response(line)
+        assert ping_resp.success is True
+        assert ping_resp.result["pdb_created"] is True
+        session.stop()
+
+    # 47. Worker-level second-run rejection with ping
+    def test_worker_second_rejection_keeps_worker_alive(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+
+        def _raw_op(rid, op, payload):
+            req = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": rid,
+                "operation": op,
+                "payload": payload,
+            }, separators=(",", ":"))
+            proc.stdin.write((req + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            line = session._response_queue.get(timeout=3.0)
+            return deserialize_response(line)
+
+        r1 = _raw_op(70, "run_to_breakpoint",
+                     {"script": "target.py", "breakpoints": [3], "argv": []})
+        assert r1.success is True
+        r2 = _raw_op(71, "run_to_breakpoint",
+                     {"script": "target.py", "breakpoints": [3], "argv": []})
+        assert r2.success is False
+        assert "already completed" in r2.error
+        r3 = _raw_op(72, "ping", {})
+        assert r3.success is True
+        session.stop()
+
+    # 48a. Session TOCTOU: identity mismatch rejection
+    def test_session_read_validated_rejects_identity_mismatch(self, ws_run):
+        import os as _os
+        session = PdbSession(ws_run)
+        session.start()
+        try:
+            script = "x = 1\n"
+            inside = Path(ws_run.root) / "identity_test.py"
+            inside.write_text(script)
+            normalized = "identity_test.py"
+
+            from unittest.mock import patch as _patch
+            with _patch("agentic_debugger.runtime.pdb_session.os.path.samestat",
+                       return_value=False):
+                with pytest.raises(PdbProtocolError, match="script file changed"):
+                    session._read_validated_workspace_script(normalized)
+
+            resp = session.ping()
+            assert resp.success is True
+        finally:
+            session.stop()
+
+    # 48b. Worker stable-source execution test
+    def test_worker_stable_source_execution(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+
+        marker = Path(ws_run.root) / "stable_source.py"
+        original_content = "x = 1\n"
+        marker.write_text(original_content)
+        abs_path = _os.path.realpath(str(marker))
+        source_bytes = marker.read_bytes()
+
+        marker.write_text("x = 2\n")
+
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda r: responses.append(r)
+
+        worker._execute_target(
+            script_normalized="stable_source.py",
+            script_abs=abs_path,
+            breakpoints=[1],
+            argv=[],
+            source_bytes=source_bytes,
+            request_id=1,
+        )
+        assert len(responses) == 1
+        assert responses[0].success is True
+
+    # 48c. Session TOCTOU: samestat identity check
+    def test_samestat_identity_check(self, ws_run):
+        import os as _os
+        a = Path(ws_run.root) / "file_a.py"
+        a.write_text("x = 1\n")
+        b = Path(ws_run.root) / "file_b.py"
+        b.write_text("y = 2\n")
+
+        stat_a = _os.stat(str(a))
+        stat_b = _os.stat(str(b))
+        assert not _os.path.samestat(stat_a, stat_b)
+
+        binary_open_flag = getattr(_os, "O_BINARY", 0)
+        fd = _os.open(str(a), _os.O_RDONLY | binary_open_flag)
+        try:
+            fstat_a = _os.fstat(fd)
+            assert _os.path.samestat(stat_a, fstat_a)
+        finally:
+            _os.close(fd)
+
+    # 48d. Worker rejects identity mismatch during read
+    def test_worker_read_validated_rejects_identity_mismatch(self, ws_run):
+        import os as _os
+        from unittest.mock import patch as _patch
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        with _patch("agentic_debugger.runtime.pdb_worker.os.path.samestat",
+                   return_value=False):
+            worker = PdbWorker()
+            result = worker._read_validated_workspace_script(
+                "target.py", ws_run.root, 1
+            )
+            assert result is None
+
+    # 48f. Worker read_bounded_fd short-read accumulation
+    def test_worker_read_bounded_fd_short_reads(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
+        d = Path(ws_run.root)
+        f = d / "worker_short_read.py"
+        f.write_bytes(b"abc" + b"def" + b"ghi")
+        fd = _os.open(str(f), _os.O_RDONLY | _BINARY_OPEN_FLAG)
+        try:
+            worker = PdbWorker()
+            result = worker._read_bounded_fd(fd, 1)
+            assert result == b"abcdefghi"
+        finally:
+            _os.close(fd)
+
+    # 48g. Worker read_bounded_fd empty
+    def test_worker_read_bounded_fd_empty(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
+        d = Path(ws_run.root)
+        f = d / "worker_empty_read.py"
+        f.write_bytes(b"")
+        fd = _os.open(str(f), _os.O_RDONLY | _BINARY_OPEN_FLAG)
+        try:
+            worker = PdbWorker()
+            result = worker._read_bounded_fd(fd, 1)
+            assert result == b""
+        finally:
+            _os.close(fd)
+
+    # 48h. Worker read_bounded_fd exact limit
+    def test_worker_read_bounded_fd_exact_limit(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
+        from agentic_debugger.runtime.pdb_worker import _MAX_TARGET_SOURCE_BYTES
+        d = Path(ws_run.root)
+        f = d / "worker_exact_limit.py"
+        f.write_bytes(b"x" * _MAX_TARGET_SOURCE_BYTES)
+        fd = _os.open(str(f), _os.O_RDONLY | _BINARY_OPEN_FLAG)
+        try:
+            worker = PdbWorker()
+            result = worker._read_bounded_fd(fd, 1)
+            assert result is not None
+            assert len(result) == _MAX_TARGET_SOURCE_BYTES
+        finally:
+            _os.close(fd)
+
+    # 48i. Worker read_bounded_fd over limit
+    def test_worker_read_bounded_fd_over_limit(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        from agentic_debugger.runtime.pdb_worker import _BINARY_OPEN_FLAG
+        from agentic_debugger.runtime.pdb_worker import _MAX_TARGET_SOURCE_BYTES
+        d = Path(ws_run.root)
+        f = d / "worker_over_limit.py"
+        f.write_bytes(b"x" * (_MAX_TARGET_SOURCE_BYTES + 1))
+        fd = _os.open(str(f), _os.O_RDONLY | _BINARY_OPEN_FLAG)
+        try:
+            worker = PdbWorker()
+            result = worker._read_bounded_fd(fd, 1)
+            assert result is None
+        finally:
+            _os.close(fd)
+
+    # 48j. Session end-to-end over-limit rejection
+    def test_session_over_limit_rejection(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
+        d = Path(ws_run.root)
+        f = d / "huge_test.py"
+        f.write_bytes(b"x = 1\n" + b"# " + b"x" * (_MAX_TARGET_SOURCE_BYTES))
+        session = PdbSession(ws_run)
+        session.start()
+        orig_send = session._send_and_receive
+        send_calls = []
+        session._send_and_receive = lambda r, t: (send_calls.append(1), orig_send(r, t))[1]
+        try:
+            with pytest.raises(PdbProtocolError, match="exceeds maximum source"):
+                session.run_to_breakpoint("huge_test.py", [1])
+            assert session._target_consumed is False
+            assert len(send_calls) == 0
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 48k. Worker end-to-end over-limit rejection via raw protocol
+    def test_worker_over_limit_rejection(self, ws_run):
+        import json as _json
+        from agentic_debugger.runtime.pdb_worker import _MAX_TARGET_SOURCE_BYTES
+        d = Path(ws_run.root)
+        f = d / "worker_huge.py"
+        f.write_bytes(b"x = 1\n" + b"x" * (_MAX_TARGET_SOURCE_BYTES))
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        try:
+            req = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": 90,
+                "operation": "run_to_breakpoint",
+                "payload": {"script": "worker_huge.py", "breakpoints": [1], "argv": []},
+            }, separators=(",", ":"))
+            proc.stdin.write((req + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            line = session._response_queue.get(timeout=3.0)
+            resp = deserialize_response(line)
+            assert resp.success is False
+            assert "exceeds maximum source" in resp.error
+            ping_req = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": 91,
+                "operation": "ping",
+                "payload": {},
+            }, separators=(",", ":"))
+            proc.stdin.write((ping_req + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            line = session._response_queue.get(timeout=3.0)
+            ping_resp = deserialize_response(line)
+            assert ping_resp.success is True
+        finally:
+            session.stop()
+
+    # 48l. Confirm no direct os.O_BINARY in production or test Task 4B1 files
+    def test_no_direct_o_binary_access_in_task4b_files(self, ws_run):
+        import ast
+        files = [
+            Path(__file__).parent.parent.parent / "agentic_debugger" / "runtime" / "pdb_session.py",
+            Path(__file__).parent.parent.parent / "agentic_debugger" / "runtime" / "pdb_worker.py",
+            Path(__file__).parent.parent.parent / "tests" / "unit" / "test_pdb_session.py",
+            Path(__file__).parent.parent.parent / "tests" / "integration" / "test_pdb_session_integration.py",
+        ]
+        for path in files:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Attribute) and node.attr == "O_BINARY":
+                    raise AssertionError(
+                        f"Direct .O_BINARY access found in {path.name} at line {node.lineno}"
+                    )
+
+    # 48e. Worker stable-source: file changes after bytes captured
+    def test_worker_stable_source_after_disk_change(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+
+        marker = Path(ws_run.root) / "stable_source2.py"
+        marker.write_text("x = 1\n")
+        abs_path = _os.path.realpath(str(marker))
+        source_bytes = marker.read_bytes()
+
+        marker.write_text("raise ValueError('should not run')\n")
+
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda r: responses.append(r)
+
+        worker._execute_target(
+            script_normalized="stable_source2.py",
+            script_abs=abs_path,
+            breakpoints=[99],
+            argv=[],
+            source_bytes=source_bytes,
+            request_id=1,
+        )
+        assert len(responses) == 1
+        assert responses[0].success is True
+        assert responses[0].result["status"] == "exited"
+
+    # 49. Worker accepts surrogate script path (raw JSON)
+    def test_worker_rejects_surrogate_script(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 80,
+            "operation": "run_to_breakpoint",
+            "payload": {"script": "bad\ud800.py", "breakpoints": [1], "argv": []},
+        }, separators=(",", ":"))
+        proc.stdin.write((req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        assert line is not None
+        resp = deserialize_response(line)
+        assert resp.success is False
+        assert "non-UTF-8" in resp.error or "utf" in resp.error.lower()
+        ping_req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 81,
+            "operation": "ping",
+            "payload": {},
+        }, separators=(",", ":"))
+        proc.stdin.write((ping_req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        ping_resp = deserialize_response(line)
+        assert ping_resp.success is True
+        assert ping_resp.request_id == 81
+        session.stop()
+
+    # 49. Worker rejects surrogate argv entry (raw JSON)
+    def test_worker_rejects_surrogate_argv(self, ws_run):
+        import json as _json
+        session = PdbSession(ws_run)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 82,
+            "operation": "run_to_breakpoint",
+            "payload": {"script": "target.py", "breakpoints": [1], "argv": ["\ud800"]},
+        }, separators=(",", ":"))
+        proc.stdin.write((req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        assert line is not None
+        resp = deserialize_response(line)
+        assert resp.success is False
+        assert "non-UTF-8" in resp.error or "utf" in resp.error.lower()
+        ping_req = _json.dumps({
+            "protocol_version": PROTOCOL_VERSION,
+            "request_id": 83,
+            "operation": "ping",
+            "payload": {},
+        }, separators=(",", ":"))
+        proc.stdin.write((ping_req + "\n").encode("utf-8"))
+        proc.stdin.flush()
+        line = session._response_queue.get(timeout=3.0)
+        ping_resp = deserialize_response(line)
+        assert ping_resp.success is True
+        assert ping_resp.request_id == 83
+        session.stop()
+
+    # 50. Repairs 4+5: Saved-trace identity via direct _execute_target
+    def test_saved_trace_identity_via_execute_target(self, ws_run):
+        import os as _os, sys as _sys
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+
+        marker = Path(ws_run.root) / "trace_check.py"
+        marker.write_text("x = 1\n")
+        abs_path = _os.path.realpath(str(marker))
+
+        tracer_log = []
+        def sentinel_trace(frame, event, arg):
+            tracer_log.append(event)
+            return sentinel_trace
+
+        saved_trace = _sys.gettrace()
+        _sys.settrace(sentinel_trace)
+        original_cwd = _os.getcwd()
+        try:
+            worker = PdbWorker()
+            responses = []
+            def collect_resp(resp):
+                responses.append(resp)
+            worker._send_response = collect_resp
+
+            # Breakpoint outcome
+            worker._execute_target(
+                script_normalized="trace_check.py",
+                script_abs=abs_path,
+                breakpoints=[1],
+                argv=[],
+                source_bytes=marker.read_bytes(),
+                request_id=1,
+            )
+            assert _sys.gettrace() is sentinel_trace, \
+                f"trace after breakpoint: {_sys.gettrace()}"
+            assert len(responses) == 1
+            assert responses[0].success is True
+            assert responses[0].result["status"] == "breakpoint"
+            responses.clear()
+
+            # Normal exit outcome
+            worker._execute_target(
+                script_normalized="trace_check.py",
+                script_abs=abs_path,
+                breakpoints=[99],
+                argv=[],
+                source_bytes=marker.read_bytes(),
+                request_id=2,
+            )
+            assert _sys.gettrace() is sentinel_trace, \
+                f"trace after exit: {_sys.gettrace()}"
+            assert len(responses) == 1
+            assert responses[0].success is True
+            assert responses[0].result["status"] == "exited"
+            responses.clear()
+
+            # Target exception outcome
+            exc_marker = Path(ws_run.root) / "exc_check.py"
+            exc_marker.write_text("raise ValueError('test')\n")
+            exc_abs = _os.path.realpath(str(exc_marker))
+
+            worker._execute_target(
+                script_normalized="exc_check.py",
+                script_abs=exc_abs,
+                breakpoints=[99],
+                argv=[],
+                source_bytes=exc_marker.read_bytes(),
+                request_id=3,
+            )
+            assert _sys.gettrace() is sentinel_trace, \
+                f"trace after exception: {_sys.gettrace()}"
+            assert len(responses) == 1
+            assert responses[0].success is False
+        finally:
+            _os.chdir(original_cwd)
+            _sys.settrace(saved_trace)
+
+    # 51. Worker-cwd restoration via direct _execute_target
+    def test_worker_cwd_restoration_via_execute_target(self, ws_run):
+        import os as _os
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+
+        original_cwd = _os.getcwd()
+
+        def _run_cwd_test(dest_dir, bp_file, bp_line, expected_status):
+            worker = PdbWorker()
+            responses = []
+            def collect_resp(resp):
+                responses.append(resp)
+            worker._send_response = collect_resp
+
+            change_dir = str(dest_dir)
+            script = (
+                f"import os\n"
+                f"os.chdir({change_dir!r})\n"
+                f"x = 1\n"
+            )
+            marker = dest_dir / "cwd_test_worker.py"
+            marker.write_text(script)
+            abs_path = _os.path.realpath(str(marker))
+
+            worker._execute_target(
+                script_normalized=marker.name,
+                script_abs=abs_path,
+                breakpoints=bp_line,
+                argv=[],
+                source_bytes=marker.read_bytes(),
+                request_id=1,
+            )
+            assert len(responses) == 1
+            assert responses[0].success is True
+            assert responses[0].result["status"] == expected_status
+
+        other_dir = Path(ws_run.root) / "subdir_cwd"
+        other_dir.mkdir(parents=True, exist_ok=True)
+
+        saved = _os.getcwd()
+        try:
+            _run_cwd_test(other_dir, other_dir / "cwd_bp.py", [3], "breakpoint")
+            assert _os.getcwd() == saved, "cwd not restored after breakpoint"
+
+            _run_cwd_test(other_dir, other_dir / "cwd_exit.py", [99], "exited")
+            assert _os.getcwd() == saved, "cwd not restored after exit"
+
+            exc_dir = Path(ws_run.root) / "subdir_exc"
+            exc_dir.mkdir(parents=True, exist_ok=True)
+            exc_script = "import os\nos.chdir({!r})\nraise ValueError('test')\n".format(str(exc_dir))
+            exc_file = exc_dir / "cwd_exc.py"
+            exc_file.write_text(exc_script)
+            exc_abs = _os.path.realpath(str(exc_file))
+
+            worker = PdbWorker()
+            exc_responses = []
+            def collect_exc_resp(resp):
+                exc_responses.append(resp)
+            worker._send_response = collect_exc_resp
+
+            worker._execute_target(
+                script_normalized=exc_file.name,
+                script_abs=exc_abs,
+                breakpoints=[99],
+                argv=[],
+                source_bytes=exc_file.read_bytes(),
+                request_id=1,
+            )
+            assert len(exc_responses) == 1
+            assert exc_responses[0].success is False
+            assert _os.getcwd() == saved, "cwd not restored after exception"
+        finally:
+            _os.chdir(saved)

@@ -4,12 +4,13 @@ import math
 import os
 import queue
 import signal
+import stat
 import subprocess
 import sys
 import threading
 import time
 from enum import Enum
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agentic_debugger.runtime.exceptions import (
     PdbProtocolError,
@@ -45,12 +46,22 @@ _STOP_REQUEST_LOCK_TIMEOUT = 0.5
 
 _QUEUE_CAPACITY = 2
 
+_MAX_SCRIPT_PATH_UTF8 = 4096
+_MAX_ARGV_ENTRY_UTF8 = 1024
+_BINARY_OPEN_FLAG = getattr(os, "O_BINARY", 0)
+_MAX_TARGET_SOURCE_BYTES = 16 * 1024 * 1024
+
 _TRUNCATION_MARKER = "\n... [diagnostics truncated] ...\n"
 
 _PING_REQUIRED_FIELDS = frozenset({"status", "pdb_created"})
 _PING_KNOWN_FIELDS = frozenset({"status", "pdb_created"})
 _SHUTDOWN_REQUIRED_FIELDS = frozenset({"shutdown"})
 _SHUTDOWN_KNOWN_FIELDS = frozenset({"shutdown"})
+
+
+def _has_raw_dotdot(script: str) -> bool:
+    parts = script.replace('\\', '/').split('/')
+    return '..' in parts
 
 
 class PdbSessionState(Enum):
@@ -203,6 +214,8 @@ class PdbSession:
         self._reader_cleanup_reason: Optional[Exception] = None
         self._reader_cleanup_error: Optional[Exception] = None
         self._reader_cleanup_thread: Optional[threading.Thread] = None
+
+        self._target_consumed = False
 
         self._response_queue: queue.Queue[Optional[bytes]] = queue.Queue(
             maxsize=_QUEUE_CAPACITY
@@ -579,6 +592,386 @@ class PdbSession:
             raise
         finally:
             self._request_lock.release()
+
+    def run_to_breakpoint(
+        self,
+        script: str,
+        breakpoints: Sequence[int],
+        argv: Sequence[str] = (),
+    ) -> PdbResponse:
+        if not self._request_lock.acquire(timeout=self._request_timeout):
+            raise PdbSessionError(
+                "A request is already in flight; only one "
+                "in-flight request is supported"
+            )
+        try:
+            with self._state_lock:
+                if self._state != PdbSessionState.READY:
+                    raise PdbSessionStateError(
+                        f"Cannot run_to_breakpoint from state "
+                        f"{self._state.value}; expected READY"
+                    )
+                if self._target_consumed:
+                    raise PdbSessionStateError(
+                        "Target execution already completed on this session; "
+                        "exactly one execution is allowed"
+                    )
+
+            script_val, source_bytes = self._validate_script_and_read(script)
+            breakpoints_val = self._validate_breakpoints(
+                breakpoints, source_bytes
+            )
+            argv_val = self._validate_argv(argv)
+
+            with self._state_lock:
+                self._target_consumed = True
+
+            payload: Dict[str, Any] = {
+                "script": script_val,
+                "breakpoints": breakpoints_val,
+                "argv": argv_val,
+            }
+
+            request = PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=self._allocate_request_id(),
+                operation="run_to_breakpoint",
+                payload=payload,
+            )
+
+            response = self._send_and_receive(
+                request, self._request_timeout
+            )
+
+            if response.success:
+                try:
+                    self._validate_run_result(
+                        response, script_val, breakpoints_val
+                    )
+                except (PdbProtocolError, PdbSessionError) as e:
+                    self._fail_and_cleanup(e)
+            else:
+                if response.result != {}:
+                    self._fail_and_cleanup(
+                        PdbProtocolError(
+                            "Failed response must have empty result, "
+                            f"got {response.result}"
+                        )
+                    )
+
+            return response
+        except Exception:
+            raise
+        finally:
+            self._request_lock.release()
+
+    @staticmethod
+    def _check_utf8_strict(value: str, label: str) -> None:
+        try:
+            encoded = value.encode('utf-8')
+        except UnicodeEncodeError as e:
+            raise PdbProtocolError(
+                f"{label} contains non-UTF-8-representable characters: {e}"
+            ) from e
+        return encoded
+
+    @staticmethod
+    def _read_bounded_fd(fd: int) -> bytes:
+        buffer = bytearray()
+        while True:
+            remaining = _MAX_TARGET_SOURCE_BYTES + 1 - len(buffer)
+            if remaining <= 0:
+                break
+            try:
+                chunk = os.read(fd, min(64 * 1024, remaining))
+            except OSError as e:
+                raise PdbProtocolError(
+                    f"cannot read script: {e}"
+                ) from e
+            if not chunk:
+                break
+            buffer.extend(chunk)
+        if len(buffer) > _MAX_TARGET_SOURCE_BYTES:
+            raise PdbProtocolError(
+                "script exceeds maximum source size"
+            )
+        return bytes(buffer)
+
+    def _read_validated_workspace_script(self, script_normalized: str) -> bytes:
+        workspace_root = self._workspace.root
+        abs_path = os.path.normpath(
+            os.path.join(workspace_root, script_normalized)
+        )
+
+        try:
+            fd = os.open(abs_path, os.O_RDONLY | _BINARY_OPEN_FLAG)
+        except (FileNotFoundError, IsADirectoryError) as e:
+            if os.path.isdir(abs_path):
+                raise PdbProtocolError(
+                    f"script is a directory: {script_normalized}"
+                ) from e
+            raise PdbProtocolError(
+                f"script not found: {script_normalized}"
+            ) from e
+        except OSError as e:
+            raise PdbProtocolError(
+                f"cannot open script: {e}"
+            ) from e
+
+        try:
+            try:
+                opened_stat = os.fstat(fd)
+            except OSError as e:
+                raise PdbProtocolError(
+                    f"cannot stat opened script: {e}"
+                ) from e
+
+            if not stat.S_ISREG(opened_stat.st_mode):
+                raise PdbProtocolError(
+                    f"script is not a regular file: {script_normalized}"
+                )
+
+            try:
+                real_root = os.path.realpath(workspace_root)
+                real_path = os.path.realpath(abs_path)
+            except (ValueError, OSError) as e:
+                raise PdbProtocolError(
+                    f"cannot resolve script path: {e}"
+                ) from e
+
+            try:
+                common = os.path.commonpath([real_root, real_path])
+            except (ValueError, OSError) as e:
+                raise PdbProtocolError(
+                    f"script path containment check failed: {e}"
+                ) from e
+
+            if os.path.normcase(common) != os.path.normcase(real_root):
+                raise PdbProtocolError(
+                    "script escapes workspace via symlink or junction"
+                )
+
+            try:
+                current_path_stat = os.stat(real_path)
+            except OSError as e:
+                raise PdbProtocolError(
+                    f"cannot stat resolved script: {e}"
+                ) from e
+
+            if not os.path.samestat(opened_stat, current_path_stat):
+                raise PdbProtocolError(
+                    "script file changed between validation and open"
+                )
+
+            source_bytes = self._read_bounded_fd(fd)
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+        return source_bytes
+
+    def _validate_script_and_read(self, script: str) -> Tuple[str, bytes]:
+        if not isinstance(script, str) or not script:
+            raise PdbProtocolError("script must be a non-empty string")
+
+        if '\0' in script:
+            raise PdbProtocolError("script contains NUL byte")
+
+        if not script.endswith('.py'):
+            raise PdbProtocolError(
+                "script must end with .py"
+            )
+
+        self._check_utf8_strict(script, "script")
+
+        if len(script.encode('utf-8')) > _MAX_SCRIPT_PATH_UTF8:
+            raise PdbProtocolError(
+                f"script path exceeds {_MAX_SCRIPT_PATH_UTF8} UTF-8 bytes"
+            )
+
+        if len(script) >= 2 and script[1] == ':':
+            raise PdbProtocolError("script must be a relative path")
+
+        if script.startswith('/') or script.startswith('\\'):
+            raise PdbProtocolError("script must be a relative path")
+
+        if _has_raw_dotdot(script):
+            raise PdbProtocolError(
+                "script must not contain .. traversal"
+            )
+
+        normalized = os.path.normpath(script)
+
+        if os.path.isabs(normalized):
+            raise PdbProtocolError("script must be a relative path")
+
+        normalized = normalized.replace('\\', '/')
+
+        source_bytes = self._read_validated_workspace_script(normalized)
+
+        return (normalized, source_bytes)
+
+    def _validate_breakpoints(
+        self, breakpoints: Sequence[int], source_bytes: bytes = b""
+    ) -> List[int]:
+        if not isinstance(breakpoints, (list, tuple)):
+            raise PdbProtocolError("breakpoints must be a list")
+
+        if len(breakpoints) < 1 or len(breakpoints) > 16:
+            raise PdbProtocolError(
+                "breakpoints must have 1-16 entries"
+            )
+
+        bps: List[int] = []
+        for bp in breakpoints:
+            if isinstance(bp, bool) or not isinstance(bp, int):
+                raise PdbProtocolError(
+                    "breakpoints must contain only integers"
+                )
+            if bp <= 0:
+                raise PdbProtocolError(
+                    "breakpoints must be positive integers"
+                )
+            bps.append(bp)
+
+        if len(set(bps)) != len(bps):
+            raise PdbProtocolError(
+                "breakpoints must not contain duplicates"
+            )
+
+        bps.sort()
+
+        if source_bytes:
+            line_count = len(source_bytes.splitlines())
+            for bp_line in bps:
+                if bp_line > line_count:
+                    raise PdbProtocolError(
+                        f"breakpoint line {bp_line} exceeds "
+                        f"source length ({line_count})"
+                    )
+
+        return bps
+
+    def _validate_argv(self, argv: Sequence[str]) -> List[str]:
+        if not isinstance(argv, (list, tuple)):
+            raise PdbProtocolError("argv must be a list")
+
+        if len(argv) > 32:
+            raise PdbProtocolError(
+                "argv must have at most 32 entries"
+            )
+
+        av: List[str] = []
+        for a in argv:
+            if isinstance(a, bool) or not isinstance(a, str):
+                raise PdbProtocolError(
+                    "argv entries must be strings"
+                )
+            if '\0' in a:
+                raise PdbProtocolError(
+                    "argv entry contains NUL byte"
+                )
+            self._check_utf8_strict(a, "argv entry")
+            if len(a.encode('utf-8')) > 1024:
+                raise PdbProtocolError(
+                    f"argv entry exceeds 1024 UTF-8 bytes"
+                )
+            av.append(a)
+
+        return av
+
+    @staticmethod
+    def _validate_run_result(
+        response: PdbResponse,
+        expected_script: str = "",
+        expected_breakpoints: Sequence[int] = (),
+    ) -> None:
+        result = response.result
+        if not isinstance(result, dict):
+            raise PdbProtocolError(
+                "run_to_breakpoint result must be a mapping"
+            )
+
+        status = result.get("status")
+        if status == "breakpoint":
+            required = {"status", "script", "line", "function"}
+            extra = set(result.keys()) - required
+            if extra:
+                raise PdbProtocolError(
+                    f"Unknown fields in breakpoint result: "
+                    f"{sorted(extra)}"
+                )
+            missing = required - set(result.keys())
+            if missing:
+                raise PdbProtocolError(
+                    f"Missing fields in breakpoint result: "
+                    f"{sorted(missing)}"
+                )
+            script = result["script"]
+            if not isinstance(script, str) or not script:
+                raise PdbProtocolError(
+                    "breakpoint result script must be a non-empty string"
+                )
+            if expected_script and script != expected_script:
+                raise PdbProtocolError(
+                    f"breakpoint result script {script!r} does not match "
+                    f"expected {expected_script!r}"
+                )
+            line = result["line"]
+            if isinstance(line, bool) or not isinstance(line, int):
+                raise PdbProtocolError(
+                    "breakpoint result line must be an integer"
+                )
+            if line <= 0:
+                raise PdbProtocolError(
+                    "breakpoint result line must be positive"
+                )
+            if expected_breakpoints and line not in expected_breakpoints:
+                raise PdbProtocolError(
+                    f"breakpoint result line {line} is not among "
+                    f"requested breakpoints {list(expected_breakpoints)}"
+                )
+            fn = result["function"]
+            if not isinstance(fn, str) or not fn:
+                raise PdbProtocolError(
+                    "breakpoint result function must be a non-empty string"
+                )
+        elif status == "exited":
+            required = {"status", "script", "exit_code"}
+            extra = set(result.keys()) - required
+            if extra:
+                raise PdbProtocolError(
+                    f"Unknown fields in exited result: "
+                    f"{sorted(extra)}"
+                )
+            missing = required - set(result.keys())
+            if missing:
+                raise PdbProtocolError(
+                    f"Missing fields in exited result: "
+                    f"{sorted(missing)}"
+                )
+            script = result["script"]
+            if not isinstance(script, str) or not script:
+                raise PdbProtocolError(
+                    "exited result script must be a non-empty string"
+                )
+            if expected_script and script != expected_script:
+                raise PdbProtocolError(
+                    f"exited result script {script!r} does not match "
+                    f"expected {expected_script!r}"
+                )
+            ec = result["exit_code"]
+            if isinstance(ec, bool) or not isinstance(ec, int):
+                raise PdbProtocolError(
+                    "exited result exit_code must be an integer"
+                )
+        else:
+            raise PdbProtocolError(
+                f"Unknown status in run_to_breakpoint result: "
+                f"{status!r}"
+            )
 
     def _send_and_receive(
         self, request: PdbRequest, timeout: float

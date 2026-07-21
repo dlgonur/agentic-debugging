@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import builtins
 import io
 import os
 import pdb
+import stat
 import sys
 import traceback
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from agentic_debugger.runtime.pdb_protocol import (
     PROTOCOL_VERSION,
@@ -17,6 +20,98 @@ from agentic_debugger.runtime.pdb_protocol import (
 from agentic_debugger.runtime.exceptions import PdbProtocolError
 
 
+_MAX_SCRIPT_PATH_UTF8 = 4096
+_MAX_ARGV_ENTRY_UTF8 = 1024
+_BINARY_OPEN_FLAG = getattr(os, "O_BINARY", 0)
+_MAX_TARGET_SOURCE_BYTES = 16 * 1024 * 1024
+
+
+class _BreakpointSentinel(BaseException):
+    pass
+
+
+class _PdbRunner(pdb.Pdb):
+    def __init__(self, script_canonic: str, breakpoints_set: frozenset[int]) -> None:
+        stdin = io.StringIO()
+        stdout = io.StringIO()
+        super().__init__(readrc=False, stdin=stdin, stdout=stdout)
+        self._script_canonic: str = script_canonic
+        self._breakpoints: frozenset[int] = breakpoints_set
+        self.hit_info: Optional[Dict[str, Any]] = None
+
+    def user_line(self, frame: Any, return_to_frame: Any = None) -> None:
+        if (frame.f_lineno in self._breakpoints and
+            os.path.normcase(os.path.abspath(frame.f_code.co_filename)) == self._script_canonic):
+            self.hit_info = {
+                'line': frame.f_lineno,
+                'function': frame.f_code.co_name,
+            }
+            raise _BreakpointSentinel()
+
+    def user_call(self, frame: Any, argument: Any) -> None:
+        pass
+
+    def user_return(self, frame: Any, return_value: Any) -> None:
+        pass
+
+    def user_exception(self, frame: Any, exc_info: Any) -> None:
+        pass
+
+    def preloop(self) -> None:
+        pass
+
+    def postloop(self) -> None:
+        pass
+
+
+class _DiscardStdout:
+    def write(self, s: str) -> int:
+        return len(s) if s else 0
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation("fileno")
+
+
+class _DiscardStderr:
+    def write(self, s: str) -> int:
+        return len(s) if s else 0
+
+    def flush(self) -> None:
+        pass
+
+    def isatty(self) -> bool:
+        return False
+
+    def fileno(self) -> int:
+        raise io.UnsupportedOperation("fileno")
+
+
+class _NullReader:
+    def read(self, size: int = -1) -> str:
+        return ''
+
+    def readline(self, size: int = -1) -> str:
+        return ''
+
+    def readable(self) -> bool:
+        return True
+
+
+def _has_raw_dotdot(script: str) -> bool:
+    parts = script.replace('\\', '/').split('/')
+    return '..' in parts
+
+
+def _canonic(path: str) -> str:
+    return os.path.normcase(os.path.abspath(path))
+
+
 class PdbWorker:
     def __init__(self) -> None:
         self._pdb_stdin = io.StringIO()
@@ -27,6 +122,8 @@ class PdbWorker:
             stdout=self._pdb_stdout,
         )
         self._running = True
+        self._target_completed = False
+        self._protocol_stdout = sys.stdout
 
     def run(self) -> None:
         while self._running:
@@ -86,6 +183,8 @@ class PdbWorker:
             self._handle_ping(request)
         elif op == "shutdown":
             self._handle_shutdown(request)
+        elif op == "run_to_breakpoint":
+            self._handle_run_to_breakpoint(request)
         else:
             self._send_error(
                 request_id=request.request_id,
@@ -126,11 +225,418 @@ class PdbWorker:
         self._send_response(response)
         self._running = False
 
+    def _handle_run_to_breakpoint(self, request: PdbRequest) -> None:
+        payload = request.payload
+
+        for field in ('script', 'breakpoints', 'argv'):
+            if field not in payload:
+                self._send_error(
+                    request.request_id,
+                    f"Missing required payload field: {field}"
+                )
+                return
+
+        for field in payload:
+            if field not in ('script', 'breakpoints', 'argv'):
+                self._send_error(
+                    request.request_id,
+                    f"Unknown payload field: {field}"
+                )
+                return
+
+        if self._target_completed:
+            self._send_error(
+                request.request_id,
+                "Target execution already completed on this worker"
+            )
+            return
+
+        workspace_root = os.getcwd()
+
+        script = payload['script']
+        breakpoints_raw = payload['breakpoints']
+        argv_raw = payload['argv']
+
+        sv = self._read_validated_workspace_script(script, workspace_root, request.request_id)
+        if sv is None:
+            return
+        script_normalized, script_abs, source_bytes = sv
+
+        bps = self._validate_breakpoints(breakpoints_raw, source_bytes, request.request_id)
+        if bps is None:
+            return
+
+        av = self._validate_argv(argv_raw, request.request_id)
+        if av is None:
+            return
+
+        self._execute_target(script_normalized, script_abs, bps, av, source_bytes, request.request_id)
+
+    def _read_validated_workspace_script(
+        self,
+        script: Any,
+        workspace_root: str,
+        request_id: int,
+    ) -> Optional[Tuple[str, str, bytes]]:
+        if not isinstance(script, str) or not script:
+            self._send_error(request_id, "script must be a non-empty string")
+            return None
+
+        if '\0' in script:
+            self._send_error(request_id, "script contains NUL byte")
+            return None
+
+        if not script.endswith('.py'):
+            self._send_error(request_id, "script must end with .py")
+            return None
+
+        try:
+            encoded = script.encode('utf-8')
+        except UnicodeEncodeError as e:
+            self._send_error(
+                request_id,
+                f"script contains non-UTF-8-representable characters: {e}"
+            )
+            return None
+
+        if len(encoded) > _MAX_SCRIPT_PATH_UTF8:
+            self._send_error(
+                request_id,
+                f"script path exceeds {_MAX_SCRIPT_PATH_UTF8} UTF-8 bytes"
+            )
+            return None
+
+        if len(script) >= 2 and script[1] == ':':
+            self._send_error(request_id, "script must be a relative path")
+            return None
+
+        if script.startswith('/') or script.startswith('\\'):
+            self._send_error(request_id, "script must be a relative path")
+            return None
+
+        normalized = os.path.normpath(script)
+
+        if os.path.isabs(normalized):
+            self._send_error(request_id, "script must be a relative path")
+            return None
+
+        if _has_raw_dotdot(script):
+            self._send_error(request_id, "script must not contain .. traversal")
+            return None
+
+        normalized = normalized.replace('\\', '/')
+
+        abs_path = os.path.normpath(os.path.join(workspace_root, normalized))
+
+        try:
+            fd = os.open(abs_path, os.O_RDONLY | _BINARY_OPEN_FLAG)
+        except (FileNotFoundError, IsADirectoryError) as e:
+            if os.path.isdir(abs_path):
+                self._send_error(request_id, f"script is a directory: {script}")
+                return None
+            self._send_error(request_id, f"script not found: {script}")
+            return None
+        except OSError as e:
+            self._send_error(request_id, f"cannot open script: {e}")
+            return None
+
+        try:
+            try:
+                opened_stat = os.fstat(fd)
+            except OSError as e:
+                self._send_error(request_id, f"cannot stat opened script: {e}")
+                return None
+
+            if not stat.S_ISREG(opened_stat.st_mode):
+                self._send_error(request_id, f"script is not a regular file: {script}")
+                return None
+
+            try:
+                real_root = os.path.realpath(workspace_root)
+                real_path = os.path.realpath(abs_path)
+            except (ValueError, OSError) as e:
+                self._send_error(request_id, f"cannot resolve script path: {e}")
+                return None
+
+            try:
+                common = os.path.commonpath([real_root, real_path])
+            except (ValueError, OSError) as e:
+                self._send_error(request_id, f"script path containment check failed: {e}")
+                return None
+
+            if os.path.normcase(common) != os.path.normcase(real_root):
+                self._send_error(request_id, "script escapes workspace via symlink or junction")
+                return None
+
+            try:
+                current_path_stat = os.stat(real_path)
+            except OSError as e:
+                self._send_error(request_id, f"cannot stat resolved script: {e}")
+                return None
+
+            if not os.path.samestat(opened_stat, current_path_stat):
+                self._send_error(
+                    request_id,
+                    "script file changed between validation and open"
+                )
+                return None
+
+            source_bytes = self._read_bounded_fd(fd, request_id)
+            if source_bytes is None:
+                return None
+        finally:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+        return (normalized, real_path, source_bytes)
+
+    def _read_bounded_fd(self, fd: int, request_id: int) -> Optional[bytes]:
+        buffer = bytearray()
+        while True:
+            remaining = _MAX_TARGET_SOURCE_BYTES + 1 - len(buffer)
+            if remaining <= 0:
+                break
+            try:
+                chunk = os.read(fd, min(64 * 1024, remaining))
+            except OSError as e:
+                self._send_error(request_id, f"cannot read script: {e}")
+                return None
+            if not chunk:
+                break
+            buffer.extend(chunk)
+        if len(buffer) > _MAX_TARGET_SOURCE_BYTES:
+            self._send_error(request_id, "script exceeds maximum source size")
+            return None
+        return bytes(buffer)
+
+    def _validate_breakpoints(
+        self,
+        breakpoints_raw: Any,
+        source_bytes: bytes,
+        request_id: int,
+    ) -> Optional[List[int]]:
+        if not isinstance(breakpoints_raw, list):
+            self._send_error(request_id, "breakpoints must be a list")
+            return None
+
+        if len(breakpoints_raw) < 1 or len(breakpoints_raw) > 16:
+            self._send_error(request_id, "breakpoints must have 1-16 entries")
+            return None
+
+        bps: List[int] = []
+        for bp in breakpoints_raw:
+            if isinstance(bp, bool) or not isinstance(bp, int):
+                self._send_error(request_id, "breakpoints must contain only integers")
+                return None
+            if bp <= 0:
+                self._send_error(request_id, "breakpoints must be positive integers")
+                return None
+            bps.append(bp)
+
+        if len(set(bps)) != len(bps):
+            self._send_error(request_id, "breakpoints must not contain duplicates")
+            return None
+
+        bps.sort()
+
+        line_count = len(source_bytes.splitlines())
+
+        for bp_line in bps:
+            if bp_line > line_count:
+                self._send_error(
+                    request_id,
+                    f"breakpoint line {bp_line} exceeds source length ({line_count})"
+                )
+                return None
+
+        return bps
+
+    def _validate_argv(
+        self,
+        argv_raw: Any,
+        request_id: int,
+    ) -> Optional[List[str]]:
+        if not isinstance(argv_raw, list):
+            self._send_error(request_id, "argv must be a list")
+            return None
+
+        if len(argv_raw) > 32:
+            self._send_error(request_id, "argv must have at most 32 entries")
+            return None
+
+        av: List[str] = []
+        for a in argv_raw:
+            if isinstance(a, bool) or not isinstance(a, str):
+                self._send_error(request_id, "argv entries must be strings")
+                return None
+            if '\0' in a:
+                self._send_error(request_id, "argv entry contains NUL byte")
+                return None
+            try:
+                encoded = a.encode('utf-8')
+            except UnicodeEncodeError as e:
+                self._send_error(
+                    request_id,
+                    f"argv entry contains non-UTF-8-representable characters: {e}"
+                )
+                return None
+            if len(encoded) > _MAX_ARGV_ENTRY_UTF8:
+                self._send_error(
+                    request_id,
+                    f"argv entry exceeds {_MAX_ARGV_ENTRY_UTF8} UTF-8 bytes"
+                )
+                return None
+            av.append(a)
+
+        return av
+
+    def _safe_error_message(self, exc: BaseException) -> str:
+        try:
+            rendered = str(exc)
+        except BaseException:
+            rendered = "<unprintable exception>"
+        msg = f"Target raised {type(exc).__name__}: {rendered}"
+        control_chars = set('\r\n\t')
+        safe = ''.join(c if c.isprintable() or c in (' ', '\t') else '?' for c in msg)
+        safe_enc = safe.encode('utf-8', errors='replace')[:4096].decode('utf-8', errors='replace')
+        return safe_enc
+
+    def _execute_target(
+        self,
+        script_normalized: str,
+        script_abs: str,
+        breakpoints: List[int],
+        argv: List[str],
+        source_bytes: bytes,
+        request_id: int,
+    ) -> None:
+        saved_argv = list(sys.argv)
+        saved_path = list(sys.path)
+        saved_stdin = sys.stdin
+        saved_stdout = sys.stdout
+        saved_stderr = sys.stderr
+        saved_cwd = os.getcwd()
+        saved_trace = sys.gettrace()
+
+        try:
+            script_dir = os.path.dirname(script_abs)
+            sys.argv = [script_normalized] + argv
+            sys.path = [script_dir] + saved_path
+            sys.stdin = _NullReader()
+            sys.stdout = _DiscardStdout()
+            sys.stderr = _DiscardStderr()
+
+            try:
+                code = compile(source_bytes, script_abs, 'exec')
+            except SyntaxError as e:
+                self._send_error(
+                    request_id,
+                    self._safe_error_message(e)
+                )
+                self._target_completed = True
+                return
+
+            canonic = _canonic(script_abs)
+            runner = _PdbRunner(canonic, frozenset(breakpoints))
+
+            try:
+                globs: Dict[str, Any] = {
+                    '__name__': '__main__',
+                    '__doc__': None,
+                    '__package__': None,
+                    '__loader__': None,
+                    '__spec__': None,
+                    '__file__': script_abs,
+                    '__builtins__': builtins.__dict__,
+                }
+                runner.run(code, globs, globs)
+            except _BreakpointSentinel:
+                result = {
+                    'status': 'breakpoint',
+                    'script': script_normalized,
+                    'line': runner.hit_info['line'],
+                    'function': runner.hit_info['function'],
+                }
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=True,
+                    result=result,
+                    error="",
+                )
+                self._send_response(response)
+                self._target_completed = True
+                return
+            except SystemExit as e:
+                ec = e.code
+                if ec is None:
+                    exit_code = 0
+                elif isinstance(ec, bool):
+                    exit_code = 1 if ec else 0
+                elif isinstance(ec, int):
+                    exit_code = ec
+                else:
+                    exit_code = 1
+                result = {
+                    'status': 'exited',
+                    'script': script_normalized,
+                    'exit_code': exit_code,
+                }
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=True,
+                    result=result,
+                    error="",
+                )
+                self._send_response(response)
+                self._target_completed = True
+                return
+            except BaseException as e:
+                error_msg = self._safe_error_message(e)
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=False,
+                    result={},
+                    error=error_msg,
+                )
+                self._send_response(response)
+                self._target_completed = True
+                return
+            else:
+                result = {
+                    'status': 'exited',
+                    'script': script_normalized,
+                    'exit_code': 0,
+                }
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=True,
+                    result=result,
+                    error="",
+                )
+                self._send_response(response)
+                self._target_completed = True
+                return
+        finally:
+            sys.argv = saved_argv
+            sys.path = saved_path
+            sys.stdin = saved_stdin
+            sys.stdout = saved_stdout
+            sys.stderr = saved_stderr
+            os.chdir(saved_cwd)
+            sys.settrace(None)
+            sys.settrace(saved_trace)
+
     def _send_response(self, response: PdbResponse) -> None:
         data = serialize_response(response)
         try:
-            sys.stdout.buffer.write(data)
-            sys.stdout.buffer.flush()
+            self._protocol_stdout.buffer.write(data)
+            self._protocol_stdout.buffer.flush()
         except OSError:
             self._running = False
 

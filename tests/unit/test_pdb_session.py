@@ -1,6 +1,8 @@
+import os as _os
 import queue as _queue
 import threading
 import queue as _queue_module
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -127,9 +129,14 @@ class _ExhaustibleMockStream:
 
 @pytest.fixture
 def mock_workspace():
+    import tempfile, shutil
+    d = tempfile.mkdtemp()
+    Path(d).mkdir(parents=True, exist_ok=True)
+    (Path(d) / "test.py").write_text("x = 1\ny = 2\nz = 3\n")
     ws = MagicMock(spec=TaskWorkspace)
-    ws.root = "C:\\test_workspace"
-    return ws
+    ws.root = d
+    yield ws
+    shutil.rmtree(d, ignore_errors=True)
 
 
 def _setup(ws, hello_responses, **kwargs):
@@ -1412,6 +1419,581 @@ class TestInFlightOverflow:
             assert session.state == PdbSessionState.STOPPED
 
 
+def _run_to_bp_resp(request_id=2, result=None, success=True, error=""):
+    if result is None:
+        result = {"status": "exited", "script": "test.py", "exit_code": 0}
+    return _ser(PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=request_id,
+        success=success,
+        result=result,
+        error=error,
+    ))
+
+
+class TestRunToBreakpointValidation:
+    def test_not_ready_state(self, mock_workspace):
+        session = PdbSession(mock_workspace)
+        with pytest.raises(PdbSessionStateError, match="Cannot run_to_breakpoint"):
+            session.run_to_breakpoint("test.py", [1])
+
+    def test_absolute_path_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="relative path"):
+            session.run_to_breakpoint("/abs/test.py", [1])
+        session.stop()
+
+    def test_dotdot_traversal_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match=".. traversal"):
+            session.run_to_breakpoint("../test.py", [1])
+        session.stop()
+
+    def test_empty_script_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="non-empty"):
+            session.run_to_breakpoint("", [1])
+        session.stop()
+
+    def test_nul_in_script_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="NUL"):
+            session.run_to_breakpoint("test\x00.py", [1])
+        session.stop()
+
+    def test_non_py_extension_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="end with .py"):
+            session.run_to_breakpoint("test.txt", [1])
+        session.stop()
+
+    def test_empty_breakpoints_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="1-16"):
+            session.run_to_breakpoint("test.py", [])
+        session.stop()
+
+    def test_too_many_breakpoints_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="1-16"):
+            session.run_to_breakpoint("test.py", list(range(1, 18)))
+        session.stop()
+
+    def test_zero_breakpoint_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="positive"):
+            session.run_to_breakpoint("test.py", [0])
+        session.stop()
+
+    def test_negative_breakpoint_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="positive"):
+            session.run_to_breakpoint("test.py", [-1])
+        session.stop()
+
+    def test_boolean_breakpoint_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="integers"):
+            session.run_to_breakpoint("test.py", [True])
+        session.stop()
+
+    def test_duplicate_breakpoint_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="duplicates"):
+            session.run_to_breakpoint("test.py", [3, 3])
+        session.stop()
+
+    def test_breakpoint_ordering(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        bps = session._validate_breakpoints([5, 1, 3])
+        assert bps == [1, 3, 5]
+        session.stop()
+
+    def test_raw_dotdot_traversal_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        for bad in ("../target.py", "a/../target.py", "a\\..\\target.py", "./../target.py"):
+            with pytest.raises(PdbProtocolError, match=".. traversal"):
+                session.run_to_breakpoint(bad, [1])
+        session.stop()
+
+    def test_missing_file_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="not found"):
+            session.run_to_breakpoint("missing.py", [1])
+        assert session._target_consumed is False
+        resp = session.ping()
+        assert resp.success is True
+        session.stop()
+
+    def test_directory_named_dotpy_rejected(self, mock_workspace):
+        import tempfile, shutil
+        d = Path(mock_workspace.root)
+        (d / "directory.py").mkdir(exist_ok=True)
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="directory"):
+            session.run_to_breakpoint("directory.py", [1])
+        assert session._target_consumed is False
+        session.stop()
+        shutil.rmtree(str(d / "directory.py"), ignore_errors=True)
+
+    def test_local_rejection_sends_no_request_and_preserves_worker(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        orig_send = session._send_and_receive
+        sent = []
+        def track_send(req, timeout):
+            sent.append(req)
+            return orig_send(req, timeout)
+        session._send_and_receive = track_send
+        with pytest.raises(PdbProtocolError, match="not found"):
+            session.run_to_breakpoint("missing.py", [1])
+        assert len(sent) == 0
+        assert session._target_consumed is False
+        resp = session.ping()
+        assert resp.success is True
+        session.stop()
+
+    def test_valid_run_possible_after_local_rejection(self, mock_workspace):
+        _run_to_bp_resp_ok = _run_to_bp_resp
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+            _run_to_bp_resp_ok(2),
+        ])
+        with pytest.raises(PdbProtocolError, match="not found"):
+            session.run_to_breakpoint("missing.py", [1])
+        resp = session.run_to_breakpoint("test.py", [2])
+        assert resp.success is True
+        session.stop()
+
+    def test_breakpoint_999_exceeds_source_length(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="exceeds source length"):
+            session.run_to_breakpoint("test.py", [1, 999])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_missing_payload_field(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="must be"):
+            session.run_to_breakpoint(123, [1])
+        session.stop()
+
+    def test_missing_script(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="non-empty"):
+            session.run_to_breakpoint("", [1])
+        session.stop()
+
+    def test_directory_path(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="end with .py"):
+            session.run_to_breakpoint("somedir", [1])
+        session.stop()
+
+    def test_oversized_script_path(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        long_path = "x" * 5000 + ".py"
+        with pytest.raises(PdbProtocolError, match="UTF-8 bytes"):
+            session.run_to_breakpoint(long_path, [1])
+        session.stop()
+
+    def test_oversized_argv_item(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="UTF-8 bytes"):
+            session.run_to_breakpoint("test.py", [1], argv=["x" * 2000])
+        session.stop()
+
+    def test_invalid_argv_container(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="list"):
+            session.run_to_breakpoint("test.py", [1], argv="not a list")
+        session.stop()
+
+    def test_non_string_argv_entry(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="strings"):
+            session.run_to_breakpoint("test.py", [1], argv=[42])
+        session.stop()
+
+    def test_wrong_script_in_breakpoint_result(self, mock_workspace):
+        bad_result = {"status": "breakpoint", "script": "wrong.py", "line": 3, "function": "main"}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch("agentic_debugger.runtime.pdb_session.subprocess.Popen") as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.run_to_breakpoint("test.py", [3])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_unrequested_line_in_breakpoint_result(self, mock_workspace):
+        bad_result = {"status": "breakpoint", "script": "test.py", "line": 99, "function": "main"}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch("agentic_debugger.runtime.pdb_session.subprocess.Popen") as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.run_to_breakpoint("test.py", [3])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_empty_function_in_breakpoint_result(self, mock_workspace):
+        bad_result = {"status": "breakpoint", "script": "test.py", "line": 3, "function": ""}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch("agentic_debugger.runtime.pdb_session.subprocess.Popen") as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.run_to_breakpoint("test.py", [3])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_extra_field_in_breakpoint_result(self, mock_workspace):
+        bad_result = {"status": "breakpoint", "script": "test.py", "line": 3, "function": "main", "extra": 1}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch("agentic_debugger.runtime.pdb_session.subprocess.Popen") as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.run_to_breakpoint("test.py", [3])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_wrong_exit_script(self, mock_workspace):
+        bad_result = {"status": "exited", "script": "wrong.py", "exit_code": 0}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch("agentic_debugger.runtime.pdb_session.subprocess.Popen") as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.run_to_breakpoint("test.py", [1])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_boolean_in_argv_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="strings"):
+            session.run_to_breakpoint("test.py", [1], argv=[True])
+        session.stop()
+
+    def test_nul_in_argv_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="NUL"):
+            session.run_to_breakpoint("test.py", [1], argv=["a\x00b"])
+        session.stop()
+
+    def test_too_many_argv_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbProtocolError, match="at most 32"):
+            session.run_to_breakpoint("test.py", [1], argv=["x"] * 33)
+        session.stop()
+
+    def test_second_execution_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        session._target_consumed = True
+        with pytest.raises(PdbSessionStateError, match="already completed"):
+            session.run_to_breakpoint("test.py", [1])
+        session.stop()
+
+    def test_concurrent_two_calls_one_executes(self, mock_workspace):
+        import time as _time
+        results = []
+        send_count = []
+        lock_held = threading.Event()
+
+        mock_stdout = _ExhaustibleMockStream([_hello_resp(1), _run_to_bp_resp(2)])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch("agentic_debugger.runtime.pdb_session.subprocess.Popen") as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+
+            session = PdbSession(mock_workspace, request_timeout=3.0)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+
+            def hang_send(req, timeout):
+                send_count.append(1)
+                lock_held.set()
+                _time.sleep(1.5)
+                # Simulate response
+                from agentic_debugger.runtime.pdb_protocol import PdbResponse
+                return PdbResponse(
+                    protocol_version=1, request_id=req.request_id,
+                    success=True,
+                    result={"status": "exited", "script": "test.py", "exit_code": 0},
+                    error="",
+                )
+
+            session._send_and_receive = hang_send
+
+            def caller():
+                try:
+                    resp = session.run_to_breakpoint("test.py", [2])
+                    results.append(("ok", resp.success))
+                except Exception as e:
+                    results.append(("err", type(e).__name__))
+
+            t1 = threading.Thread(target=caller, daemon=True)
+            t1.start()
+            lock_held.wait(timeout=5)
+            _time.sleep(0.1)
+
+            with pytest.raises((PdbSessionError, PdbSessionStateError)):
+                session.run_to_breakpoint("test.py", [2])
+
+            t1.join(timeout=5)
+
+        assert len(results) == 1
+        assert results[0][0] == "ok"
+        assert len(send_count) == 1
+        session.stop()
+
+    def test_in_flight_limit(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        session._request_lock.acquire(timeout=0.1)
+        with pytest.raises(PdbSessionError, match="already in flight"):
+            session.run_to_breakpoint("test.py", [1])
+        session._request_lock.release()
+        session.stop()
+
+    def test_malformed_success_result_breakpoint(self, mock_workspace):
+        bad_result = {"status": "breakpoint", "script": 123, "line": 5, "function": "main"}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises(PdbProtocolError, match="script must be"):
+                session.run_to_breakpoint("test.py", [1])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_malformed_success_result_exited(self, mock_workspace):
+        bad_result = {"status": "exited", "script": "test.py", "exit_code": True}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises(PdbProtocolError, match="exit_code must be"):
+                session.run_to_breakpoint("test.py", [1])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_unknown_status_in_result(self, mock_workspace):
+        bad_result = {"status": "unknown", "script": "test.py"}
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result=bad_result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            with pytest.raises(PdbProtocolError, match="Unknown status"):
+                session.run_to_breakpoint("test.py", [1])
+            assert session.state == PdbSessionState.FAILED
+            session.stop()
+
+    def test_valid_target_error_does_not_fail_session(self, mock_workspace):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result={}, success=False, error="Target raised ValueError: test"),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            resp = session.run_to_breakpoint("test.py", [1])
+            assert resp.success is False
+            assert "ValueError" in resp.error
+            assert session.state == PdbSessionState.READY
+            session.stop()
+
+    def test_ping_still_works_after_target_error(self, mock_workspace):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2, result={}, success=False, error="Target error"),
+            _ping_resp(3),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            session.run_to_breakpoint("test.py", [1])
+            resp = session.ping()
+            assert resp.success is True
+            session.stop()
+
+    def test_second_run_to_breakpoint_rejected_after_valid_exec(self, mock_workspace):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2),
+            _ping_resp(3),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            session.run_to_breakpoint("test.py", [1])
+            with pytest.raises(PdbSessionStateError, match="already completed"):
+                session.run_to_breakpoint("test.py", [1])
+            session.stop()
+
+    def test_context_manager_stop_after_run(self, mock_workspace):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _run_to_bp_resp(2),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            with session as s:
+                resp = s.run_to_breakpoint("test.py", [1])
+                assert resp.success is True
+            assert session.state == PdbSessionState.STOPPED
+
+
 class TestCleanupFailure:
     """Repair 3: cleanup coordinator failure is preserved."""
 
@@ -1449,3 +2031,106 @@ class TestCleanupFailure:
             stuck.join(timeout=1.0)
             session._terminate_and_cleanup()
             assert session._proc is None
+
+
+class TestRunToBreakpointRepairs:
+    """Repairs 1–3: cross-drive, TOCTOU, UTF-8 validation."""
+
+    def test_cross_drive_commonpath_raises_pdb_error(self, mock_workspace):
+        s = PdbSession(mock_workspace)
+        with patch("agentic_debugger.runtime.pdb_session.os.path.commonpath",
+                   side_effect=ValueError("no common drive")):
+            with pytest.raises(PdbProtocolError, match="containment check"):
+                s._read_validated_workspace_script("test.py")
+
+    def test_commonpath_oserror_raises_pdb_error(self, mock_workspace):
+        s = PdbSession(mock_workspace)
+        with patch("agentic_debugger.runtime.pdb_session.os.path.commonpath",
+                   side_effect=OSError("commonpath failed")):
+            with pytest.raises(PdbProtocolError, match="containment check"):
+                s._read_validated_workspace_script("test.py")
+
+    def test_reject_utf8_surrogate_script(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="non-UTF-8"):
+            session.run_to_breakpoint("bad\ud800.py", [1])
+        assert session._target_consumed is False
+        resp = session.ping()
+        assert resp.success is True
+        session.stop()
+
+    def test_reject_utf8_surrogate_argv(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="non-UTF-8"):
+            session.run_to_breakpoint("test.py", [1], argv=["\ud800"])
+        assert session._target_consumed is False
+        resp = session.ping()
+        assert resp.success is True
+        session.stop()
+
+    def test_check_utf8_strict_raises_on_surrogate(self, mock_workspace):
+        s = PdbSession(mock_workspace)
+        with pytest.raises(PdbProtocolError, match="non-UTF-8"):
+            s._check_utf8_strict("\ud800", "test")
+
+    def test_check_utf8_strict_passes_normal(self, mock_workspace):
+        s = PdbSession(mock_workspace)
+        s._check_utf8_strict("normal.py", "script")
+
+    def test_binary_open_flag_portable(self, mock_workspace):
+        from agentic_debugger.runtime.pdb_session import _BINARY_OPEN_FLAG as bf
+        assert bf == getattr(_os, "O_BINARY", 0)
+
+    def test_session_read_bounded_fd_short_reads(self, mock_workspace):
+        import tempfile
+        d = Path(mock_workspace.root)
+        f = d / "short_read_test.py"
+        f.write_bytes(b"abc" + b"def" + b"ghi")
+        s = PdbSession(mock_workspace)
+        fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
+        try:
+            result = s._read_bounded_fd(fd)
+            assert result == b"abcdefghi"
+        finally:
+            _os.close(fd)
+
+    def test_session_read_bounded_fd_empty(self, mock_workspace):
+        d = Path(mock_workspace.root)
+        f = d / "empty_read_test.py"
+        f.write_bytes(b"")
+        s = PdbSession(mock_workspace)
+        fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
+        try:
+            result = s._read_bounded_fd(fd)
+            assert result == b""
+        finally:
+            _os.close(fd)
+
+    def test_session_read_bounded_fd_exact_limit(self, mock_workspace):
+        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_session import PdbSession as _Ps
+        d = Path(mock_workspace.root)
+        f = d / "exact_limit_test.py"
+        data = b"x" * _MAX_TARGET_SOURCE_BYTES
+        f.write_bytes(data)
+        fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
+        try:
+            result = _Ps._read_bounded_fd(fd)
+            assert isinstance(result, bytes)
+            assert len(result) == _MAX_TARGET_SOURCE_BYTES
+        finally:
+            _os.close(fd)
+
+    def test_session_read_bounded_fd_over_limit(self, mock_workspace):
+        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
+        from agentic_debugger.runtime.pdb_session import PdbSession as _Ps
+        d = Path(mock_workspace.root)
+        f = d / "over_limit_test.py"
+        data = b"x" * (_MAX_TARGET_SOURCE_BYTES + 1)
+        f.write_bytes(data)
+        fd = _os.open(str(f), _os.O_RDONLY | getattr(_os, "O_BINARY", 0))
+        try:
+            with pytest.raises(PdbProtocolError, match="exceeds maximum source"):
+                _Ps._read_bounded_fd(fd)
+        finally:
+            _os.close(fd)
