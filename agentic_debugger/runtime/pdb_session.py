@@ -58,6 +58,29 @@ _PING_KNOWN_FIELDS = frozenset({"status", "pdb_created"})
 _SHUTDOWN_REQUIRED_FIELDS = frozenset({"shutdown"})
 _SHUTDOWN_KNOWN_FIELDS = frozenset({"shutdown"})
 
+_MAX_RESULT_FUNCTION_UTF8 = 4096
+_MAX_RESULT_ERROR_UTF8 = 4096
+
+_PAUSED_RESULT_FIELDS = frozenset({"state", "script", "line", "function"})
+_EXITED_RESULT_FIELDS = frozenset({"state", "script", "exit_code"})
+_TERMINATED_RESULT_FIELDS = frozenset({"state", "script"})
+_STATUS_IDLE_FIELDS = frozenset({"state"})
+_STATUS_PAUSED_FIELDS = frozenset({"state", "script", "line", "function"})
+_STATUS_EXITED_FIELDS = frozenset({"state", "script", "exit_code"})
+_STATUS_FAILED_FIELDS = frozenset({"state", "script", "error"})
+_STATUS_TERMINATED_FIELDS = frozenset({"state", "script"})
+
+# Public target states the worker may legitimately return.
+_PUBLIC_TARGET_STATES = frozenset({
+    "idle", "paused", "exited", "failed", "terminated",
+})
+
+# Private transient value: "starting" is used only while the
+# start_paused_target call owns _request_lock.  It is never
+# a valid worker result or a stable local lifecycle state.
+# Local \"unknown\" is set only when a correlated worker response
+# is operationally failed and the true lifecycle is not known.
+
 
 def _has_raw_dotdot(script: str) -> bool:
     parts = script.replace('\\', '/').split('/')
@@ -216,6 +239,9 @@ class PdbSession:
         self._reader_cleanup_thread: Optional[threading.Thread] = None
 
         self._target_consumed = False
+        self._target_lifecycle_state: str = "idle"
+        self._active_script: Optional[str] = None
+        self._active_breakpoints: Optional[Sequence[int]] = None
 
         self._response_queue: queue.Queue[Optional[bytes]] = queue.Queue(
             maxsize=_QUEUE_CAPACITY
@@ -650,6 +676,14 @@ class PdbSession:
                     )
                 except (PdbProtocolError, PdbSessionError) as e:
                     self._fail_and_cleanup(e)
+                status = response.result.get("status")
+                with self._state_lock:
+                    if status == "breakpoint":
+                        self._target_lifecycle_state = "terminated"
+                    elif status == "exited":
+                        self._target_lifecycle_state = "exited"
+                    self._active_script = script_val
+                    self._active_breakpoints = None
             else:
                 if response.result != {}:
                     self._fail_and_cleanup(
@@ -658,8 +692,213 @@ class PdbSession:
                             f"got {response.result}"
                         )
                     )
+                with self._state_lock:
+                    self._target_lifecycle_state = "failed"
+                    self._active_script = script_val
+                    self._active_breakpoints = None
 
             return response
+        except Exception:
+            raise
+        finally:
+            self._request_lock.release()
+
+    def start_paused_target(
+        self,
+        script: str,
+        breakpoints: Sequence[int],
+        argv: Sequence[str] = (),
+    ) -> Dict[str, object]:
+        if not self._request_lock.acquire(timeout=self._request_timeout):
+            raise PdbSessionError(
+                "A request is already in flight; only one "
+                "in-flight request is supported"
+            )
+        try:
+            with self._state_lock:
+                if self._state != PdbSessionState.READY:
+                    raise PdbSessionStateError(
+                        f"Cannot start_paused_target from state "
+                        f"{self._state.value}; expected READY"
+                    )
+                if self._target_consumed:
+                    raise PdbSessionStateError(
+                        "Target execution already completed on this session; "
+                        "exactly one execution is allowed"
+                    )
+
+            script_val, source_bytes = self._validate_script_and_read(script)
+            breakpoints_val = self._validate_breakpoints(
+                breakpoints, source_bytes
+            )
+            argv_val = self._validate_argv(argv)
+
+            with self._state_lock:
+                self._target_consumed = True
+                self._target_lifecycle_state = "starting"
+                self._active_script = script_val
+                self._active_breakpoints = list(breakpoints_val)
+
+            payload: Dict[str, Any] = {
+                "script": script_val,
+                "breakpoints": breakpoints_val,
+                "argv": argv_val,
+            }
+
+            request = PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=self._allocate_request_id(),
+                operation="start_paused_target",
+                payload=payload,
+            )
+
+            response = self._send_and_receive(
+                request, self._request_timeout
+            )
+
+            if response.success:
+                try:
+                    state = self._validate_start_paused_result(
+                        response, script_val, breakpoints_val
+                    )
+                except (PdbProtocolError, PdbSessionError) as e:
+                    self._fail_and_cleanup(e)
+
+                if state == "paused":
+                    self._update_local_lifecycle("paused", script_val)
+                    return {
+                        "state": "paused",
+                        "script": response.result["script"],
+                        "line": response.result["line"],
+                        "function": response.result["function"],
+                    }
+                else:
+                    self._update_local_lifecycle("exited", script_val)
+                    return {
+                        "state": "exited",
+                        "script": response.result["script"],
+                        "exit_code": response.result["exit_code"],
+                    }
+            else:
+                if response.result != {}:
+                    self._fail_and_cleanup(
+                        PdbProtocolError(
+                            "Failed start_paused_target response must have "
+                            f"empty result, got {response.result}"
+                        )
+                    )
+                self._update_local_lifecycle("failed", script_val)
+                raise PdbSessionError(
+                    f"Target failed to start: {response.error}"
+                )
+        except Exception:
+            raise
+        finally:
+            self._request_lock.release()
+
+    def get_target_status(self) -> Dict[str, object]:
+        if not self._request_lock.acquire(timeout=self._request_timeout):
+            raise PdbSessionError(
+                "A request is already in flight; only one "
+                "in-flight request is supported"
+            )
+        try:
+            with self._state_lock:
+                if self._state != PdbSessionState.READY:
+                    raise PdbSessionStateError(
+                        f"Cannot get_target_status from state "
+                        f"{self._state.value}; expected READY"
+                    )
+
+            request = PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=self._allocate_request_id(),
+                operation="get_target_status",
+                payload={},
+            )
+
+            response = self._send_and_receive(
+                request, self._request_timeout
+            )
+
+            if not response.success:
+                if response.result != {}:
+                    self._fail_and_cleanup(
+                        PdbProtocolError(
+                            "Failed get_target_status response must have "
+                            f"empty result, got {response.result}"
+                        )
+                    )
+                raise PdbSessionError(
+                    f"get_target_status failed: {response.error}"
+                )
+
+            try:
+                state = self._validate_status_result(response)
+            except (PdbProtocolError, PdbSessionError) as e:
+                self._fail_and_cleanup(e)
+
+            self._update_local_lifecycle(state)
+
+            return dict(response.result)
+        except Exception:
+            raise
+        finally:
+            self._request_lock.release()
+
+    def terminate_paused_target(self) -> Dict[str, object]:
+        if not self._request_lock.acquire(timeout=self._request_timeout):
+            raise PdbSessionError(
+                "A request is already in flight; only one "
+                "in-flight request is supported"
+            )
+        try:
+            with self._state_lock:
+                if self._state != PdbSessionState.READY:
+                    raise PdbSessionStateError(
+                        f"Cannot terminate_paused_target from state "
+                        f"{self._state.value}; expected READY"
+                    )
+                if self._target_lifecycle_state != "paused":
+                    raise PdbSessionStateError(
+                        f"Cannot terminate_paused_target in local lifecycle "
+                        f"state {self._target_lifecycle_state!r}; "
+                        f"expected 'paused'"
+                    )
+                active_script = self._active_script
+
+            request = PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=self._allocate_request_id(),
+                operation="terminate_paused_target",
+                payload={},
+            )
+
+            response = self._send_and_receive(
+                request, self._request_timeout
+            )
+
+            if not response.success:
+                if response.result != {}:
+                    self._fail_and_cleanup(
+                        PdbProtocolError(
+                            "Failed terminate_paused_target response must "
+                            f"have empty result, got {response.result}"
+                        )
+                    )
+                self._update_local_lifecycle("unknown", active_script)
+                raise PdbSessionError(
+                    f"Terminate failed: {response.error}"
+                )
+
+            try:
+                self._validate_terminate_result(response, active_script)
+            except (PdbProtocolError, PdbSessionError) as e:
+                self._fail_and_cleanup(e)
+
+            self._update_local_lifecycle("terminated", active_script)
+
+            return dict(response.result)
         except Exception:
             raise
         finally:
@@ -972,6 +1211,330 @@ class PdbSession:
                 f"Unknown status in run_to_breakpoint result: "
                 f"{status!r}"
             )
+
+    @staticmethod
+    def _validate_bounded_protocol_string(
+        v: Any, label: str, max_utf8: int = _MAX_SCRIPT_PATH_UTF8,
+    ) -> str:
+        if not isinstance(v, str):
+            raise PdbProtocolError(f"{label} must be a string")
+        if not v:
+            raise PdbProtocolError(f"{label} must be non-empty")
+        if '\0' in v:
+            raise PdbProtocolError(f"{label} contains NUL byte")
+        try:
+            encoded = v.encode('utf-8')
+        except UnicodeEncodeError as e:
+            raise PdbProtocolError(
+                f"{label} contains non-UTF-8-representable characters: {e}"
+            ) from e
+        if len(encoded) > max_utf8:
+            raise PdbProtocolError(
+                f"{label} exceeds {max_utf8} UTF-8 bytes"
+            )
+        return v
+
+    @staticmethod
+    def _validate_result_script(v: Any, label: str) -> str:
+        import posixpath
+        script = PdbSession._validate_bounded_protocol_string(
+            v, label, _MAX_SCRIPT_PATH_UTF8
+        )
+        if '\\' in script:
+            raise PdbProtocolError(
+                f"{label} must use forward slashes, got {script!r}"
+            )
+        if not script.endswith('.py'):
+            raise PdbProtocolError(f"{label} must end with .py")
+        if len(script) >= 2 and script[1] == ':':
+            raise PdbProtocolError(f"{label} must be a relative path")
+        if script.startswith('/'):
+            raise PdbProtocolError(f"{label} must be a relative path")
+        if _has_raw_dotdot(script):
+            raise PdbProtocolError(
+                f"{label} must not contain .. traversal"
+            )
+        normalized = posixpath.normpath(script)
+        if normalized != script:
+            raise PdbProtocolError(
+                f"{label} must already be a normalized forward-slash "
+                f"path, got {script!r}"
+            )
+        if normalized in ("", ".", "..") or normalized.startswith("/"):
+            raise PdbProtocolError(
+                f"{label} is not a valid relative path, got {script!r}"
+            )
+        return script
+
+    @staticmethod
+    def _validate_int_strict_field(v: Any, label: str) -> int:
+        if isinstance(v, bool) or not isinstance(v, int):
+            raise PdbProtocolError(
+                f"{label} must be an integer, got {type(v).__name__}"
+            )
+        return v
+
+    @staticmethod
+    def _check_exact_fields(
+        result: dict, required: frozenset, label: str
+    ) -> None:
+        extra = set(result.keys()) - required
+        if extra:
+            raise PdbProtocolError(
+                f"Unknown fields in {label}: {sorted(extra)}"
+            )
+        missing = required - set(result.keys())
+        if missing:
+            raise PdbProtocolError(
+                f"Missing fields in {label}: {sorted(missing)}"
+            )
+
+    def _validate_start_paused_result(
+        self,
+        response: PdbResponse,
+        expected_script: str,
+        expected_breakpoints: Sequence[int],
+    ) -> str:
+        result = response.result
+        if not isinstance(result, dict):
+            raise PdbProtocolError(
+                "start_paused_target result must be a mapping"
+            )
+        state = result.get("state")
+        if isinstance(state, bool) or not isinstance(state, str):
+            raise PdbProtocolError(
+                "start_paused_target result state must be a string, "
+                f"got {type(state).__name__}"
+            )
+        _START_VALID_STATES = frozenset({"paused", "exited"})
+        if state not in _START_VALID_STATES:
+            raise PdbProtocolError(
+                f"start_paused_target result state must be 'paused' "
+                f"or 'exited', got {state!r}"
+            )
+        if state == "paused":
+            self._check_exact_fields(
+                result, _PAUSED_RESULT_FIELDS,
+                "start_paused_target paused result"
+            )
+            script = self._validate_result_script(
+                result["script"],
+                "start_paused_target paused result script"
+            )
+            if script != expected_script:
+                raise PdbProtocolError(
+                    f"start_paused_target paused result script {script!r} "
+                    f"does not match expected {expected_script!r}"
+                )
+            line = self._validate_int_strict_field(
+                result["line"],
+                "start_paused_target paused result line"
+            )
+            if line <= 0:
+                raise PdbProtocolError(
+                    "start_paused_target paused result line must be positive"
+                )
+            if line not in expected_breakpoints:
+                raise PdbProtocolError(
+                    f"start_paused_target paused result line {line} is not "
+                    f"among requested breakpoints "
+                    f"{list(expected_breakpoints)}"
+                )
+            self._validate_bounded_protocol_string(
+                result["function"],
+                "start_paused_target paused result function",
+                _MAX_RESULT_FUNCTION_UTF8,
+            )
+        elif state == "exited":
+            self._check_exact_fields(
+                result, _EXITED_RESULT_FIELDS,
+                "start_paused_target exited result"
+            )
+            script = self._validate_result_script(
+                result["script"], "start_paused_target exited result script"
+            )
+            if script != expected_script:
+                raise PdbProtocolError(
+                    f"start_paused_target exited result script {script!r} "
+                    f"does not match expected {expected_script!r}"
+                )
+            self._validate_int_strict_field(
+                result["exit_code"],
+                "start_paused_target exited result exit_code"
+            )
+        return state
+
+    def _validate_status_result(
+        self, response: PdbResponse
+    ) -> str:
+        result = response.result
+        if not isinstance(result, dict):
+            raise PdbProtocolError(
+                "get_target_status result must be a mapping"
+            )
+        state = result.get("state")
+        if isinstance(state, bool) or not isinstance(state, str):
+            raise PdbProtocolError(
+                "get_target_status result state must be a string"
+            )
+        if state not in _PUBLIC_TARGET_STATES:
+            raise PdbProtocolError(
+                f"Unknown state in get_target_status result: {state!r}"
+            )
+        with self._state_lock:
+            budget_consumed = self._target_consumed
+            active_script = self._active_script
+            active_bps = self._active_breakpoints
+
+        if state == "idle":
+            self._check_exact_fields(
+                result, _STATUS_IDLE_FIELDS,
+                "get_target_status idle result"
+            )
+            if budget_consumed:
+                raise PdbProtocolError(
+                    "get_target_status returned idle after "
+                    "execution budget was consumed"
+                )
+        else:
+            if not budget_consumed:
+                raise PdbProtocolError(
+                    f"get_target_status returned {state!r} before "
+                    "execution budget was consumed"
+                )
+            if state == "paused":
+                self._check_exact_fields(
+                    result, _STATUS_PAUSED_FIELDS,
+                    "get_target_status paused result"
+                )
+                script = self._validate_result_script(
+                    result["script"],
+                    "get_target_status paused result script"
+                )
+                if script != active_script:
+                    raise PdbProtocolError(
+                        f"get_target_status paused script {script!r} "
+                        f"does not match active {active_script!r}"
+                    )
+                line = self._validate_int_strict_field(
+                    result["line"],
+                    "get_target_status paused result line"
+                )
+                if line <= 0:
+                    raise PdbProtocolError(
+                        "get_target_status paused result line "
+                        "must be positive"
+                    )
+                if active_bps is not None and line not in active_bps:
+                    raise PdbProtocolError(
+                        f"get_target_status paused result line {line} "
+                        f"is not among active breakpoints "
+                        f"{list(active_bps)}"
+                    )
+                self._validate_bounded_protocol_string(
+                    result["function"],
+                    "get_target_status paused result function",
+                    _MAX_RESULT_FUNCTION_UTF8,
+                )
+            elif state == "exited":
+                self._check_exact_fields(
+                    result, _STATUS_EXITED_FIELDS,
+                    "get_target_status exited result"
+                )
+                script = self._validate_result_script(
+                    result["script"],
+                    "get_target_status exited result script"
+                )
+                if script != active_script:
+                    raise PdbProtocolError(
+                        f"get_target_status exited script {script!r} "
+                        f"does not match active {active_script!r}"
+                    )
+                self._validate_int_strict_field(
+                    result["exit_code"],
+                    "get_target_status exited result exit_code"
+                )
+            elif state == "failed":
+                self._check_exact_fields(
+                    result, _STATUS_FAILED_FIELDS,
+                    "get_target_status failed result"
+                )
+                script = self._validate_result_script(
+                    result["script"],
+                    "get_target_status failed result script"
+                )
+                if script != active_script:
+                    raise PdbProtocolError(
+                        f"get_target_status failed script {script!r} "
+                        f"does not match active {active_script!r}"
+                    )
+                self._validate_bounded_protocol_string(
+                    result["error"],
+                    "get_target_status failed result error",
+                    _MAX_RESULT_ERROR_UTF8,
+                )
+            elif state == "terminated":
+                self._check_exact_fields(
+                    result, _STATUS_TERMINATED_FIELDS,
+                    "get_target_status terminated result"
+                )
+                script = self._validate_result_script(
+                    result["script"],
+                    "get_target_status terminated result script"
+                )
+                if script != active_script:
+                    raise PdbProtocolError(
+                        f"get_target_status terminated script {script!r} "
+                        f"does not match active {active_script!r}"
+                    )
+        return state
+
+    def _validate_terminate_result(
+        self,
+        response: PdbResponse,
+        expected_script: str,
+    ) -> None:
+        result = response.result
+        if not isinstance(result, dict):
+            raise PdbProtocolError(
+                "terminate_paused_target result must be a mapping"
+            )
+        self._check_exact_fields(
+            result, _TERMINATED_RESULT_FIELDS,
+            "terminate_paused_target result"
+        )
+        state = result.get("state")
+        if state != "terminated":
+            raise PdbProtocolError(
+                f"terminate_paused_target result state must be "
+                f"'terminated', got {state!r}"
+            )
+        script = self._validate_result_script(
+            result["script"],
+            "terminate_paused_target result script"
+        )
+        if script != expected_script:
+            raise PdbProtocolError(
+                f"terminate_paused_target result script {script!r} "
+                f"does not match expected {expected_script!r}"
+            )
+
+    def _update_local_lifecycle(
+        self,
+        state: str,
+        script: Optional[str] = None,
+    ) -> None:
+        with self._state_lock:
+            self._target_lifecycle_state = state
+            if script is not None:
+                self._active_script = script
+            if state == "idle":
+                self._active_script = None
+                self._active_breakpoints = None
+            elif state == "paused":
+                pass
+            elif state in ("exited", "failed", "terminated", "unknown"):
+                self._active_breakpoints = None
 
     def _send_and_receive(
         self, request: PdbRequest, timeout: float

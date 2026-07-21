@@ -2134,3 +2134,1388 @@ class TestRunToBreakpointRepairs:
                 _Ps._read_bounded_fd(fd)
         finally:
             _os.close(fd)
+
+
+def _paused_start_resp(request_id=2, result=None, success=True, error=""):
+    if result is None:
+        result = {
+            "state": "paused", "script": "test.py",
+            "line": 3, "function": "<module>",
+        }
+    return _ser(PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=request_id,
+        success=success,
+        result=result,
+        error=error,
+    ))
+
+
+def _status_resp(request_id=2, result=None, success=True, error=""):
+    if result is None:
+        result = {"state": "idle"}
+    return _ser(PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=request_id,
+        success=success,
+        result=result,
+        error=error,
+    ))
+
+
+def _term_resp(request_id=2, result=None, success=True, error=""):
+    if result is None:
+        result = {"state": "terminated", "script": "test.py"}
+    return _ser(PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=request_id,
+        success=success,
+        result=result,
+        error=error,
+    ))
+
+
+# =====================================================================
+# Task 4B2B — Public PdbSession Paused-Target API and Lifecycle Guards
+# =====================================================================
+
+
+class TestPausedTargetPublicAPI:
+    """Method existence, exact signatures and outgoing request contracts."""
+
+    def test_methods_exist(self, mock_workspace):
+        session = PdbSession(mock_workspace)
+        assert hasattr(session, "start_paused_target")
+        assert hasattr(session, "get_target_status")
+        assert hasattr(session, "terminate_paused_target")
+        assert callable(session.start_paused_target)
+        assert callable(session.get_target_status)
+        assert callable(session.terminate_paused_target)
+
+    def test_start_paused_target_exact_operation(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _paused_start_resp(2),
+        ])
+        sent = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            sent.append(("send", req))
+            return orig(req, timeout)
+        session._send_and_receive = track
+        result = session.start_paused_target("test.py", [3])
+        assert len(sent) == 1
+        req = sent[0][1]
+        assert req.operation == "start_paused_target"
+        assert req.payload == {"script": "test.py", "breakpoints": [3], "argv": []}
+        assert set(req.payload.keys()) == {"script", "breakpoints", "argv"}
+        assert result["state"] == "paused"
+        session.stop()
+
+    def test_requests_have_detached_payload(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _paused_start_resp(2),
+        ])
+        sent = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            sent.append(req)
+            return orig(req, timeout)
+        session._send_and_receive = track
+        bps = [3]
+        result = session.start_paused_target("test.py", bps)
+        assert len(sent) == 1
+        bps.append(5)
+        assert sent[0].payload["breakpoints"] == [3]
+        session.stop()
+
+    def test_get_target_status_exact_operation(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _status_resp(2),
+        ])
+        sent = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            sent.append(req)
+            return orig(req, timeout)
+        session._send_and_receive = track
+        result = session.get_target_status()
+        assert len(sent) == 1
+        assert sent[0].operation == "get_target_status"
+        assert sent[0].payload == {}
+        assert result["state"] == "idle"
+        session.stop()
+
+    def test_terminate_paused_target_exact_operation(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        sent = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            sent.append(("send", req))
+            return orig(req, timeout)
+        session._send_and_receive = track
+        result = session.terminate_paused_target()
+        assert len(sent) == 1
+        req = sent[0][1]
+        assert req.operation == "terminate_paused_target"
+        assert req.payload == {}
+        assert result["state"] == "terminated"
+        session.stop()
+
+    def test_terminate_no_unknown_fields(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        sent = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            sent.append(req)
+            return orig(req, timeout)
+        session._send_and_receive = track
+        result = session.terminate_paused_target()
+        assert sent[0].payload == {}
+        session.stop()
+
+
+class TestPausedTargetValidationBeforeSend:
+    """Validation failures send zero requests and preserve session."""
+
+    def _assert_validation_preserves_session(
+        self, session, mock_proc
+    ):
+        assert session.state == PdbSessionState.READY
+        assert session._target_consumed is False
+        orig_send = session._send_and_receive
+        send_count = []
+        def track(req, timeout):
+            send_count.append(req)
+            return orig_send(req, timeout)
+        session._send_and_receive = track
+
+        with pytest.raises(PdbProtocolError):
+            session.start_paused_target("test.py", [3])
+        assert len(send_count) == 0
+        assert session._target_consumed is False
+        assert session.state == PdbSessionState.READY
+        session.ping()
+        return session
+
+    def test_not_ready_state(self, mock_workspace):
+        session = PdbSession(mock_workspace)
+        with pytest.raises(PdbSessionStateError, match="Cannot start_paused_target"):
+            session.start_paused_target("test.py", [1])
+
+    def test_invalid_script_type(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError):
+            session.start_paused_target(123, [1])
+        session.stop()
+
+    def test_absolute_path_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="relative path"):
+            session.start_paused_target("/abs/test.py", [1])
+        session.stop()
+
+    def test_raw_traversal_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match=".. traversal"):
+            session.start_paused_target("../test.py", [1])
+        session.stop()
+
+    def test_non_py_file_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="end with .py"):
+            session.start_paused_target("test.txt", [1])
+        session.stop()
+
+    def test_symlink_escape_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        from unittest.mock import patch
+        with patch(
+            "agentic_debugger.runtime.pdb_session.os.path.commonpath",
+            return_value="/other"
+        ):
+            with pytest.raises(PdbProtocolError, match="symlink or junction"):
+                session.start_paused_target("test.py", [1])
+        session.stop()
+
+    def test_missing_file_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="not found"):
+            session.start_paused_target("missing.py", [1])
+        assert session._target_consumed is False
+        session.ping()
+        session.stop()
+
+    def test_oversized_source_rejected(self, mock_workspace):
+        from agentic_debugger.runtime.pdb_session import _MAX_TARGET_SOURCE_BYTES
+        d = Path(mock_workspace.root)
+        f = d / "huge_test.py"
+        f.write_bytes(b"x = 1\n" + b"# " + b"x" * _MAX_TARGET_SOURCE_BYTES)
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        orig_send = session._send_and_receive
+        send_calls = []
+        session._send_and_receive = lambda r, t: (send_calls.append(1), orig_send(r, t))[1]
+        with pytest.raises(PdbProtocolError, match="exceeds maximum source"):
+            session.start_paused_target("huge_test.py", [1])
+        assert len(send_calls) == 0
+        assert session._target_consumed is False
+        session.ping()
+        session.stop()
+
+    def test_empty_breakpoints_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="1-16"):
+            session.start_paused_target("test.py", [])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_duplicate_breakpoint_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="duplicates"):
+            session.start_paused_target("test.py", [3, 3])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_bool_breakpoint_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="integers"):
+            session.start_paused_target("test.py", [True])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_out_of_range_breakpoint_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="exceeds source length"):
+            session.start_paused_target("test.py", [1, 999])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_argv_is_string_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="list"):
+            session.start_paused_target("test.py", [1], argv="not a list")
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_invalid_argv_item_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="strings"):
+            session.start_paused_target("test.py", [1], argv=[42])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_nul_in_argv_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="NUL"):
+            session.start_paused_target("test.py", [1], argv=["a\x00b"])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_non_utf8_input_rejected(self, mock_workspace):
+        session, mp = _setup(mock_workspace, [_hello_resp(), _ping_resp(2)])
+        with pytest.raises(PdbProtocolError, match="non-UTF-8"):
+            session.start_paused_target("test.py", [1], argv=["\ud800"])
+        assert session._target_consumed is False
+        session.stop()
+
+    def test_validation_failure_then_valid_start_succeeds(self, mock_workspace):
+        _ok_resp = _paused_start_resp(2)
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _ok_resp,
+        ])
+        with pytest.raises(PdbProtocolError):
+            session.start_paused_target("missing.py", [1])
+        assert session._target_consumed is False
+        result = session.start_paused_target("test.py", [3])
+        assert result["state"] == "paused"
+        session.stop()
+
+    def test_validation_failure_then_run_to_breakpoint_succeeds(self, mock_workspace):
+        _run_bp_resp = _run_to_bp_resp(2)
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _run_bp_resp,
+        ])
+        with pytest.raises(PdbProtocolError):
+            session.start_paused_target("missing.py", [1])
+        assert session._target_consumed is False
+        resp = session.run_to_breakpoint("test.py", [2])
+        assert resp.success is True
+        session.stop()
+
+
+class TestPausedTargetStartResult:
+    """Malformed start_paused_target results fail the session."""
+
+    def _setup_with_result(self, mock_workspace, result, success=True, error=""):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _paused_start_resp(2, result=result, success=success, error=error),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            return session
+
+    def test_non_mapping_result(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_resp = b'{"protocol_version":1,"request_id":2,"success":true,"result":"not a dict","error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_resp
+        session._response_queue.get = inject_get
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_unknown_state(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace, {"state": "unknown_state"}
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_unknown_public_state_raises(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace, {"state": "unknown"}
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_unknown_rejected(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"unknown"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_missing_field(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace, {"state": "paused", "script": "test.py", "line": 3}
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_extra_field(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "test.py", "line": 3,
+             "function": "main", "extra": 1},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_mismatched_script(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "wrong.py", "line": 3,
+             "function": "main"},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_paused_line_not_requested(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "test.py", "line": 99,
+             "function": "main"},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_bool_line(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "test.py", "line": True,
+             "function": "main"},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_empty_function(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "test.py", "line": 3,
+             "function": ""},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_bool_exit_code(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "exited", "script": "test.py", "exit_code": True},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_function_4097_bytes(self, mock_workspace):
+        func_val = "f" + "x" * 4096
+        result = {"state": "paused", "script": "test.py", "line": 3,
+                  "function": func_val}
+        session = self._setup_with_result(mock_workspace, result)
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    # ── Start-result state type counterexamples ──
+    @pytest.mark.parametrize("bad_state,expected_type", [
+        ([], "list"),
+        ({}, "dict"),
+        (1, "int"),
+        (None, "NoneType"),
+    ])
+    def test_start_state_wrong_type(self, mock_workspace, bad_state, expected_type):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        import json
+        raw = json.dumps({
+            "protocol_version": 1, "request_id": 2, "success": True,
+            "result": {"state": bad_state, "script": "test.py",
+                       "line": 3, "function": "main"}, "error": "",
+        }, separators=(",", ":"))
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return (raw + "\n").encode("utf-8")
+        session._response_queue.get = inject_get
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        assert not isinstance(session._proc, MagicMock) or session._proc is None
+        session.stop()
+
+    @pytest.mark.parametrize("bad_state", ["idle", "failed", "terminated", "unknown"])
+    def test_start_state_invalid_known_state(self, mock_workspace, bad_state):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        import json
+        result = {"state": bad_state}
+        if bad_state in ("paused",):
+            result.update({"script": "test.py", "line": 3, "function": "main"})
+        elif bad_state in ("exited",):
+            result.update({"script": "test.py", "exit_code": 0})
+        elif bad_state in ("failed",):
+            result.update({"script": "test.py", "error": "err"})
+        elif bad_state in ("terminated",):
+            result.update({"script": "test.py"})
+        raw = json.dumps({
+            "protocol_version": 1, "request_id": 2, "success": True,
+            "result": result, "error": "",
+        }, separators=(",", ":"))
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return (raw + "\n").encode("utf-8")
+        session._response_queue.get = inject_get
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_start_state_no_raw_typeerror(self, mock_workspace):
+        """No raw TypeError escapes from start_paused_target state validation."""
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        raw = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":[],"script":"test.py","line":3,"function":"main"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return raw
+        session._response_queue.get = inject_get
+        try:
+            session.start_paused_target("test.py", [3])
+        except TypeError:
+            pytest.fail("Raw TypeError escaped instead of PdbProtocolError")
+        except (PdbProtocolError, PdbSessionError):
+            pass
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_error_4097_bytes(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        err_val = "e" + "x" * 4096
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"failed","script":"test.py","error":"' + err_val.encode('utf-8') + b'"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        session._active_breakpoints = None
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_script_4097_bytes(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        long_name = "x" * 4097 + ".py"
+        bad_line = (
+            b'{"protocol_version":1,"request_id":2,"success":true,'
+            b'"result":{"state":"terminated","script":"' + long_name.encode('utf-8') + b'"}}' + b'\n'
+        )
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_lifecycle_state = "paused"
+        session._active_script = long_name
+        session._target_consumed = True
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_multibyte_exceeds_utf8_limit(self, mock_workspace):
+        func_val = "\u4e00" * 2049
+        result = {"state": "paused", "script": "test.py", "line": 3,
+                  "function": func_val}
+        session = self._setup_with_result(mock_workspace, result)
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+
+class TestPausedTargetStartCounterexamples:
+    """Direct counterexample tests for protocol-boundary violations."""
+
+    def _setup_with_result(self, mock_workspace, result, success=True, error=""):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1),
+            _paused_start_resp(2, result=result, success=success, error=error),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            return session
+
+    def test_start_paused_traversal_script(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "../escape.py",
+             "line": 3, "function": "f"},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_start_paused_negative_line(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "paused", "script": "test.py",
+             "line": -1, "function": "f"},
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_start_failed_absolute_script(self, mock_workspace):
+        session = self._setup_with_result(
+            mock_workspace,
+            {"state": "failed", "script": "/absolute.py", "error": "error"},
+            success=False, error="Target error",
+        )
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_paused_traversal_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"paused","script":"../escape.py","line":3,"function":"f"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        session._active_breakpoints = [3]
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_paused_negative_line(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"paused","script":"test.py","line":-1,"function":"f"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        session._active_breakpoints = [3]
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_paused_line_not_in_breakpoints(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"paused","script":"test.py","line":99,"function":"f"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        session._active_breakpoints = [3]
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_failed_absolute_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"failed","script":"/absolute.py","error":"err"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_failed_nul_error(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"failed","script":"test.py","error":"err\x00or"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_unconsumed_paused_status(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"paused","script":"test.py","line":3,"function":"f"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_unconsumed_exited_status(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"exited","script":"test.py","exit_code":0},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_consumed_idle_status(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"idle"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_consumed_mismatched_script_status(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"terminated","script":"wrong.py"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_error_4097_bytes(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        err_val = "e" + "x" * 4096
+        bad_line = b'{"protocol_version":1,"request_id":2,"success":true,"result":{"state":"failed","script":"test.py","error":"' + err_val.encode('utf-8') + b'"},"error":""}\n'
+        orig_get = session._response_queue.get
+        def inject_get(timeout=None):
+            return bad_line
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    # ── Repair 1: non-canonical result scripts ──
+
+    def _inject_start_result(self, session, result_dict):
+        import json
+        raw = json.dumps({
+            "protocol_version": 1, "request_id": 2,
+            "success": True, "result": result_dict, "error": "",
+        }, separators=(",", ":"))
+        def inject_get(timeout=None):
+            return (raw + "\n").encode("utf-8")
+        session._response_queue.get = inject_get
+
+    def _inject_status_result(self, session, result_dict):
+        import json
+        raw = json.dumps({
+            "protocol_version": 1, "request_id": 2,
+            "success": True, "result": result_dict, "error": "",
+        }, separators=(",", ":"))
+        def inject_get(timeout=None):
+            return (raw + "\n").encode("utf-8")
+        session._response_queue.get = inject_get
+        session._target_consumed = True
+        session._active_script = "test.py"
+
+    def _inject_terminate_result(self, session, result_dict):
+        import json
+        raw = json.dumps({
+            "protocol_version": 1, "request_id": 2,
+            "success": True, "result": result_dict, "error": "",
+        }, separators=(",", ":"))
+        def inject_get(timeout=None):
+            return (raw + "\n").encode("utf-8")
+        session._response_queue.get = inject_get
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+
+    def test_start_paused_backslash_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        self._inject_start_result(session, {
+            "state": "paused", "script": ".\\test.py",
+            "line": 3, "function": "main",
+        })
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_start_paused_dot_segment_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        self._inject_start_result(session, {
+            "state": "paused", "script": "./test.py",
+            "line": 3, "function": "main",
+        })
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_start_paused_dup_separator_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        self._inject_start_result(session, {
+            "state": "paused", "script": "test.py/",
+            "line": 3, "function": "main",
+        })
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_status_backslash_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        self._inject_status_result(session, {
+            "state": "paused", "script": ".\\test.py",
+            "line": 3, "function": "main",
+        })
+        session._active_breakpoints = [3]
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.get_target_status()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_terminate_backslash_script(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp(1)])
+        self._inject_terminate_result(session, {
+            "state": "terminated", "script": ".\\test.py",
+        })
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+
+class TestPausedTargetStatus:
+    """Status result validation."""
+
+    def _make_status_response(self, mock_workspace, result):
+        mock_stdout = _ExhaustibleMockStream([
+            _hello_resp(1), _status_resp(2, result=result),
+        ])
+        mock_stderr = _ExhaustibleMockStream([])
+        with patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        ) as mp:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = mock_stdout
+            mock_proc.stderr = mock_stderr
+            mp.return_value = mock_proc
+            session = PdbSession(mock_workspace)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+            return session
+
+    def test_status_idle(self, mock_workspace):
+        session = self._make_status_response(mock_workspace, {"state": "idle"})
+        try:
+            result = session.get_target_status()
+            assert result["state"] == "idle"
+            assert set(result.keys()) == {"state"}
+        finally:
+            session.stop()
+
+    def test_status_paused(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace,
+            {"state": "paused", "script": "test.py", "line": 3,
+             "function": "<module>"}
+        )
+        session._target_consumed = True
+        session._active_script = "test.py"
+        session._active_breakpoints = [3]
+        try:
+            result = session.get_target_status()
+            assert result["state"] == "paused"
+            assert result["line"] == 3
+        finally:
+            session.stop()
+
+    def test_status_exited(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "exited", "script": "test.py", "exit_code": 0}
+        )
+        session._target_consumed = True
+        session._active_script = "test.py"
+        try:
+            result = session.get_target_status()
+            assert result["state"] == "exited"
+            assert result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    def test_status_failed(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "failed", "script": "test.py",
+             "error": "Target raised ValueError"}
+        )
+        session._target_consumed = True
+        session._active_script = "test.py"
+        try:
+            result = session.get_target_status()
+            assert result["state"] == "failed"
+            assert "ValueError" in result["error"]
+        finally:
+            session.stop()
+
+    def test_status_terminated(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "terminated", "script": "test.py"}
+        )
+        session._target_consumed = True
+        session._active_script = "test.py"
+        try:
+            result = session.get_target_status()
+            assert result["state"] == "terminated"
+        finally:
+            session.stop()
+
+    def test_unknown_state_raises(self, mock_workspace):
+        session = self._make_status_response(mock_workspace, {"state": "bogus"})
+
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_missing_field_for_state(self, mock_workspace):
+        session = self._make_status_response(mock_workspace, {"state": "paused"})
+
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_extra_field_for_state(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "idle", "extra": 1}
+        )
+
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_bool_numeric_field(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "exited", "script": "test.py", "exit_code": True}
+        )
+
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_consumed_then_contradictory_idle(self, mock_workspace):
+        session = self._make_status_response(mock_workspace, {"state": "idle"})
+
+        session._target_consumed = True
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_failed_state_empty_error(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "failed", "script": "test.py", "error": ""}
+        )
+
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_paused_state_empty_function(self, mock_workspace):
+        session = self._make_status_response(
+            mock_workspace, {"state": "paused", "script": "test.py", "line": 3,
+             "function": ""}
+        )
+
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_target_status()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+
+class TestPausedTargetTerminate:
+    """Termination guard and result."""
+
+    def test_terminate_before_start_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.READY
+        session.stop()
+
+    def test_terminate_after_exit_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        session._target_lifecycle_state = "exited"
+        with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.READY
+        session.stop()
+
+    def test_terminate_after_failure_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        session._target_lifecycle_state = "failed"
+        with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.READY
+        session.stop()
+
+    def test_terminate_after_termination_rejected(self, mock_workspace):
+        session, _ = _setup(mock_workspace, [_hello_resp()])
+        session._target_lifecycle_state = "terminated"
+        with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.READY
+        session.stop()
+
+    def test_local_rejection_sends_zero_requests(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [_hello_resp()])
+        send_count = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            send_count.append(req)
+            return orig(req, timeout)
+        session._send_and_receive = track
+        with pytest.raises(PdbSessionStateError):
+            session.terminate_paused_target()
+        assert len(send_count) == 0
+        session.stop()
+
+    def test_terminate_while_paused_sends_request(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        send_count = []
+        orig = session._send_and_receive
+        def track(req, timeout):
+            send_count.append(req)
+            return orig(req, timeout)
+        session._send_and_receive = track
+        result = session.terminate_paused_target()
+        assert len(send_count) == 1
+        assert result["state"] == "terminated"
+        assert result["script"] == "test.py"
+        session.stop()
+
+    def test_mismatched_terminated_script_rejected(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2, result={
+                "state": "terminated", "script": "wrong.py",
+            }),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_extra_field_in_terminate_result_rejected(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2, result={
+                "state": "terminated", "script": "test.py", "extra": 1,
+            }),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        with pytest.raises((PdbProtocolError, PdbSessionError)):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.FAILED
+        session.stop()
+
+    def test_second_termination_rejected_locally(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        session.terminate_paused_target()
+        assert session._target_lifecycle_state == "terminated"
+        with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+            session.terminate_paused_target()
+        session.stop()
+
+    def test_failed_termination_sets_unknown(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+            _term_resp(2, result={}, success=False,
+                       error="Cannot terminate in state: exited"),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        with pytest.raises(PdbSessionError, match="Terminate failed"):
+            session.terminate_paused_target()
+        assert session.state == PdbSessionState.READY
+        assert session._target_lifecycle_state == "unknown"
+        assert session._active_script == "test.py"
+        with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+            session.terminate_paused_target()
+        session.stop()
+
+    def test_failed_termination_status_refresh(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+            _term_resp(2, result={}, success=False,
+                       error="Cannot terminate in state: exited"),
+            _status_resp(3, result={"state": "exited", "script": "test.py",
+                                    "exit_code": 0}),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        session._target_consumed = True
+        with pytest.raises(PdbSessionError):
+            session.terminate_paused_target()
+        assert session._target_lifecycle_state == "unknown"
+        result = session.get_target_status()
+        assert result["state"] == "exited"
+        assert session._target_lifecycle_state == "exited"
+        session.stop()
+
+    def test_ping_after_successful_termination(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _term_resp(2), _ping_resp(3),
+        ])
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        session.terminate_paused_target()
+        pong = session.ping()
+        assert pong.success is True
+        session.stop()
+
+
+class TestPausedTargetAtomicReservation:
+    """Atomic one-target execution reservation with deterministic coordination."""
+
+    def test_two_concurrent_paused_starts(self, mock_workspace):
+        results = []
+        send_count = []
+        in_send = threading.Event()
+        release_send = threading.Event()
+        t1 = None
+        session = None
+        mpatch = patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        )
+        mp = mpatch.start()
+        try:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = _ExhaustibleMockStream([
+                _hello_resp(1), _paused_start_resp(2),
+            ])
+            mock_proc.stderr = _ExhaustibleMockStream([])
+            mp.return_value = mock_proc
+
+            session = PdbSession(mock_workspace, request_timeout=3.0)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+
+            saved_send = session._send_and_receive
+            def hang_send(req, timeout):
+                send_count.append(1)
+                in_send.set()
+                assert release_send.wait(timeout=5.0), (
+                    "Release event not set within timeout"
+                )
+                from agentic_debugger.runtime.pdb_protocol import PdbResponse
+                return PdbResponse(
+                    protocol_version=1, request_id=req.request_id,
+                    success=True,
+                    result={
+                        "state": "paused", "script": "test.py",
+                        "line": 3, "function": "<module>",
+                    },
+                    error="",
+                )
+            session._send_and_receive = hang_send
+
+            def caller():
+                try:
+                    result = session.start_paused_target("test.py", [3])
+                    results.append(("ok", result))
+                except Exception as e:
+                    results.append(("err", type(e).__name__))
+
+            t1 = threading.Thread(target=caller, daemon=True)
+            t1.start()
+            assert in_send.wait(timeout=5.0), (
+                "First caller did not reach the send boundary"
+            )
+
+            with pytest.raises((PdbSessionError, PdbSessionStateError)):
+                session.start_paused_target("test.py", [3])
+        finally:
+            release_send.set()
+            if t1 is not None:
+                t1.join(timeout=5.0)
+            if session is not None:
+                session.stop()
+            mpatch.stop()
+
+        assert not t1.is_alive()
+        assert len(results) == 1
+        assert results[0][0] == "ok"
+        assert len(send_count) == 1
+
+    def test_concurrent_paused_and_run_to_breakpoint(self, mock_workspace):
+        results = []
+        send_count = []
+        in_send = threading.Event()
+        release_send = threading.Event()
+        t1 = None
+        session = None
+        mpatch = patch(
+            "agentic_debugger.runtime.pdb_session.subprocess.Popen"
+        )
+        mp = mpatch.start()
+        try:
+            mock_proc = MagicMock()
+            mock_proc.pid = 9999
+            mock_proc.poll.return_value = None
+            mock_proc.stdin = MagicMock()
+            mock_proc.stdout = _ExhaustibleMockStream([
+                _hello_resp(1), _paused_start_resp(2),
+            ])
+            mock_proc.stderr = _ExhaustibleMockStream([])
+            mp.return_value = mock_proc
+
+            session = PdbSession(mock_workspace, request_timeout=3.0)
+            session._get_worker_argv = lambda: ["fake", "-c", "pass"]
+            session.start()
+
+            def hang_send(req, timeout):
+                send_count.append(1)
+                in_send.set()
+                assert release_send.wait(timeout=5.0), (
+                    "Release event not set within timeout"
+                )
+                from agentic_debugger.runtime.pdb_protocol import PdbResponse
+                return PdbResponse(
+                    protocol_version=1, request_id=req.request_id,
+                    success=True,
+                    result={
+                        "state": "paused", "script": "test.py",
+                        "line": 3, "function": "<module>",
+                    },
+                    error="",
+                )
+            session._send_and_receive = hang_send
+
+            def paused_caller():
+                try:
+                    result = session.start_paused_target("test.py", [3])
+                    results.append(("ok", result))
+                except Exception as e:
+                    results.append(("err", type(e).__name__))
+
+            t1 = threading.Thread(target=paused_caller, daemon=True)
+            t1.start()
+            assert in_send.wait(timeout=5.0), (
+                "First caller did not reach the send boundary"
+            )
+
+            with pytest.raises((PdbSessionError, PdbSessionStateError)):
+                session.run_to_breakpoint("test.py", [2])
+        finally:
+            release_send.set()
+            if t1 is not None:
+                t1.join(timeout=5.0)
+            if session is not None:
+                session.stop()
+            mpatch.stop()
+
+        assert not t1.is_alive()
+        assert len(results) == 1
+        assert results[0][0] == "ok"
+        assert len(send_count) == 1
+
+    def test_winner_updates_lifecycle(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1), _paused_start_resp(2),
+        ])
+        result = session.start_paused_target("test.py", [3])
+        assert result["state"] == "paused"
+        assert session._target_consumed is True
+        assert session._target_lifecycle_state == "paused"
+        session.stop()
+
+    def test_loser_does_not_corrupt_session(self, mock_workspace):
+        session, mock_proc = _setup(mock_workspace, [
+            _hello_resp(1),
+        ])
+        session._target_consumed = True
+        with pytest.raises(PdbSessionStateError, match="already completed"):
+            session.start_paused_target("test.py", [3])
+        assert session.state == PdbSessionState.READY
+        session.stop()

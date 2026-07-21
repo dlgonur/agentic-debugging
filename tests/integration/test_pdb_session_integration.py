@@ -3738,3 +3738,367 @@ class TestPersistentPauseInternalState:
         resp = responses[0]
         assert resp.success is False
         assert "Unexpected" in resp.error
+
+
+# =====================================================================
+# Task 4B2B — Public PdbSession Paused-Target API and Lifecycle Guards
+# =====================================================================
+
+
+class TestPublicPausedTargetIntegration:
+    """Public PdbSession paused-target integration tests."""
+
+    @pytest.fixture
+    def ws_pub(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "simple.py").write_text(
+                "x = 1\n"
+                "y = 2\n"
+                "z = 3\n"
+                "w = 4\n"
+                "# end\n"
+            )
+            (src / "with_finally.py").write_text(
+                "import sys\n"
+                "try:\n"
+                "    x = 1\n"
+                "finally:\n"
+                "    with open(sys.argv[1], 'w') as f:\n"
+                "        f.write('finally executed')\n"
+                "# after\n"
+            )
+            (src / "exit_early.py").write_text(
+                "x = 1\n"
+                "import sys\n"
+                "sys.stdout.write('done')\n"
+                "# end\n"
+            )
+            (src / "fail_target.py").write_text(
+                "def main():\n"
+                "    raise ValueError('example')\n"
+                "main()\n"
+                "# end\n"
+            )
+            (src / "break_before_exit.py").write_text(
+                "x = 1\n"
+                "y = 2\n"
+                "# end\n"
+            )
+            (src / "code_after.py").write_text(
+                "x = 1\n"
+                "import sys\n"
+                "with open(sys.argv[1], 'w') as f:\n"
+                "    f.write('AFTER_SHOULD_NOT_EXIST')\n"
+                "# end\n"
+            )
+            (src / "oneshot_target.py").write_text("x = 1\ny = 2\nz = 3\n")
+            (src / "oneshot_exit.py").write_text(
+                "import sys\nsys.exit(42)\n# end\n"
+            )
+            (src / "oneshot_fail.py").write_text(
+                "raise ValueError('test')\n# end\n"
+            )
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    # 57. Public start reaches paused breakpoint
+    def test_public_start_reaches_breakpoint(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            result = session.start_paused_target("simple.py", [3])
+            assert result["state"] == "paused"
+            assert result["script"] == "simple.py"
+            assert result["line"] == 3
+            assert result["function"] == "<module>"
+        finally:
+            session.stop()
+
+    # 58. Exact paused result
+    def test_exact_paused_result(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            result = session.start_paused_target("simple.py", [3])
+            assert set(result.keys()) == {"state", "script", "line", "function"}
+        finally:
+            session.stop()
+
+    # 59. Code after breakpoint not executed
+    def test_code_after_breakpoint_not_executed(self, ws_pub):
+        marker = Path(ws_pub.root) / "after_bp_pub.txt"
+        (Path(ws_pub.root) / "after_bp_pub.py").write_text(
+            "x = 1\n"
+            f"open({str(marker)!r}, 'w').write('SHOULD_NOT_EXIST')\n"
+            "# end\n"
+        )
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            result = session.start_paused_target("after_bp_pub.py", [1])
+            assert result["state"] == "paused"
+            assert result["line"] == 1
+            assert not marker.exists()
+        finally:
+            session.stop()
+
+    # 60. Ping while paused
+    def test_ping_while_paused(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("simple.py", [3])
+            pong = session.ping()
+            assert pong.success is True
+        finally:
+            session.stop()
+
+    # 61. Public status while paused
+    def test_status_while_paused(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("simple.py", [3])
+            status = session.get_target_status()
+            assert status["state"] == "paused"
+            assert status["script"] == "simple.py"
+            assert status["line"] == 3
+        finally:
+            session.stop()
+
+    # 62/63. Public terminate and exact result
+    def test_public_terminate(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("simple.py", [3])
+            result = session.terminate_paused_target()
+            assert result["state"] == "terminated"
+            assert result["script"] == "simple.py"
+            assert set(result.keys()) == {"state", "script"}
+        finally:
+            session.stop()
+
+    # 64. Status after termination
+    def test_status_after_termination(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("simple.py", [3])
+            session.terminate_paused_target()
+            status = session.get_target_status()
+            assert status["state"] == "terminated"
+            assert status["script"] == "simple.py"
+        finally:
+            session.stop()
+
+    # 65. Target finally executes
+    def test_target_finally_executes(self, ws_pub):
+        marker = Path(ws_pub.root) / "finally_pub.txt"
+        marker_str = str(marker)
+        (Path(ws_pub.root) / "finally_pub.py").write_text(
+            "import sys\n"
+            "try:\n"
+            "    x = 1\n"
+            "finally:\n"
+            f"    with open({marker_str!r}, 'w') as f:\n"
+            "        f.write('finally executed')\n"
+            "# after\n"
+        )
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("finally_pub.py", [3], argv=[marker_str])
+            session.terminate_paused_target()
+            assert marker.exists()
+            assert marker.read_text() == "finally executed"
+        finally:
+            session.stop()
+
+    # 66. Code after interrupted flow does not execute
+    def test_code_after_interrupted_flow(self, ws_pub):
+        marker = Path(ws_pub.root) / "after_int_pub.txt"
+        marker_str = str(marker)
+        (Path(ws_pub.root) / "after_int_pub.py").write_text(
+            "x = 1\n"
+            f"with open({marker_str!r}, 'w') as f:\n"
+            "    f.write('AFTER')\n"
+            "# end\n"
+        )
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("after_int_pub.py", [1], argv=[marker_str])
+            session.terminate_paused_target()
+            assert not marker.exists()
+        finally:
+            session.stop()
+
+    # 67. Ping after termination
+    def test_ping_after_termination(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("simple.py", [3])
+            session.terminate_paused_target()
+            pong = session.ping()
+            assert pong.success is True
+        finally:
+            session.stop()
+
+    # 68. Second terminate locally rejected
+    def test_second_terminate_locally_rejected(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("simple.py", [3])
+            session.terminate_paused_target()
+            with pytest.raises(PdbSessionStateError, match="Cannot terminate"):
+                session.terminate_paused_target()
+            pong = session.ping()
+            assert pong.success is True
+        finally:
+            session.stop()
+
+    # 69/70. Start target exits before breakpoint
+    def test_start_target_exits_before_breakpoint(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            result = session.start_paused_target("exit_early.py", [4])
+            assert result["state"] == "exited"
+            assert result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    def test_status_after_exit(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            session.start_paused_target("exit_early.py", [4])
+            status = session.get_target_status()
+            assert status["state"] == "exited"
+            assert status["exit_code"] == 0
+        finally:
+            session.stop()
+
+    # 71/72. Start target fails before breakpoint
+    def test_start_target_fails_before_breakpoint(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            with pytest.raises(PdbSessionError, match="ValueError"):
+                session.start_paused_target("fail_target.py", [4])
+            assert session.state == PdbSessionState.READY
+        finally:
+            session.stop()
+
+    def test_status_after_failure(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            with pytest.raises(PdbSessionError):
+                session.start_paused_target("fail_target.py", [4])
+            status = session.get_target_status()
+            assert status["state"] == "failed"
+            assert "ValueError" in status["error"]
+        finally:
+            session.stop()
+
+    # 73. Worker remains pingable after target failure
+    def test_ping_after_target_failure(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            with pytest.raises(PdbSessionError):
+                session.start_paused_target("fail_target.py", [4])
+            pong = session.ping()
+            assert pong.success is True
+        finally:
+            session.stop()
+
+    # 74. Stop while paused
+    def test_stop_while_paused(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        session.start_paused_target("simple.py", [3])
+        session.stop()
+        assert session.state == PdbSessionState.STOPPED
+
+    # 75. Context-manager exit while paused
+    def test_context_manager_while_paused(self, ws_pub):
+        with PdbSession(ws_pub) as session:
+            session.start_paused_target("simple.py", [3])
+            assert session.state == PdbSessionState.READY
+        assert session.state == PdbSessionState.STOPPED
+
+    # 76. One-shot breakpoint followed by public status
+    def test_oneshot_breakpoint_then_status_terminated(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("oneshot_target.py", [3])
+            assert resp.success is True
+            status = session.get_target_status()
+            assert status["state"] == "terminated"
+        finally:
+            session.stop()
+
+    # 77. One-shot exit followed by public status
+    def test_oneshot_exit_then_status_exited(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("oneshot_exit.py", [3])
+            assert resp.success is True
+            status = session.get_target_status()
+            assert status["state"] == "exited"
+        finally:
+            session.stop()
+
+    # 78. One-shot failure followed by public status
+    def test_oneshot_failure_then_status_failed(self, ws_pub):
+        session = PdbSession(ws_pub)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("oneshot_fail.py", [2])
+            assert resp.success is False
+            status = session.get_target_status()
+            assert status["state"] == "failed"
+            assert "ValueError" in status["error"]
+        finally:
+            session.stop()
+
+    # 79/80. Timeout before first breakpoint triggers session cleanup
+    def test_timeout_before_breakpoint(self, ws_pub):
+        (Path(ws_pub.root) / "timeout_pub.py").write_text(
+            "import time\ntime.sleep(300)\nx = 1\n"
+        )
+        session = PdbSession(ws_pub, request_timeout=1.0)
+        session.start()
+        try:
+            with pytest.raises(PdbSessionTimeoutError):
+                session.start_paused_target("timeout_pub.py", [3])
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    # 81. No orphan worker after timeout cleanup
+    def test_no_orphan_worker_after_timeout(self, ws_pub):
+        (Path(ws_pub.root) / "inf_pub.py").write_text(
+            "import time\ntime.sleep(300)\nx = 1\n"
+        )
+        session = PdbSession(ws_pub, request_timeout=1.0)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        try:
+            with pytest.raises(PdbSessionTimeoutError):
+                session.start_paused_target("inf_pub.py", [3])
+        finally:
+            session.stop()
+        proc.wait(timeout=3.0)
+        assert proc.poll() is not None
