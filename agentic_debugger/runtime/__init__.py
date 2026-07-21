@@ -14,6 +14,11 @@ from agentic_debugger.runtime.exceptions import (
     PatchApplyError,
     PatchStateError,
     PatchRevertError,
+    PdbProtocolError,
+    PdbSessionError,
+    PdbSessionStateError,
+    PdbSessionTimeoutError,
+    PdbWorkerExitedError,
 )
 from agentic_debugger.runtime.patcher import (
     PatchFileChange,
@@ -22,6 +27,22 @@ from agentic_debugger.runtime.patcher import (
     SyntaxFileResult,
     SyntaxCheckResult,
     PatchManager,
+)
+from agentic_debugger.runtime.pdb_protocol import (
+    PROTOCOL_VERSION,
+    SUPPORTED_OPERATIONS,
+    MAX_LINE_LENGTH,
+    PdbRequest,
+    PdbResponse,
+    PdbWorkerInfo,
+    serialize_request,
+    deserialize_request,
+    serialize_response,
+    deserialize_response,
+)
+from agentic_debugger.runtime.pdb_session import (
+    PdbSessionState,
+    PdbSession,
 )
 
 __all__ = [
@@ -43,10 +64,27 @@ __all__ = [
     "PatchApplyError",
     "PatchStateError",
     "PatchRevertError",
+    "PdbProtocolError",
+    "PdbSessionError",
+    "PdbSessionStateError",
+    "PdbSessionTimeoutError",
+    "PdbWorkerExitedError",
     "PatchFileChange",
     "PatchApplyResult",
     "PatchSnapshot",
     "SyntaxFileResult",
     "SyntaxCheckResult",
     "PatchManager",
+    "PROTOCOL_VERSION",
+    "SUPPORTED_OPERATIONS",
+    "MAX_LINE_LENGTH",
+    "PdbRequest",
+    "PdbResponse",
+    "PdbWorkerInfo",
+    "serialize_request",
+    "deserialize_request",
+    "serialize_response",
+    "deserialize_response",
+    "PdbSessionState",
+    "PdbSession",
 ]

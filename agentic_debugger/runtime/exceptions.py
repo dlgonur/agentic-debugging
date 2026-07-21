@@ -47,3 +47,23 @@ class PatchStateError(RuntimeError):
 
 class PatchRevertError(RuntimeError):
     """Raised when patch revert fails."""
+
+
+class PdbProtocolError(RuntimeError):
+    """Raised for PDB protocol-level errors."""
+
+
+class PdbSessionError(RuntimeError):
+    """Base exception for PDB session errors."""
+
+
+class PdbSessionStateError(PdbSessionError):
+    """Raised when a session operation is invalid for the current state."""
+
+
+class PdbSessionTimeoutError(PdbSessionError):
+    """Raised when a session operation times out."""
+
+
+class PdbWorkerExitedError(PdbSessionError):
+    """Raised when the worker process exits unexpectedly."""
