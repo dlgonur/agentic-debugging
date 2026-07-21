@@ -146,6 +146,7 @@ Rules:
 - [x] 4.6.1 MVP Task 2 — Workspace and Command/Test Runtime v1 (commit 778d38c)
 - [x] 4.6.2 MVP Task 3 — Source Retrieval and Deterministic Patch Lifecycle v1 (commit e396799)
 - [x] 4.6.3 MVP Task 4A — PDB Session Lifecycle and Protocol Foundation v1 (feature/mvp-pdb-session-foundation-v1, commit c8539a4)
+- [x] 4.6.4 MVP Task 4B1 — One-Shot Target Run to First Breakpoint v1 (feature/mvp-pdb-breakpoints-execution-v1, commit 84fe9e2)
 
 ---
 
@@ -206,15 +207,19 @@ Rules:
 
 Current active item:
 
-- Task 4B — Breakpoints and Execution Control v1
+- Task 4B2 — Persistent Paused Target Lifecycle Foundation v1
 
 Notes:
 
 - The original Task 4 — PDB Session and Runtime Skills v1 is being executed as smaller sequential subtasks because the previous monolithic task exceeded the implementation agent's reliable working scope.
 - Task 4B should remain substantially smaller than Task 4A.
+- Task 4B1 required extensive adversarial review despite its bounded scope; Task 4B2 must remain narrower and must not include continue/resume, stepping or inspection.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - Task 4B — Breakpoints and Execution Control
+    - [x] Task 4B1 — One-Shot Target Run to First Breakpoint
+    - Task 4B2 — Persistent Paused Target Lifecycle Foundation
+    - Task 4B3 — Continue/Resume and Additional Execution Control
   - Task 4C — Stack, Frame and Locals Inspection
   - Task 4D — Safe Evaluation and PDB Integration Hardening, only if required
 

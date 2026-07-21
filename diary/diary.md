@@ -554,3 +554,119 @@ PDB worker'ı güvenilir biçimde başlatma, protokol doğrulama ve cleanup meka
 ### Sonuç / Bir Sonraki Adım
 
 Task 4A tamamlandı ve main branch'ine merge edildi. Bir sonraki adım, Task 4B — Breakpoints and Execution Control v1 geliştirmesidir. Task 4B'nin kapsamı, Task 4A'dan belirgin biçimde daha küçük tutulacak.
+
+### Task 4B1 — One-Shot Target Run to First Breakpoint v1
+
+#### Amaç ve Kapsam
+
+Task 4B1, debugger execution ilkellerinden yalnızca birini ekledi:
+
+- workspace-relative Python target
+- configure edilmiş line breakpoints
+- program başlangıcından itibaren çalıştırma
+- ilk configure edilmiş breakpoint'te durma
+- structured breakpoint veya exit sonucu
+
+Bu, one-shot bir execution snapshot'ıdır. Target ilk breakpoint'e ulaştıktan sonra unwound edilir ve kalıcı olarak paused tutulmaz.
+
+Aşağıdaki özellikler Task 4B1 dışında kalmıştır:
+
+- breakpoint sonrası resume
+- başka bir breakpoint'e continue
+- step
+- next
+- return
+- stack inceleme
+- frame seçimi
+- locals inceleme
+- expression evaluation
+- controller entegrasyonu
+
+#### Ana Implementasyon Detayları
+
+- Yeni `run_to_breakpoint` protokol operasyonu
+- Strict payload alanları: `script`, `breakpoints`, `argv`
+- Breakpoint sonucu alanları: `status`, `script`, `line`, `function`
+- Exited sonucu alanları: `status`, `script`, `exit_code`
+- Session başına yalnızca bir target execution'a izin verilir
+- Session ve worker ikinci bir target run'ı bağımsız olarak reddeder
+- Normal target sonuçları worker'ı canlı ve pingable bırakır
+- Timeout ve protokol bozulması Task 4A otomatik failure cleanup'ini korur
+
+#### Execution ve Isolation Tasarımı
+
+- Özel bir PDB runner `readrc=False` kullanır
+- Ham veya interaktif PDB terminali dışarıya açılmaz
+- Özel bir `BaseException` sentinel'i ilk breakpoint'te execution'ı unwound eder
+- Sıradan target `except Exception` handler'ları breakpoint sinyalini yakalayamaz
+- Target stdout, stderr ve stdin protokol kanalından izole edilir
+- `sys.argv`, `sys.path`, standart stream'ler, current working directory ve önceki trace state geri yüklenir
+- Target exception'ları tam traceback veya locals içermeyen bounded structured failure'lar üretir
+- `SystemExit` değerleri strict integer exit code'lara normalize edilir
+
+#### Path ve Kaynak Güvenliği
+
+Nihai kabul edilen hardening:
+
+- Ham `..` traversal reddi (normalizasyon öncesi)
+- Absolute, rooted, drive ve UNC path reddi
+- Session ve worker'da workspace containment validation
+- Symlink/junction escape koruması
+- `fstat` kullanarak stabil file-handle validation, post-open containment ve file identity karşılaştırması
+- Kaynak bytes bir kez yakalanır ve execution path'i yeniden açmaz
+- Platform-safe binary open flags
+- Bounded short-read-safe source accumulation
+- Maksimum target kaynak boyutu 16 MiB
+- UTF-8 BOM ve geçerli PEP 263 encoding desteği (source bytes compilation ile)
+- UTF-8 olarak temsil edilemeyen protokol girdileri deterministik olarak reddedilir
+
+#### Review ve Repair Dersleri
+
+Task, birden fazla bounded review-and-repair turu gerektirdi.
+
+Bağımsız inceleme sırasında bulunan önemli sorunlar:
+
+- Breakpoint sentinel'inin sıradan `except Exception` ile yakalanabilmesi
+- Eksik session-side path validation
+- Ham traversal normalizasyonu
+- Eksik breakpoint line validation
+- `.pdbrc` izolasyonu
+- Kaydedilmiş trace ve working-directory geri yükleme
+- Target `BaseException` handling
+- Tam sonuç korelasyonu
+- Concurrent one-shot reservation
+- Duplicate worker responses
+- Source-decoding classification
+- `SystemExit(bool)` normalizasyonu
+- Symlink validation-to-open race condition
+- Stabil captured-source execution
+- Doğrudan `os.O_BINARY` kullanımının POSIX uyumsuzluğu
+- Eksik ve boundsız source read
+- Son test-only portability düzeltmesi
+
+İlk implementation çıktısından sonra bağımsız incelemelerde yeni edge case'ler ortaya çıktığı için düzeltmeler aynı branch üzerinde birden fazla ayrı ve sınırlandırılmış repair turunda uygulandı.
+
+Önemli mühendislik dersi:
+
+```text
+passing tests were insufficient without adversarial runtime, filesystem,
+protocol, concurrency and cross-platform counterexamples
+```
+
+#### Validation ve Kabul Edilen Git Kaydı
+
+- Targeted suite: 307 passed
+- Full suite: 761 passed, 2 skipped
+- Compileall: passed
+- `git diff --check`: clean
+- Runtime dependencies: none
+- Değişen dosya: 6
+- Diff: 3144 insertions, 7 deletions
+- Branch: `feature/mvp-pdb-breakpoints-execution-v1`
+- Commit: `84fe9e2 Add one-shot PDB breakpoint execution`
+
+İki atlanan test mevcut platform-specific command-runner/process-group testleridir.
+
+#### Sonraki Adım
+
+Task 4B1 tamamlanmıştır. Task 4B şemsiyesinin tamamı tamamlanmamıştır. Bir sonraki aktif implementation maddesi **Task 4B2 — Persistent Paused Target Lifecycle Foundation v1**'dir. Task 4B2 yalnızca bounded bir persistent paused-target lifecycle kurmalıdır; continue/resume, stepping veya inceleme özellikleri henüz implemente edilmemiştir.
