@@ -145,6 +145,7 @@ Rules:
 - [x] 4.6.0 MVP Task 1 — Foundation Contracts and Event Skeleton v1 (commit 347f74d)
 - [x] 4.6.1 MVP Task 2 — Workspace and Command/Test Runtime v1 (commit 778d38c)
 - [x] 4.6.2 MVP Task 3 — Source Retrieval and Deterministic Patch Lifecycle v1 (commit e396799)
+- [x] 4.6.3 MVP Task 4A — PDB Session Lifecycle and Protocol Foundation v1 (feature/mvp-pdb-session-foundation-v1, commit c8539a4)
 
 ---
 
@@ -205,13 +206,14 @@ Rules:
 
 Current active item:
 
-- Task 4A — PDB Session Lifecycle and Protocol Foundation v1
+- Task 4B — Breakpoints and Execution Control v1
 
 Notes:
 
 - The original Task 4 — PDB Session and Runtime Skills v1 is being executed as smaller sequential subtasks because the previous monolithic task exceeded the implementation agent's reliable working scope.
+- Task 4B should remain substantially smaller than Task 4A.
 - Planned decomposition:
-  - Task 4A — PDB Session Lifecycle and Protocol Foundation
+  - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - Task 4B — Breakpoints and Execution Control
   - Task 4C — Stack, Frame and Locals Inspection
   - Task 4D — Safe Evaluation and PDB Integration Hardening, only if required
@@ -222,7 +224,7 @@ Current constraints:
 
 ## Last Updated
 
-2026-07-20
+2026-07-21
 
 
 

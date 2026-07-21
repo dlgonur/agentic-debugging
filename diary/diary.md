@@ -1,6 +1,6 @@
 ﻿# Agentic Debugging Staj Defteri
 
-Bu dosyada 13–19 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
+Bu dosyada 13–21 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
 
 ---
 
@@ -488,3 +488,69 @@ AST tabanlı source retrieval'de class/function disambiguation ve decorator hand
 ### Sonuç / Bir Sonraki Adım
 
 Kaynak kod tarama ve patch lifecycle katmanı tamamlandı. Branch incelenip main üzerine fast-forward merge edildi. Bir sonraki adım, Task 4A — PDB Session Lifecycle and Protocol Foundation v1 geliştirmesidir.
+
+---
+
+## 21 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 4A — PDB Session Lifecycle and Protocol Foundation v1 geliştirmesi, bağımsız inceleme ve test doğrulaması
+
+### Yapılan Çalışmalar
+
+Bugün implementation plan içindeki dördüncü task olan PDB session lifecycle ve protocol foundation katmanını geliştirdim. Çalışma `feature/mvp-pdb-session-foundation-v1` branch'inde yürütüldü.
+
+Task 4A'nın amacı, agentic debugger'ın PDB ile güvenli, kontrollü ve test edilebilir biçimde iletişim kurmasını sağlayacak altyapıyı oluşturmaktı. Bu kapsamda doğrudan hedef kod çalıştırma, breakpoint yönetimi, stepping, stack/frame/locals inceleme veya expression evaluation gibi özellikler Task 4A dışında bırakıldı. Bu task yalnızca session yönetimi, worker izolasyonu ve protokol doğrulamasına odaklandı.
+
+Aşağıdaki bileşenler implemente edildi:
+
+- **agentic_debugger/runtime/pdb_protocol.py** — Strict versioned UTF-8 line-delimited JSON protocol. Request record'ları `protocol_version`, `request_id`, `operation` ve `payload` alanlarını; response record'ları `protocol_version`, `request_id`, `success`, `result` ve `error` alanlarını içeriyor. Serialization ve validation deterministik biçimde çalışıyor. Geçersiz alanlar, eksik alanlar ve yanlış tipler reddediliyor.
+- **agentic_debugger/runtime/pdb_session.py** — PDB session states (NEW, STARTING, READY, STOPPING, STOPPED, FAILED) ve bounded lifecycle yönetimi. Session içinde aynı anda yalnızca bir request'in işlenmesine izin veren one-in-flight restriction ve request correlation mekanizması bulunuyor. Context manager desteği sayesinde cleanup otomatikleştirildi.
+- **agentic_debugger/runtime/pdb_worker.py** — Trusted worker launch için isolated Python mode kullanılıyor. Worker içinde `pdb.Pdb` nesnesi oluşturuluyor ancak interaktif PDB I/O'su dışarıya açılmıyor. Başlangıç handshake validation ile worker'ın doğru protokol sürümünde çalıştığı ve sağlıklı olduğu doğrulanıyor.
+
+Desteklenen lifecycle operations:
+- **hello** — Worker başlatma ve handshake.
+- **ping** — Worker canlılık kontrolü.
+- **shutdown** — Orderly shutdown (önce worker'a bildirim, ardından process-group-aware cleanup).
+
+Worker yönetiminde process-group-aware shutdown, timeout, EOF, malformed response ve worker-death durumları için sağlam hata yönetimi eklendi. Protokol kanal bütünlüğü kaybolduğunda otomatik cleanup tetikleniyor. Bounded protocol lines ve bounded response channel sayesinde kaynak taşması önleniyor. Diagnostics çıktıları da sınırlandırıldı.
+
+Session başlangıcında workspace modülü ve sitecustomize izolasyonu sağlanarak worker'ın dış ortamdan etkilenmemesi hedeflendi.
+
+Hem orderly (önce bildirim, sonra bekleme) hem forced shutdown mekanizmaları implemente edildi.
+
+### Review ve Repair Süreci
+
+Task 4A başlangıçta implementation agent tarafından üretilen ilk çıktı sonrasında birden fazla bounded review-and-repair turu gerektirdi:
+
+- **Trusted worker isolation** — Worker'ın `pdb.Pdb` kullanırken gereksiz dosya veya modül erişimine izin vermemesi için ek kısıtlamalar eklendi.
+- **Process ve thread cleanup** — Worker process ve alt süreçlerinin timeout ve shutdown sonrasında güvenilir biçimde temizlenmesi için iyileştirmeler yapıldı.
+- **Protocol strictness** — Request/response validation'da eksik alan kontrolü ve tip denetimi daha katı hale getirildi.
+- **Response queue overflow** — Sınırlı kapasiteli response kanalında taşma durumunda geri bildirim ve cleanup davranışı düzeltildi.
+- **Shutdown acknowledgement ve process exit** — Worker'ın shutdown bildirimine yanıt vermediği durumlarda forced shutdown mekanizması geliştirildi.
+- **Diagnostics bounds** — Diagnostics çıktılarının sınırsız büyümemesi için boyut sınırı ve taşma davranışı eklendi.
+
+Bu mühendislik dersleri, PDB ile güvenli ve güvenilir bir iletişim altyapısı kurmanın göründüğünden daha karmaşık olduğunu gösterdi.
+
+### Test ve Doğrulama
+
+- Hedeflenen Task 4A suite: **180 passed**
+- Full test suite: **634 passed, 2 skipped**
+- `python -m compileall -q agentic_debugger tests`: passed
+- `git diff --check`: clean
+- Yeni runtime dependency eklenmedi
+- Task 4B–4D kapsamındaki hiçbir özellik (breakpoint, stepping, stack/frame/locals, evaluation) eklenmedi
+
+Toplamda **8 dosya** değişti ve **3910 satır** eklendi.
+
+### Kabul Edilen Commit ve Branch
+
+- Branch: `feature/mvp-pdb-session-foundation-v1`
+- Commit: `c8539a4 Add PDB session lifecycle foundation`
+
+### Öğrendiklerim
+
+PDB worker'ı güvenilir biçimde başlatma, protokol doğrulama ve cleanup mekanizmalarının, debugger üzerinde çalışan diğer özelliklerden (breakpoint, stepping, stack inceleme) daha önce sağlam bir foundation gerektirdiğini öğrendim. Async olmayan bir ortamda response queue yönetimi ve process-group-aware cleanup gibi konuların, başlangıçta düşündüğümden daha fazla edge case içerdiğini gördüm.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 4A tamamlandı ve main branch'ine merge edildi. Bir sonraki adım, Task 4B — Breakpoints and Execution Control v1 geliştirmesidir. Task 4B'nin kapsamı, Task 4A'dan belirgin biçimde daha küçük tutulacak.
