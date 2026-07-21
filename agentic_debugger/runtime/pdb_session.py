@@ -75,9 +75,9 @@ _PUBLIC_TARGET_STATES = frozenset({
     "idle", "paused", "exited", "failed", "terminated",
 })
 
-# Private transient value: "starting" is used only while the
-# start_paused_target call owns _request_lock.  It is never
-# a valid worker result or a stable local lifecycle state.
+# Private transient values "starting" and "continuing" are used only while
+# their execution-control call owns _request_lock.  They are never valid
+# worker results or stable local lifecycle states.
 # Local \"unknown\" is set only when a correlated worker response
 # is operationally failed and the true lifecycle is not known.
 
@@ -846,6 +846,74 @@ class PdbSession:
         finally:
             self._request_lock.release()
 
+    def continue_paused_target(self) -> Dict[str, object]:
+        if not self._request_lock.acquire(timeout=self._request_timeout):
+            raise PdbSessionError(
+                "A request is already in flight; only one "
+                "in-flight request is supported"
+            )
+        try:
+            with self._state_lock:
+                if self._state != PdbSessionState.READY:
+                    raise PdbSessionStateError(
+                        f"Cannot continue_paused_target from state "
+                        f"{self._state.value}; expected READY"
+                    )
+                if self._target_lifecycle_state != "paused":
+                    raise PdbSessionStateError(
+                        f"Cannot continue_paused_target in local lifecycle "
+                        f"state {self._target_lifecycle_state!r}; "
+                        f"expected 'paused'"
+                    )
+                active_script = self._active_script
+                active_breakpoints = self._active_breakpoints
+                if not isinstance(active_script, str):
+                    raise PdbSessionStateError(
+                        "Cannot continue_paused_target without active "
+                        "target metadata"
+                    )
+                self._target_lifecycle_state = "continuing"
+
+            request = PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=self._allocate_request_id(),
+                operation="continue_paused_target",
+                payload={},
+            )
+            response = self._send_and_receive(
+                request, self._request_timeout
+            )
+
+            if not response.success:
+                if response.result != {}:
+                    self._fail_and_cleanup(
+                        PdbProtocolError(
+                            "Failed continue_paused_target response must "
+                            f"have empty result, got {response.result}"
+                        )
+                    )
+                self._update_local_lifecycle("unknown", active_script)
+                raise PdbSessionError(
+                    f"Continue failed: {response.error}"
+                )
+
+            try:
+                state = self._validate_continue_result(
+                    response, active_script, active_breakpoints
+                )
+            except (PdbProtocolError, PdbSessionError) as e:
+                self._fail_and_cleanup(e)
+
+            self._update_local_lifecycle(state, active_script)
+            return dict(response.result)
+        except Exception:
+            raise
+        finally:
+            with self._state_lock:
+                if self._target_lifecycle_state == "continuing":
+                    self._target_lifecycle_state = "unknown"
+            self._request_lock.release()
+
     def terminate_paused_target(self) -> Dict[str, object]:
         if not self._request_lock.acquire(timeout=self._request_timeout):
             raise PdbSessionError(
@@ -1295,72 +1363,100 @@ class PdbSession:
         expected_script: str,
         expected_breakpoints: Sequence[int],
     ) -> str:
+        return self._validate_persistent_outcome_result(
+            response,
+            expected_script,
+            expected_breakpoints,
+            "start_paused_target",
+        )
+
+    def _validate_continue_result(
+        self,
+        response: PdbResponse,
+        expected_script: str,
+        expected_breakpoints: Optional[Sequence[int]],
+    ) -> str:
+        return self._validate_persistent_outcome_result(
+            response,
+            expected_script,
+            expected_breakpoints,
+            "continue_paused_target",
+        )
+
+    def _validate_persistent_outcome_result(
+        self,
+        response: PdbResponse,
+        expected_script: str,
+        expected_breakpoints: Optional[Sequence[int]],
+        operation: str,
+    ) -> str:
         result = response.result
         if not isinstance(result, dict):
             raise PdbProtocolError(
-                "start_paused_target result must be a mapping"
+                f"{operation} result must be a mapping"
             )
         state = result.get("state")
         if isinstance(state, bool) or not isinstance(state, str):
             raise PdbProtocolError(
-                "start_paused_target result state must be a string, "
+                f"{operation} result state must be a string, "
                 f"got {type(state).__name__}"
             )
         _START_VALID_STATES = frozenset({"paused", "exited"})
         if state not in _START_VALID_STATES:
             raise PdbProtocolError(
-                f"start_paused_target result state must be 'paused' "
+                f"{operation} result state must be 'paused' "
                 f"or 'exited', got {state!r}"
             )
         if state == "paused":
             self._check_exact_fields(
                 result, _PAUSED_RESULT_FIELDS,
-                "start_paused_target paused result"
+                f"{operation} paused result"
             )
             script = self._validate_result_script(
                 result["script"],
-                "start_paused_target paused result script"
+                f"{operation} paused result script"
             )
             if script != expected_script:
                 raise PdbProtocolError(
-                    f"start_paused_target paused result script {script!r} "
+                    f"{operation} paused result script {script!r} "
                     f"does not match expected {expected_script!r}"
                 )
             line = self._validate_int_strict_field(
                 result["line"],
-                "start_paused_target paused result line"
+                f"{operation} paused result line"
             )
             if line <= 0:
                 raise PdbProtocolError(
-                    "start_paused_target paused result line must be positive"
+                    f"{operation} paused result line must be positive"
                 )
-            if line not in expected_breakpoints:
+            if (expected_breakpoints is not None and
+                    line not in expected_breakpoints):
                 raise PdbProtocolError(
-                    f"start_paused_target paused result line {line} is not "
+                    f"{operation} paused result line {line} is not "
                     f"among requested breakpoints "
                     f"{list(expected_breakpoints)}"
                 )
             self._validate_bounded_protocol_string(
                 result["function"],
-                "start_paused_target paused result function",
+                f"{operation} paused result function",
                 _MAX_RESULT_FUNCTION_UTF8,
             )
         elif state == "exited":
             self._check_exact_fields(
                 result, _EXITED_RESULT_FIELDS,
-                "start_paused_target exited result"
+                f"{operation} exited result"
             )
             script = self._validate_result_script(
-                result["script"], "start_paused_target exited result script"
+                result["script"], f"{operation} exited result script"
             )
             if script != expected_script:
                 raise PdbProtocolError(
-                    f"start_paused_target exited result script {script!r} "
+                    f"{operation} exited result script {script!r} "
                     f"does not match expected {expected_script!r}"
                 )
             self._validate_int_strict_field(
                 result["exit_code"],
-                "start_paused_target exited result exit_code"
+                f"{operation} exited result exit_code"
             )
         return state
 
@@ -1533,7 +1629,7 @@ class PdbSession:
                 self._active_breakpoints = None
             elif state == "paused":
                 pass
-            elif state in ("exited", "failed", "terminated", "unknown"):
+            elif state in ("exited", "failed", "terminated"):
                 self._active_breakpoints = None
 
     def _send_and_receive(

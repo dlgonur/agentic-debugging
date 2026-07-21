@@ -12,7 +12,8 @@ PROTOCOL_VERSION = 1
 
 SUPPORTED_OPERATIONS = frozenset({
     "hello", "ping", "shutdown", "run_to_breakpoint",
-    "start_paused_target", "get_target_status", "terminate_paused_target",
+    "start_paused_target", "continue_paused_target", "get_target_status",
+    "terminate_paused_target",
 })
 
 MAX_LINE_LENGTH = 65536

@@ -385,7 +385,8 @@ class TestSerialization:
     def test_supported_operations(self):
         assert SUPPORTED_OPERATIONS == frozenset(
             {"hello", "ping", "shutdown", "run_to_breakpoint",
-             "start_paused_target", "get_target_status", "terminate_paused_target"}
+             "start_paused_target", "continue_paused_target",
+             "get_target_status", "terminate_paused_target"}
         )
 
     def test_run_to_breakpoint_operation_accepted(self):

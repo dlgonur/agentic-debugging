@@ -3519,3 +3519,335 @@ class TestPausedTargetAtomicReservation:
             session.start_paused_target("test.py", [3])
         assert session.state == PdbSessionState.READY
         session.stop()
+
+
+# =====================================================================
+# Task 4B3 ? Continue/Resume and Additional Execution Control v1
+# =====================================================================
+
+
+def _continue_response(request_id=2, result=None, success=True, error=""):
+    if result is None:
+        result = {
+            "state": "paused", "script": "test.py",
+            "line": 3, "function": "<module>",
+        }
+    return PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=request_id,
+        success=success,
+        result=result,
+        error=error,
+    )
+
+
+def _ready_continue_session(mock_workspace, response):
+    session, proc = _setup(mock_workspace, [_hello_resp(1)])
+    session._target_consumed = True
+    session._target_lifecycle_state = "paused"
+    session._active_script = "test.py"
+    session._active_breakpoints = [3, 5]
+    sent = []
+
+    def send(request, timeout):
+        sent.append(request)
+        return response
+
+    session._send_and_receive = send
+    return session, proc, sent
+
+
+class TestContinuePausedTargetPublicAPI:
+    def test_method_exists_and_exact_signature(self, mock_workspace):
+        import inspect
+        method = getattr(PdbSession, "continue_paused_target")
+        assert callable(method)
+        assert list(inspect.signature(method).parameters) == ["self"]
+
+    def test_exact_operation_payload_and_result(self, mock_workspace):
+        response = _continue_response()
+        session, _, sent = _ready_continue_session(mock_workspace, response)
+        try:
+            result = session.continue_paused_target()
+            assert result == response.result
+            assert len(sent) == 1
+            assert sent[0].operation == "continue_paused_target"
+            assert sent[0].payload == {}
+            assert set(sent[0].to_mapping()) == {
+                "protocol_version", "request_id", "operation", "payload",
+            }
+            assert session._target_lifecycle_state == "paused"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("local_state", [
+        "idle", "starting", "continuing", "exited", "failed",
+        "terminated", "unknown",
+    ])
+    def test_local_lifecycle_rejection_is_zero_request(
+        self, mock_workspace, local_state
+    ):
+        session, _, sent = _ready_continue_session(
+            mock_workspace, _continue_response()
+        )
+        session._target_lifecycle_state = local_state
+        try:
+            with pytest.raises(PdbSessionStateError, match="Cannot continue"):
+                session.continue_paused_target()
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+            expected_state = "unknown" if local_state == "continuing" else local_state
+            assert session._target_lifecycle_state == expected_state
+            assert session._target_consumed is True
+            assert session._active_script == "test.py"
+            ping_response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION, request_id=99,
+                success=True, result={"status": "ok", "pdb_created": True}, error="",
+            )
+            session._send_and_receive = lambda request, timeout: PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=ping_response.success,
+                result=ping_response.result,
+                error=ping_response.error,
+            )
+            assert session.ping().success is True
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("one_shot_state", ["terminated", "exited", "failed"])
+    def test_one_shot_lifecycle_rejected_without_request(
+        self, mock_workspace, one_shot_state
+    ):
+        session, _, sent = _ready_continue_session(
+            mock_workspace, _continue_response()
+        )
+        session._target_lifecycle_state = one_shot_state
+        session._active_breakpoints = None
+        try:
+            with pytest.raises(PdbSessionStateError):
+                session.continue_paused_target()
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+            assert session._target_consumed is True
+        finally:
+            session.stop()
+
+
+class TestContinuePausedTargetValidation:
+    @pytest.mark.parametrize("result", [
+        pytest.param([], id="list-result"),
+        pytest.param("paused", id="string-result"),
+        pytest.param({"state": []}, id="list-state"),
+        pytest.param({"state": {}}, id="dict-state"),
+        pytest.param({"state": 1}, id="integer-state"),
+        pytest.param({"state": None}, id="null-state"),
+        pytest.param({"state": "idle"}, id="idle-state"),
+        pytest.param({"state": "failed"}, id="failed-state"),
+        pytest.param({"state": "terminated"}, id="terminated-state"),
+        pytest.param({"state": "unknown"}, id="unknown-state"),
+        pytest.param({"state": "running"}, id="running-state"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 3},
+                     id="missing-paused-field"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 3,
+                      "function": "f", "extra": 1}, id="extra-paused-field"),
+        pytest.param({"state": "paused", "script": "other.py", "line": 3,
+                      "function": "f"}, id="mismatched-script"),
+        pytest.param({"state": "paused", "script": "sub\\test.py", "line": 3,
+                      "function": "f"}, id="backslash-script"),
+        pytest.param({"state": "paused", "script": "./test.py", "line": 3,
+                      "function": "f"}, id="dot-segment-script"),
+        pytest.param({"state": "paused", "script": "sub//test.py", "line": 3,
+                      "function": "f"}, id="duplicate-separator-script"),
+        pytest.param({"state": "paused", "script": "../test.py", "line": 3,
+                      "function": "f"}, id="traversal-script"),
+        pytest.param({"state": "paused", "script": "C:/test.py", "line": 3,
+                      "function": "f"}, id="absolute-script"),
+        pytest.param({"state": "paused", "script": "test.py", "line": True,
+                      "function": "f"}, id="bool-line"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 0,
+                      "function": "f"}, id="zero-line"),
+        pytest.param({"state": "paused", "script": "test.py", "line": -1,
+                      "function": "f"}, id="negative-line"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 4,
+                      "function": "f"}, id="line-outside-breakpoints"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 3,
+                      "function": ""}, id="empty-function"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 3,
+                      "function": "bad\0name"}, id="nul-function"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 3,
+                      "function": "\ud800"}, id="non-utf8-function"),
+        pytest.param({"state": "paused", "script": "test.py", "line": 3,
+                      "function": "x" * 4097}, id="oversized-function"),
+        pytest.param({"state": "exited", "script": "test.py"},
+                     id="missing-exit-field"),
+        pytest.param({"state": "exited", "script": "test.py", "exit_code": 0,
+                      "extra": 1}, id="extra-exit-field"),
+        pytest.param({"state": "exited", "script": "test.py", "exit_code": True},
+                     id="bool-exit-code"),
+    ])
+    def test_malformed_success_fails_session_and_cleans_up(
+        self, mock_workspace, result
+    ):
+        response = MagicMock(spec=PdbResponse)
+        response.success = True
+        response.result = result
+        response.error = ""
+        session, _, sent = _ready_continue_session(mock_workspace, response)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.continue_paused_target()
+            assert len(sent) == 1
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+    def test_ordinary_failed_response_sets_unknown_and_retains_metadata(
+        self, mock_workspace
+    ):
+        response = _continue_response(
+            success=False, result={}, error="Target raised ValueError: boom"
+        )
+        session, _, sent = _ready_continue_session(mock_workspace, response)
+        try:
+            with pytest.raises(PdbSessionError, match="Continue failed"):
+                session.continue_paused_target()
+            assert len(sent) == 1
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "unknown"
+            assert session._active_script == "test.py"
+            assert session._active_breakpoints == [3, 5]
+            with pytest.raises(PdbSessionStateError):
+                session.continue_paused_target()
+            assert len(sent) == 1
+        finally:
+            session.stop()
+
+    def test_failed_response_with_nonempty_result_is_corruption(self, mock_workspace):
+        response = _continue_response(
+            success=False, result={"state": "failed"}, error="boom"
+        )
+        session, _, _ = _ready_continue_session(mock_workspace, response)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.continue_paused_target()
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+
+class TestContinueStatusRecovery:
+    @pytest.mark.parametrize("result, expected", [
+        ({"state": "paused", "script": "test.py", "line": 5,
+          "function": "main"}, "paused"),
+        ({"state": "exited", "script": "test.py", "exit_code": 0}, "exited"),
+        ({"state": "failed", "script": "test.py", "error": "bounded"}, "failed"),
+        ({"state": "terminated", "script": "test.py"}, "terminated"),
+    ])
+    def test_unknown_refresh_recovers_authoritative_state(
+        self, mock_workspace, result, expected
+    ):
+        session, _, _ = _ready_continue_session(
+            mock_workspace, _continue_response()
+        )
+        session._target_lifecycle_state = "unknown"
+        responses = [PdbResponse(
+            protocol_version=PROTOCOL_VERSION, request_id=2,
+            success=True, result=result, error="",
+        )]
+        session._send_and_receive = lambda request, timeout: responses.pop(0)
+        try:
+            refreshed = session.get_target_status()
+            assert refreshed["state"] == expected
+            assert session._target_lifecycle_state == expected
+            if expected == "paused":
+                session._send_and_receive = lambda request, timeout: _continue_response(
+                    request_id=request.request_id,
+                    result={"state": "exited", "script": "test.py", "exit_code": 0},
+                )
+                assert session.continue_paused_target()["state"] == "exited"
+            else:
+                with pytest.raises(PdbSessionStateError):
+                    session.continue_paused_target()
+        finally:
+            session.stop()
+
+
+class TestContinueConcurrency:
+    @pytest.mark.parametrize("loser_name", ["continue", "terminate", "status"])
+    def test_one_inflight_boundary_sends_one_execution_control(
+        self, mock_workspace, loser_name
+    ):
+        session, _, _ = _ready_continue_session(
+            mock_workspace, _continue_response()
+        )
+        session._request_timeout = 0.1
+        entered = threading.Event()
+        release = threading.Event()
+        sent = []
+        outcomes = []
+
+        def blocking_send(request, timeout):
+            sent.append(request.operation)
+            entered.set()
+            assert release.wait(timeout=5.0)
+            return _continue_response(request_id=request.request_id)
+
+        session._send_and_receive = blocking_send
+        thread = threading.Thread(
+            target=lambda: outcomes.append(session.continue_paused_target()),
+            daemon=True,
+        )
+        try:
+            thread.start()
+            assert entered.wait(timeout=5.0)
+            loser = {
+                "continue": session.continue_paused_target,
+                "terminate": session.terminate_paused_target,
+                "status": session.get_target_status,
+            }[loser_name]
+            with pytest.raises(PdbSessionError, match="already in flight"):
+                loser()
+            assert sent == ["continue_paused_target"]
+        finally:
+            release.set()
+            thread.join(timeout=5.0)
+            session.stop()
+        assert not thread.is_alive()
+        assert outcomes and outcomes[0]["state"] == "paused"
+
+
+class TestContinueProtocolBoundary:
+    @pytest.mark.parametrize("kind", ["request-id", "version", "malformed"])
+    def test_continue_transport_envelope_corruption_cleans_up(
+        self, mock_workspace, kind
+    ):
+        if kind == "malformed":
+            wire = b"not-json\n"
+        else:
+            response = PdbResponse(
+                protocol_version=(99 if kind == "version" else PROTOCOL_VERSION),
+                request_id=(77 if kind == "request-id" else 2),
+                success=True,
+                result={
+                    "state": "paused", "script": "test.py",
+                    "line": 3, "function": "f",
+                },
+                error="",
+            )
+            wire = _ser(response)
+        session, _ = _setup(mock_workspace, [_hello_resp(1), wire])
+        session._target_consumed = True
+        session._target_lifecycle_state = "paused"
+        session._active_script = "test.py"
+        session._active_breakpoints = [3]
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.continue_paused_target()
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()

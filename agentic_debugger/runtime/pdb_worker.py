@@ -92,6 +92,7 @@ class _PdbPersistentRunner(pdb.Pdb):
         if (frame.f_lineno in self._breakpoints and
             os.path.normcase(os.path.abspath(frame.f_code.co_filename)) == self._script_canonic):
             with self._condition:
+                self._lifecycle['pause_generation'] += 1
                 self._lifecycle['state'] = 'paused'
                 self._lifecycle['line'] = frame.f_lineno
                 self._lifecycle['function'] = frame.f_code.co_name
@@ -187,6 +188,7 @@ class PdbWorker:
             'exit_code': None,
             'error': '',
             '_start_script': '',
+            'pause_generation': 0,
         }
         self._target_thread: Optional[threading.Thread] = None
         self._unsafe = False
@@ -253,6 +255,8 @@ class PdbWorker:
             self._handle_run_to_breakpoint(request)
         elif op == "start_paused_target":
             self._handle_start_paused_target(request)
+        elif op == "continue_paused_target":
+            self._handle_continue_paused_target(request)
         elif op == "get_target_status":
             self._handle_get_target_status(request)
         elif op == "terminate_paused_target":
@@ -751,6 +755,46 @@ class PdbWorker:
             return {'state': 'terminated'}
         return {'error': f"Target termination produced unexpected state: {final_state}"}
 
+    def _fail_paused_target_invariant(self, error: str) -> str:
+        """Clean up a false paused state without writing a response."""
+        safe_error = ''.join(
+            c if c.isprintable() or c in (' ', '\t') else '?'
+            for c in error
+        )
+        safe_error = safe_error.encode(
+            'utf-8', errors='replace'
+        )[:4096].decode('utf-8', errors='replace')
+        if not safe_error:
+            safe_error = "Internal paused-target invariant failure"
+
+        with self._condition:
+            target_thread = self._target_thread
+            if target_thread is not None and target_thread.is_alive():
+                self._lifecycle['state'] = 'terminating'
+                self._condition.notify_all()
+
+        cleanup_safe = True
+        if target_thread is threading.current_thread():
+            cleanup_safe = False
+        elif target_thread is not None and target_thread.is_alive():
+            target_thread.join(timeout=_WORKER_TERMINATION_TIMEOUT)
+            cleanup_safe = not target_thread.is_alive()
+
+        if not cleanup_safe:
+            safe_error += "; target invariant cleanup timed out"
+            safe_error = safe_error.encode(
+                'utf-8', errors='replace'
+            )[:4096].decode('utf-8', errors='replace')
+            self._unsafe = True
+            self._running = False
+
+        with self._condition:
+            self._target_thread = None
+            self._lifecycle['state'] = 'failed'
+            self._lifecycle['error'] = safe_error
+            self._condition.notify_all()
+        return safe_error
+
     def _execute_target_persistent(
         self,
         script_normalized: str,
@@ -909,6 +953,7 @@ class PdbWorker:
             self._lifecycle['function'] = ''
             self._lifecycle['exit_code'] = None
             self._lifecycle['error'] = ''
+            self._lifecycle['pause_generation'] = 0
 
         self._target_thread = threading.Thread(
             target=self._execute_target_persistent,
@@ -980,6 +1025,128 @@ class PdbWorker:
                 f"Unexpected target lifecycle state: {state}"
             )
 
+    def _handle_continue_paused_target(self, request: PdbRequest) -> None:
+        payload = request.payload
+        if not isinstance(payload, dict):
+            self._send_error(request.request_id, "payload must be a mapping")
+            return
+        for field in payload:
+            self._send_error(
+                request.request_id,
+                f"Unknown payload field: {field}"
+            )
+            return
+
+        failure: Optional[str] = None
+        invariant_failure: Optional[str] = None
+        result: Optional[Dict[str, Any]] = None
+        terminal_state: Optional[str] = None
+        with self._condition:
+            state = self._lifecycle['state']
+            target_thread = self._target_thread
+            if state != 'paused':
+                failure = f"Cannot continue target in state: {state}"
+            elif target_thread is None:
+                invariant_failure = (
+                    "Paused target invariant failure: target thread is missing"
+                )
+            elif not target_thread.is_alive():
+                invariant_failure = (
+                    "Paused target invariant failure: target thread is not alive"
+                )
+            else:
+                pause_generation = self._lifecycle['pause_generation']
+                self._lifecycle['state'] = 'running'
+                self._condition.notify_all()
+
+                while True:
+                    state = self._lifecycle['state']
+                    current_generation = self._lifecycle['pause_generation']
+                    if state == 'paused':
+                        if current_generation <= pause_generation:
+                            invariant_failure = (
+                                "Paused target invariant failure: stale pause "
+                                f"generation {current_generation} did not "
+                                f"advance beyond {pause_generation}"
+                            )
+                        else:
+                            result = {
+                                'state': 'paused',
+                                'script': self._lifecycle['script'],
+                                'line': self._lifecycle['line'],
+                                'function': self._lifecycle['function'],
+                            }
+                        break
+                    if state in ('exited', 'failed'):
+                        terminal_state = state
+                        break
+                    if state != 'running':
+                        invariant_failure = (
+                            "Paused target invariant failure: unexpected "
+                            f"lifecycle state after continue: {state}"
+                        )
+                        break
+                    self._condition.wait()
+
+        if invariant_failure is not None:
+            error = self._fail_paused_target_invariant(invariant_failure)
+            self._send_error(request.request_id, error)
+            return
+
+        if failure is not None:
+            self._send_error(request.request_id, failure)
+            return
+
+        if result is not None:
+            self._send_response(PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            ))
+            return
+
+        target_thread = self._target_thread
+        if target_thread is not None and target_thread is not threading.current_thread():
+            target_thread.join(timeout=_WORKER_TERMINATION_TIMEOUT)
+            if target_thread.is_alive():
+                self._unsafe = True
+                self._running = False
+                self._target_thread = None
+                self._send_error(
+                    request.request_id,
+                    "Target thread did not complete after continued outcome"
+                )
+                return
+            self._target_thread = None
+
+        with self._condition:
+            state = self._lifecycle['state']
+            script = self._lifecycle['script']
+            exit_code = self._lifecycle['exit_code']
+            error = self._lifecycle['error']
+
+        if state != terminal_state:
+            self._send_error(
+                request.request_id,
+                f"Continued target terminal state changed unexpectedly: {state}"
+            )
+        elif state == 'exited':
+            self._send_response(PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result={
+                    'state': 'exited',
+                    'script': script,
+                    'exit_code': exit_code,
+                },
+                error="",
+            ))
+        else:
+            self._send_error(request.request_id, error)
+
     def _handle_get_target_status(self, request: PdbRequest) -> None:
         payload = request.payload
         if not isinstance(payload, dict):
@@ -992,8 +1159,26 @@ class PdbWorker:
             )
             return
 
+        invariant_failure: Optional[str] = None
         with self._condition:
             state = self._lifecycle['state']
+            if state == 'paused':
+                target_thread = self._target_thread
+                if target_thread is None:
+                    invariant_failure = (
+                        "Paused target invariant failure during status: "
+                        "target thread is missing"
+                    )
+                elif not target_thread.is_alive():
+                    invariant_failure = (
+                        "Paused target invariant failure during status: "
+                        "target thread is not alive"
+                    )
+
+        if invariant_failure is not None:
+            self._fail_paused_target_invariant(invariant_failure)
+            with self._condition:
+                state = self._lifecycle['state']
 
         if state == 'idle':
             result = {'state': 'idle'}

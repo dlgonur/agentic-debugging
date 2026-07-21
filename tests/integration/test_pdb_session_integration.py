@@ -4102,3 +4102,620 @@ class TestPublicPausedTargetIntegration:
             session.stop()
         proc.wait(timeout=3.0)
         assert proc.poll() is not None
+
+
+# =====================================================================
+# Task 4B3 ? Continue/Resume and Additional Execution Control v1
+# =====================================================================
+
+
+@pytest.fixture
+def continue_workspace():
+    root = Path(tempfile.mkdtemp())
+    try:
+        (root / "multi.py").write_text(
+            "import sys\n"
+            "open(sys.argv[1], 'a').write('A')\n"
+            "first = 1\n"
+            "open(sys.argv[1], 'a').write('B')\n"
+            "second = 2\n"
+            "open(sys.argv[1], 'a').write('C')\n"
+            "# end\n"
+        )
+        (root / "loop.py").write_text(
+            "import sys\n"
+            "for i in range(2):\n"
+            "    with open(sys.argv[1], 'a') as f:\n"
+            "        f.write(str(i))\n"
+            "# end\n"
+        )
+        (root / "fail_after.py").write_text(
+            "x = 1\n"
+            "raise ValueError('resume boom')\n"
+            "# end\n"
+        )
+        (root / "terminate_later.py").write_text(
+            "import sys\n"
+            "try:\n"
+            "    first = 1\n"
+            "    middle = 2\n"
+            "    second = 3\n"
+            "    open(sys.argv[1], 'w').write('AFTER')\n"
+            "finally:\n"
+            "    open(sys.argv[2], 'w').write('FINAL')\n"
+        )
+        (root / "io_cycles.py").write_text(
+            "import sys\n"
+            "first = 1\n"
+            "print('target stdout')\n"
+            "sys.stderr.write('target stderr')\n"
+            "data = sys.stdin.read()\n"
+            "open(sys.argv[1], 'w').write(repr(data))\n"
+            "second = 2\n"
+            "open(sys.argv[1], 'a').write('|done')\n"
+        )
+        (root / "timeout_after.py").write_text(
+            "first = 1\n"
+            "while True:\n"
+            "    pass\n"
+        )
+        with TaskWorkspace(str(root)) as workspace:
+            yield workspace
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+class TestContinueRepeatedExecutionIntegration:
+    def test_different_lines_pause_independently_then_exit(self, continue_workspace):
+        marker = Path(continue_workspace.root) / "multi-marker.txt"
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            first = session.start_paused_target(
+                "multi.py", [3, 5], argv=[str(marker)]
+            )
+            assert first == {
+                "state": "paused", "script": "multi.py",
+                "line": 3, "function": "<module>",
+            }
+            assert marker.read_text() == "A"
+            assert session.get_target_status()["line"] == 3
+            assert session.ping().success is True
+
+            second = session.continue_paused_target()
+            assert second == {
+                "state": "paused", "script": "multi.py",
+                "line": 5, "function": "<module>",
+            }
+            assert marker.read_text() == "AB"
+            assert session.get_target_status()["line"] == 5
+            assert session.ping().success is True
+
+            exited = session.continue_paused_target()
+            assert exited == {
+                "state": "exited", "script": "multi.py", "exit_code": 0,
+            }
+            assert marker.read_text() == "ABC"
+            assert session.get_target_status() == exited
+            assert session.ping().success is True
+            with pytest.raises(PdbSessionStateError):
+                session.continue_paused_target()
+        finally:
+            session.stop()
+
+    def test_same_line_loop_is_a_new_pause_and_never_auto_continues(
+        self, continue_workspace
+    ):
+        marker = Path(continue_workspace.root) / "loop-marker.txt"
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            first = session.start_paused_target(
+                "loop.py", [4], argv=[str(marker)]
+            )
+            assert first["line"] == 4
+            assert marker.read_text() == ""
+
+            second = session.continue_paused_target()
+            assert second["state"] == "paused"
+            assert second["line"] == first["line"] == 4
+            assert marker.read_text() == "0"
+            assert session.get_target_status() == second
+            assert marker.read_text() == "0"
+
+            exited = session.continue_paused_target()
+            assert exited["state"] == "exited"
+            assert marker.read_text() == "01"
+        finally:
+            session.stop()
+
+    def test_multiple_breakpoint_order_skips_unreachable(self, continue_workspace):
+        marker = Path(continue_workspace.root) / "ordering.txt"
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            assert session.start_paused_target(
+                "multi.py", [3, 5, 7], argv=[str(marker)]
+            )["line"] == 3
+            assert session.continue_paused_target()["line"] == 5
+            assert session.continue_paused_target()["state"] == "exited"
+        finally:
+            session.stop()
+
+
+class TestContinueFailureAndRecoveryIntegration:
+    def test_failure_after_resume_is_operational_and_recoverable(
+        self, continue_workspace
+    ):
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            assert session.start_paused_target("fail_after.py", [1])["line"] == 1
+            with pytest.raises(PdbSessionError, match="ValueError") as exc_info:
+                session.continue_paused_target()
+            assert "Traceback" not in str(exc_info.value)
+            assert "locals" not in str(exc_info.value).lower()
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "unknown"
+            with pytest.raises(PdbSessionStateError):
+                session.continue_paused_target()
+            assert session.ping().success is True
+            status = session.get_target_status()
+            assert status["state"] == "failed"
+            assert "ValueError" in status["error"]
+            with pytest.raises(PdbSessionStateError):
+                session.continue_paused_target()
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("value, expected", [
+        ("None", 0), ("False", 0), ("True", 1),
+        ("17", 17), ("-9", -9), ("'text'", 1),
+    ])
+    def test_system_exit_normalization_after_continue(
+        self, continue_workspace, value, expected
+    ):
+        path = Path(continue_workspace.root) / "exit_after.py"
+        path.write_text(
+            "first = 1\n"
+            "import sys\n"
+            f"sys.exit({value})\n"
+        )
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            assert session.start_paused_target("exit_after.py", [1])["line"] == 1
+            result = session.continue_paused_target()
+            assert result["state"] == "exited"
+            assert result["exit_code"] == expected
+            assert isinstance(result["exit_code"], int)
+            assert not isinstance(result["exit_code"], bool)
+        finally:
+            session.stop()
+
+
+class TestContinueTerminationAndCleanupIntegration:
+    def test_termination_at_later_pause_runs_finally_and_releases_thread(
+        self, continue_workspace
+    ):
+        after = Path(continue_workspace.root) / "after.txt"
+        final = Path(continue_workspace.root) / "final.txt"
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            assert session.start_paused_target(
+                "terminate_later.py", [3, 5], argv=[str(after), str(final)]
+            )["line"] == 3
+            assert session.continue_paused_target()["line"] == 5
+            result = session.terminate_paused_target()
+            assert result == {
+                "state": "terminated", "script": "terminate_later.py",
+            }
+            assert final.read_text() == "FINAL"
+            assert not after.exists()
+            assert session.get_target_status() == result
+            assert session.ping().success is True
+            with pytest.raises(PdbSessionStateError):
+                session.terminate_paused_target()
+        finally:
+            session.stop()
+
+    def test_stop_after_continue_pause_is_bounded(self, continue_workspace):
+        marker = Path(continue_workspace.root) / "stop.txt"
+        session = PdbSession(continue_workspace)
+        try:
+            session.start()
+            session.start_paused_target(
+                "multi.py", [3, 5], argv=[str(marker)]
+            )
+            session.continue_paused_target()
+            session.stop()
+            assert session.state == PdbSessionState.STOPPED
+            assert marker.read_text() == "AB"
+        finally:
+            if session.state != PdbSessionState.STOPPED:
+                session.stop()
+
+    def test_context_exit_after_multiple_pauses_cleans_worker(
+        self, continue_workspace
+    ):
+        marker = Path(continue_workspace.root) / "context.txt"
+        with PdbSession(continue_workspace) as session:
+            proc = session._proc
+            session.start_paused_target("loop.py", [4], argv=[str(marker)])
+            session.continue_paused_target()
+        assert session.state == PdbSessionState.STOPPED
+        assert proc is not None
+        proc.wait(timeout=3.0)
+        assert proc.poll() is not None
+        assert marker.read_text() == "0"
+
+    def test_target_io_isolated_across_continue_cycles(self, continue_workspace):
+        marker = Path(continue_workspace.root) / "io.txt"
+        session = PdbSession(continue_workspace)
+        session.start()
+        try:
+            assert session.start_paused_target(
+                "io_cycles.py", [2, 7], argv=[str(marker)]
+            )["line"] == 2
+            assert session.continue_paused_target()["line"] == 7
+            assert marker.read_text() == "''"
+            assert session.ping().success is True
+            assert session.continue_paused_target()["state"] == "exited"
+            assert marker.read_text() == "''|done"
+            assert session.ping().success is True
+        finally:
+            session.stop()
+
+    def test_timeout_after_resume_kills_worker_and_rejects_late_ping(
+        self, continue_workspace
+    ):
+        session = PdbSession(continue_workspace, request_timeout=0.5)
+        session.start()
+        proc = session._proc
+        try:
+            assert session.start_paused_target("timeout_after.py", [1])["line"] == 1
+            with pytest.raises(PdbSessionTimeoutError):
+                session.continue_paused_target()
+            assert session.state == PdbSessionState.FAILED
+            assert proc is not None
+            proc.wait(timeout=3.0)
+            assert proc.poll() is not None
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+
+class TestContinueWorkerCoordination:
+    @pytest.mark.parametrize("state", [
+        "idle", "starting", "running", "resuming", "exited", "failed",
+        "terminated", "terminating",
+    ])
+    def test_raw_nonpaused_state_fails_once_without_resume(self, state):
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda response: responses.append(response)
+        with worker._condition:
+            worker._lifecycle["state"] = state
+            generation = worker._lifecycle["pause_generation"]
+        worker._handle(PdbRequest(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=41,
+            operation="continue_paused_target",
+            payload={},
+        ))
+        assert len(responses) == 1
+        assert responses[0].request_id == 41
+        assert responses[0].success is False
+        assert responses[0].result == {}
+        assert worker._lifecycle["state"] == state
+        assert worker._lifecycle["pause_generation"] == generation
+        assert worker._target_thread is None
+
+    def test_unknown_continue_payload_field_fails_once(self):
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda response: responses.append(response)
+        worker._handle(PdbRequest(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=42,
+            operation="continue_paused_target",
+            payload={"resume": True},
+        ))
+        assert len(responses) == 1
+        assert responses[0].success is False
+        assert responses[0].result == {}
+
+    def test_real_same_line_advances_private_generation(self):
+        import threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        root = Path(tempfile.mkdtemp())
+        worker = PdbWorker()
+        thread = None
+        try:
+            script = "for i in range(2):\n    value = i\n# end\n"
+            path = root / "generation.py"
+            path.write_text(script)
+            worker._target_started = True
+            with worker._condition:
+                worker._lifecycle["state"] = "starting"
+                worker._lifecycle["script"] = "generation.py"
+                worker._lifecycle["_start_script"] = "generation.py"
+            thread = _threading.Thread(
+                target=worker._execute_target_persistent,
+                args=("generation.py", os.path.realpath(str(path)), [2], [],
+                      script.encode("utf-8")),
+                daemon=True,
+            )
+            worker._target_thread = thread
+            thread.start()
+            deadline = time.monotonic() + 3.0
+            with worker._condition:
+                while worker._lifecycle["state"] == "starting":
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0, (
+                        "Target did not leave starting state"
+                    )
+                    worker._condition.wait(timeout=remaining)
+                first_generation = worker._lifecycle["pause_generation"]
+                first_line = worker._lifecycle["line"]
+            assert first_generation == 1
+            responses = []
+            worker._send_response = lambda response: responses.append(response)
+            worker._handle_continue_paused_target(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=1,
+                operation="continue_paused_target", payload={},
+            ))
+            with worker._condition:
+                second_generation = worker._lifecycle["pause_generation"]
+                second_line = worker._lifecycle["line"]
+            assert second_generation > first_generation
+            assert second_line == first_line == 2
+            assert len(responses) == 1
+            assert responses[0].success is True
+            assert responses[0].result["state"] == "paused"
+            worker._handle_continue_paused_target(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=2,
+                operation="continue_paused_target", payload={},
+            ))
+            assert len(responses) == 2
+            assert responses[1].result["state"] == "exited"
+            assert worker._target_thread is None
+            thread.join(timeout=3.0)
+            assert not thread.is_alive()
+        finally:
+            if thread is not None and thread.is_alive():
+                worker._request_target_termination()
+                thread.join(timeout=3.0)
+            shutil.rmtree(str(root), ignore_errors=True)
+
+    def test_stale_pause_generation_fails_closed(self):
+        import threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda response: responses.append(response)
+        ready = _threading.Event()
+        publisher_errors = []
+
+        def stale_publisher():
+            deadline = time.monotonic() + 3.0
+            try:
+                with worker._condition:
+                    ready.set()
+                    while worker._lifecycle["state"] == "paused":
+                        remaining = deadline - time.monotonic()
+                        assert remaining > 0, (
+                            "Continue did not release stale publisher"
+                        )
+                        worker._condition.wait(timeout=remaining)
+                    worker._lifecycle["state"] = "paused"
+                    worker._condition.notify_all()
+            except BaseException as exc:
+                publisher_errors.append(exc)
+
+        with worker._condition:
+            worker._lifecycle["state"] = "paused"
+            worker._lifecycle["script"] = "test.py"
+            worker._lifecycle["line"] = 3
+            worker._lifecycle["function"] = "f"
+            worker._lifecycle["pause_generation"] = 7
+        thread = _threading.Thread(target=stale_publisher, daemon=True)
+        worker._target_thread = thread
+        try:
+            thread.start()
+            assert ready.wait(timeout=3.0)
+            worker._handle_continue_paused_target(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=9,
+                operation="continue_paused_target", payload={},
+            ))
+            assert len(responses) == 1
+            response = responses[0]
+            assert response.request_id == 9
+            assert response.success is False
+            assert response.result == {}
+            assert "stale pause generation" in response.error
+            thread.join(timeout=3.0)
+            assert not thread.is_alive()
+            assert publisher_errors == []
+            assert worker._target_thread is None
+            assert worker._lifecycle["pause_generation"] == 7
+            assert worker._lifecycle["state"] == "failed"
+            assert worker._lifecycle["error"] == response.error
+            assert worker._running is True
+            assert worker._unsafe is False
+
+            worker._handle_get_target_status(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=10,
+                operation="get_target_status", payload={},
+            ))
+            assert len(responses) == 2
+            status = responses[1]
+            assert status.request_id == 10
+            assert status.success is True
+            assert status.result["state"] == "failed"
+            assert status.result["error"]
+            assert len(status.result["error"].encode("utf-8")) <= 4096
+        finally:
+            if thread.is_alive():
+                with worker._condition:
+                    worker._lifecycle["state"] = "terminating"
+                    worker._condition.notify_all()
+                thread.join(timeout=3.0)
+            assert not thread.is_alive()
+
+    @pytest.mark.parametrize("thread_kind", ["missing", "dead"])
+    def test_continue_repairs_paused_without_live_thread(self, thread_kind):
+        import threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda response: responses.append(response)
+        stale_thread = None
+        if thread_kind == "dead":
+            stale_thread = _threading.Thread(target=lambda: None)
+            stale_thread.start()
+            stale_thread.join(timeout=3.0)
+            assert not stale_thread.is_alive()
+        with worker._condition:
+            worker._lifecycle["state"] = "paused"
+            worker._lifecycle["script"] = "test.py"
+            worker._lifecycle["line"] = 3
+            worker._lifecycle["function"] = "f"
+            worker._lifecycle["pause_generation"] = 4
+            worker._target_thread = stale_thread
+
+        worker._handle_continue_paused_target(PdbRequest(
+            protocol_version=PROTOCOL_VERSION, request_id=20,
+            operation="continue_paused_target", payload={},
+        ))
+        assert len(responses) == 1
+        response = responses[0]
+        assert response.request_id == 20
+        assert response.success is False
+        assert response.result == {}
+        assert "target thread" in response.error
+        assert worker._lifecycle["pause_generation"] == 4
+        assert worker._lifecycle["state"] == "failed"
+        assert worker._target_thread is None
+        assert worker._running is True
+        assert worker._unsafe is False
+
+        worker._handle_get_target_status(PdbRequest(
+            protocol_version=PROTOCOL_VERSION, request_id=21,
+            operation="get_target_status", payload={},
+        ))
+        assert len(responses) == 2
+        assert responses[1].success is True
+        assert responses[1].result["state"] == "failed"
+        assert responses[1].result["error"]
+
+    @pytest.mark.parametrize("thread_kind", ["missing", "dead"])
+    def test_status_repairs_paused_without_live_thread(self, thread_kind):
+        import threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda response: responses.append(response)
+        stale_thread = None
+        if thread_kind == "dead":
+            stale_thread = _threading.Thread(target=lambda: None)
+            stale_thread.start()
+            stale_thread.join(timeout=3.0)
+            assert not stale_thread.is_alive()
+        with worker._condition:
+            worker._lifecycle["state"] = "paused"
+            worker._lifecycle["script"] = "test.py"
+            worker._lifecycle["line"] = 3
+            worker._lifecycle["function"] = "f"
+            worker._target_thread = stale_thread
+
+        worker._handle_get_target_status(PdbRequest(
+            protocol_version=PROTOCOL_VERSION, request_id=30,
+            operation="get_target_status", payload={},
+        ))
+        assert len(responses) == 1
+        assert responses[0].request_id == 30
+        assert responses[0].success is True
+        assert responses[0].result["state"] == "failed"
+        assert responses[0].result["error"]
+        assert worker._lifecycle["state"] == "failed"
+        assert worker._target_thread is None
+
+
+class TestContinueProcessGlobalRestoration:
+    def test_globals_restored_after_continue_to_exit(self):
+        import threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        root = Path(tempfile.mkdtemp())
+        other = root / "other"
+        other.mkdir()
+        worker = PdbWorker()
+        responses = []
+        thread = None
+        saved_argv = list(sys.argv)
+        saved_path = list(sys.path)
+        saved_stdin = sys.stdin
+        saved_stdout = sys.stdout
+        saved_stderr = sys.stderr
+        saved_cwd = os.getcwd()
+        try:
+            script = (
+                "import os\n"
+                f"os.chdir({str(other)!r})\n"
+                "paused = 1\n"
+                "finished = 2\n"
+            )
+            path = root / "restore_continue.py"
+            path.write_text(script)
+            worker._target_started = True
+            worker._send_response = lambda response: responses.append(response)
+            with worker._condition:
+                worker._lifecycle["state"] = "starting"
+                worker._lifecycle["script"] = "restore_continue.py"
+                worker._lifecycle["_start_script"] = "restore_continue.py"
+            thread = _threading.Thread(
+                target=worker._execute_target_persistent,
+                args=("restore_continue.py", os.path.realpath(str(path)), [3],
+                      ["arg"], script.encode("utf-8")),
+                daemon=True,
+            )
+            worker._target_thread = thread
+            thread.start()
+            deadline = time.monotonic() + 3.0
+            with worker._condition:
+                while worker._lifecycle["state"] == "starting":
+                    remaining = deadline - time.monotonic()
+                    assert remaining > 0, (
+                        "Target did not leave starting state"
+                    )
+                    worker._condition.wait(timeout=remaining)
+                assert worker._lifecycle["state"] == "paused"
+            worker._handle_continue_paused_target(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=55,
+                operation="continue_paused_target", payload={},
+            ))
+            thread.join(timeout=3.0)
+            assert not thread.is_alive()
+            assert worker._target_thread is None
+            assert responses[-1].result["state"] == "exited"
+            assert sys.argv == saved_argv
+            assert sys.path == saved_path
+            assert sys.stdin is saved_stdin
+            assert sys.stdout is saved_stdout
+            assert sys.stderr is saved_stderr
+            assert os.getcwd() == saved_cwd
+        finally:
+            os.chdir(saved_cwd)
+            sys.argv = saved_argv
+            sys.path = saved_path
+            sys.stdin = saved_stdin
+            sys.stdout = saved_stdout
+            sys.stderr = saved_stderr
+            if thread is not None and thread.is_alive():
+                worker._request_target_termination()
+                thread.join(timeout=3.0)
+            shutil.rmtree(str(root), ignore_errors=True)
