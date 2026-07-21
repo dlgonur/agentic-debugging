@@ -1929,3 +1929,1812 @@ class TestRunToBreakpointIntegration:
             assert _os.getcwd() == saved, "cwd not restored after exception"
         finally:
             _os.chdir(saved)
+
+
+# ──────────────────────────────────────────────────────────────────────
+# Task 4B2A — Worker-Side Persistent Pause Lifecycle v1
+# ──────────────────────────────────────────────────────────────────────
+
+
+_SIMPLE_PAUSE_SCRIPT = (
+    "x = 1\n"
+    "y = 2\n"
+    "z = 3\n"
+    "# end\n"
+)
+
+_PAUSE_WITH_PRINT = (
+    "print('hello from target')\n"
+    "x = 42\n"
+    "# end\n"
+)
+
+_PAUSE_WITH_STDERR = (
+    "import sys\n"
+    "sys.stderr.write('stderr from target\\n')\n"
+    "x = 42\n"
+    "# end\n"
+)
+
+_PAUSE_WITH_INPUT = (
+    "try:\n"
+    "    data = input()\n"
+    "except EOFError:\n"
+    "    x = 42\n"
+    "else:\n"
+    "    x = 0\n"
+    "# end\n"
+)
+
+_PAUSE_FUNCTION_SCRIPT = (
+    "def main():\n"
+    "    x = 1\n"
+    "    y = 2\n"
+    "    z = 3\n"
+    "\n"
+    "def other():\n"
+    "    pass\n"
+    "\n"
+    "main()\n"
+)
+
+_PAUSE_EXIT_EARLY = (
+    "x = 1\n"
+    "import sys\n"
+    "sys.stdout.write('done')\n"
+    "# end\n"
+)
+
+_PAUSE_SYSEXIT = (
+    "import sys\n"
+    "sys.exit(42)\n"
+    "# end\n"
+)
+
+_PAUSE_TARGET_EXCEPTION = (
+    "def main():\n"
+    "    raise ValueError('example')\n"
+    "main()\n"
+    "# end\n"
+)
+
+_PAUSE_FINALLY_SCRIPT = (
+    "import sys\n"
+    "try:\n"
+    "    x = 1\n"
+    "finally:\n"
+    "    with open(sys.argv[1], 'w') as f:\n"
+    "        f.write('finally executed')\n"
+    "# after\n"
+)
+
+_PAUSE_CODE_AFTER_SCRIPT = (
+    "x = 1\n"
+    "import sys\n"
+    "with open(sys.argv[1], 'w') as f:\n"
+    "    f.write('SHOULD_NOT_EXIST')\n"
+    "# end\n"
+)
+
+
+def _raw_op(session, rid, op, payload):
+    """Send a raw protocol operation to the worker and return the response."""
+    import json as _json
+    proc = session._proc
+    assert proc is not None
+    req = _json.dumps({
+        "protocol_version": PROTOCOL_VERSION,
+        "request_id": rid,
+        "operation": op,
+        "payload": payload,
+    }, separators=(",", ":"))
+    proc.stdin.write((req + "\n").encode("utf-8"))
+    proc.stdin.flush()
+    line = session._response_queue.get(timeout=5.0)
+    return deserialize_response(line)
+
+
+@pytest.fixture
+def ws_pause():
+    """Workspace fixture for persistent pause tests."""
+    src = Path(tempfile.mkdtemp())
+    try:
+        (src / "pause_target.py").write_text(_SIMPLE_PAUSE_SCRIPT)
+        (src / "pause_func.py").write_text(_PAUSE_FUNCTION_SCRIPT)
+        (src / "pause_print.py").write_text(_PAUSE_WITH_PRINT)
+        (src / "pause_stderr.py").write_text(_PAUSE_WITH_STDERR)
+        (src / "pause_input.py").write_text(_PAUSE_WITH_INPUT)
+        (src / "pause_exit_early.py").write_text(_PAUSE_EXIT_EARLY)
+        (src / "pause_sysexit.py").write_text(_PAUSE_SYSEXIT)
+        (src / "pause_exception.py").write_text(_PAUSE_TARGET_EXCEPTION)
+        with TaskWorkspace(str(src)) as ws:
+            yield ws
+    finally:
+        shutil.rmtree(str(src), ignore_errors=True)
+
+
+class TestPersistentPauseRawProtocol:
+    """Persistent pause lifecycle tests via raw protocol wires."""
+
+    # ── 1/2/3/4. Start reaches first breakpoint, exact result, target pauses ──
+    def test_start_paused_reaches_breakpoint(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 10, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            assert resp.result["script"] == "pause_target.py"
+            assert resp.result["line"] == 3
+            assert resp.result["function"] == "<module>"
+            assert set(resp.result.keys()) == {"state", "script", "line", "function"}
+        finally:
+            session.stop()
+
+    # 5. Ping succeeds while paused
+    def test_ping_while_paused(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 20, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            ping = session.ping()
+            assert ping.success is True
+            assert ping.result["status"] == "ok"
+        finally:
+            session.stop()
+
+    # 6. Status returns exact paused result
+    def test_status_while_paused(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 30, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            status = _raw_op(session, 31, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "paused"
+            assert status.result["script"] == "pause_target.py"
+            assert status.result["line"] == 3
+            assert status.result["function"] == "<module>"
+        finally:
+            session.stop()
+
+    # 7. Target stdout before pause does not corrupt protocol
+    def test_target_stdout_does_not_corrupt(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 40, "start_paused_target", {
+                "script": "pause_print.py", "breakpoints": [2], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 8. Target stderr before pause does not enter diagnostics
+    def test_target_stderr_isolated(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 50, "start_paused_target", {
+                "script": "pause_stderr.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            diag = session.diagnostics
+            assert "stderr from target" not in diag
+        finally:
+            session.stop()
+
+    # 9. Target input() cannot consume protocol requests
+    def test_target_input_does_not_block_protocol(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 60, "start_paused_target", {
+                "script": "pause_input.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 10. First of multiple configured breakpoints wins
+    def test_first_breakpoint_wins(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 70, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3, 4], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            assert resp.result["line"] == 3
+        finally:
+            session.stop()
+
+    # 11. No second breakpoint reached while paused (code after doesn't execute)
+    def test_code_after_breakpoint_not_executed(self, ws_pause):
+        marker = Path(ws_pause.root) / "pause_after_marker.txt"
+        script = (
+            "x = 1\n"
+            f"open({str(marker)!r}, 'w').write('SHOULD_NOT_EXIST')\n"
+            "# end\n"
+        )
+        (Path(ws_pause.root) / "pause_after.py").write_text(script)
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 80, "start_paused_target", {
+                "script": "pause_after.py", "breakpoints": [1], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            assert resp.result["line"] == 1
+            assert not marker.exists()
+        finally:
+            session.stop()
+
+    # 12/13/14. Terminate paused target successfully
+    def test_terminate_paused_target(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 90, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            term = _raw_op(session, 91, "terminate_paused_target", {})
+            assert term.success is True
+            assert term.result["state"] == "terminated"
+            assert term.result["script"] == "pause_target.py"
+        finally:
+            session.stop()
+
+    # 14. Status after termination
+    def test_status_after_termination(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 100, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            _raw_op(session, 101, "terminate_paused_target", {})
+            status = _raw_op(session, 102, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "terminated"
+            assert status.result["script"] == "pause_target.py"
+        finally:
+            session.stop()
+
+    # 15. Target finally executes during termination
+    def test_target_finally_during_termination(self, ws_pause):
+        marker = Path(ws_pause.root) / "pause_finally_marker.txt"
+        marker_str = str(marker)
+        (Path(ws_pause.root) / "pause_finally.py").write_text(
+            "import sys\n"
+            "try:\n"
+            "    x = 1\n"
+            "finally:\n"
+            f"    with open({marker_str!r}, 'w') as f:\n"
+            "        f.write('finally executed')\n"
+            "# after\n"
+        )
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 110, "start_paused_target", {
+                "script": "pause_finally.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            _raw_op(session, 111, "terminate_paused_target", {})
+            assert marker.exists()
+            assert marker.read_text() == "finally executed"
+        finally:
+            session.stop()
+
+    # 16. Code after interrupted flow does not execute
+    def test_code_after_interrupted_flow(self, ws_pause):
+        marker = Path(ws_pause.root) / "pause_after_interrupt.txt"
+        marker_str = str(marker)
+        script = (
+            "x = 1\n"
+            f"with open({marker_str!r}, 'w') as f:\n"
+            "    f.write('AFTER')\n"
+            "# end\n"
+        )
+        (Path(ws_pause.root) / "pause_after_int.py").write_text(script)
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 120, "start_paused_target", {
+                "script": "pause_after_int.py", "breakpoints": [1], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            _raw_op(session, 121, "terminate_paused_target", {})
+            assert not marker.exists()
+        finally:
+            session.stop()
+
+    # 19. Ping succeeds after successful termination
+    def test_ping_after_termination(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 130, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            _raw_op(session, 131, "terminate_paused_target", {})
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 20. Second termination rejected while worker healthy
+    def test_second_termination_rejected(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 140, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            _raw_op(session, 141, "terminate_paused_target", {})
+            term2 = _raw_op(session, 142, "terminate_paused_target", {})
+            assert term2.success is False
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 21. Target exits before breakpoint
+    def test_target_exits_before_breakpoint(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 150, "start_paused_target", {
+                "script": "pause_exit_early.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "exited"
+            assert resp.result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    # 22. Status after normal exit
+    def test_status_after_normal_exit(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 160, "start_paused_target", {
+                "script": "pause_exit_early.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "exited"
+            status = _raw_op(session, 161, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "exited"
+            assert status.result["script"] == "pause_exit_early.py"
+            assert status.result["exit_code"] == 0
+        finally:
+            session.stop()
+
+    # 23. SystemExit normalization preserved
+    def test_sysexit_integer_preserved(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 170, "start_paused_target", {
+                "script": "pause_sysexit.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "exited"
+            assert resp.result["exit_code"] == 42
+        finally:
+            session.stop()
+
+    # 24. Target exception before breakpoint
+    def test_target_exception_before_breakpoint(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 180, "start_paused_target", {
+                "script": "pause_exception.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is False
+            assert resp.result == {}
+            assert "ValueError" in resp.error
+        finally:
+            session.stop()
+
+    # 25. Status after target failure
+    def test_status_after_failure(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 190, "start_paused_target", {
+                "script": "pause_exception.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is False
+            status = _raw_op(session, 191, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "failed"
+            assert status.result["script"] == "pause_exception.py"
+            assert "ValueError" in status.result["error"]
+        finally:
+            session.stop()
+
+    # 26. Worker pingable after exit
+    def test_ping_after_exit(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 200, "start_paused_target", {
+                "script": "pause_exit_early.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is True
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 27. Worker pingable after target failure
+    def test_ping_after_failure(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp = _raw_op(session, 210, "start_paused_target", {
+                "script": "pause_exception.py", "breakpoints": [4], "argv": [],
+            })
+            assert resp.success is False
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    # 28. Second persistent start rejected
+    def test_second_persistent_start_rejected(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            resp1 = _raw_op(session, 220, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp1.success is True
+            assert resp1.result["state"] == "paused"
+            resp2 = _raw_op(session, 221, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp2.success is False
+            assert "already completed" in resp2.error
+            ping = session.ping()
+            assert ping.success is True
+            term = _raw_op(session, 222, "terminate_paused_target", {})
+            assert term.success is True
+        finally:
+            session.stop()
+
+    # 31. Concurrent duplicate raw start requests create exactly one target thread
+    def test_concurrent_duplicate_start(self, ws_pause):
+        """Send two start_paused_target rapidly; only one should start."""
+        session = PdbSession(ws_pause)
+        session.start()
+        proc = session._proc
+        assert proc is not None
+        try:
+            import json as _json
+            req_body = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": 230,
+                "operation": "start_paused_target",
+                "payload": {"script": "pause_target.py", "breakpoints": [3], "argv": []},
+            }, separators=(",", ":"))
+            req_body2 = _json.dumps({
+                "protocol_version": PROTOCOL_VERSION,
+                "request_id": 231,
+                "operation": "start_paused_target",
+                "payload": {"script": "pause_target.py", "breakpoints": [3], "argv": []},
+            }, separators=(",", ":"))
+            proc.stdin.write((req_body + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            proc.stdin.write((req_body2 + "\n").encode("utf-8"))
+            proc.stdin.flush()
+            line1 = session._response_queue.get(timeout=5.0)
+            resp1 = deserialize_response(line1)
+            line2 = session._response_queue.get(timeout=5.0)
+            resp2 = deserialize_response(line2)
+            successes = sum([resp1.success, resp2.success])
+            assert successes == 1
+            _raw_op(session, 232, "terminate_paused_target", {})
+        finally:
+            session.stop()
+
+    # 35. Status before any target is idle
+    def test_status_idle_before_target(self, ws_pause):
+        session = PdbSession(ws_pause)
+        session.start()
+        try:
+            status = _raw_op(session, 240, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "idle"
+        finally:
+            session.stop()
+
+
+class TestPersistentPauseOneTargetRule:
+    """One-target rule tests: start_paused_target and run_to_breakpoint mutual exclusion."""
+
+    @pytest.fixture
+    def ws_onetarget(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "target.py").write_text("x = 1\ny = 2\nz = 3\n")
+            (src / "bp_target.py").write_text("x = 1\ny = 2\nz = 3\n")
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    # 29. Persistent start after run_to_breakpoint rejected
+    def test_persistent_start_after_run_to_breakpoint(self, ws_onetarget):
+        session = PdbSession(ws_onetarget)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("target.py", [3])
+            assert resp.success is True
+            resp2 = _raw_op(session, 310, "start_paused_target", {
+                "script": "bp_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp2.success is False
+            assert "already completed" in resp2.error
+        finally:
+            session.stop()
+
+    # 30. run_to_breakpoint after persistent start rejected
+    def test_run_to_breakpoint_after_persistent_start(self, ws_onetarget):
+        session = PdbSession(ws_onetarget)
+        session.start()
+        try:
+            resp = _raw_op(session, 320, "start_paused_target", {
+                "script": "bp_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+            resp2 = _raw_op(session, 321, "run_to_breakpoint", {
+                "script": "target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp2.success is False
+            assert "already completed" in resp2.error
+            _raw_op(session, 322, "terminate_paused_target", {})
+        finally:
+            session.stop()
+
+
+class TestPersistentPauseShutdownAndCleanup:
+    """Shutdown and cleanup while target is paused."""
+
+    @pytest.fixture
+    def ws_cleanup(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "pause_target.py").write_text(_SIMPLE_PAUSE_SCRIPT)
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    # 32. PdbSession.stop() while target paused terminates/reaps worker
+    def test_stop_while_paused(self, ws_cleanup):
+        session = PdbSession(ws_cleanup)
+        session.start()
+        resp = _raw_op(session, 340, "start_paused_target", {
+            "script": "pause_target.py", "breakpoints": [3], "argv": [],
+        })
+        assert resp.success is True
+        assert resp.result["state"] == "paused"
+        session.stop()
+        assert session.state == PdbSessionState.STOPPED
+
+    # 33. Context-manager exit while target paused cleans the worker
+    def test_context_manager_while_paused(self, ws_cleanup):
+        with PdbSession(ws_cleanup) as session:
+            resp = _raw_op(session, 350, "start_paused_target", {
+                "script": "pause_target.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "paused"
+        assert session.state == PdbSessionState.STOPPED
+
+
+class TestPersistentPauseStateRestoration:
+    """Process-global state restoration after termination, exit, failure via direct worker tests."""
+
+    def test_sys_argv_restored_after_termination(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "state_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "state_test.py"))
+            saved_argv = list(_sys.argv)
+            saved_cwd = _os.getcwd()
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'state_test.py'
+                    worker._lifecycle['script'] = 'state_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('state_test.py', abs_path, [1], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                thread.start()
+                with worker._condition:
+                    while worker._lifecycle['state'] == 'starting':
+                        worker._condition.wait()
+                    assert worker._lifecycle['state'] == 'paused'
+                with worker._condition:
+                    worker._lifecycle['state'] = 'terminating'
+                    worker._condition.notify_all()
+                thread.join(timeout=3.0)
+                assert list(_sys.argv) == saved_argv
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_sys_path_restored_after_exit(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "path_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "path_test.py"))
+            saved_path = list(_sys.path)
+            saved_cwd = _os.getcwd()
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'path_test.py'
+                    worker._lifecycle['script'] = 'path_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('path_test.py', abs_path, [99], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                with worker._condition:
+                    state = worker._lifecycle['state']
+                assert state in ('exited',)
+                assert list(_sys.path) == saved_path
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_std_streams_restored_after_failure(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "fail_test.py").write_text("raise ValueError('test')\n")
+            abs_path = _os.path.realpath(str(d / "fail_test.py"))
+            saved_stdin = _sys.stdin
+            saved_stdout = _sys.stdout
+            saved_stderr = _sys.stderr
+            saved_cwd = _os.getcwd()
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'fail_test.py'
+                    worker._lifecycle['script'] = 'fail_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('fail_test.py', abs_path, [99], [], b"raise ValueError('test')\n"),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                assert _sys.stdin is saved_stdin
+                assert _sys.stdout is saved_stdout
+                assert _sys.stderr is saved_stderr
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_cwd_restored_after_termination(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "cwd_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "cwd_test.py"))
+            saved_cwd = _os.getcwd()
+            try:
+                other_dir = d / "subdir"
+                other_dir.mkdir(exist_ok=True)
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'cwd_test.py'
+                    worker._lifecycle['script'] = 'cwd_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('cwd_test.py', abs_path, [1], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                thread.start()
+                with worker._condition:
+                    while worker._lifecycle['state'] == 'starting':
+                        worker._condition.wait()
+                    assert worker._lifecycle['state'] == 'paused'
+                _os.chdir(str(other_dir))
+                with worker._condition:
+                    worker._lifecycle['state'] = 'terminating'
+                    worker._condition.notify_all()
+                thread.join(timeout=3.0)
+                assert _os.getcwd() == saved_cwd
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_trace_restored_after_exit(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "trace_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "trace_test.py"))
+            saved_trace = _sys.gettrace()
+            saved_cwd = _os.getcwd()
+            tracer_log = []
+            def sentinel_trace(frame, event, arg):
+                tracer_log.append(event)
+                return sentinel_trace
+            try:
+                _sys.settrace(sentinel_trace)
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'trace_test.py'
+                    worker._lifecycle['script'] = 'trace_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('trace_test.py', abs_path, [99], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                assert _sys.gettrace() is sentinel_trace
+            finally:
+                _sys.settrace(saved_trace)
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+
+class TestPersistentPauseMalformedRequests:
+    """Malformed request validation for persistent lifecycle operations."""
+
+    @pytest.fixture
+    def ws_malformed(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "target.py").write_text("x = 1\ny = 2\nz = 3\n# end\n")
+            (src / "exit_early.py").write_text("x = 1\nimport sys\nsys.stdout.write('done')\n# end\n")
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    def test_start_missing_script(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 400, "start_paused_target", {
+                "breakpoints": [1], "argv": [],
+            })
+            assert resp.success is False
+            assert "Missing" in resp.error
+        finally:
+            session.stop()
+
+    def test_start_missing_breakpoints(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 410, "start_paused_target", {
+                "script": "target.py", "argv": [],
+            })
+            assert resp.success is False
+            assert "Missing" in resp.error
+        finally:
+            session.stop()
+
+    def test_start_missing_argv(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 420, "start_paused_target", {
+                "script": "target.py", "breakpoints": [1],
+            })
+            assert resp.success is False
+            assert "Missing" in resp.error
+        finally:
+            session.stop()
+
+    def test_start_unknown_field(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 430, "start_paused_target", {
+                "script": "target.py", "breakpoints": [1], "argv": [], "extra": 42,
+            })
+            assert resp.success is False
+            assert "Unknown" in resp.error
+        finally:
+            session.stop()
+
+    def test_start_invalid_script_type(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 440, "start_paused_target", {
+                "script": 123, "breakpoints": [1], "argv": [],
+            })
+            assert resp.success is False
+        finally:
+            session.stop()
+
+    def test_status_with_unknown_field_rejected(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 450, "get_target_status", {"unknown": "value"})
+            assert resp.success is False
+            assert "Unknown" in resp.error
+        finally:
+            session.stop()
+
+    def test_terminate_with_unknown_field_rejected(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 460, "terminate_paused_target", {"unknown": "value"})
+            assert resp.success is False
+            assert "Unknown" in resp.error
+        finally:
+            session.stop()
+
+    def test_terminate_when_idle_rejected(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            resp = _raw_op(session, 470, "terminate_paused_target", {})
+            assert resp.success is False
+            assert "Cannot terminate" in resp.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+    def test_terminate_after_exit_rejected(self, ws_malformed):
+        session = PdbSession(ws_malformed)
+        session.start()
+        try:
+            sysexit_py = (Path(ws_malformed.root) / "sysexit.py")
+            sysexit_py.write_text("import sys\nsys.exit(0)\nx = 1\n# end\n")
+            resp = _raw_op(session, 480, "start_paused_target", {
+                "script": "sysexit.py", "breakpoints": [3], "argv": [],
+            })
+            assert resp.success is True
+            assert resp.result["state"] == "exited"
+            term = _raw_op(session, 481, "terminate_paused_target", {})
+            assert term.success is False
+            assert "Cannot terminate" in term.error
+            ping = session.ping()
+            assert ping.success is True
+        finally:
+            session.stop()
+
+
+class TestPersistentPauseOneShotStatus:
+    """One-shot run_to_breakpoint lifecycle status coherence (Repair 4)."""
+
+    @pytest.fixture
+    def ws_oneshot(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "target.py").write_text("x = 1\ny = 2\nz = 3\n")
+            (src / "sysexit.py").write_text("import sys\nsys.exit(42)\n# end\n")
+            (src / "fail.py").write_text("raise ValueError('test')\n# end\n")
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    def test_breakpoint_status_after_oneshot(self, ws_oneshot):
+        session = PdbSession(ws_oneshot)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("target.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "breakpoint"
+            status = _raw_op(session, 510, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "terminated"
+            assert status.result["script"] == "target.py"
+        finally:
+            session.stop()
+
+    def test_exit_status_after_oneshot(self, ws_oneshot):
+        session = PdbSession(ws_oneshot)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("sysexit.py", [3])
+            assert resp.success is True
+            assert resp.result["status"] == "exited"
+            status = _raw_op(session, 520, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "exited"
+            assert status.result["exit_code"] == 42
+        finally:
+            session.stop()
+
+    def test_failure_status_after_oneshot(self, ws_oneshot):
+        session = PdbSession(ws_oneshot)
+        session.start()
+        try:
+            resp = session.run_to_breakpoint("fail.py", [2])
+            assert resp.success is False
+            assert "ValueError" in resp.error
+            status = _raw_op(session, 530, "get_target_status", {})
+            assert status.success is True
+            assert status.result["state"] == "failed"
+            assert "ValueError" in status.result["error"]
+        finally:
+            session.stop()
+
+
+class TestPersistentPauseHangingFinally:
+    """Deterministic hanging-finally timeout coverage.
+
+    The target pauses inside a try block. Controlled termination raises the
+    private termination sentinel, which unwinds the target stack and enters its
+    finally block. The finally block waits on a test-controlled Event, allowing
+    the test to deterministically hold the target thread past the bounded
+    termination timeout.
+    """
+
+    def test_explicit_terminate_hanging_finally_one_response(self):
+        import os as _os, sys as _sys, threading as _threading
+        import builtins as _builtins
+        from agentic_debugger.runtime import pdb_worker as _pw
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        d = Path(tempfile.mkdtemp())
+        saved_timeout = _pw._WORKER_TERMINATION_TIMEOUT
+        saved_cwd = _os.getcwd()
+        event = _threading.Event()
+        thread = None
+        worker = None
+        responses = []
+        try:
+            (d / "hang_finally.py").write_text(
+                "import builtins\ntry:\n    x = 1\nfinally:\n    builtins._task4b2a_release_event.wait()\n# end\n"
+            )
+            abs_path = _os.path.realpath(str(d / "hang_finally.py"))
+            source = b"import builtins\ntry:\n    x = 1\nfinally:\n    builtins._task4b2a_release_event.wait()\n# end\n"
+            _builtins._task4b2a_release_event = event
+            worker = _pw.PdbWorker()
+            worker._send_response = lambda r: responses.append(r)
+            worker._target_started = True
+            with worker._condition:
+                worker._lifecycle['state'] = 'starting'
+                worker._lifecycle['_start_script'] = 'hang_finally.py'
+                worker._lifecycle['script'] = 'hang_finally.py'
+            thread = _threading.Thread(
+                target=worker._execute_target_persistent,
+                args=('hang_finally.py', abs_path, [3], [], source),
+                daemon=True,
+            )
+            worker._target_thread = thread
+            thread.start()
+            with worker._condition:
+                while worker._lifecycle['state'] == 'starting':
+                    worker._condition.wait()
+            assert worker._lifecycle['state'] == 'paused'
+            _pw._WORKER_TERMINATION_TIMEOUT = 0.05
+            worker._handle_terminate_paused_target(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=42,
+                operation='terminate_paused_target', payload={},
+            ))
+            assert len(responses) == 1
+            resp = responses[0]
+            assert resp.request_id == 42
+            assert resp.success is False
+            assert resp.result == {}
+            assert "timeout" in resp.error or "termination" in resp.error
+            assert worker._unsafe is True
+            assert worker._running is False
+            assert thread.is_alive()
+            assert worker._lifecycle['state'] == 'terminating'
+        finally:
+            event.set()
+            _pw._WORKER_TERMINATION_TIMEOUT = saved_timeout
+            if thread is not None:
+                thread.join(timeout=3.0)
+            if hasattr(_builtins, '_task4b2a_release_event'):
+                del _builtins._task4b2a_release_event
+            if worker is not None:
+                _os.chdir(saved_cwd)
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+        assert not thread.is_alive()
+        assert len(responses) == 1
+
+    def test_shutdown_hanging_finally_one_response(self):
+        import os as _os, sys as _sys, threading as _threading
+        import builtins as _builtins
+        from agentic_debugger.runtime import pdb_worker as _pw
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        d = Path(tempfile.mkdtemp())
+        saved_timeout = _pw._WORKER_TERMINATION_TIMEOUT
+        saved_cwd = _os.getcwd()
+        event = _threading.Event()
+        thread = None
+        worker = None
+        responses = []
+        try:
+            (d / "shutdown_hang.py").write_text(
+                "import builtins\ntry:\n    x = 1\nfinally:\n    builtins._task4b2a_release_event.wait()\n# end\n"
+            )
+            abs_path = _os.path.realpath(str(d / "shutdown_hang.py"))
+            source = b"import builtins\ntry:\n    x = 1\nfinally:\n    builtins._task4b2a_release_event.wait()\n# end\n"
+            _builtins._task4b2a_release_event = event
+            worker = _pw.PdbWorker()
+            worker._send_response = lambda r: responses.append(r)
+            worker._target_started = True
+            with worker._condition:
+                worker._lifecycle['state'] = 'starting'
+                worker._lifecycle['_start_script'] = 'shutdown_hang.py'
+                worker._lifecycle['script'] = 'shutdown_hang.py'
+            thread = _threading.Thread(
+                target=worker._execute_target_persistent,
+                args=('shutdown_hang.py', abs_path, [3], [], source),
+                daemon=True,
+            )
+            worker._target_thread = thread
+            thread.start()
+            with worker._condition:
+                while worker._lifecycle['state'] == 'starting':
+                    worker._condition.wait()
+            assert worker._lifecycle['state'] == 'paused'
+            _pw._WORKER_TERMINATION_TIMEOUT = 0.05
+            worker._handle_shutdown(PdbRequest(
+                protocol_version=PROTOCOL_VERSION, request_id=99,
+                operation='shutdown', payload={},
+            ))
+            assert len(responses) == 1
+            resp = responses[0]
+            assert resp.request_id == 99
+            assert resp.success is False
+            assert resp.result == {}
+            assert "timeout" in resp.error or "termination" in resp.error
+            assert worker._unsafe is True
+            assert worker._running is False
+            assert thread.is_alive()
+            assert worker._lifecycle['state'] == 'terminating'
+        finally:
+            event.set()
+            _pw._WORKER_TERMINATION_TIMEOUT = saved_timeout
+            if thread is not None:
+                thread.join(timeout=3.0)
+            if hasattr(_builtins, '_task4b2a_release_event'):
+                del _builtins._task4b2a_release_event
+            if worker is not None:
+                _os.chdir(saved_cwd)
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+        assert not thread.is_alive()
+        assert len(responses) == 1
+
+
+class TestPersistentPauseStartHandlerThread:
+    """Start-handler thread cleanup after exit and failure via _handle_start_paused_target (Repair 3)."""
+
+    def test_start_handler_clears_thread_after_exit(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime import pdb_worker as _pw
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "exit_target.py").write_text("x = 1\ny = 2\nz = 3\n# end\n" + "# padding\n" * 100)
+            saved_cwd = _os.getcwd()
+            _os.chdir(str(d))
+            try:
+                captured_threads = []
+                saved_thread_factory = _pw.threading.Thread
+                def recording_thread(*a, **kw):
+                    t = saved_thread_factory(*a, **kw)
+                    captured_threads.append(t)
+                    return t
+                _pw.threading.Thread = recording_thread
+                worker = _pw.PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._handle_start_paused_target(PdbRequest(
+                    protocol_version=PROTOCOL_VERSION, request_id=10,
+                    operation='start_paused_target',
+                    payload={"script": "exit_target.py", "breakpoints": [99], "argv": []},
+                ))
+                assert len(responses) == 1
+                resp = responses[0]
+                assert resp.success is True
+                assert resp.result["state"] == "exited"
+                assert worker._target_thread is None
+                assert len(captured_threads) == 1
+                assert not captured_threads[0].is_alive()
+            finally:
+                _pw.threading.Thread = saved_thread_factory
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_start_handler_clears_thread_after_failure(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime import pdb_worker as _pw
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "fail_target.py").write_text("raise ValueError('boom')\n# pad\n" * 50)
+            saved_cwd = _os.getcwd()
+            _os.chdir(str(d))
+            try:
+                captured_threads = []
+                saved_thread_factory = _pw.threading.Thread
+                def recording_thread(*a, **kw):
+                    t = saved_thread_factory(*a, **kw)
+                    captured_threads.append(t)
+                    return t
+                _pw.threading.Thread = recording_thread
+                worker = _pw.PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._handle_start_paused_target(PdbRequest(
+                    protocol_version=PROTOCOL_VERSION, request_id=11,
+                    operation='start_paused_target',
+                    payload={"script": "fail_target.py", "breakpoints": [99], "argv": []},
+                ))
+                assert len(responses) == 1
+                resp = responses[0]
+                assert resp.success is False
+                assert "ValueError" in resp.error
+                assert worker._target_thread is None
+                assert len(captured_threads) == 1
+                assert not captured_threads[0].is_alive()
+            finally:
+                _pw.threading.Thread = saved_thread_factory
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+
+class TestPersistentPauseRunnerWeakRef:
+    """Runner collectability via weak reference (Repair 4)."""
+
+    def test_runner_retained_while_paused(self):
+        import os as _os, threading as _threading, gc as _gc, weakref as _wr
+        from agentic_debugger.runtime import pdb_worker as _pw
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "runner_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "runner_test.py"))
+            saved_cwd = _os.getcwd()
+            worker = _pw.PdbWorker()
+            responses = []
+            worker._send_response = lambda r: responses.append(r)
+            worker._target_started = True
+            runner_ref = [None]
+            saved_runner_class = _pw._PdbPersistentRunner
+            class CapturingRunner(saved_runner_class):
+                def __new__(cls, *a, **kw):
+                    inst = super().__new__(cls)
+                    runner_ref[0] = _wr.ref(inst)
+                    return inst
+            _pw._PdbPersistentRunner = CapturingRunner
+            try:
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'runner_test.py'
+                    worker._lifecycle['script'] = 'runner_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('runner_test.py', abs_path, [1], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                worker._target_thread = thread
+                thread.start()
+                with worker._condition:
+                    while worker._lifecycle['state'] == 'starting':
+                        worker._condition.wait()
+                    assert worker._lifecycle['state'] == 'paused'
+                r = runner_ref[0]
+                assert r is not None
+                assert r() is not None, "Runner should be alive while paused"
+                assert thread.is_alive()
+                worker._request_target_termination()
+                thread.join(timeout=3.0)
+            finally:
+                _pw._PdbPersistentRunner = saved_runner_class
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_runner_collectable_after_exit(self):
+        import os as _os, threading as _threading, gc as _gc, weakref as _wr
+        from agentic_debugger.runtime import pdb_worker as _pw
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "runner_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "runner_test.py"))
+            saved_cwd = _os.getcwd()
+            worker = _pw.PdbWorker()
+            responses = []
+            worker._send_response = lambda r: responses.append(r)
+            worker._target_started = True
+            runner_ref = [None]
+            saved_runner_class = _pw._PdbPersistentRunner
+            class CapturingRunner(saved_runner_class):
+                def __new__(cls, *a, **kw):
+                    inst = super().__new__(cls)
+                    runner_ref[0] = _wr.ref(inst)
+                    return inst
+            _pw._PdbPersistentRunner = CapturingRunner
+            try:
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'runner_test.py'
+                    worker._lifecycle['script'] = 'runner_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('runner_test.py', abs_path, [99], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                assert not thread.is_alive()
+                runner_weakref = runner_ref[0]
+                assert runner_weakref is not None, "Persistent runner was never created"
+                _gc.collect()
+                assert runner_weakref() is None, "Persistent runner remained strongly referenced"
+            finally:
+                _pw._PdbPersistentRunner = saved_runner_class
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_runner_collectable_after_failure(self):
+        import os as _os, threading as _threading, gc as _gc, weakref as _wr
+        from agentic_debugger.runtime import pdb_worker as _pw
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "runner_test.py").write_text("raise ValueError('x')\n")
+            abs_path = _os.path.realpath(str(d / "runner_test.py"))
+            saved_cwd = _os.getcwd()
+            worker = _pw.PdbWorker()
+            responses = []
+            worker._send_response = lambda r: responses.append(r)
+            worker._target_started = True
+            runner_ref = [None]
+            saved_runner_class = _pw._PdbPersistentRunner
+            class CapturingRunner(saved_runner_class):
+                def __new__(cls, *a, **kw):
+                    inst = super().__new__(cls)
+                    runner_ref[0] = _wr.ref(inst)
+                    return inst
+            _pw._PdbPersistentRunner = CapturingRunner
+            try:
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'runner_test.py'
+                    worker._lifecycle['script'] = 'runner_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('runner_test.py', abs_path, [99], [], b"raise ValueError('x')\n"),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                assert not thread.is_alive()
+                runner_weakref = runner_ref[0]
+                assert runner_weakref is not None, "Persistent runner was never created"
+                _gc.collect()
+                assert runner_weakref() is None, "Persistent runner remained strongly referenced"
+            finally:
+                _pw._PdbPersistentRunner = saved_runner_class
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_runner_collectable_after_termination(self):
+        import os as _os, threading as _threading, gc as _gc, weakref as _wr
+        from agentic_debugger.runtime import pdb_worker as _pw
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "runner_test.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "runner_test.py"))
+            saved_cwd = _os.getcwd()
+            worker = _pw.PdbWorker()
+            responses = []
+            worker._send_response = lambda r: responses.append(r)
+            worker._target_started = True
+            runner_ref = [None]
+            saved_runner_class = _pw._PdbPersistentRunner
+            class CapturingRunner(saved_runner_class):
+                def __new__(cls, *a, **kw):
+                    inst = super().__new__(cls)
+                    runner_ref[0] = _wr.ref(inst)
+                    return inst
+            _pw._PdbPersistentRunner = CapturingRunner
+            try:
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'runner_test.py'
+                    worker._lifecycle['script'] = 'runner_test.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('runner_test.py', abs_path, [1], [], b"x = 1\n"),
+                    daemon=True,
+                )
+                worker._target_thread = thread
+                thread.start()
+                with worker._condition:
+                    while worker._lifecycle['state'] == 'starting':
+                        worker._condition.wait()
+                    assert worker._lifecycle['state'] == 'paused'
+                term_result = worker._request_target_termination()
+                assert term_result == {"state": "terminated"}
+                assert worker._target_thread is None
+                thread.join(timeout=3.0)
+                assert not thread.is_alive()
+                runner_weakref = runner_ref[0]
+                assert runner_weakref is not None, "Persistent runner was never created"
+                _gc.collect()
+                assert runner_weakref() is None, "Persistent runner remained strongly referenced"
+            finally:
+                _pw._PdbPersistentRunner = saved_runner_class
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+
+class TestPersistentPauseCwdTermination:
+    """Target-driven cwd restoration after termination (Repair 5)."""
+
+    def test_target_driven_cwd_restored_after_termination(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            other = d / "other_term"
+            other.mkdir(exist_ok=True)
+            saved_cwd = _os.getcwd()
+            script = (
+                "import os\n"
+                f"os.chdir({str(other)!r})\n"
+                "x = 1\n"
+            )
+            (d / "cwd_term.py").write_text(script)
+            abs_path = _os.path.realpath(str(d / "cwd_term.py"))
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'cwd_term.py'
+                    worker._lifecycle['script'] = 'cwd_term.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('cwd_term.py', abs_path, [3], [], script.encode()),
+                    daemon=True,
+                )
+                worker._target_thread = thread
+                thread.start()
+                with worker._condition:
+                    while worker._lifecycle['state'] == 'starting':
+                        worker._condition.wait()
+                    assert worker._lifecycle['state'] == 'paused'
+                worker._request_target_termination()
+                thread.join(timeout=3.0)
+                assert not thread.is_alive()
+                assert _os.getcwd() == saved_cwd
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+
+class TestPersistentPauseTraceReleaseAndCwd:
+    """Trace identity, thread release, target-driven cwd for exit/failure (Repair 6)."""
+
+    def test_target_thread_trace_identity(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "trace_id.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "trace_id.py"))
+            saved_cwd = _os.getcwd()
+            saved_trace = _sys.gettrace()
+            observed = []
+            def sentinel_trace(frame, event, arg):
+                return sentinel_trace
+            _threading.settrace(sentinel_trace)
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'trace_id.py'
+                    worker._lifecycle['script'] = 'trace_id.py'
+                def wrapper():
+                    worker._execute_target_persistent(
+                        'trace_id.py', abs_path, [99], [], b"x = 1\n"
+                    )
+                    observed.append(_sys.gettrace() is sentinel_trace)
+                thread = _threading.Thread(target=wrapper, daemon=True)
+                thread.start()
+                thread.join(timeout=3.0)
+                assert len(observed) == 1
+                assert observed[0] is True
+            finally:
+                _threading.settrace(None)
+                _sys.settrace(saved_trace)
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_target_thread_trace_after_failure(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "trace_fail.py").write_text("raise ValueError('x')\n")
+            abs_path = _os.path.realpath(str(d / "trace_fail.py"))
+            saved_cwd = _os.getcwd()
+            saved_trace = _sys.gettrace()
+            observed = []
+            def sentinel_trace(frame, event, arg):
+                return sentinel_trace
+            _threading.settrace(sentinel_trace)
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'trace_fail.py'
+                    worker._lifecycle['script'] = 'trace_fail.py'
+                def wrapper():
+                    worker._execute_target_persistent(
+                        'trace_fail.py', abs_path, [99], [], b"raise ValueError('x')\n"
+                    )
+                    observed.append(_sys.gettrace() is sentinel_trace)
+                thread = _threading.Thread(target=wrapper, daemon=True)
+                thread.start()
+                thread.join(timeout=3.0)
+                assert len(observed) == 1
+                assert observed[0] is True
+            finally:
+                _threading.settrace(None)
+                _sys.settrace(saved_trace)
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_target_thread_trace_after_termination(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            (d / "trace_term.py").write_text("x = 1\n")
+            abs_path = _os.path.realpath(str(d / "trace_term.py"))
+            saved_cwd = _os.getcwd()
+            saved_trace = _sys.gettrace()
+            observed = []
+            def sentinel_trace(frame, event, arg):
+                return sentinel_trace
+            _threading.settrace(sentinel_trace)
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'trace_term.py'
+                    worker._lifecycle['script'] = 'trace_term.py'
+                def wrapper():
+                    worker._execute_target_persistent(
+                        'trace_term.py', abs_path, [1], [], b"x = 1\n"
+                    )
+                    observed.append(_sys.gettrace() is sentinel_trace)
+                thread = _threading.Thread(target=wrapper, daemon=True)
+                thread.start()
+                with worker._condition:
+                    while worker._lifecycle['state'] == 'starting':
+                        worker._condition.wait()
+                    assert worker._lifecycle['state'] == 'paused'
+                worker._request_target_termination()
+                thread.join(timeout=3.0)
+                assert len(observed) == 1
+                assert observed[0] is True
+            finally:
+                _threading.settrace(None)
+                _sys.settrace(saved_trace)
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_target_driven_cwd_restored(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            other = d / "other_dir"
+            other.mkdir(exist_ok=True)
+            saved_cwd = _os.getcwd()
+            script = (
+                "import os\n"
+                f"os.chdir({str(other)!r})\n"
+                "x = 1\n"
+            )
+            (d / "cwd_target.py").write_text(script)
+            abs_path = _os.path.realpath(str(d / "cwd_target.py"))
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'cwd_target.py'
+                    worker._lifecycle['script'] = 'cwd_target.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('cwd_target.py', abs_path, [99], [], script.encode()),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                assert _os.getcwd() == saved_cwd
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+    def test_target_driven_cwd_restored_after_failure(self):
+        import os as _os, sys as _sys, threading as _threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        d = Path(tempfile.mkdtemp())
+        try:
+            other = d / "other_fail"
+            other.mkdir(exist_ok=True)
+            saved_cwd = _os.getcwd()
+            script = (
+                "import os\n"
+                f"os.chdir({str(other)!r})\n"
+                "raise ValueError('boom')\n"
+            )
+            (d / "cwd_fail.py").write_text(script)
+            abs_path = _os.path.realpath(str(d / "cwd_fail.py"))
+            try:
+                worker = PdbWorker()
+                responses = []
+                worker._send_response = lambda r: responses.append(r)
+                worker._target_started = True
+                with worker._condition:
+                    worker._lifecycle['state'] = 'starting'
+                    worker._lifecycle['_start_script'] = 'cwd_fail.py'
+                    worker._lifecycle['script'] = 'cwd_fail.py'
+                thread = _threading.Thread(
+                    target=worker._execute_target_persistent,
+                    args=('cwd_fail.py', abs_path, [99], [], script.encode()),
+                    daemon=True,
+                )
+                thread.start()
+                thread.join(timeout=3.0)
+                assert _os.getcwd() == saved_cwd
+            finally:
+                _os.chdir(saved_cwd)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(str(d), ignore_errors=True)
+
+
+class TestPersistentPauseShutdownUnpaused:
+    """Normal (unpaused) shutdown produces exactly one response."""
+
+    def test_shutdown_unpaused_worker_one_response(self):
+        from agentic_debugger.runtime import pdb_worker as _pw
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        worker = _pw.PdbWorker()
+        responses = []
+        worker._send_response = lambda r: responses.append(r)
+        worker._handle_shutdown(PdbRequest(
+            protocol_version=PROTOCOL_VERSION, request_id=1,
+            operation='shutdown', payload={},
+        ))
+        assert len(responses) == 1, f"Got {len(responses)} responses"
+        resp = responses[0]
+        assert resp.success is True
+        assert resp.result.get('shutdown') is True
+
+
+class TestPersistentPauseSystemExit:
+    """SystemExit normalization for persistent targets (Repair 6)."""
+
+    @pytest.fixture
+    def ws_sysexit(self):
+        src = Path(tempfile.mkdtemp())
+        try:
+            (src / "target.py").write_text("x = 1\ny = 2\nz = 3\n")
+            with TaskWorkspace(str(src)) as ws:
+                yield ws
+        finally:
+            shutil.rmtree(str(src), ignore_errors=True)
+
+    def _run_target_and_get_exit(self, ws, script_lines):
+        full_lines = script_lines + ["# padding", "# end"]
+        script_content = "\n".join(full_lines)
+        script_path = Path(ws.root) / "tmp_exit.py"
+        script_path.write_text(script_content)
+        bp_line = len(full_lines)
+        session = PdbSession(ws)
+        session.start()
+        try:
+            resp = _raw_op(session, 600, "start_paused_target", {
+                "script": "tmp_exit.py", "breakpoints": [bp_line], "argv": [],
+            })
+            assert resp.success is True, f"start failed: {resp.error}"
+            assert resp.result["state"] == "exited"
+            ec = resp.result["exit_code"]
+            assert isinstance(ec, int) and not isinstance(ec, bool)
+            return ec
+        finally:
+            session.stop()
+
+    def test_sysexit_none(self, ws_sysexit):
+        ec = self._run_target_and_get_exit(ws_sysexit, [
+            "import sys", "sys.exit(None)", "# end",
+        ])
+        assert ec == 0
+
+    def test_sysexit_false(self, ws_sysexit):
+        ec = self._run_target_and_get_exit(ws_sysexit, [
+            "import sys", "sys.exit(False)", "# end",
+        ])
+        assert ec == 0
+
+    def test_sysexit_true(self, ws_sysexit):
+        ec = self._run_target_and_get_exit(ws_sysexit, [
+            "import sys", "sys.exit(True)", "# end",
+        ])
+        assert ec == 1
+
+    def test_sysexit_42(self, ws_sysexit):
+        ec = self._run_target_and_get_exit(ws_sysexit, [
+            "import sys", "sys.exit(42)", "# end",
+        ])
+        assert ec == 42
+
+    def test_sysexit_negative(self, ws_sysexit):
+        ec = self._run_target_and_get_exit(ws_sysexit, [
+            "import sys", "sys.exit(-3)", "# end",
+        ])
+        assert ec == -3
+
+    def test_sysexit_string(self, ws_sysexit):
+        ec = self._run_target_and_get_exit(ws_sysexit, [
+            "import sys", "sys.exit('bye')", "# end",
+        ])
+        assert ec == 1
+
+
+class TestPersistentPauseInternalState:
+    """Internal-state invariant enforcement (Repair 7)."""
+
+    def test_unexpected_state_returns_failed_response(self):
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda r: responses.append(r)
+        with worker._condition:
+            worker._lifecycle['state'] = 'starting'
+        worker._handle_get_target_status(PdbRequest(
+            protocol_version=PROTOCOL_VERSION, request_id=1,
+            operation='get_target_status', payload={},
+        ))
+        assert len(responses) == 1
+        resp = responses[0]
+        assert resp.success is False
+        assert "Unexpected" in resp.error
+
+    def test_internal_terminating_returns_failed(self):
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+        from agentic_debugger.runtime.pdb_protocol import PdbRequest, PROTOCOL_VERSION
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = lambda r: responses.append(r)
+        with worker._condition:
+            worker._lifecycle['state'] = 'terminating'
+        worker._handle_get_target_status(PdbRequest(
+            protocol_version=PROTOCOL_VERSION, request_id=1,
+            operation='get_target_status', payload={},
+        ))
+        assert len(responses) == 1
+        resp = responses[0]
+        assert resp.success is False
+        assert "Unexpected" in resp.error

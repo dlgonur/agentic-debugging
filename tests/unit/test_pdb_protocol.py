@@ -384,7 +384,8 @@ class TestSerialization:
 
     def test_supported_operations(self):
         assert SUPPORTED_OPERATIONS == frozenset(
-            {"hello", "ping", "shutdown", "run_to_breakpoint"}
+            {"hello", "ping", "shutdown", "run_to_breakpoint",
+             "start_paused_target", "get_target_status", "terminate_paused_target"}
         )
 
     def test_run_to_breakpoint_operation_accepted(self):
@@ -510,3 +511,115 @@ class TestPdbRequestWithPayload:
         resp = PdbResponse.from_mapping(_VALID_RESPONSE_MAPPING)
         data = serialize_response(resp)
         assert data.endswith(b"\n")
+
+
+class TestNewPersistentOperations:
+    """Tests for start_paused_target, get_target_status, terminate_paused_target payload validation."""
+
+    def test_start_paused_target_operation_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "start_paused_target"
+        m["payload"] = {
+            "script": "test.py",
+            "breakpoints": [4, 8],
+            "argv": ["argument"],
+        }
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "start_paused_target"
+        assert req.payload["script"] == "test.py"
+        assert req.payload["breakpoints"] == [4, 8]
+        assert req.payload["argv"] == ["argument"]
+
+    def test_start_paused_target_payload_round_trip(self):
+        payload = {
+            "script": "subdir/target.py",
+            "breakpoints": [5, 10, 15],
+            "argv": ["arg1", "arg2"],
+        }
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "start_paused_target"
+        m["payload"] = payload
+        req = PdbRequest.from_mapping(m)
+        ser = serialize_request(req)
+        req2 = deserialize_request(ser)
+        assert req2.payload == payload
+
+    def test_start_paused_target_missing_script(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "start_paused_target"
+        m["payload"] = {"breakpoints": [1], "argv": []}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "start_paused_target"
+
+    def test_start_paused_target_unknown_field(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "start_paused_target"
+        m["payload"] = {"script": "x.py", "breakpoints": [1], "argv": [], "extra": 1}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "start_paused_target"
+
+    def test_start_paused_target_wrong_field_type(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "start_paused_target"
+        m["payload"] = {"script": 123, "breakpoints": [1], "argv": []}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "start_paused_target"
+
+    def test_get_target_status_operation_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "get_target_status"
+        m["payload"] = {}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "get_target_status"
+
+    def test_get_target_status_with_fields_rejected_by_worker(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "get_target_status"
+        m["payload"] = {"unknown": "value"}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "get_target_status"
+        assert req.payload == {"unknown": "value"}
+
+    def test_terminate_paused_target_operation_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "terminate_paused_target"
+        m["payload"] = {}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "terminate_paused_target"
+
+    def test_terminate_paused_target_with_fields_rejected_by_worker(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "terminate_paused_target"
+        m["payload"] = {"unknown": "value"}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "terminate_paused_target"
+        assert req.payload == {"unknown": "value"}
+
+    def test_run_to_breakpoint_still_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "run_to_breakpoint"
+        m["payload"] = {"script": "test.py", "breakpoints": [1], "argv": []}
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "run_to_breakpoint"
+
+    def test_hello_still_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "hello"
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "hello"
+
+    def test_ping_still_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "ping"
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "ping"
+
+    def test_shutdown_still_accepted(self):
+        m = dict(_VALID_REQUEST_MAPPING)
+        m["operation"] = "shutdown"
+        req = PdbRequest.from_mapping(m)
+        assert req.operation == "shutdown"
+
+    def test_malformed_request_still_rejected(self):
+        with pytest.raises(PdbProtocolError, match="not valid JSON"):
+            deserialize_request(b"not json\n")

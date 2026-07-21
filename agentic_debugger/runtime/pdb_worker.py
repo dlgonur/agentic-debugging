@@ -6,6 +6,7 @@ import os
 import pdb
 import stat
 import sys
+import threading
 import traceback
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -30,6 +31,13 @@ class _BreakpointSentinel(BaseException):
     pass
 
 
+class _TerminationSentinel(BaseException):
+    pass
+
+
+_WORKER_TERMINATION_TIMEOUT = 3.0
+
+
 class _PdbRunner(pdb.Pdb):
     def __init__(self, script_canonic: str, breakpoints_set: frozenset[int]) -> None:
         stdin = io.StringIO()
@@ -47,6 +55,51 @@ class _PdbRunner(pdb.Pdb):
                 'function': frame.f_code.co_name,
             }
             raise _BreakpointSentinel()
+
+    def user_call(self, frame: Any, argument: Any) -> None:
+        pass
+
+    def user_return(self, frame: Any, return_value: Any) -> None:
+        pass
+
+    def user_exception(self, frame: Any, exc_info: Any) -> None:
+        pass
+
+    def preloop(self) -> None:
+        pass
+
+    def postloop(self) -> None:
+        pass
+
+
+class _PdbPersistentRunner(pdb.Pdb):
+    def __init__(
+        self,
+        script_canonic: str,
+        breakpoints_set: frozenset[int],
+        condition: threading.Condition,
+        lifecycle: Dict[str, Any],
+    ) -> None:
+        stdin = io.StringIO()
+        stdout = io.StringIO()
+        super().__init__(readrc=False, stdin=stdin, stdout=stdout)
+        self._script_canonic: str = script_canonic
+        self._breakpoints: frozenset[int] = breakpoints_set
+        self._condition: threading.Condition = condition
+        self._lifecycle: Dict[str, Any] = lifecycle
+
+    def user_line(self, frame: Any, return_to_frame: Any = None) -> None:
+        if (frame.f_lineno in self._breakpoints and
+            os.path.normcase(os.path.abspath(frame.f_code.co_filename)) == self._script_canonic):
+            with self._condition:
+                self._lifecycle['state'] = 'paused'
+                self._lifecycle['line'] = frame.f_lineno
+                self._lifecycle['function'] = frame.f_code.co_name
+                self._condition.notify_all()
+                while self._lifecycle['state'] == 'paused':
+                    self._condition.wait()
+                if self._lifecycle['state'] == 'terminating':
+                    raise _TerminationSentinel()
 
     def user_call(self, frame: Any, argument: Any) -> None:
         pass
@@ -122,13 +175,26 @@ class PdbWorker:
             stdout=self._pdb_stdout,
         )
         self._running = True
-        self._target_completed = False
+        self._target_started = False
+        self._protocol_stdin = sys.stdin
         self._protocol_stdout = sys.stdout
+        self._condition = threading.Condition()
+        self._lifecycle: Dict[str, Any] = {
+            'state': 'idle',
+            'script': '',
+            'line': 0,
+            'function': '',
+            'exit_code': None,
+            'error': '',
+            '_start_script': '',
+        }
+        self._target_thread: Optional[threading.Thread] = None
+        self._unsafe = False
 
     def run(self) -> None:
-        while self._running:
+        while self._running and not self._unsafe:
             try:
-                data = sys.stdin.buffer.readline(MAX_LINE_LENGTH + 1)
+                data = self._protocol_stdin.buffer.readline(MAX_LINE_LENGTH + 1)
             except OSError:
                 self._diag("stdin read error")
                 break
@@ -185,6 +251,12 @@ class PdbWorker:
             self._handle_shutdown(request)
         elif op == "run_to_breakpoint":
             self._handle_run_to_breakpoint(request)
+        elif op == "start_paused_target":
+            self._handle_start_paused_target(request)
+        elif op == "get_target_status":
+            self._handle_get_target_status(request)
+        elif op == "terminate_paused_target":
+            self._handle_terminate_paused_target(request)
         else:
             self._send_error(
                 request_id=request.request_id,
@@ -215,6 +287,15 @@ class PdbWorker:
         self._send_response(response)
 
     def _handle_shutdown(self, request: PdbRequest) -> None:
+        with self._condition:
+            is_paused = self._lifecycle['state'] == 'paused'
+        if is_paused:
+            term_result = self._request_target_termination()
+            if term_result.get('error'):
+                self._send_error(request.request_id, term_result['error'])
+                self._running = False
+                self._unsafe = True
+                return
         response = PdbResponse(
             protocol_version=PROTOCOL_VERSION,
             request_id=request.request_id,
@@ -244,7 +325,7 @@ class PdbWorker:
                 )
                 return
 
-        if self._target_completed:
+        if self._target_started:
             self._send_error(
                 request.request_id,
                 "Target execution already completed on this worker"
@@ -270,6 +351,7 @@ class PdbWorker:
         if av is None:
             return
 
+        self._target_started = True
         self._execute_target(script_normalized, script_abs, bps, av, source_bytes, request.request_id)
 
     def _read_validated_workspace_script(
@@ -531,11 +613,13 @@ class PdbWorker:
             try:
                 code = compile(source_bytes, script_abs, 'exec')
             except SyntaxError as e:
-                self._send_error(
-                    request_id,
-                    self._safe_error_message(e)
-                )
-                self._target_completed = True
+                error_msg = self._safe_error_message(e)
+                self._send_error(request_id, error_msg)
+                with self._condition:
+                    self._lifecycle['state'] = 'failed'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['error'] = error_msg
+                    self._condition.notify_all()
                 return
 
             canonic = _canonic(script_abs)
@@ -567,7 +651,10 @@ class PdbWorker:
                     error="",
                 )
                 self._send_response(response)
-                self._target_completed = True
+                with self._condition:
+                    self._lifecycle['state'] = 'terminated'
+                    self._lifecycle['script'] = script_normalized
+                    self._condition.notify_all()
                 return
             except SystemExit as e:
                 ec = e.code
@@ -592,7 +679,11 @@ class PdbWorker:
                     error="",
                 )
                 self._send_response(response)
-                self._target_completed = True
+                with self._condition:
+                    self._lifecycle['state'] = 'exited'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['exit_code'] = exit_code
+                    self._condition.notify_all()
                 return
             except BaseException as e:
                 error_msg = self._safe_error_message(e)
@@ -604,7 +695,11 @@ class PdbWorker:
                     error=error_msg,
                 )
                 self._send_response(response)
-                self._target_completed = True
+                with self._condition:
+                    self._lifecycle['state'] = 'failed'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['error'] = error_msg
+                    self._condition.notify_all()
                 return
             else:
                 result = {
@@ -620,7 +715,11 @@ class PdbWorker:
                     error="",
                 )
                 self._send_response(response)
-                self._target_completed = True
+                with self._condition:
+                    self._lifecycle['state'] = 'exited'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['exit_code'] = 0
+                    self._condition.notify_all()
                 return
         finally:
             sys.argv = saved_argv
@@ -631,6 +730,379 @@ class PdbWorker:
             os.chdir(saved_cwd)
             sys.settrace(None)
             sys.settrace(saved_trace)
+
+    def _request_target_termination(self) -> Dict[str, Any]:
+        with self._condition:
+            if self._lifecycle['state'] == 'paused':
+                self._lifecycle['state'] = 'terminating'
+                self._condition.notify_all()
+        target_thread = self._target_thread
+        if target_thread is not None and target_thread is not threading.current_thread():
+            target_thread.join(timeout=_WORKER_TERMINATION_TIMEOUT)
+            if target_thread.is_alive():
+                self._unsafe = True
+                self._running = False
+                self._target_thread = None
+                return {'error': "Target termination did not complete within timeout", 'timeout': True}
+            self._target_thread = None
+        with self._condition:
+            final_state = self._lifecycle['state']
+        if final_state == 'terminated':
+            return {'state': 'terminated'}
+        return {'error': f"Target termination produced unexpected state: {final_state}"}
+
+    def _execute_target_persistent(
+        self,
+        script_normalized: str,
+        script_abs: str,
+        breakpoints: List[int],
+        argv: List[str],
+        source_bytes: bytes,
+    ) -> None:
+        saved_argv = list(sys.argv)
+        saved_path = list(sys.path)
+        saved_stdin = sys.stdin
+        saved_stdout = sys.stdout
+        saved_stderr = sys.stderr
+        saved_cwd = os.getcwd()
+        saved_trace = sys.gettrace()
+
+        pending_state: Optional[str] = None
+        pending_exit_code: Optional[int] = None
+        pending_error: str = ""
+
+        try:
+            script_dir = os.path.dirname(script_abs)
+            sys.argv = [script_normalized] + argv
+            sys.path = [script_dir] + saved_path
+            sys.stdin = _NullReader()
+            sys.stdout = _DiscardStdout()
+            sys.stderr = _DiscardStderr()
+
+            try:
+                code = compile(source_bytes, script_abs, 'exec')
+            except SyntaxError as e:
+                pending_state = 'failed'
+                pending_error = self._safe_error_message(e)
+                return
+
+            canonic = _canonic(script_abs)
+            runner: Optional[_PdbPersistentRunner] = _PdbPersistentRunner(
+                canonic, frozenset(breakpoints),
+                self._condition, self._lifecycle,
+            )
+
+            globs: Dict[str, Any] = {
+                '__name__': '__main__',
+                '__doc__': None,
+                '__package__': None,
+                '__loader__': None,
+                '__spec__': None,
+                '__file__': script_abs,
+                '__builtins__': builtins.__dict__,
+            }
+
+            try:
+                runner.run(code, globs, globs)
+            except _TerminationSentinel:
+                pending_state = 'terminated'
+                return
+            except SystemExit as e:
+                ec = e.code
+                if ec is None:
+                    pending_exit_code = 0
+                elif isinstance(ec, bool):
+                    pending_exit_code = 1 if ec else 0
+                elif isinstance(ec, int):
+                    pending_exit_code = ec
+                else:
+                    pending_exit_code = 1
+                pending_state = 'exited'
+                return
+            except BaseException as e:
+                pending_state = 'failed'
+                pending_error = self._safe_error_message(e)
+                return
+            else:
+                pending_state = 'exited'
+                pending_exit_code = 0
+                return
+        finally:
+            runner = None
+            sys.argv = saved_argv
+            sys.path = saved_path
+            sys.stdin = saved_stdin
+            sys.stdout = saved_stdout
+            sys.stderr = saved_stderr
+            os.chdir(saved_cwd)
+            sys.settrace(None)
+            sys.settrace(saved_trace)
+            if pending_state is not None:
+                with self._condition:
+                    self._lifecycle['state'] = pending_state
+                    if pending_state == 'exited':
+                        self._lifecycle['exit_code'] = pending_exit_code
+                    elif pending_state == 'failed':
+                        self._lifecycle['error'] = pending_error
+                    elif pending_state == 'terminated':
+                        pass
+                    self._condition.notify_all()
+
+    def _handle_start_paused_target(self, request: PdbRequest) -> None:
+        payload = request.payload
+
+        for field in ('script', 'breakpoints', 'argv'):
+            if field not in payload:
+                self._send_error(
+                    request.request_id,
+                    f"Missing required payload field: {field}"
+                )
+                return
+
+        for field in payload:
+            if field not in ('script', 'breakpoints', 'argv'):
+                self._send_error(
+                    request.request_id,
+                    f"Unknown payload field: {field}"
+                )
+                return
+
+        with self._condition:
+            if self._target_started:
+                self._send_error(
+                    request.request_id,
+                    "Target execution already completed on this worker"
+                )
+                return
+            if self._lifecycle['state'] != 'idle':
+                self._send_error(
+                    request.request_id,
+                    "Target execution already completed on this worker"
+                )
+                return
+
+        workspace_root = os.getcwd()
+        script = payload['script']
+        breakpoints_raw = payload['breakpoints']
+        argv_raw = payload['argv']
+
+        sv = self._read_validated_workspace_script(script, workspace_root, request.request_id)
+        if sv is None:
+            return
+        script_normalized, script_abs, source_bytes = sv
+
+        bps = self._validate_breakpoints(breakpoints_raw, source_bytes, request.request_id)
+        if bps is None:
+            return
+
+        av = self._validate_argv(argv_raw, request.request_id)
+        if av is None:
+            return
+
+        self._target_started = True
+
+        with self._condition:
+            self._lifecycle['state'] = 'starting'
+            self._lifecycle['_start_script'] = script_normalized
+            self._lifecycle['script'] = script_normalized
+            self._lifecycle['line'] = 0
+            self._lifecycle['function'] = ''
+            self._lifecycle['exit_code'] = None
+            self._lifecycle['error'] = ''
+
+        self._target_thread = threading.Thread(
+            target=self._execute_target_persistent,
+            args=(script_normalized, script_abs, bps, av, source_bytes),
+            daemon=True,
+        )
+        self._target_thread.start()
+
+        with self._condition:
+            while self._lifecycle['state'] == 'starting':
+                self._condition.wait()
+            state = self._lifecycle['state']
+
+        if state == 'paused':
+            result: Dict[str, Any] = {
+                'state': 'paused',
+                'script': script_normalized,
+                'line': self._lifecycle['line'],
+                'function': self._lifecycle['function'],
+            }
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+            self._send_response(response)
+        elif state in ('exited', 'failed'):
+            target_thread = self._target_thread
+            if target_thread is not None and target_thread is not threading.current_thread():
+                target_thread.join(timeout=_WORKER_TERMINATION_TIMEOUT)
+                if target_thread.is_alive():
+                    self._unsafe = True
+                    self._running = False
+                    self._send_error(
+                        request.request_id,
+                        "Target thread did not complete after outcome"
+                    )
+                    return
+                self._target_thread = None
+            if state == 'exited':
+                result = {
+                    'state': 'exited',
+                    'script': script_normalized,
+                    'exit_code': self._lifecycle['exit_code'],
+                }
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request.request_id,
+                    success=True,
+                    result=result,
+                    error="",
+                )
+                self._send_response(response)
+            else:
+                error_msg = self._lifecycle['error']
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request.request_id,
+                    success=False,
+                    result={},
+                    error=error_msg,
+                )
+                self._send_response(response)
+        else:
+            self._send_error(
+                request.request_id,
+                f"Unexpected target lifecycle state: {state}"
+            )
+
+    def _handle_get_target_status(self, request: PdbRequest) -> None:
+        payload = request.payload
+        if not isinstance(payload, dict):
+            self._send_error(request.request_id, "payload must be a mapping")
+            return
+        for field in payload:
+            self._send_error(
+                request.request_id,
+                f"Unknown payload field: {field}"
+            )
+            return
+
+        with self._condition:
+            state = self._lifecycle['state']
+
+        if state == 'idle':
+            result = {'state': 'idle'}
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+        elif state == 'paused':
+            result = {
+                'state': 'paused',
+                'script': self._lifecycle['script'],
+                'line': self._lifecycle['line'],
+                'function': self._lifecycle['function'],
+            }
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+        elif state == 'exited':
+            result = {
+                'state': 'exited',
+                'script': self._lifecycle['script'],
+                'exit_code': self._lifecycle['exit_code'],
+            }
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+        elif state == 'failed':
+            result = {
+                'state': 'failed',
+                'script': self._lifecycle['script'],
+                'error': self._lifecycle['error'],
+            }
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+        elif state == 'terminated':
+            result = {
+                'state': 'terminated',
+                'script': self._lifecycle['script'],
+            }
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request.request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+        else:
+            self._send_error(
+                request.request_id,
+                f"Unexpected lifecycle state: {state}"
+            )
+            return
+        self._send_response(response)
+
+    def _handle_terminate_paused_target(self, request: PdbRequest) -> None:
+        payload = request.payload
+        if not isinstance(payload, dict):
+            self._send_error(request.request_id, "payload must be a mapping")
+            return
+        for field in payload:
+            self._send_error(
+                request.request_id,
+                f"Unknown payload field: {field}"
+            )
+            return
+
+        with self._condition:
+            state = self._lifecycle['state']
+
+        if state != 'paused':
+            self._send_error(
+                request.request_id,
+                f"Cannot terminate target in state: {state}"
+            )
+            return
+
+        term_result = self._request_target_termination()
+        if term_result.get('error'):
+            self._send_error(request.request_id, term_result['error'])
+            return
+
+        result = {
+            'state': 'terminated',
+            'script': self._lifecycle['script'],
+        }
+        response = PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=request.request_id,
+            success=True,
+            result=result,
+            error="",
+        )
+        self._send_response(response)
 
     def _send_response(self, response: PdbResponse) -> None:
         data = serialize_response(response)
