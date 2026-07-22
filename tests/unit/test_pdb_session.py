@@ -3033,7 +3033,7 @@ class TestPausedTargetStartCounterexamples:
         session.stop()
 
 
-class TestPausedTargetStatus:
+class _TestPausedTargetStatusBase:
     """Status result validation."""
 
     def _make_status_response(self, mock_workspace, result):
@@ -3065,6 +3065,354 @@ class TestPausedTargetStatus:
         finally:
             session.stop()
 
+
+# =====================================================================
+# Task 4C - Stack, frame, and locals inspection v1
+# =====================================================================
+
+
+def _valid_stack_result():
+    return {
+        "state": "paused",
+        "script": "test.py",
+        "pause_generation": 1,
+        "frames": [{
+            "frame_id": 0,
+            "script": "test.py",
+            "line": 3,
+            "function": "<module>",
+            "is_current": True,
+        }],
+        "total_frames": 1,
+        "truncated": False,
+    }
+
+
+def _valid_frame_result():
+    return {
+        "state": "paused",
+        "pause_generation": 1,
+        "frame": {
+            "frame_id": 0,
+            "script": "test.py",
+            "line": 3,
+            "function": "<module>",
+            "is_current": True,
+            "argument_names": [],
+            "local_names": ["value"],
+            "locals_count": 1,
+            "locals_truncated": False,
+        },
+    }
+
+
+def _int_summary(value=42):
+    return {
+        "kind": "int",
+        "type": "builtins.int",
+        "value": value,
+        "special": None,
+        "size": value.bit_length(),
+        "items": [],
+        "entries": [],
+        "truncated": False,
+    }
+
+
+def _valid_locals_result():
+    return {
+        "state": "paused",
+        "pause_generation": 1,
+        "frame_id": 0,
+        "locals": [{"name": "value", "value": _int_summary()}],
+        "total_count": 1,
+        "truncated": False,
+    }
+
+
+def _ready_inspection_session(mock_workspace, result, success=True, error=""):
+    response = PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=2,
+        success=success,
+        result=result,
+        error=error,
+    )
+    session, proc = _setup(mock_workspace, [_hello_resp(1)])
+    session._target_consumed = True
+    session._target_lifecycle_state = "paused"
+    session._active_script = "test.py"
+    session._active_breakpoints = [3]
+    sent = []
+
+    def send(request, timeout):
+        sent.append(request)
+        return response
+
+    session._send_and_receive = send
+    return session, proc, sent
+
+
+class TestInspectionPublicAPI:
+    @pytest.mark.parametrize(
+        ("name", "parameters"),
+        [
+            ("get_stack_summary", ["self"]),
+            ("get_frame", ["self", "frame_id", "pause_generation"]),
+            (
+                "get_frame_locals",
+                ["self", "frame_id", "pause_generation"],
+            ),
+        ],
+    )
+    def test_exact_public_signatures(self, name, parameters):
+        import inspect
+        assert list(inspect.signature(getattr(PdbSession, name)).parameters) == parameters
+
+    @pytest.mark.parametrize(
+        ("method", "result", "operation", "payload"),
+        [
+            (
+                lambda session: session.get_stack_summary(),
+                _valid_stack_result(), "get_stack_summary", {},
+            ),
+            (
+                lambda session: session.get_frame(0, 1),
+                _valid_frame_result(), "get_frame",
+                {"frame_id": 0, "pause_generation": 1},
+            ),
+            (
+                lambda session: session.get_frame_locals(0, 1),
+                _valid_locals_result(), "get_frame_locals",
+                {"frame_id": 0, "pause_generation": 1},
+            ),
+        ],
+    )
+    def test_exact_operation_payload_and_result(
+        self, mock_workspace, method, result, operation, payload
+    ):
+        session, _, sent = _ready_inspection_session(mock_workspace, result)
+        try:
+            assert method(session) == result
+            assert len(sent) == 1
+            assert sent[0].operation == operation
+            assert sent[0].payload == payload
+            assert session._target_lifecycle_state == "paused"
+            assert session.state == PdbSessionState.READY
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        ("frame_id", "generation"),
+        [(True, 1), (-1, 1), ("0", 1), (0, True), (0, 0), (0, -1), (0, "1")],
+    )
+    def test_identifiers_are_strict_before_send(
+        self, mock_workspace, frame_id, generation
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_frame_result()
+        )
+        try:
+            with pytest.raises(PdbSessionError):
+                session.get_frame(frame_id, generation)
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "local_state",
+        [
+            "idle", "starting", "continuing", "exited", "failed",
+            "terminated", "unknown",
+        ],
+    )
+    @pytest.mark.parametrize(
+        "method",
+        [
+            lambda session: session.get_stack_summary(),
+            lambda session: session.get_frame(0, 1),
+            lambda session: session.get_frame_locals(0, 1),
+        ],
+    )
+    def test_nonpaused_lifecycle_rejects_without_request(
+        self, mock_workspace, local_state, method
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_stack_result()
+        )
+        session._target_lifecycle_state = local_state
+        try:
+            with pytest.raises(PdbSessionStateError):
+                method(session)
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+            assert session._target_consumed is True
+            assert session._active_script == "test.py"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("one_shot_state", ["exited", "terminated"])
+    def test_one_shot_completion_rejects_without_request(
+        self, mock_workspace, one_shot_state
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_stack_result()
+        )
+        session._target_lifecycle_state = one_shot_state
+        session._active_breakpoints = None
+        try:
+            with pytest.raises(PdbSessionStateError):
+                session.get_stack_summary()
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+        finally:
+            session.stop()
+
+    def test_correlated_operation_failure_is_ordinary(self, mock_workspace):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, {}, success=False, error="Unknown frame_id"
+        )
+        try:
+            with pytest.raises(PdbSessionError, match="Unknown frame_id"):
+                session.get_frame(99, 1)
+            assert len(sent) == 1
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+            assert session._active_script == "test.py"
+        finally:
+            session.stop()
+
+    def test_status_refresh_recovers_unknown_then_inspection(self, mock_workspace):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_stack_result()
+        )
+        session._target_lifecycle_state = "unknown"
+        responses = [
+            PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=2,
+                success=True,
+                result={
+                    "state": "paused", "script": "test.py",
+                    "line": 3, "function": "<module>",
+                },
+                error="",
+            ),
+            PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=3,
+                success=True,
+                result=_valid_stack_result(),
+                error="",
+            ),
+        ]
+
+        def send(request, timeout):
+            sent.append(request)
+            return responses.pop(0)
+
+        session._send_and_receive = send
+        try:
+            with pytest.raises(PdbSessionStateError):
+                session.get_stack_summary()
+            assert sent == []
+            assert session.get_target_status()["state"] == "paused"
+            assert session.get_stack_summary()["pause_generation"] == 1
+            assert [request.operation for request in sent] == [
+                "get_target_status", "get_stack_summary",
+            ]
+        finally:
+            session.stop()
+
+
+class TestInspectionMalformedResults:
+    @pytest.mark.parametrize(
+        "result",
+        [
+            {**_valid_stack_result(), "state": []},
+            {**_valid_stack_result(), "pause_generation": True},
+            {**_valid_stack_result(), "script": "../test.py"},
+            {**_valid_stack_result(), "extra": 1},
+            {**_valid_stack_result(), "total_frames": 2, "truncated": False},
+            {**_valid_stack_result(), "frames": []},
+            {
+                **_valid_stack_result(),
+                "frames": [{
+                    **_valid_stack_result()["frames"][0], "line": True,
+                }],
+            },
+        ],
+    )
+    def test_malformed_stack_cleans_session(self, mock_workspace, result):
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_stack_summary()
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            {**_valid_frame_result(), "pause_generation": 2},
+            {
+                **_valid_frame_result(),
+                "frame": {
+                    **_valid_frame_result()["frame"],
+                    "argument_names": ["value", "value"],
+                },
+            },
+            {
+                **_valid_frame_result(),
+                "frame": {
+                    **_valid_frame_result()["frame"],
+                    "local_names": ["z", "a"], "locals_count": 2,
+                },
+            },
+        ],
+    )
+    def test_malformed_frame_cleans_session(self, mock_workspace, result):
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_frame(0, 1)
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "result",
+        [
+            {**_valid_locals_result(), "frame_id": True},
+            {
+                **_valid_locals_result(),
+                "locals": [{"name": "value", "value": {"kind": "int"}}],
+            },
+            {
+                **_valid_locals_result(),
+                "locals": [{
+                    "name": "value",
+                    "value": {**_int_summary(), "kind": "invalid"},
+                }],
+            },
+            {**_valid_locals_result(), "unknown": 1},
+            {**_valid_locals_result(), "total_count": 2, "truncated": False},
+        ],
+    )
+    def test_malformed_locals_cleans_session(self, mock_workspace, result):
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_frame_locals(0, 1)
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+class TestPausedTargetStatus(_TestPausedTargetStatusBase):
     def test_status_paused(self, mock_workspace):
         session = self._make_status_response(
             mock_workspace,
@@ -3849,5 +4197,319 @@ class TestContinueProtocolBoundary:
             assert session.state == PdbSessionState.FAILED
             with pytest.raises(PdbSessionStateError):
                 session.ping()
+        finally:
+            session.stop()
+
+
+class TestInspectionConcurrency:
+    @pytest.mark.parametrize(
+        ("winner", "result", "loser"),
+        [
+            (
+                lambda session: session.get_stack_summary(),
+                _valid_stack_result(),
+                lambda session: session.continue_paused_target(),
+            ),
+            (
+                lambda session: session.get_frame_locals(0, 1),
+                _valid_locals_result(),
+                lambda session: session.continue_paused_target(),
+            ),
+            (
+                lambda session: session.get_frame(0, 1),
+                _valid_frame_result(),
+                lambda session: session.terminate_paused_target(),
+            ),
+            (
+                lambda session: session.get_frame_locals(0, 1),
+                _valid_locals_result(),
+                lambda session: session.get_target_status(),
+            ),
+            (
+                lambda session: session.get_frame_locals(0, 1),
+                _valid_locals_result(),
+                lambda session: session.get_frame_locals(0, 1),
+            ),
+        ],
+    )
+    def test_exactly_one_request_owns_boundary(
+        self, mock_workspace, winner, result, loser
+    ):
+        session, _, sent = _ready_inspection_session(mock_workspace, result)
+        session._request_timeout = 0.1
+        entered = threading.Event()
+        release = threading.Event()
+        winner_outcomes = []
+        loser_outcomes = []
+        response = PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=2,
+            success=True,
+            result=result,
+            error="",
+        )
+
+        def blocking_send(request, timeout):
+            sent.append(request)
+            entered.set()
+            assert release.wait(timeout=2.0)
+            return response
+
+        session._send_and_receive = blocking_send
+
+        def run_winner():
+            try:
+                winner_outcomes.append(winner(session))
+            except Exception as exc:
+                winner_outcomes.append(exc)
+
+        def run_loser():
+            try:
+                loser_outcomes.append(loser(session))
+            except Exception as exc:
+                loser_outcomes.append(exc)
+
+        winner_thread = threading.Thread(target=run_winner)
+        loser_thread = threading.Thread(target=run_loser)
+        winner_thread.start()
+        try:
+            assert entered.wait(timeout=2.0)
+            loser_thread.start()
+            loser_thread.join(timeout=2.0)
+            assert not loser_thread.is_alive()
+            assert len(loser_outcomes) == 1
+            assert isinstance(loser_outcomes[0], PdbSessionError)
+            assert len(sent) == 1
+        finally:
+            release.set()
+            winner_thread.join(timeout=2.0)
+            if loser_thread.ident is not None:
+                loser_thread.join(timeout=2.0)
+            assert not winner_thread.is_alive()
+            assert not loser_thread.is_alive()
+            session.stop()
+        assert len(winner_outcomes) == 1
+        assert not isinstance(winner_outcomes[0], Exception)
+        assert session._target_lifecycle_state == "paused"
+
+
+# Task 4C repair: full-envelope bounds and kind/type coherence.
+
+
+def _summary_for_kind(kind):
+    common = {
+        "kind": kind,
+        "type": {
+            "none": "builtins.NoneType",
+            "bool": "builtins.bool",
+            "int": "builtins.int",
+            "float": "builtins.float",
+            "str": "builtins.str",
+            "bytes": "builtins.bytes",
+            "list": "builtins.list",
+            "tuple": "builtins.tuple",
+            "dict": "builtins.dict",
+            "set": "builtins.set",
+            "frozenset": "builtins.frozenset",
+            "object": "example.Widget",
+        }[kind],
+        "value": None,
+        "special": None,
+        "size": None,
+        "items": [],
+        "entries": [],
+        "truncated": False,
+    }
+    if kind == "bool":
+        common["value"] = True
+    elif kind == "int":
+        common.update(value=7, size=3)
+    elif kind == "float":
+        common["value"] = 1.5
+    elif kind == "str":
+        common.update(value="text", size=4)
+    elif kind == "bytes":
+        common.update(value="00", size=1)
+    elif kind in ("list", "tuple", "dict", "set", "frozenset"):
+        common["size"] = 0
+    return common
+
+
+def _locals_with_summary(summary):
+    result = _valid_locals_result()
+    result["locals"][0]["value"] = summary
+    return result
+
+
+def _unbounded_response_size(response):
+    import json
+    return len((json.dumps(
+        response.to_mapping(), ensure_ascii=False, separators=(",", ":"),
+        sort_keys=True, allow_nan=False,
+    ) + "\n").encode("utf-8"))
+
+
+class TestInspectionResponseEnvelopeRepair:
+    def test_canonical_full_response_boundary(self):
+        import json
+        from agentic_debugger.runtime.pdb_protocol import MAX_LINE_LENGTH
+
+        def response_with_padding(count):
+            return PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=2,
+                success=True,
+                result={"padding": "x" * count},
+                error="",
+            )
+
+        empty = response_with_padding(0)
+        padding_at_limit = MAX_LINE_LENGTH - _unbounded_response_size(empty)
+        at_limit = response_with_padding(padding_at_limit)
+        below_limit = response_with_padding(padding_at_limit - 1)
+        above_limit = response_with_padding(padding_at_limit + 1)
+        assert _unbounded_response_size(below_limit) == MAX_LINE_LENGTH - 1
+        assert _unbounded_response_size(at_limit) == MAX_LINE_LENGTH
+        assert _unbounded_response_size(above_limit) == MAX_LINE_LENGTH + 1
+        PdbSession._validate_successful_inspection_response_size(
+            below_limit, "get_stack_summary"
+        )
+        PdbSession._validate_successful_inspection_response_size(
+            at_limit, "get_stack_summary"
+        )
+        with pytest.raises(PdbProtocolError, match="protocol line limit"):
+            PdbSession._validate_successful_inspection_response_size(
+                above_limit, "get_stack_summary"
+            )
+
+    def test_injected_oversized_success_cleans_session(self, mock_workspace):
+        frames = []
+        for frame_id in range(64):
+            frames.append({
+                "frame_id": frame_id,
+                "script": "test.py",
+                "line": frame_id + 1,
+                "function": "f" * 2000,
+                "is_current": frame_id == 0,
+            })
+        result = {
+            "state": "paused", "script": "test.py",
+            "pause_generation": 1, "frames": frames,
+            "total_frames": 64, "truncated": False,
+        }
+        response = PdbResponse(
+            protocol_version=PROTOCOL_VERSION, request_id=2,
+            success=True, result=result, error="",
+        )
+        assert _unbounded_response_size(response) > 65536
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises(PdbProtocolError, match="protocol line limit"):
+                session.get_stack_summary()
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+
+class TestInspectionKindTypeCoherenceRepair:
+    _CANONICAL_KINDS = (
+        "none", "bool", "int", "float", "str", "bytes", "list",
+        "tuple", "dict", "set", "frozenset",
+    )
+
+    @pytest.mark.parametrize("kind", _CANONICAL_KINDS)
+    def test_top_level_kind_type_mismatch_cleans_session(
+        self, mock_workspace, kind
+    ):
+        summary = _summary_for_kind(kind)
+        summary["type"] = "evil.Type"
+        session, _, _ = _ready_inspection_session(
+            mock_workspace, _locals_with_summary(summary)
+        )
+        try:
+            with pytest.raises(PdbProtocolError, match="does not match kind"):
+                session.get_frame_locals(0, 1)
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("kind", _CANONICAL_KINDS)
+    def test_exact_canonical_builtin_types_are_accepted(
+        self, mock_workspace, kind
+    ):
+        result = _locals_with_summary(_summary_for_kind(kind))
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            assert session.get_frame_locals(0, 1) == result
+            assert session.state == PdbSessionState.READY
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "container_kind,location",
+        [
+            ("list", "item"),
+            ("tuple", "item"),
+            ("dict", "key"),
+            ("dict", "value"),
+        ],
+    )
+    def test_nested_kind_type_mismatch_cleans_session(
+        self, mock_workspace, container_kind, location
+    ):
+        container = _summary_for_kind(container_kind)
+        bad = _int_summary(1)
+        bad["type"] = "evil.Type"
+        if container_kind in ("list", "tuple"):
+            container.update(size=1, items=[bad])
+        else:
+            good = _int_summary(2)
+            container.update(
+                size=1,
+                entries=[{
+                    "key": bad if location == "key" else good,
+                    "value": bad if location == "value" else good,
+                }],
+            )
+        session, _, _ = _ready_inspection_session(
+            mock_workspace, _locals_with_summary(container)
+        )
+        try:
+            with pytest.raises(PdbProtocolError, match="does not match kind"):
+                session.get_frame_locals(0, 1)
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("type_name", ["example.Widget", "unknown"])
+    def test_valid_object_type_names_are_accepted(
+        self, mock_workspace, type_name
+    ):
+        summary = _summary_for_kind("object")
+        summary["type"] = type_name
+        result = _locals_with_summary(summary)
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            assert session.get_frame_locals(0, 1) == result
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize("type_name", ["", "x" * 513])
+    def test_invalid_object_type_names_clean_session(
+        self, mock_workspace, type_name
+    ):
+        summary = _summary_for_kind("object")
+        summary["type"] = type_name
+        session, _, _ = _ready_inspection_session(
+            mock_workspace, _locals_with_summary(summary)
+        )
+        try:
+            with pytest.raises(PdbProtocolError):
+                session.get_frame_locals(0, 1)
+            assert session.state == PdbSessionState.FAILED
         finally:
             session.stop()

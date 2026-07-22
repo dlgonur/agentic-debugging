@@ -386,7 +386,8 @@ class TestSerialization:
         assert SUPPORTED_OPERATIONS == frozenset(
             {"hello", "ping", "shutdown", "run_to_breakpoint",
              "start_paused_target", "continue_paused_target",
-             "get_target_status", "terminate_paused_target"}
+             "get_target_status", "terminate_paused_target",
+             "get_stack_summary", "get_frame", "get_frame_locals"}
         )
 
     def test_run_to_breakpoint_operation_accepted(self):
@@ -624,3 +625,31 @@ class TestNewPersistentOperations:
     def test_malformed_request_still_rejected(self):
         with pytest.raises(PdbProtocolError, match="not valid JSON"):
             deserialize_request(b"not json\n")
+
+
+class TestInspectionProtocolOperations:
+    @pytest.mark.parametrize(
+        ("operation", "payload"),
+        [
+            ("get_stack_summary", {}),
+            ("get_frame", {"frame_id": 0, "pause_generation": 1}),
+            ("get_frame_locals", {"frame_id": 0, "pause_generation": 1}),
+        ],
+    )
+    def test_canonical_operation_round_trip(self, operation, payload):
+        request = PdbRequest(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=901,
+            operation=operation,
+            payload=payload,
+        )
+        restored = deserialize_request(serialize_request(request))
+        assert restored.operation == operation
+        assert restored.payload == payload
+
+    @pytest.mark.parametrize(
+        "alias",
+        ["stack", "get_stack", "frame", "locals", "get_locals"],
+    )
+    def test_operation_aliases_are_not_supported(self, alias):
+        assert alias not in SUPPORTED_OPERATIONS

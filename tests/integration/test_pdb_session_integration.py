@@ -4387,7 +4387,7 @@ class TestContinueTerminationAndCleanupIntegration:
             session.stop()
 
 
-class TestContinueWorkerCoordination:
+class _TestContinueWorkerCoordinationBase:
     @pytest.mark.parametrize("state", [
         "idle", "starting", "running", "resuming", "exited", "failed",
         "terminated", "terminating",
@@ -4492,6 +4492,435 @@ class TestContinueWorkerCoordination:
                 thread.join(timeout=3.0)
             shutil.rmtree(str(root), ignore_errors=True)
 
+
+# =====================================================================
+# Task 4C - Stack, frame, and locals inspection v1
+# =====================================================================
+
+
+@pytest.fixture
+def inspection_workspace():
+    root = Path(tempfile.mkdtemp())
+    try:
+        lines = [
+            "import math",
+            "import sys",
+            "def trip():",
+            "    with open(sys.argv[1], 'a') as marker:",
+            "        marker.write('called')",
+            "    raise RuntimeError('hostile method invoked')",
+            "class HostileDescriptor:",
+            "    def __get__(self, instance, owner):",
+            "        return trip()",
+            "class Hostile:",
+            "    descriptor = HostileDescriptor()",
+            "    @property",
+            "    def property_value(self):",
+            "        return trip()",
+            "    def __repr__(self): return trip()",
+            "    def __str__(self): return trip()",
+            "    def __format__(self, spec): return trip()",
+            "    def __len__(self): return trip()",
+            "    def __iter__(self): return trip()",
+            "    def __getitem__(self, key): return trip()",
+            "    def __getattribute__(self, name): return trip()",
+            "class HostileList(list):",
+            "    def __iter__(self): return trip()",
+            "    def __len__(self): return trip()",
+            "    def __getitem__(self, key): return trip()",
+            "class HostileDict(dict):",
+            "    def __iter__(self): return trip()",
+            "    def __len__(self): return trip()",
+            "    def __getitem__(self, key): return trip()",
+            "def outer(value):",
+            "    caller_local = 'caller'",
+            "    return inner(value, 7, 8, keyword=9, extra=10)",
+            "def inner(value, /, positional, *args, keyword, **kwargs):",
+            "    a_none = None",
+            "    a_false = False",
+            "    a_true = True",
+            "    a_positive = 42",
+            "    a_negative = -17",
+            "    a_large = 1 << 1000",
+            "    a_huge = 1 << 100000",
+            "    a_finite = 1.25",
+            "    a_nan = float('nan')",
+            "    a_inf = float('inf')",
+            "    a_ninf = float('-inf')",
+            "    a_ascii = 'hello'",
+            "    a_multibyte = 'é' * 2000",
+            "    a_nul = 'left\\x00right'",
+            "    a_bytes = b'abc'",
+            "    a_big_bytes = b'x' * 2048",
+            "    a_list = [1, 2, 3]",
+            "    a_tuple = ('a', 'b')",
+            "    a_dict = {'first': 1, 'second': 2}",
+            "    a_set = {1, 2}",
+            "    a_frozenset = frozenset({1, 2})",
+            "    a_nested = [[['deep']]]",
+            "    a_long_list = list(range(20))",
+            "    a_long_dict = {str(i): i for i in range(20)}",
+            "    a_cycle_list = []",
+            "    a_cycle_list.append(a_cycle_list)",
+            "    a_cycle_dict = {}",
+            "    a_cycle_dict['self'] = a_cycle_dict",
+            "    a_hostile = Hostile()",
+            "    a_list_subclass = HostileList([1, 2])",
+            "    a_dict_subclass = HostileDict({'x': 1})",
+        ]
+        lines.extend(f"    z_filler_{i:03d} = {i}" for i in range(140))
+        lines.extend([
+            "    pause_one = 1",
+            "    pause_two = 2",
+            "    return pause_two",
+            "outer(42)",
+        ])
+        inspection_text = "\n".join(lines) + "\n"
+        first_line = lines.index("    pause_one = 1") + 1
+        second_line = lines.index("    pause_two = 2") + 1
+        (root / "inspection.py").write_text(inspection_text, encoding="utf-8")
+
+        budget_lines = ["def budget():"]
+        budget_lines.extend(
+            f"    value_{i:03d} = 'é' * 1024" for i in range(40)
+        )
+        budget_lines.extend(["    pause = 1", "    return pause", "budget()"])
+        budget_line = budget_lines.index("    pause = 1") + 1
+        (root / "budget.py").write_text(
+            "\n".join(budget_lines) + "\n", encoding="utf-8"
+        )
+
+        deep_lines = []
+        for index in range(70):
+            deep_lines.append(f"def frame_{index}():")
+            if index == 69:
+                deep_lines.append("    pause = 1")
+                deep_line = len(deep_lines)
+                deep_lines.append("    return pause")
+            else:
+                deep_lines.append(f"    return frame_{index + 1}()")
+        deep_lines.append("frame_0()")
+        (root / "deep.py").write_text(
+            "\n".join(deep_lines) + "\n", encoding="utf-8"
+        )
+
+        with TaskWorkspace(str(root)) as workspace:
+            yield workspace, first_line, second_line, budget_line, deep_line
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+def _locals_by_name(result):
+    return {entry["name"]: entry["value"] for entry in result["locals"]}
+
+
+class TestInspectionPublicIntegration:
+    def test_nested_stack_frame_locals_and_generation(
+        self, inspection_workspace
+    ):
+        import json
+        workspace, first_line, second_line, _, _ = inspection_workspace
+        marker = Path(workspace.root) / "hostile-marker.txt"
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            started = session.start_paused_target(
+                "inspection.py", [first_line, second_line], [str(marker)]
+            )
+            assert started["line"] == first_line
+
+            stack = session.get_stack_summary()
+            assert set(stack) == {
+                "state", "script", "pause_generation", "frames",
+                "total_frames", "truncated",
+            }
+            assert stack["state"] == "paused"
+            assert stack["script"] == "inspection.py"
+            assert stack["pause_generation"] == 1
+            assert [frame["frame_id"] for frame in stack["frames"]] == [0, 1, 2]
+            assert [frame["function"] for frame in stack["frames"]] == [
+                "inner", "outer", "<module>",
+            ]
+            assert [frame["is_current"] for frame in stack["frames"]] == [
+                True, False, False,
+            ]
+            assert all(frame["script"] == "inspection.py" for frame in stack["frames"])
+            assert all(not os.path.isabs(frame["script"]) for frame in stack["frames"])
+            assert stack["total_frames"] == 3
+            assert stack["truncated"] is False
+            assert session.get_stack_summary() == stack
+            assert session.get_target_status()["line"] == first_line
+            assert session.ping().success is True
+
+            current = session.get_frame(0, 1)
+            caller = session.get_frame(1, 1)
+            assert current["frame"]["function"] == "inner"
+            assert caller["frame"]["function"] == "outer"
+            assert current["frame"]["argument_names"] == [
+                "value", "positional", "keyword", "args", "kwargs",
+            ]
+            assert current["frame"]["local_names"] == sorted(
+                current["frame"]["local_names"]
+            )
+            assert len(current["frame"]["local_names"]) == 128
+            assert current["frame"]["locals_count"] > 128
+            assert current["frame"]["locals_truncated"] is True
+            assert "caller_local" in caller["frame"]["local_names"]
+
+            locals_result = session.get_frame_locals(0, 1)
+            encoded = json.dumps(
+                locals_result, ensure_ascii=False, separators=(",", ":"),
+                sort_keys=True, allow_nan=False,
+            ).encode("utf-8")
+            assert len(encoded) <= 32768
+            assert len(locals_result["locals"]) <= 128
+            assert locals_result["total_count"] > 128
+            assert locals_result["truncated"] is True
+            names = [entry["name"] for entry in locals_result["locals"]]
+            assert names == sorted(names)
+            assert session.get_frame_locals(0, 1) == locals_result
+            assert b"NaN" not in encoded and b"Infinity" not in encoded
+
+            values = _locals_by_name(locals_result)
+            assert values["a_none"]["kind"] == "none"
+            assert values["a_false"]["value"] is False
+            assert values["a_true"]["value"] is True
+            assert values["a_positive"]["value"] == 42
+            assert values["a_negative"]["value"] == -17
+            assert values["a_large"]["value"] == 1 << 1000
+            assert values["a_huge"]["value"] is None
+            assert values["a_huge"]["size"] == 100001
+            assert values["a_huge"]["truncated"] is True
+            assert values["a_finite"]["value"] == 1.25
+            assert values["a_nan"]["special"] == "nan"
+            assert values["a_inf"]["special"] == "inf"
+            assert values["a_ninf"]["special"] == "-inf"
+            assert values["a_ascii"]["value"] == "hello"
+            assert len(values["a_multibyte"]["value"].encode("utf-8")) == 2048
+            assert values["a_multibyte"]["truncated"] is True
+            assert values["a_nul"]["value"] == "left\x00right"
+            assert values["a_bytes"]["value"] == "616263"
+            assert len(values["a_big_bytes"]["value"]) == 2048
+            assert values["a_big_bytes"]["truncated"] is True
+            assert [item["value"] for item in values["a_list"]["items"]] == [1, 2, 3]
+            assert [item["value"] for item in values["a_tuple"]["items"]] == ["a", "b"]
+            assert [entry["key"]["value"] for entry in values["a_dict"]["entries"]] == [
+                "first", "second",
+            ]
+            assert values["a_set"]["items"] == []
+            assert values["a_set"]["size"] == 2
+            assert values["a_set"]["truncated"] is True
+            assert values["a_frozenset"]["items"] == []
+            assert values["a_nested"]["items"][0]["items"][0]["truncated"] is True
+            assert len(values["a_long_list"]["items"]) == 16
+            assert values["a_long_list"]["truncated"] is True
+            assert len(values["a_long_dict"]["entries"]) == 16
+            assert values["a_cycle_list"]["items"][0]["truncated"] is True
+            cycle_dict_value = values["a_cycle_dict"]["entries"][0]["value"]
+            assert cycle_dict_value["kind"] == "dict"
+            assert cycle_dict_value["truncated"] is True
+            assert values["a_hostile"]["kind"] == "object"
+            assert values["a_list_subclass"]["kind"] == "object"
+            assert values["a_dict_subclass"]["kind"] == "object"
+            assert not marker.exists()
+
+            with pytest.raises(PdbSessionError):
+                session.get_frame(99, 1)
+            with pytest.raises(PdbSessionError):
+                session.get_frame_locals(99, 1)
+            assert session.state == PdbSessionState.READY
+            assert session.get_target_status()["line"] == first_line
+
+            resumed = session.continue_paused_target()
+            assert resumed["line"] == second_line
+            stack_two = session.get_stack_summary()
+            assert stack_two["pause_generation"] == 2
+            assert stack_two["frames"][0]["frame_id"] == 0
+            with pytest.raises(PdbSessionError):
+                session.get_frame(0, 1)
+            with pytest.raises(PdbSessionError):
+                session.get_frame_locals(0, 1)
+            assert session.state == PdbSessionState.READY
+            assert session.get_target_status()["line"] == second_line
+            assert session.get_frame(0, 2)["frame"]["function"] == "inner"
+            assert session.get_frame_locals(0, 2)["pause_generation"] == 2
+            assert session.continue_paused_target()["state"] == "exited"
+            assert session._target_lifecycle_state == "exited"
+        finally:
+            session.stop()
+
+    def test_locals_budget_stops_before_overflow(self, inspection_workspace):
+        import json
+        workspace, _, _, budget_line, _ = inspection_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            session.start_paused_target("budget.py", [budget_line])
+            stack = session.get_stack_summary()
+            captured = []
+            original = session._send_and_receive
+
+            def capture(request, timeout):
+                response = original(request, timeout)
+                captured.append((request, response))
+                return response
+
+            session._send_and_receive = capture
+            result = session.get_frame_locals(0, stack["pause_generation"])
+            encoded = json.dumps(
+                result, ensure_ascii=False, separators=(",", ":"),
+                sort_keys=True, allow_nan=False,
+            ).encode("utf-8")
+            assert len(encoded) <= 32768
+            assert captured[-1][0].operation == "get_frame_locals"
+            assert len(serialize_response(captured[-1][1])) < MAX_LINE_LENGTH
+            assert result["total_count"] == 40
+            assert len(result["locals"]) < 40
+            assert result["truncated"] is True
+            assert session.get_frame_locals(0, 1) == result
+            assert session.ping().success is True
+        finally:
+            session.stop()
+
+    def test_stack_truncation_is_bounded_and_stable(self, inspection_workspace):
+        workspace, _, _, _, deep_line = inspection_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            session.start_paused_target("deep.py", [deep_line])
+            result = session.get_stack_summary()
+            assert len(result["frames"]) == 64
+            assert result["total_frames"] == 71
+            assert result["truncated"] is True
+            assert [frame["frame_id"] for frame in result["frames"]] == list(range(64))
+            assert result["frames"][0]["function"] == "frame_69"
+            assert result["frames"][1]["function"] == "frame_68"
+            assert session.get_stack_summary() == result
+            assert session.get_target_status()["state"] == "paused"
+        finally:
+            session.stop()
+
+    def test_inspection_then_termination(self, inspection_workspace):
+        workspace, first_line, second_line, _, _ = inspection_workspace
+        marker = Path(workspace.root) / "terminate-hostile-marker.txt"
+        with PdbSession(workspace) as session:
+            session.start_paused_target(
+                "inspection.py", [first_line, second_line], [str(marker)]
+            )
+            generation = session.get_stack_summary()["pause_generation"]
+            session.get_frame(0, generation)
+            session.get_frame_locals(0, generation)
+            assert session.terminate_paused_target()["state"] == "terminated"
+            with pytest.raises(PdbSessionStateError):
+                session.get_stack_summary()
+            assert not marker.exists()
+
+
+class TestInspectionRawProtocol:
+    @pytest.mark.parametrize(
+        ("operation", "payload"),
+        [
+            ("get_stack_summary", {"extra": 1}),
+            ("get_frame", {"frame_id": 0, "pause_generation": 1, "extra": 1}),
+            ("get_frame", {"pause_generation": 1}),
+            ("get_frame", {"frame_id": True, "pause_generation": 1}),
+            ("get_frame", {"frame_id": -1, "pause_generation": 1}),
+            ("get_frame", {"frame_id": 0, "pause_generation": True}),
+            ("get_frame", {"frame_id": 0, "pause_generation": 0}),
+            ("get_frame_locals", {"frame_id": "0", "pause_generation": 1}),
+            ("get_frame_locals", {"frame_id": 0, "pause_generation": -1}),
+        ],
+    )
+    def test_exact_payload_validation(self, inspection_workspace, operation, payload):
+        workspace, _, _, _, _ = inspection_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            response = _raw_op(session, 900, operation, payload)
+            assert response.success is False
+            assert response.result == {}
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "alias", ["stack", "get_stack", "frame", "locals", "get_locals"]
+    )
+    def test_aliases_rejected(self, inspection_workspace, alias):
+        workspace, _, _, _, _ = inspection_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            response = _raw_op(session, 901, alias, {})
+            assert response.success is False
+            assert response.result == {}
+            assert "Unsupported operation" in response.error
+        finally:
+            session.stop()
+
+
+class TestInspectionWorkerInvariant:
+    @pytest.mark.parametrize("condition", ["missing_thread", "dead_thread", "missing_frame", "outside_frame"])
+    def test_false_paused_state_fails_once_and_cleans(self, condition):
+        import sys
+        import threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = responses.append
+        worker._workspace_root_real = os.path.realpath(tempfile.gettempdir())
+        worker._lifecycle.update({
+            "state": "paused", "script": "target.py",
+            "pause_generation": 1, "_paused_frame": sys._getframe(),
+        })
+        release = threading.Event()
+        thread = None
+        if condition == "dead_thread":
+            thread = threading.Thread(target=lambda: None)
+            thread.start()
+            thread.join(timeout=2.0)
+            assert not thread.is_alive()
+            worker._target_thread = thread
+        elif condition in ("missing_frame", "outside_frame"):
+            def paused_owner():
+                with worker._condition:
+                    while worker._lifecycle["state"] == "paused":
+                        worker._condition.wait()
+                release.set()
+
+            thread = threading.Thread(target=paused_owner, daemon=True)
+            worker._target_thread = thread
+            thread.start()
+            assert thread.is_alive()
+            if condition == "missing_frame":
+                worker._lifecycle["_paused_frame"] = None
+        else:
+            worker._target_thread = None
+
+        try:
+            worker._handle_get_stack_summary(PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=902,
+                operation="get_stack_summary",
+                payload={},
+            ))
+            assert len(responses) == 1
+            assert responses[0].success is False
+            assert responses[0].result == {}
+            assert worker._lifecycle["state"] == "failed"
+            assert worker._lifecycle["_paused_frame"] is None
+            assert worker._target_thread is None
+        finally:
+            with worker._condition:
+                if worker._lifecycle["state"] == "paused":
+                    worker._lifecycle["state"] = "terminating"
+                    worker._condition.notify_all()
+            release.set()
+            if thread is not None:
+                thread.join(timeout=3.0)
+                assert not thread.is_alive()
+
+class TestContinueWorkerCoordination(_TestContinueWorkerCoordinationBase):
     def test_stale_pause_generation_fails_closed(self):
         import threading as _threading
         from agentic_debugger.runtime.pdb_worker import PdbWorker
@@ -4719,3 +5148,250 @@ class TestContinueProcessGlobalRestoration:
                 worker._request_target_termination()
                 thread.join(timeout=3.0)
             shutil.rmtree(str(root), ignore_errors=True)
+
+
+# Task 4C repair: complete response-envelope fitting.
+
+
+def _unbounded_wire_size(response):
+    import json
+    return len((json.dumps(
+        response.to_mapping(), ensure_ascii=False, separators=(",", ":"),
+        sort_keys=True, allow_nan=False,
+    ) + "\n").encode("utf-8"))
+
+
+@pytest.fixture
+def inspection_response_budget_workspace():
+    root = Path(tempfile.mkdtemp())
+    try:
+        stack_names = []
+        stack_lines = []
+        for index in range(64):
+            prefix = f"stack_{index:03d}_"
+            stack_names.append(prefix + "x" * (1500 - len(prefix)))
+        for index, name in enumerate(stack_names):
+            stack_lines.append(f"def {name}():")
+            if index == 63:
+                stack_lines.append("    pause = 1")
+                stack_pause_line = len(stack_lines)
+                stack_lines.append("    return pause")
+            else:
+                stack_lines.append(f"    return {stack_names[index + 1]}()")
+        stack_lines.append(f"{stack_names[0]}()")
+        (root / "long_stack.py").write_text(
+            "\n".join(stack_lines) + "\n", encoding="utf-8"
+        )
+
+        local_names = []
+        local_lines = ["def local_target():"]
+        for index in range(128):
+            prefix = f"local_{index:03d}_"
+            name = prefix + "x" * (512 - len(prefix))
+            local_names.append(name)
+            local_lines.append(f"    {name} = {index}")
+        local_lines.append("    pause = 1")
+        local_pause_line = len(local_lines)
+        local_lines.extend(["    return pause", "local_target()"])
+        (root / "long_locals.py").write_text(
+            "\n".join(local_lines) + "\n", encoding="utf-8"
+        )
+
+        argument_names = []
+        argument_lines = ["def argument_target("]
+        for index in range(128):
+            prefix = f"argument_{index:03d}_"
+            name = prefix + "x" * (512 - len(prefix))
+            argument_names.append(name)
+            argument_lines.append(f"    {name}=0,")
+        argument_lines.extend([
+            "):",
+            "    pause = 1",
+            "    return pause",
+            "argument_target()",
+        ])
+        argument_pause_line = argument_lines.index("    pause = 1") + 1
+        (root / "long_arguments.py").write_text(
+            "\n".join(argument_lines) + "\n", encoding="utf-8"
+        )
+
+        with TaskWorkspace(str(root)) as workspace:
+            yield {
+                "workspace": workspace,
+                "stack_names": stack_names,
+                "stack_pause_line": stack_pause_line,
+                "local_names": sorted(local_names),
+                "local_pause_line": local_pause_line,
+                "argument_names": argument_names,
+                "argument_pause_line": argument_pause_line,
+            }
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+class TestInspectionCompleteResponseBudgetRepair:
+    @staticmethod
+    def _capture_operations(session):
+        captured = []
+        original = session._send_and_receive
+
+        def capture(request, timeout):
+            response = original(request, timeout)
+            captured.append((request, response))
+            return response
+
+        session._send_and_receive = capture
+        return captured
+
+    def test_long_stack_is_trimmed_to_complete_response_budget(
+        self, inspection_response_budget_workspace
+    ):
+        data = inspection_response_budget_workspace
+        session = PdbSession(data["workspace"])
+        session.start()
+        try:
+            session.start_paused_target(
+                "long_stack.py", [data["stack_pause_line"]]
+            )
+            captured = self._capture_operations(session)
+            next_request_id = session._next_request_id
+            pre_frames = []
+            for frame_id, index in enumerate(range(63, -1, -1)):
+                pre_frames.append({
+                    "frame_id": frame_id,
+                    "script": "long_stack.py",
+                    "line": (
+                        data["stack_pause_line"] if index == 63
+                        else index * 2 + 2
+                    ),
+                    "function": data["stack_names"][index],
+                    "is_current": frame_id == 0,
+                })
+            pre_response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=next_request_id,
+                success=True,
+                result={
+                    "state": "paused", "script": "long_stack.py",
+                    "pause_generation": 1, "frames": pre_frames,
+                    "total_frames": 65, "truncated": True,
+                },
+                error="",
+            )
+            assert _unbounded_wire_size(pre_response) > MAX_LINE_LENGTH
+
+            result = session.get_stack_summary()
+            request, response = captured[-1]
+            assert request.operation == "get_stack_summary"
+            repaired_wire = serialize_response(response)
+            assert len(repaired_wire) < MAX_LINE_LENGTH
+            assert result["frames"][0]["frame_id"] == 0
+            assert result["frames"][0]["is_current"] is True
+            assert [frame["frame_id"] for frame in result["frames"]] == list(
+                range(len(result["frames"]))
+            )
+            assert len(result["frames"]) < 64
+            assert result["total_frames"] == 65
+            assert result["truncated"] is True
+            assert session.get_target_status()["state"] == "paused"
+            assert session.ping().success is True
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    def test_long_local_names_are_trimmed_to_complete_response_budget(
+        self, inspection_response_budget_workspace
+    ):
+        data = inspection_response_budget_workspace
+        session = PdbSession(data["workspace"])
+        session.start()
+        try:
+            session.start_paused_target(
+                "long_locals.py", [data["local_pause_line"]]
+            )
+            stack = session.get_stack_summary()
+            generation = stack["pause_generation"]
+            current = stack["frames"][0]
+            captured = self._capture_operations(session)
+            next_request_id = session._next_request_id
+            pre_response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=next_request_id,
+                success=True,
+                result={
+                    "state": "paused", "pause_generation": generation,
+                    "frame": {
+                        **current,
+                        "argument_names": [],
+                        "local_names": data["local_names"],
+                        "locals_count": 128,
+                        "locals_truncated": False,
+                    },
+                },
+                error="",
+            )
+            assert _unbounded_wire_size(pre_response) > MAX_LINE_LENGTH
+
+            result = session.get_frame(0, generation)
+            request, response = captured[-1]
+            assert request.operation == "get_frame"
+            repaired_wire = serialize_response(response)
+            returned_names = result["frame"]["local_names"]
+            assert len(repaired_wire) < MAX_LINE_LENGTH
+            assert returned_names == sorted(returned_names)
+            assert len(returned_names) < 128
+            assert result["frame"]["locals_count"] == 128
+            assert result["frame"]["locals_truncated"] is True
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.get_target_status()["state"] == "paused"
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    def test_argument_only_overflow_is_ordinary_correlated_failure(
+        self, inspection_response_budget_workspace
+    ):
+        data = inspection_response_budget_workspace
+        session = PdbSession(data["workspace"])
+        session.start()
+        try:
+            started = session.start_paused_target(
+                "long_arguments.py", [data["argument_pause_line"]]
+            )
+            stack = session.get_stack_summary()
+            generation = stack["pause_generation"]
+            current = stack["frames"][0]
+            pre_response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=session._next_request_id,
+                success=True,
+                result={
+                    "state": "paused", "pause_generation": generation,
+                    "frame": {
+                        **current,
+                        "argument_names": data["argument_names"],
+                        "local_names": [],
+                        "locals_count": 128,
+                        "locals_truncated": True,
+                    },
+                },
+                error="",
+            )
+            assert _unbounded_wire_size(pre_response) > MAX_LINE_LENGTH
+            captured = self._capture_operations(session)
+
+            with pytest.raises(PdbSessionError, match="argument metadata"):
+                session.get_frame(0, generation)
+            request, response = captured[-1]
+            assert request.operation == "get_frame"
+            assert response.request_id == request.request_id
+            assert response.success is False
+            assert response.result == {}
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+            assert session.get_target_status()["line"] == started["line"]
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
