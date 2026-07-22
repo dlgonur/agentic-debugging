@@ -150,6 +150,7 @@ Rules:
 - [x] 4.6.5 MVP Task 4B2 — Persistent Paused Target Lifecycle Foundation v1 (feature/mvp-pdb-paused-lifecycle-v1, commits 78471cf and 9a921bd)
 - [x] 4.6.6 MVP Task 4B3 — Continue/Resume and Additional Execution Control v1 (feature/mvp-pdb-continue-resume-v1, commit e9032dd)
 - [x] 4.6.7 MVP Task 4C — Stack, Frame and Locals Inspection v1 (feature/mvp-pdb-inspection-v1, commit 24ecc7a)
+- [x] 4.6.8 MVP Task 4D — Safe Evaluation and PDB Integration Hardening v1 (feature/mvp-pdb-safe-evaluation-v1, commit 17a7ebb)
 
 ---
 
@@ -210,18 +211,22 @@ Rules:
 
 Current active item:
 
-- Task 4D — Safe Evaluation and PDB Integration Hardening v1
+- Task 5 — Controller State Machine and Tool Policy v1
 
 Notes:
 
-- The original Task 4 — PDB Session and Runtime Skills v1 is being executed as smaller sequential subtasks because the previous monolithic task exceeded the implementation agent's reliable working scope.
-- Task 4C is complete; Task 4D is the active implementation item.
-- Task 4D must not expose arbitrary `eval`.
-- Task 4D must not expose `exec`.
-- Task 4D must not expose raw or arbitrary PDB commands.
-- Task 4D must preserve the established Task 4A–4C contracts.
-- Controller, patch-generation, and event-stream integration remain out of scope.
-- Tier 3 and supporting-paper reading remain deferred.
+- Task 4A complete.
+- Task 4B complete.
+- Task 4C complete.
+- Task 4D complete.
+- parent Task 4 complete.
+- Task 5 active.
+- Controller will use existing deterministic typed tools.
+- Task 5 covers transitions, action allowlists, budgets, hypothesis lifecycle, PDB gating, deterministic tool registry and mocked model adapter.
+- No real or paid model call in default tests.
+- Task 6 curated fixtures remains later.
+- Task 7 verifier/evaluation remains later.
+- Tier 3/supporting-paper reading remains deferred.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - [x] Task 4B — Breakpoints and Execution Control
@@ -231,7 +236,9 @@ Notes:
       - [x] Task 4B2B — Public PdbSession Paused-Target API and Lifecycle Guards
     - [x] Task 4B3 — Continue/Resume and Additional Execution Control
   - [x] Task 4C — Stack, Frame and Locals Inspection
-  - Task 4D — Safe Evaluation and PDB Integration Hardening
+  - [x] Task 4D — Safe Evaluation and PDB Integration Hardening
+- [x] Task 4 — PDB Session and Runtime Skills
+- Task 5 — Controller State Machine and Tool Policy
 
 ## Last Updated
 

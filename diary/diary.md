@@ -926,3 +926,129 @@ Result-object boyut sınırının tek başına protocol-line sınırını garant
 #### Sonuç / Bir Sonraki Adım
 
 Task 4C tamamlandı. Task 4A ve Task 4B tamamlanmış durumda kalıyor; ancak **Task 4 — PDB Session and Runtime Skills** henüz tamamlanmadı. Bir sonraki tek aktif madde **Task 4D — Safe Evaluation and PDB Integration Hardening v1**. Task 4D arbitrary `eval`, `exec` veya raw/arbitrary PDB commands açmamalı ve Task 4A–4C kontratlarını korumalıdır. Controller, patch-generation ve event-stream integration daha sonraki işler olarak kalıyor.
+
+### Task 4D — Safe Evaluation and PDB Integration Hardening v1
+
+#### Amaç ve Kapsam
+
+Task 4D, daha önce yalnızca salt-okunur inceleme sunan PDB altyapısına güvenli expression evaluation eklemek için geliştirildi. Task 4C stack, frame ve locals inspection'ı sağlamıştı fakat modelin paused frame üzerinde keyfi bir Python ifadesini değerlendirmesine izin vermiyordu. Ham PDB terminali veya `eval`/`exec` ile bu yeteneği eklemek modelin arbitrary bytecode çalıştırmasına yol açar ve güvenli olmazdı.
+
+Bu task'ın amacı, ifadeleri `ast.parse` ile ayrıştırıp private bir AST interpreter ile yorumlayarak güvenli, kısıtlanmış ve test edilmiş bir değerlendirme kanalı oluşturmaktı. Bu kanal frame-local değişkenlere salt-okunur erişim, sınırlı aritmetik, güvenli scalar karşılaştırmalar ve kontrollü container indexleme sağlamalı; buna karşılık arbitrary çağrılar, attribute erişimi, mutation, import, comprehension, lambda ve raw PDB komutlarını engellemeliydi.
+
+Implementation `feature/mvp-pdb-safe-evaluation-v1` branch'inde yürütüldü ve `17a7ebb Add safe PDB expression evaluation` commit'i ile kabul edildi. Altı dosyada 2410 satır ekleme ve 58 satır silme ile altı dosya değişti.
+
+#### Güvenli AST Değerlendiricisi
+
+Task 4D hiçbir yerde Python `eval(...)` veya `exec(...)` kullanmaz. İfadeler `ast.parse(expression, mode="eval")` ile ayrıştırılır ve private bir explicit AST interpreter tarafından yorumlanır. İfadeler compile edilip arbitrary bytecode olarak çalıştırılmaz. Projede önceden kabul edilmiş target-loading yolunda bulunan iki adet `compile(..., "exec")` çağrısı Task 4D tarafından değiştirilmemiştir.
+
+Kesin public metot şudur:
+
+```python
+safe_eval_expression(
+    frame_id: int,
+    pause_generation: int,
+    expression: str,
+) -> Dict[str, object]
+```
+
+Canonical protokol operasyonu `safe_eval_expression` ve exact payload örneği:
+
+```json
+{
+  "frame_id": 0,
+  "pause_generation": 1,
+  "expression": "items[0]"
+}
+```
+
+Alias, arbitrary PDB command veya raw PDB terminal yüzeyi eklenmedi.
+
+Expression giriş kısıtlamaları şunlardır: exact `str`, non-empty, leading/trailing whitespace yok, geçerli UTF-8, ASCII control karakteri yok, U+007F yok, maksimum 1024 UTF-8 byte. AST sınırları: maksimum 64 node, maksimum 12 nesting depth, maksimum 128 evaluator adımı, maksimum 512 UTF-8 byte identifier.
+
+İzin verilen semantikler frame-local name'ler (locals-only), güvenli scalar constant'lar, güvenli intrinsic `len`, exact built-in sequence indexleme (`list`, `tuple`, `str`, `bytes` için integer index, bool hariç, negatif index desteklenir), bounded exact-dict lookup, unary işlemler (`+`, `-`, `~`, `not`), binary arithmetic işlemler (`+`, `-`, `*`, `/`, `//`, `%`), exact-bool `and`, `or`, conditional expression (`x if C else y`), bounded scalar karşılaştırmalar ve identity kontrolüdür (`is`, `is not`). Exact-dict lookup en fazla 256 entry tarar ve güvenli exact scalar key türleri olarak `NoneType`, `bool`, `int`, `float`, `str` ve `bytes` kabul edilir. Boyut sınırları `int` için 4096 bit, `str` için 4096 UTF-8 byte ve `bytes` için 4096 byte'tır.
+
+Reddedilen semantikler: `Attribute`, `Lambda`, `NamedExpr`, comprehensions, generator expression, f-string, slice, container literal, arbitrary call, keyword call, starred call, membership test (`in`, `not in`), power (`**`), shift (`<<`, `>>`) ve binary bitwise işlemlerdir (`&`, `|`, `^`). Unary invert `~` izin verilen ve yalnızca exact `int` operand üzerinde çalışan bir operatördür.
+
+Başarılı top-level result alanları: `state`, `pause_generation`, `frame`, `expression`, `value`. Value summary, Task 4C'deki schema'yı (`kind`, `type`, `value`, `special`, `size`, `items`, `entries`, `truncated`) aynen kullanır. Task 4C'nin scalar, container, depth, item, cycle, preview ve canonical kind/type kuralları değişmemiştir.
+
+Maksimum compact evaluation result 32768 UTF-8 byte, maksimum complete protocol line 65536 byte (envelope ve newline dahil). Oversized ordinary sonuçlar internal serializer hatası açığa çıkarmaz.
+
+#### Locals, Globals ve Module-Scope İzolasyonu
+
+Task 4D'nin kritik güvenlik kararlarından biri name çözümlemesinin yalnızca seçili function frame'inin current locals'ı üzerinden yapılmasıdır. Frame globals, Python builtins, worker globals veya import edilmiş modüller hiçbir şekilde fallback olarak kullanılmaz.
+
+Module frame'leri stack summary'lerde yapısal olarak görünür kalır. Ancak `frame.f_locals is frame.f_globals` koşulunu sağlayan frame'ler module scope olarak kabul edilir ve şu işlemler için ordinary failure üretir: `get_frame`, `get_frame_locals`, `safe_eval_expression`. Bu sayede module globals, `__builtins__`, modül namespace değerleri ve builtin mapping'lerin açığa çıkması engellenir. Module-frame reddi invariant cleanup tetiklemez ve paused target'a zarar vermez. Session-side validation da fabricated başarılı module-frame detail veya evaluation response'larını reddeder.
+
+#### Review ve Repair Süreci
+
+İlk implementation tüm testlerini geçti. Ancak bağımsız adversarial review dört önemli güvenlik açığı buldu:
+
+1. **Frame-local keyed lookup hostile key eşitliği:** `mapping[name]`, `dict.__getitem__(mapping, name)` veya `FrameLocalsProxy.__getitem__(mapping, name)` kullanımı, hostile bir key'in `__eq__` metodunu çalıştırabiliyordu. Bu, marker dosyası oluşturulmasına veya exception sızmasına izin verebilirdi.
+
+2. **Module caller frame'leri globals ve __builtins__ açığa çıkarıyordu:** Module-frame'lerde locals lookup aslında globals'a düştüğü için builtin fonksiyonlar ve import edilmiş modüller erişilebilir durumdaydı.
+
+3. **Finite float aritmetiği başarılı overflow yapabiliyordu:** `1e308 * 1e308` gibi işlemler, non-finite (`inf`) float sonucu ordinary failure yerine başarılı olarak dönebiliyordu.
+
+4. **Dict scalar karşılaştırma bound'ları eksikti:** Stored dict key'lerinin boyut sınırı olmadığı için çok büyük key'ler karşılaştırma sırasında sorun çıkarabiliyordu.
+
+Repair sırasında:
+
+1. **Frame-local keyed lookup kaldırıldı.** Yerine, doğrudan frame-local mapping türünden paired entry'leri tarayan güvenli bir enumeration mekanizması getirildi. Maksimum 4096 entry taranır; yalnızca exact string key'ler dikkate alınır; string subclass'ları, non-string key'ler, geçersiz veya oversized name'ler atlanır; values direkt paired entry'den alınır; ikinci bir keyed lookup yapılmaz. Bu davranış safe evaluation, frame detail ve frame locals serialization'da ortak kullanılır.
+
+2. **Module-frame değer taşıyan işlemler reddedildi.** Module frame'leri için `get_frame`, `get_frame_locals` ve `safe_eval_expression` ordinary failure üretiyor.
+
+3. **Session malformed-success validation sertleştirildi.** Fabricated başarılı module-frame detail veya evaluation response'ları protokol corruption olarak reddediliyor.
+
+4. **Finite-input non-finite aritmetik reddedildi.** Finite numeric operand'lar (`int` veya `float` excluding bool) non-finite float sonucu (`inf`, `-inf`, `nan`) üretemiyor. Örneğin `1e308 * 1e308`, `1e308 + 1e308`, `1e308 / 1e-308` ordinary failure döner. Standalone non-finite float constant'lar ise Task 4C'nin special-float değer özeti üzerinden desteklenmeye devam eder.
+
+5. **Dict key bound'ları eklendi.** Request edilen ve stored scalar key türleri için limitler getirildi: `int` maksimum 4096 bit, `str` maksimum 4096 UTF-8 byte, `bytes` maksimum 4096 byte. Oversized request key'leri scanning öncesinde ordinary failure üretir. Oversized stored key'ler identity/equality karşılaştırması öncesinde atlanır. Daha sonra gelen bounded matching key erişilebilir kalır. Multibyte sınırı doğrulaması: `2048 × "é" = 4096 UTF-8 byte` kabul, `2049 × "é" = 4098 UTF-8 byte` red.
+
+Her repair turu testlerle revalide edildi ve sonuçta kabul edilen güvenlik seviyesine ulaşıldı.
+
+#### Test ve Doğrulama
+
+- Branch: `feature/mvp-pdb-safe-evaluation-v1`
+- Commit: `17a7ebb Add safe PDB expression evaluation`
+- Targeted: **919 passed, 0 failed, 0 skipped, 0 warnings**
+- Full suite: **1373 passed, 0 failed, 2 skipped, 3 warnings**
+- Files changed: **6**
+- Diff: **2410 insertions, 58 deletions**
+- `python -m compileall -q agentic_debugger tests`: passed
+- `git diff --check`: clean
+- Runtime dependencies added: none
+
+İki skip Task 4D tarafından oluşturulmadı:
+
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group` — POSIX-specific process group test.
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded` — Windows, Job Objects olmadan inherited-pipe testleri için gereken POSIX process-group detachment davranışını desteklemiyor.
+
+Üç warning önceden var olan `PytestCollectionWarning` kayıtlarıydı: `TestRunKind`, `TestRunResult`, `TestRunner`. Task 4D bu warning'leri oluşturmadı.
+
+Concurrency doğrulaması şu yarışları kapsadı: evaluation vs continue, evaluation vs terminate, evaluation vs status, evaluation vs stack inspection, evaluation vs evaluation. Her durumda tam olarak bir request session boundary'yi sahiplendi, loser'lar one-in-flight hatası aldı, duplicate response, deadlock veya execution advancement oluşmadı. Thread'ler bounded biçimde join edildi ve synchronization event'leri `finally` içinde serbest bırakıldı.
+
+Hostile object güvenliği şu kategorileri kapsadı: `__repr__`, `__str__`, `__format__`, `__bool__`, `__len__`, `__iter__`, `__next__`, `__getitem__`, `__contains__`, `__eq__`, ordering method'lar, arithmetic method'lar, `__index__`, `__hash__`, instance `__getattribute__`, property'ler, descriptor'lar ve metaclass hook'ları. Bare hostile object'ler yalnızca generic bounded object summary olarak döndü; unsafe işlemler hostile behavior çalışmadan önce başarısız oldu; marker dosyaları oluşmadı ve hostile exception'lar public boundary'yi geçmedi.
+
+Başarılı execution-control integration sequence'leri:
+
+- `start -> paused -> safe evaluation -> continue -> paused`
+- `generation 1 evaluation -> continue -> generation 2 evaluation`
+- `start -> paused -> safe evaluation -> exited`
+- `start -> paused -> safe evaluation -> terminate -> terminated`
+
+Evaluation target execution'ını ilerletmez, generation'ı artırmaz, target thread'i değiştirmez, locals veya referenced container'ları mutate etmez, breakpoint'leri değiştirmez ve başka bir target run tüketmez. Stack, frame ve locals inspection evaluation sonrasında geçerli kalır.
+
+#### Öğrendiklerim
+
+Task 4D'de Python AST interpreter'ı elle yazmanın düşündüğümden daha fazla edge case içerdiğini gördüm. Özellikle her AST node türü için explicit handling, identifier boyut sınırları, nesting depth kontrolü ve evaluator adım counter'ı gibi mekanizmaların birlikte çalışması gerekiyor.
+
+En önemli öğrendiğim şey, Python'un frame locals proxy'sine key'li erişimin (`mapping[name]`) hostile key'lerin `__eq__` metodunu çalıştırabildiği ve bunun güvenli bir değerlendirme kanalı için kabul edilemez olduğuydu. Repair sırasında doğrudan paired-entry enumeration'a geçmek zorunda kaldım. Bu yöntem, üç farklı işlemde (safe evaluation, frame detail, frame locals) ortak kullanıldı.
+
+Module-frame tespitinin, evaluation'dan önce yapılması gereken ayrı bir güvenlik katmanı olduğunu öğrendim. `frame.f_locals is frame.f_globals` kontrolü basit görünse de, module frame'lerinde yapılacak herhangi bir locals erişimi aslında globals ve builtins'i açığa çıkarıyor.
+
+Son olarak, tüm testler geçse bile bağımsız adversarial review'in dört ayrı güvenlik açığını ortaya çıkardığını gördüm. Bu, güvenlik odaklı bir özellikte test coverage'ın tek başına yeterli olmadığını, mutlaka adversarial düşünen bir inceleme süreci gerektiğini gösterdi.
+
+#### Sonuç / Bir Sonraki Adım
+
+Task 4D tamamlandı. Task 4A, Task 4B ve Task 4C tamamlanmış durumda kalıyor. Parent **Task 4 — PDB Session and Runtime Skills** artık tamamlanmıştır. Full proje ve Phase 4 tamamlanmamıştır.
+
+Bir sonraki tek aktif implementation maddesi **Task 5 — Controller State Machine and Tool Policy v1**'dir. Task 5, mevcut deterministik araçları policy ve state transition'ları üzerinden birbirine bağlamalıdır. Default testlerde gerçek ücretli model çağrısı eklememelidir. Curated benchmark fixture'ları Task 6'ya, verifier/evaluation runner ise Task 7'ye bırakılmalıdır.
