@@ -3096,7 +3096,7 @@ def _valid_frame_result():
             "frame_id": 0,
             "script": "test.py",
             "line": 3,
-            "function": "<module>",
+            "function": "inner",
             "is_current": True,
             "argument_names": [],
             "local_names": ["value"],
@@ -4513,3 +4513,780 @@ class TestInspectionKindTypeCoherenceRepair:
             assert session.state == PdbSessionState.FAILED
         finally:
             session.stop()
+
+    def test_stack_summary_accepts_structural_module_frame(
+        self, mock_workspace
+    ):
+        result = _valid_stack_result()
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            assert session.get_stack_summary() == result
+            assert result["frames"][0]["function"] == "<module>"
+            assert session.state == PdbSessionState.READY
+        finally:
+            session.stop()
+
+    def test_module_frame_detail_success_is_protocol_corruption(
+        self, mock_workspace
+    ):
+        result = _valid_frame_result()
+        result["frame"]["function"] = "<module>"
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.get_frame(0, 1)
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+
+# =====================================================================
+# Task 4D - Safe evaluation and PDB integration hardening v1
+# =====================================================================
+
+
+def _valid_safe_eval_result(expression="value", frame_id=0, generation=1):
+    return {
+        "state": "paused",
+        "pause_generation": generation,
+        "frame": {
+            "frame_id": frame_id,
+            "script": "test.py",
+            "line": 3,
+            "function": "inner",
+            "is_current": frame_id == 0,
+        },
+        "expression": expression,
+        "value": _int_summary(),
+    }
+
+
+class TestSafeEvaluationPublicAPI:
+    def test_exact_public_signature_operation_payload_and_result(
+        self, mock_workspace
+    ):
+        import inspect
+        assert list(inspect.signature(
+            PdbSession.safe_eval_expression
+        ).parameters) == [
+            "self", "frame_id", "pause_generation", "expression",
+        ]
+        result = _valid_safe_eval_result("items[0]")
+        session, _, sent = _ready_inspection_session(mock_workspace, result)
+        try:
+            assert session.safe_eval_expression(0, 1, "items[0]") == result
+            assert len(sent) == 1
+            assert sent[0].operation == "safe_eval_expression"
+            assert sent[0].payload == {
+                "frame_id": 0,
+                "pause_generation": 1,
+                "expression": "items[0]",
+            }
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+        finally:
+            session.stop()
+
+    def test_module_frame_success_is_protocol_corruption(
+        self, mock_workspace
+    ):
+        result = _valid_safe_eval_result("1 + 2")
+        result["frame"]["function"] = "<module>"
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.safe_eval_expression(0, 1, "1 + 2")
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        ("frame_id", "generation"),
+        [
+            (True, 1), (-1, 1), ("0", 1),
+            (0, True), (0, 0), (0, -1), (0, "1"),
+        ],
+    )
+    def test_identifier_validation_is_local(
+        self, mock_workspace, frame_id, generation
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_safe_eval_result()
+        )
+        try:
+            with pytest.raises(PdbSessionError):
+                session.safe_eval_expression(frame_id, generation, "value")
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            None, 1, True, "", "   ", " value", "value ",
+            "a\0b", "a\rb", "a\nb", "a\tb", "a\x7fb", "\ud800",
+            "é" * 513,
+        ],
+    )
+    def test_expression_envelope_validation_is_local(
+        self, mock_workspace, expression
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_safe_eval_result()
+        )
+        try:
+            with pytest.raises(PdbSessionError):
+                session.safe_eval_expression(0, 1, expression)
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+        finally:
+            session.stop()
+
+    def test_1024_byte_expression_is_sent_exactly(self, mock_workspace):
+        expression = "x" * 1024
+        result = _valid_safe_eval_result(expression)
+        session, _, sent = _ready_inspection_session(mock_workspace, result)
+        try:
+            assert session.safe_eval_expression(0, 1, expression) == result
+            assert sent[0].payload["expression"] == expression
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "local_state",
+        [
+            "idle", "starting", "continuing", "exited", "failed",
+            "terminated", "unknown",
+        ],
+    )
+    def test_nonpaused_lifecycle_rejects_without_request(
+        self, mock_workspace, local_state
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, _valid_safe_eval_result()
+        )
+        session._target_lifecycle_state = local_state
+        try:
+            with pytest.raises(PdbSessionStateError):
+                session.safe_eval_expression(0, 1, "value")
+            assert sent == []
+            assert session.state == PdbSessionState.READY
+            assert session._target_consumed is True
+            assert session._active_script == "test.py"
+        finally:
+            session.stop()
+
+    def test_operation_failure_is_ordinary_and_preserves_pause(
+        self, mock_workspace
+    ):
+        session, _, sent = _ready_inspection_session(
+            mock_workspace, {}, success=False, error="Unknown local name"
+        )
+        try:
+            with pytest.raises(PdbSessionError, match="Unknown local name"):
+                session.safe_eval_expression(0, 1, "missing")
+            assert len(sent) == 1
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+            assert session._target_consumed is True
+            assert session._active_script == "test.py"
+        finally:
+            session.stop()
+
+
+class TestSafeEvaluationSuccessfulResultValidation:
+    @pytest.mark.parametrize(
+        "result",
+        [
+            {**_valid_safe_eval_result(), "state": "exited"},
+            {**_valid_safe_eval_result(), "pause_generation": 2},
+            {**_valid_safe_eval_result(), "expression": "other"},
+            {**_valid_safe_eval_result(), "unknown": 1},
+            {
+                **_valid_safe_eval_result(),
+                "frame": {
+                    **_valid_safe_eval_result()["frame"], "frame_id": 1,
+                },
+            },
+            {
+                **_valid_safe_eval_result(),
+                "frame": {
+                    **_valid_safe_eval_result()["frame"],
+                    "script": "../test.py",
+                },
+            },
+            {
+                **_valid_safe_eval_result(),
+                "value": {**_int_summary(), "type": "builtins.bool"},
+            },
+            {
+                **_valid_safe_eval_result(),
+                "value": {"kind": "int"},
+            },
+        ],
+    )
+    def test_malformed_success_cleans_session(self, mock_workspace, result):
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises((PdbProtocolError, PdbSessionError)):
+                session.safe_eval_expression(0, 1, "value")
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+    def test_oversized_result_cleans_session(self, mock_workspace):
+        leaf = _summary_for_kind("str")
+        leaf.update({
+            "value": "x" * 2048, "size": 2048, "truncated": False,
+        })
+        inner = _summary_for_kind("list")
+        inner.update({
+            "size": 16, "items": [leaf for _ in range(16)],
+            "truncated": False,
+        })
+        outer = _summary_for_kind("list")
+        outer.update({
+            "size": 16, "items": [inner for _ in range(16)],
+            "truncated": False,
+        })
+        result = {**_valid_safe_eval_result(), "value": outer}
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises(PdbProtocolError, match="32768-byte"):
+                session.safe_eval_expression(0, 1, "value")
+            assert session.state == PdbSessionState.FAILED
+        finally:
+            session.stop()
+
+    def test_oversized_complete_response_cleans_session(
+        self, mock_workspace, monkeypatch
+    ):
+        import agentic_debugger.runtime.pdb_session as session_module
+        leaf = _summary_for_kind("str")
+        leaf.update({
+            "value": "x" * 2048, "size": 2048, "truncated": False,
+        })
+        inner = _summary_for_kind("list")
+        inner.update({
+            "size": 16, "items": [leaf for _ in range(16)],
+            "truncated": False,
+        })
+        outer = _summary_for_kind("list")
+        outer.update({
+            "size": 2, "items": [inner, inner], "truncated": False,
+        })
+        result = {**_valid_safe_eval_result(), "value": outer}
+        response = PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=2,
+            success=True,
+            result=result,
+            error="",
+        )
+        assert _unbounded_response_size(response) > 65536
+        monkeypatch.setattr(
+            session_module, "_MAX_SAFE_EVAL_RESULT_BYTES", 1024 * 1024
+        )
+        session, _, _ = _ready_inspection_session(mock_workspace, result)
+        try:
+            with pytest.raises(PdbProtocolError, match="protocol line limit"):
+                session.safe_eval_expression(0, 1, "value")
+            assert session.state == PdbSessionState.FAILED
+            with pytest.raises(PdbSessionStateError):
+                session.ping()
+        finally:
+            session.stop()
+
+
+class TestSafeExpressionInterpreter:
+    @staticmethod
+    def _evaluate(expression, local_values=None):
+        from agentic_debugger.runtime.pdb_worker import (
+            _parse_safe_expression,
+            _SafeExpressionInterpreter,
+        )
+        mapping = {} if local_values is None else local_values
+        parsed = _parse_safe_expression(expression)
+        return _SafeExpressionInterpreter(mapping).evaluate(parsed)
+
+    @pytest.mark.parametrize(
+        ("expression", "local_values", "expected"),
+        [
+            ("name", {"name": 42}, 42),
+            ("None", {}, None),
+            ("False", {}, False),
+            ("True", {}, True),
+            ("17", {}, 17),
+            ("-17", {}, -17),
+            ("1.5", {}, 1.5),
+            ("1e999", {}, float("inf")),
+            ("'é'", {}, "é"),
+            ("b'abc'", {}, b"abc"),
+            ("len(value)", {"value": [1, 2]}, 2),
+            ("value[0]", {"value": [42]}, 42),
+            ("value[-1]", {"value": (1, 2)}, 2),
+            ("value[1]", {"value": "ab"}, "b"),
+            ("value[0]", {"value": b"a"}, 97),
+            ("value['key']", {"value": {"key": 7}}, 7),
+            ("+value", {"value": 2}, 2),
+            ("~value", {"value": 2}, -3),
+            ("not value", {"value": False}, True),
+            ("2 + 3", {}, 5),
+            ("5 - 3", {}, 2),
+            ("5 * 3", {}, 15),
+            ("5 / 2", {}, 2.5),
+            ("5 // 2", {}, 2),
+            ("5 % 2", {}, 1),
+            ("2 + 0.5", {}, 2.5),
+            ("True and False", {}, False),
+            ("True or missing", {}, True),
+            ("1 == 1", {}, True),
+            ("1.0 != 2", {}, True),
+            ("'a' < 'b'", {}, True),
+            ("b'a' <= b'b'", {}, True),
+            ("1 < 2.0 < 3", {}, True),
+            ("value is None", {"value": object()}, False),
+            ("1 if flag else missing", {"flag": True}, 1),
+        ],
+    )
+    def test_allowed_semantics(self, expression, local_values, expected):
+        result = self._evaluate(expression, local_values)
+        if isinstance(expected, float) and expected == float("inf"):
+            assert result == float("inf")
+        else:
+            assert result == expected
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "obj.attr", "lambda: 1", "(x := 1)",
+            "[x for x in y]", "{x for x in y}",
+            "{x: x for x in y}", "(x for x in y)",
+            "f'{x}'", "value[1:2]", "[1]", "(1, 2)", "{'x': 1}",
+            "set()", "open('x')", "len(value, value)",
+            "len(value=value)", "len(*value)", "2 ** 3", "2 << 1",
+            "2 & 1", "1 in value",
+        ],
+    )
+    def test_structurally_rejected(self, expression):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        with pytest.raises(_SafeEvaluationError):
+            self._evaluate(expression, {"x": 1, "y": [], "value": []})
+
+    @pytest.mark.parametrize(
+        ("expression", "local_values"),
+        [
+            ("missing", {}),
+            ("not value", {"value": object()}),
+            ("value + 1", {"value": object()}),
+            ("value[0]", {"value": object()}),
+            ("len(value)", {"value": object()}),
+            ("value[True]", {"value": [1]}),
+            ("value[2]", {"value": [1]}),
+            ("1 / 0", {}),
+            ("1 % 0", {}),
+            ("1 and True", {}),
+            ("value == None", {"value": object()}),
+            ("value < 1", {"value": object()}),
+            ("1 < '1'", {}),
+            ("1 if 1 else 2", {}),
+            ("'x' + 'y'", {}),
+        ],
+    )
+    def test_unsafe_or_failed_operations_are_bounded(
+        self, expression, local_values
+    ):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        with pytest.raises(_SafeEvaluationError) as caught:
+            self._evaluate(expression, local_values)
+        assert caught.value.args
+        assert len(str(caught.value).encode("utf-8")) <= 4096
+
+    def test_ast_node_depth_identifier_and_arithmetic_bounds(self):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        expressions = [
+            " + ".join(["1"] * 30),
+            "+" * 13 + "1",
+            "x" * 513,
+            f"value * value",
+        ]
+        locals_values = {"value": 1 << 4095}
+        for expression in expressions:
+            with pytest.raises(_SafeEvaluationError):
+                self._evaluate(expression, locals_values)
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "1e308 + 1e308",
+            "1e308 * 1e308",
+            "1e308 / 1e-308",
+            "1e308 // 1e-308",
+            "huge + 1e308",
+        ],
+    )
+    def test_finite_arithmetic_cannot_overflow_to_nonfinite(
+        self, expression
+    ):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        with pytest.raises(_SafeEvaluationError, match="Finite arithmetic"):
+            self._evaluate(expression, {"huge": 1 << 1023})
+
+    def test_nonfinite_constant_and_finite_arithmetic_remain_supported(self):
+        assert self._evaluate("1e999") == float("inf")
+        assert self._evaluate("1e307 + 1e307") == 2e307
+
+    def test_hostile_hooks_are_never_invoked(self):
+        from agentic_debugger.runtime.pdb_worker import (
+            _SafeEvaluationError, _summarize_value,
+        )
+        calls = []
+
+        class Hostile:
+            def __getattribute__(self, name):
+                if name == "__class__":
+                    calls.append(name)
+                return object.__getattribute__(self, name)
+
+            def __repr__(self): calls.append("repr"); raise AssertionError
+            def __str__(self): calls.append("str"); raise AssertionError
+            def __format__(self, spec): calls.append("format"); raise AssertionError
+            def __bool__(self): calls.append("bool"); raise AssertionError
+            def __len__(self): calls.append("len"); raise AssertionError
+            def __getitem__(self, key): calls.append("getitem"); raise AssertionError
+            def __eq__(self, other): calls.append("eq"); raise AssertionError
+            def __lt__(self, other): calls.append("lt"); raise AssertionError
+            def __add__(self, other): calls.append("add"); raise AssertionError
+            def __hash__(self): calls.append("hash"); raise AssertionError
+
+        hostile = Hostile()
+        assert _summarize_value(hostile)["kind"] == "object"
+        assert self._evaluate("obj is None", {"obj": hostile}) is False
+        for expression in ["obj == None", "obj + 1", "obj[0]", "len(obj)"]:
+            with pytest.raises(_SafeEvaluationError):
+                self._evaluate(expression, {"obj": hostile})
+        assert calls == []
+
+    def test_hostile_dictionary_key_is_skipped_without_hooks(self):
+        calls = []
+
+        class HostileKey:
+            def __hash__(self):
+                calls.append("hash")
+                return 1
+
+            def __eq__(self, other):
+                calls.append("eq")
+                return False
+
+        key = HostileKey()
+        mapping = {key: "secret", "safe": 42}
+        calls.clear()
+        assert self._evaluate("mapping['safe']", {"mapping": mapping}) == 42
+        with pytest.raises(Exception) as caught:
+            self._evaluate("mapping['missing']", {"mapping": mapping})
+        assert caught.value.__class__.__name__ == "_SafeEvaluationError"
+        assert calls == []
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            1 << 4095,
+            "\u00e9" * 2048,
+            b"x" * 4096,
+        ],
+    )
+    def test_requested_dictionary_key_boundary_is_accepted(self, key):
+        assert self._evaluate(
+            "mapping[key]", {"mapping": {key: 42}, "key": key}
+        ) == 42
+
+    @pytest.mark.parametrize(
+        "key",
+        [
+            1 << 4096,
+            "\u00e9" * 2049,
+            b"x" * 4097,
+        ],
+    )
+    def test_oversized_requested_dictionary_key_fails_before_scan(self, key):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+
+        with pytest.raises(_SafeEvaluationError, match="safe bounds"):
+            self._evaluate(
+                "mapping[key]", {"mapping": {"safe": 42}, "key": key}
+            )
+
+    def test_oversized_stored_dictionary_keys_are_skipped(self):
+        mapping = {
+            1 << 4096: "oversized-int",
+            "\u00e9" * 2049: "oversized-str",
+            b"x" * 4097: "oversized-bytes",
+            "target": 42,
+        }
+        assert self._evaluate(
+            "mapping[key]", {"mapping": mapping, "key": "target"}
+        ) == 42
+
+    def test_frame_local_collision_never_invokes_hostile_equality(
+        self, tmp_path
+    ):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        marker = tmp_path / "frame-local-collision.txt"
+        calls = []
+
+        class HostileKey:
+            active = False
+
+            def __init__(self, collision_hash):
+                self.collision_hash = collision_hash
+
+            def __hash__(self):
+                return self.collision_hash
+
+            def __eq__(self, other):
+                if self.active:
+                    calls.append(other)
+                    marker.write_text("hostile equality", encoding="utf-8")
+                    raise RuntimeError("hostile equality")
+                return False
+
+        target_key = HostileKey(hash("target"))
+        unknown_key = HostileKey(hash("unknown"))
+        mapping = {
+            target_key: "ignored-target-collision",
+            unknown_key: "ignored-unknown-collision",
+            "target": 42,
+        }
+        HostileKey.active = True
+
+        assert self._evaluate("target", mapping) == 42
+        with pytest.raises(_SafeEvaluationError, match="Unknown local name"):
+            self._evaluate("unknown", mapping)
+        assert calls == []
+        assert not marker.exists()
+
+    def test_frame_local_enumeration_uses_paired_values_and_bound(self):
+        from agentic_debugger.runtime.pdb_worker import (
+            _frame_locals_entries, _frame_locals_lookup,
+        )
+
+        class StringSubclass(str):
+            pass
+
+        mapping = {"safe": 7, StringSubclass("unsafe"): 8, 9: 10}
+        entries, failure = _frame_locals_entries(mapping)
+        assert failure is None
+        assert entries == [("safe", 7)]
+        found, value, failure = _frame_locals_lookup(mapping, "safe")
+        assert (found, value, failure) == (True, 7, None)
+
+        oversized = {f"name_{index:04d}": index for index in range(4097)}
+        entries, failure = _frame_locals_entries(oversized)
+        assert entries is None
+        assert failure == "Frame locals exceed 4096-entry scan limit"
+        found, value, failure = _frame_locals_lookup(
+            oversized, "missing"
+        )
+        assert found is False
+        assert value is None
+        assert failure == "Frame locals exceed 4096-entry scan limit"
+
+    def test_parser_recursion_and_step_overflow_are_bounded(self, monkeypatch):
+        import agentic_debugger.runtime.pdb_worker as worker_module
+        with monkeypatch.context() as context:
+            context.setattr(
+                worker_module.ast, "parse",
+                lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()),
+            )
+            with pytest.raises(
+                worker_module._SafeEvaluationError, match="syntax"
+            ):
+                worker_module._parse_safe_expression("value")
+        with monkeypatch.context() as context:
+            context.setattr(worker_module, "_MAX_EVALUATOR_STEPS", 1)
+            with pytest.raises(
+                worker_module._SafeEvaluationError, match="step"
+            ):
+                self._evaluate("value + 1", {"value": 1})
+
+    def test_exact_builtin_subclasses_are_rejected_without_hooks(self):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        calls = []
+
+        class HostileList(list):
+            def __len__(self): calls.append("len"); raise AssertionError
+            def __getitem__(self, key):
+                calls.append("getitem")
+                raise AssertionError
+
+        value = HostileList([1])
+        for expression in ["len(value)", "value[0]"]:
+            with pytest.raises(_SafeEvaluationError):
+                self._evaluate(expression, {"value": value})
+        assert calls == []
+
+    def test_dictionary_scan_limit_and_unsafe_key(self):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        mapping = {index: index for index in range(257)}
+        with pytest.raises(_SafeEvaluationError, match="256-entry"):
+            self._evaluate("mapping[256]", {"mapping": mapping})
+        assert self._evaluate("mapping[255]", {"mapping": mapping}) == 255
+        with pytest.raises(_SafeEvaluationError, match="key type"):
+            self._evaluate(
+                "mapping[key]", {"mapping": mapping, "key": object()}
+            )
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "0x" + "f" * 1025,
+            repr("é" * 1025),
+            repr(b"x" * 1025),
+            "1j", "...",
+        ],
+    )
+    def test_constant_bounds_and_types(self, expression):
+        from agentic_debugger.runtime.pdb_worker import _SafeEvaluationError
+        with pytest.raises(_SafeEvaluationError):
+            self._evaluate(expression)
+
+
+class TestSafeEvaluationConcurrency:
+    @pytest.mark.parametrize(
+        "loser",
+        [
+            lambda session: session.continue_paused_target(),
+            lambda session: session.terminate_paused_target(),
+            lambda session: session.get_target_status(),
+            lambda session: session.get_stack_summary(),
+            lambda session: session.safe_eval_expression(0, 1, "value"),
+        ],
+    )
+    def test_exactly_one_request_owns_boundary(
+        self, mock_workspace, loser
+    ):
+        result = _valid_safe_eval_result()
+        session, _, sent = _ready_inspection_session(mock_workspace, result)
+        session._request_timeout = 0.1
+        entered = threading.Event()
+        release = threading.Event()
+        winner_outcomes = []
+        loser_outcomes = []
+        response = PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=2,
+            success=True,
+            result=result,
+            error="",
+        )
+
+        def blocking_send(request, timeout):
+            sent.append(request)
+            entered.set()
+            assert release.wait(timeout=2.0)
+            return response
+
+        session._send_and_receive = blocking_send
+
+        def run_winner():
+            try:
+                winner_outcomes.append(
+                    session.safe_eval_expression(0, 1, "value")
+                )
+            except Exception as exc:
+                winner_outcomes.append(exc)
+
+        def run_loser():
+            try:
+                loser_outcomes.append(loser(session))
+            except Exception as exc:
+                loser_outcomes.append(exc)
+
+        winner_thread = threading.Thread(target=run_winner)
+        loser_thread = threading.Thread(target=run_loser)
+        winner_thread.start()
+        try:
+            assert entered.wait(timeout=2.0)
+            loser_thread.start()
+            loser_thread.join(timeout=2.0)
+            assert not loser_thread.is_alive()
+            assert len(loser_outcomes) == 1
+            assert isinstance(loser_outcomes[0], PdbSessionError)
+            assert len(sent) == 1
+            assert sent[0].operation == "safe_eval_expression"
+        finally:
+            release.set()
+            winner_thread.join(timeout=2.0)
+            if loser_thread.ident is not None:
+                loser_thread.join(timeout=2.0)
+            assert not winner_thread.is_alive()
+            assert not loser_thread.is_alive()
+            session.stop()
+        assert winner_outcomes == [result]
+        assert session._target_lifecycle_state == "paused"
+
+
+def test_safe_evaluation_status_recovery_from_unknown(mock_workspace):
+    eval_result = _valid_safe_eval_result()
+    session, _, sent = _ready_inspection_session(mock_workspace, eval_result)
+    session._target_lifecycle_state = "unknown"
+    responses = [
+        PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=2,
+            success=True,
+            result={
+                "state": "paused", "script": "test.py",
+                "line": 3, "function": "<module>",
+            },
+            error="",
+        ),
+        PdbResponse(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=3,
+            success=True,
+            result=eval_result,
+            error="",
+        ),
+    ]
+
+    def send(request, timeout):
+        sent.append(request)
+        return responses.pop(0)
+
+    session._send_and_receive = send
+    try:
+        with pytest.raises(PdbSessionStateError):
+            session.safe_eval_expression(0, 1, "value")
+        assert sent == []
+        assert session.get_target_status()["state"] == "paused"
+        assert session.safe_eval_expression(0, 1, "value") == eval_result
+        assert [request.operation for request in sent] == [
+            "get_target_status", "safe_eval_expression",
+        ]
+    finally:
+        session.stop()
+
+
+def test_safe_expression_ast_is_collectable():
+    import gc
+    import weakref
+    from agentic_debugger.runtime.pdb_worker import (
+        _parse_safe_expression, _SafeExpressionInterpreter,
+    )
+    parsed = _parse_safe_expression("value + 1")
+    reference = weakref.ref(parsed)
+    assert _SafeExpressionInterpreter({"value": 1}).evaluate(parsed) == 2
+    parsed = None
+    gc.collect()
+    assert reference() is None

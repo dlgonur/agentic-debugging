@@ -164,6 +164,613 @@ class TestPdbSessionIntegration:
         finally:
             session.stop()
 
+
+# =====================================================================
+# Task 4D - Safe evaluation and PDB integration hardening v1
+# =====================================================================
+
+
+@pytest.fixture
+def safe_eval_workspace():
+    root = Path(tempfile.mkdtemp())
+    marker = root / "hostile-marker.txt"
+    lines = [
+        "import pathlib",
+        "import math",
+        "GLOBAL_ONLY = 9001",
+        "IMPORTED_GLOBAL = math",
+        "MARKER = pathlib.Path(__import__('sys').argv[1])",
+        "def hit(name):",
+        "    MARKER.write_text(name, encoding='utf-8')",
+        "    raise AssertionError(name)",
+        "class HostileMeta(type):",
+        "    def __getattribute__(cls, name): hit('meta')",
+        "class Descriptor:",
+        "    def __get__(self, instance, owner): hit('descriptor')",
+        "class Hostile(metaclass=HostileMeta):",
+        "    descriptor = Descriptor()",
+        "    @property",
+        "    def attr(self): hit('property')",
+        "    def __getattribute__(self, name): hit('getattribute')",
+        "    def __repr__(self): hit('repr')",
+        "    def __str__(self): hit('str')",
+        "    def __format__(self, spec): hit('format')",
+        "    def __bool__(self): hit('bool')",
+        "    def __len__(self): hit('len')",
+        "    def __iter__(self): hit('iter')",
+        "    def __next__(self): hit('next')",
+        "    def __getitem__(self, key): hit('getitem')",
+        "    def __contains__(self, value): hit('contains')",
+        "    def __eq__(self, other): hit('eq')",
+        "    def __lt__(self, other): hit('lt')",
+        "    def __le__(self, other): hit('le')",
+        "    def __gt__(self, other): hit('gt')",
+        "    def __ge__(self, other): hit('ge')",
+        "    def __add__(self, other): hit('add')",
+        "    def __sub__(self, other): hit('sub')",
+        "    def __mul__(self, other): hit('mul')",
+        "    def __truediv__(self, other): hit('truediv')",
+        "    def __floordiv__(self, other): hit('floordiv')",
+        "    def __mod__(self, other): hit('mod')",
+        "    def __index__(self): hit('index')",
+        "    def __hash__(self): hit('hash')",
+        "class HostileKey:",
+        "    def __hash__(self):",
+        "        MARKER.write_text('key-hash', encoding='utf-8')",
+        "        return 17",
+        "    def __eq__(self, other): hit('key-eq')",
+        "def outer():",
+        "    caller_value = 77",
+        "    def inner():",
+        "        items = [42, 43]",
+        "        text = 'hello'",
+        "        exact_dict = {'safe': 88, 3: 99}",
+        "        obj = Hostile()",
+        "        hostile_key = HostileKey()",
+        "        hostile_dict = {hostile_key: 'secret', 'safe': 123}",
+        "        huge = 1 << 4095",
+        "        bounded_int_key = 1 << 4095",
+        "        oversized_int_key = 1 << 4096",
+        "        bounded_text_key = '\u00e9' * 2048",
+        "        oversized_text_key = '\u00e9' * 2049",
+        "        bounded_bytes_key = b'x' * 4096",
+        "        oversized_bytes_key = b'x' * 4097",
+        "        bounded_key_dict = {bounded_int_key: 11, "
+        "bounded_text_key: 12, bounded_bytes_key: 13}",
+        "        oversized_stored_dict = {oversized_int_key: 1, "
+        "oversized_text_key: 2, oversized_bytes_key: 3, 'target': 14}",
+        "        large_float = 1e308",
+        "        tiny_float = 1e-308",
+        "        budget_value = ['x' * 2048 for _ in range(16)]",
+        "        len = 'shadowed-local'",
+        "        if MARKER.exists(): MARKER.unlink()",
+        "        pause_one = items[0]",
+        "        between = items[1]",
+        "        pause_two = between",
+        "        return pause_one + pause_two",
+        "    return inner()",
+        "outer()",
+    ]
+    first_line = lines.index("        pause_one = items[0]") + 1
+    second_line = lines.index("        pause_two = between") + 1
+    (root / "safe_eval_target.py").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    try:
+        with TaskWorkspace(str(root)) as workspace:
+            yield workspace, marker, first_line, second_line
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+@pytest.fixture
+def frame_local_collision_workspace():
+    root = Path(tempfile.mkdtemp())
+    marker = root / "frame-local-collision.txt"
+    lines = [
+        "import pathlib",
+        "import sys",
+        "MARKER = pathlib.Path(sys.argv[1])",
+        "class HostileKey:",
+        "    active = False",
+        "    def __init__(self, collision_hash):",
+        "        self.collision_hash = collision_hash",
+        "    def __hash__(self):",
+        "        return self.collision_hash",
+        "    def __eq__(self, other):",
+        "        if self.active:",
+        "            MARKER.write_text('hostile equality', encoding='utf-8')",
+        "            raise RuntimeError('hostile equality')",
+        "        return False",
+        "def target_function():",
+        "    target = 42",
+        "    frame = sys._getframe()",
+        "    local_mapping = frame.f_locals",
+        "    unknown_key = HostileKey(hash('unknown_collision'))",
+        "    extra_key = HostileKey(hash('extra_local'))",
+        "    local_mapping[unknown_key] = 'ignored unknown collision'",
+        "    local_mapping[extra_key] = 'ignored exact collision'",
+        "    local_mapping['extra_local'] = 73",
+        "    HostileKey.active = True",
+        "    pause = target",
+        "    return pause",
+        "target_function()",
+    ]
+    pause_line = lines.index("    pause = target") + 1
+    (root / "frame_local_collision.py").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    try:
+        with TaskWorkspace(str(root)) as workspace:
+            yield workspace, marker, pause_line
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+class TestFrameLocalCollisionIntegration:
+    def test_eval_and_locals_never_reenter_mapping_by_key(
+        self, frame_local_collision_workspace
+    ):
+        workspace, marker, pause_line = frame_local_collision_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            session.start_paused_target(
+                "frame_local_collision.py", [pause_line], [str(marker)]
+            )
+            generation = session.get_stack_summary()["pause_generation"]
+            assert session.safe_eval_expression(
+                0, generation, "target"
+            )["value"]["value"] == 42
+            with pytest.raises(PdbSessionError, match="Unknown local name"):
+                session.safe_eval_expression(
+                    0, generation, "unknown_collision"
+                )
+            assert not marker.exists()
+
+            frame = session.get_frame(0, generation)["frame"]
+            assert "extra_local" in frame["local_names"]
+            locals_result = session.get_frame_locals(0, generation)
+            values = {
+                entry["name"]: entry["value"]
+                for entry in locals_result["locals"]
+            }
+            assert values["target"]["value"] == 42
+            assert values["extra_local"]["value"] == 73
+            assert not marker.exists()
+            assert session.get_target_status()["state"] == "paused"
+            assert session.ping().success is True
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+
+@pytest.fixture
+def module_scope_eval_workspace():
+    root = Path(tempfile.mkdtemp())
+    lines = [
+        "import math",
+        "module_value = 42",
+        "pause = module_value",
+        "after = pause + 1",
+    ]
+    pause_line = lines.index("pause = module_value") + 1
+    (root / "module_scope.py").write_text(
+        "\n".join(lines) + "\n", encoding="utf-8"
+    )
+    try:
+        with TaskWorkspace(str(root)) as workspace:
+            yield workspace, pause_line
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+
+
+class TestModuleScopeSafeEvaluationIsolation:
+    def test_current_module_frame_rejects_all_value_bearing_operations(
+        self, module_scope_eval_workspace
+    ):
+        workspace, pause_line = module_scope_eval_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            session.start_paused_target("module_scope.py", [pause_line])
+            stack = session.get_stack_summary()
+            generation = stack["pause_generation"]
+            assert stack["frames"][0]["function"] == "<module>"
+            assert session.get_target_status()["state"] == "paused"
+            with pytest.raises(PdbSessionError, match="Module-scope"):
+                session.get_frame(0, generation)
+            with pytest.raises(PdbSessionError, match="Module-scope"):
+                session.get_frame_locals(0, generation)
+            for expression in [
+                "module_value", "math", "open", "len", "1 + 2", "len('abc')",
+            ]:
+                with pytest.raises(PdbSessionError, match="Module-scope"):
+                    session.safe_eval_expression(0, generation, expression)
+            status = session.get_target_status()
+            assert status["state"] == "paused"
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            assert session.continue_paused_target()["state"] == "exited"
+        finally:
+            session.stop()
+
+    def test_current_module_frame_failure_preserves_termination(
+        self, module_scope_eval_workspace
+    ):
+        workspace, pause_line = module_scope_eval_workspace
+        session = PdbSession(workspace)
+        session.start()
+        try:
+            session.start_paused_target("module_scope.py", [pause_line])
+            generation = session.get_stack_summary()["pause_generation"]
+            with pytest.raises(PdbSessionError, match="Module-scope"):
+                session.safe_eval_expression(0, generation, "1 + 2")
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+
+class TestSafeEvaluationIntegration:
+    @staticmethod
+    def _start(data, breakpoints=None):
+        workspace, marker, first_line, second_line = data
+        session = PdbSession(workspace)
+        session.start()
+        selected = [first_line, second_line] if breakpoints is None else breakpoints
+        started = session.start_paused_target(
+            "safe_eval_target.py", selected, [str(marker)]
+        )
+        assert started["state"] == "paused"
+        return session
+
+    def test_locals_only_intrinsic_len_and_success_schema(
+        self, safe_eval_workspace
+    ):
+        session = self._start(safe_eval_workspace)
+        try:
+            stack = session.get_stack_summary()
+            generation = stack["pause_generation"]
+            result = session.safe_eval_expression(0, generation, "items[0]")
+            assert set(result) == {
+                "state", "pause_generation", "frame", "expression", "value",
+            }
+            assert result["state"] == "paused"
+            assert result["pause_generation"] == generation
+            assert result["frame"] == stack["frames"][0]
+            assert result["expression"] == "items[0]"
+            assert result["value"] == {
+                "kind": "int", "type": "builtins.int", "value": 42,
+                "special": None, "size": 6, "items": [], "entries": [],
+                "truncated": False,
+            }
+            assert session.safe_eval_expression(
+                1, generation, "caller_value"
+            )["value"]["value"] == 77
+            assert session.safe_eval_expression(
+                0, generation, "len"
+            )["value"]["value"] == "shadowed-local"
+            assert session.safe_eval_expression(
+                0, generation, "len(items)"
+            )["value"]["value"] == 2
+            assert session.safe_eval_expression(
+                0, generation, "exact_dict['safe']"
+            )["value"]["value"] == 88
+            assert session.get_target_status()["line"] == result["frame"]["line"]
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.get_frame(0, generation)["frame"]["frame_id"] == 0
+            assert session.get_frame_locals(0, generation)["frame_id"] == 0
+            module_frames = [
+                frame for frame in stack["frames"]
+                if frame["function"] == "<module>"
+            ]
+            assert len(module_frames) == 1
+            module_frame_id = module_frames[0]["frame_id"]
+            assert module_frame_id == 2
+            assert session.get_frame(0, generation)["frame"]["function"] == "inner"
+            assert session.get_frame(1, generation)["frame"]["function"] == "outer"
+            assert session.safe_eval_expression(
+                0, generation, "items[0]"
+            )["value"]["value"] == 42
+            assert session.safe_eval_expression(
+                1, generation, "caller_value"
+            )["value"]["value"] == 77
+            with pytest.raises(PdbSessionError, match="Module-scope"):
+                session.get_frame(module_frame_id, generation)
+            with pytest.raises(PdbSessionError, match="Module-scope"):
+                session.get_frame_locals(module_frame_id, generation)
+            for expression in [
+                "GLOBAL_ONLY", "IMPORTED_GLOBAL", "__builtins__",
+                "1 + 2", "len('abc')",
+            ]:
+                with pytest.raises(PdbSessionError, match="Module-scope"):
+                    session.safe_eval_expression(
+                        module_frame_id, generation, expression
+                    )
+            assert session.get_frame_locals(
+                0, generation
+            )["frame_id"] == 0
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            continued = session.continue_paused_target()
+            assert continued["state"] == "paused"
+            assert (
+                session.get_stack_summary()["pause_generation"]
+                == generation + 1
+            )
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        ("expression", "expected"),
+        [
+            ("bounded_key_dict[bounded_int_key]", 11),
+            ("bounded_key_dict[bounded_text_key]", 12),
+            ("bounded_key_dict[bounded_bytes_key]", 13),
+            ("oversized_stored_dict['target']", 14),
+        ],
+    )
+    def test_bounded_and_skipped_stored_dict_keys(
+        self, safe_eval_workspace, expression, expected
+    ):
+        session = self._start(safe_eval_workspace)
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            result = session.safe_eval_expression(0, generation, expression)
+            assert result["value"]["value"] == expected
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "bounded_key_dict[oversized_int_key]",
+            "bounded_key_dict[oversized_text_key]",
+            "bounded_key_dict[oversized_bytes_key]",
+        ],
+    )
+    def test_oversized_requested_dict_key_failure_is_recoverable(
+        self, safe_eval_workspace, expression
+    ):
+        session = self._start(safe_eval_workspace)
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            with pytest.raises(PdbSessionError, match="safe bounds"):
+                session.safe_eval_expression(0, generation, expression)
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            assert session.safe_eval_expression(
+                0, generation, "exact_dict['safe']"
+            )["value"]["value"] == 88
+            continued = session.continue_paused_target()
+            assert continued["state"] == "paused"
+            assert (
+                session.get_stack_summary()["pause_generation"]
+                == generation + 1
+            )
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "large_float + large_float",
+            "large_float * large_float",
+            "large_float / tiny_float",
+            "large_float // tiny_float",
+        ],
+    )
+    def test_finite_float_overflow_is_ordinary_and_recoverable(
+        self, safe_eval_workspace, expression
+    ):
+        session = self._start(safe_eval_workspace)
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            with pytest.raises(PdbSessionError, match="Finite arithmetic"):
+                session.safe_eval_expression(0, generation, expression)
+            assert session.get_target_status()["state"] == "paused"
+            assert session.safe_eval_expression(
+                0, generation, "large_float / 10.0"
+            )["value"]["value"] == 1e307
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    @pytest.mark.parametrize(
+        "expression",
+        [
+            "GLOBAL_ONLY", "IMPORTED_GLOBAL", "open", "eval", "exec",
+            "__import__('os')", "open('x')", "eval('1')", "exec('x')",
+            "IMPORTED_GLOBAL.pi", "obj.attr", "lambda: 1", "[x for x in items]",
+            "items[0:1]", "items + items", "obj == None", "obj + 1",
+            "obj[0]", "len(obj)", "missing", "1 / 0", "huge * huge",
+            " + ".join(["1"] * 30), "+" * 13 + "1",
+        ],
+    )
+    def test_ordinary_failures_preserve_pause_and_worker(
+        self, safe_eval_workspace, expression
+    ):
+        session = self._start(safe_eval_workspace)
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            with pytest.raises(PdbSessionError):
+                session.safe_eval_expression(0, generation, expression)
+            assert session.state == PdbSessionState.READY
+            assert session._target_lifecycle_state == "paused"
+            assert session.get_target_status()["state"] == "paused"
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.ping().success is True
+            assert session.safe_eval_expression(
+                0, generation, "items[-1]"
+            )["value"]["value"] == 43
+        finally:
+            session.stop()
+
+    def test_hostile_object_and_dict_key_have_no_side_effects(
+        self, safe_eval_workspace
+    ):
+        session = self._start(safe_eval_workspace)
+        marker = safe_eval_workspace[1]
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            bare = session.safe_eval_expression(0, generation, "obj")
+            assert bare["value"]["kind"] == "object"
+            assert session.safe_eval_expression(
+                0, generation, "obj is None"
+            )["value"]["value"] is False
+            assert session.safe_eval_expression(
+                0, generation, "hostile_dict['safe']"
+            )["value"]["value"] == 123
+            for expression in [
+                "obj == None", "obj + 1", "obj[0]", "len(obj)",
+                "obj.attr", "hostile_dict['missing']",
+            ]:
+                with pytest.raises(PdbSessionError):
+                    session.safe_eval_expression(0, generation, expression)
+            assert not marker.exists()
+            assert session.ping().success is True
+        finally:
+            session.stop()
+
+    def test_generation_staleness_then_new_generation_and_termination(
+        self, safe_eval_workspace
+    ):
+        session = self._start(safe_eval_workspace)
+        try:
+            generation_one = session.get_stack_summary()["pause_generation"]
+            assert session.safe_eval_expression(
+                0, generation_one, "items[0]"
+            )["value"]["value"] == 42
+            continued = session.continue_paused_target()
+            assert continued["state"] == "paused"
+            generation_two = session.get_stack_summary()["pause_generation"]
+            assert generation_two > generation_one
+            with pytest.raises(PdbSessionError, match="generation"):
+                session.safe_eval_expression(0, generation_one, "items[0]")
+            with pytest.raises(PdbSessionError, match="frame_id"):
+                session.safe_eval_expression(99, generation_two, "items[0]")
+            assert session.safe_eval_expression(
+                0, generation_two, "items[1]"
+            )["value"]["value"] == 43
+            assert session.terminate_paused_target()["state"] == "terminated"
+            sent = []
+            session._send_and_receive = lambda request, timeout: sent.append(request)
+            with pytest.raises(PdbSessionStateError):
+                session.safe_eval_expression(0, generation_two, "items[0]")
+            assert sent == []
+        finally:
+            session.stop()
+
+    def test_evaluation_does_not_mutate_and_continue_exits(
+        self, safe_eval_workspace
+    ):
+        first_line = safe_eval_workspace[2]
+        session = self._start(safe_eval_workspace, [first_line])
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            before = session.safe_eval_expression(0, generation, "items")["value"]
+            assert session.safe_eval_expression(
+                0, generation, "items[0] + items[1]"
+            )["value"]["value"] == 85
+            after = session.safe_eval_expression(0, generation, "items")["value"]
+            assert after == before
+            assert session.get_stack_summary()["pause_generation"] == generation
+            assert session.continue_paused_target() == {
+                "state": "exited", "script": "safe_eval_target.py",
+                "exit_code": 0,
+            }
+            with pytest.raises(PdbSessionStateError):
+                session.safe_eval_expression(0, generation, "items[0]")
+        finally:
+            session.stop()
+
+    def test_result_budget_failure_is_ordinary(self, safe_eval_workspace):
+        session = self._start(safe_eval_workspace)
+        try:
+            generation = session.get_stack_summary()["pause_generation"]
+            with pytest.raises(PdbSessionError, match="32768-byte"):
+                session.safe_eval_expression(0, generation, "budget_value")
+            assert session.get_target_status()["state"] == "paused"
+            assert session.safe_eval_expression(
+                0, generation, "items[0]"
+            )["value"]["value"] == 42
+            assert session.terminate_paused_target()["state"] == "terminated"
+        finally:
+            session.stop()
+
+    def test_stop_and_context_manager_cleanup_after_evaluation(
+        self, safe_eval_workspace
+    ):
+        workspace, marker, first_line, _ = safe_eval_workspace
+        with PdbSession(workspace) as session:
+            session.start_paused_target(
+                "safe_eval_target.py", [first_line], [str(marker)]
+            )
+            generation = session.get_stack_summary()["pause_generation"]
+            assert session.safe_eval_expression(
+                0, generation, "items[0]"
+            )["value"]["value"] == 42
+        assert session.state == PdbSessionState.STOPPED
+        assert session._proc is None
+
+
+class TestSafeEvaluationRawProtocol:
+    def test_payload_validation_aliases_and_utf8_boundary(
+        self, safe_eval_workspace
+    ):
+        session = TestSafeEvaluationIntegration._start(safe_eval_workspace)
+        try:
+            invalid_payloads = [
+                {"pause_generation": 1, "expression": "items[0]"},
+                {"frame_id": 0, "expression": "items[0]"},
+                {"frame_id": 0, "pause_generation": 1},
+                {"frame_id": 0, "pause_generation": 1,
+                 "expression": "items[0]", "extra": 1},
+                {"frame_id": True, "pause_generation": 1,
+                 "expression": "items[0]"},
+                {"frame_id": -1, "pause_generation": 1,
+                 "expression": "items[0]"},
+                {"frame_id": 0, "pause_generation": True,
+                 "expression": "items[0]"},
+                {"frame_id": 0, "pause_generation": 0,
+                 "expression": "items[0]"},
+                {"frame_id": 0, "pause_generation": 1, "expression": ""},
+                {"frame_id": 0, "pause_generation": 1, "expression": " x"},
+                {"frame_id": 0, "pause_generation": 1, "expression": "x\n"},
+                {"frame_id": 0, "pause_generation": 1,
+                 "expression": "x" * 1025},
+            ]
+            for offset, payload in enumerate(invalid_payloads):
+                response = _raw_op(
+                    session, 7000 + offset, "safe_eval_expression", payload
+                )
+                assert response.success is False
+                assert response.result == {}
+                assert response.error
+            boundary = _raw_op(session, 7100, "safe_eval_expression", {
+                "frame_id": 0, "pause_generation": 1,
+                "expression": "x" * 1024,
+            })
+            assert boundary.success is False
+            assert "Identifier" in boundary.error
+            for offset, alias in enumerate(
+                    ["eval", "evaluate", "safe_eval", "pdb_eval"]):
+                response = _raw_op(session, 7200 + offset, alias, {})
+                assert response.success is False
+                assert response.result == {}
+                assert "Unsupported operation" in response.error
+            assert session.get_target_status()["state"] == "paused"
+            assert session.ping().success is True
+        finally:
+            session.stop()
+
     def test_worker_is_alive_after_start(self, workspace):
         session = PdbSession(workspace)
         session.start()
@@ -4919,6 +5526,90 @@ class TestInspectionWorkerInvariant:
             if thread is not None:
                 thread.join(timeout=3.0)
                 assert not thread.is_alive()
+
+class TestSafeEvaluationWorkerInvariant:
+    @pytest.mark.parametrize(
+        "condition",
+        [
+            "missing_thread", "dead_thread", "missing_frame",
+            "invalid_generation", "outside_workspace", "cannot_canonicalize",
+        ],
+    )
+    def test_false_paused_state_fails_once_and_cleans(self, condition):
+        import threading
+        from agentic_debugger.runtime.pdb_worker import PdbWorker
+
+        worker = PdbWorker()
+        responses = []
+        worker._send_response = responses.append
+        worker._workspace_root_real = os.path.realpath(os.getcwd())
+        worker._lifecycle.update({
+            "state": "paused",
+            "script": "tests/integration/test_pdb_session_integration.py",
+            "pause_generation": 1,
+            "_paused_frame": sys._getframe(),
+        })
+        release = threading.Event()
+        target_thread = None
+        if condition == "dead_thread":
+            target_thread = threading.Thread(target=lambda: None)
+            target_thread.start()
+            target_thread.join(timeout=2.0)
+            assert not target_thread.is_alive()
+        elif condition != "missing_thread":
+            def paused_owner():
+                try:
+                    with worker._condition:
+                        while worker._lifecycle["state"] == "paused":
+                            worker._condition.wait()
+                finally:
+                    release.set()
+
+            target_thread = threading.Thread(target=paused_owner, daemon=True)
+            target_thread.start()
+            assert target_thread.is_alive()
+        worker._target_thread = target_thread
+        if condition == "missing_frame":
+            worker._lifecycle["_paused_frame"] = None
+        elif condition == "invalid_generation":
+            worker._lifecycle["pause_generation"] = 0
+        elif condition == "outside_workspace":
+            worker._workspace_root_real = os.path.realpath(tempfile.gettempdir())
+        elif condition == "cannot_canonicalize":
+            worker._canonical_workspace_frame_script = lambda frame: None
+
+        try:
+            worker._handle_safe_eval_expression(PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=7300,
+                operation="safe_eval_expression",
+                payload={
+                    "frame_id": 0,
+                    "pause_generation": 1,
+                    "expression": "value",
+                },
+            ))
+            assert len(responses) == 1
+            response = responses[0]
+            assert response.request_id == 7300
+            assert response.success is False
+            assert response.result == {}
+            assert response.error
+            assert worker._lifecycle["state"] == "failed"
+            assert worker._lifecycle["_paused_frame"] is None
+            assert worker._target_thread is None
+            assert worker._running is True
+            assert worker._unsafe is False
+        finally:
+            with worker._condition:
+                if worker._lifecycle["state"] == "paused":
+                    worker._lifecycle["state"] = "terminating"
+                    worker._condition.notify_all()
+            release.set()
+            if target_thread is not None:
+                target_thread.join(timeout=3.0)
+                assert not target_thread.is_alive()
+
 
 class TestContinueWorkerCoordination(_TestContinueWorkerCoordinationBase):
     def test_stale_pause_generation_fails_closed(self):

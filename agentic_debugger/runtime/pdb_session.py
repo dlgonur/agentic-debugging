@@ -72,6 +72,8 @@ _MAX_STRING_PREVIEW_UTF8 = 2048
 _MAX_BYTES_PREVIEW = 1024
 _MAX_SERIALIZED_INT_BITS = 4096
 _MAX_LOCALS_RESULT_BYTES = 32768
+_MAX_SAFE_EVAL_RESULT_BYTES = 32768
+_MAX_EXPRESSION_UTF8 = 1024
 
 _PAUSED_RESULT_FIELDS = frozenset({"state", "script", "line", "function"})
 _EXITED_RESULT_FIELDS = frozenset({"state", "script", "exit_code"})
@@ -96,6 +98,9 @@ _FRAME_DETAIL_FIELDS = frozenset({
 _LOCALS_RESULT_FIELDS = frozenset({
     "state", "pause_generation", "frame_id", "locals", "total_count",
     "truncated",
+})
+_SAFE_EVAL_RESULT_FIELDS = frozenset({
+    "state", "pause_generation", "frame", "expression", "value",
 })
 _LOCAL_ENTRY_FIELDS = frozenset({"name", "value"})
 _VALUE_SUMMARY_FIELDS = frozenset({
@@ -938,6 +943,64 @@ class PdbSession:
             generation_val,
         )
 
+    def safe_eval_expression(
+        self,
+        frame_id: int,
+        pause_generation: int,
+        expression: str,
+    ) -> Dict[str, object]:
+        frame_id_val, generation_val = self._validate_safe_eval_identifiers(
+            frame_id, pause_generation
+        )
+        expression_val = self._validate_safe_eval_expression_input(expression)
+        return self._perform_inspection(
+            "safe_eval_expression",
+            {
+                "frame_id": frame_id_val,
+                "pause_generation": generation_val,
+                "expression": expression_val,
+            },
+            frame_id_val,
+            generation_val,
+        )
+
+    @staticmethod
+    def _validate_safe_eval_identifiers(
+        frame_id: Any, pause_generation: Any
+    ) -> Tuple[int, int]:
+        if type(frame_id) is not int:
+            raise PdbSessionError("frame_id must be an integer")
+        if frame_id < 0:
+            raise PdbSessionError("frame_id must be non-negative")
+        if type(pause_generation) is not int:
+            raise PdbSessionError("pause_generation must be an integer")
+        if pause_generation <= 0:
+            raise PdbSessionError("pause_generation must be positive")
+        return frame_id, pause_generation
+
+    @staticmethod
+    def _validate_safe_eval_expression_input(expression: Any) -> str:
+        if type(expression) is not str:
+            raise PdbSessionError("expression must be a string")
+        if not expression:
+            raise PdbSessionError("expression must be non-empty")
+        if expression != expression.strip():
+            raise PdbSessionError(
+                "expression must not have surrounding whitespace"
+            )
+        if any(ord(character) <= 0x1f or ord(character) == 0x7f
+               for character in expression):
+            raise PdbSessionError(
+                "expression contains a prohibited control character"
+            )
+        try:
+            encoded = expression.encode('utf-8')
+        except UnicodeEncodeError as e:
+            raise PdbSessionError("expression must be valid UTF-8") from e
+        if len(encoded) > _MAX_EXPRESSION_UTF8:
+            raise PdbSessionError("expression exceeds 1024 UTF-8 bytes")
+        return expression
+
     @staticmethod
     def _validate_inspection_identifiers(
         frame_id: Any, pause_generation: Any
@@ -1021,6 +1084,14 @@ class PdbSession:
                         response.result,
                         requested_frame_id,
                         requested_generation,
+                    )
+                elif operation == "safe_eval_expression":
+                    self._validate_safe_eval_result(
+                        response.result,
+                        requested_frame_id,
+                        requested_generation,
+                        payload['expression'],
+                        active_script,
                     )
                 else:
                     raise PdbProtocolError(
@@ -1747,6 +1818,10 @@ class PdbSession:
         self._validate_frame_summary_mapping(
             summary, requested_frame_id, "get_frame frame"
         )
+        if frame['function'] == '<module>':
+            raise PdbProtocolError(
+                "get_frame successful result must not expose a module frame"
+            )
         if requested_frame_id == 0 and frame['script'] != active_script:
             raise PdbProtocolError(
                 "get_frame current frame script does not match active target"
@@ -2010,6 +2085,97 @@ class PdbSession:
         if len(encoded) > _MAX_LOCALS_RESULT_BYTES:
             raise PdbProtocolError(
                 "get_frame_locals result exceeds 32768-byte budget"
+            )
+
+    def _validate_safe_eval_result(
+        self,
+        result: Any,
+        requested_frame_id: Optional[int],
+        requested_generation: Optional[int],
+        requested_expression: Any,
+        active_script: str,
+    ) -> None:
+        if not isinstance(result, dict):
+            raise PdbProtocolError(
+                "safe_eval_expression result must be a mapping"
+            )
+        self._check_exact_fields(
+            result, _SAFE_EVAL_RESULT_FIELDS,
+            "safe_eval_expression result",
+        )
+        if type(result['state']) is not str or result['state'] != 'paused':
+            raise PdbProtocolError(
+                "safe_eval_expression result state must be 'paused'"
+            )
+        if type(result['pause_generation']) is not int:
+            raise PdbProtocolError(
+                "safe_eval_expression pause_generation must be an integer"
+            )
+        generation = result['pause_generation']
+        if generation <= 0 or generation != requested_generation:
+            raise PdbProtocolError(
+                "safe_eval_expression pause_generation does not match request"
+            )
+        if requested_frame_id is None:
+            raise PdbProtocolError(
+                "safe_eval_expression request frame_id is unavailable"
+            )
+        frame = result['frame']
+        if not isinstance(frame, dict):
+            raise PdbProtocolError(
+                "safe_eval_expression frame must be a mapping"
+            )
+        if (type(frame.get('script')) is not str or
+                type(frame.get('function')) is not str or
+                type(frame.get('frame_id')) is not int or
+                type(frame.get('line')) is not int):
+            raise PdbProtocolError(
+                "safe_eval_expression frame strings must be exact strings"
+            )
+        self._validate_frame_summary_mapping(
+            frame, requested_frame_id, "safe_eval_expression frame"
+        )
+        if frame['function'] == '<module>':
+            raise PdbProtocolError(
+                "safe_eval_expression successful result must not expose "
+                "a module frame"
+            )
+        if requested_frame_id == 0 and frame['script'] != active_script:
+            raise PdbProtocolError(
+                "safe_eval_expression current frame does not match target"
+            )
+        expression = result['expression']
+        if type(expression) is not str or expression != requested_expression:
+            raise PdbProtocolError(
+                "safe_eval_expression expression does not match request"
+            )
+        try:
+            self._validate_safe_eval_expression_input(expression)
+        except PdbSessionError as e:
+            raise PdbProtocolError(
+                "safe_eval_expression result expression is invalid"
+            ) from e
+        self._validate_value_summary(
+            result['value'], "safe_eval_expression value"
+        )
+        try:
+            encoded = json.dumps(
+                result,
+                ensure_ascii=False,
+                separators=(',', ':'),
+                sort_keys=True,
+                allow_nan=False,
+            ).encode('utf-8')
+        except (
+            TypeError, ValueError, UnicodeEncodeError, MemoryError,
+            RecursionError,
+        ) as e:
+            raise PdbProtocolError(
+                "safe_eval_expression result is not compact valid JSON"
+            ) from e
+        if len(encoded) > _MAX_SAFE_EVAL_RESULT_BYTES:
+            raise PdbProtocolError(
+                "safe_eval_expression result exceeds 32768-byte budget"
             )
 
     def _validate_start_paused_result(

@@ -387,7 +387,8 @@ class TestSerialization:
             {"hello", "ping", "shutdown", "run_to_breakpoint",
              "start_paused_target", "continue_paused_target",
              "get_target_status", "terminate_paused_target",
-             "get_stack_summary", "get_frame", "get_frame_locals"}
+             "get_stack_summary", "get_frame", "get_frame_locals",
+             "safe_eval_expression"}
         )
 
     def test_run_to_breakpoint_operation_accepted(self):
@@ -652,4 +653,33 @@ class TestInspectionProtocolOperations:
         ["stack", "get_stack", "frame", "locals", "get_locals"],
     )
     def test_operation_aliases_are_not_supported(self, alias):
+        assert alias not in SUPPORTED_OPERATIONS
+
+
+class TestSafeEvaluationProtocolOperation:
+    def test_canonical_operation_and_exact_payload_round_trip(self):
+        payload = {
+            "frame_id": 0,
+            "pause_generation": 1,
+            "expression": "items[0]",
+        }
+        request = PdbRequest(
+            protocol_version=PROTOCOL_VERSION,
+            request_id=902,
+            operation="safe_eval_expression",
+            payload=payload,
+        )
+        restored = deserialize_request(serialize_request(request))
+        assert "safe_eval_expression" in SUPPORTED_OPERATIONS
+        assert restored.operation == "safe_eval_expression"
+        assert restored.payload == payload
+        assert set(restored.payload) == {
+            "frame_id", "pause_generation", "expression",
+        }
+
+    @pytest.mark.parametrize(
+        "alias",
+        ["eval", "evaluate", "safe_eval", "pdb_eval", "expression"],
+    )
+    def test_aliases_are_not_supported(self, alias):
         assert alias not in SUPPORTED_OPERATIONS

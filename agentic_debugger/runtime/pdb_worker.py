@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import builtins
 import io
 import json
@@ -39,6 +40,17 @@ _MAX_BYTES_PREVIEW = 1024
 _MAX_CONTAINER_ITEMS = 16
 _MAX_CONTAINER_DEPTH = 2
 _MAX_LOCALS_RESULT_BYTES = 32768
+_MAX_SAFE_EVAL_RESULT_BYTES = 32768
+_MAX_EXPRESSION_UTF8 = 1024
+_MAX_AST_NODES = 64
+_MAX_AST_DEPTH = 12
+_MAX_EVALUATOR_STEPS = 128
+_MAX_IDENTIFIER_UTF8 = 512
+_MAX_CONSTANT_STRING_UTF8 = 2048
+_MAX_CONSTANT_BYTES = 1024
+_MAX_COMPARISON_TEXT_BYTES = 4096
+_MAX_DICT_SCAN_ENTRIES = 256
+_MAX_FRAME_LOCAL_ENTRIES = 4096
 # Keeps JSON integer conversion comfortably below Python's default decimal
 # conversion limit while preserving ordinary large integers losslessly.
 _MAX_SERIALIZED_INT_BITS = 4096
@@ -50,6 +62,23 @@ class _BreakpointSentinel(BaseException):
 
 class _TerminationSentinel(BaseException):
     pass
+
+
+class _SafeEvaluationError(Exception):
+    """Bounded ordinary failure from the read-only expression language."""
+
+
+_SAFE_CONSTANT_TYPES = (type(None), bool, int, float, str, bytes)
+_SAFE_DICT_KEY_TYPES = _SAFE_CONSTANT_TYPES
+_SAFE_LEN_TYPES = (str, bytes, list, tuple, dict, set, frozenset)
+_SAFE_SEQUENCE_TYPES = (list, tuple, str, bytes)
+_SAFE_AST_TYPES = (
+    ast.Expression, ast.Name, ast.Constant, ast.UnaryOp, ast.BinOp,
+    ast.BoolOp, ast.Compare, ast.IfExp, ast.Subscript, ast.Call, ast.Load,
+    ast.UAdd, ast.USub, ast.Invert, ast.Not, ast.Add, ast.Sub, ast.Mult,
+    ast.Div, ast.FloorDiv, ast.Mod, ast.And, ast.Or, ast.Eq, ast.NotEq,
+    ast.Lt, ast.LtE, ast.Gt, ast.GtE, ast.Is, ast.IsNot,
+)
 
 
 _WORKER_TERMINATION_TIMEOUT = 3.0
@@ -213,16 +242,521 @@ _SAFE_BUILTIN_TYPE_NAMES = (
 )
 
 
-def _frame_locals_keys(mapping: Any) -> Any:
-    if type(mapping) is dict:
-        return dict.keys(mapping)
-    return _FRAME_LOCALS_PROXY_TYPE.keys(mapping)
+def _frame_locals_operations(mapping: Any) -> Optional[Tuple[Any, Any]]:
+    mapping_type = type(mapping)
+    if mapping_type is dict:
+        return dict.__len__, dict.items
+    if mapping_type is _FRAME_LOCALS_PROXY_TYPE:
+        return (
+            _FRAME_LOCALS_PROXY_TYPE.__len__,
+            _FRAME_LOCALS_PROXY_TYPE.items,
+        )
+    return None
 
 
-def _frame_locals_get(mapping: Any, name: str) -> Any:
-    if type(mapping) is dict:
-        return dict.__getitem__(mapping, name)
-    return _FRAME_LOCALS_PROXY_TYPE.__getitem__(mapping, name)
+def _frame_locals_lookup(
+    mapping: Any, requested_name: str
+) -> Tuple[bool, Any, Optional[str]]:
+    """Find one exact-string local without hashing into the mapping."""
+    operations = _frame_locals_operations(mapping)
+    if operations is None:
+        return False, None, "Frame locals are unavailable for this pause"
+    if (type(requested_name) is not str or
+            _safe_utf8_string(requested_name, _MAX_NAME_UTF8) is None):
+        return False, None, "Requested local name is invalid"
+    length_operation, items_operation = operations
+    iterator: Any = None
+    stored_name: Any = None
+    stored_value: Any = None
+    try:
+        original_size = length_operation(mapping)
+        iterator = iter(items_operation(mapping))
+        for index in range(_MAX_FRAME_LOCAL_ENTRIES + 1):
+            try:
+                stored_name, stored_value = next(iterator)
+            except StopIteration:
+                if length_operation(mapping) != original_size:
+                    return (
+                        False, None,
+                        "Frame locals mutated during bounded scan",
+                    )
+                return False, None, None
+            except RuntimeError:
+                return (
+                    False, None,
+                    "Frame locals mutated during bounded scan",
+                )
+            if index == _MAX_FRAME_LOCAL_ENTRIES:
+                return (
+                    False, None,
+                    "Frame locals exceed 4096-entry scan limit",
+                )
+            if (type(stored_name) is str and
+                    _safe_utf8_string(
+                        stored_name, _MAX_NAME_UTF8
+                    ) is not None and
+                    str.__eq__(stored_name, requested_name) is True):
+                if length_operation(mapping) != original_size:
+                    return (
+                        False, None,
+                        "Frame locals mutated during bounded scan",
+                    )
+                return True, stored_value, None
+    except (MemoryError, RuntimeError, TypeError, ValueError):
+        return False, None, "Frame locals scan failed safely"
+    finally:
+        stored_value = None
+        stored_name = None
+        iterator = None
+    return False, None, None
+
+
+def _frame_locals_entries(
+    mapping: Any,
+) -> Tuple[Optional[List[Tuple[str, Any]]], Optional[str]]:
+    """Collect bounded safe local pairs without keyed re-fetches."""
+    operations = _frame_locals_operations(mapping)
+    if operations is None:
+        return None, "Frame locals are unavailable for this pause"
+    length_operation, items_operation = operations
+    entries: List[Tuple[str, Any]] = []
+    iterator: Any = None
+    stored_name: Any = None
+    stored_value: Any = None
+    try:
+        original_size = length_operation(mapping)
+        iterator = iter(items_operation(mapping))
+        for index in range(_MAX_FRAME_LOCAL_ENTRIES + 1):
+            try:
+                stored_name, stored_value = next(iterator)
+            except StopIteration:
+                if length_operation(mapping) != original_size:
+                    return None, "Frame locals mutated during bounded scan"
+                entries.sort(key=lambda entry: entry[0])
+                return entries, None
+            except RuntimeError:
+                return None, "Frame locals mutated during bounded scan"
+            if index == _MAX_FRAME_LOCAL_ENTRIES:
+                return None, "Frame locals exceed 4096-entry scan limit"
+            if (type(stored_name) is str and
+                    _safe_utf8_string(
+                        stored_name, _MAX_NAME_UTF8
+                    ) is not None):
+                entries.append((stored_name, stored_value))
+    except (MemoryError, RuntimeError, TypeError, ValueError):
+        return None, "Frame locals scan failed safely"
+    finally:
+        stored_value = None
+        stored_name = None
+        iterator = None
+    return None, "Frame locals scan failed safely"
+
+
+def _validate_expression_envelope(expression: Any) -> Optional[str]:
+    if type(expression) is not str:
+        return "expression must be a string"
+    if not expression:
+        return "expression must be non-empty"
+    if expression != expression.strip():
+        return "expression must not have surrounding whitespace"
+    if any(ord(character) <= 0x1f or ord(character) == 0x7f
+           for character in expression):
+        return "expression contains a prohibited control character"
+    try:
+        encoded = expression.encode('utf-8')
+    except UnicodeEncodeError:
+        return "expression must be valid UTF-8"
+    if len(encoded) > _MAX_EXPRESSION_UTF8:
+        return "expression exceeds 1024 UTF-8 bytes"
+    return None
+
+
+def _validate_constant(value: Any) -> None:
+    value_type = type(value)
+    if value_type not in _SAFE_CONSTANT_TYPES:
+        raise _SafeEvaluationError("Unsupported constant type")
+    if value_type is int and int.bit_length(value) > _MAX_SERIALIZED_INT_BITS:
+        raise _SafeEvaluationError("Integer constant exceeds 4096-bit limit")
+    if value_type is str:
+        try:
+            size = len(value.encode('utf-8'))
+        except UnicodeEncodeError:
+            raise _SafeEvaluationError("String constant is not valid UTF-8")
+        if size > _MAX_CONSTANT_STRING_UTF8:
+            raise _SafeEvaluationError(
+                "String constant exceeds 2048-byte limit"
+            )
+    if value_type is bytes and bytes.__len__(value) > _MAX_CONSTANT_BYTES:
+        raise _SafeEvaluationError("Bytes constant exceeds 1024-byte limit")
+
+
+def _parse_safe_expression(expression: str) -> ast.Expression:
+    try:
+        parsed = ast.parse(expression, mode='eval')
+    except (SyntaxError, ValueError, TypeError, MemoryError, RecursionError):
+        raise _SafeEvaluationError("Expression syntax is invalid")
+
+    count = 0
+    pending: List[Tuple[ast.AST, int]] = [(parsed, 1)]
+    try:
+        while pending:
+            node, depth = pending.pop()
+            count += 1
+            if count > _MAX_AST_NODES:
+                raise _SafeEvaluationError("Expression exceeds AST node limit")
+            if depth > _MAX_AST_DEPTH:
+                raise _SafeEvaluationError("Expression exceeds AST depth limit")
+            if type(node) not in _SAFE_AST_TYPES:
+                raise _SafeEvaluationError("Expression uses unsupported syntax")
+            if type(node) is ast.Name:
+                try:
+                    identifier = node.id.encode('utf-8')
+                except UnicodeEncodeError:
+                    raise _SafeEvaluationError("Identifier is not valid UTF-8")
+                if len(identifier) > _MAX_IDENTIFIER_UTF8:
+                    raise _SafeEvaluationError(
+                        "Identifier exceeds 512-byte limit"
+                    )
+            elif type(node) is ast.Constant:
+                _validate_constant(node.value)
+            elif type(node) is ast.Call:
+                if (type(node.func) is not ast.Name or
+                        node.func.id != 'len' or len(node.args) != 1 or
+                        node.keywords or
+                        type(node.args[0]) is ast.Starred):
+                    raise _SafeEvaluationError("Unsupported function call")
+            children = list(ast.iter_child_nodes(node))
+            for child in reversed(children):
+                pending.append((child, depth + 1))
+    except _SafeEvaluationError:
+        raise
+    except (MemoryError, RecursionError, TypeError, ValueError):
+        raise _SafeEvaluationError("Expression structure is invalid")
+    return parsed
+
+
+def _check_bounded_integer(value: Any, label: str) -> None:
+    if type(value) is int and int.bit_length(value) > _MAX_SERIALIZED_INT_BITS:
+        raise _SafeEvaluationError(f"{label} exceeds 4096-bit limit")
+
+
+def _check_comparison_bound(value: Any) -> None:
+    value_type = type(value)
+    if value_type is int:
+        _check_bounded_integer(value, "Comparison operand")
+    elif value_type is str:
+        if len(value.encode('utf-8')) > _MAX_COMPARISON_TEXT_BYTES:
+            raise _SafeEvaluationError(
+                "Comparison string exceeds 4096-byte limit"
+            )
+    elif value_type is bytes:
+        if bytes.__len__(value) > _MAX_COMPARISON_TEXT_BYTES:
+            raise _SafeEvaluationError(
+                "Comparison bytes exceed 4096-byte limit"
+            )
+
+
+def _safe_scalar_keys_equal(left: Any, right: Any) -> bool:
+    if left is right:
+        return True
+    left_type = type(left)
+    right_type = type(right)
+    if (left_type not in _SAFE_DICT_KEY_TYPES or
+            right_type not in _SAFE_DICT_KEY_TYPES):
+        return False
+    if left_type is type(None) or right_type is type(None):
+        return False
+    if left_type in (bool, int, float) and right_type in (bool, int, float):
+        return bool(left == right)
+    if left_type is str and right_type is str:
+        return bool(str.__eq__(left, right))
+    if left_type is bytes and right_type is bytes:
+        return bool(bytes.__eq__(left, right))
+    return False
+
+
+def _safe_dict_key_is_bounded(key: Any) -> bool:
+    key_type = type(key)
+    if key_type not in _SAFE_DICT_KEY_TYPES:
+        return False
+    if key_type is int:
+        return int.bit_length(key) <= _MAX_SERIALIZED_INT_BITS
+    if key_type is str:
+        if str.__len__(key) > _MAX_COMPARISON_TEXT_BYTES:
+            return False
+        try:
+            return len(key.encode('utf-8')) <= _MAX_COMPARISON_TEXT_BYTES
+        except UnicodeEncodeError:
+            return False
+    if key_type is bytes:
+        return bytes.__len__(key) <= _MAX_COMPARISON_TEXT_BYTES
+    return True
+
+
+def _safe_dict_lookup(mapping: dict, requested_key: Any) -> Any:
+    if type(requested_key) not in _SAFE_DICT_KEY_TYPES:
+        raise _SafeEvaluationError("Dictionary lookup key type is unsafe")
+    if not _safe_dict_key_is_bounded(requested_key):
+        raise _SafeEvaluationError("Dictionary lookup key exceeds safe bounds")
+    original_size = dict.__len__(mapping)
+    iterator = iter(dict.items(mapping))
+    try:
+        for index in range(_MAX_DICT_SCAN_ENTRIES + 1):
+            try:
+                stored_key, stored_value = next(iterator)
+            except StopIteration:
+                if dict.__len__(mapping) != original_size:
+                    raise _SafeEvaluationError(
+                        "Dictionary mutated during safe lookup"
+                    )
+                raise _SafeEvaluationError("Dictionary key was not found")
+            except RuntimeError:
+                raise _SafeEvaluationError(
+                    "Dictionary mutated during safe lookup"
+                )
+            if index == _MAX_DICT_SCAN_ENTRIES:
+                raise _SafeEvaluationError(
+                    "Dictionary lookup exceeds 256-entry scan limit"
+                )
+            if (_safe_dict_key_is_bounded(stored_key) and
+                    _safe_scalar_keys_equal(stored_key, requested_key)):
+                if dict.__len__(mapping) != original_size:
+                    raise _SafeEvaluationError(
+                        "Dictionary mutated during safe lookup"
+                    )
+                return stored_value
+    finally:
+        iterator = None
+    raise _SafeEvaluationError("Dictionary key was not found")
+
+
+class _SafeExpressionInterpreter:
+    def __init__(self, local_mapping: Any) -> None:
+        self._locals = local_mapping
+        self._steps = 0
+
+    def evaluate(self, parsed: ast.Expression) -> Any:
+        return self._evaluate_node(parsed.body)
+
+    def _step(self) -> None:
+        self._steps += 1
+        if self._steps > _MAX_EVALUATOR_STEPS:
+            raise _SafeEvaluationError("Expression exceeds evaluator step limit")
+
+    def _evaluate_node(self, node: ast.AST) -> Any:
+        self._step()
+        node_type = type(node)
+        if node_type is ast.Name:
+            found, value, failure = _frame_locals_lookup(
+                self._locals, node.id
+            )
+            if failure is not None:
+                raise _SafeEvaluationError(failure)
+            if not found:
+                raise _SafeEvaluationError("Unknown local name")
+            return value
+        if node_type is ast.Constant:
+            return node.value
+        if node_type is ast.UnaryOp:
+            return self._unary(node)
+        if node_type is ast.BinOp:
+            return self._binary(node)
+        if node_type is ast.BoolOp:
+            return self._boolean(node)
+        if node_type is ast.Compare:
+            return self._compare(node)
+        if node_type is ast.IfExp:
+            condition = self._evaluate_node(node.test)
+            if type(condition) is not bool:
+                raise _SafeEvaluationError(
+                    "Conditional expression requires a boolean condition"
+                )
+            return self._evaluate_node(
+                node.body if condition else node.orelse
+            )
+        if node_type is ast.Subscript:
+            return self._subscript(node)
+        if node_type is ast.Call:
+            return self._intrinsic_len(node)
+        raise _SafeEvaluationError("Expression uses unsupported syntax")
+
+    def _unary(self, node: ast.UnaryOp) -> Any:
+        value = self._evaluate_node(node.operand)
+        operator_type = type(node.op)
+        if operator_type is ast.Not:
+            if type(value) is not bool:
+                raise _SafeEvaluationError("not requires an exact boolean")
+            return not value
+        if type(value) not in (int, float) or type(value) is bool:
+            raise _SafeEvaluationError("Unary numeric operand type is unsafe")
+        _check_bounded_integer(value, "Unary operand")
+        try:
+            if operator_type is ast.UAdd:
+                result = +value
+            elif operator_type is ast.USub:
+                result = -value
+            elif operator_type is ast.Invert and type(value) is int:
+                result = ~value
+            else:
+                raise _SafeEvaluationError("Unsupported unary operator")
+        except (ArithmeticError, MemoryError, ValueError):
+            raise _SafeEvaluationError("Unary operation failed safely")
+        _check_bounded_integer(result, "Unary result")
+        return result
+
+    def _binary(self, node: ast.BinOp) -> Any:
+        left = self._evaluate_node(node.left)
+        right = self._evaluate_node(node.right)
+        if (type(left) not in (int, float) or type(left) is bool or
+                type(right) not in (int, float) or type(right) is bool):
+            raise _SafeEvaluationError("Arithmetic operand type is unsafe")
+        _check_bounded_integer(left, "Arithmetic operand")
+        _check_bounded_integer(right, "Arithmetic operand")
+        operands_are_finite = (
+            (type(left) is int or math.isfinite(left)) and
+            (type(right) is int or math.isfinite(right))
+        )
+        operator_type = type(node.op)
+        if operator_type is ast.Mult and type(left) is int and type(right) is int:
+            if (left != 0 and right != 0 and
+                    int.bit_length(left) + int.bit_length(right) - 1 >
+                    _MAX_SERIALIZED_INT_BITS):
+                raise _SafeEvaluationError(
+                    "Integer multiplication exceeds 4096-bit limit"
+                )
+        try:
+            if operator_type is ast.Add:
+                result = left + right
+            elif operator_type is ast.Sub:
+                result = left - right
+            elif operator_type is ast.Mult:
+                result = left * right
+            elif operator_type is ast.Div:
+                result = left / right
+            elif operator_type is ast.FloorDiv:
+                result = left // right
+            elif operator_type is ast.Mod:
+                result = left % right
+            else:
+                raise _SafeEvaluationError("Unsupported arithmetic operator")
+        except (ArithmeticError, MemoryError, ValueError):
+            raise _SafeEvaluationError("Arithmetic operation failed safely")
+        if type(result) not in (int, float) or type(result) is bool:
+            raise _SafeEvaluationError("Arithmetic result type is unsafe")
+        if (type(result) is float and operands_are_finite and
+                not math.isfinite(result)):
+            raise _SafeEvaluationError(
+                "Finite arithmetic overflow produced a non-finite result"
+            )
+        _check_bounded_integer(result, "Arithmetic result")
+        return result
+
+    def _boolean(self, node: ast.BoolOp) -> bool:
+        is_and = type(node.op) is ast.And
+        for value_node in node.values:
+            value = self._evaluate_node(value_node)
+            if type(value) is not bool:
+                raise _SafeEvaluationError(
+                    "Boolean operation requires exact booleans"
+                )
+            if is_and and not value:
+                return False
+            if not is_and and value:
+                return True
+        return is_and
+
+    def _compare(self, node: ast.Compare) -> bool:
+        left = self._evaluate_node(node.left)
+        for operator_node, comparator_node in zip(node.ops, node.comparators):
+            right = self._evaluate_node(comparator_node)
+            operator_type = type(operator_node)
+            if operator_type is ast.Is:
+                matched = left is right
+            elif operator_type is ast.IsNot:
+                matched = left is not right
+            elif operator_type in (ast.Eq, ast.NotEq):
+                if (type(left) not in _SAFE_CONSTANT_TYPES or
+                        type(right) not in _SAFE_CONSTANT_TYPES):
+                    raise _SafeEvaluationError(
+                        "Equality operand type is unsafe"
+                    )
+                _check_comparison_bound(left)
+                _check_comparison_bound(right)
+                matched = left == right
+                if operator_type is ast.NotEq:
+                    matched = not matched
+            else:
+                left_type = type(left)
+                right_type = type(right)
+                numeric = (
+                    left_type in (int, float) and left_type is not bool and
+                    right_type in (int, float) and right_type is not bool
+                )
+                same_text = (
+                    (left_type is str and right_type is str) or
+                    (left_type is bytes and right_type is bytes)
+                )
+                if not numeric and not same_text:
+                    raise _SafeEvaluationError(
+                        "Ordering operand types are unsafe"
+                    )
+                _check_comparison_bound(left)
+                _check_comparison_bound(right)
+                if operator_type is ast.Lt:
+                    matched = left < right
+                elif operator_type is ast.LtE:
+                    matched = left <= right
+                elif operator_type is ast.Gt:
+                    matched = left > right
+                elif operator_type is ast.GtE:
+                    matched = left >= right
+                else:
+                    raise _SafeEvaluationError(
+                        "Unsupported comparison operator"
+                    )
+            if type(matched) is not bool:
+                raise _SafeEvaluationError("Comparison result is unsafe")
+            if not matched:
+                return False
+            left = right
+        return True
+
+    def _intrinsic_len(self, node: ast.Call) -> int:
+        value = self._evaluate_node(node.args[0])
+        value_type = type(value)
+        if value_type not in _SAFE_LEN_TYPES:
+            raise _SafeEvaluationError("Intrinsic len operand type is unsafe")
+        operations = {
+            str: str.__len__, bytes: bytes.__len__, list: list.__len__,
+            tuple: tuple.__len__, dict: dict.__len__, set: set.__len__,
+            frozenset: frozenset.__len__,
+        }
+        try:
+            return operations[value_type](value)
+        except (MemoryError, RuntimeError):
+            raise _SafeEvaluationError("Intrinsic len failed safely")
+
+    def _subscript(self, node: ast.Subscript) -> Any:
+        value = self._evaluate_node(node.value)
+        key = self._evaluate_node(node.slice)
+        value_type = type(value)
+        if value_type in _SAFE_SEQUENCE_TYPES:
+            if type(key) is not int:
+                raise _SafeEvaluationError(
+                    "Sequence index must be an exact integer"
+                )
+            _check_bounded_integer(key, "Sequence index")
+            operations = {
+                list: list.__getitem__, tuple: tuple.__getitem__,
+                str: str.__getitem__, bytes: bytes.__getitem__,
+            }
+            try:
+                return operations[value_type](value, key)
+            except (IndexError, OverflowError):
+                raise _SafeEvaluationError("Sequence index is out of range")
+        if value_type is dict:
+            return _safe_dict_lookup(value, key)
+        raise _SafeEvaluationError("Subscript operand type is unsafe")
 
 
 def _safe_utf8_string(value: Any, maximum: int) -> Optional[str]:
@@ -546,6 +1080,8 @@ class PdbWorker:
             self._handle_get_frame(request)
         elif op == "get_frame_locals":
             self._handle_get_frame_locals(request)
+        elif op == "safe_eval_expression":
+            self._handle_safe_eval_expression(request)
         else:
             self._send_error(
                 request_id=request.request_id,
@@ -1762,11 +2298,27 @@ class PdbWorker:
         else:
             self._send_error(request.request_id, "Inspection failed closed")
 
+    @staticmethod
+    def _namespace_local_mapping(
+        frame: types.FrameType,
+    ) -> Tuple[Optional[Any], Optional[str]]:
+        try:
+            local_mapping = frame.f_locals
+            global_mapping = frame.f_globals
+        except BaseException:
+            return None, "Frame locals are unavailable for this pause"
+        if local_mapping is global_mapping:
+            return None, "Module-scope frame values are unavailable"
+        if type(local_mapping) not in (dict, _FRAME_LOCALS_PROXY_TYPE):
+            return None, "Frame locals are unavailable for this pause"
+        return local_mapping, None
+
     def _frame_detail_result(
         self,
         frame: types.FrameType,
         metadata: Dict[str, Any],
         generation: int,
+        local_mapping: Any,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
         try:
             code = frame.f_code
@@ -1778,11 +2330,8 @@ class PdbWorker:
             if code.co_flags & 0x08:
                 argument_count += 1
             raw_arguments = code.co_varnames[:argument_count]
-            local_mapping = frame.f_locals
         except BaseException:
             return None, "Frame metadata is unavailable for this pause"
-        if type(local_mapping) not in (dict, _FRAME_LOCALS_PROXY_TYPE):
-            return None, "Frame locals are unavailable for this pause"
 
         argument_names: List[str] = []
         seen_arguments = set()
@@ -1793,12 +2342,11 @@ class PdbWorker:
             seen_arguments.add(bounded)
             argument_names.append(bounded)
 
-        local_names = [
-            name for name in _frame_locals_keys(local_mapping)
-            if type(name) is str and
-            _safe_utf8_string(name, _MAX_NAME_UTF8) is not None
-        ]
-        local_names.sort()
+        local_entries, locals_failure = _frame_locals_entries(local_mapping)
+        if locals_failure is not None or local_entries is None:
+            return None, locals_failure or "Frame locals scan failed safely"
+        local_names = [name for name, _value in local_entries]
+        local_entries = None
         locals_count = len(local_names)
         detail = dict(metadata)
         detail.update({
@@ -1825,6 +2373,7 @@ class PdbWorker:
         invariant_failure: Optional[str] = None
         response: Optional[PdbResponse] = None
         frames: Optional[List[Tuple[types.FrameType, Dict[str, Any]]]] = None
+        local_mapping: Any = None
         with self._condition:
             (frames, _total, generation, _script,
              failure, invariant_failure) = self._inspection_snapshot()
@@ -1835,9 +2384,11 @@ class PdbWorker:
                     failure = "Unknown frame_id for current pause"
                 else:
                     frame, metadata = frames[frame_id]
-                    result, failure = self._frame_detail_result(
-                        frame, metadata, generation
-                    )
+                    local_mapping, failure = self._namespace_local_mapping(frame)
+                    if local_mapping is not None:
+                        result, failure = self._frame_detail_result(
+                            frame, metadata, generation, local_mapping
+                        )
                     if result is not None:
                         while True:
                             candidate = PdbResponse(
@@ -1862,6 +2413,7 @@ class PdbWorker:
                             result = None
                             break
                     frame = None
+        local_mapping = None
         frames = None
         if invariant_failure is not None:
             error = self._fail_paused_target_invariant(invariant_failure)
@@ -1875,23 +2427,14 @@ class PdbWorker:
 
     def _frame_locals_result(
         self,
-        frame: types.FrameType,
         frame_id: int,
         generation: int,
+        local_mapping: Any,
     ) -> Tuple[Optional[Dict[str, Any]], Optional[str]]:
-        try:
-            local_mapping = frame.f_locals
-        except BaseException:
-            return None, "Frame locals are unavailable for this pause"
-        if type(local_mapping) not in (dict, _FRAME_LOCALS_PROXY_TYPE):
-            return None, "Frame locals are unavailable for this pause"
-        names = [
-            name for name in _frame_locals_keys(local_mapping)
-            if type(name) is str and
-            _safe_utf8_string(name, _MAX_NAME_UTF8) is not None
-        ]
-        names.sort()
-        total_count = len(names)
+        entries, entries_failure = _frame_locals_entries(local_mapping)
+        if entries_failure is not None or entries is None:
+            return None, entries_failure or "Frame locals scan failed safely"
+        total_count = len(entries)
         result: Dict[str, Any] = {
             'state': 'paused',
             'pause_generation': generation,
@@ -1900,25 +2443,29 @@ class PdbWorker:
             'total_count': total_count,
             'truncated': total_count > _MAX_LOCAL_NAMES,
         }
-        for name in names[:_MAX_LOCAL_NAMES]:
-            try:
-                value = _frame_locals_get(local_mapping, name)
+        value: Any = None
+        try:
+            for index, (name, value) in enumerate(entries):
+                if index >= _MAX_LOCAL_NAMES:
+                    break
                 summary = _summarize_value(value)
-            except (KeyError, RuntimeError):
-                result['truncated'] = True
-                break
-            entry = {'name': name, 'value': summary}
-            result['locals'].append(entry)
-            try:
-                within_budget = (
-                    _compact_json_size(result) <= _MAX_LOCALS_RESULT_BYTES
-                )
-            except (TypeError, ValueError, UnicodeEncodeError, OverflowError):
-                within_budget = False
-            if not within_budget:
-                result['locals'].pop()
-                result['truncated'] = True
-                break
+                entry = {'name': name, 'value': summary}
+                result['locals'].append(entry)
+                try:
+                    within_budget = (
+                        _compact_json_size(result) <= _MAX_LOCALS_RESULT_BYTES
+                    )
+                except (
+                    TypeError, ValueError, UnicodeEncodeError, OverflowError,
+                ):
+                    within_budget = False
+                if not within_budget:
+                    result['locals'].pop()
+                    result['truncated'] = True
+                    break
+        finally:
+            value = None
+            entries = None
         if len(result['locals']) < total_count:
             result['truncated'] = True
         if _compact_json_size(result) > _MAX_LOCALS_RESULT_BYTES:
@@ -1937,6 +2484,7 @@ class PdbWorker:
         invariant_failure: Optional[str] = None
         response: Optional[PdbResponse] = None
         frames: Optional[List[Tuple[types.FrameType, Dict[str, Any]]]] = None
+        local_mapping: Any = None
         with self._condition:
             (frames, _total, generation, _script,
              failure, invariant_failure) = self._inspection_snapshot()
@@ -1947,9 +2495,11 @@ class PdbWorker:
                     failure = "Unknown frame_id for current pause"
                 else:
                     frame = frames[frame_id][0]
-                    result, failure = self._frame_locals_result(
-                        frame, frame_id, generation
-                    )
+                    local_mapping, failure = self._namespace_local_mapping(frame)
+                    if local_mapping is not None:
+                        result, failure = self._frame_locals_result(
+                            frame_id, generation, local_mapping
+                        )
                     if result is not None:
                         candidate = PdbResponse(
                             protocol_version=PROTOCOL_VERSION,
@@ -1966,6 +2516,7 @@ class PdbWorker:
                             )
                             result = None
                     frame = None
+        local_mapping = None
         frames = None
         if invariant_failure is not None:
             error = self._fail_paused_target_invariant(invariant_failure)
@@ -1976,6 +2527,143 @@ class PdbWorker:
             self._send_response(response)
         else:
             self._send_error(request.request_id, "Inspection failed closed")
+
+    @staticmethod
+    def _validate_safe_eval_payload(
+        payload: Dict[str, Any]
+    ) -> Tuple[Optional[int], Optional[int], Optional[str], Optional[str]]:
+        required = {'frame_id', 'pause_generation', 'expression'}
+        missing = required - set(payload.keys())
+        if missing:
+            return None, None, None, (
+                f"Missing required payload field: {sorted(missing)[0]}"
+            )
+        extra = set(payload.keys()) - required
+        if extra:
+            return None, None, None, (
+                f"Unknown payload field: {sorted(extra)[0]}"
+            )
+        frame_id = payload['frame_id']
+        generation = payload['pause_generation']
+        expression = payload['expression']
+        if type(frame_id) is not int:
+            return None, None, None, "frame_id must be an integer"
+        if frame_id < 0:
+            return None, None, None, "frame_id must be non-negative"
+        if type(generation) is not int:
+            return None, None, None, "pause_generation must be an integer"
+        if generation <= 0:
+            return None, None, None, "pause_generation must be positive"
+        expression_error = _validate_expression_envelope(expression)
+        if expression_error is not None:
+            return None, None, None, expression_error
+        return frame_id, generation, expression, None
+
+    def _handle_safe_eval_expression(self, request: PdbRequest) -> None:
+        (frame_id, requested_generation, expression,
+         payload_error) = self._validate_safe_eval_payload(request.payload)
+        if payload_error is not None:
+            self._send_error(request.request_id, payload_error)
+            return
+
+        failure: Optional[str] = None
+        invariant_failure: Optional[str] = None
+        response: Optional[PdbResponse] = None
+        frames: Optional[List[Tuple[types.FrameType, Dict[str, Any]]]] = None
+        parsed: Optional[ast.Expression] = None
+        interpreter: Optional[_SafeExpressionInterpreter] = None
+        evaluated_value: Any = None
+        local_mapping: Any = None
+        frame: Optional[types.FrameType] = None
+        try:
+            with self._condition:
+                (frames, _total, generation, _script,
+                 failure, invariant_failure) = self._inspection_snapshot()
+                if frames is not None:
+                    if requested_generation != generation:
+                        failure = "Stale or unknown pause generation"
+                    elif frame_id is None or frame_id >= len(frames):
+                        failure = "Unknown frame_id for current pause"
+                    else:
+                        try:
+                            frame, metadata = frames[frame_id]
+                            local_mapping, failure = (
+                                self._namespace_local_mapping(frame)
+                            )
+                            if failure is not None or local_mapping is None:
+                                raise _SafeEvaluationError(
+                                    failure or
+                                    "Frame locals are unavailable for this pause"
+                                )
+                            parsed = _parse_safe_expression(expression)
+                            interpreter = _SafeExpressionInterpreter(local_mapping)
+                            evaluated_value = interpreter.evaluate(parsed)
+                            result = {
+                                'state': 'paused',
+                                'pause_generation': generation,
+                                'frame': dict(metadata),
+                                'expression': expression,
+                                'value': _summarize_value(evaluated_value),
+                            }
+                            try:
+                                result_fits = (
+                                    _compact_json_size(result) <=
+                                    _MAX_SAFE_EVAL_RESULT_BYTES
+                                )
+                            except (
+                                TypeError, ValueError, UnicodeEncodeError,
+                                OverflowError, MemoryError, RecursionError,
+                            ):
+                                result_fits = False
+                            if not result_fits:
+                                failure = (
+                                    "Safe-evaluation result exceeds "
+                                    "32768-byte budget"
+                                )
+                            else:
+                                candidate = PdbResponse(
+                                    protocol_version=PROTOCOL_VERSION,
+                                    request_id=request.request_id,
+                                    success=True,
+                                    result=result,
+                                    error='',
+                                )
+                                try:
+                                    response_fits = _successful_response_fits(
+                                        candidate
+                                    )
+                                except PdbProtocolError:
+                                    response_fits = False
+                                if response_fits:
+                                    response = candidate
+                                else:
+                                    failure = (
+                                        "Safe-evaluation response exceeds "
+                                        "65536-byte protocol limit"
+                                    )
+                        except _SafeEvaluationError as exc:
+                            failure = str(exc)
+                        except BaseException:
+                            failure = "Safe evaluation failed closed"
+        finally:
+            evaluated_value = None
+            interpreter = None
+            local_mapping = None
+            parsed = None
+            frame = None
+            frames = None
+
+        if invariant_failure is not None:
+            error = self._fail_paused_target_invariant(invariant_failure)
+            self._send_error(request.request_id, error)
+        elif failure is not None:
+            self._send_error(request.request_id, failure)
+        elif response is not None:
+            self._send_response(response)
+        else:
+            self._send_error(
+                request.request_id, "Safe evaluation failed closed"
+            )
 
     def _handle_terminate_paused_target(self, request: PdbRequest) -> None:
         payload = request.payload
