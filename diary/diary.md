@@ -1,6 +1,6 @@
 ﻿# Agentic Debugging Staj Defteri
 
-Bu dosyada 13–21 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
+Bu dosyada 13–22 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
 
 ---
 
@@ -764,3 +764,68 @@ Platform-specific skip farkı: Windows 2 skip, Linux 1 skip — aynı toplam 962
 #### Sonraki Adım
 
 Task 4B2 tamamlanmıştır. Task 4B şemsiyesinin tamamı tamamlanmamıştır. Bir sonraki aktif implementation maddesi **Task 4B3 — Continue/Resume and Additional Execution Control v1**'dir. Task 4B3 bounded kalmalıdır; stack/frame/locals incelemesi içermemelidir. Stack, frame ve locals incelemesi Task 4C kapsamındadır. Expression evaluation yalnızca gerekirse Task 4D kapsamında ele alınacaktır.
+
+---
+
+## 22 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 4B3 — Continue/Resume and Additional Execution Control v1 geliştirmesi, invariant hardening ve bağımsız doğrulama
+
+### Yapılan Çalışmalar
+
+Bugün Task 4B3 ile persistent paused target üzerinde açık ve kontrollü devam ettirme davranışını tamamladım. Task 4B1 ilk breakpoint'e kadar tek seferlik çalıştırmayı, Task 4B2 ise ilk kalıcı pause lifecycle'ını sağlamıştı. Task 4B3 bunların üzerine her yeni pause için ayrı bir continue isteği gerektiren yürütme kontrolünü eklediği için Task 4B'nin execution-control kısmını tamamladı. Yeni public API `continue_paused_target() -> dict[str, object]`, protokolde tam olarak `continue_paused_target` operasyonunu ve boş `{}` payload'ını kullanıyor.
+
+Persistent target artık `start -> paused -> continue -> paused -> continue -> exited veya failed` akışını izleyebiliyor. Continuation sırasında ikinci bir target thread oluşturulmuyor; aynı persistent target thread'i ve aynı PDB runner yeniden kullanılıyor. Resume ve sonraki pause arasındaki eşgüdümü mevcut `threading.Condition` sağlıyor. Her pause, private ve monoton artan bir pause generation değerini yükseltiyor. Continue isteği o andaki generation değerini yakalıyor ve yalnızca daha yeni, yani strictly newer bir generation bu isteği başarılı bir yeni pause olarak tamamlayabiliyor. Bu nedenle ilerlemeyi source line eşitsizliğiyle ölçmek gerekmiyor: loop'un sonraki iterasyonunda aynı configured breakpoint line'a yeniden ulaşmak da, farklı bir breakpoint line'a ilerlemek de doğru biçimde destekleniyor. Her yeni pause için yeniden açık bir continue çağrısı gerekiyor; gizli auto-continue davranışı bulunmuyor. Transient `running` state worker içinde private kalıyor ve protokol response'larını yalnızca protocol thread yazıyor; target thread hiçbir zaman protocol JSON yazmıyor.
+
+Başarılı continuation sonucu tam olarak `paused` veya `exited` oluyor. `paused` sonucu yalnızca `state`, `script`, `line`, `function`; `exited` sonucu ise yalnızca `state`, `script`, `exit_code` alanlarını taşıyor. Sonuç doğrulamasında exact field kümesi, strict state type, yalnızca iki izinli state, aktif script ile canonical eşleşme, pozitif ve configured breakpoint line, bool-as-int reddi, bounded UTF-8 function değeri ve strict integer exit code kontrol ediliyor. Script sonucu canonical forward-slash workspace-relative biçimde olmak zorunda; traversal, absolute, drive, UNC, backslash ve alternatif normalize edilmiş biçimler reddediliyor. Malformed bir successful response session'ı fail edip tamamını temizliyor.
+
+Session tarafında `continue_paused_target()` yalnızca doğrulanmış local `paused` durumundan çağrılabiliyor. Geçersiz local lifecycle çağrıları worker'a sıfır continue request gönderiyor ve mevcut one-in-flight koruması aynı anda tek isteğin session boundary'yi sahiplenmesini sürdürüyor. Request bu sınırı tutarken yalnızca private transient `continuing` state kullanılıyor. Yeni pause başarıyla doğrulanırsa local lifecycle tekrar `paused`, çıkış olursa `exited` oluyor. Correlated fakat ordinary failed continue response session'ı `READY` tutarken local target lifecycle'ını `unknown` yapıyor; tekrar denemeden önce `get_target_status()` ile authoritative durum yenileniyor. Bu refresh `paused`, `exited`, `failed` veya `terminated` durumlarını kurtarabiliyor. Buna karşılık transport timeout, EOF veya protocol corruption bütün session'ı fail edip temizlemeye devam ediyor.
+
+Mevcut Task 4B davranışlarını da korudum. `start_paused_target` ilk persistent pause operasyonu olarak kaldı; `get_target_status` yalnızca public lifecycle state'lerini gösteriyor. `terminate_paused_target` ikinci veya daha sonraki pause'lardan sonra çalışıyor. Bir veya daha fazla continue döngüsünden sonra `stop()` bounded kalıyor ve context manager cleanup birden çok pause sonrasında da kaynakları kapatıyor. One-shot `run_to_breakpoint` davranışsal olarak ayrı kaldı ve one-shot completion sonrasında continue local olarak reddediliyor.
+
+Execution tarafında breakpoint'ten sonraki kod explicit continue gelene kadar çalışmıyor; sonraki pause canlı target thread'i ve runner'ı koruyor. Exit, failure veya termination sonunda target thread join edilip pointer temizleniyor, runner ve paused-frame referansları bırakılıyor. `sys.argv`, `sys.path`, stdin, stdout, stderr, cwd ve trace state kabul edilen restoration sırasıyla geri yükleniyor. Target stdout/stderr protokolü bozamıyor ve target stdin izole kalıyor. `SystemExit` normalizasyonu da korundu: `None` ve `False` için `0`, `True` için `1`, integer için aynı integer, diğer değerler için `1` üretiliyor.
+
+### Review ve Repair Süreci
+
+İlk implementation kendi test suite'ini başarıyla geçti. Ancak bağımsız adversarial review, stale pause generation durumunda worker'ın `_running = True`, lifecycle'ın `paused` ve `_target_thread`'in dead kalabildiği bir karşı örnek buldu. Bu durumda status yanlış biçimde başarılı bir paused sonucu döndürebiliyordu. Paused state sırasında target thread pointer'ının missing veya dead olması da aynı false-authoritative-state problemine yol açıyordu.
+
+Bu problemi gidermek için response yazmayan tek bir invariant-failure cleanup helper eklendi. Helper önce `terminating` durumunu yayımlıyor, join öncesinde lock'u serbest bırakıyor, target thread'i bounded biçimde join ediyor, stale pointer'ı temizliyor ve bounded invariant error text ile `failed` lifecycle yayımlıyor. Paused lifecycle artık ancak non-null ve live bir `_target_thread` ile geçerli sayılıyor; status da başarılı `paused` dönmeden önce thread'in varlığını ve canlılığını doğruluyor. Böylece stale veya duplicate generation worker-internal invariant failure olarak ele alınıyor ve stale generation worker'ı sahte paused durumda bırakmıyor.
+
+Safe cleanup tamamlanırsa worker canlı kalıyor ve status `failed` döndürüyor. Cleanup güvenli biçimde tamamlanamazsa worker `unsafe` işaretlenip duruyor. Invariant helper response yazmıyor; tek correlated failure response yalnızca aktif protocol handler tarafından gönderiliyor. Bu ayrım önemliydi: sıradan target-code exception'ı internal invariant corruption değildir ve recoverable session `unknown` ile status refresh akışını kullanmaya devam eder.
+
+Review sırasında doğrudan worker beklemelerini sınırsız sayıda per-wait timeout tekrarından çıkarıp tek bir monotonic total deadline kullanacak şekilde değiştirdim. `test_stop_after_continue_pause_is_bounded` testinde session cleanup'ını `finally` içinde garanti altına aldım; assertion başarısız olsa bile session'ın bounded biçimde durdurulması sağlanıyor.
+
+### Test ve Doğrulama
+
+- Branch: `feature/mvp-pdb-continue-resume-v1`
+- Commit: `e9032dd Add persistent PDB continue control`
+- Targeted: **591 passed**
+- Full suite: **1045 passed, 2 skipped, 3 warnings**
+- Files changed: **6**
+- Diff: **1253 insertions, 21 deletions**
+- `python -m compileall -q agentic_debugger tests`: passed
+- `git diff --check`: clean
+- Runtime dependencies added: none
+
+Değişiklik kapsamı `agentic_debugger/runtime/pdb_protocol.py`, `agentic_debugger/runtime/pdb_session.py`, `agentic_debugger/runtime/pdb_worker.py`, `tests/integration/test_pdb_session_integration.py`, `tests/unit/test_pdb_protocol.py` ve `tests/unit/test_pdb_session.py` dosyalarından oluştu.
+
+Windows full suite içindeki iki skip platforma özgüydü ve Task 4B3 tarafından oluşturulmadı:
+
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group` — POSIX-specific process group test.
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded` — Windows, Job Object olmadan inherited-pipe testleri için POSIX process-group detachment'ı desteklemiyor.
+
+Üç warning de önceden var olan `PytestCollectionWarning` kayıtlarıydı: `TestRunKind`, `TestRunResult` ve `TestRunner`. Task 4B3 bu warning'leri eklemedi.
+
+Event-driven concurrency testleri `continue vs continue`, `continue vs terminate` ve `continue vs status` yarışlarını kapsadı. Testler session boundary'yi tam olarak bir request'in sahiplendiğini, yalnızca bir execution-control request gönderildiğini, loser çağrıların reddedildiğini, deadlock oluşmadığını ve thread'lerin bounded biçimde join edildiğini kanıtladı. Synchronization event'leri cleanup sırasında `finally` içinde serbest bırakıldı.
+
+### Öğrendiklerim
+
+Bu çalışmada aynı source line'a tekrar ulaşılabildiği için line equality veya inequality'nin execution progress'i kanıtlamadığını somut olarak gördüm. Tekrarlanan özdeş olayları ayırmak için monoton generation counter daha doğru bir model sağlıyor. Ayrıca bir lifecycle state'in yalnızca adı yeterli değil; onu destekleyen thread, runner ve frame gibi kaynaklar invariant'ı sağladığında state gerçekten authoritative oluyor.
+
+Failed-closed davranışın sadece bir hata döndürmek anlamına gelmediğini de öğrendim. Component hata sonrasında coherent bir lifecycle ve temizlenmiş kaynaklar bırakmalı. Response ownership'ın tek protocol handler'da tutulması duplicate protocol message riskini ortadan kaldırıyor. Bounded join yaparken lock'u önce bırakmak deadlock önlemek için zorunlu. Test beklemelerinde ayrı ayrı yenilenen timeout'lar yerine total deadline kullanmak gerçek bir üst sınır sağlıyor; cleanup'ın `finally` içinde olması da failure-safe test tasarımının parçası. Son olarak bütün testler geçse bile adversarial state-corruption counterexample'larının farklı bir güvence katmanı sunduğunu gördüm.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 4B3 tamamlandı ve bununla parent **Task 4B — Breakpoints and Execution Control** da tamamlandı. Task 4A tamamlanmış durumda kalıyor. Bu kayıt yalnızca execution-control kısmının bittiğini ifade ediyor; full PDB adapter veya Phase 4 tamamlanmış değildir.
+
+Bir sonraki tek aktif implementation maddesi **Task 4C — Stack, Frame and Locals Inspection** olacaktır. Task 4C expression evaluation, arbitrary PDB commands, controller integration, patch generation veya event-stream integration içermemelidir. Expression evaluation yalnızca gerekirse Task 4D kapsamında ele alınacaktır; controller ve event-stream entegrasyonu ise daha sonraki iş olarak kalmaktadır.

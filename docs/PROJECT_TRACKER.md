@@ -148,6 +148,7 @@ Rules:
 - [x] 4.6.3 MVP Task 4A — PDB Session Lifecycle and Protocol Foundation v1 (feature/mvp-pdb-session-foundation-v1, commit c8539a4)
 - [x] 4.6.4 MVP Task 4B1 — One-Shot Target Run to First Breakpoint v1 (feature/mvp-pdb-breakpoints-execution-v1, commit 84fe9e2)
 - [x] 4.6.5 MVP Task 4B2 — Persistent Paused Target Lifecycle Foundation v1 (feature/mvp-pdb-paused-lifecycle-v1, commits 78471cf and 9a921bd)
+- [x] 4.6.6 MVP Task 4B3 — Continue/Resume and Additional Execution Control v1 (feature/mvp-pdb-continue-resume-v1, commit e9032dd)
 
 ---
 
@@ -208,29 +209,31 @@ Rules:
 
 Current active item:
 
-- Task 4B3 — Continue/Resume and Additional Execution Control v1
+- Task 4C — Stack, Frame and Locals Inspection v1
 
 Notes:
 
 - The original Task 4 — PDB Session and Runtime Skills v1 is being executed as smaller sequential subtasks because the previous monolithic task exceeded the implementation agent's reliable working scope.
-- Task 4B2 is complete; Task 4B parent remains incomplete.
-- Task 4B3 must not include stack/frame/locals inspection.
-- Task 4B3 must not include expression evaluation.
+- Task 4B is complete; Task 4C is the active implementation item.
+- Task 4C must not include expression evaluation.
+- Task 4C must not include arbitrary PDB commands.
+- Task 4C must not include controller, patch-generation, or event-stream integration.
+- Task 4D remains conditional and is only required if expression evaluation is needed.
 - Tier 3 and supporting-paper reading remain deferred.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
-  - Task 4B — Breakpoints and Execution Control
+  - [x] Task 4B — Breakpoints and Execution Control
     - [x] Task 4B1 — One-Shot Target Run to First Breakpoint
     - [x] Task 4B2 — Persistent Paused Target Lifecycle Foundation
       - [x] Task 4B2A — Worker-Side Persistent Pause Lifecycle
       - [x] Task 4B2B — Public PdbSession Paused-Target API and Lifecycle Guards
-    - Task 4B3 — Continue/Resume and Additional Execution Control
+    - [x] Task 4B3 — Continue/Resume and Additional Execution Control
   - Task 4C — Stack, Frame and Locals Inspection
   - Task 4D — Safe Evaluation and PDB Integration Hardening, only if required
 
 ## Last Updated
 
-2026-07-21
+2026-07-22
 
 
 
