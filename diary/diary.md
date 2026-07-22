@@ -829,3 +829,100 @@ Failed-closed davranışın sadece bir hata döndürmek anlamına gelmediğini d
 Task 4B3 tamamlandı ve bununla parent **Task 4B — Breakpoints and Execution Control** da tamamlandı. Task 4A tamamlanmış durumda kalıyor. Bu kayıt yalnızca execution-control kısmının bittiğini ifade ediyor; full PDB adapter veya Phase 4 tamamlanmış değildir.
 
 Bir sonraki tek aktif implementation maddesi **Task 4C — Stack, Frame and Locals Inspection** olacaktır. Task 4C expression evaluation, arbitrary PDB commands, controller integration, patch generation veya event-stream integration içermemelidir. Expression evaluation yalnızca gerekirse Task 4D kapsamında ele alınacaktır; controller ve event-stream entegrasyonu ise daha sonraki iş olarak kalmaktadır.
+
+### Task 4C — Stack, Frame and Locals Inspection v1
+
+#### Amaç ve Kapsam
+
+Task 4C kapsamında persistent target duraklatılmışken stack, seçili frame ve locals hakkında salt-okunur, yapılandırılmış runtime incelemesi ekledim. İnceleme yalnızca target'ın authoritative biçimde `paused` olduğu durumda kullanılabiliyor. Expression evaluation, arbitrary PDB komutları ve raw PDB terminal erişimi kapsam dışında kaldı; kaynak kod penceresinin alınması da mevcut source araçlarının sorumluluğu olmaya devam ediyor. İnceleme target execution'ını resume etmiyor, pause generation'ı artırmıyor, breakpoint'leri veya locals değerlerini değiştirmiyor, yeni target thread ya da yeni target execution oluşturmuyor ve target lifecycle'ını değiştirmiyor.
+
+Worker tarafında başarılı inceleme için `worker lifecycle == paused`, canlı bir `_target_thread`, saklanan paused frame ve pozitif `pause_generation` invariant'larının tümü gerekli. Missing veya dead target thread, missing paused frame, geçersiz generation ya da yetkilendirilmemiş current frame hiçbir zaman başarılı inspection response üretmiyor. False-paused durumlar mevcut invariant-failure cleanup yolunu çalıştırıyor. Public session metotları da yalnızca doğrulanmış local `paused` durumundan çağrıya izin veriyor; diğer lifecycle durumlarındaki çağrılar sıfır inspection request gönderiyor. Stale generation veya unknown frame gibi ordinary inspection failure'ları session'ı `READY`, local target lifecycle'ını ise `paused` bırakıyor. Local lifecycle daha önce başka bir recoverable operasyon hatası nedeniyle `unknown` olmuşsa `get_target_status()` authoritative `paused` durumunu geri kazanabiliyor ve ardından inspection yeniden kullanılabiliyor.
+
+#### Ana Implementasyon
+
+Üç public metodu kaydettim:
+
+```python
+get_stack_summary() -> Dict[str, object]
+
+get_frame(
+    frame_id: int,
+    pause_generation: int,
+) -> Dict[str, object]
+
+get_frame_locals(
+    frame_id: int,
+    pause_generation: int,
+) -> Dict[str, object]
+```
+
+Canonical protokol operasyonları sırasıyla `get_stack_summary`, `get_frame` ve `get_frame_locals`. Stack isteği `{}` payload'ını, frame ve locals istekleri ise örneğin `{"frame_id": 0, "pause_generation": 1}` payload'ını kullanıyor. Alias, arbitrary PDB command veya raw PDB terminal erişimi eklenmedi.
+
+Frame kimliği ephemeral ve pause generation'a bağlı: `frame_id 0` current paused frame'i, `frame_id 1` immediate authorized caller'ı, `frame_id 2` bir sonraki authorized caller'ı gösteriyor; sıralama innermost/current frame'den eski caller'lara doğru ilerliyor. Her stack response mevcut pozitif `pause_generation` değerini içeriyor ve `get_frame` ile `get_frame_locals` çağrılarında bu generation'ın gönderilmesi gerekiyor. Continue sonrasında daha sonraki bir pause'a gelindiğinde generation artıyor, frame numaralandırması yeniden sıfırdan başlıyor ve eski frame ID/generation çifti stale oluyor. Stale istek ordinary failure dönüyor; session `READY`, target ise paused kalıyor ve yeni generation ile inspection başarılı oluyor. Freshness source-line equality ile belirlenmiyor.
+
+Yalnızca aktif workspace içinde güvenle canonicalize edilebilen target frame'lerini dışarı açtım. Worker implementation ve protocol-loop frame'leri, workspace dışındaki stdlib ve site-packages frame'leri, absolute host path'leri, malformed path'leri, symlink veya junction escape'lerini ve canonical biçimde temsil edilemeyen path'leri filtreledim. Script değerleri yalnızca canonical, forward-slash kullanan, workspace-relative `.py` path'leri olarak dönüyor. Current paused frame'in kendisi authorized workspace frame'i olarak temsil edilemiyorsa boş başarılı stack yerine invariant failure oluşuyor; current olmayan external caller frame'leri ise filtreleniyor.
+
+Stack summary'nin top-level alanları tam olarak `state`, `script`, `pause_generation`, `frames`, `total_frames`, `truncated`. Her frame summary de tam olarak `frame_id`, `script`, `line`, `function`, `is_current` alanlarını içeriyor. Frame ID'leri sıfırdan başlayan contiguous değerler; frame zero current ve tam olarak bir frame current. Line değerleri strict positive integer, function adları bounded UTF-8 string ve script'ler canonical workspace path'i. Byte fitting öncesi maksimum logical frame sayısı 64; `total_frames` gerçek authorized stack depth'i koruyor, `truncated` ise frame omission olduğunu kaydediyor.
+
+Frame detail tam olarak `frame_id`, `script`, `line`, `function`, `is_current`, `argument_names`, `local_names`, `locals_count`, `locals_truncated` alanlarını açıyor. Argument adları value evaluation yapılmadan code object'ten çıkarılıyor; positional-only, positional, keyword-only, `*args` ve `**kwargs` destekleniyor ve sıralama code object'i izliyor. Local adları deterministic ve sorted; en fazla 128 local adı dönüyor, `locals_count` gerçek sayıyı koruyor. `get_frame` hiçbir local value veya global döndürmüyor.
+
+Başarılı lifecycle akışlarını `start -> paused -> stack -> frame -> locals -> continue`, generation 1'de inspect edip continue ile generation 2'ye geçme ve eski generation isteğini ordinary failure olarak reddedip yeni generation'ı kabul etme, `start -> paused -> inspect -> terminate -> terminated` ve `start -> paused -> inspect -> continue -> exited` biçimlerinde doğruladım. Inspection; continue davranışını, inspection sonrası termination'ı, bounded stop'u, context-manager cleanup'ını, ping'i, status'u, target thread identity'yi ve pause generation'ı koruyor. Persistent frame cache eklenmedi. Eski paused-frame referansları continue, exit, failure, termination, invariant cleanup, shutdown ve context-manager cleanup sırasında bırakılıyor.
+
+#### Güvenli Locals Serileştirmesi
+
+`get_frame_locals`, Python objeleri veya raw `repr` string'leri yerine bounded structured summary döndürüyor. Her value summary'nin exact alanları `kind`, `type`, `value`, `special`, `size`, `items`, `entries`, `truncated`; desteklenen kind değerleri `none`, `bool`, `int`, `float`, `str`, `bytes`, `list`, `tuple`, `dict`, `set`, `frozenset` ve `object`.
+
+Scalar incelemesinde yalnızca exact built-in tipleri kabul ettim; `bool`, `int`'ten ayrı kalıyor. Integer decimal serileştirme eşiği 4096 bit; daha büyük integer değerlerde sınırsız decimal conversion yapılmadan bit length raporlanıyor. Finite float'lar JSON number olarak dönüyor; `nan`, `inf` ve `-inf`, `value = null` ile `special` alanında gösteriliyor ve non-standard JSON NaN/Infinity token'ı üretilmiyor. String preview en fazla 2048 UTF-8 byte ve truncation geçerli Unicode boundary'yi koruyor; embedded NUL reddedilmeyip güvenli JSON escape'iyle taşınıyor. Bytes preview en fazla 1024 raw byte'ı lowercase hexadecimal olarak kodluyor.
+
+Yalnızca exact built-in `list`, `tuple`, `dict`, `set` ve `frozenset` container'larını traverse ettim. Maksimum recursion depth 2, maksimum sequence item sayısı 16 ve maksimum dictionary entry sayısı 16. List ve tuple sırası ile built-in dict insertion order korunuyor; set ve frozenset yalnızca length açıyor. Cyclic container'lar güvenle sonlanıyor, depth veya item omission `truncated` alanını işaretliyor ve built-in container subclass'ları generic object olarak ele alınıyor. Local adları deterministic sorted düzende ve en fazla 128 tane dönüyor; locals result object için maksimum compact budget 32768 UTF-8 byte.
+
+Unsupported veya user-defined object'ler yalnızca bounded ve güvenli type name açıyor. İnceleme user-defined `__repr__`, `__str__`, `__format__`, `__len__`, `__iter__`, `__getitem__`, instance `__getattribute__`, property, descriptor veya metaclass hook çağırmıyor. Hostile test object'leri marker file oluşturmadı ve exception sızdırmadı. Implementasyona `vars`, `dir`, `pprint`, `inspect.getmembers`, arbitrary serializer, `eval` veya `exec` eklenmedi.
+
+Session recursive validation'ında canonical kind/type eşlemesini şu şekilde zorunlu tuttum: `none -> builtins.NoneType`, `bool -> builtins.bool`, `int -> builtins.int`, `float -> builtins.float`, `str -> builtins.str`, `bytes -> builtins.bytes`, `list -> builtins.list`, `tuple -> builtins.tuple`, `dict -> builtins.dict`, `set -> builtins.set`, `frozenset -> builtins.frozenset`. `object` için bounded safe `module.qualname` veya `unknown` kabul ediliyor. Örneğin `kind = int` ile `type = evil.Type` taşıyan malformed successful result protocol corruption olarak reddediliyor; session fail oluyor, worker temizleniyor, partial result dönmüyor ve sonraki ping reddediliyor.
+
+#### Review ve Repair Süreci
+
+İlk implementation kendi testlerini geçti. Bağımsız adversarial review ise legal 64-frame bir stack'te uzun function adlarının 65536-byte protocol line sınırını aşabildiğini ve maksimum uzunlukta 128 local adı olan bir frame'in de aynı sınırı aşabildiğini gösterdi. Ayrıca session validation yalnızca result-object boyutunu kontrol ediyor, complete response'u kontrol etmiyordu; `int` ile `evil.Type` gibi canonical olmayan kind/type eşleşmeleri de kabul ediliyordu.
+
+Repair sırasında worker'a canonical serializer üzerinden complete successful `PdbResponse` preflight'ı ekledim. Bu kontrol protocol envelope, request ID, result, error ve newline'ın tamamını hesaba katıyor. Protokol serialized line için 65536 byte dahil olmak üzere izin veriyor, daha büyük satırları reddediyor; boundary doğrulamasında 65535 ve 65536 kabul edildi, 65537 reddedildi. `get_frame_locals` için ayrıca 32768 UTF-8 byte compact result-object bütçesi korunuyor.
+
+Long-stack karşı örneğinde pre-repair complete response **101560 byte**, repaired complete response **65132 byte** ölçüldü. Gerçek authorized frame sayısı **65**, dönen frame sayısı **41** oldu. Response sığana kadar caller frame'leri sondan deterministic biçimde çıkarılıyor; frame zero present ve current kalıyor, ID'ler contiguous kalıyor, `total_frames = 65` ve `truncated = true` dönüyor.
+
+Long-local-name karşı örneğinde pre-repair complete frame response **66217 byte**, repaired complete frame response **65186 byte** ölçüldü. Gerçek local sayısı **128**, dönen local adı sayısı **126** oldu. Local adları response sığana kadar sondan çıkarılıyor; sorted order ve gerçek `locals_count = 128` korunuyor, `locals_truncated = true` oluyor.
+
+Argument-only overflow örneğinin complete response boyutu **66222 byte** oldu. Argument adlarında truncation alanı bulunmadığından bunlar sessizce atılmıyor. Operasyon exact empty result içeren tek bir ordinary correlated failure dönüyor; session `READY`, target paused kalıyor, ping ve sonraki geçerli inspection kullanılabiliyor ve execution ilerlemiyor. Internal `Serialized response exceeds MAX_LINE_LENGTH` hatası dışarı açılmıyor.
+
+Repair ayrıca canonical kind/type mapping'i recursive olarak zorunlu kıldı. Enjekte edilmiş oversized successful response'lar artık session'ı fail edip worker'ı temizliyor ve partial result bırakmıyor. Böylece logical count limitleri ile byte limitlerinin ayrı güvenlik sınırları olduğu hem worker hem session katmanında doğrulandı.
+
+Concurrency doğrulamasında `stack vs continue`, `locals vs continue`, `frame vs terminate`, `locals vs status` ve `locals vs locals` yarışlarını event-driven testlerle kapsadım. Bu testler session boundary'yi tam olarak bir request'in sahiplendiğini, tam olarak bir inspection request gönderildiğini, loser'ın established session error aldığını, inspection'ın execution'ı ilerletmediğini, deadlock oluşmadığını ve thread'lerin bounded biçimde join edildiğini gösterdi. Synchronization event'leri `finally` içinde serbest bırakıldı.
+
+#### Test ve Doğrulama
+
+- Branch: `feature/mvp-pdb-inspection-v1`
+- Commit: `24ecc7a Add PDB stack frame and locals inspection`
+- Targeted: **714 passed, 0 failed, 0 skipped, 0 warnings**
+- Full suite: **1168 passed, 0 failed, 2 skipped, 3 warnings**
+- Files changed: **6**
+- Diff: **2759 insertions, 8 deletions**
+- `python -m compileall -q agentic_debugger tests`: passed
+- `git diff --check`: clean
+- Runtime dependencies added: none
+
+Implementation kapsamı `agentic_debugger/runtime/pdb_protocol.py`, `agentic_debugger/runtime/pdb_session.py`, `agentic_debugger/runtime/pdb_worker.py`, `tests/integration/test_pdb_session_integration.py`, `tests/unit/test_pdb_protocol.py` ve `tests/unit/test_pdb_session.py` dosyalarından oluştu.
+
+Final Windows full suite içindeki iki skip platforma özgüydü ve Task 4C tarafından oluşturulmadı:
+
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group` — POSIX-specific process group test.
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded` — Windows, Job Objects olmadan inherited-pipe testleri için gereken POSIX process-group detachment davranışını desteklemiyor.
+
+Üç warning de önceden var olan `PytestCollectionWarning` kayıtlarıydı: `TestRunKind`, `TestRunResult` ve `TestRunner`. Task 4C bu warning'leri oluşturmadı.
+
+#### Öğrendiklerim
+
+Frame ID'lerinin tek başına kalıcı kimlik olmadığını, mutlaka bir pause generation'a bağlanması gerektiğini öğrendim. External frame'leri veri açığa çıkmadan önce filtrelemek ve yalnızca canonical workspace frame'lerini kabul etmek güven sınırının önemli bir parçası. Güvenli inspection `repr`'a dayanamaz; exact built-in type kontrolleri container subclass'larının ve user-defined davranışların tetiklenmesini engelliyor.
+
+Result-object boyut sınırının tek başına protocol-line sınırını garanti etmediğini de somut ölçümlerle gördüm: complete envelope boyutu ayrıca preflight edilmeli. Logical count limitleri ve byte limitleri birbirinden bağımsız. Malformed successful response sıradan iş hatası değil protocol corruption olarak ele alınmalı; buna karşılık stale frame/generation ordinary failure olarak sağlıklı paused session'ı bozmamalı. Son olarak testlerin geçmesi önemli olsa da adversarial boundary construction'ın yerini tutmuyor; uzun function, local ve argument adları ancak kasıtlı uç örneklerle complete-response açığını görünür yaptı.
+
+#### Sonuç / Bir Sonraki Adım
+
+Task 4C tamamlandı. Task 4A ve Task 4B tamamlanmış durumda kalıyor; ancak **Task 4 — PDB Session and Runtime Skills** henüz tamamlanmadı. Bir sonraki tek aktif madde **Task 4D — Safe Evaluation and PDB Integration Hardening v1**. Task 4D arbitrary `eval`, `exec` veya raw/arbitrary PDB commands açmamalı ve Task 4A–4C kontratlarını korumalıdır. Controller, patch-generation ve event-stream integration daha sonraki işler olarak kalıyor.
