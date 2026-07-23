@@ -137,7 +137,7 @@ Rules:
 - [x] 4.3.2 Build deterministic code-search tool.
 - [x] 4.3.3 Build deterministic test-run tool.
 - [x] 4.3.4 Build deterministic patch-apply tool.
-- [ ] 4.4.1 Build single-agent controller loop.
+- [x] 4.4.1 Build single-agent controller loop.
 - [ ] 4.5.1 Add localization output.
 - [ ] 4.5.2 Add root-cause explanation output.
 - [ ] 4.5.3 Add patch proposal output.
@@ -151,6 +151,7 @@ Rules:
 - [x] 4.6.6 MVP Task 4B3 — Continue/Resume and Additional Execution Control v1 (feature/mvp-pdb-continue-resume-v1, commit e9032dd)
 - [x] 4.6.7 MVP Task 4C — Stack, Frame and Locals Inspection v1 (feature/mvp-pdb-inspection-v1, commit 24ecc7a)
 - [x] 4.6.8 MVP Task 4D — Safe Evaluation and PDB Integration Hardening v1 (feature/mvp-pdb-safe-evaluation-v1, commit 17a7ebb)
+- [x] 4.6.9 MVP Task 5 — Controller State Machine and Tool Policy v1 (feature/mvp-controller-v1, commits 532214e, e2187e2, 365dc49 and 43d00c8)
 
 ---
 
@@ -211,7 +212,7 @@ Rules:
 
 Current active item:
 
-- Task 5 — Controller State Machine and Tool Policy v1
+- Task 6 — Curated Benchmark Fixtures v1
 
 Notes:
 
@@ -220,11 +221,11 @@ Notes:
 - Task 4C complete.
 - Task 4D complete.
 - parent Task 4 complete.
-- Task 5 active.
-- Controller will use existing deterministic typed tools.
-- Task 5 covers transitions, action allowlists, budgets, hypothesis lifecycle, PDB gating, deterministic tool registry and mocked model adapter.
-- No real or paid model call in default tests.
-- Task 6 curated fixtures remains later.
+- Task 5 complete.
+- Task 5 was fast-forward merged into `main` at `43d00c8`.
+- Task 6 is now the single active implementation item.
+- Task 6 should create the first tiny curated pytest-compatible bug fixtures.
+- Real model integration remains later.
 - Task 7 verifier/evaluation remains later.
 - Tier 3/supporting-paper reading remains deferred.
 - Planned decomposition:
@@ -238,11 +239,12 @@ Notes:
   - [x] Task 4C — Stack, Frame and Locals Inspection
   - [x] Task 4D — Safe Evaluation and PDB Integration Hardening
 - [x] Task 4 — PDB Session and Runtime Skills
-- Task 5 — Controller State Machine and Tool Policy
+- [x] Task 5 — Controller State Machine and Tool Policy
+- Task 6 — Curated Benchmark Fixtures v1
 
 ## Last Updated
 
-2026-07-22
+2026-07-23
 
 
 

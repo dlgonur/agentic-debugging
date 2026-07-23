@@ -1052,3 +1052,90 @@ Son olarak, tüm testler geçse bile bağımsız adversarial review'in dört ayr
 Task 4D tamamlandı. Task 4A, Task 4B ve Task 4C tamamlanmış durumda kalıyor. Parent **Task 4 — PDB Session and Runtime Skills** artık tamamlanmıştır. Full proje ve Phase 4 tamamlanmamıştır.
 
 Bir sonraki tek aktif implementation maddesi **Task 5 — Controller State Machine and Tool Policy v1**'dir. Task 5, mevcut deterministik araçları policy ve state transition'ları üzerinden birbirine bağlamalıdır. Default testlerde gerçek ücretli model çağrısı eklememelidir. Curated benchmark fixture'ları Task 6'ya, verifier/evaluation runner ise Task 7'ye bırakılmalıdır.
+
+### Task 5 — Controller State Machine and Tool Policy v1
+
+#### Amaç ve Kapsam
+
+Task 5'in amacı, önceki task'larda oluşturulan deterministik ve tipli kontratları bir controller policy katmanı üzerinden birbirine bağlamaktı. Bu task controller state machine'ini, model ile tool arasındaki sınırları ve deterministik bir execution loop'u tamamladı; ancak gerçek runtime veya PDB araçlarını controller'a bağlamadı. Gerçek veya ücretli model çağrısı eklenmedi ve varsayılan test davranışı yalnızca scripted/mock model adapter üzerinden yürütüldü.
+
+#### Ana Implementasyon
+
+Controller state'leri ve izin verilen action listeleri açık biçimde tanımlandı. Transition'lar observation'ları otomatik olarak yorumlayıp kendiliğinden state değiştirmek yerine model directive'leri ve explicit transition policy tarafından yönlendirildi. Controller loop model çağrısı, action validation, dispatch ve bounded result üretimini bu policy sınırları içinde yürüttü.
+
+Budget enforcement dispatch'ten önce yapıldı. Patch, test, PDB ve source-observation budget'ları, canonical dispatch reason'lara göre tüketildi; aynı action'ın farklı kayıt veya yürütme yollarında farklı bütçe hesabına girmesi engellendi. Deterministic action, observation ve step ID'leri ile canonical controller-owned state ve detached model-facing snapshot'lar kullanıldı.
+
+#### Controller Policy ve State Machine
+
+Root-cause hypothesis kayıtları immutable olacak şekilde tasarlandı ve kontrollü lifecycle kurallarıyla ilerledi. Controller'ın state-specific action allowlist'i her state'te hangi action'ın kabul edilebileceğini açıkça belirledi. Automatic observation-driven transition, adaptive PDB gate, hidden run cursor ve controller tarafından event generation bu task'ın kapsamına alınmadı.
+
+Caller-owned run config construction sırasında canonical hale getirildi. Böylece daha sonra caller'ın aynı config nesnesinde yaptığı değişiklikler controller'ın execution davranışını etkileyemedi. Controller veya registry sınırında unsafe ya da malformed çıktı oluştuğunda ordinary internal exception sızdırılmadı; bunun yerine bounded `controller_error` run result üretildi.
+
+#### Tool Registry ve Model Adapter
+
+Tool registry private ve deterministik tutuldu. Action argümanları ve observation payload'ları strict exact-type bounded JSON validation'dan geçirildi; scalar, container, depth, item ve byte sınırları exact built-in türlerle uygulandı. Tool handler'larına verilen dispatch action, trace'te saklanan recorded action'dan ayrı bir nesne oldu.
+
+Model-facing snapshot'lar controller-owned canonical state'ten detached üretildi. Nested state'in paylaşılmaması, model adapter'ın controller state'ini dolaylı biçimde değiştirememesi ve recorded action'ın handler tarafından mutate edilememesi trust boundary'nin temel parçaları oldu. Default adapter scripted/mock davranış sağladı; gerçek model entegrasyonu daha sonraki bir task'a bırakıldı.
+
+#### Controller Trust Boundaries
+
+İlk controller implementation kendi testlerini geçti; fakat bağımsız adversarial review dört trust-boundary kusuru buldu:
+
+1. Model-facing snapshot'lar nested controller state'i paylaşıyordu.
+2. Tool handler'ları trace'te tutulan action'ın aynısını alıyordu.
+3. Caller-owned run config sonraki execution'ı etkileyebiliyordu.
+4. Malformed observation payload'ları strict validation'dan önce incelenebiliyordu.
+
+İkinci repair review şu bulguları ortaya çıkardı:
+
+1. `ControllerStepResult` exact scalar validation'dan önce equality yapıyordu.
+2. Default config object controller instance'ları arasında paylaşılıyordu.
+3. Runtime validation hâlâ caller-owned config'e başvuruyordu.
+4. Gerekli adversarial regression matrix'inin bazı parçaları eksikti.
+5. Untracked file'lar için cumulative evidence üretiminde reproducible alternate-index yöntemi gerekiyordu.
+
+Task 5C3 bu bulguları onardı ve kalıcı adversarial regression coverage ekledi. Strict validation artık değerleri gözlemlemeden önce exact türleri doğruluyor; config, runtime validation ve action/observation sınırları controller-owned canonical verilere dayanıyor.
+
+#### Review ve Repair Süreci
+
+Review süreci, yalnızca nominal controller akışlarının değil, model çıktısının, tool registry'sinin, config'in ve serialized boundary'lerin adversarial biçimde denetlenmesi gerektiğini gösterdi. Özellikle model snapshot'larının detached olması, recorded ve dispatch action'larının ayrılması ve malformed JSON benzeri payload'ların bounded sonuçlara çevrilmesi güvenilirlik için zorunlu hale geldi.
+
+Controller'a hidden run cursor, event generation, gerçek model call, runtime/PDB tool integration veya adaptive PDB gate eklenmedi. Task 5 herhangi bir benchmark bug'ını onarmadı ve gerçek runtime/PDB tool çağırmadı.
+
+#### Test ve Doğrulama
+
+Branch: `feature/mvp-controller-v1`
+Final commit: `43d00c8 Add hardened controller state machine v1`
+
+Controller tests: **108 passed**
+Targeted: **386 passed**
+Full suite: **1671 passed, 2 skipped, 3 warnings**
+
+`python -m compileall -q agentic_debugger tests`: passed
+`git diff --check`: passed
+Runtime dependencies added: none
+
+Önceden var olan ve Task 5 tarafından oluşturulmayan iki skip node'ı şunlardı:
+
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group`
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded`
+
+Üç mevcut `PytestCollectionWarning` konumu şunlardı:
+
+- `agentic_debugger/runtime/test_runner.py:13`
+- `agentic_debugger/runtime/test_runner.py:20`
+- `agentic_debugger/runtime/test_runner.py:40`
+
+Bu warning'ler `TestRunKind`, `TestRunResult` ve `TestRunner` collection'ı ile ilgilidir ve Task 5 tarafından oluşturulmamıştır.
+
+#### Öğrendiklerim
+
+Typed contract'ları bir controller policy katmanında birleştirmenin yalnızca state transition yazmaktan ibaret olmadığını öğrendim. Model-facing snapshot, recorded action, dispatch action, canonical config ve strict serialization sınırlarının her biri ayrı bir güven sınırı oluşturuyor. Kendi testlerinin geçmesi, nested aliasing veya validation sıralaması gibi kusurları garanti etmiyor; adversarial review ve kalıcı regression testleri gerekli.
+
+Budget tüketiminin canonical dispatch reason'a bağlanması da önemli bir ders oldu. Aynı yürütme kararının farklı katmanlarda farklı adlarla işlenmesi bütçe politikasını zayıflatabileceğinden, enforcement'ın dispatch öncesinde ve tek bir canonical neden üzerinden yapılması gerekiyor.
+
+#### Sonuç / Bir Sonraki Adım
+
+Task 5 tamamlandı. `feature/mvp-controller-v1` branch'i fast-forward olarak `main` branch'ine merge edilip push edildi; `main` ve `origin/main` artık `43d00c8` commit'ini gösteriyor.
+
+Bir sonraki tek aktif implementation task'ı **Task 6 — Curated Benchmark Fixtures v1**'dir. Task 6, faydalı runtime state açığa çıkaran küçük ve deterministik pytest-compatible bug fixture'larıyla başlamalıdır. Task 7 verifier/evaluation ve gerçek model entegrasyonu daha sonraki işler olarak kalıyor.
