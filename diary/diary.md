@@ -1139,3 +1139,104 @@ Budget tüketiminin canonical dispatch reason'a bağlanması da önemli bir ders
 Task 5 tamamlandı. `feature/mvp-controller-v1` branch'i fast-forward olarak `main` branch'ine merge edilip push edildi; `main` ve `origin/main` artık `43d00c8` commit'ini gösteriyor.
 
 Bir sonraki tek aktif implementation task'ı **Task 6 — Curated Benchmark Fixtures v1**'dir. Task 6, faydalı runtime state açığa çıkaran küçük ve deterministik pytest-compatible bug fixture'larıyla başlamalıdır. Task 7 verifier/evaluation ve gerçek model entegrasyonu daha sonraki işler olarak kalıyor.
+
+### Task 6 — Curated Benchmark Fixtures v1
+
+#### Amaç ve Kapsam
+
+Task 6'nın amacı, gerçek model veya büyük bir benchmark entegrasyonundan önce küçük, deterministik ve denetlenebilir debugging örnekleri oluşturmaktı. Tiny curated fixture'lar BugsInPy veya full SWE-bench'ten önce gelmeli; böylece task yükleme, test sözleşmeleri, oracle metadata'sı, reproduction ve integrity davranışı küçük bir yüzeyde güvenilir biçimde doğrulanabilir. Bu task'ta verifier runner, patch evaluation, workspace restoration, gerçek model kullanımı veya controller-runtime integration geliştirilmedi.
+
+Beş fixture oluşturuldu:
+
+- curated-none-handling-001
+- curated-off-by-one-002
+- curated-wrong-branch-003
+- curated-mutation-alias-004
+- curated-caller-callee-005
+
+Her fixture task.json, bir defective source file ve bir pytest test file'ından oluşur. Böylece toplam fixture file sayısı 15'tir. Kategoriler sırasıyla none handling, off-by-one, wrong branch, mutation alias ve caller-callee sözleşmesi hatalarını temsil eder. Her hata, debugger'ın yalnızca traceback görmesi yerine ilgili runtime state'i (değer, sınır, branch seçimi, alias/mutation etkisi veya çağıran-çağrılan fonksiyon ilişkisi) incelemesini gerektirecek şekilde tasarlandı.
+
+Her fixture'ta tam olarak bir intentional baseline failure bulunur. Bu tek fail-to-pass (F2P) testi, defect'in onarılmasıyla geçmesi gereken ana başarı ölçümünü belirgin tutar. En az iki pass-to-pass (P2P) testi ise düzeltmenin zaten doğru olan davranışları bozmadığını sınar. F2P ile P2P ayrımı yapılmazsa bir fixture, yalnızca genel test sayısını artırarak başarılı görünebilir veya regression üretirken doğru kabul edilebilir.
+
+#### Fixture Tasarımı
+
+Fixture'lar pytest-compatible, küçük ve bağımsız tutuldu. Her biri deterministic argv-based reproduction sağlar; network veya external service dependency içermez. Defect'ler gerçek bir debugging oturumunda anlamlı olabilecek runtime state'i açığa çıkarır, ancak fixture oracle'ları agent'a önceden verilmez. Bu yaklaşım daha sonra verifier'ın baseline, patch sonrası davranış ve regression sonuçlarını aynı sözleşmeyle karşılaştırmasına izin verir.
+
+#### Manifest ve Test Sözleşmeleri
+
+Manifest'ler mevcut DebugTask schema v1 sözleşmesini kullanır; schema değişikliği yapılmadı. Manifest metadata'sında target-file ve target-symbol oracle bilgisi ile reproduction bilgisi bulunur. Oracle data agent_visible_mapping() tarafından expose edilmez; agent yalnızca kendisine açık olan task görünümünü alır, integrity ve evaluator kontrolleri ise repository içindeki canonical metadata'yı kullanır.
+
+Normal repository pytest çalıştırması intentional fixture failure'larını doğrudan collect etmez. Fixture test node'ları fixture kökleri içinde ayrı çalıştırılır; bu nedenle ana repository suite'i, baseline olarak fail etmesi tasarlanan testleri kendi normal test collection'ına karıştırmaz.
+
+#### Integrity Harness
+
+tests/unit/test_curated_fixture_integrity.py, fixture'ların yalnızca nominal olarak çalıştığını değil, ilan edilen sözleşmeye sadık kaldığını denetler. Integrity testleri exact collected node set'lerini, declared node order ile reversed node order'ın single-process pytest subprocess'ları içindeki tekrarını, repeated execution'ı, fixture isolation'ını ve tüm fixture dosyalarının byte immutability'sini doğrular. Full-suite collection'ın manifest node set'iyle tam eşitliği de kontrol edilir; eksik veya fazladan test sessizce kabul edilmez.
+
+İlk bağımsız review fixture davranışının doğru olduğunu doğruladı, fakat integrity harness'te dört boşluk buldu:
+
+1. compileall tarafından üretilen __pycache__/*.pyc dosyaları sonraki integrity validation'ı bozuyordu.
+2. Reversed execution node'ları ayrı subprocess'larda çalıştırıyor ve aynı-process order independence'ı kanıtlamıyordu.
+3. Reproduction execution manifest'teki cwd alanını yok sayıyor ve yanlış timeout alanını kullanıyordu.
+4. Full-suite collection'ın manifest node set'iyle exact equality'si kontrol edilmiyordu.
+
+#### Autonomous Campaign ve Subagent Döngüsü
+
+Autonomous campaign bir write-active supervisor, bir read-only fixture auditor, bir read-only benchmark reviewer ve bir read-only fixture validator kullandı. Cumulative evidence ve bağımsız external review birlikte değerlendirildi; write yetkisi yalnızca supervisor'da kaldı. Bu ayrım, fixture dosyalarının üretimi ile bunların salt-okunur sözleşme ve bütünlük denetiminin birbirinden ayrılmasını sağladı.
+
+#### İlk Review Bulguları
+
+İlk review sonucunda temel fixture davranışının doğru olmasına rağmen integrity harness'in compiler yan etkisi, subprocess sınırı, manifest alanlarının uygulanmaması ve collection completeness konularında yeterli kanıt üretmediği görüldü. Bu bulgular fixture'ların yeniden tasarlanmasını gerektirmedi; sorunlar validation ve harness seviyesinde dar kapsamlı repair ile giderildi.
+
+#### Task 6R1 Repair
+
+Task 6R1 şu düzeltmeleri yaptı:
+
+- Canonical payload validation'da yalnızca exact __pycache__ dizinleri altındaki .pyc dosyaları dar biçimde dışlandı.
+- Mutation detection için complete byte snapshots korunmaya devam etti; broad cache ignore uygulanmadı.
+- Declared ve reversed node order aynı pytest subprocess'ı içinde çalıştırıldı.
+- Manifest cwd değeri fixture root içinde güvenli biçimde resolve edildi.
+- Manifest reproduction timeout alanı kullanıldı.
+- Collected node set'lerinin manifest node set'leriyle exact equality'si doğrulandı.
+
+R1 boyunca 15 fixture dosyasının tamamı byte-for-byte unchanged kaldı.
+
+#### Test ve Doğrulama
+
+Kesin final evidence:
+
+- Branch: feature/mvp-curated-bugs-v1
+- Commit: eedcccb Add curated benchmark fixtures v1
+- Fixture files: 15
+- Integrity test: tests/unit/test_curated_fixture_integrity.py
+- Schema plus integrity: 70 passed
+- Focused integrity: 11 passed
+- Relevant regressions: 121 passed, 2 skipped, 3 warnings
+- Full suite: 1682 passed, 2 skipped, 3 warnings
+- Compileall: passed
+- git diff --check: passed
+- Dependencies: none
+
+İki mevcut skip node ID'si:
+
+- tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group
+- tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded
+
+Üç warning location'ı:
+
+- agentic_debugger/runtime/test_runner.py:13
+- agentic_debugger/runtime/test_runner.py:20
+- agentic_debugger/runtime/test_runner.py:40
+
+Bu skips ve PytestCollectionWarning kayıtları mevcut repository durumundan gelmektedir; Task 6 tarafından oluşturulmadı. Task 6'da dependency eklenmedi, network veya external service kullanılmadı, gerçek model çağrısı ve evaluator runner eklenmedi.
+
+#### Öğrendiklerim
+
+Tiny fixture'larda bile baseline F2P ile P2P sözleşmelerini açıkça ayırmanın, yalnızca toplam test sayısına bakmaktan çok daha anlamlı olduğunu öğrendim. Oracle metadata'sının agent_visible_mapping() dışında tutulması, agent'ın debugging yaparken evaluator bilgisini doğrudan görmemesini sağlıyor. Aynı zamanda deterministic argv reproduction, güvenilir bir sonraki verifier katmanı için kritik bir temel oluşturuyor.
+
+Integrity tarafında compiler-generated .pyc artifact'larının gerçek bir mutation olmadığını, fakat broad cache ignore'ların gerçek dosya değişikliklerini gizleyebileceğini gördüm. Bu nedenle yalnızca exact __pycache__ dizinleri altındaki .pyc dosyaları dar biçimde ele alındı ve complete byte snapshots ile mutation detection korundu. Manifest cwd ve timeout alanlarının gerçekten uygulanması da manifest'in yalnızca açıklama değil, yürütme sözleşmesi olduğunu gösterdi.
+
+#### Sonuç / Bir Sonraki Adım
+
+Task 6 tamamlandı. feature/mvp-curated-bugs-v1 branch'i fast-forward olarak main branch'ine merge edilip push edildi; main ve origin/main eedcccb commit'ini gösteriyor.
+
+Bir sonraki tek aktif implementation item Task 7 — Verifier and Evaluation Runner v1'dir. Task 7 henüz başlamadı. Task 7; task loading ve workspace preparation, reproduction execution, F2P/P2P validation, patch application ve restoration, outcome classification, deterministic metrics/result records ve curated fixture execution'ını kapsamalı; şimdilik gerçek model çağrısı eklenmemelidir. Real model integration, adaptive PDB gating, BugsInPy ve Tier 3 ertelenmiştir.

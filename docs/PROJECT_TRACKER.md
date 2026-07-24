@@ -152,6 +152,8 @@ Rules:
 - [x] 4.6.7 MVP Task 4C — Stack, Frame and Locals Inspection v1 (feature/mvp-pdb-inspection-v1, commit 24ecc7a)
 - [x] 4.6.8 MVP Task 4D — Safe Evaluation and PDB Integration Hardening v1 (feature/mvp-pdb-safe-evaluation-v1, commit 17a7ebb)
 - [x] 4.6.9 MVP Task 5 — Controller State Machine and Tool Policy v1 (feature/mvp-controller-v1, commits 532214e, e2187e2, 365dc49 and 43d00c8)
+- [x] 4.6.10 MVP Task 6 — Curated Benchmark Fixtures v1 (feature/mvp-curated-bugs-v1, commit eedcccb)
+- [ ] 4.6.11 MVP Task 7 — Verifier and Evaluation Runner v1
 
 ---
 
@@ -212,7 +214,7 @@ Rules:
 
 Current active item:
 
-- Task 6 — Curated Benchmark Fixtures v1
+- Task 7 — Verifier and Evaluation Runner v1
 
 Notes:
 
@@ -223,11 +225,13 @@ Notes:
 - parent Task 4 complete.
 - Task 5 complete.
 - Task 5 was fast-forward merged into `main` at `43d00c8`.
-- Task 6 is now the single active implementation item.
-- Task 6 should create the first tiny curated pytest-compatible bug fixtures.
+- Task 6 complete: five curated pytest-compatible bug fixtures were reviewed, repaired, merged and pushed.
+- Task 6 was fast-forward merged into main at eedcccb; main and origin/main point to eedcccb.
+- Task 7 is now the single active implementation item.
+- Task 7 should cover task loading and workspace preparation, reproduction execution, fail-to-pass and pass-to-pass validation, patch application and restoration, outcome classification, deterministic metrics/result records, and curated fixture execution.
+- Task 7 must not make real model calls yet.
 - Real model integration remains later.
-- Task 7 verifier/evaluation remains later.
-- Tier 3/supporting-paper reading remains deferred.
+- Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - [x] Task 4B — Breakpoints and Execution Control
@@ -240,11 +244,12 @@ Notes:
   - [x] Task 4D — Safe Evaluation and PDB Integration Hardening
 - [x] Task 4 — PDB Session and Runtime Skills
 - [x] Task 5 — Controller State Machine and Tool Policy
-- Task 6 — Curated Benchmark Fixtures v1
+- [x] Task 6 — Curated Benchmark Fixtures v1
+- Task 7 — Verifier and Evaluation Runner v1
 
 ## Last Updated
 
-2026-07-23
+2026-07-24
 
 
 
