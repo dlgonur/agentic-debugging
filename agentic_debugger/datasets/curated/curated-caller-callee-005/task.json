@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "task_id": "curated-caller-callee-005",
+  "title": "Convert the caller representation at the boundary",
+  "description": "A price-formatting caller and callee use different numeric representations and should agree at their contract boundary.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/curated-caller-callee-005",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_price.py::test_dollar_representation_is_converted_at_boundary", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_price.py::test_dollar_representation_is_converted_at_boundary"],
+    "pass_to_pass": [
+      "tests/test_price.py::test_zero_dollars_formats_as_zero",
+      "tests/test_price.py::test_cents_representation_formats_standard_value"
+    ],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["price.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 5,
+    "max_pdb_observations": 8
+  },
+  "oracle": {
+    "bug_category": "caller/callee contract mismatch",
+    "target_files": ["price.py"],
+    "target_symbols": ["format_price"],
+    "root_cause_summary": "The caller forwards a dollar amount directly to a callee whose argument is cents.",
+    "runtime_evidence_hint": "Caller locals show the representation label and amount while the callee frame shows the same number interpreted as cents."
+  },
+  "tags": ["curated", "runtime-state", "caller-callee", "contract-mismatch", "deterministic", "isolated"]
+}

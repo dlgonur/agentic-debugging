@@ -1,0 +1,41 @@
+{
+  "schema_version": "1.0",
+  "task_id": "curated-wrong-branch-003",
+  "title": "Select the correct access branch",
+  "description": "An access selector should distinguish the combined flag case from the individual employee and pass-holder cases.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/curated-wrong-branch-003",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_access_branch.py::test_employee_with_pass_gets_priority_access", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_access_branch.py::test_employee_with_pass_gets_priority_access"],
+    "pass_to_pass": [
+      "tests/test_access_branch.py::test_employee_without_pass_gets_employee_access",
+      "tests/test_access_branch.py::test_pass_holder_without_employee_flag_gets_guest_access",
+      "tests/test_access_branch.py::test_without_flags_is_denied"
+    ],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["access_branch.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 5,
+    "max_pdb_observations": 8
+  },
+  "oracle": {
+    "bug_category": "wrong conditional branch",
+    "target_files": ["access_branch.py"],
+    "target_symbols": ["choose_access"],
+    "root_cause_summary": "A broad employee condition is evaluated before the more specific combined employee-and-pass case.",
+    "runtime_evidence_hint": "The frame exposes both boolean flags and the selected branch for the ambiguous combination."
+  },
+  "tags": ["curated", "runtime-state", "wrong-branch", "boolean-logic", "deterministic", "isolated"]
+}

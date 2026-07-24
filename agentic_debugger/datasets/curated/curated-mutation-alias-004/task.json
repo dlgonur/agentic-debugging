@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "task_id": "curated-mutation-alias-004",
+  "title": "Append a label without mutating the caller",
+  "description": "A collection helper should return updated content while leaving the caller-owned input available for later use.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/curated-mutation-alias-004",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_labels.py::test_original_labels_remain_unchanged", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_labels.py::test_original_labels_remain_unchanged"],
+    "pass_to_pass": [
+      "tests/test_labels.py::test_returned_content_contains_new_label",
+      "tests/test_labels.py::test_repeated_calls_with_separate_inputs_are_independent"
+    ],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["labels.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 5,
+    "max_pdb_observations": 8
+  },
+  "oracle": {
+    "bug_category": "mutation / aliasing",
+    "target_files": ["labels.py"],
+    "target_symbols": ["add_label"],
+    "root_cause_summary": "The helper's working collection aliases the caller-owned list before appending the new label.",
+    "runtime_evidence_hint": "Caller and helper locals expose the same object identity for the input and working collections."
+  },
+  "tags": ["curated", "runtime-state", "mutation", "aliasing", "deterministic", "isolated"]
+}

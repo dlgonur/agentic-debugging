@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "task_id": "curated-off-by-one-002",
+  "title": "Return the complete recent window",
+  "description": "A deterministic sequence-window helper should return the requested recent values at the exact boundary as well as for ordinary windows.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/curated-off-by-one-002",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_recent_window.py::test_full_length_window_includes_every_value", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_recent_window.py::test_full_length_window_includes_every_value"],
+    "pass_to_pass": [
+      "tests/test_recent_window.py::test_smaller_window_returns_recent_values",
+      "tests/test_recent_window.py::test_zero_window_is_empty"
+    ],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["recent_window.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 5,
+    "max_pdb_observations": 8
+  },
+  "oracle": {
+    "bug_category": "boundary / off-by-one",
+    "target_files": ["recent_window.py"],
+    "target_symbols": ["recent_window"],
+    "root_cause_summary": "The calculated loop indexes omit the final value when the requested window reaches the sequence boundary.",
+    "runtime_evidence_hint": "The frame exposes sequence length, requested size, start and end indexes, and the calculated indexes at the boundary."
+  },
+  "tags": ["curated", "runtime-state", "boundary", "off-by-one", "deterministic", "isolated"]
+}

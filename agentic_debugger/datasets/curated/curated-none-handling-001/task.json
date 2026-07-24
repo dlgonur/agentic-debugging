@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "task_id": "curated-none-handling-001",
+  "title": "Format an optional display name",
+  "description": "A public display-name formatter should handle an absent optional name while preserving its existing formatting behavior.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/curated-none-handling-001",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_display_name.py::test_missing_display_name_returns_fallback", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_display_name.py::test_missing_display_name_returns_fallback"],
+    "pass_to_pass": [
+      "tests/test_display_name.py::test_regular_display_name_is_formatted",
+      "tests/test_display_name.py::test_whitespace_is_normalized"
+    ],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["display_name.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 5,
+    "max_pdb_observations": 8
+  },
+  "oracle": {
+    "bug_category": "None handling",
+    "target_files": ["display_name.py"],
+    "target_symbols": ["format_display_name"],
+    "root_cause_summary": "The helper applies a string operation before normalizing the optional value.",
+    "runtime_evidence_hint": "The formatter frame exposes that its local optional name is None before the string operation executes."
+  },
+  "tags": ["curated", "runtime-state", "none-handling", "deterministic", "isolated"]
+}
