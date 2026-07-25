@@ -1,0 +1,717 @@
+{
+  "schema_version": "1.0",
+  "trajectory_name": "static-successful-repair.json",
+  "task_id": "curated-none-handling-001",
+  "policy_name": "static",
+  "fixed_scripted_model_sequence": [
+    {
+      "expected_state": "Reproduce",
+      "kind": "action",
+      "action": "run_reproduction",
+      "arguments": {
+        "node_id": "tests/test_display_name.py::test_missing_display_name_returns_fallback"
+      }
+    },
+    {
+      "expected_state": "Reproduce",
+      "kind": "transition",
+      "target_state": "Understand",
+      "reason": "failure reproduced"
+    },
+    {
+      "expected_state": "Understand",
+      "kind": "action",
+      "action": "search_code",
+      "arguments": {
+        "path": "display_name.py",
+        "query": "format_display_name"
+      }
+    },
+    {
+      "expected_state": "Understand",
+      "kind": "transition",
+      "target_state": "Patch",
+      "reason": "static evidence sufficient"
+    },
+    {
+      "expected_state": "Patch",
+      "kind": "action",
+      "action": "apply_patch",
+      "arguments": {
+        "patch": "--- a/display_name.py\n+++ b/display_name.py\n@@ -1,5 +1,5 @@\n def format_display_name(name: str | None) -> str:\n-    normalized_name = name.strip()\n+    normalized_name = name.strip() if name is not None else \"\"\n     if not normalized_name:\n         return \"Anonymous\"\n     return normalized_name.title()\n"
+      }
+    },
+    {
+      "expected_state": "Patch",
+      "kind": "transition",
+      "target_state": "Validate",
+      "reason": "patch applied"
+    },
+    {
+      "expected_state": "Validate",
+      "kind": "action",
+      "action": "run_reproduction",
+      "arguments": {
+        "node_id": "tests/test_display_name.py::test_missing_display_name_returns_fallback"
+      }
+    },
+    {
+      "expected_state": "Validate",
+      "kind": "transition",
+      "target_state": "Done",
+      "reason": "candidate verified"
+    }
+  ],
+  "expected_semantic_events": [
+    {
+      "event_id": "<EVENT_ID-0>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 0,
+          "test_runs": 1
+        },
+        "budget_before": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 0,
+          "test_runs": 0
+        },
+        "directive_kind": "action",
+        "model_call_index": 0,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 0,
+      "state": "Reproduce",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-1>",
+      "event_type": "action",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "run_reproduction",
+      "payload": {
+        "action": {
+          "action_id": "<ACTION_ID-0>",
+          "arguments": {
+            "node_id": "tests/test_display_name.py::test_missing_display_name_returns_fallback"
+          },
+          "name": "run_reproduction",
+          "run_id": "<RUN_ID-0>",
+          "state": "Reproduce",
+          "task_id": "curated-none-handling-001"
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 1,
+      "state": "Reproduce",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-2>",
+      "event_type": "observation",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "run_reproduction",
+      "payload": {
+        "observation": {
+          "action_id": "<ACTION_ID-0>",
+          "name": "run_reproduction",
+          "observation_id": "<OBSERVATION_ID-0>",
+          "payload": {
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_display_name.py::test_missing_display_name_returns_fallback",
+              "-q"
+            ],
+            "dispatch_reason": "ok",
+            "node_id": "tests/test_display_name.py::test_missing_display_name_returns_fallback",
+            "output_present": true,
+            "phase": "Reproduce",
+            "returncode": 1,
+            "status": "fail"
+          },
+          "run_id": "<RUN_ID-0>",
+          "status": "ok",
+          "summary": "candidate test execution recorded",
+          "task_id": "curated-none-handling-001",
+          "truncated": false
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 2,
+      "state": "Reproduce",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-3>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 0,
+          "test_runs": 1
+        },
+        "budget_before": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 0,
+          "test_runs": 1
+        },
+        "directive_kind": "transition",
+        "model_call_index": 1,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 3,
+      "state": "Reproduce",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-4>",
+      "event_type": "transition",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "state_transition",
+      "payload": {
+        "reason": "failure reproduced",
+        "source_state": "Reproduce",
+        "target_state": "Understand"
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 4,
+      "state": "Understand",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-5>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "budget_before": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 0,
+          "test_runs": 1
+        },
+        "directive_kind": "action",
+        "model_call_index": 2,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 5,
+      "state": "Understand",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-6>",
+      "event_type": "action",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "search_code",
+      "payload": {
+        "action": {
+          "action_id": "<ACTION_ID-1>",
+          "arguments": {
+            "path": "display_name.py",
+            "query": "format_display_name"
+          },
+          "name": "search_code",
+          "run_id": "<RUN_ID-0>",
+          "state": "Understand",
+          "task_id": "curated-none-handling-001"
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 6,
+      "state": "Understand",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-7>",
+      "event_type": "observation",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "search_code",
+      "payload": {
+        "observation": {
+          "action_id": "<ACTION_ID-1>",
+          "name": "search_code",
+          "observation_id": "<OBSERVATION_ID-1>",
+          "payload": {
+            "dispatch_reason": "ok",
+            "match": true,
+            "path": "display_name.py",
+            "query": "format_display_name",
+            "source_sha256": "24363dea4b935443e4ad1cfb78ed6d219c9e36d78c4386599226119f5f359dee"
+          },
+          "run_id": "<RUN_ID-0>",
+          "status": "ok",
+          "summary": "source symbol located",
+          "task_id": "curated-none-handling-001",
+          "truncated": false
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 7,
+      "state": "Understand",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-8>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "budget_before": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "directive_kind": "transition",
+        "model_call_index": 3,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 8,
+      "state": "Understand",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-9>",
+      "event_type": "transition",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "state_transition",
+      "payload": {
+        "reason": "static evidence sufficient",
+        "source_state": "Understand",
+        "target_state": "Patch"
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 9,
+      "state": "Patch",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-10>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "budget_before": {
+          "patch_attempts": 0,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "directive_kind": "action",
+        "model_call_index": 4,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 10,
+      "state": "Patch",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-11>",
+      "event_type": "action",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "apply_patch",
+      "payload": {
+        "action": {
+          "action_id": "<ACTION_ID-2>",
+          "arguments": {
+            "patch": "--- a/display_name.py\n+++ b/display_name.py\n@@ -1,5 +1,5 @@\n def format_display_name(name: str | None) -> str:\n-    normalized_name = name.strip()\n+    normalized_name = name.strip() if name is not None else \"\"\n     if not normalized_name:\n         return \"Anonymous\"\n     return normalized_name.title()\n"
+          },
+          "name": "apply_patch",
+          "run_id": "<RUN_ID-0>",
+          "state": "Patch",
+          "task_id": "curated-none-handling-001"
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 11,
+      "state": "Patch",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-12>",
+      "event_type": "observation",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "apply_patch",
+      "payload": {
+        "observation": {
+          "action_id": "<ACTION_ID-2>",
+          "name": "apply_patch",
+          "observation_id": "<OBSERVATION_ID-2>",
+          "payload": {
+            "applied": true,
+            "dispatch_reason": "ok",
+            "patch_sha256": "be71ec8c5bec4656c51d3e01fb87614e0f35c15a2ce72de3667af28723260976",
+            "semantic_assertion": "expected-symbol-change",
+            "target": "display_name.py",
+            "valid_unified_diff": true
+          },
+          "run_id": "<RUN_ID-0>",
+          "status": "ok",
+          "summary": "candidate patch applied",
+          "task_id": "curated-none-handling-001",
+          "truncated": false
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 12,
+      "state": "Patch",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-13>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "budget_before": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "directive_kind": "transition",
+        "model_call_index": 5,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 13,
+      "state": "Patch",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-14>",
+      "event_type": "transition",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "state_transition",
+      "payload": {
+        "reason": "patch applied",
+        "source_state": "Patch",
+        "target_state": "Validate"
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 14,
+      "state": "Validate",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-15>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 2
+        },
+        "budget_before": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 1
+        },
+        "directive_kind": "action",
+        "model_call_index": 6,
+        "stop_reason": null
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 15,
+      "state": "Validate",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-16>",
+      "event_type": "action",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "run_reproduction",
+      "payload": {
+        "action": {
+          "action_id": "<ACTION_ID-3>",
+          "arguments": {
+            "node_id": "tests/test_display_name.py::test_missing_display_name_returns_fallback"
+          },
+          "name": "run_reproduction",
+          "run_id": "<RUN_ID-0>",
+          "state": "Validate",
+          "task_id": "curated-none-handling-001"
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 16,
+      "state": "Validate",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-17>",
+      "event_type": "observation",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "run_reproduction",
+      "payload": {
+        "observation": {
+          "action_id": "<ACTION_ID-3>",
+          "name": "run_reproduction",
+          "observation_id": "<OBSERVATION_ID-3>",
+          "payload": {
+            "command": [
+              "python",
+              "-m",
+              "pytest",
+              "tests/test_display_name.py::test_missing_display_name_returns_fallback",
+              "-q"
+            ],
+            "dispatch_reason": "ok",
+            "node_id": "tests/test_display_name.py::test_missing_display_name_returns_fallback",
+            "output_present": true,
+            "phase": "Validate",
+            "returncode": 0,
+            "status": "pass"
+          },
+          "run_id": "<RUN_ID-0>",
+          "status": "ok",
+          "summary": "candidate test execution recorded",
+          "task_id": "curated-none-handling-001",
+          "truncated": false
+        }
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 17,
+      "state": "Validate",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-18>",
+      "event_type": "decision",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "controller_decision",
+      "payload": {
+        "budget_after": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 2
+        },
+        "budget_before": {
+          "patch_attempts": 1,
+          "pdb_observations": 0,
+          "source_observations": 1,
+          "test_runs": 2
+        },
+        "directive_kind": "transition",
+        "model_call_index": 7,
+        "stop_reason": "done"
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 18,
+      "state": "Validate",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-19>",
+      "event_type": "transition",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "state_transition",
+      "payload": {
+        "reason": "candidate verified",
+        "source_state": "Validate",
+        "target_state": "Done"
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 19,
+      "state": "Done",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    },
+    {
+      "event_id": "<EVENT_ID-20>",
+      "event_type": "final",
+      "metadata": {
+        "model": "scripted",
+        "tool_version": "task8"
+      },
+      "name": "run_finished",
+      "payload": {
+        "final_state": "Done",
+        "model_calls": 8,
+        "stop_reason": "done"
+      },
+      "run_id": "<RUN_ID-0>",
+      "schema_version": "1.0",
+      "sequence": 20,
+      "state": "Done",
+      "task_id": "curated-none-handling-001",
+      "_semantic_projection": "trajectory-semantic-v1"
+    }
+  ],
+  "expected_controller_terminal_state": "Done",
+  "expected_patch_assertion": {
+    "executed": true,
+    "target_file": "display_name.py",
+    "patch_sha256": "be71ec8c5bec4656c51d3e01fb87614e0f35c15a2ce72de3667af28723260976",
+    "valid_unified_diff": true,
+    "semantic_change": "normalized_name = name.strip()"
+  },
+  "expected_evaluator_status": "COMPLETED",
+  "expected_evaluator_outcome": "RESOLVED",
+  "expected_f2p_totals": {
+    "passed": 1,
+    "total": 1
+  },
+  "expected_p2p_totals": {
+    "passed": 2,
+    "total": 2
+  },
+  "expected_pdb_usage": {
+    "actions": 0,
+    "observations": 0
+  },
+  "expected_model_call_count": 8,
+  "metadata": {
+    "model_backend": "scripted",
+    "network_attempts": 0,
+    "provider_attempts": 0,
+    "workspace_parent": "pytest-temporary-parent",
+    "pdb_fixture_source": null,
+    "pdb_driver": null,
+    "pdb_runtime_clue": null
+  }
+}
