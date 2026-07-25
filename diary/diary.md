@@ -1443,3 +1443,200 @@ Task 7 trusted-local çalışır ve OS-level hostile-code sandbox değildir. Bu 
 Task 7 tamamlandı. `feature/mvp-verifier-runner-v1` branch'i fast-forward olarak `main` branch'ine merge edilip push edildi; `main` ve `origin/main` artık `1b0af78` commit'ini gösteriyor.
 
 Bir sonraki tek aktif implementation maddesi **Task 8 — Golden Trajectories v1**'dir. Task 8, sabit model action sequence'leri, kararlı event expectation'ları, replay validation, patch/test assertion'ları ve no-real-model CI coverage sağlamalıdır. Task 8 henüz başlamamıştır.
+
+---
+
+## 26 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 8 — Golden Trajectories v1 geliştirmesi, replay mimarisi, sabit model senaryoları, immutable artifact doğrulaması, bağımsız inceleme ve test doğrulaması
+
+### Yapılan Çalışmalar
+
+Bugün, implementation plan içindeki sekizinci task olan golden trajectories katmanını geliştirdim. Task 8, daha önce Task 1–7'de oluşturulan deterministik altyapıyı tamamlayarak üç sabit, tekrarlanabilir debug senaryosunun kaydedilmesini, doğrulanmasını ve test edilmesini sağladı.
+
+#### Golden Trajectories'in Amacı
+
+Golden trajectories, gerçek model çağrısı olmadan controller loop'unun deterministik biçimde test edilebilmesini sağlamak için oluşturuldu. Her trajectory, sabit bir model action sequence'i, sabit event expectation'ları ve doğrulanabilir sonuçlar içerir. Bu sayede CI ortamında gerçek LLM maliyeti ve ağ bağımlılığı olmadan debugging davranışı doğrulanabilir.
+
+#### RunEvent Replay Mimarisi ve JSONL/Local-Path Replay
+
+Task 8'in temel yeniliği, kaydedilmiş RunEvent akışlarını yeniden oynatabilen replay katmanıdır. Replay, RunEvent/mapping iterable'ları, JSONL text'i ve bir local JSONL path'ini girdi olarak kabul eder. Girdiler `RunEvent.from_mapping` ile detached edilerek mutable girdi verisinden ayrıştırılır ve `_FrozenDict`/`_FrozenList` immutable private record'ları veya yeniden oluşturulmuş copy'ler olarak expose edilir. Replay, sequence validation, run-identity kontrolü ve state transition doğrulamasından geçirir.
+
+Sequence validation, event sequence'lerinin sıfırdan başlamasını, kesintisiz artmasını ve duplicate/skip/out-of-order durumlarının reddedilmesini sağlar. Run-identity validation tüm event'lerin aynı run_id ve task_id altında olmasını zorunlu kılar.
+
+#### Controller State Transition Rekonstrüksiyonu
+
+Replay katmanı, event akışından controller state transition'larını yeniden kurar. İlk event'in Reproduce state'iyle başlaması, terminal state'in (COMPLETED veya FAILED) tek ve son olması, geçersiz state transition'larının reddedilmesi gibi kurallar replay sırasında doğrulanır. Her Action event'i, kendinden sonra gelen Observation event'i ile eşleştirilir. Bu sayede action/observation linkage replay sırasında otomatik olarak doğrulanır.
+
+#### Semantic Trajectory Projection ve First-Mismatch Reporting
+
+Golden artifact'ler, ham event akışı yerine semantic olarak projekte edilmiş event'ler içerir. Projection sırasında timestamp'ler tamamen kaldırılır, nondeterministik `duration_ms`, `tokens` ve `cost` metadata alanları kaldırılır, üretilmiş identity field'ları (`event_id`, `run_id`, `action_id`, `observation_id`, `workspace_id`, `session_id`, `pdb_session_id`) kararlı alias'larla değiştirilir ve yalnızca bildirilmiş workspace-root path'leri normalize edilir. İlgisiz absolute path'ler ve material payload farklılıkları olduğu gibi korunur. Projekte edilmiş event'ler, replay validator'dan geçirilerek geçerlilikleri doğrulanır.
+
+First-mismatch reporting sayesinde, replay sırasında beklenen ve gerçek event arasındaki ilk fark açıkça raporlanır.
+
+#### Immutable ve Detached Replay Records
+
+ReplayTrajectory sınıfı yalnızca factory metodu üzerinden oluşturulabilir ve immutable'dır. GoldenArtifact sınıfı ise hem doğrudan yapıcı hem de factory yükleme için tek bir validation path'i kullanır. Golden artifact'ler desteklenen schema version `1.0` gerektirir, eksik veya bilinmeyen alanları reddeder. Artifact validation, identity, terminal state, model-call sayısı, PDB action/observation sayısı, patch varlığı ve directive/event cross-field closure kurallarını uygular. Bu cross-field consistency kuralları, örneğin bir artifact'te patch varsa mutlaka patch action/observation'ı olması, model-call sayısının scripted output sayısıyla eşleşmesi, her scripted directive'in bir controller decision event'ine karşılık gelmesi, action directive'lerinin tam olarak bir action ve bir observation event'ine sahip olması ve rejection artifact'lerinde hiçbir patch action/observation bulunmaması gibi ilişkileri doğrular.
+
+#### Scripted Model Sequences ve Exact Model-Call Accounting
+
+Her golden trajectory, sabit bir scripted model sequence kullanır. Scripted output'ların sayısı model-call sayısıyla tam olarak eşleşmelidir. Kısa sequence'ler (yetersiz output) ve unused sequence'ler (fazla output) reddedilir. Bu sayede modelin tam olarak beklenen sayıda çağrıldığı ve her çağrının beklenen çıktıyı ürettiği doğrulanır.
+
+#### Üç Golden Trajectory
+
+Üç golden trajectory oluşturuldu:
+
+1. **Static Successful Repair (static-successful-repair.json):** curated-none-handling-001 fixture'ı üzerinde static policy ile çalışan bir trajectory. 21 event, 8/8 model call, 0/0 PDB action/observation, COMPLETED/RESOLVED, F2P 1/1, P2P 2/2.
+
+2. **PDB-Gated Successful Repair (pdb-gated-successful-repair.json):** Aynı fixture üzerinde controller-gated PDB policy ile çalışan trajectory. 34 event, 13/13 model call, 4/2 PDB action/observation, COMPLETED/RESOLVED, F2P 1/1, P2P 2/2. Bu trajectory, curated-none-handling-001 fixture'ının kopyalanmış `display_name.py` dosyasını kullanır, `display_name.py::task8_driver` fonksiyonunu çalıştırır, `format_display_name` fonksiyonunda duraklar ve `name = None` runtime clue'unu kaydeder. Trajectory iki adet sınırlı runtime-evidence observation'ı (`get_stack_summary` ve `get_frame_locals`) içerir.
+
+   Bu trajectory, PDB'in teşhis kalitesini iyileştirdiğine dair nedensel bir kanıt oluşturmaz. Yalnızca PDB-gated policy'nin deterministik olarak çalıştığını, runtime state'i inceleyebildiğini ve beklenen sonucu üretebildiğini gösterir.
+
+3. **Deterministic Rejection (deterministic-rejection.json):** Static rejection policy ile çalışan, modelin patch üretmeyi reddettiği trajectory. 3 event, 1/1 model call, patch action/observation içermez, evaluator not_run, F2P/P2P 0/0. Patch side effect'lerinin olmadığı doğrulanır — rejection trajectory'sinde hiçbir patch action veya observation bulunmaz.
+
+#### Patch Assertion'ları
+
+Patch assertion'ları trajectory türüne göre farklılık gösterir. Başarılı onarım trajectory'leri tam olarak hedef dosyayı (`target_file`), patch hash'ini (`patch_sha256`), geçerli unified diff'i (`valid_unified_diff: true`) ve başarılı uygulamayı (`applied: true`) assert eder. Deterministic rejection trajectory'si ise `executed: false` assert eder ve hiçbir patch action veya observation event'inin bulunmadığını doğrular.
+
+#### Task 7 Evaluator Entegrasyonu
+
+Golden trajectory'ler, evaluator sonucunu (outcome, F2P geçiş sayısı, P2P geçiş sayısı) içerir. Replay sırasında evaluator result'ının trajectory sonucuyla tutarlı olduğu doğrulanır. Bu entegrasyon, Task 7'nin verifier pipeline'ının golden trajectory'ler içinde test edilmesini sağlar.
+
+#### Provider ve Network Attempt Guards
+
+Tüm golden trajectory'ler scripted backend kullanılarak çalıştırılır. Provider attempt'ları 0, network attempt'ları 0 olarak ölçülmüştür. Gerçek model veya ağ çağrısı yapılmadığından emin olmak için kapsamlı socket guard'ları kullanılır.
+
+#### Portable Disposable Workspace Handling
+
+Workspace yönetimi, pytest'in geçici dizinleri üzerinde portable biçimde çalışır. Global workspace root kullanılmaz; her run için ayrı pytest temporary dizini oluşturulur. Path normalizasyonu yalnızca workspace root altındaki yolları kapsar; ilgisiz absolute path'ler material olarak korunur.
+
+#### Exception-Safe Cleanup
+
+Cleanup, başarılı, reddedilmiş, script tükenmiş, PDB hatası, tool hatası, evaluator hatası ve cleanup hatası dahil tüm path'lerde exception-safe biçimde çalışır. Execution ve cleanup'in her ikisi de başarısız olduğunda ExceptionGroup veya BaseExceptionGroup kullanılır. Cleanup sırasında ortaya çıkan tüm hatalar toplanır ve raporlanır.
+
+### Review ve Repair Süreci
+
+Task 8, iki ana review/repair round'u gerektirdi:
+
+**R1 Findings:**
+- Semantic normalization tüm absolute path'leri collapse ediyordu; yalnızca workspace root altındakiler normalize edilmeli.
+- `run_trajectory` yalnızca başarılı execution sonrasında cleanup yapıyordu.
+- GoldenArtifact ve ReplayTrajectory public constructor'ları validation bypass edebiliyordu.
+- Projection markers tam replay validation'dan geçmiyordu.
+- GoldenArtifact identity, terminal, model-call, PDB, patch ve directive/event cross-field closure kuralları eksikti.
+- Dört yetkili source/test dosyası fazladan terminal blank line içeriyordu.
+- Evidence eski R1 hash'lerini, raporlarını ve geçici helper artifact'larını tutuyordu.
+
+**R2 Repairs:**
+- Root-boundary path normalization ve deterministik command observation'ları eklendi.
+- try/cleanup lifecycle tüm başarılı/reddedilmiş/tükenmiş/PDB-hatalı/tool-hatalı/evaluator-hatalı/cleanup-hatalı path'leri kapsayacak şekilde genişletildi.
+- ReplayTrajectory factory-only immutable yapıldı; GoldenArtifact constructor tam validation uygulayacak şekilde sertleştirildi.
+- Projekte edilmiş event'ler replay validation'dan geçirildi.
+- Cross-field artifact validation ve mutation test'leri eklendi.
+- EOF ve disposable-index whitespace kontrolleri yapıldı.
+- Taze artifact hash'leri, source hash'leri, patch stat/properties, exact skip node ID'leri, warning kayıtları ve final report üretildi.
+
+Bağımsız reviewer (`trajectory_reviewer`) ve validator (`trajectory_validator`), evidence repair sonrasında PASS verdi.
+
+### Test ve Doğrulama
+
+Task 8'in kesin doğrulama sonuçları:
+
+```
+Focused Task 8:
+67 passed
+
+Golden suite:
+11 passed
+
+Relevant regression:
+1453 passed, 2 warnings
+
+Full suite:
+1843 passed, 2 skipped, 5 warnings
+
+Compileall:
+passed
+
+git diff --check:
+passed
+
+Staged-equivalent whitespace:
+passed
+
+Forward patch check:
+passed
+
+Reverse patch check:
+passed
+
+Canonical fixture mismatches:
+0
+
+Provider attempts:
+0
+
+Network attempts:
+0
+```
+
+İki mevcut skip node ID'si:
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group`
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded`
+
+Üç mevcut `PytestCollectionWarning` location'ı:
+- `agentic_debugger/runtime/test_runner.py:13` — `TestRunKind`
+- `agentic_debugger/runtime/test_runner.py:20` — `TestRunResult`
+- `agentic_debugger/runtime/test_runner.py:40` — `TestRunner`
+
+Bu skip'ler ve warning'ler mevcut repository durumundan gelmektedir; Task 8 tarafından oluşturulmamıştır.
+
+Kabul edilen patch properties:
+```
+17 files changed
+4557 insertions
+182524 bytes
+4658 LF lines
+17 diff sections
+
+SHA-256:
+29c91ec5ba9c86a1183707ab8323d3303692d09a1a0f63795a64bf1a54a8011c
+```
+
+Golden artifact hash'leri:
+```
+deterministic-rejection.json:
+7ACA9FCD8DDC5D0DC46572A6982C9FFECC555B1CC6EDAE2D73DEB38FAB1AFC20
+
+pdb-gated-successful-repair.json:
+B5DF93AD3DF7408389A2C903E63EB5E3EA4B790D5B23A49F39D5212AEB93B9FC
+
+static-successful-repair.json:
+E4DB481C84B167A39BDEC9F3603CA4DD91A492AAC57CB3AD4313BA02B791D672
+```
+
+Bu sonuçlar Windows ortamında elde edilmiştir. POSIX ortamında inherited-pipe/process-group test davranışı farklılık gösterebilir (bilinen non-blocking POSIX inherited-pipe/process-group caveat). Bu caveat, daha önceki task'lardan bu yana var olan ve Task 8 tarafından oluşturulmayan bir platform farkıdır.
+
+#### Git Kaydı
+
+- İlk implementasyon `feature/mvp-golden-trajectories-v1` branch'inde yapıldı; progress kaydı `docs/task-8-progress-records` branch'inde tutuluyor.
+- Commit: `ab9b8b7 Add golden trajectories v1`
+- main ve origin/main `ab9b8b7` commit'ini gösteriyor.
+- Task 8'de dependency eklenmedi, network veya external service kullanılmadı, gerçek model çağrısı yapılmadı.
+- Hostile-code containment, causal PDB efficacy kanıtı, adaptive PDB gating veya real model integration kapsam dışı kaldı.
+
+### Öğrendiklerim
+
+Bu çalışmada golden trajectory'lerin yalnızca test artifact'ı olmadığını, aynı zamanda controller loop'unun deterministik davranışını kanıtlayan sözleşmeler olduğunu öğrendim. Replay validation, yalnızca event sırasını değil, state transition'larını, action/observation ilişkisini ve cross-field consistency'yi de doğrulamalı.
+
+Semantic projection sırasında nondeterministik alanların normalize edilmesi, artifact'lerin her ortamda karşılaştırılabilir olmasını sağlıyor. Ancak material payload farklarının korunması, artifact'in gerçek execution davranışını yansıtması açısından kritik.
+
+Scripted model sequence'lerinde exact model-call accounting'in tutulması, her model çağrısının beklendiği gibi çalıştığını garanti ediyor. Kısa veya unused sequence'lerin reddedilmesi, artifact bütünlüğünün önemli bir parçası.
+
+En önemlisi, PDB-gated trajectory'nin runtime state'i inceleyebildiğini göstermesine rağmen bunun PDB'in teşhisi iyileştirdiğine dair nedensel bir kanıt olmadığını açıkça belirtmem gerektiğini öğrendim. Task 8'in kapsamı, deterministik replay'ın çalıştığını kanıtlamaktır; PDB'in etkinliğini ölçmek değil.
+
+Path normalizasyonu sırasında tüm absolute path'leri collapse etmek yerine yalnızca workspace root altındakileri normalize etmenin, unrelated absolute path'lerin material kalmasını sağladığını gördüm. Bu, artifact'lerin yanlışlıkla fazla normalize edilmesini önlüyor.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 8 tamamlandı. Bir sonraki adım **Task 9 — First End-to-End Demonstration**'dur. Task 9 henüz başlamamıştır ve implementation'ına başlanmamıştır.

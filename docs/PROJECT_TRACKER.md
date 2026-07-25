@@ -212,9 +212,9 @@ Rules:
 
 ## Current Focus
 
-Current active item:
+Current active items:
 
-- Task 8 — Golden Trajectories v1 — not yet started
+- Task 9 — First End-to-End Demonstration — not started
 
 Notes:
 
@@ -228,10 +228,13 @@ Notes:
 - Task 6 complete: five curated pytest-compatible bug fixtures were reviewed, repaired, merged and pushed.
 - Task 6 was fast-forward merged into main at eedcccb.
 - Task 7 complete: Verifier and Evaluation Runner v1.
-- Task 7 was fast-forward merged into main at 1b0af78; main and origin/main point to 1b0af78.
+- Task 7 was fast-forward merged into main at 1b0af78.
 - Task 7 provides authoritative DebugTask loading and validation, disposable workspace preparation, canonical fixture immutability checks, baseline reproduction, F2P/P2P execution, candidate unified-diff application, syntax validation, post-patch reproduction, exact test-node collection, full-suite consistency checks, bounded typed result records, deterministic JSON-compatible mappings, workspace-relative path normalization, cleanup lifecycle reporting, verifier command accounting separate from controller max_test_runs, and trusted-local execution-boundary disclosure.
 - Task 7 evaluates trusted local benchmark fixtures and benign candidate patches. It is not an OS-level hostile-code security sandbox.
-- Task 8 — Golden Trajectories v1 is now the single active implementation item. It has not yet started.
+- Task 8 complete: Golden Trajectories v1 (commit ab9b8b7). At the Task 8 implementation closeout point, main and origin/main point to ab9b8b7.
+- Task 8 provides immutable record/replay architecture, RunEvent sequence validation, controller state transition reconstruction, action/observation linkage, semantic trajectory projection and first-mismatch reporting, scripted model sequences with exact model-call accounting (rejecting exhausted/unused outputs), static/PDB-gated/deterministic-rejection trajectories, verifier integration, provider/network attempt guards, portable disposable workspace handling, and exception-safe cleanup across success/rejection/exhaustion/PDB/tool/evaluator/cleanup-error paths.
+- Task 8 is not an OS-level hostile-code sandbox and does not claim causal PDB efficacy proof for agentic debugging.
+- Task 9 — First End-to-End Demonstration is now the sole active implementation item. It has not yet started.
 - Hostile-code filesystem, process and network containment remains deferred.
 - Real model integration, adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
 - Planned decomposition:
@@ -248,10 +251,12 @@ Notes:
 - [x] Task 5 — Controller State Machine and Tool Policy
 - [x] Task 6 — Curated Benchmark Fixtures v1
 - [x] Task 7 — Verifier and Evaluation Runner v1 (feature/mvp-verifier-runner-v1, commit 1b0af78)
+- [x] Task 8 — Golden Trajectories v1 (commit ab9b8b7)
+- [ ] Task 9 — First End-to-End Demonstration
 
 ## Last Updated
 
-2026-07-25
+2026-07-26
 
 
 
