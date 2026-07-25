@@ -153,7 +153,7 @@ Rules:
 - [x] 4.6.8 MVP Task 4D — Safe Evaluation and PDB Integration Hardening v1 (feature/mvp-pdb-safe-evaluation-v1, commit 17a7ebb)
 - [x] 4.6.9 MVP Task 5 — Controller State Machine and Tool Policy v1 (feature/mvp-controller-v1, commits 532214e, e2187e2, 365dc49 and 43d00c8)
 - [x] 4.6.10 MVP Task 6 — Curated Benchmark Fixtures v1 (feature/mvp-curated-bugs-v1, commit eedcccb)
-- [ ] 4.6.11 MVP Task 7 — Verifier and Evaluation Runner v1
+- [x] 4.6.11 MVP Task 7 — Verifier and Evaluation Runner v1 (feature/mvp-verifier-runner-v1, commit 1b0af78)
 
 ---
 
@@ -214,7 +214,7 @@ Rules:
 
 Current active item:
 
-- Task 7 — Verifier and Evaluation Runner v1
+- Task 8 — Golden Trajectories v1 — not yet started
 
 Notes:
 
@@ -226,12 +226,14 @@ Notes:
 - Task 5 complete.
 - Task 5 was fast-forward merged into `main` at `43d00c8`.
 - Task 6 complete: five curated pytest-compatible bug fixtures were reviewed, repaired, merged and pushed.
-- Task 6 was fast-forward merged into main at eedcccb; main and origin/main point to eedcccb.
-- Task 7 is now the single active implementation item.
-- Task 7 should cover task loading and workspace preparation, reproduction execution, fail-to-pass and pass-to-pass validation, patch application and restoration, outcome classification, deterministic metrics/result records, and curated fixture execution.
-- Task 7 must not make real model calls yet.
-- Real model integration remains later.
-- Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
+- Task 6 was fast-forward merged into main at eedcccb.
+- Task 7 complete: Verifier and Evaluation Runner v1.
+- Task 7 was fast-forward merged into main at 1b0af78; main and origin/main point to 1b0af78.
+- Task 7 provides authoritative DebugTask loading and validation, disposable workspace preparation, canonical fixture immutability checks, baseline reproduction, F2P/P2P execution, candidate unified-diff application, syntax validation, post-patch reproduction, exact test-node collection, full-suite consistency checks, bounded typed result records, deterministic JSON-compatible mappings, workspace-relative path normalization, cleanup lifecycle reporting, verifier command accounting separate from controller max_test_runs, and trusted-local execution-boundary disclosure.
+- Task 7 evaluates trusted local benchmark fixtures and benign candidate patches. It is not an OS-level hostile-code security sandbox.
+- Task 8 — Golden Trajectories v1 is now the single active implementation item. It has not yet started.
+- Hostile-code filesystem, process and network containment remains deferred.
+- Real model integration, adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - [x] Task 4B — Breakpoints and Execution Control
@@ -245,11 +247,11 @@ Notes:
 - [x] Task 4 — PDB Session and Runtime Skills
 - [x] Task 5 — Controller State Machine and Tool Policy
 - [x] Task 6 — Curated Benchmark Fixtures v1
-- Task 7 — Verifier and Evaluation Runner v1
+- [x] Task 7 — Verifier and Evaluation Runner v1 (feature/mvp-verifier-runner-v1, commit 1b0af78)
 
 ## Last Updated
 
-2026-07-24
+2026-07-25
 
 
 

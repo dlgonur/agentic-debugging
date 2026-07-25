@@ -1240,3 +1240,206 @@ Integrity tarafında compiler-generated .pyc artifact'larının gerçek bir muta
 Task 6 tamamlandı. feature/mvp-curated-bugs-v1 branch'i fast-forward olarak main branch'ine merge edilip push edildi; main ve origin/main eedcccb commit'ini gösteriyor.
 
 Bir sonraki tek aktif implementation item Task 7 — Verifier and Evaluation Runner v1'dir. Task 7 henüz başlamadı. Task 7; task loading ve workspace preparation, reproduction execution, F2P/P2P validation, patch application ve restoration, outcome classification, deterministic metrics/result records ve curated fixture execution'ını kapsamalı; şimdilik gerçek model çağrısı eklenmemelidir. Real model integration, adaptive PDB gating, BugsInPy ve Tier 3 ertelenmiştir.
+
+---
+
+## Task 7 — Verifier and Evaluation Runner v1
+
+**Çalışmanın Konusu:** MVP Verifier ve Evaluation Runner katmanının geliştirilmesi, bağımsız inceleme ve test doğrulaması
+
+### Amaç ve Kapsam
+
+Task 7, daha önce Task 1–6'da oluşturulan deterministik altyapıyı tamamlayarak bir benchmark task'ının evaluate edilmesini sağladı. Bu task, baseline reproduction'dan başlayıp candidate patch uygulaması, fail-to-pass (F2P) ve pass-to-pass (P2P) testleri, outcome classification ve typed result record'larına kadar uzanan tam bir pipeline sundu.
+
+Task 7'nin temel amacı, bir modelin ürettiği patch'in davranışsal doğruluğunu, controller veya patch generation adımından bağımsız olarak değerlendirebilmekti. Verifier, controller'ın `max_test_runs` bütçesini tüketmez; kendi command accounting'ine sahiptir. Bu ayrım, verifier'ın controller loop'unun dışında bağımsız çalışmasını sağlar.
+
+Kapsam dışında kalanlar:
+- Controller-to-verifier entegrasyonu (ileriki bir task),
+- Model-driven patch generation,
+- Gerçek model çağrısı,
+- PDB orchestration,
+- Adaptive PDB gating,
+- BugsInPy entegrasyonu,
+- Persistent evaluation storage,
+- Parallel veya batch benchmark execution,
+- Hostile-code OS-level sandboxing.
+
+### Evaluator Mimarisi
+
+Evaluator, `agentic_debugger/evaluation/` paketi altında aşağıdaki modüllerden oluşur:
+
+- **`__init__.py`** — Public paket API'sini expose eder.
+- **`task_schema.py`** — Task 1'den gelen mevcut `DebugTask` schema'sı. Task 7, doğrudan `DebugTask` nesnelerini de tam schema validation ve detachment sürecinden geçirir.
+- **`evaluator.py`** — Public export façade; `EvaluationRunner`'ı `EvaluationVerifier` alias'ı olarak tanımlar. Ayrı bir high-level `Evaluator` implementasyonu içermez.
+- **`outcome_taxonomy.py`** — Altı semantik outcome'u (`RESOLVED`, `BREAKING_RESOLVED`, `NO_OP`, `REGRESSION`, `PARTIALLY_RESOLVED`, `WORK_IN_PROGRESS`) ve `classify_outcome` fonksiyonunu tanımlar.
+- **`runner.py`** — Typed evaluation record'ları, validation invariant'ları, serialization, output/path normalization ve yetkili `load_task` fonksiyonunu tanımlar.
+- **`verifier.py`** — `EvaluationVerifier` sınıfını içerir ve tam evaluation lifecycle'ını yürütür.
+
+### Baseline ve Candidate Pipeline
+
+Verifier pipeline'ı aşağıdaki adımları sırayla yürütür:
+
+1. `DebugTask` loading, complete schema validation ve detachment.
+2. Canonical fixture pre-evaluation hash.
+3. Disposable workspace preparation.
+4. Exact declared pytest-node collection.
+5. Baseline reproduction — manifest'te tanımlanan bir komutla task'in reproduce edilebildiği doğrulanır. Reproduction, individual F2P execution'dan ayrıdır.
+6. Individual baseline F2P ve P2P execution.
+7. Baseline validity decision.
+8. Candidate unified-diff application.
+9. Syntax validation.
+10. Post-patch reproduction.
+11. Individual post-patch F2P ve P2P execution.
+12. Declared full-suite execution ve aggregate consistency validation. Full suite birincil outcome değil, supporting consistency evidence'dır.
+13. Semantic outcome classification — yalnızca individual post-patch F2P/P2P sonuçlarına göre belirlenir.
+14. Workspace cleanup ve canonical fixture post-evaluation hash.
+
+### Outcome Taxonomy
+
+Altı semantik outcome tanımlanmıştır:
+
+- **RESOLVED:** tüm F2P geçer ve tüm P2P geçer.
+- **BREAKING_RESOLVED:** tüm F2P geçer ve en az bir P2P başarısız.
+- **PARTIALLY_RESOLVED:** en az bir F2P geçer (hepsi değil) ve tüm P2P geçer.
+- **WORK_IN_PROGRESS:** en az bir F2P geçer (hepsi değil) ve en az bir P2P başarısız.
+- **NO_OP:** hiçbir F2P geçmez ve tüm P2P geçer.
+- **REGRESSION:** hiçbir F2P geçmez ve en az bir P2P başarısız.
+
+Schema v1 tam olarak bir F2P node'u gerektirdiği için, PARTIALLY_RESOLVED ve WORK_IN_PROGRESS şu an schema v1 altında ulaşılabilir değildir. Tüm altı outcome taxonomy seviyesinde test edilir, ancak evaluator schema v1 altında yalnızca dört outcome üretir.
+
+Patch apply failure, syntax failure, timeout ve infrastructure failure semantik outcome'ların dışında kalır. Bunlar technical failure kategorileridir ve verifier tarafından ayrıca raporlanır.
+
+### Typed Result Sözleşmeleri
+
+`EvaluationResult` bounded ve typed bir record'dur. Yüksek seviyeli yapısı şu alanları içerir:
+
+- `task_id`
+- execution boundary
+- evaluation status ve stop reason
+- semantic outcome
+- workspace lifecycle record
+- baseline record
+- patch-application record
+- syntax record
+- post-patch reproduction
+- post-patch F2P ve P2P record'ları
+- full-suite record
+- F2P/P2P totals ve passed counts
+- candidate patch attempt count
+- task `max_test_runs` metadata
+- verifier command ve selected-test counters
+- timeout flag
+- bounded diagnostic
+
+Result mapping'leri JSON-compatible, detached (orijinal nesnelere referans tutmaz) ve deterministic'tir. `COMPLETED` record'ları contradiction içeremez: örneğin `post_patch_f2p`, `post_patch_p2p` veya `full_suite` evidence'ı eksik olamaz ve retained F2P/P2P statüleriyle `outcome` çelişemez.
+
+### Workspace ve Trust Model
+
+Task 7 v1, trusted local benchmark fixture'larını ve benign candidate patch'leri değerlendirir. Disposable workspace'ler, patch-path kontrolleri ve manifest cwd kontrolleri repository bütünlüğünü korur. Temporary workspace path'leri canonical ve normalized biçimde kaydedilir; raw veya alternatif path temsilleri kullanılmaz.
+
+Task 7 v1 bir OS-level hostile-code security sandbox değildir. Hostile-code filesystem, process ve network containment gelecekteki bir task'a ertelenmiştir.
+
+Partial evidence, bounded failure durumlarında korunur. Örneğin patch başarısız olursa baseline evidence'ı ve workspace state'i kaybolmaz. Contradictory `COMPLETED` record'ları ise reddedilir; bir `COMPLETED` statüsündeki record tüm gerekli test evidence'ını içermelidir.
+
+### Autonomous Campaign
+
+Autonomous campaign bir write-active supervisor (GPT-5.6 Luna High), read-only evaluation auditor, read-only adversarial reviewer ve read-only independent validator kullandı. Cumulative patch evidence ve repeated independent external review sürecin temelini oluşturdu. Write yetkisi yalnızca supervisor'da kaldı; auditor, reviewer ve validator yalnızca diff ve test sonuçlarını okuyarak geri bildirim verdi.
+
+Bounded repair rounds R1'den R6'ya kadar sürdü. Her turda bağımsız inceleme sonucu bulunan sorunlar dar kapsamlı repair ile giderildi.
+
+### Review ve Repair Turları
+
+Task 7, altı bounded repair round'u (R1–R6) gerektirdi:
+
+1. **OS-level hostile-code containment gereksiniminin düzeltilmesi:** İlk prompt yanlışlıkla OS-level hostile-code containment talep ediyordu. Bu gereksinim trusted-local execution olarak düzeltildi. Hostile-code sandboxing ertelendi.
+
+2. **max_test_runs schema blocker'ının reddi:** Görünürde bir `max_test_runs` schema engeli vardı. Oysa `max_test_runs` controller/repair-agent action metadata'sıdır. Verifier-internal komutlar evaluation overhead'ıdır ve ayrı sayılır.
+
+3. **Runtime monkeypatch ve hidden platform-specific workspace fallback'in kaldırılması:** Monkeypatch mimarisi ve platform-specific workspace davranışı temizlendi.
+
+4. **Workspace lifecycle, cleanup precedence ve partial-evidence retention'ın onarımı:** Workspace oluşturma, temizleme önceliği ve kısmi kanıt saklama düzeltildi.
+
+5. **Exact pytest assertion, timeout, collection ve infrastructure-result parsing:** Test çalıştırma ve sonuç ayrıştırma kesinleştirildi.
+
+6. **Exact full-suite collection ve aggregate consistency validation:** Tüm test node'larının toplanması ve manifest'le tutarlılığı doğrulandı.
+
+7. **Canonical hashing narrowing:** Yalnızca exact `__pycache__` dizinleri altındaki `.pyc` dosyaları hashing dışında bırakıldı.
+
+8. **Workspace-relative cwd ve parametrized pytest node ID preservation:** Çalışma dizini bilgisi ve parametrize test node ID'leri korundu.
+
+9. **Direct DebugTask schema validation:** Doğrudan `DebugTask` nesneleri tam schema validation ve detachment sürecinden geçirildi.
+
+10. **Invalid schema-v1 multi-F2P evaluator testlerinin kaldırılması:** Altı outcome taxonomy seviyesinde test edilir, ancak schema v1 altında yalnızca dört evaluator outcome'u geçerlidir. Multi-F2P testleri kaldırıldı.
+
+11. **Public EvaluationResult invariant hardening:** Contradictory `COMPLETED` record'ları reddedilir ve semantik outcome'lar saklanan test evidence'ından yeniden hesaplanır.
+
+12. **Final EOF whitespace ve evidence-generation artifact onarımı:** Dosya sonu boşlukları ve kanıt üretim artifact'ları temizlendi.
+
+Kabul edilen Task 7 kapsamı içinde bilinen unresolved blocker kalmamıştır.
+
+### Test ve Doğrulama
+
+Task 7'nin kesin doğrulama sonuçları:
+
+```
+Branch:
+feature/mvp-verifier-runner-v1
+
+Commit:
+1b0af78 Add verifier and evaluation runner v1
+
+Source/test files:
+7
+
+Focused unit:
+73 passed, 2 warnings
+
+Integration:
+21 passed
+
+Relevant regression:
+350 passed, 2 skipped, 5 warnings
+
+Full suite:
+1776 passed, 2 skipped, 5 warnings
+
+Compileall:
+passed
+
+Whitespace and reverse-patch checks:
+passed
+
+Dependencies:
+none
+```
+
+İki mevcut skip node ID'si:
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_posix_child_has_different_process_group`
+- `tests/unit/test_command_runner.py::TestCommandRunner::test_detached_inherited_pipe_returns_bounded`
+
+Üç mevcut `PytestCollectionWarning` location'ı:
+- `agentic_debugger/runtime/test_runner.py:13`
+- `agentic_debugger/runtime/test_runner.py:20`
+- `agentic_debugger/runtime/test_runner.py:40`
+
+### Öğrendiklerim
+
+Verification'ın patch generation'dan ayrı tasarlanması, değerlendirmenin controller loop'undan bağımsız çalışabilmesini sağlıyor. Baseline'ın önce doğrulanması, candidate classification öncesinde task'ın geçerli olduğunu garanti ediyor. F2P ve P2P sonuçlarının outcome'u belirlemesi, SWE-bench yaklaşımıyla uyumlu.
+
+Reproduction ve full-suite birincil outcome değil, supporting consistency evidence olarak çalışıyor. Patch, syntax, timeout, collection ve infrastructure failure'ları altı semantik outcome'un dışında kalıyor — bunlar technical failure kategorileri.
+
+Result mapping'lerinin detached, bounded ve deterministic olması, evaluator çıktısının her ortamda aynı şekilde yorumlanabilmesini sağlıyor. Temporary workspace path'lerinin normalize edilmesi, path karşılaştırmalarında tutarlılık sağlıyor.
+
+Canonical fixture hash'leri, fixture'ların beklenmeyen biçimde değişmediğini doğruluyor. Doğrudan `DebugTask` girdilerinin schema validation'dan geçmesi, evaluator'a gelen her girdinin aynı katı kontratlara tabi olmasını sağlıyor.
+
+Schema v1 tam olarak bir F2P node'u gerektirdiği için dört evaluator outcome'una ulaşılırken, taxonomy altı outcome tanımlıyor. PARTIALLY_RESOLVED ve WORK_IN_PROGRESS, birden fazla F2P node'u gerektiren future schema versiyonları için hazır.
+
+`max_test_runs`'ın controller'a ait olması ve verifier'ın kendi command accounting'ini tutması, iki katmanın bütçe açısından birbirine karışmamasını sağlıyor. Partial evidence'ın bounded failure durumunda korunması, diagnoz için değerli bilgi kaybını önlüyor. Contradictory `COMPLETED` record'larının reddi, evaluation sonuçlarının tutarlılığını garanti ediyor.
+
+Task 7 trusted-local çalışır ve OS-level hostile-code sandbox değildir. Bu sınırlama, container veya sanal makine tabanlı bir sandbox'ın daha sonra eklenmesi gerektiği anlamına gelir.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 7 tamamlandı. `feature/mvp-verifier-runner-v1` branch'i fast-forward olarak `main` branch'ine merge edilip push edildi; `main` ve `origin/main` artık `1b0af78` commit'ini gösteriyor.
+
+Bir sonraki tek aktif implementation maddesi **Task 8 — Golden Trajectories v1**'dir. Task 8, sabit model action sequence'leri, kararlı event expectation'ları, replay validation, patch/test assertion'ları ve no-real-model CI coverage sağlamalıdır. Task 8 henüz başlamamıştır.
