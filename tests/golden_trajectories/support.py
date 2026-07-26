@@ -37,11 +37,16 @@ from agentic_debugger.agent.tool_registry import (
     ToolResult,
     ToolSpec,
 )
+from agentic_debugger.agent.trajectory import (
+    FIXED_TIMESTAMP,
+    project_controller_run,
+)
+from agentic_debugger.demo.catalog import reference_repair_snippets, scenario_ids
 from agentic_debugger.evaluation import load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
 from agentic_debugger.events.replay import ReplayTrajectory, replay_events, semantic_projection
-from agentic_debugger.events.schema import EventType, ObservationStatus, RunEvent
+from agentic_debugger.events.schema import ObservationStatus, RunEvent
 from agentic_debugger.runtime.pdb_session import PdbSession
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
@@ -49,32 +54,11 @@ from agentic_debugger.runtime.workspace import TaskWorkspace
 ROOT = Path(__file__).resolve().parents[2]
 CURATED = ROOT / "agentic_debugger" / "datasets" / "curated"
 
+# The reference repairs live in the product demonstration catalog so Task 8 and
+# Task 9 cannot drift apart.  The golden artifacts pin the resulting patch
+# hashes, so a catalog edit fails these tests loudly instead of silently.
 PATCH_REPLACEMENTS = {
-    "curated-none-handling-001": (
-        "display_name.py",
-        "normalized_name = name.strip()",
-        "normalized_name = name.strip() if name is not None else \"\"",
-    ),
-    "curated-off-by-one-002": (
-        "recent_window.py",
-        "end_index - (1 if requested_size == sequence_length else 0)",
-        "end_index",
-    ),
-    "curated-wrong-branch-003": (
-        "access_branch.py",
-        "    if employee_flag:\n        selected_branch = \"employee\"\n    elif employee_flag and pass_flag:\n        selected_branch = \"priority\"",
-        "    if employee_flag and pass_flag:\n        selected_branch = \"priority\"\n    elif employee_flag:\n        selected_branch = \"employee\"",
-    ),
-    "curated-mutation-alias-004": (
-        "labels.py",
-        "    caller_labels = labels\n    working_labels = caller_labels\n    shared_identity = id(caller_labels) == id(working_labels)\n    if not shared_identity:\n        raise RuntimeError(\"unexpected collection identity\")",
-        "    caller_labels = labels\n    working_labels = list(caller_labels)",
-    ),
-    "curated-caller-callee-005": (
-        "price.py",
-        "    callee_input = caller_amount\n    return _format_price(callee_input)",
-        "    callee_input = caller_amount * 100 if caller_representation == \"dollars\" else caller_amount\n    return _format_price(callee_input)",
-    ),
+    task_id: reference_repair_snippets(task_id) for task_id in scenario_ids()
 }
 
 
@@ -412,56 +396,16 @@ def _registry(
     ))
 
 
-def _event_from(sequence: int, event_type: EventType, name: str, state: ControllerState | None, payload: dict[str, Any], run_id: str, task_id: str) -> RunEvent:
-    from agentic_debugger.events.schema import Metadata
-    return RunEvent("1.0", f"event-{sequence:09d}", run_id, task_id, sequence, "2026-01-01T00:00:00Z", event_type, name, state.value if state else None, payload, Metadata(0, "task8", "scripted", None, None))
-
-
 def project_controller(result: ControllerRunResult) -> list[RunEvent]:
-    events: list[RunEvent] = []
-    sequence = 0
+    """Project a Task 8 controller run through the shared product projection."""
 
-    def add(kind: EventType, name: str, state: ControllerState | None, payload: dict[str, Any]) -> None:
-        nonlocal sequence
-        events.append(_event_from(sequence, kind, name, state, payload, result.run_id, result.task_id))
-        sequence += 1
-
-    for step in result.steps:
-        directive_kind = step.directive_kind.value if step.directive_kind is not None else None
-        add(EventType.DECISION, "controller_decision", step.state_before, {
-            "directive_kind": directive_kind,
-            "model_call_index": step.model_call_index,
-            "stop_reason": step.stop_reason.value if step.stop_reason else None,
-            "budget_before": {
-                "patch_attempts": step.budget_before.patch_attempts,
-                "test_runs": step.budget_before.test_runs,
-                "pdb_observations": step.budget_before.pdb_observations,
-                "source_observations": step.budget_before.source_observations,
-            },
-            "budget_after": {
-                "patch_attempts": step.budget_after.patch_attempts,
-                "test_runs": step.budget_after.test_runs,
-                "pdb_observations": step.budget_after.pdb_observations,
-                "source_observations": step.budget_after.source_observations,
-            },
-        })
-        if step.action is not None:
-            add(EventType.ACTION, step.action.name, step.state_before, {"action": step.action.to_mapping()})
-        if step.observation is not None:
-            add(EventType.OBSERVATION, step.observation.name, step.state_before, {"observation": step.observation.to_mapping()})
-        if step.state_before is not step.state_after:
-            add(EventType.TRANSITION, "state_transition", step.state_after, {
-                "source_state": step.state_before.value,
-                "target_state": step.state_after.value,
-                "reason": step.transition_reason or (step.stop_reason.value if step.stop_reason else "controller transition"),
-            })
-
-    add(EventType.FINAL, "run_finished", result.final_state, {
-        "final_state": result.final_state.value,
-        "stop_reason": result.stop_reason.value,
-        "model_calls": result.model_calls,
-    })
-    return events
+    return project_controller_run(
+        result,
+        tool_version="task8",
+        model="scripted",
+        timestamp=FIXED_TIMESTAMP,
+        duration_ms=0,
+    )
 
 
 def _cleanup_resources(

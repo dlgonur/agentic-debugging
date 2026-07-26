@@ -1,0 +1,610 @@
+"""Real tool handlers for the Task 9 demonstration.
+
+Every handler delegates to an already-accepted component:
+
+============================  =======================================
+Controller action             Backing implementation
+============================  =======================================
+``run_reproduction``          ``runtime.test_runner.TestRunner``
+``run_regression_tests``      ``runtime.test_runner.TestRunner``
+``find_function``             ``skills.search_skills.find_function``
+``get_source_window``         ``skills.file_skills.get_source_window``
+``apply_patch``               ``runtime.patcher.PatchManager``
+``syntax_check``              ``runtime.patcher.PatchManager``
+``start_pdb_session``         ``runtime.pdb_session.PdbSession``
+``get_stack_summary``         ``runtime.pdb_session.PdbSession``
+``get_frame_locals``          ``runtime.pdb_session.PdbSession``
+``safe_eval_expression``      ``runtime.pdb_session.PdbSession``
+``stop_pdb_session``          ``runtime.pdb_session.PdbSession``
+``classify_outcome``          ``evaluation.outcome_taxonomy``
+============================  =======================================
+
+``express_root_cause_hypothesis`` is the one handler with no backing runtime
+component: it records the offline model's own localization and root-cause
+claim so the evaluator can score it against the task oracle.
+
+Handlers never fabricate a success.  A component that raises is surfaced as a
+``rejected``/``error``/``timeout`` observation through the accepted tool
+registry, and the controller reacts to the observation it actually received.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import shutil
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Callable, Optional, Sequence
+
+from agentic_debugger.agent.controller_policy import ActionName
+from agentic_debugger.agent.tool_registry import (
+    ToolExecutionError,
+    ToolRegistry,
+    ToolRejectedError,
+    ToolResult,
+    ToolSpec,
+    ToolTimeoutError,
+)
+from agentic_debugger.demo.catalog import (
+    DemoScenario,
+    probe_driver_source,
+    resolve_probe_breakpoint,
+)
+from agentic_debugger.evaluation.outcome_taxonomy import classify_outcome
+from agentic_debugger.evaluation.runner import bounded_error, normalize_output
+from agentic_debugger.evaluation.task_schema import DebugTask
+from agentic_debugger.events.schema import Action, ObservationStatus
+from agentic_debugger.runtime.exceptions import (
+    PatchApplyError,
+    PatchAuthorizationError,
+    PatchStateError,
+    PatchValidationError,
+    PdbSessionError,
+    PdbSessionTimeoutError,
+    SourceInspectionError,
+    SourceParseError,
+    WorkspaceError,
+)
+from agentic_debugger.runtime.patcher import PatchManager
+from agentic_debugger.runtime.pdb_session import PdbSession
+from agentic_debugger.runtime.test_runner import TestRunKind, TestRunner
+from agentic_debugger.runtime.workspace import TaskWorkspace
+from agentic_debugger.skills.file_skills import get_source_window
+from agentic_debugger.skills.search_skills import find_function
+
+#: Source-window radius used by the demonstration.  Small enough to keep the
+#: observation payload bounded and stable, large enough to show the defect.
+SOURCE_WINDOW_RADIUS = 6
+
+#: Maximum characters of a bounded diagnostic retained for reporting.
+MAX_DIAGNOSTIC_CHARS = 400
+
+
+class DemoToolError(RuntimeError):
+    """Raised for demonstration harness misuse rather than tool failure."""
+
+
+def bounded_diagnostic(exc: BaseException, workspace_root: Optional[str] = None) -> str:
+    """Bound a diagnostic and strip disposable workspace paths out of it.
+
+    Diagnostics land in the deterministic section of the demonstration result
+    document, so a raw ``PermissionError`` naming a ``mkdtemp`` directory would
+    make that section unstable.  Normalisation reuses the accepted verifier
+    helper so the demo and the verifier redact identically.
+    """
+
+    text = normalize_output(bounded_error(exc), workspace_root)
+    text = "".join(char if 0x20 <= ord(char) != 0x7F else " " for char in text).strip()
+    if len(text) > MAX_DIAGNOSTIC_CHARS:
+        text = text[: MAX_DIAGNOSTIC_CHARS - 3] + "..."
+    return text or "tool failure"
+
+
+def _json_safe(value: Any, label: str) -> Any:
+    try:
+        return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True))
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ToolExecutionError(f"{label} is not JSON-compatible") from exc
+
+
+def _validator(
+    required: dict[str, type],
+    optional: Optional[dict[str, type]] = None,
+) -> Callable[[dict[str, object]], dict[str, object]]:
+    """Build a strict argument validator that rejects unknown keys."""
+
+    optional = optional or {}
+    known = set(required) | set(optional)
+
+    def validate(arguments: dict[str, object]) -> dict[str, object]:
+        if type(arguments) is not dict:
+            raise ToolRejectedError("arguments must be a mapping")
+        unknown = sorted(set(arguments) - known)
+        if unknown:
+            raise ToolRejectedError(f"unknown argument: {unknown[0]}")
+        missing = sorted(set(required) - set(arguments))
+        if missing:
+            raise ToolRejectedError(f"missing argument: {missing[0]}")
+        for name, expected in {**required, **optional}.items():
+            if name not in arguments:
+                continue
+            value = arguments[name]
+            if type(value) is not expected:
+                raise ToolRejectedError(f"argument {name} has the wrong type")
+            if expected is str and not value:
+                raise ToolRejectedError(f"argument {name} must be non-empty")
+            if expected is int and value < 0:
+                raise ToolRejectedError(f"argument {name} must be non-negative")
+        return dict(arguments)
+
+    return validate
+
+
+def pytest_argv(base: Sequence[str], node_ids: Sequence[str]) -> list[str]:
+    """Rebuild a manifest pytest argv for an explicit set of node ids."""
+
+    argv: list[str] = []
+    replaced = False
+    for item in base:
+        if "::" in item:
+            if not replaced:
+                argv.extend(node_ids)
+                replaced = True
+            continue
+        argv.append(item)
+    if not replaced:
+        argv.extend(node_ids)
+    return argv
+
+
+@dataclass(frozen=True)
+class PdbProbe:
+    """A prepared, disposable debugger target derived from the fixture."""
+
+    source_dir: Path
+    parent_dir: Path
+    script: str
+    breakpoint_line: int
+    focus_function: str
+
+
+def prepare_pdb_probe(
+    fixture_dir: Path,
+    scenario: DemoScenario,
+    parent_dir: Path,
+) -> PdbProbe:
+    """Copy the canonical fixture and append one module-level probe driver.
+
+    The canonical fixture is never written to.  The copy receives a single
+    appended driver function plus its call so the focus function actually runs
+    under the debugger, and the breakpoint is resolved from the fixture AST.
+    """
+
+    probe = scenario.runtime_probe
+    source_dir = parent_dir / f"probe-{scenario.task_id}"
+    if source_dir.exists():
+        raise DemoToolError(f"probe source directory already exists: {source_dir}")
+    shutil.copytree(fixture_dir, source_dir, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
+    module = source_dir / probe.module_path
+    if not module.is_file():
+        raise DemoToolError(f"probe module is missing from the fixture: {probe.module_path}")
+    original = module.read_text(encoding="utf-8")
+    breakpoint_line = resolve_probe_breakpoint(original, probe)
+    module.write_text(original + probe_driver_source(probe), encoding="utf-8", newline="\n")
+    return PdbProbe(
+        source_dir=source_dir,
+        parent_dir=parent_dir,
+        script=probe.module_path,
+        breakpoint_line=breakpoint_line,
+        focus_function=probe.focus_function,
+    )
+
+
+class DemoToolContext:
+    """Mutable execution state shared by the demonstration tool handlers."""
+
+    def __init__(
+        self,
+        *,
+        task: DebugTask,
+        workspace: TaskWorkspace,
+        patch: str,
+        probe: Optional[PdbProbe],
+    ) -> None:
+        self.task = task
+        self.workspace = workspace
+        self.patch = patch
+        self.probe = probe
+        self.test_runner = TestRunner(workspace)
+        self.patch_manager = PatchManager(
+            workspace,
+            list(task.constraints.allowed_write_paths),
+            list(task.constraints.denied_write_paths),
+        )
+
+        self.tool_calls: list[str] = []
+        self.tool_errors: list[dict[str, str]] = []
+        self.baseline_failure_reproduced: Optional[bool] = None
+        self.post_patch_f2p_passed: Optional[bool] = None
+        self.regression_passed: Optional[bool] = None
+        self.patch_applied = False
+        self.patch_changed_files: tuple[str, ...] = ()
+        self.syntax_passed: Optional[bool] = None
+        self.declared_localization: Optional[dict[str, str]] = None
+        self.controller_outcome: Optional[str] = None
+
+        self.pdb_session: Optional[PdbSession] = None
+        self.pdb_workspace: Optional[TaskWorkspace] = None
+        self.pdb_pause_generation: Optional[int] = None
+        self.pdb_observation_names: list[str] = []
+        self.pdb_session_started = False
+
+    # -- lifecycle ---------------------------------------------------------
+
+    def release_pdb(self) -> list[BaseException]:
+        """Stop the session and delete its workspace; never raise."""
+
+        errors: list[BaseException] = []
+        session = self.pdb_session
+        if session is not None:
+            try:
+                session.stop()
+            except BaseException as exc:  # noqa: BLE001 - cleanup must continue
+                # Keep the handle so an outer cleanup pass can retry rather
+                # than losing the only reference to a live worker process.
+                errors.append(exc)
+            else:
+                self.pdb_session = None
+        workspace = self.pdb_workspace
+        if workspace is not None:
+            try:
+                workspace.cleanup()
+                if os.path.exists(workspace.root):
+                    raise DemoToolError("PDB workspace root remains after cleanup")
+            except BaseException as exc:  # noqa: BLE001 - cleanup must continue
+                errors.append(exc)
+            else:
+                self.pdb_workspace = None
+        return errors
+
+    def record_error(self, action: str, exc: BaseException) -> None:
+        """Retain a bounded, path-normalized diagnostic naming what failed."""
+
+        self.tool_errors.append(
+            {"action": action, "diagnostic": bounded_diagnostic(exc, self.workspace.root)}
+        )
+
+    # -- helpers -----------------------------------------------------------
+
+    def require_session(self, action: str) -> PdbSession:
+        if self.pdb_session is None:
+            raise ToolRejectedError(f"{action} requires an active PDB session")
+        return self.pdb_session
+
+
+def _ok(payload: dict[str, Any], summary: str) -> ToolResult:
+    return ToolResult(ObservationStatus.OK, payload, summary)
+
+
+def build_registry(context: DemoToolContext) -> ToolRegistry:
+    """Register every demonstration tool against the accepted registry."""
+
+    task = context.task
+    reproduction_argv = tuple(task.reproduction.argv)
+    reproduction_cwd = task.reproduction.cwd
+
+    def spec(
+        name: ActionName,
+        validator: Callable[[dict[str, object]], dict[str, object]],
+        handler: Callable[[Action, dict[str, object]], ToolResult],
+    ) -> ToolSpec:
+        def guarded(action: Action, arguments: dict[str, object]) -> ToolResult:
+            context.tool_calls.append(action.name)
+            try:
+                return handler(action, arguments)
+            except BaseException as exc:  # noqa: BLE001 - record, then surface
+                context.record_error(action.name, exc)
+                raise
+
+        return ToolSpec(name, validator, guarded, version="demo-1")
+
+    # -- reproduction and tests -------------------------------------------
+
+    def handle_run_reproduction(action: Action, arguments: dict[str, object]) -> ToolResult:
+        phase = arguments["phase"]
+        if phase not in ("baseline", "post_patch"):
+            raise ToolRejectedError("phase must be baseline or post_patch")
+        result = context.test_runner.run_reproduction(task)
+        if result.timed_out:
+            raise ToolTimeoutError("reproduction command timed out")
+        if result.launch_error or result.command_result.exit_code is None:
+            raise ToolExecutionError("reproduction command could not be launched")
+        node_id = task.tests.fail_to_pass[0]
+        reproduced = bool(result.reproduction_match) and not result.passed
+        payload: dict[str, Any] = {
+            "phase": phase,
+            "node_id": node_id,
+            "exit_code": result.command_result.exit_code,
+            "expected_exit_code": task.reproduction.expected_exit_code,
+            "passed": bool(result.passed),
+            "failure_reproduced": reproduced,
+        }
+        if phase == "baseline":
+            context.baseline_failure_reproduced = reproduced
+            summary = "baseline reproduction executed"
+        else:
+            context.post_patch_f2p_passed = bool(result.passed)
+            summary = "post-patch reproduction executed"
+        return _ok(payload, summary)
+
+    def handle_run_regression_tests(action: Action, arguments: dict[str, object]) -> ToolResult:
+        nodes = list(task.tests.pass_to_pass)
+        if not nodes:
+            raise ToolExecutionError("task declares no pass-to-pass tests")
+        argv = pytest_argv(reproduction_argv, nodes)
+        result = context.test_runner.run_tests(
+            argv,
+            reproduction_cwd,
+            task.tests.timeout_seconds,
+            kind=TestRunKind.REGRESSION,
+        )
+        if result.timed_out:
+            raise ToolTimeoutError("regression command timed out")
+        if result.launch_error or result.command_result.exit_code is None:
+            raise ToolExecutionError("regression command could not be launched")
+        all_passed = bool(result.passed)
+        context.regression_passed = all_passed
+        return _ok(
+            {
+                "node_ids": nodes,
+                "node_count": len(nodes),
+                "exit_code": result.command_result.exit_code,
+                "all_passed": all_passed,
+            },
+            "designated regression tests executed",
+        )
+
+    def handle_classify_outcome(action: Action, arguments: dict[str, object]) -> ToolResult:
+        if context.post_patch_f2p_passed is None or context.regression_passed is None:
+            raise ToolExecutionError("validation evidence is incomplete")
+        f2p = [context.post_patch_f2p_passed]
+        p2p = [context.regression_passed]
+        outcome = classify_outcome(f2p, p2p)
+        context.controller_outcome = outcome.value
+        return _ok(
+            {
+                "outcome": outcome.value,
+                "f2p_passed": f2p,
+                "p2p_passed": p2p,
+                "evidence_scope": "controller_validation",
+            },
+            "controller validation outcome classified",
+        )
+
+    # -- static source retrieval ------------------------------------------
+
+    def handle_find_function(action: Action, arguments: dict[str, object]) -> ToolResult:
+        try:
+            match = find_function(context.workspace, arguments["name"], arguments["path"])
+        except (SourceInspectionError, SourceParseError, WorkspaceError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        if match is None:
+            raise ToolExecutionError("declared symbol was not found in the declared file")
+        return _ok(_json_safe(match.to_mapping(), "find_function"), "declared symbol located")
+
+    def handle_get_source_window(action: Action, arguments: dict[str, object]) -> ToolResult:
+        line = arguments["line"]
+        if line < 1:
+            raise ToolRejectedError("line must be positive")
+        try:
+            window = get_source_window(
+                context.workspace, arguments["path"], line, SOURCE_WINDOW_RADIUS
+            )
+        except (SourceInspectionError, WorkspaceError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        return _ok(_json_safe(window.to_mapping(), "get_source_window"), "source window retrieved")
+
+    def handle_express_hypothesis(action: Action, arguments: dict[str, object]) -> ToolResult:
+        declared = {
+            "hypothesis_id": str(arguments["hypothesis_id"]),
+            "statement": str(arguments["statement"]),
+            "target_file": str(arguments["target_file"]),
+            "target_symbol": str(arguments["target_symbol"]),
+            "confidence": str(arguments["confidence"]),
+        }
+        context.declared_localization = {
+            "file_path": declared["target_file"],
+            "symbol": declared["target_symbol"],
+        }
+        return _ok(dict(declared), "root-cause hypothesis recorded")
+
+    # -- patch lifecycle ---------------------------------------------------
+
+    def handle_apply_patch(action: Action, arguments: dict[str, object]) -> ToolResult:
+        diff = arguments["patch"]
+        try:
+            result = context.patch_manager.apply_patch(diff)
+        except (PatchValidationError, PatchAuthorizationError, PatchStateError) as exc:
+            raise ToolRejectedError(bounded_diagnostic(exc)) from exc
+        except PatchApplyError as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.patch_applied = bool(result.success)
+        context.patch_changed_files = tuple(sorted(item.path for item in result.changed_files))
+        return _ok(
+            {
+                "applied": bool(result.success),
+                "changed_files": list(context.patch_changed_files),
+                "hunk_count": result.hunk_count,
+                "patch_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+                "after_sha256": {key: result.after_sha256[key] for key in sorted(result.after_sha256)},
+            },
+            "candidate patch applied to the disposable workspace",
+        )
+
+    def handle_syntax_check(action: Action, arguments: dict[str, object]) -> ToolResult:
+        try:
+            result = context.patch_manager.syntax_check()
+        except (PatchStateError, PatchApplyError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.syntax_passed = bool(result.all_passed)
+        return _ok(
+            {
+                "all_passed": bool(result.all_passed),
+                "results": [item.to_mapping() for item in result.results],
+            },
+            "patched source syntax validated",
+        )
+
+    # -- bounded runtime evidence -----------------------------------------
+
+    def handle_start_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
+        probe = context.probe
+        if probe is None:
+            raise ToolRejectedError("no runtime probe is configured for this task")
+        if context.pdb_session is not None:
+            raise ToolRejectedError("a PDB session is already active")
+        try:
+            workspace = TaskWorkspace(str(probe.source_dir), parent_dir=str(probe.parent_dir))
+        except WorkspaceError as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.pdb_workspace = workspace
+        # Register the session before starting it so a failed start is still
+        # stopped and its workspace removed by release_pdb().
+        session = PdbSession(workspace)
+        context.pdb_session = session
+        try:
+            session.start()
+            context.pdb_session_started = True
+            started = session.start_paused_target(probe.script, [probe.breakpoint_line])
+        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            context.release_pdb()
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        if started.get("state") != "paused":
+            context.release_pdb()
+            raise ToolExecutionError("runtime probe did not reach the declared breakpoint")
+        return _ok(
+            {
+                "state": "paused",
+                "script": started["script"],
+                "line": started["line"],
+                "function": started["function"],
+                "breakpoint_line": probe.breakpoint_line,
+                "focus_function": probe.focus_function,
+            },
+            "runtime probe paused at the declared breakpoint",
+        )
+
+    def handle_stack_summary(action: Action, arguments: dict[str, object]) -> ToolResult:
+        session = context.require_session("get_stack_summary")
+        try:
+            stack = session.get_stack_summary()
+        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        generation = stack.get("pause_generation")
+        if type(generation) is not int:
+            raise ToolExecutionError("stack summary did not report a pause generation")
+        context.pdb_pause_generation = generation
+        context.pdb_observation_names.append("get_stack_summary")
+        return _ok(_json_safe(dict(stack), "get_stack_summary"), "bounded stack summary collected")
+
+    def handle_frame_locals(action: Action, arguments: dict[str, object]) -> ToolResult:
+        session = context.require_session("get_frame_locals")
+        try:
+            result = session.get_frame_locals(
+                int(arguments["frame_id"]), int(arguments["pause_generation"])
+            )
+        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.pdb_observation_names.append("get_frame_locals")
+        return _ok(_json_safe(dict(result), "get_frame_locals"), "bounded frame locals collected")
+
+    def handle_safe_eval(action: Action, arguments: dict[str, object]) -> ToolResult:
+        session = context.require_session("safe_eval_expression")
+        try:
+            result = session.safe_eval_expression(
+                int(arguments["frame_id"]),
+                int(arguments["pause_generation"]),
+                str(arguments["expression"]),
+            )
+        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.pdb_observation_names.append("safe_eval_expression")
+        return _ok(
+            _json_safe(dict(result), "safe_eval_expression"),
+            "restricted runtime expression evaluated",
+        )
+
+    def handle_stop_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
+        started = context.pdb_session_started
+        had_workspace = context.pdb_workspace is not None
+        errors = context.release_pdb()
+        if errors:
+            raise ToolExecutionError(bounded_diagnostic(errors[0], context.workspace.root))
+        return _ok(
+            {
+                "stopped": context.pdb_session is None,
+                "session_started": started,
+                "workspace_removed": had_workspace and context.pdb_workspace is None,
+            },
+            "PDB session stopped and its workspace released",
+        )
+
+    return ToolRegistry(
+        (
+            spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
+            spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
+            spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
+            spec(
+                ActionName.FIND_FUNCTION,
+                _validator({"name": str, "path": str}),
+                handle_find_function,
+            ),
+            spec(
+                ActionName.GET_SOURCE_WINDOW,
+                _validator({"path": str, "line": int}),
+                handle_get_source_window,
+            ),
+            spec(
+                ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
+                _validator(
+                    {
+                        "hypothesis_id": str,
+                        "statement": str,
+                        "target_file": str,
+                        "target_symbol": str,
+                        "confidence": str,
+                    }
+                ),
+                handle_express_hypothesis,
+            ),
+            spec(ActionName.APPLY_PATCH, _validator({"patch": str}), handle_apply_patch),
+            spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
+            spec(ActionName.START_PDB_SESSION, _validator({}), handle_start_pdb),
+            spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
+            spec(
+                ActionName.GET_FRAME_LOCALS,
+                _validator({"frame_id": int, "pause_generation": int}),
+                handle_frame_locals,
+            ),
+            spec(
+                ActionName.SAFE_EVAL_EXPRESSION,
+                _validator({"frame_id": int, "pause_generation": int, "expression": str}),
+                handle_safe_eval,
+            ),
+            spec(ActionName.STOP_PDB_SESSION, _validator({}), handle_stop_pdb),
+        )
+    )
+
+
+__all__ = [
+    "MAX_DIAGNOSTIC_CHARS",
+    "SOURCE_WINDOW_RADIUS",
+    "DemoToolContext",
+    "DemoToolError",
+    "PdbProbe",
+    "build_registry",
+    "prepare_pdb_probe",
+    "pytest_argv",
+]
