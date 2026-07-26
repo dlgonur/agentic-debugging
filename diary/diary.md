@@ -1,4 +1,4 @@
-﻿# Agentic Debugging Staj Defteri
+# Agentic Debugging Staj Defteri
 
 Bu dosyada 13–22 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
 
@@ -1640,3 +1640,27 @@ Path normalizasyonu sırasında tüm absolute path'leri collapse etmek yerine ya
 ### Sonuç / Bir Sonraki Adım
 
 Task 8 tamamlandı. Bir sonraki adım **Task 9 — First End-to-End Demonstration**'dur. Task 9 henüz başlamamıştır ve implementation'ına başlanmamıştır.
+
+---
+
+## 26 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 9 — First End-to-End Demonstration kabulü, merge sonrası doğrulama ve MVP uygulama dizisinin kapatılması
+
+### Yapılan Çalışmalar
+
+Bugün Task 9'un kabul edilen implementation'ını ve merge durumunu kapattım. Task 9'un implementation commit'i `e7031fa796a738fc80de4c673607eee72254ce56` oldu. Bu task, gerçek controller, tool registry, workspace, test runner, source-skill, PatchManager, PDB session, event replay ve Task 7 verifier yollarını tek bir offline ve deterministik uçtan uca demonstration içinde birleştirdi. Demonstration beş curated task ve iki policy üzerinde çalıştı; implementation kapsamı 19 değişen dosya, 6709 insertion ve 75 deletion olarak kaydedildi.
+
+Kabul edilen sonuçlarda 5 curated task × 2 policy = 10 case çalıştırıldı. Controller bütün case'lerde Done durumuna ulaştı (10/10); verifier sonucu bütün case'lerde `COMPLETED / RESOLVED` oldu (10/10); fail-to-pass 10/10, pass-to-pass 22/22 ve localization `CORRECT_TARGET_SYMBOL` 10/10 olarak gerçekleşti. Her demonstration case'inde full suite geçti, canonical fixture'lar değişmeden kaldı (10/10), disposable workspace'ler temizlendi (10/10), provider attempt sayısı 0 ve network attempt sayısı 0 oldu.
+
+Static policy ile PDB-on-uncertainty policy aynı deterministic offline catalog repair'ını kullandı. Static policy'de verifier COMPLETED 5/5, RESOLVED 5/5, fail-to-pass 5/5, pass-to-pass 11/11 ve PDB observation 0 oldu. PDB-on-uncertainty policy'de aynı sonuçlar korunurken 21 başarılı PDB observation kaydedildi. Bu nedenle static-versus-PDB parity yapısaldır; demonstration PDB'in nedensel olarak daha etkili olduğunu kanıtlamaz. Provider ve network guard'ları yalnızca process içindeki attempt'leri ölçer; OS-level network sandbox anlamına gelmez.
+
+İki clean strict demonstration execution'ı deterministik view bakımından aynı çıktı: 10 semantic trajectory karşılaştırıldı ve semantic difference sayısı 0 oldu. Generated source-tree digest kabul edilen live tree ile eşleşti ve stale summary placeholder değeri kalmadı. Validation sonuçları focused Task 9 suite için 177 passed, ilgili controller/PDB/replay/golden/evaluator regression suite için 1229 passed ve 2 warning, full repository suite için 2020 passed, 2 skipped ve 5 warning oldu. Compile ve whitespace validation da geçti. Skip ve warning'ler önceden mevcuttu; evidence inventory sırasında görülen managed-sandbox `.pytest_cache` permission warning'i product defect değildi.
+
+### Öğrendiklerim
+
+Task 9, Task 1–8 boyunca ayrı ayrı doğrulanan parçaların aynı kontrollü demonstration içinde birlikte çalışabildiğini gösterdi. Bununla birlikte bu sonuç, dokuz task'lık kabul edilen MVP implementation dizisinin tamamlandığını gösterir; daha geniş araştırma ve staj hedeflerinin tamamlandığını göstermez. Dataset expansion/inventory, training-data çalışmaları, fine-tuning, RAG'in henüz tamamlanmamış kısımları, DPO/RLHF, broad benchmarking, real model integration, adaptive PDB gating, hostile-code containment ve sonraki technical evaluation çalışmaları kapsam dışında, ertelenmiş, kısmi veya başlanmamış olarak kalır.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 9 kabul edildi ve dokuz task'lık MVP implementation dizisi tamamlandı. Bundan sonraki adımlar MVP sonrası araştırma, dataset ve model çalışmaları, daha geniş evaluation ve ertelenen güvenlik/altyapı başlıklarıdır. Implementation kabulü ve merge kaydı ayrı olarak tamamlandı; bu ilerleme kaydı güncellemesi ise `docs/PROJECT_TRACKER.md` ve bu diary dosyasıyla ayrı bir documentation-only closeout olarak kapatılmaktadır.
