@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import shutil
 import tempfile
+import uuid
 from pathlib import Path
 from typing import Optional
 
@@ -53,9 +54,7 @@ class TaskWorkspace:
             destination_parent = tempfile.gettempdir()
 
         try:
-            self._root: str = tempfile.mkdtemp(
-                prefix="task_workspace_", dir=destination_parent
-            )
+            self._root = _make_workspace_root(destination_parent)
         except OSError as e:
             raise WorkspaceError(
                 f"Failed to create temporary workspace directory: {e}"
@@ -162,6 +161,25 @@ def _copy_contents(src: str, dst: str) -> None:
             )
         else:
             shutil.copy2(s, d)
+
+
+def _make_workspace_root(parent: str) -> str:
+    """Create a writable disposable directory without tempfile ACL surprises.
+
+    On the supported Windows environment, tempfile.mkdtemp can create a
+    directory whose inherited ACL denies the same process subsequent file
+    creation. Explicit mkdir retains collision safety while preserving the
+    existing workspace ownership boundary.
+    """
+
+    for _ in range(64):
+        candidate = os.path.join(parent, f"task_workspace_{uuid.uuid4().hex}")
+        try:
+            os.mkdir(candidate)
+            return candidate
+        except FileExistsError:
+            continue
+    raise OSError("workspace directory collision limit reached")
 
 
 def _workspace_ignore(path: str, names: list[str]) -> set[str]:

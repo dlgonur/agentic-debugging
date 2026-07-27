@@ -24,6 +24,15 @@ artifacts/
 checkpoints/
 models/
 
+# Task 10A review evidence (working-only, never commit)
+_ai-review/task-10a-real-model-evaluation-harness-v1/
+task-10a-real-model-evaluation-harness-v1.zip
+
+# Task 10A local validation scratch
+.task10a-*/
+.pytest-task10a/
+.pytest_cache/
+
 # Secrets
 .env
 *.env

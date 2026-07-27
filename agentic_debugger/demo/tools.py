@@ -38,7 +38,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from agentic_debugger.agent.controller_policy import ActionName
+from agentic_debugger.agent.controller_policy import ActionName, PdbPolicy
 from agentic_debugger.agent.tool_registry import (
     ToolExecutionError,
     ToolRegistry,
@@ -216,6 +216,7 @@ class DemoToolContext:
         self.task = task
         self.workspace = workspace
         self.patch = patch
+        self.candidate_patch = ""
         self.probe = probe
         self.test_runner = TestRunner(workspace)
         self.patch_manager = PatchManager(
@@ -288,7 +289,7 @@ def _ok(payload: dict[str, Any], summary: str) -> ToolResult:
     return ToolResult(ObservationStatus.OK, payload, summary)
 
 
-def build_registry(context: DemoToolContext) -> ToolRegistry:
+def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolRegistry:
     """Register every demonstration tool against the accepted registry."""
 
     task = context.task
@@ -430,6 +431,10 @@ def build_registry(context: DemoToolContext) -> ToolRegistry:
             raise ToolRejectedError(bounded_diagnostic(exc)) from exc
         except PatchApplyError as exc:
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        # Only a patch that passed the real PatchManager lifecycle becomes
+        # authoritative evidence for the evaluator.  Rejected or failed
+        # attempts never overwrite the accepted candidate.
+        context.candidate_patch = diff
         context.patch_applied = bool(result.success)
         context.patch_changed_files = tuple(sorted(item.path for item in result.changed_files))
         return _ok(
@@ -441,6 +446,23 @@ def build_registry(context: DemoToolContext) -> ToolRegistry:
                 "after_sha256": {key: result.after_sha256[key] for key in sorted(result.after_sha256)},
             },
             "candidate patch applied to the disposable workspace",
+        )
+
+    def handle_revert_patch(action: Action, arguments: dict[str, object]) -> ToolResult:
+        try:
+            result = context.patch_manager.revert_patch()
+        except (PatchStateError, PatchApplyError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.candidate_patch = ""
+        context.patch_applied = False
+        context.patch_changed_files = ()
+        context.syntax_passed = None
+        return _ok(
+            {
+                "reverted": True,
+                "changed_files": [item.path for item in result.changed_files],
+            },
+            "accepted candidate patch reverted from the disposable workspace",
         )
 
     def handle_syntax_check(action: Action, arguments: dict[str, object]) -> ToolResult:
@@ -460,6 +482,8 @@ def build_registry(context: DemoToolContext) -> ToolRegistry:
     # -- bounded runtime evidence -----------------------------------------
 
     def handle_start_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
+        if pdb_policy is PdbPolicy.DISABLED:
+            raise ToolRejectedError("PDB access is disabled by evaluation policy")
         probe = context.probe
         if probe is None:
             raise ToolRejectedError("no runtime probe is configured for this task")
@@ -580,6 +604,7 @@ def build_registry(context: DemoToolContext) -> ToolRegistry:
                 handle_express_hypothesis,
             ),
             spec(ActionName.APPLY_PATCH, _validator({"patch": str}), handle_apply_patch),
+            spec(ActionName.REVERT_PATCH, _validator({}), handle_revert_patch),
             spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
             spec(ActionName.START_PDB_SESSION, _validator({}), handle_start_pdb),
             spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
