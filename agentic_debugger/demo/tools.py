@@ -39,6 +39,7 @@ from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
 from agentic_debugger.agent.controller_policy import ActionName, PdbPolicy
+from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import (
     ToolExecutionError,
     ToolRegistry,
@@ -78,8 +79,22 @@ from agentic_debugger.skills.search_skills import find_function
 #: observation payload bounded and stable, large enough to show the defect.
 SOURCE_WINDOW_RADIUS = 6
 
+
+def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
+    """Return the phase values accepted by run_reproduction in a state."""
+
+    if state is ControllerState.REPRODUCE:
+        return ("baseline",)
+    if state is ControllerState.VALIDATE:
+        return ("post_patch",)
+    return ()
+
 #: Maximum characters of a bounded diagnostic retained for reporting.
 MAX_DIAGNOSTIC_CHARS = 400
+
+
+def _safe_rejection(message: str) -> ToolRejectedError:
+    return ToolRejectedError(message, safe_diagnostic=message)
 
 
 class DemoToolError(RuntimeError):
@@ -120,23 +135,23 @@ def _validator(
 
     def validate(arguments: dict[str, object]) -> dict[str, object]:
         if type(arguments) is not dict:
-            raise ToolRejectedError("arguments must be a mapping")
+            raise _safe_rejection("arguments must be a mapping")
         unknown = sorted(set(arguments) - known)
         if unknown:
-            raise ToolRejectedError(f"unknown argument: {unknown[0]}")
+            raise _safe_rejection(f"unknown argument: {unknown[0]}")
         missing = sorted(set(required) - set(arguments))
         if missing:
-            raise ToolRejectedError(f"missing argument: {missing[0]}")
+            raise _safe_rejection(f"missing argument: {missing[0]}")
         for name, expected in {**required, **optional}.items():
             if name not in arguments:
                 continue
             value = arguments[name]
             if type(value) is not expected:
-                raise ToolRejectedError(f"argument {name} has the wrong type")
+                raise _safe_rejection(f"argument {name} has the wrong type")
             if expected is str and not value:
-                raise ToolRejectedError(f"argument {name} must be non-empty")
+                raise _safe_rejection(f"argument {name} must be non-empty")
             if expected is int and value < 0:
-                raise ToolRejectedError(f"argument {name} must be non-negative")
+                raise _safe_rejection(f"argument {name} must be non-negative")
         return dict(arguments)
 
     return validate
@@ -281,7 +296,7 @@ class DemoToolContext:
 
     def require_session(self, action: str) -> PdbSession:
         if self.pdb_session is None:
-            raise ToolRejectedError(f"{action} requires an active PDB session")
+            raise _safe_rejection(f"{action} requires an active PDB session")
         return self.pdb_session
 
 
@@ -315,8 +330,8 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
 
     def handle_run_reproduction(action: Action, arguments: dict[str, object]) -> ToolResult:
         phase = arguments["phase"]
-        if phase not in ("baseline", "post_patch"):
-            raise ToolRejectedError("phase must be baseline or post_patch")
+        if phase not in legal_reproduction_phases(action.state):
+            raise _safe_rejection("phase must be baseline or post_patch")
         result = context.test_runner.run_reproduction(task)
         if result.timed_out:
             raise ToolTimeoutError("reproduction command timed out")
@@ -398,7 +413,7 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
     def handle_get_source_window(action: Action, arguments: dict[str, object]) -> ToolResult:
         line = arguments["line"]
         if line < 1:
-            raise ToolRejectedError("line must be positive")
+            raise _safe_rejection("line must be positive")
         try:
             window = get_source_window(
                 context.workspace, arguments["path"], line, SOURCE_WINDOW_RADIUS
@@ -428,7 +443,7 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
         try:
             result = context.patch_manager.apply_patch(diff)
         except (PatchValidationError, PatchAuthorizationError, PatchStateError) as exc:
-            raise ToolRejectedError(bounded_diagnostic(exc)) from exc
+            raise _safe_rejection(bounded_diagnostic(exc)) from exc
         except PatchApplyError as exc:
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
         # Only a patch that passed the real PatchManager lifecycle becomes
@@ -483,12 +498,12 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
 
     def handle_start_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
         if pdb_policy is PdbPolicy.DISABLED:
-            raise ToolRejectedError("PDB access is disabled by evaluation policy")
+            raise _safe_rejection("PDB access is disabled by evaluation policy")
         probe = context.probe
         if probe is None:
-            raise ToolRejectedError("no runtime probe is configured for this task")
+            raise _safe_rejection("no runtime probe is configured for this task")
         if context.pdb_session is not None:
-            raise ToolRejectedError("a PDB session is already active")
+            raise _safe_rejection("a PDB session is already active")
         try:
             workspace = TaskWorkspace(str(probe.source_dir), parent_dir=str(probe.parent_dir))
         except WorkspaceError as exc:
@@ -631,5 +646,6 @@ __all__ = [
     "PdbProbe",
     "build_registry",
     "prepare_pdb_probe",
+    "legal_reproduction_phases",
     "pytest_argv",
 ]

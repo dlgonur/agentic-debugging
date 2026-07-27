@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Callable, TypeAlias
@@ -25,6 +26,11 @@ MAX_TOOL_RESULT_PAYLOAD_BYTES = 65536
 MAX_TOOL_SUMMARY_BYTES = 4096
 MAX_TOOL_JSON_DEPTH = 32
 MAX_TOOL_JSON_NODES = 4096
+MAX_TOOL_DIAGNOSTIC_BYTES = 400
+
+_DIAGNOSTIC_SECRET = re.compile(
+    r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+"
+)
 
 
 class ToolRegistryError(ValueError):
@@ -41,6 +47,10 @@ class ToolArgumentError(ToolRegistryError):
 
 class ToolRejectedError(ToolRegistryError):
     """Raised by a handler when it rejects an otherwise valid invocation."""
+
+    def __init__(self, message: str, *, safe_diagnostic: str | None = None) -> None:
+        super().__init__(message)
+        self.safe_diagnostic = safe_diagnostic
 
 
 class ToolTimeoutError(ToolRegistryError):
@@ -80,6 +90,27 @@ _FIXED_SUMMARIES = {
     ToolDispatchReason.INVALID_TOOL_RESULT:
         "Tool returned an invalid result.",
 }
+
+
+def _bounded_safe_diagnostic(value: object) -> str | None:
+    if type(value) is not str or not value:
+        return None
+    value = _DIAGNOSTIC_SECRET.sub("<redacted>", value)
+    value = "".join(char if 0x20 <= ord(char) != 0x7F else " " for char in value).strip()
+    if not value:
+        return None
+    encoded = value.encode("utf-8")
+    if len(encoded) > MAX_TOOL_DIAGNOSTIC_BYTES:
+        value = encoded[: MAX_TOOL_DIAGNOSTIC_BYTES - 3].decode("utf-8", errors="ignore") + "..."
+    return value
+
+
+def _rejection_payload(reason: ToolDispatchReason, *, diagnostic: object = None) -> dict[str, object]:
+    payload: dict[str, object] = {"dispatch_reason": reason.value}
+    bounded = _bounded_safe_diagnostic(diagnostic)
+    if bounded is not None:
+        payload["diagnostic"] = bounded
+    return payload
 
 
 class _JsonCopyError(Exception):
@@ -428,12 +459,25 @@ class ToolRegistry:
                 ObservationStatus.REJECTED,
                 ToolDispatchReason.INVALID_ARGUMENTS,
                 _FIXED_SUMMARIES[ToolDispatchReason.INVALID_ARGUMENTS],
+                payload=_rejection_payload(ToolDispatchReason.INVALID_ARGUMENTS),
             )
 
         try:
             validated_arguments = spec.argument_validator(raw_arguments)
             validated_arguments = _detach_json_dict(
                 validated_arguments, max_bytes=MAX_TOOL_ARGUMENT_BYTES
+            )
+        except ToolRejectedError as exc:
+            return _make_observation(
+                action,
+                observation_id,
+                ObservationStatus.REJECTED,
+                ToolDispatchReason.INVALID_ARGUMENTS,
+                _FIXED_SUMMARIES[ToolDispatchReason.INVALID_ARGUMENTS],
+                payload=_rejection_payload(
+                    ToolDispatchReason.INVALID_ARGUMENTS,
+                    diagnostic=exc.safe_diagnostic,
+                ),
             )
         except Exception:
             return _make_observation(
@@ -442,17 +486,22 @@ class ToolRegistry:
                 ObservationStatus.REJECTED,
                 ToolDispatchReason.INVALID_ARGUMENTS,
                 _FIXED_SUMMARIES[ToolDispatchReason.INVALID_ARGUMENTS],
+                payload=_rejection_payload(ToolDispatchReason.INVALID_ARGUMENTS),
             )
 
         try:
             result = spec.handler(action, validated_arguments)
-        except ToolRejectedError:
+        except ToolRejectedError as exc:
             return _make_observation(
                 action,
                 observation_id,
                 ObservationStatus.REJECTED,
                 ToolDispatchReason.TOOL_REJECTED,
                 _FIXED_SUMMARIES[ToolDispatchReason.TOOL_REJECTED],
+                payload=_rejection_payload(
+                    ToolDispatchReason.TOOL_REJECTED,
+                    diagnostic=exc.safe_diagnostic,
+                ),
             )
         except ToolTimeoutError:
             return _make_observation(

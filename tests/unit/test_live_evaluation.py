@@ -20,6 +20,7 @@ from agentic_debugger.evaluation.live import (
     LiveConfigurationError,
     LiveExecutionAuthorization,
     LiveModelAdapter,
+    LiveModelAdapterError,
     LiveModelConfig,
     LiveOptInError,
     LiveRunLimits,
@@ -311,7 +312,87 @@ def test_model_request_context_is_complete_bounded_and_identity_scoped():
     assert "hypotheses" in captured["controller"]
     assert "directive_schema" in captured
     assert "apply_patch" in captured["action_contracts"]
+    assert captured["action_contracts"]["run_reproduction"]["phase"] == {"type": "string", "enum": ["baseline"]}
+    assert captured["controller"]["legal_transition_targets"] == ["Understand", "Failed"]
+    assert captured["directive_schema"]["add_hypothesis"]["constraints"]["confidence"]["enum"] == ["low", "medium", "high"]
     assert isinstance(captured["history"], list)
+
+
+def test_state_specific_contract_uses_post_patch_phase_and_authoritative_targets():
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    captured = []
+    class ContextTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "contract check"}}
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ContextTransport(), limits=LiveRunLimits(max_model_requests=2))
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
+    adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.VALIDATE, 1, limits, ControllerBudgetState(), HypothesisLedger()))
+    assert captured[1]["action_contracts"]["run_reproduction"]["phase"] == {"type": "string", "enum": ["post_patch"]}
+    assert captured[1]["controller"]["legal_transition_targets"] == ["Understand", "RuntimeEvidence", "Patch", "Done", "Failed"]
+
+
+def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and_identity():
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    captured = []
+    class InvalidThenValidTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {"usage": {"prompt_tokens": 3, "completion_tokens": 4, "total_tokens": 7}, "directive": {"kind": "transition", "target_state": "NotAState", "reason": "invalid"}}
+            return {"usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}, "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(ControllerSnapshot("retry-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
+    assert directive.target_state is ControllerState.FAILED
+    assert adapter.metrics.model_requests == 2
+    assert adapter.metrics.model_responses == 2
+    assert adapter.metrics.retries == 1
+    assert adapter.metrics.to_mapping()["token_usage"] == {"prompt_tokens": 8, "completion_tokens": 10, "total_tokens": 18, "provider_reported": True, "missing_fields": []}
+    assert captured[0]["protocol"]["logical_model_call_index"] == captured[1]["protocol"]["logical_model_call_index"] == 0
+    assert captured[0]["protocol"]["transport_attempt_index"] == 1
+    assert captured[1]["protocol"]["transport_attempt_index"] == 2
+    assert captured[0]["protocol"]["request_id"] != captured[1]["protocol"]["request_id"]
+    assert len(adapter.history) == 1
+
+
+def test_all_provider_completed_invalid_directives_terminate_as_invalid_model_response():
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    class InvalidTransport:
+        def request(self, payload, timeout_seconds):
+            return {"usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}, "directive": {"kind": "not-a-directive"}}
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(ControllerSnapshot("invalid-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
+    assert adapter.metrics.termination_reason == "invalid_model_response"
+    assert adapter.metrics.model_requests == 2
+    assert adapter.metrics.model_responses == 2
+    assert adapter.metrics.retries == 1
+    assert adapter.metrics.to_mapping()["token_usage"]["total_tokens"] == 10
+
+
+def test_jsonl_wrapper_convention_keeps_provider_completed_invalid_directive_on_success_exit():
+    response = json.dumps({"usage": {"prompt_tokens": 1, "completion_tokens": 2, "total_tokens": 3}, "directive": {"kind": "not-a-directive"}})
+    command = (sys.executable, "-c", f"import sys; sys.stdout.write({response!r})")
+    result = JsonlCommandTransport(LiveModelConfig("local", command), max_output_bytes=1024).request({}, 5)
+    assert result["usage"]["total_tokens"] == 3
+    assert result["directive"]["kind"] == "not-a-directive"
+
+
+def test_jsonl_nonzero_exit_remains_transport_failure_even_with_json_output():
+    response = json.dumps({"usage": {"total_tokens": 3}, "directive": {"kind": "not-a-directive"}})
+    command = (sys.executable, "-c", f"import sys; sys.stdout.write({response!r}); sys.exit(7)")
+    with pytest.raises(LiveTransportError) as error:
+        JsonlCommandTransport(LiveModelConfig("local", command), max_output_bytes=1024).request({}, 5)
+    assert error.value.kind == "process_error"
 
 
 def test_successful_fake_model_uses_controller_patch_lifecycle_verifier_and_events(workspace_parent):

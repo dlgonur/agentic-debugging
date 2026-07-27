@@ -9,12 +9,12 @@ from typing import Any, Mapping, Protocol
 from agentic_debugger.agent.controller import ControllerRunConfig, ControllerRunResult, ControllerStopReason, DeterministicController
 from agentic_debugger.agent.controller_policy import ActionName, ControllerBudgetLimits, ControllerBudgetState, HypothesisConfidence, HypothesisLedger, HypothesisStatus
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
-from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
 from agentic_debugger.demo.catalog import scenario_for
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.runner import CURATED_RELATIVE_ROOT, localization_record
-from agentic_debugger.demo.tools import DemoToolContext, build_registry, prepare_pdb_probe
+from agentic_debugger.demo.tools import DemoToolContext, build_registry, legal_reproduction_phases, prepare_pdb_probe
 from agentic_debugger.evaluation.runner import bounded_error, load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
@@ -32,12 +32,18 @@ class LiveTransportError(LiveEvaluationError):
 class LiveModelAdapterError(ModelAdapterError): pass
 
 LIVE_SCHEMA_VERSION = "1.0"
-LIVE_PROTOCOL_VERSION = "1.0"
+LIVE_PROTOCOL_VERSION = "1.1"
 LIVE_CONFIG_SCHEMA_VERSION = "1.0"
 MAX_MODEL_RESPONSE_BYTES = 1_048_576
 MAX_COMMAND_ARGUMENTS = 32
-LIVE_DIRECTIVE_SCHEMA={"action":{"kind":"action","required":["name","arguments"]},"transition":{"kind":"transition","required":["target_state","reason"]},"add_hypothesis":{"kind":"add_hypothesis","required":["hypothesis_id","statement","confidence","evidence_refs","requires_runtime_evidence"]},"revise_hypothesis":{"kind":"revise_hypothesis","required":["hypothesis_id","statement","confidence","evidence_refs","requires_runtime_evidence"]},"set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"]}}
-LIVE_ACTION_CONTRACTS={ActionName.RUN_REPRODUCTION.value:{"phase":"string"},ActionName.RUN_REGRESSION_TESTS.value:{},ActionName.CLASSIFY_OUTCOME.value:{},ActionName.FIND_FUNCTION.value:{"name":"string","path":"string"},ActionName.GET_SOURCE_WINDOW.value:{"path":"string","line":"integer"},ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value:{"hypothesis_id":"string","statement":"string","target_file":"string","target_symbol":"string","confidence":"string"},ActionName.APPLY_PATCH.value:{"patch":"unified-diff string"},ActionName.REVERT_PATCH.value:{},ActionName.SYNTAX_CHECK.value:{},ActionName.START_PDB_SESSION.value:{},ActionName.GET_STACK_SUMMARY.value:{},ActionName.GET_FRAME_LOCALS.value:{"frame_id":"integer","pause_generation":"integer"},ActionName.SAFE_EVAL_EXPRESSION.value:{"frame_id":"integer","pause_generation":"integer","expression":"string"},ActionName.STOP_PDB_SESSION.value:{}}
+LIVE_DIRECTIVE_SCHEMA={
+    "action":{"kind":"action","required":["name","arguments"]},
+    "transition":{"kind":"transition","required":["target_state","reason"]},
+    "add_hypothesis":{"kind":"add_hypothesis","required":["hypothesis_id","statement","confidence","evidence_refs","requires_runtime_evidence"],"constraints":{"confidence":{"type":"string","enum":[item.value for item in HypothesisConfidence]}}},
+    "revise_hypothesis":{"kind":"revise_hypothesis","required":["hypothesis_id","statement","confidence","evidence_refs","requires_runtime_evidence"],"constraints":{"confidence":{"type":"string","enum":[item.value for item in HypothesisConfidence]}}},
+    "set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"],"constraints":{"status":{"type":"string","enum":[item.value for item in HypothesisStatus if item is not HypothesisStatus.ACTIVE]}}},
+}
+LIVE_ACTION_CONTRACTS={ActionName.RUN_REPRODUCTION.value:{"phase":{"type":"string","enum":[]}},ActionName.RUN_REGRESSION_TESTS.value:{},ActionName.CLASSIFY_OUTCOME.value:{},ActionName.FIND_FUNCTION.value:{"name":"string","path":"string"},ActionName.GET_SOURCE_WINDOW.value:{"path":"string","line":"integer"},ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value:{"hypothesis_id":"string","statement":"string","target_file":"string","target_symbol":"string","confidence":{"type":"string","enum":[item.value for item in HypothesisConfidence]}},ActionName.APPLY_PATCH.value:{"patch":"unified-diff string"},ActionName.REVERT_PATCH.value:{},ActionName.SYNTAX_CHECK.value:{},ActionName.START_PDB_SESSION.value:{},ActionName.GET_STACK_SUMMARY.value:{},ActionName.GET_FRAME_LOCALS.value:{"frame_id":"integer","pause_generation":"integer"},ActionName.SAFE_EVAL_EXPRESSION.value:{"frame_id":"integer","pause_generation":"integer","expression":"string"},ActionName.STOP_PDB_SESSION.value:{}}
 
 class LiveCaseStatus(str, Enum):
     RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
@@ -200,11 +206,14 @@ class JsonlCommandTransport:
             raise LiveTransportError("model request timed out",kind="request_timeout",timed_out=True) from None
         for thread in threads: thread.join(timeout=2)
         if stdout.truncated: raise LiveTransportError("model response exceeded the configured output bound",kind="response_too_large")
-        if write_error and process.returncode==0: raise LiveTransportError("model command could not consume request",kind="process_error")
         if process.returncode!=0: raise LiveTransportError("model command failed",kind="process_error")
         try: value=json.loads(stdout.text())
         except (UnicodeError,json.JSONDecodeError): raise LiveTransportError("model response was invalid JSON",kind="invalid_response") from None
         if not isinstance(value,Mapping): raise LiveTransportError("model response was not an object",kind="invalid_response")
+        # A wrapper may emit its completed JSON response and close stdin before
+        # the bounded request writer finishes.  A successful JSON response is
+        # the provider completion contract; the harmless broken-pipe signal is
+        # not a transport failure in that case.
         return value
 
 @dataclass
@@ -235,25 +244,41 @@ def _parse(value)->ModelDirective:
     except (KeyError,TypeError,ValueError,ModelAdapterError): pass
     raise LiveModelAdapterError("invalid model directive")
 
+
+def _action_contracts_for_state(state: ControllerState) -> dict[str, dict[str, Any]]:
+    contracts = {name: dict(arguments) for name, arguments in LIVE_ACTION_CONTRACTS.items()}
+    contracts[ActionName.RUN_REPRODUCTION.value] = {
+        "phase": {"type": "string", "enum": list(legal_reproduction_phases(state))}
+    }
+    return contracts
+
+
+def _legal_transition_targets(state: ControllerState) -> list[str]:
+    return [candidate.value for candidate in ControllerState if candidate in TRANSITION_GRAPH[state]]
+
 class LiveModelAdapter:
     def __init__(self,*,task,policy,config,transport,limits,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic):
         self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]
     @staticmethod
     def _hypotheses(snapshot):
         return [{"hypothesis_id":item.hypothesis_id,"statement":item.statement,"confidence":item.confidence.value,"status":item.status.value,"evidence_refs":list(item.evidence_refs),"requires_runtime_evidence":item.requires_runtime_evidence,"revision":item.revision} for item in snapshot.hypotheses.hypotheses]
-    def _request_context(self,snapshot):
-        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":f"{self.run_id}:request:{self.metrics.model_requests+1}"},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":LIVE_DIRECTIVE_SCHEMA,"action_contracts":LIVE_ACTION_CONTRACTS,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":[x.value for x in snapshot.allowed_actions],"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials."}
+    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int):
+        request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
+        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":LIVE_DIRECTIVE_SCHEMA,"action_contracts":_action_contracts_for_state(snapshot.state),"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":[x.value for x in snapshot.allowed_actions],"legal_transition_targets":_legal_transition_targets(snapshot.state),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials."}
     def next_directive(self,snapshot):
-        request=redact_for_recording(self._request_context(snapshot))
-        try:
-            request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
-        except (TypeError,ValueError,UnicodeError):
-            self.metrics.termination_reason="request_serialization"; raise LiveModelAdapterError("live model context could not be serialized") from None
-        if len(request_bytes)>MAX_MODEL_RESPONSE_BYTES:
-            self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context exceeded the configured request bound")
-        self.history.append({"request_index":snapshot.model_call_index,"state":snapshot.state.value,"allowed_actions":[x.value for x in snapshot.allowed_actions],"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None})
+        logical_request_index = snapshot.model_call_index
+        history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":[x.value for x in snapshot.allowed_actions],"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
+        self.history.append(history_entry)
+        del self.history[:-32]
         for attempt in range(self.limits.max_retries+1):
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
+            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1))
+            try:
+                request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
+            except (TypeError,ValueError,UnicodeError):
+                self.metrics.termination_reason="request_serialization"; raise LiveModelAdapterError("live model context could not be serialized") from None
+            if len(request_bytes)>MAX_MODEL_RESPONSE_BYTES:
+                self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context exceeded the configured request bound")
             self.metrics.model_requests+=1
             timeout_seconds=min(self.config.request_timeout_seconds,self._remaining())
             phase_started=self.clock()

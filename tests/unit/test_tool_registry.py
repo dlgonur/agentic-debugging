@@ -337,6 +337,21 @@ def test_handler_exception_translation_is_bounded(error, status, reason):
     assert "traceback" not in observation.to_mapping()
 
 
+def test_explicit_safe_rejection_diagnostic_is_bounded_redacted_and_actionable():
+    observation = registry_for(
+        handler=lambda *_: (_ for _ in ()).throw(
+            ToolRejectedError(
+                "internal detail",
+                safe_diagnostic="phase must be baseline or post_patch; token=secret-value" + "x" * 1000,
+            )
+        )
+    ).dispatch(action(), observation_id="obs")
+    assert observation.payload["dispatch_reason"] == ToolDispatchReason.TOOL_REJECTED.value
+    assert observation.payload["diagnostic"].startswith("phase must be baseline or post_patch")
+    assert "secret-value" not in observation.to_mapping().__str__()
+    assert len(observation.payload["diagnostic"].encode("utf-8")) <= 400
+
+
 @pytest.mark.parametrize("result", [None, {}, object()])
 def test_invalid_handler_results_are_generic(result):
     observation = registry_for(handler=lambda *_: result).dispatch(

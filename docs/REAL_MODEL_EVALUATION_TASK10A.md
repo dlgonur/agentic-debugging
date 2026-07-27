@@ -76,10 +76,26 @@ repetition, and limit configuration before any comparison is attempted.
 
 The model command receives a bounded JSON request containing protocol/version,
 evaluation/case/run/trajectory identity, task context, policy, controller
-state, allowed actions, budget limits/state, hypotheses, last observation, and
-up to 32 bounded history entries. Each request has a unique request ID. The
-command must return one JSON directive object; it must not rely on
-process-local memory.
+state, allowed actions, state-specific action contracts, authoritative legal
+transition targets, budget limits/state, hypotheses, last observation, and up
+to 32 bounded history entries. The live wire protocol is version 1.1; version
+1.0 must not be interpreted as having these fields or meanings. Each request
+has a globally unique request ID plus explicit logical model-call and
+transport-attempt indexes. A retry changes the transport-attempt index and
+request ID while retaining one bounded history entry for the logical call.
+The Reproduce state advertises only `run_reproduction.phase=baseline`, and
+Validate advertises only `post_patch`. Enum-backed confidence and status
+fields expose their accepted values. Tool rejections retain the
+`dispatch_reason` and may include a bounded, redacted diagnostic; arbitrary
+exception text is not forwarded.
+
+The provider-neutral command convention is: a transport/process/network
+failure may use a nonzero command exit; a provider completion with an invalid
+directive must instead return exit 0 and a JSON object such as
+`{"usage": {...}, "directive": {"kind": "not-a-directive"}}`. The harness
+counts usage and the JSON response before parsing, classifies the directive as
+`invalid_model_response`, and retries within budget. Nonzero exits remain
+transport failures and are not treated as provider completions.
 
 The CLI validates configured reports before writing either JSON or human output.
 Duplicate task/policy selections are rejected before any case starts. Exit

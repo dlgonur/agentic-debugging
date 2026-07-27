@@ -120,6 +120,16 @@ class TestArgumentValidation:
         assert observation.status is ObservationStatus.REJECTED
         assert _reason(observation) == ToolDispatchReason.INVALID_ARGUMENTS.value
 
+    def test_reproduction_phase_rejection_exposes_safe_legal_value_diagnostic(
+        self, context: DemoToolContext
+    ) -> None:
+        observation = _dispatch(
+            context, "run_reproduction", ControllerState.REPRODUCE, {"phase": "initial"}
+        )
+        assert observation.status is ObservationStatus.REJECTED
+        assert _reason(observation) == ToolDispatchReason.TOOL_REJECTED.value
+        assert observation.payload["diagnostic"] == "phase must be baseline or post_patch"
+
 
 class TestStatePolicyEnforcement:
     def test_patch_action_is_refused_outside_the_patch_state(
