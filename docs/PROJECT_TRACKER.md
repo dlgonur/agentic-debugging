@@ -215,7 +215,8 @@ Rules:
 
 Current active items:
 
-- No remaining implementation item in the accepted nine-task MVP sequence.
+- Task 10A complete and accepted: Real-Model Evaluation Harness v1.
+- Next active engineering focus: Task 10B — Controlled Live Baseline Run v1.
 - Post-MVP research, dataset, model, and broader evaluation work remains active or deferred as noted below.
 
 Notes:
@@ -243,9 +244,12 @@ Notes:
 - The two clean strict demonstration executions produced identical deterministic views: 10 semantic trajectories compared and 0 semantic differences; the generated source-tree digest matched the accepted live tree and no stale summary placeholder values remained.
 - Task 9 validation passed: focused Task 9 suite 177 tests; relevant controller/PDB/replay/golden/evaluator regression suite 1229 passed with 2 warnings; full repository suite 2020 passed, 2 skipped, and 5 warnings; compile validation and whitespace validation passed. The skips and warnings were pre-existing. One managed-sandbox `.pytest_cache` permission warning occurred during evidence inventory generation and was not a product defect.
 - Static-versus-PDB parity is structural because both policies use the same deterministic offline catalog repair. The demonstration does not establish causal PDB superiority. Provider/network guards measure in-process attempts and are not an operating-system-level network sandbox.
-- The accepted nine-task MVP implementation sequence is complete. This does not complete the broader research or internship project: dataset expansion/inventory, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
+- Task 10A complete and accepted: Real-Model Evaluation Harness v1, implementation commit `14a0287a763553038549eb8d84d6d9f8a432f44a`.
+- Task 10A delivers an explicitly authorized, offline-by-default real-model evaluation harness over the existing integrated runtime. It provides dual explicit live-access authorization before configuration is read, credential-free configuration, credential-shaped configuration and argv rejection, secret-safe events, diagnostics, JSON reports, and human reports, UUID-based evaluation identities, unique namespaces for reports, cases, runs, trajectories, and requests, duplicate task and policy rejection, stable credential-free configuration fingerprinting, full controller/tool-registry/policy/PDB/patch-lifecycle/RunEvent/localization/verifier/cleanup integration, accepted-patch-only verifier submission, static-policy PDB prohibition, positive PDB-enabled live-path validation, bounded model requests/retries/stdin/stdout-stderr/request-timeouts/model-transport timing, explicit unknown provider token fields, non-destructive workspace ownership and cleanup, versioned machine-readable reports, human-readable reports, authoritative report-schema validation before configured CLI output, coherent resolved/unresolved/rejected/failed/cleanup-failed/interrupted/partial semantics, deterministic local fake and fault-injection validation, and no external provider execution during Task 10A.
+- Task 10A does not claim that a real model solved any task, does not claim PDB improves model performance, and does not claim a provider-specific integration has been validated.
+- The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. This does not complete the broader research or internship project: dataset expansion/inventory, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
 - Hostile-code filesystem, process and network containment remains deferred.
-- Real model integration, adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
+- Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - [x] Task 4B — Breakpoints and Execution Control
@@ -262,10 +266,12 @@ Notes:
 - [x] Task 7 — Verifier and Evaluation Runner v1 (feature/mvp-verifier-runner-v1, commit 1b0af78)
 - [x] Task 8 — Golden Trajectories v1 (commit ab9b8b7)
 - [x] Task 9 — First End-to-End Demonstration (accepted implementation commit e7031fa796a738fc80de4c673607eee72254ce56)
+- [x] Task 10A — Real-Model Evaluation Harness v1 (implementation commit 14a0287a763553038549eb8d84d6d9f8a432f44a)
+- [ ] Task 10B — Controlled Live Baseline Run v1 (next active engineering focus)
 
 ## Last Updated
 
-2026-07-26
+2026-07-27
 
 
 

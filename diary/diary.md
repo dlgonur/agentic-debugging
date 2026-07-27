@@ -1664,3 +1664,55 @@ Task 9, Task 1–8 boyunca ayrı ayrı doğrulanan parçaların aynı kontrollü
 ### Sonuç / Bir Sonraki Adım
 
 Task 9 kabul edildi ve dokuz task'lık MVP implementation dizisi tamamlandı. Bundan sonraki adımlar MVP sonrası araştırma, dataset ve model çalışmaları, daha geniş evaluation ve ertelenen güvenlik/altyapı başlıklarıdır. Implementation kabulü ve merge kaydı ayrı olarak tamamlandı; bu ilerleme kaydı güncellemesi ise `docs/PROJECT_TRACKER.md` ve bu diary dosyasıyla ayrı bir documentation-only closeout olarak kapatılmaktadır.
+
+---
+
+## 27 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 10A — Real-Model Evaluation Harness v1 kabulü ve ilerleme kaydı kapatma
+
+### Yapılan Çalışmalar
+
+Bugün Task 10A'nın kabul edilen implementation commit'ini (`14a0287`) fast-forward merge sonrasında kapattım. Task 9 deterministik bir uçtan uca demonstrasyon sağlamış, fakat gerçek model çağrısı içermiyordu. Task 10A, mevcut entegre runtime üzerinde, offline-varsayılan ve explicit yetkilendirme gerektiren bir gerçek model değerlendirme koşum takımı ekledi.
+
+Kabul edilen implementation sınırı şunları içeriyordu: configuration okunmadan önce çift explicit live-access authorization, credential-free configuration, credential-shaped configuration ve argv reddi, secret-safe events/diagnostics/JSON/human raporları, UUID tabanlı değerlendirme kimlikleri, report/case/run/trajectory/request için unique namespace'ler, duplicate task ve policy reddi, kararlı credential-free configuration fingerprinting, gerçek controller/tool-registry/policy/PDB/patch-lifecycle/RunEvent/localization/verifier/cleanup entegrasyonu, accepted-patch-only verifier submission, static-policy PDB prohibition, positive PDB-enabled live-path validation, bounded model requests/retries/stdin/stdout-stderr/request-timeouts/model-transport timing, explicit unknown provider token fields, non-destructive workspace ownership/cleanup, versioned machine-readable/human-readable raporlar, CLI çıktısı öncesinde yetkili report-schema validation, coherent resolved/unresolved/rejected/failed/cleanup-failed/interrupted/partial semantics ve deterministic local fake/fault-injection validation. Task 10A sırasında hiçbir external provider execution yapılmadı.
+
+Task 10A, gerçek bir modelin herhangi bir görevi çözdüğünü, PDB'in model performansını iyileştirdiğini veya herhangi bir provider-specific entegrasyonun doğrulandığını iddia etmez.
+
+### Güvenlik ve Ölçüm Kararları
+
+Configuration'un credential-free olması ve credential-shaped girdilerin configuration okunmadan reddedilmesi, credential'ların event log'larına veya raporlara sızmasını engelledi. Bounded model request'leri, retry mekanizmaları ve transport timing sayesinde değerlendirme kaynakları kontrol altında tutuldu. Provider-specific doğrulama yapılmadığından, bu task herhangi bir provider token'ının gerçek bir API ile çalıştığını iddia etmez.
+
+### Adversarial Review ve Repair
+
+Task 10A birden fazla review/repair turu gerektirdi. Configuration, authorization, event raporlama ve validation mekanizmaları adversarial olarak incelendi. Özellikle credential-shaped yapılandırmanın configuration öncesinde reddedilmesi, secret-safe raporlama ve namespace uniqueness konularında düzeltmeler yapıldı.
+
+### Final Validation
+
+- Focused Task 10A: 41 passed
+- Pre-commit focused rerun: 41 passed, 107.19s
+- Controller/adapter regression: 439 passed
+- Process/runner regression: 230 passed, 2 skipped, 5 warnings
+- Patch lifecycle: 9 passed
+- PDB integration: 291 passed
+- Verifier integration: 21 passed
+- Offline deterministic demo: 21 passed, deterministic comparison passed
+- Fixture integrity: 11 passed
+- Complete suite: 2,061 passed, 2 skipped, 5 warnings, 0 failed, 0 deselected
+- Compile: passed
+- Whitespace: passed
+- Canonical fixtures: unchanged
+
+Complete-suite validation'da Windows temporary-directory ACL sorunu için geçici, commit edilmemiş bir validation shim kullanıldı ve validation sonrasında kaldırıldı. ACL kaynaklı ortam hataları product-test hatası olarak sunulmadı.
+
+### Merge
+
+Implementation commit `14a0287a763553038549eb8d84d6d9f8a432f44a` fast-forward merge ile `main` branch'ine alındı. `main` ve `origin/main` aynı commit'i gösteriyor.
+
+### Task 10B'ye Kadar Doğrulanmamış Konular
+
+Task 10A sırasında hiçbir external provider execution yapılmadı. Task 10B (Controlled Live Baseline Run v1) tamamlanana kadar gerçek provider configuration'ının çalışması, provider-specific response/usage validation, gerçek model çağrısı sonrası static-PDB karşılaştırması ve bounded baseline repetitions/failure analizi doğrulanmamış kalır.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 10A kabul edildi ve ilerleme kaydı kapatıldı. Bir sonraki aktif mühendislik odağı Task 10B — Controlled Live Baseline Run v1'dir. Daha geniş post-MVP çalışmaları (dataset expansion, broader evaluation, real-model comparisons, PDB effectiveness experiments, containment hardening, RAG, fine-tuning, DPO/RLHF, final academic analysis/reporting) görünür durumda kalmaya devam eder.
