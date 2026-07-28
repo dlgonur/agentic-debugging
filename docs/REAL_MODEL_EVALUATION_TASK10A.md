@@ -77,10 +77,11 @@ repetition, and limit configuration before any comparison is attempted.
 The model command receives a bounded JSON request containing protocol/version,
 evaluation/case/run/trajectory identity, task context, policy, controller
 state, allowed actions, state-specific action contracts, authoritative legal
-transition targets, budget limits/state, hypotheses, last observation, and up
-to 32 bounded history entries. The live wire protocol is version 1.1; version
-1.0 must not be interpreted as having these fields or meanings. Each request
-has a globally unique request ID plus explicit logical model-call and
+transition targets, budget limits/state, hypotheses, last observation, a
+`directive_feedback` field, and up to 32 bounded history entries. The live
+wire protocol is version 1.2; version 1.1 and earlier must not be interpreted
+as having the `directive_feedback` field or its meaning. Each request has a
+globally unique request ID plus explicit logical model-call and
 transport-attempt indexes. A retry changes the transport-attempt index and
 request ID while retaining one bounded history entry for the logical call.
 The Reproduce state advertises only `run_reproduction.phase=baseline`, and
@@ -96,6 +97,56 @@ directive must instead return exit 0 and a JSON object such as
 counts usage and the JSON response before parsing, classifies the directive as
 `invalid_model_response`, and retries within budget. Nonzero exits remain
 transport failures and are not treated as provider completions.
+
+### Invalid-directive retry feedback (protocol 1.2)
+
+A directive is "provider-completed" when the transport call itself succeeded
+(no `LiveTransportError`, no nonzero command exit); the harness then attempts
+to interpret whatever the provider returned as a directive. The
+`directive_feedback` key is structurally present in every request; on the
+first transport attempt for a logical model call its value is `null`, not
+absent. If that attempt's directive is rejected, every field the harness uses
+to classify it comes from the harness's own closed vocabulary — never from
+raw provider text — so a non-null `directive_feedback` on a retry is safe to
+forward: `{"category": <one of the five rejection categories below>,
+"message": <a bounded, pre-authored string identifying the specific problem>,
+"rejected_transport_attempt": <the 1-based attempt that was rejected>}`. The
+five rejection categories are `illegal_action` (a real action name not legal
+in the current controller state), `illegal_transition` (a real target state
+not reachable from the current state), `invalid_argument_value` (a value that
+fails a declared argument contract, e.g. an out-of-enum
+`run_reproduction.phase` or hypothesis `confidence`/`status`),
+`malformed_directive` (an unrecognized or missing `kind`, missing required
+fields, or a response body that is not a JSON object), and
+`ambiguous_response_envelope` (a response that mixes both wire conventions at
+once — a top-level `kind` alongside a nested `directive` — so the harness
+cannot tell which one is meant and refuses to guess). The harness never
+invents, rewrites, or silently substitutes a legal directive on the model's
+behalf; `directive_feedback` only explains the rejection, and the
+`allowed_actions`, `legal_transition_targets`, and `action_contracts` already
+present in the same request remain the sole authoritative legal-directive
+contract. `directive_feedback` reflects only the immediately preceding
+attempt: a `LiveTransportError` on any attempt clears pending feedback, so a
+transport or provider command/process failure is never described as an
+invalid directive, and a directive rejection is never carried across a
+transport failure into a later attempt. Repeating a rejected directive after
+receiving feedback keeps counting as a normal retry and still terminates as
+`invalid_model_response` once `max_retries` is exhausted, exactly as before
+this repair.
+
+Directive parsing enforces exactly the fields `LIVE_DIRECTIVE_SCHEMA` already
+advertises as required, for every directive kind, including
+`add_hypothesis`/`revise_hypothesis`: `evidence_refs` and
+`requires_runtime_evidence` must both be present or the directive is rejected
+as `malformed_directive`, naming the missing field. `evidence_refs` must be a
+genuine JSON array; a string, object, number, boolean, or `null` in that
+position is rejected as `malformed_directive` rather than being reinterpreted
+— a JSON string is never iterated into single-character references, and a
+JSON object is never iterated into its keys. This mirrors the same
+never-invent/never-substitute rule the retry-feedback contract itself
+follows: the harness explains why a directive was rejected, it does not
+silently reshape the directive into something the provider did not actually
+send.
 
 The CLI validates configured reports before writing either JSON or human output.
 Duplicate task/policy selections are rejected before any case starts. Exit
@@ -123,5 +174,16 @@ tooling outside this repository; its evidence package and baseline verdict are
 recorded in `docs/PROJECT_TRACKER.md` and are not restated here. In that run
 the PDB-enabled case terminated before PDB was opened, so the run does not
 measure PDB effectiveness and supports no claim that PDB is better or worse
-than the static policy. The next source task is Task 10B-R3 — Invalid
-Directive Retry Feedback v1.
+than the static policy. That baseline also surfaced a remaining engineering
+finding: after a provider-completed invalid directive, the retry was blind —
+it repeated the model's identity/accounting exactly but carried no
+explanation of what was rejected, and the model repeated the same illegal
+action (`extract_failing_test`) on the next attempt.
+
+Task 10B-R3 — Invalid Directive Retry Feedback v1 repaired that gap by adding
+the bounded `directive_feedback` contract described above (protocol version
+1.2). This campaign did not execute any live provider; it repairs and tests
+the retry path only against local, deterministic transports and fixtures.
+Whether bounded corrective feedback measurably reduces repeated illegal
+directives against a real provider remains an open question for a future
+controlled live diagnostic and is not established by this repair.

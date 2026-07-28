@@ -29,10 +29,30 @@ class LiveTransportError(LiveEvaluationError):
         super().__init__(message)
         self.kind = kind
         self.timed_out = timed_out
-class LiveModelAdapterError(ModelAdapterError): pass
+
+class DirectiveRejectionCategory(str, Enum):
+    """Closed vocabulary for why a provider-completed directive was rejected.
+
+    Only these bounded, pre-authored strings ever reach the retry-feedback
+    context; raw provider text is never echoed back into it.
+    """
+    ILLEGAL_ACTION = "illegal_action"
+    ILLEGAL_TRANSITION = "illegal_transition"
+    INVALID_ARGUMENT_VALUE = "invalid_argument_value"
+    MALFORMED_DIRECTIVE = "malformed_directive"
+    AMBIGUOUS_ENVELOPE = "ambiguous_response_envelope"
+
+MAX_REJECTION_DETAIL_CHARS = 200
+
+class LiveModelAdapterError(ModelAdapterError):
+    def __init__(self, message: str, *, category: "DirectiveRejectionCategory" = DirectiveRejectionCategory.MALFORMED_DIRECTIVE, detail: str = ""):
+        super().__init__(message)
+        self.category = category
+        text = str(detail)
+        self.detail = text if len(text) <= MAX_REJECTION_DETAIL_CHARS else text[:MAX_REJECTION_DETAIL_CHARS - 3] + "..."
 
 LIVE_SCHEMA_VERSION = "1.0"
-LIVE_PROTOCOL_VERSION = "1.1"
+LIVE_PROTOCOL_VERSION = "1.2"
 LIVE_CONFIG_SCHEMA_VERSION = "1.0"
 MAX_MODEL_RESPONSE_BYTES = 1_048_576
 MAX_COMMAND_ARGUMENTS = 32
@@ -234,16 +254,14 @@ class LiveModelMetrics:
             elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
     def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason}
 
-def _parse(value)->ModelDirective:
-    try:
-        if value["kind"]=="action": return ActionDirective(ActionName(value["name"]),value["arguments"])
-        if value["kind"]=="transition": return TransitionDirective(ControllerState(value["target_state"]),value["reason"])
-        if value["kind"]=="add_hypothesis": return AddHypothesisDirective(value["hypothesis_id"],value["statement"],HypothesisConfidence(value["confidence"]),tuple(value.get("evidence_refs",())),value.get("requires_runtime_evidence",False))
-        if value["kind"]=="revise_hypothesis": return ReviseHypothesisDirective(value["hypothesis_id"],value["statement"],HypothesisConfidence(value["confidence"]),tuple(value["evidence_refs"]),value["requires_runtime_evidence"])
-        if value["kind"]=="set_hypothesis_status": return SetHypothesisStatusDirective(value["hypothesis_id"],HypothesisStatus(value["status"]))
-    except (KeyError,TypeError,ValueError,ModelAdapterError): pass
-    raise LiveModelAdapterError("invalid model directive")
+def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
+    return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
 
+def _require_field(value: Mapping[str, Any], key: str) -> Any:
+    try:
+        return value[key]
+    except (KeyError, TypeError):
+        raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, f"missing '{key}'") from None
 
 def _action_contracts_for_state(state: ControllerState) -> dict[str, dict[str, Any]]:
     contracts = {name: dict(arguments) for name, arguments in LIVE_ACTION_CONTRACTS.items()}
@@ -252,9 +270,96 @@ def _action_contracts_for_state(state: ControllerState) -> dict[str, dict[str, A
     }
     return contracts
 
+def _validate_enum_constrained_arguments(name: ActionName, arguments: Mapping[str, Any], state: ControllerState) -> None:
+    """Reject an argument value outside its advertised, state-specific enum.
+
+    Only arguments whose contract already declares an ``enum`` (currently
+    ``run_reproduction.phase``) are checked here; this mirrors exactly what
+    ``_action_contracts_for_state`` already advertises to the model, so the
+    contract stays the single source of truth.
+    """
+    contract = _action_contracts_for_state(state).get(name.value, {})
+    for argument_name, spec in contract.items():
+        if isinstance(spec, Mapping) and "enum" in spec and arguments.get(argument_name) not in spec["enum"]:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, f"'{argument_name}' must be one of {list(spec['enum'])}")
 
 def _legal_transition_targets(state: ControllerState) -> list[str]:
     return [candidate.value for candidate in ControllerState if candidate in TRANSITION_GRAPH[state]]
+
+def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
+    """Unwrap the provider envelope without silently guessing when it is ambiguous.
+
+    The wire convention is either a bare directive object or a
+    ``{"usage": ..., "directive": {...}}`` wrapper.  A response carrying both a
+    top-level ``kind`` and a nested ``directive`` mixes both conventions at
+    once; guessing which one is meant would risk silently substituting a
+    directive the model never actually returned, so it is rejected instead.
+    """
+    wrapped = "directive" in response
+    inline = "kind" in response
+    if wrapped and inline:
+        raise _rejected(DirectiveRejectionCategory.AMBIGUOUS_ENVELOPE, "response has both a top-level 'kind' and a nested 'directive'")
+    return response["directive"] if wrapped else response
+
+def _parse(value: Any, snapshot: ControllerSnapshot) -> ModelDirective:
+    if not isinstance(value, Mapping):
+        raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "directive must be a JSON object")
+    kind = value.get("kind")
+    if kind == "action":
+        arguments = _require_field(value, "arguments")
+        if not isinstance(arguments, Mapping):
+            raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "'arguments' must be a JSON object")
+        try:
+            name = ActionName(_require_field(value, "name"))
+        except ValueError:
+            raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized action name") from None
+        if name not in snapshot.allowed_actions:
+            raise _rejected(DirectiveRejectionCategory.ILLEGAL_ACTION, f"action '{name.value}' is not allowed in state '{snapshot.state.value}'")
+        _validate_enum_constrained_arguments(name, arguments, snapshot.state)
+        try:
+            return ActionDirective(name, dict(arguments))
+        except ModelAdapterError:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "action arguments failed validation") from None
+    if kind == "transition":
+        try:
+            target = ControllerState(_require_field(value, "target_state"))
+        except ValueError:
+            raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized target_state") from None
+        reason = _require_field(value, "reason")
+        if target not in TRANSITION_GRAPH[snapshot.state]:
+            raise _rejected(DirectiveRejectionCategory.ILLEGAL_TRANSITION, f"'{target.value}' is not reachable from '{snapshot.state.value}'")
+        try:
+            return TransitionDirective(target, reason)
+        except ModelAdapterError:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "'reason' failed validation") from None
+    if kind in ("add_hypothesis", "revise_hypothesis"):
+        hypothesis_id = _require_field(value, "hypothesis_id")
+        statement = _require_field(value, "statement")
+        try:
+            confidence = HypothesisConfidence(_require_field(value, "confidence"))
+        except ValueError:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "'confidence' must be low, medium, or high") from None
+        evidence_refs_raw = _require_field(value, "evidence_refs")
+        requires_runtime_evidence = _require_field(value, "requires_runtime_evidence")
+        if type(evidence_refs_raw) is not list:
+            raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "'evidence_refs' must be a JSON array") from None
+        evidence_refs = tuple(evidence_refs_raw)
+        directive_cls = AddHypothesisDirective if kind == "add_hypothesis" else ReviseHypothesisDirective
+        try:
+            return directive_cls(hypothesis_id, statement, confidence, evidence_refs, requires_runtime_evidence)
+        except ModelAdapterError:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "hypothesis fields failed validation") from None
+    if kind == "set_hypothesis_status":
+        hypothesis_id = _require_field(value, "hypothesis_id")
+        try:
+            status = HypothesisStatus(_require_field(value, "status"))
+        except ValueError:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "unrecognized hypothesis status") from None
+        try:
+            return SetHypothesisStatusDirective(hypothesis_id, status)
+        except ModelAdapterError:
+            raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "hypothesis status fields failed validation") from None
+    raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized or missing directive 'kind'")
 
 class LiveModelAdapter:
     def __init__(self,*,task,policy,config,transport,limits,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic):
@@ -262,17 +367,18 @@ class LiveModelAdapter:
     @staticmethod
     def _hypotheses(snapshot):
         return [{"hypothesis_id":item.hypothesis_id,"statement":item.statement,"confidence":item.confidence.value,"status":item.status.value,"evidence_refs":list(item.evidence_refs),"requires_runtime_evidence":item.requires_runtime_evidence,"revision":item.revision} for item in snapshot.hypotheses.hypotheses]
-    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int):
+    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
-        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":LIVE_DIRECTIVE_SCHEMA,"action_contracts":_action_contracts_for_state(snapshot.state),"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":[x.value for x in snapshot.allowed_actions],"legal_transition_targets":_legal_transition_targets(snapshot.state),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials."}
+        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":LIVE_DIRECTIVE_SCHEMA,"action_contracts":_action_contracts_for_state(snapshot.state),"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":[x.value for x in snapshot.allowed_actions],"legal_transition_targets":_legal_transition_targets(snapshot.state),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
     def next_directive(self,snapshot):
         logical_request_index = snapshot.model_call_index
         history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":[x.value for x in snapshot.allowed_actions],"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
         self.history.append(history_entry)
         del self.history[:-32]
+        rejection: dict[str, Any] | None = None
         for attempt in range(self.limits.max_retries+1):
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
-            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1))
+            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,rejection=rejection))
             try:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
             except (TypeError,ValueError,UnicodeError):
@@ -284,18 +390,20 @@ class LiveModelAdapter:
             phase_started=self.clock()
             try:
                 response=self.transport.request(request,timeout_seconds)
-                if not isinstance(response,Mapping): raise LiveModelAdapterError("invalid model response")
+                if not isinstance(response,Mapping): raise LiveModelAdapterError("invalid model response",category=DirectiveRejectionCategory.MALFORMED_DIRECTIVE,detail="model response was not a JSON object")
                 self.metrics.model_responses+=1
                 self.metrics.usage(response.get("usage"))
-                raw_directive=response.get("directive",response)
-                directive=_parse(raw_directive)
+                raw_directive=_resolve_raw_directive(response)
+                directive=_parse(raw_directive,snapshot)
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
                 return directive
             except LiveTransportError as exc:
+                rejection=None
                 self.metrics.error(exc.kind)
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
-            except LiveModelAdapterError:
+            except LiveModelAdapterError as exc:
+                rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt+1}
                 self.metrics.error("invalid_model_response")
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="invalid_model_response"; raise
@@ -805,4 +913,4 @@ def validate_live_report(report):
         _schema_error("report completed count is inconsistent")
     return payload
 
-__all__=["JsonlCommandTransport","LiveCaseResult","LiveCaseStatus","LiveConfigurationError","LiveEvaluationError","LiveExecutionAuthorization","LiveModelAdapter","LiveModelAdapterError","LiveModelConfig","LiveModelMetrics","LiveOptInError","LiveRunLimits","LiveTransportError","ModelTransport","LIVE_SCHEMA_VERSION","redact_for_recording","render_live_report","rejected_live_report","run_live_case","run_live_evaluation","validate_live_report"]
+__all__=["DirectiveRejectionCategory","JsonlCommandTransport","LiveCaseResult","LiveCaseStatus","LiveConfigurationError","LiveEvaluationError","LiveExecutionAuthorization","LiveModelAdapter","LiveModelAdapterError","LiveModelConfig","LiveModelMetrics","LiveOptInError","LiveRunLimits","LiveTransportError","ModelTransport","LIVE_PROTOCOL_VERSION","LIVE_SCHEMA_VERSION","redact_for_recording","render_live_report","rejected_live_report","run_live_case","run_live_evaluation","validate_live_report"]
