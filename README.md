@@ -23,6 +23,23 @@ The project investigates the path from traditional debugging, fault localization
 - research/papers/: local paper archive; PDFs are gitignored
 - TODO.md: project TODO list
 
-## Current phase
+## Current status
 
-Phase 1: Literature review and source verification.
+An MVP agentic debugging implementation is accepted through Task 9: a single
+controller agent, typed deterministic tools (file read, code search, test
+run, patch apply), PDB session/runtime skills, and a verifier-backed patch
+workflow. Task 10A added a real-model evaluation harness v1, and Task 10B-R1
+repaired the live protocol contracts and attempt accounting (protocol version
+`1.1`). A controlled live baseline run has since been accepted with
+limitation (`ACCEPT_WITH_LIMITATION`); see `docs/PROJECT_TRACKER.md` for the
+full evidence record. That baseline's PDB-enabled case never opened PDB, so
+it supports no claim about PDB effectiveness.
+
+The current source priority is Task 10B-R3 — Invalid Directive Retry
+Feedback v1.
+
+Dataset expansion, broader evaluation, fine-tuning, RAG expansion beyond the
+implemented tool foundations, preference optimization (DPO/RLHF), containment
+hardening, and final technical reporting remain future work — see `TODO.md`
+for the phase-level roadmap. This status does not represent completion of the
+broader internship or research project.

@@ -126,8 +126,8 @@ Rules:
 
 - [ ] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages.
 - [ ] 4.2 Combine fine-tuned model with RAG.
-- [ ] 4.3 Develop file-read, code-search, test-run, and patch-apply tools.
-- [ ] 4.4 Create the debugging agent.
+- [x] 4.3 Develop file-read, code-search, test-run, and patch-apply tools.
+- [x] 4.4 Create the debugging agent.
 - [ ] 4.5 Make the model localize faults, identify root cause, and generate patches.
 
 ### 4.x Subtasks / Log
@@ -174,10 +174,10 @@ Rules:
 
 ## 6. Phase 6 — Debugger Adapter
 
-- [ ] 6.1 Develop a debugger adapter for PDB, GDB, or LLDB.
+- [x] 6.1 Develop a debugger adapter for PDB, GDB, or LLDB. (Completed for PDB only; GDB and LLDB remain unimplemented.)
 - [ ] 6.2 Enable the fine-tuned model to generate debugger commands and interpret outputs.
-- [ ] 6.3 Enable breakpoint placement, variable inspection, stack trace reading, and step-by-step debugging.
-- [ ] 6.4 Enable patch generation and test validation after debugger interaction.
+- [x] 6.3 Enable breakpoint placement, variable inspection, stack trace reading, and step-by-step debugging.
+- [x] 6.4 Enable patch generation and test validation after debugger interaction.
 
 ### 6.x Subtasks / Log
 
@@ -216,7 +216,10 @@ Rules:
 Current active items:
 
 - Task 10A complete and accepted: Real-Model Evaluation Harness v1.
-- Next active engineering focus: Task 10B — Controlled Live Baseline Run v1.
+- Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1 (protocol version 1.1).
+- Controlled live baseline run complete: verdict `ACCEPT_WITH_LIMITATION` (evidence package verdict `ACCEPT`).
+- Remaining engineering finding: blind retry after a provider-completed invalid directive — the retry preserves identities and accounting but receives no bounded corrective context describing what was rejected.
+- Next source task: Task 10B-R3 — Invalid Directive Retry Feedback v1.
 - Post-MVP research, dataset, model, and broader evaluation work remains active or deferred as noted below.
 
 Notes:
@@ -247,6 +250,13 @@ Notes:
 - Task 10A complete and accepted: Real-Model Evaluation Harness v1, implementation commit `14a0287a763553038549eb8d84d6d9f8a432f44a`.
 - Task 10A delivers an explicitly authorized, offline-by-default real-model evaluation harness over the existing integrated runtime. It provides dual explicit live-access authorization before configuration is read, credential-free configuration, credential-shaped configuration and argv rejection, secret-safe events, diagnostics, JSON reports, and human reports, UUID-based evaluation identities, unique namespaces for reports, cases, runs, trajectories, and requests, duplicate task and policy rejection, stable credential-free configuration fingerprinting, full controller/tool-registry/policy/PDB/patch-lifecycle/RunEvent/localization/verifier/cleanup integration, accepted-patch-only verifier submission, static-policy PDB prohibition, positive PDB-enabled live-path validation, bounded model requests/retries/stdin/stdout-stderr/request-timeouts/model-transport timing, explicit unknown provider token fields, non-destructive workspace ownership and cleanup, versioned machine-readable reports, human-readable reports, authoritative report-schema validation before configured CLI output, coherent resolved/unresolved/rejected/failed/cleanup-failed/interrupted/partial semantics, deterministic local fake and fault-injection validation, and no external provider execution during Task 10A.
 - Task 10A does not claim that a real model solved any task, does not claim PDB improves model performance, and does not claim a provider-specific integration has been validated.
+- Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1, accepted implementation/merge commit `2996f16f7c95baf0860d0736d8ab67d13af60b9e`. It exposed truthful state-specific action and transition contracts and preserved unique transport-attempt identities, bounded rejection diagnostics, and usage accounting for provider-completed invalid model responses. The live wire protocol version is `1.1`.
+- The private Task 10B live runner remains operator tooling outside this repository. Its final offline qualification passed 59 tests.
+- A controlled live baseline run executed via that private runner. The controlled live evidence package (SHA-256 `87ac568c74aaa4b6d2e726003a5a1cafd238215411f691dd3aaa7d46e135db08`) received verdict `ACCEPT`; the controlled live baseline itself received verdict `ACCEPT_WITH_LIMITATION`.
+- In that baseline, the static policy result was `RESOLVED`, completing the full reproduction, localization, patch, verification, and cleanup trajectory. The PDB policy terminated with underlying reason `invalid_model_response`; the case-status layer reported `PROVIDER_ERROR`, but this must not be read as proof of a provider outage. The model repeated the illegal action `extract_failing_test`, and PDB was never opened.
+- Because PDB was never opened in the PDB-enabled case, the controlled live baseline does not measure PDB effectiveness. No claim that PDB is better or worse than the static policy is supported by this baseline.
+- The remaining source-level finding is blind retry after a provider-completed invalid directive: the retry preserves identities and accounting but receives no bounded corrective context describing what was rejected.
+- The next source task is Task 10B-R3 — Invalid Directive Retry Feedback v1.
 - The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. This does not complete the broader research or internship project: dataset expansion/inventory, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
 - Hostile-code filesystem, process and network containment remains deferred.
 - Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
@@ -267,11 +277,13 @@ Notes:
 - [x] Task 8 — Golden Trajectories v1 (commit ab9b8b7)
 - [x] Task 9 — First End-to-End Demonstration (accepted implementation commit e7031fa796a738fc80de4c673607eee72254ce56)
 - [x] Task 10A — Real-Model Evaluation Harness v1 (implementation commit 14a0287a763553038549eb8d84d6d9f8a432f44a)
-- [ ] Task 10B — Controlled Live Baseline Run v1 (next active engineering focus)
+- [x] Task 10B-R1 — Live Protocol and Accounting Repair v1 (accepted implementation/merge commit 2996f16f7c95baf0860d0736d8ab67d13af60b9e; protocol version 1.1)
+- [x] Controlled live baseline run (private-runner operator tooling; evidence package verdict ACCEPT; baseline verdict ACCEPT_WITH_LIMITATION)
+- [ ] Task 10B-R3 — Invalid Directive Retry Feedback v1 (next source task)
 
 ## Last Updated
 
-2026-07-27
+2026-07-28
 
 
 

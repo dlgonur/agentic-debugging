@@ -115,6 +115,13 @@ only an owned directory is removed; pre-existing operator directories remain
 untouched. Hostile-code containment remains the trusted-local-workspace
 boundary accepted by Task 7.
 
-Task 10B must supply operator-approved live configuration, perform a smoke run,
-and then run the baseline experiment. Those executions and causal
-interpretation remain unverified by Task 10A.
+Task 10B-R1 completed the live protocol and accounting repair described above
+(protocol version 1.1; accepted implementation/merge commit
+`2996f16f7c95baf0860d0736d8ab67d13af60b9e`). A controlled live baseline run has
+since executed via the private Task 10B live runner, which remains operator
+tooling outside this repository; its evidence package and baseline verdict are
+recorded in `docs/PROJECT_TRACKER.md` and are not restated here. In that run
+the PDB-enabled case terminated before PDB was opened, so the run does not
+measure PDB effectiveness and supports no claim that PDB is better or worse
+than the static policy. The next source task is Task 10B-R3 — Invalid
+Directive Retry Feedback v1.

@@ -1716,3 +1716,41 @@ Task 10A sırasında hiçbir external provider execution yapılmadı. Task 10B (
 ### Sonuç / Bir Sonraki Adım
 
 Task 10A kabul edildi ve ilerleme kaydı kapatıldı. Bir sonraki aktif mühendislik odağı Task 10B — Controlled Live Baseline Run v1'dir. Daha geniş post-MVP çalışmaları (dataset expansion, broader evaluation, real-model comparisons, PDB effectiveness experiments, containment hardening, RAG, fine-tuning, DPO/RLHF, final academic analysis/reporting) görünür durumda kalmaya devam eder.
+
+---
+
+## 28 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 10B-R1 — Live Protocol Contracts and Attempt Accounting Repair v1 kabulü, controlled live baseline evidence incelemesi ve ilerleme kaydının kapatılması
+
+### Yapılan Çalışmalar
+
+Bugün Task 10B kapsamındaki ilk repair adımını, Task 10B-R1'i, kapattım. Task 10A'nın accepted harness'i credential-free ve offline-varsayılan çalışıyordu, fakat live wire protokolünde state-specific action/transition contract'ları ve provider-completed invalid model response'lar için transport-attempt accounting'i tam olarak truthful değildi. Task 10B-R1 bu iki açığı düzeltti: controller'ın gerçekten sunduğu state-specific action ve transition contract'ları expose edildi; unique transport-attempt identity'leri, bounded rejection diagnostics ve provider-completed invalid model response'lar için usage accounting korunacak şekilde sağlamlaştırıldı. Live wire protokol sürümü bu repair ile `1.1` oldu. Kabul edilen implementation/merge commit'i `2996f16f7c95baf0860d0736d8ab67d13af60b9e`.
+
+Bu repair `agentic_debugger/agent/tool_registry.py`, `agentic_debugger/demo/tools.py`, `agentic_debugger/evaluation/live.py` dosyalarında ve ilgili testlerde yapıldı; `docs/REAL_MODEL_EVALUATION_TASK10A.md` da protokol sürümü ve yeni contract davranışını yansıtacak şekilde güncellendi.
+
+Task 10B-R1'in kabulünden sonra, private Task 10B live runner üzerinden — bu runner repository dışında kalan operator tooling'idir — bir controlled live baseline run yürütüldü. Bu çalışmanın kendisi bu documentation-only closure'ın kapsamı dışındadır; burada yalnızca kabul edilen sonuçları kaydediyorum.
+
+### Controlled Live Baseline Evidence
+
+Private runner'ın final offline qualification'ı **59 passed** sonucunu verdi. Controlled live evidence paketi SHA-256 `87ac568c74aaa4b6d2e726003a5a1cafd238215411f691dd3aaa7d46e135db08` ile `ACCEPT` verdict'i aldı. Controlled live baseline'ın kendisi ise `ACCEPT_WITH_LIMITATION` verdict'i aldı.
+
+Baseline'da static policy sonucu `RESOLVED` oldu ve full reproduction, localization, patch, verification ve cleanup trajectory'sini eksiksiz tamamladı. PDB policy ise `invalid_model_response` underlying reason'ı ile sonlandı. Case-status katmanı `PROVIDER_ERROR` bildirdi, fakat bunun bir provider outage'ının kanıtı olarak okunmaması gerekiyor — case-status ile underlying reason farklı katmanlar ve bunları karıştırmak yanlış bir sonuç çıkarımına yol açar. Model, illegal action olan `extract_failing_test`'i tekrarladı ve PDB hiçbir zaman açılmadı.
+
+PDB hiçbir zaman açılmadığı için bu baseline PDB etkinliğini ölçmüyor. PDB'in static policy'den daha iyi veya daha kötü olduğuna dair hiçbir iddia bu baseline tarafından desteklenmiyor. Bu ayrımı açıkça kaydetmek, deneysel sonuç ile mühendislik bulgusunu birbirine karıştırmamak için önemliydi.
+
+### Kalan Mühendislik Bulgusu
+
+Kalan source-level bulgu şu: provider-completed bir invalid directive'den sonra model'in retry'ı kör (blind) kalıyor. Retry, identity'leri ve accounting'i koruyor, fakat reddedilen şeyin ne olduğunu açıklayan bounded bir corrective context almıyor. Bu, modelin aynı illegal action'ı (`extract_failing_test`) tekrarlamasının olası bir açıklaması.
+
+### Doğrulama
+
+Bu kayıt yalnızca documentation-only bir closure'dır; herhangi bir kaynak kod, test, private-runner veya live-provider çalıştırması yapılmadı. Kaydedilen sonuçlar, accepted implementation baseline (`2996f16`) ve operator tarafından sağlanan controlled live evidence facts'e dayanıyor.
+
+### Öğrendiklerim
+
+Bu kapanışta en önemli öğrendiğim şey, case-status katmanının (`PROVIDER_ERROR`) ile underlying reason'ın (`invalid_model_response`) farklı sorulara cevap verdiğiydi: biri "harness ne gördü", diğeri "asıl neden ne". Bunları birleştirip "provider outage kanıtı" gibi sunmak yanlış bir deneysel iddia olurdu. PDB hiç açılmadığında PDB hakkında hiçbir karşılaştırmalı iddia yapılamayacağını da açıkça kaydetmem gerekti; aksi halde structural bir baseline gap'i causal bir PDB sonucu gibi yanlış okunabilirdi.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 10B-R1 kabul edildi ve ilerleme kaydı kapatıldı. Controlled live baseline evidence'ı `ACCEPT_WITH_LIMITATION` olarak kabul edilmiş durumda ve kalan bulgu (invalid directive sonrası kör retry) kaydedilmiştir. Bir sonraki source task **Task 10B-R3 — Invalid Directive Retry Feedback v1**'dir; bu task henüz başlamamıştır.
