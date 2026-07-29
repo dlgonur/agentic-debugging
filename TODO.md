@@ -5,15 +5,26 @@
 Aşağıdaki faz listesi, stajın orijinal geniş araştırma/ürün planını temsil eder.
 Bu plan içinde bazı maddeler, fine-tuning veya RAG üzerinden değil,
 deterministic tool'lar ve verifier-backed bir controller agent üzerinden
-(Task 1-9), ardından Task 10A real-model evaluation harness v1 ve Task 10B-R1
-live protocol/accounting repair v1 (protocol version `1.1`) ile zaten
-tamamlanmış ve kabul edilmiştir. Bu maddeler aşağıda `[x]` ile işaretlenmiş ve
-neye dayandığı not edilmiştir; tam kanıt kaydı için `docs/PROJECT_TRACKER.md`'e
-bakınız. Mevcut aktif source önceliği **Task 10B-R3 — Invalid Directive Retry
-Feedback v1**'dir. Dataset expansion, broader evaluation, fine-tuning, RAG
-genişletmesi, preference optimization (DPO/RLHF), containment hardening ve
-final teknik rapor hâlâ future work olarak kalır; bu not stajın veya daha geniş
-araştırma projesinin tamamlandığı anlamına gelmez.
+(Task 1-9), ardından Task 10A real-model evaluation harness, Task 10B-R1 live
+protocol/accounting repair ve Task 10B-R3 invalid-directive retry feedback
+repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R3'ün accepted commit'i
+`1bb1d5251cc732f331ce2f5fdd163d9e46309d29`, live wire protocol sürümü
+`1.2`'dir.
+
+Private operator runner üzerinden tek fixture, iki policy ve policy başına iki
+repetition içeren dört-case descriptive matrix tamamlandı. Static policy 2/2
+case'i çözdü; PDB-on-uncertainty 0/2 case çözdü ve iki case de PDB açılmadan
+`invalid_model_response` ile sonlandı. Altı feedback episode'unun dördünde
+legal-directive recovery gözlendi. Bu küçük, fixture-specific sonuç causal PDB
+etkinliği, policy üstünlüğü veya genel model güvenilirliği kanıtı değildir.
+
+Maddeler aşağıda `[x]` ile işaretlenmiş ve neye dayandığı not edilmiştir; tam
+kanıt kaydı için `docs/PROJECT_TRACKER.md`'e bakınız. Mevcut aktif mühendislik
+önceliği, PDB policy yolunun PDB'ye ulaşmadan neden illegal veya malformed
+directive ürettiğini offline olarak incelemektir. Dataset expansion, broader
+evaluation, fine-tuning, RAG genişletmesi, preference optimization (DPO/RLHF),
+containment hardening ve final teknik rapor hâlâ future work olarak kalır; bu
+not stajın veya daha geniş araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Daily requirement
 

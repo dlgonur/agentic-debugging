@@ -217,9 +217,11 @@ Current active items:
 
 - Task 10A complete and accepted: Real-Model Evaluation Harness v1.
 - Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1 (protocol version 1.1).
-- Controlled live baseline run complete: verdict `ACCEPT_WITH_LIMITATION` (evidence package verdict `ACCEPT`).
-- Remaining engineering finding: blind retry after a provider-completed invalid directive — the retry preserves identities and accounting but receives no bounded corrective context describing what was rejected.
-- Next source task: Task 10B-R3 — Invalid Directive Retry Feedback v1.
+- Task 10B-R3 complete and accepted: Invalid Directive Retry Feedback v1, accepted implementation/merge commit `1bb1d5251cc732f331ce2f5fdd163d9e46309d29` (protocol version 1.2).
+- The private-runner retry-recovery diagnostic directly observed both successful and failed corrective-feedback episodes; it did not resolve the case or open PDB.
+- The locked four-case OpenCode Zen matrix completed on `curated-none-handling-001` with `deepseek-v4-flash-free` variant `max`: static policy resolved 2/2 cases; PDB-on-uncertainty resolved 0/2 and both cases terminated with underlying reason `invalid_model_response` before PDB opened.
+- Across the matrix, corrective-feedback recovery occurred in 4 of 6 observed episodes. The matrix is descriptive, fixture-specific, model-specific, and provider-route-specific; it supports no causal PDB-effectiveness or policy-superiority claim.
+- Current engineering focus: offline analysis of why the PDB policy path continues to emit illegal or malformed directives before reaching PDB. Do not expand the live comparison until a controlled real-model path actually opens PDB.
 - Post-MVP research, dataset, model, and broader evaluation work remains active or deferred as noted below.
 
 Notes:
@@ -250,13 +252,21 @@ Notes:
 - Task 10A complete and accepted: Real-Model Evaluation Harness v1, implementation commit `14a0287a763553038549eb8d84d6d9f8a432f44a`.
 - Task 10A delivers an explicitly authorized, offline-by-default real-model evaluation harness over the existing integrated runtime. It provides dual explicit live-access authorization before configuration is read, credential-free configuration, credential-shaped configuration and argv rejection, secret-safe events, diagnostics, JSON reports, and human reports, UUID-based evaluation identities, unique namespaces for reports, cases, runs, trajectories, and requests, duplicate task and policy rejection, stable credential-free configuration fingerprinting, full controller/tool-registry/policy/PDB/patch-lifecycle/RunEvent/localization/verifier/cleanup integration, accepted-patch-only verifier submission, static-policy PDB prohibition, positive PDB-enabled live-path validation, bounded model requests/retries/stdin/stdout-stderr/request-timeouts/model-transport timing, explicit unknown provider token fields, non-destructive workspace ownership and cleanup, versioned machine-readable reports, human-readable reports, authoritative report-schema validation before configured CLI output, coherent resolved/unresolved/rejected/failed/cleanup-failed/interrupted/partial semantics, deterministic local fake and fault-injection validation, and no external provider execution during Task 10A.
 - Task 10A does not claim that a real model solved any task, does not claim PDB improves model performance, and does not claim a provider-specific integration has been validated.
-- Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1, accepted implementation/merge commit `2996f16f7c95baf0860d0736d8ab67d13af60b9e`. It exposed truthful state-specific action and transition contracts and preserved unique transport-attempt identities, bounded rejection diagnostics, and usage accounting for provider-completed invalid model responses. The live wire protocol version is `1.1`.
-- The private Task 10B live runner remains operator tooling outside this repository. Its final offline qualification passed 59 tests.
-- A controlled live baseline run executed via that private runner. The controlled live evidence package (SHA-256 `87ac568c74aaa4b6d2e726003a5a1cafd238215411f691dd3aaa7d46e135db08`) received verdict `ACCEPT`; the controlled live baseline itself received verdict `ACCEPT_WITH_LIMITATION`.
-- In that baseline, the static policy result was `RESOLVED`, completing the full reproduction, localization, patch, verification, and cleanup trajectory. The PDB policy terminated with underlying reason `invalid_model_response`; the case-status layer reported `PROVIDER_ERROR`, but this must not be read as proof of a provider outage. The model repeated the illegal action `extract_failing_test`, and PDB was never opened.
-- Because PDB was never opened in the PDB-enabled case, the controlled live baseline does not measure PDB effectiveness. No claim that PDB is better or worse than the static policy is supported by this baseline.
-- The remaining source-level finding is blind retry after a provider-completed invalid directive: the retry preserves identities and accounting but receives no bounded corrective context describing what was rejected.
-- The next source task is Task 10B-R3 — Invalid Directive Retry Feedback v1.
+- Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1, accepted implementation/merge commit `2996f16f7c95baf0860d0736d8ab67d13af60b9e`. It exposed truthful state-specific action and transition contracts and preserved unique transport-attempt identities, bounded rejection diagnostics, and usage accounting for provider-completed invalid model responses. The live wire protocol version became `1.1`.
+- The private Task 10B live runner remains operator tooling outside this repository. The original controlled live baseline evidence package (SHA-256 `87ac568c74aaa4b6d2e726003a5a1cafd238215411f691dd3aaa7d46e135db08`) received verdict `ACCEPT`; the baseline received verdict `ACCEPT_WITH_LIMITATION`.
+- In that original baseline, the static policy result was `RESOLVED`. The PDB policy terminated with underlying reason `invalid_model_response`; the case-status layer reported `PROVIDER_ERROR`, which is not evidence of a provider outage. The model repeated the illegal action `extract_failing_test`, and PDB was never opened.
+- Task 10B-R3 complete and accepted: Invalid Directive Retry Feedback v1, accepted implementation/merge commit `1bb1d5251cc732f331ce2f5fdd163d9e46309d29`. It added bounded, redacted, structured `directive_feedback` after provider-completed invalid directives while preserving retry identity, accounting, and transport-failure semantics. The live wire protocol version became `1.2`.
+- Task 10B-R3 evidence was archived outside the repository with SHA-256 `4b32ec09a2f6bae58c63c42123bbfd9323711f2c07d4ecc6024c97aaed360b5c`.
+- A minimal retry-recovery diagnostic then ran through the private runner. Its evidence package SHA-256 is `4681de9c02ca8f222cf6067293e59a8dd3c1eb605d4ee4be245ddf13e9cea88a`. The diagnostic directly observed one legal recovery after feedback and one later failed recovery in the same case; the case still terminated with `invalid_model_response`, did not attempt a patch, and never opened PDB.
+- Private-runner follow-up work added protocol-1.2 compatibility, direct sanitized feedback evidence, episode classification, a locked small repeated matrix profile, per-case stop gates, aggregate budget enforcement, infrastructure exception closure, redaction hardening, and telemetry fail-closed behavior. This tooling remains outside the repository and is not part of the source commit history.
+- The final locked matrix used OpenCode Zen provider ID `opencode`, model ID `deepseek-v4-flash-free`, variant `max`, fixture `curated-none-handling-001`, policies `static-baseline` and `pdb-on-uncertainty`, two repetitions per policy, four total cases, and concurrency 1.
+- The matrix evidence package SHA-256 is `96675c3995683169c440411deef84429277bcf5289c03375863f6bc65b3ac43d`; the evidence package and matrix execution received verdict `ACCEPT`, while experimental interpretation remains limited.
+- Static policy resolved 2/2 cases and produced 2/2 accepted patches. PDB-on-uncertainty resolved 0/2 cases; both terminated with underlying reason `invalid_model_response`, no patch or verifier phase was reached, and PDB openings were 0/2.
+- Across all four cases, there were 31 logical model calls, 37 transport attempts, 226,385 provider-reported total tokens, provider-reported cost metadata of 0, and approximately 396.5 seconds wall-clock duration. Provider-reported cost metadata is descriptive and is not proof of actual billing.
+- Six corrective-feedback episodes were observed: 4 `RECOVERED_AFTER_FEEDBACK`, 2 `INVALID_AFTER_FEEDBACK`, and 0 `INTERRUPTED_AFTER_FEEDBACK`. This 4/6 descriptive recovery fraction is not a causal estimate or generalized reliability claim.
+- The historical OpenCode Go baseline and the OpenCode Zen free-model matrix use different provider routes and must not be pooled as one provider population.
+- Because neither PDB-enabled matrix case opened PDB, the matrix still does not measure PDB effectiveness. It supports no claim that static debugging is superior, that PDB is harmful, or that protocol 1.2 caused a higher success rate.
+- The next engineering step is an offline audit of the PDB-policy directive path before any larger live comparison.
 - The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. This does not complete the broader research or internship project: dataset expansion/inventory, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
 - Hostile-code filesystem, process and network containment remains deferred.
 - Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
@@ -279,11 +289,15 @@ Notes:
 - [x] Task 10A — Real-Model Evaluation Harness v1 (implementation commit 14a0287a763553038549eb8d84d6d9f8a432f44a)
 - [x] Task 10B-R1 — Live Protocol and Accounting Repair v1 (accepted implementation/merge commit 2996f16f7c95baf0860d0736d8ab67d13af60b9e; protocol version 1.1)
 - [x] Controlled live baseline run (private-runner operator tooling; evidence package verdict ACCEPT; baseline verdict ACCEPT_WITH_LIMITATION)
-- [ ] Task 10B-R3 — Invalid Directive Retry Feedback v1 (next source task)
+- [x] Task 10B-R3 — Invalid Directive Retry Feedback v1 (accepted implementation/merge commit 1bb1d5251cc732f331ce2f5fdd163d9e46309d29; protocol version 1.2)
+- [x] Minimal controlled retry-recovery diagnostic (private-runner operator tooling; mixed episode result; no PDB opening)
+- [x] Private-runner feedback evidence, episode classification, locked matrix, and enforceable stop-gate hardening
+- [x] Four-case OpenCode Zen descriptive matrix (2 static + 2 PDB-on-uncertainty; exact locked order; matrix/evidence accepted; PDB openings 0)
+- [ ] Offline PDB-policy directive-path audit (next engineering task; no live call required)
 
 ## Last Updated
 
-2026-07-28
+2026-07-29
 
 
 

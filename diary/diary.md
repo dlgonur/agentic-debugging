@@ -1754,3 +1754,96 @@ Bu kapanışta en önemli öğrendiğim şey, case-status katmanının (`PROVIDE
 ### Sonuç / Bir Sonraki Adım
 
 Task 10B-R1 kabul edildi ve ilerleme kaydı kapatıldı. Controlled live baseline evidence'ı `ACCEPT_WITH_LIMITATION` olarak kabul edilmiş durumda ve kalan bulgu (invalid directive sonrası kör retry) kaydedilmiştir. Bir sonraki source task **Task 10B-R3 — Invalid Directive Retry Feedback v1**'dir; bu task henüz başlamamıştır.
+
+---
+
+## 29 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 10B-R3 — Invalid Directive Retry Feedback v1 kabulü, private-runner evidence hardening'i ve küçük OpenCode Zen live matrix kapanışı
+
+### Repository Source Repair
+
+Task 10B-R3, provider-completed invalid directive sonrasındaki blind retry bulgusunu kapattı. Retry request'ine bounded, redacted ve structured `directive_feedback` eklendi. İlk attempt'te bu alan `null`; provider-completed invalid directive sonrasında retry'da rejection category, pre-authored bounded message ve rejected transport-attempt index'i taşınıyor. Legal action ve transition contract'ları authoritative kalıyor; harness model adına directive icat etmiyor, düzeltmiyor veya silently substitute etmiyor.
+
+`add_hypothesis` ve `revise_hypothesis` directive'lerinde `evidence_refs` ile `requires_runtime_evidence` required alanları strict biçimde enforce edildi. `evidence_refs` yalnız gerçek JSON array olduğunda kabul ediliyor; string, mapping, scalar veya `null` değerleri malformed directive olarak reddediliyor.
+
+Accepted implementation/merge commit'i `1bb1d5251cc732f331ce2f5fdd163d9e46309d29`; live wire protocol sürümü `1.2`. R3 closeout evidence archive SHA-256 değeri `4b32ec09a2f6bae58c63c42123bbfd9323711f2c07d4ecc6024c97aaed360b5c`.
+
+### Minimal Retry-Recovery Diagnostic
+
+R3 kabulünden sonra full baseline tekrar edilmedi. Yalnız `curated-none-handling-001` ve `pdb-on-uncertainty` yolu üzerinde tek-case controlled diagnostic çalıştırıldı. Evidence package SHA-256 değeri `4681de9c02ca8f222cf6067293e59a8dd3c1eb605d4ee4be245ddf13e9cea88a`.
+
+Bu diagnostic içinde iki corrective-feedback episode gözlendi. İlk episode'da model illegal action sonrasında legal `Understand` transition'ına döndü ve `RECOVERED_AFTER_FEEDBACK` olarak sınıflandırıldı. Daha sonraki episode'da feedback sonrasında model yine illegal directive üretti ve `INVALID_AFTER_FEEDBACK` sonucu oluştu. Case genel olarak `invalid_model_response` ile sonlandı, patch veya verifier aşamasına ulaşmadı ve PDB açılmadı. Bu nedenle sonuç, recovery'nin mümkün olduğunu fakat güvenilir veya garantili olmadığını gösteren tek-run descriptive evidence olarak kaydedildi.
+
+### Private Runner Hardening
+
+Private runner repository dışında operator tooling olarak kaldı. R3A-R3C boyunca protocol 1.2 compatibility, locked single-policy ve repeated-matrix profiles, direct sanitized feedback evidence, episode classification, deterministic matrix ordering, per-case execution boundaries, post-case stop gates, aggregate budget enforcement, partial/stopped evidence, infrastructure exception closure, redaction hardening ve telemetry fail-closed davranışı eklendi.
+
+Bu süreçte runner veya repository source'u birbirine karıştırılmadı. Runner değişiklikleri repository commit history'sine girmedi. Repository `main` branch'i accepted R3 commit'inde temiz kaldı. Packaging, manifest, hash ve ZIP işlemleri daha sonra operator-side deterministic PowerShell script'leriyle yürütüldü.
+
+### Final OpenCode Zen Matrix
+
+OpenCode Go aboneliği sona erdiği için final small repeated matrix farklı bir provider route üzerinde çalıştırıldı. Historical OpenCode Go baseline ile final matrix aynı provider population gibi değerlendirilmedi.
+
+Final locked route:
+
+- provider ID: `opencode`
+- model ID: `deepseek-v4-flash-free`
+- variant: `max`
+- fixture: `curated-none-handling-001`
+- policies: `static-baseline`, `pdb-on-uncertainty`
+- repetitions: policy başına 2
+- total cases: 4
+- concurrency: 1
+
+Matrix exact locked order ile 4/4 planned, started ve completed case üretti. Evidence package SHA-256 değeri `96675c3995683169c440411deef84429277bcf5289c03375863f6bc65b3ac43d`; evidence package ve matrix execution `ACCEPT`, experimental interpretation ise qualification gerektiren descriptive evidence olarak kabul edildi.
+
+### Matrix Sonuçları
+
+Static policy:
+
+- resolved cases: 2/2
+- accepted patches: 2/2
+- her iki case'te fail-to-pass 1/1
+- her iki case'te pass-to-pass 2/2
+- verifier başarılı
+- PDB openings: 0
+
+PDB-on-uncertainty policy:
+
+- resolved cases: 0/2
+- iki case'in underlying termination reason'ı: `invalid_model_response`
+- case-status layer: `PROVIDER_ERROR`
+- patch attempted: 0/2
+- verifier reached: 0/2
+- PDB openings: 0/2
+
+Aggregate:
+
+- logical model calls: 31
+- transport attempts: 37
+- provider-reported total tokens: 226,385
+- provider-reported cost metadata: 0
+- wall-clock duration: yaklaşık 396.5 saniye
+- feedback episodes: 6
+- `RECOVERED_AFTER_FEEDBACK`: 4
+- `INVALID_AFTER_FEEDBACK`: 2
+- `INTERRUPTED_AFTER_FEEDBACK`: 0
+
+Provider-reported cost değeri gerçek billing kanıtı olarak yorumlanmadı. Matrix küçük, tek-fixture, model-specific ve provider-route-specific olduğu için istatistiksel significance, confidence interval, causal treatment effect veya generalized reliability iddiası üretilmedi.
+
+### Deneysel Sınır
+
+Static policy'nin 2/2, PDB policy'nin 0/2 sonucu descriptive olarak kaydedilebilir; fakat “static debugging PDB'den daha iyidir” sonucu çıkarılamaz. PDB-enabled iki case de PDB açılmadan directive validation aşamasında sonlandı. Dolayısıyla ölçülen şey PDB'nin debugging etkisi değil, modelin PDB policy contract yolunda legal directive üretme başarısızlığıdır.
+
+Protocol 1.2 feedback altı episode'un dördünde legal recovery ile birlikte gözlendi. Bu, feedback'in bazı gerçek provider episode'larında faydalı olabildiğini gösterir; feedback'in success rate'i nedensel olarak artırdığını veya modeli güvenilir biçimde düzelttiğini kanıtlamaz.
+
+### Öğrendiklerim
+
+Bu çalışma, provider route, model identity, protocol contract ve policy behavior'ın ayrı deneysel değişkenler olarak kaydedilmesi gerektiğini gösterdi. Historical OpenCode Go sonucu ile OpenCode Zen free-model matrix'ini tek örneklem gibi birleştirmek yanlış olurdu.
+
+Ayrıca bir policy'nin “PDB-enabled” olması, PDB'nin gerçekten kullanıldığı anlamına gelmiyor. PDB açılmadan biten case'lerden PDB effectiveness sonucu çıkarmak mümkün değil. Bir sonraki değerlendirme genişletilmeden önce PDB policy yolunun neden illegal veya malformed directive ürettiği offline olarak incelenmeli ve gerçek modelin PDB açabildiği kontrollü bir path gösterilmeli.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 10B-R3 source repair'i kabul edildi ve small repeated matrix tamamlandı. Otomatik veya manuel tekrar planlanmıyor. Bir sonraki mühendislik adımı, live provider kullanmadan PDB-policy directive path'ini offline olarak audit etmektir. PDB'nin gerçekten açılabildiği kontrollü bir real-model path gösterilmeden daha büyük static-versus-PDB karşılaştırması yapılmayacaktır.

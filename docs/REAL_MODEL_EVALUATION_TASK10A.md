@@ -166,24 +166,35 @@ only an owned directory is removed; pre-existing operator directories remain
 untouched. Hostile-code containment remains the trusted-local-workspace
 boundary accepted by Task 7.
 
-Task 10B-R1 completed the live protocol and accounting repair described above
+Task 10B-R1 completed the initial live protocol and accounting repair
 (protocol version 1.1; accepted implementation/merge commit
-`2996f16f7c95baf0860d0736d8ab67d13af60b9e`). A controlled live baseline run has
-since executed via the private Task 10B live runner, which remains operator
-tooling outside this repository; its evidence package and baseline verdict are
-recorded in `docs/PROJECT_TRACKER.md` and are not restated here. In that run
-the PDB-enabled case terminated before PDB was opened, so the run does not
-measure PDB effectiveness and supports no claim that PDB is better or worse
-than the static policy. That baseline also surfaced a remaining engineering
-finding: after a provider-completed invalid directive, the retry was blind —
-it repeated the model's identity/accounting exactly but carried no
-explanation of what was rejected, and the model repeated the same illegal
-action (`extract_failing_test`) on the next attempt.
+`2996f16f7c95baf0860d0736d8ab67d13af60b9e`). Task 10B-R3 — Invalid Directive
+Retry Feedback v1 then added the bounded `directive_feedback` contract
+described above (protocol version 1.2; accepted implementation/merge commit
+`1bb1d5251cc732f331ce2f5fdd163d9e46309d29`). The R3 implementation campaign
+itself used only local deterministic transports and made no live provider
+call.
 
-Task 10B-R3 — Invalid Directive Retry Feedback v1 repaired that gap by adding
-the bounded `directive_feedback` contract described above (protocol version
-1.2). This campaign did not execute any live provider; it repairs and tests
-the retry path only against local, deterministic transports and fixtures.
-Whether bounded corrective feedback measurably reduces repeated illegal
-directives against a real provider remains an open question for a future
-controlled live diagnostic and is not established by this repair.
+Subsequent live work executed through private operator tooling outside this
+repository. A minimal retry-recovery diagnostic directly observed both a
+legal recovery after corrective feedback and a later failed recovery in the
+same case. The case still terminated with `invalid_model_response`, did not
+reach patch verification, and never opened PDB.
+
+A later locked four-case descriptive matrix used fixture
+`curated-none-handling-001`, OpenCode Zen provider ID `opencode`, model ID
+`deepseek-v4-flash-free`, variant `max`, two repetitions of
+`static-baseline`, and two repetitions of `pdb-on-uncertainty`. Static policy
+resolved 2/2 cases. PDB-on-uncertainty resolved 0/2; both cases terminated
+with underlying reason `invalid_model_response` before PDB opened. Across the
+matrix, 4 of 6 observed corrective-feedback episodes produced a legal next
+directive, while 2 remained invalid.
+
+These results are small, descriptive, fixture-specific, model-specific, and
+provider-route-specific. They do not establish that protocol 1.2 caused a
+higher success rate, that corrective feedback is generally reliable, or that
+one policy is superior. Because neither PDB-enabled case opened PDB, the
+matrix still does not measure PDB effectiveness. The historical OpenCode Go
+baseline and the later OpenCode Zen free-model matrix must not be pooled as
+one provider population. Exact evidence hashes, accounting totals, and
+qualified conclusions are recorded in `docs/PROJECT_TRACKER.md`.
