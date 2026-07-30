@@ -9,8 +9,19 @@ from pathlib import Path
 
 import pytest
 
-from agentic_debugger.agent.controller_policy import ActionName, PdbPolicy
+from agentic_debugger.agent.controller_policy import (
+    ActionName,
+    BudgetKind,
+    ControllerBudgetLimits,
+    ControllerBudgetState,
+    HypothesisConfidence,
+    HypothesisLedger,
+    PdbPolicy,
+    allowed_actions_for_state,
+    budget_kind_for_action,
+)
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.tool_registry import ToolRejectedError, ToolRegistry, ToolResult, ToolSpec
 from agentic_debugger.demo.catalog import build_reference_patch, scenario_for
 from agentic_debugger.demo.policies import DemoPolicy
 from agentic_debugger.demo.tools import DemoToolContext, build_registry
@@ -35,7 +46,7 @@ from agentic_debugger.evaluation.live import (
 )
 from agentic_debugger.evaluation.live_cli import main as live_main
 from agentic_debugger.evaluation.task_schema import DebugTask
-from agentic_debugger.events.schema import Action
+from agentic_debugger.events.schema import Action, Observation, ObservationStatus
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
@@ -57,6 +68,45 @@ def workspace_parent():
 
 def config() -> LiveModelConfig:
     return LiveModelConfig("test-model", ("test-model-command",))
+
+
+def _test_live_registry() -> ToolRegistry:
+    return ToolRegistry((
+        ToolSpec(
+            ActionName.RUN_REPRODUCTION,
+            lambda arguments: dict(arguments),
+            lambda _action, _arguments: ToolResult(ObservationStatus.OK, {}, "ok"),
+            argument_contract={
+                "required": ["phase"],
+                "properties": {
+                    "phase": {"type": "string", "min_length": 1}
+                },
+                "additional_properties": False,
+            },
+        ),
+    ))
+
+
+def test_live_adapter_requires_registry_before_transport():
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    calls = []
+
+    class NeverTransport:
+        def request(self, payload, timeout_seconds):
+            calls.append(payload)
+            raise AssertionError("transport must not be called")
+
+    with pytest.raises(LiveConfigurationError, match="registry is required"):
+        LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.STATIC_BASELINE,
+            config=config(),
+            transport=NeverTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+        )
+    assert calls == []
 
 
 class FakeTransport:
@@ -120,15 +170,15 @@ class PdbScriptedTransport(ScriptedTransport):
         self.directives = [
             {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
             {"kind": "transition", "target_state": "Understand", "reason": "reproduced"},
-            {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "runtime evidence requested"},
+            {"kind": "action", "name": "find_function", "arguments": {"name": scenario.localization.symbol, "path": scenario.localization.file_path}},
+            {"kind": "action", "name": "get_source_window", "arguments": {"path": scenario.localization.file_path, "line": 1}},
+            {"kind": "add_hypothesis", "hypothesis_id": scenario.hypothesis_id, "statement": scenario.root_cause_statement, "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": True},
+            {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "qualifying hypothesis requests runtime evidence"},
             {"kind": "action", "name": "start_pdb_session", "arguments": {}},
             {"kind": "action", "name": "get_stack_summary", "arguments": {}},
             {"kind": "action", "name": "get_frame_locals", "arguments": {"frame_id": 0, "pause_generation": 1}},
             {"kind": "action", "name": "stop_pdb_session", "arguments": {}},
             {"kind": "transition", "target_state": "Understand", "reason": "runtime evidence collected"},
-            {"kind": "action", "name": "find_function", "arguments": {"name": scenario.localization.symbol, "path": scenario.localization.file_path}},
-            {"kind": "action", "name": "get_source_window", "arguments": {"path": scenario.localization.file_path, "line": 1}},
-            {"kind": "add_hypothesis", "hypothesis_id": scenario.hypothesis_id, "statement": scenario.root_cause_statement, "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": True},
             {"kind": "action", "name": "express_root_cause_hypothesis", "arguments": {"hypothesis_id": scenario.hypothesis_id, "statement": scenario.root_cause_statement, "target_file": scenario.localization.file_path, "target_symbol": scenario.localization.symbol, "confidence": "high"}},
             {"kind": "transition", "target_state": "Patch", "reason": "runtime evidence is sufficient"},
             {"kind": "action", "name": "apply_patch", "arguments": {"patch": patch}},
@@ -239,7 +289,7 @@ def test_token_usage_survives_redaction_and_secret_values_do_not():
 def test_adapter_request_and_retry_limits_and_unknown_usage():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
     transport = FakeTransport([{"directive": {"kind": "transition", "target_state": "Failed", "reason": "fake stop"}}], failures=2)
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=2))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=2), registry=_test_live_registry())
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
     directive = adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.REPRODUCE, 0, ControllerBudgetLimits.from_task_constraints(task.constraints), ControllerBudgetState(), HypothesisLedger()))
@@ -254,7 +304,7 @@ def test_timeout_classification_and_measurements_survive_adapter_failure():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
     transport = FakeTransport(failures=0)
     transport.request = lambda payload, timeout_seconds: (_ for _ in ()).throw(LiveTransportError("timeout", kind="request_timeout", timed_out=True))
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0), registry=_test_live_registry())
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
     with pytest.raises(Exception):
@@ -305,7 +355,7 @@ def test_model_request_context_is_complete_bounded_and_identity_scoped():
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "context check"}}
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ContextTransport(), limits=LiveRunLimits(max_model_requests=1), evaluation_id="eval-x", case_id="case-x", run_id="run-x", trajectory_id="trajectory-x")
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ContextTransport(), limits=LiveRunLimits(max_model_requests=1), registry=_test_live_registry(), evaluation_id="eval-x", case_id="case-x", run_id="run-x", trajectory_id="trajectory-x")
     adapter.next_directive(ControllerSnapshot("run-x", task.task_id, ControllerState.REPRODUCE, 0, ControllerBudgetLimits.from_task_constraints(task.constraints), ControllerBudgetState(), HypothesisLedger()))
     assert captured["protocol"]["name"] == "agentic-debugger-live-jsonl"
     assert captured["identity"] == {"evaluation_id": "eval-x", "case_id": "case-x", "run_id": "run-x", "trajectory_id": "trajectory-x"}
@@ -313,11 +363,93 @@ def test_model_request_context_is_complete_bounded_and_identity_scoped():
     assert "budget_state" in captured["controller"]
     assert "hypotheses" in captured["controller"]
     assert "directive_schema" in captured
-    assert "apply_patch" in captured["action_contracts"]
-    assert captured["action_contracts"]["run_reproduction"]["phase"] == {"type": "string", "enum": ["baseline"]}
+    assert set(captured["action_contracts"]) == set(captured["controller"]["allowed_actions"])
+    assert set(captured["action_contracts"]) == {"run_reproduction"}
+    assert captured["action_contracts"]["run_reproduction"] == {
+        "required": ["phase"],
+        "properties": {
+            "phase": {"type": "string", "min_length": 1, "enum": ["baseline"]}
+        },
+        "additional_properties": False,
+    }
     assert captured["controller"]["legal_transition_targets"] == ["Understand", "Failed"]
-    assert captured["directive_schema"]["add_hypothesis"]["constraints"]["confidence"]["enum"] == ["low", "medium", "high"]
+    assert set(captured["directive_schema"]) == {"action", "transition"}
     assert isinstance(captured["history"], list)
+
+
+def test_current_request_reports_protocol_13():
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    captured = {}
+
+    class ProtocolTransport:
+        def request(self, payload, timeout_seconds):
+            captured.update(payload)
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "version check"}}
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=ProtocolTransport(),
+        limits=LiveRunLimits(max_model_requests=1),
+        registry=_test_live_registry(),
+    )
+    adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+
+    assert captured["protocol"]["version"] == "1.3"
+    assert config().to_metadata(LiveRunLimits(max_model_requests=1))["protocol_version"] == "1.3"
+
+
+def test_current_report_validation_rejects_protocol_12_configuration(workspace_parent):
+    report = _single_case_report(_case(workspace_parent, FailAfterFirstTransport()))
+    assert report["configuration"]["protocol_version"] == "1.3"
+    report["configuration"]["protocol_version"] = "1.2"
+
+    with pytest.raises(LiveConfigurationError):
+        validate_live_report(report)
+
+
+def test_transport_request_contract_mutation_does_not_alias_registry_or_global_schema(tmp_path):
+    from agentic_debugger.evaluation import live as live_module
+
+    fixture = ROOT / "agentic_debugger/datasets/curated" / TASK_ID
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(tmp_path))
+    context = DemoToolContext(task=task, workspace=workspace, patch="", probe=None)
+    registry = build_registry(context, pdb_policy=PdbPolicy.DISABLED)
+    captured = []
+
+    class MutatingTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                payload["action_contracts"]["run_reproduction"]["properties"]["phase"]["enum"].append("transport-mutated")
+                payload["directive_schema"]["action"]["required"].append("transport-mutated")
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "mutation check"}}
+
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.STATIC_BASELINE,
+            config=config(),
+            transport=MutatingTransport(),
+            limits=LiveRunLimits(max_model_requests=2),
+            registry=registry,
+        )
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE, 0))
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE, 1))
+
+        assert captured[1]["action_contracts"]["run_reproduction"]["properties"]["phase"]["enum"] == ["baseline"]
+        assert captured[1]["directive_schema"]["action"]["required"] == ["name", "arguments"]
+        assert registry.argument_contracts()["run_reproduction"]["properties"]["phase"] == {
+            "type": "string",
+            "min_length": 1,
+        }
+        assert live_module.LIVE_DIRECTIVE_SCHEMA["action"]["required"] == ["name", "arguments"]
+    finally:
+        workspace.cleanup()
 
 
 def test_state_specific_contract_uses_post_patch_phase_and_authoritative_targets():
@@ -329,12 +461,464 @@ def test_state_specific_contract_uses_post_patch_phase_and_authoritative_targets
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "contract check"}}
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ContextTransport(), limits=LiveRunLimits(max_model_requests=2))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ContextTransport(), limits=LiveRunLimits(max_model_requests=2), registry=_test_live_registry())
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
     adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.VALIDATE, 1, limits, ControllerBudgetState(), HypothesisLedger()))
-    assert captured[1]["action_contracts"]["run_reproduction"]["phase"] == {"type": "string", "enum": ["post_patch"]}
-    assert captured[1]["controller"]["legal_transition_targets"] == ["Understand", "RuntimeEvidence", "Patch", "Done", "Failed"]
+    assert captured[1]["action_contracts"]["run_reproduction"] == {
+        "required": ["phase"],
+        "properties": {
+            "phase": {"type": "string", "min_length": 1, "enum": ["post_patch"]}
+        },
+        "additional_properties": False,
+    }
+    assert captured[1]["controller"]["legal_transition_targets"] == ["Understand", "Patch", "Done", "Failed"]
+
+
+def _gate_snapshot(task, *, reproduced=True, hypothesis=True, confidence=HypothesisConfidence.LOW,
+                   requires_runtime_evidence=False, budget_state=None):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    ledger = HypothesisLedger()
+    if hypothesis:
+        ledger = ledger.add(
+            limits,
+            hypothesis_id="gate-hypothesis",
+            statement="runtime evidence may distinguish the cause",
+            confidence=confidence,
+            requires_runtime_evidence=requires_runtime_evidence,
+        )
+    observation = Observation(
+        "observation-baseline",
+        "action-baseline",
+        "gate-run",
+        task.task_id,
+        ActionName.RUN_REPRODUCTION.value,
+        ObservationStatus.OK,
+        {
+            "dispatch_reason": "ok",
+            "phase": "baseline",
+            "failure_reproduced": reproduced,
+        },
+        "baseline reproduction executed",
+        False,
+    )
+    return ControllerSnapshot(
+        "gate-run",
+        task.task_id,
+        ControllerState.UNDERSTAND,
+        0,
+        limits,
+        budget_state or ControllerBudgetState(),
+        ledger,
+        observation,
+    )
+
+
+class _RuntimeTransitionTransport:
+    def __init__(self):
+        self.payloads = []
+
+    def request(self, payload, timeout_seconds):
+        self.payloads.append(payload)
+        return {
+            "directive": {
+                "kind": "transition",
+                "target_state": "RuntimeEvidence",
+                "reason": "runtime evidence requested",
+            }
+        }
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "allowed"),
+    [
+        ({"reproduced": False}, False),
+        ({"budget_state": ControllerBudgetState(pdb_observations=8)}, False),
+        ({"hypothesis": False}, False),
+        ({"confidence": HypothesisConfidence.MEDIUM}, False),
+        ({"confidence": HypothesisConfidence.LOW}, True),
+        ({"confidence": HypothesisConfidence.HIGH, "requires_runtime_evidence": True}, True),
+    ],
+)
+def test_live_uncertainty_gate_is_machine_enforced(kwargs, allowed):
+    task = DebugTask.from_mapping(
+        json.loads(
+            (ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()
+        )
+    )
+    transport = _RuntimeTransitionTransport()
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=config(),
+        transport=transport,
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    snapshot = _gate_snapshot(task, **kwargs)
+    if allowed:
+        directive = adapter.next_directive(snapshot)
+        assert directive.target_state is ControllerState.RUNTIME_EVIDENCE
+        assert "RuntimeEvidence" in transport.payloads[0]["controller"]["legal_transition_targets"]
+    else:
+        with pytest.raises(LiveModelAdapterError):
+            adapter.next_directive(snapshot)
+        assert "RuntimeEvidence" not in transport.payloads[0]["controller"]["legal_transition_targets"]
+
+
+def test_static_live_policy_does_not_advertise_or_accept_runtime_evidence():
+    task = DebugTask.from_mapping(
+        json.loads(
+            (ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()
+        )
+    )
+    transport = _RuntimeTransitionTransport()
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=transport,
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_gate_snapshot(task))
+    payload = transport.payloads[0]
+    assert "RuntimeEvidence" not in payload["controller"]["legal_transition_targets"]
+    assert not any(name.endswith("pdb_session") for name in payload["action_contracts"])
+
+
+def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_path):
+    from agentic_debugger.evaluation.live import _action_contracts_for_state
+
+    fixture = ROOT / "agentic_debugger/datasets/curated" / TASK_ID
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(tmp_path))
+    context = DemoToolContext(task=task, workspace=workspace, patch="", probe=None)
+    registry = build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY)
+    registered = {name.value for name in registry.names()}
+    pdb_names = {
+        ActionName.START_PDB_SESSION.value,
+        ActionName.GET_STACK_SUMMARY.value,
+        ActionName.GET_FRAME_LOCALS.value,
+        ActionName.SAFE_EVAL_EXPRESSION.value,
+        ActionName.STOP_PDB_SESSION.value,
+    }
+    try:
+        for state in ControllerState:
+            contracts = _action_contracts_for_state(
+                state,
+                registry=registry,
+                policy=DemoPolicy.STATIC_BASELINE,
+                session_active=False,
+                pdb_available=True,
+                pdb_observations_remaining=1,
+            )
+            expected = {
+                action.value
+                for action in allowed_actions_for_state(state)
+            } & registered
+            expected -= pdb_names
+            assert set(contracts) == expected
+            for contract in contracts.values():
+                assert set(contract["required"]) == set(contract["properties"])
+                assert contract["additional_properties"] is False
+
+        before = _action_contracts_for_state(
+            ControllerState.RUNTIME_EVIDENCE,
+            registry=registry,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            session_active=False,
+            pdb_available=True,
+            pdb_observations_remaining=1,
+        )
+        active = _action_contracts_for_state(
+            ControllerState.RUNTIME_EVIDENCE,
+            registry=registry,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            session_active=True,
+            pdb_available=True,
+            pdb_observations_remaining=1,
+        )
+        assert ActionName.START_PDB_SESSION.value in before
+        assert ActionName.GET_STACK_SUMMARY.value not in before
+        assert ActionName.STOP_PDB_SESSION.value not in before
+        assert ActionName.START_PDB_SESSION.value not in active
+        assert ActionName.GET_STACK_SUMMARY.value in active
+        assert ActionName.STOP_PDB_SESSION.value in active
+    finally:
+        workspace.cleanup()
+
+
+def _runtime_budget_snapshot(task, pdb_observations: int):
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    return ControllerSnapshot(
+        "runtime-budget-run",
+        task.task_id,
+        ControllerState.RUNTIME_EVIDENCE,
+        0,
+        limits,
+        ControllerBudgetState(pdb_observations=pdb_observations),
+        HypothesisLedger(),
+    )
+
+
+def _pdb_registry_case(tmp_path):
+    fixture = ROOT / "agentic_debugger/datasets/curated" / TASK_ID
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(tmp_path))
+    context = DemoToolContext(task=task, workspace=workspace, patch="", probe=None)
+    return task, workspace, build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY)
+
+
+def test_zero_pdb_budget_filters_active_observations_but_keeps_stop(tmp_path):
+    task, workspace, registry = _pdb_registry_case(tmp_path)
+    captured = []
+
+    class StopTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "budget check"}}
+
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=StopTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+            registry=registry,
+        )
+        adapter._runtime_transition_authorized = True
+        adapter._pdb_session_active = True
+        adapter.next_directive(_runtime_budget_snapshot(task, task.constraints.max_pdb_observations))
+        actions = set(captured[0]["action_contracts"])
+        observation_actions = {
+            name.value
+            for name in registry.names()
+            if budget_kind_for_action(name) is BudgetKind.PDB_OBSERVATIONS
+        }
+        assert not actions & observation_actions
+        assert ActionName.STOP_PDB_SESSION.value in actions
+    finally:
+        workspace.cleanup()
+
+
+def test_zero_pdb_budget_filters_inactive_start_and_session_actions(tmp_path):
+    task, workspace, registry = _pdb_registry_case(tmp_path)
+    captured = []
+
+    class InactiveTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "budget check"}}
+
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=InactiveTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+            registry=registry,
+        )
+        adapter._runtime_transition_authorized = True
+        adapter.next_directive(_runtime_budget_snapshot(task, task.constraints.max_pdb_observations))
+        actions = set(captured[0]["action_contracts"])
+        assert ActionName.START_PDB_SESSION.value not in actions
+        assert ActionName.STOP_PDB_SESSION.value not in actions
+        assert not any(
+            budget_kind_for_action(ActionName(name)) is BudgetKind.PDB_OBSERVATIONS
+            for name in actions
+        )
+    finally:
+        workspace.cleanup()
+
+
+def test_positive_pdb_budget_preserves_start_observe_stop_lifecycle(tmp_path):
+    task, workspace, registry = _pdb_registry_case(tmp_path)
+    captured = []
+
+    class LifecycleTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "budget check"}}
+
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=LifecycleTransport(),
+            limits=LiveRunLimits(max_model_requests=2),
+            registry=registry,
+        )
+        adapter._runtime_transition_authorized = True
+        adapter.next_directive(_runtime_budget_snapshot(task, 0))
+        before = set(captured[0]["action_contracts"])
+        assert ActionName.START_PDB_SESSION.value in before
+        assert ActionName.GET_STACK_SUMMARY.value not in before
+        assert ActionName.STOP_PDB_SESSION.value not in before
+
+        adapter._pdb_session_active = True
+        adapter.next_directive(_runtime_budget_snapshot(task, 0))
+        active = set(captured[1]["action_contracts"])
+        assert ActionName.START_PDB_SESSION.value not in active
+        assert ActionName.GET_STACK_SUMMARY.value in active
+        assert ActionName.STOP_PDB_SESSION.value in active
+    finally:
+        workspace.cleanup()
+
+
+def test_exhausted_pdb_observation_is_illegal_action_and_recovers_to_stop(tmp_path):
+    task, workspace, registry = _pdb_registry_case(tmp_path)
+    captured = []
+
+    class ExhaustedObservationTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {"directive": {"kind": "action", "name": ActionName.GET_STACK_SUMMARY.value, "arguments": {}}}
+            return {"directive": {"kind": "action", "name": ActionName.STOP_PDB_SESSION.value, "arguments": {}}}
+
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=ExhaustedObservationTransport(),
+            limits=LiveRunLimits(max_model_requests=2, max_retries=1),
+            registry=registry,
+        )
+        adapter._runtime_transition_authorized = True
+        adapter._pdb_session_active = True
+        directive = adapter.next_directive(_runtime_budget_snapshot(task, task.constraints.max_pdb_observations))
+        assert directive.name is ActionName.STOP_PDB_SESSION
+        assert ActionName.GET_STACK_SUMMARY.value not in captured[0]["action_contracts"]
+        assert ActionName.STOP_PDB_SESSION.value in captured[0]["action_contracts"]
+        assert captured[1]["directive_feedback"]["category"] == "illegal_action"
+        assert captured[0]["protocol"]["request_id"] != captured[1]["protocol"]["request_id"]
+        assert captured[0]["protocol"]["transport_attempt_index"] == 1
+        assert captured[1]["protocol"]["transport_attempt_index"] == 2
+        assert adapter.metrics.model_requests == 2
+        assert adapter.metrics.model_responses == 2
+        assert adapter.metrics.retries == 1
+    finally:
+        workspace.cleanup()
+
+
+def test_registry_argument_contract_matches_validator_constraints(tmp_path):
+    fixture = ROOT / "agentic_debugger/datasets/curated" / TASK_ID
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(tmp_path))
+    context = DemoToolContext(task=task, workspace=workspace, patch="", probe=None)
+    registry = build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY)
+    try:
+        contracts = registry.argument_contracts()
+        find_contract = contracts[ActionName.FIND_FUNCTION.value]
+        window_contract = contracts[ActionName.GET_SOURCE_WINDOW.value]
+        hypothesis_contract = contracts[ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value]
+
+        assert find_contract["required"] == ["name", "path"]
+        assert find_contract["properties"]["name"] == {
+            "type": "string",
+            "min_length": 1,
+        }
+        assert find_contract["additional_properties"] is False
+        assert window_contract["properties"]["line"] == {
+            "type": "integer",
+            "minimum": 0,
+        }
+        assert hypothesis_contract["properties"]["confidence"]["enum"] == [
+            item.value for item in HypothesisConfidence
+        ]
+
+        invalid_cases = (
+            (ActionName.FIND_FUNCTION, {"name": "", "path": "demo.py"}),
+            (ActionName.GET_SOURCE_WINDOW, {"path": "demo.py", "line": -1}),
+            (
+                ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
+                {
+                    "hypothesis_id": "h1",
+                    "statement": "root cause",
+                    "target_file": "demo.py",
+                    "target_symbol": "run",
+                    "confidence": "certain",
+                },
+            ),
+            (ActionName.FIND_FUNCTION, {"name": "run"}),
+            (ActionName.FIND_FUNCTION, {"name": "run", "path": "demo.py", "extra": 1}),
+        )
+        for name, arguments in invalid_cases:
+            with pytest.raises(ToolRejectedError):
+                registry.get(name).argument_validator(arguments)
+
+        assert registry.get(ActionName.FIND_FUNCTION).argument_validator(
+            {"name": "run", "path": "demo.py"}
+        ) == {"name": "run", "path": "demo.py"}
+        assert registry.get(ActionName.GET_SOURCE_WINDOW).argument_validator(
+            {"path": "demo.py", "line": 0}
+        ) == {"path": "demo.py", "line": 0}
+        assert registry.get(ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS).argument_validator(
+            {
+                "hypothesis_id": "h1",
+                "statement": "root cause",
+                "target_file": "demo.py",
+                "target_symbol": "run",
+                "confidence": "low",
+            }
+        )["confidence"] == "low"
+    finally:
+        workspace.cleanup()
+
+
+def test_state_illegal_hypothesis_directive_gets_bounded_feedback_and_recovers():
+    task = DebugTask.from_mapping(
+        json.loads(
+            (ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()
+        )
+    )
+    captured = []
+
+    class IllegalHypothesisThenValid:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {
+                    "directive": {
+                        "kind": "add_hypothesis",
+                        "hypothesis_id": "h1",
+                        "statement": "root cause",
+                        "confidence": "low",
+                        "evidence_refs": [],
+                        "requires_runtime_evidence": False,
+                    }
+                }
+            return {
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "Failed",
+                    "reason": "recovered",
+                }
+            }
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=IllegalHypothesisThenValid(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=1),
+        registry=_test_live_registry(),
+    )
+    directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert directive.target_state is ControllerState.FAILED
+    assert captured[1]["directive_feedback"]["category"] == "illegal_action"
+    assert "add_hypothesis" in captured[1]["directive_feedback"]["message"]
 
 
 def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and_identity():
@@ -348,7 +932,7 @@ def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and
             return {"usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}, "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     directive = adapter.next_directive(ControllerSnapshot("retry-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
     assert directive.target_state is ControllerState.FAILED
@@ -363,6 +947,93 @@ def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and
     assert len(adapter.history) == 1
     assert captured[0]["directive_feedback"] is None
     assert captured[1]["directive_feedback"] == {"category": "malformed_directive", "message": "unrecognized target_state", "rejected_transport_attempt": 1}
+
+
+@pytest.mark.parametrize(
+    "bad_kind",
+    [[], {}, None, True, 1, "unknown-kind"],
+    ids=["array", "object", "null", "boolean", "number", "unknown-string"],
+)
+def test_non_string_or_unknown_directive_kind_is_bounded_and_recovers(bad_kind):
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    captured = []
+
+    class BadKindThenValidTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            usage = {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}
+            if len(captured) == 1:
+                return {"usage": usage, "directive": {"kind": bad_kind}}
+            return {
+                "usage": usage,
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "Failed",
+                    "reason": "recovered",
+                },
+            }
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=BadKindThenValidTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=1),
+        registry=_test_live_registry(),
+    )
+    directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+
+    assert directive.target_state is ControllerState.FAILED
+    assert adapter.metrics.model_requests == 2
+    assert adapter.metrics.model_responses == 2
+    assert adapter.metrics.retries == 1
+    assert adapter.metrics.to_mapping()["token_usage"] == {
+        "prompt_tokens": 4,
+        "completion_tokens": 6,
+        "total_tokens": 10,
+        "provider_reported": True,
+        "missing_fields": [],
+    }
+    assert captured[0]["protocol"]["transport_attempt_index"] == 1
+    assert captured[1]["protocol"]["transport_attempt_index"] == 2
+    assert captured[0]["protocol"]["request_id"] != captured[1]["protocol"]["request_id"]
+    assert captured[0]["directive_feedback"] is None
+    feedback = captured[1]["directive_feedback"]
+    assert feedback["category"] == "malformed_directive"
+    assert feedback["message"] == "unrecognized or missing directive 'kind'"
+    assert feedback["rejected_transport_attempt"] == 1
+
+
+def test_non_string_directive_kind_terminates_without_retry_and_retains_usage():
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+
+    class InvalidKindTransport:
+        def request(self, payload, timeout_seconds):
+            return {
+                "usage": {"prompt_tokens": 7, "completion_tokens": 8, "total_tokens": 15},
+                "directive": {"kind": []},
+            }
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=InvalidKindTransport(),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+
+    assert adapter.metrics.termination_reason == "invalid_model_response"
+    assert adapter.metrics.model_requests == 1
+    assert adapter.metrics.model_responses == 1
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.to_mapping()["token_usage"]["total_tokens"] == 15
 
 
 def _snapshot(task, state, model_call_index=0):
@@ -382,7 +1053,7 @@ def test_illegal_action_rejection_carries_category_and_recovers_on_retry():
                 # extract_failing_test is a real ActionName but is only legal in Understand, not Reproduce.
                 return {"directive": {"kind": "action", "name": "extract_failing_test", "arguments": {}}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalActionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalActionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     assert captured[0]["directive_feedback"] is None
@@ -402,7 +1073,7 @@ def test_illegal_transition_rejection_carries_category_and_recovers_on_retry():
                 # Patch is not reachable directly from Reproduce.
                 return {"directive": {"kind": "transition", "target_state": "Patch", "reason": "skip ahead"}}
             return {"directive": {"kind": "transition", "target_state": "Understand", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalTransitionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalTransitionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.UNDERSTAND
     feedback = captured[1]["directive_feedback"]
@@ -419,7 +1090,7 @@ def test_invalid_argument_value_rejection_for_reproduction_phase_and_hypothesis_
             if len(captured) == 1:
                 return {"directive": {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "post_patch"}}}
             return {"directive": {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadPhaseThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadPhaseThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.arguments["phase"] == "baseline"
     feedback = captured[1]["directive_feedback"]
@@ -433,7 +1104,7 @@ def test_invalid_argument_value_rejection_for_reproduction_phase_and_hypothesis_
             if len(captured2) == 1:
                 return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "extreme", "evidence_refs": [], "requires_runtime_evidence": False}}
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadConfidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadConfidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive2 = adapter2.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive2.hypothesis_id == "h1"
     feedback2 = captured2[1]["directive_feedback"]
@@ -450,7 +1121,7 @@ def test_malformed_directive_rejection_for_unknown_kind_and_missing_field():
             if len(captured) == 1:
                 return {"directive": {"kind": "bogus-kind"}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=UnknownKindThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=UnknownKindThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     feedback = captured[1]["directive_feedback"]
@@ -463,7 +1134,7 @@ def test_malformed_directive_rejection_for_unknown_kind_and_missing_field():
             if len(captured2) == 1:
                 return {"directive": {"kind": "transition", "target_state": "Failed"}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingReasonThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingReasonThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     adapter2.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     feedback2 = captured2[1]["directive_feedback"]
     assert feedback2["category"] == "malformed_directive"
@@ -479,7 +1150,7 @@ def test_add_hypothesis_missing_evidence_refs_is_rejected_and_corrected_on_retry
             if len(captured) == 1:
                 return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "requires_runtime_evidence": False}}
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingEvidenceRefsThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingEvidenceRefsThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive.hypothesis_id == "h1"
     assert directive.evidence_refs == ()
@@ -498,7 +1169,7 @@ def test_add_hypothesis_missing_requires_runtime_evidence_is_rejected():
             if len(captured) == 1:
                 return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": []}}
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingRequiresRuntimeEvidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingRequiresRuntimeEvidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     feedback = captured[1]["directive_feedback"]
     assert feedback["category"] == "malformed_directive"
@@ -519,7 +1190,7 @@ def test_hypothesis_evidence_refs_non_array_shapes_are_rejected_not_coerced():
                 if len(captured) == 1:
                     return {"directive": add_hypothesis_directive(bad_evidence_refs)}
                 return {"directive": add_hypothesis_directive([])}
-        adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+        adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
         directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
         assert directive.evidence_refs == (), bad_evidence_refs
         feedback = captured[1]["directive_feedback"]
@@ -538,7 +1209,7 @@ def test_revise_hypothesis_evidence_refs_non_array_shape_is_rejected_not_coerced
             if len(captured) == 1:
                 return {"directive": {"kind": "revise_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": "abc", "requires_runtime_evidence": False}}
             return {"directive": {"kind": "revise_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive.evidence_refs == ()
     feedback = captured[1]["directive_feedback"]
@@ -553,7 +1224,7 @@ def test_hypothesis_valid_json_array_evidence_refs_is_accepted_unchanged():
         def request(self, payload, timeout_seconds):
             captured.append(payload)
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": ["obs-1", "obs-2"], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ValidArrayTransport(), limits=LiveRunLimits(max_model_requests=1, max_retries=0))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ValidArrayTransport(), limits=LiveRunLimits(max_model_requests=1, max_retries=0), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive.evidence_refs == ("obs-1", "obs-2")
     assert captured[0]["directive_feedback"] is None
@@ -568,7 +1239,7 @@ def test_request_instructions_distinguish_null_from_non_null_directive_feedback(
             if len(captured) == 1:
                 return {"directive": {"kind": "bogus-kind"}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert captured[0]["directive_feedback"] is None
     assert captured[1]["directive_feedback"] is not None
@@ -589,7 +1260,7 @@ def test_ambiguous_response_envelope_is_rejected_rather_than_silently_resolved()
                     "directive": {"kind": "transition", "target_state": "Failed", "reason": "nested directive"},
                 }
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AmbiguousThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AmbiguousThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     feedback = captured[1]["directive_feedback"]
@@ -607,7 +1278,7 @@ def test_transport_failure_does_not_carry_forward_prior_directive_rejection_feed
             if len(captured) == 2:
                 raise LiveTransportError("provider unavailable", kind="provider_failure")
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenTransportErrorThenValidTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenTransportErrorThenValidTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     assert captured[0]["directive_feedback"] is None
@@ -622,7 +1293,7 @@ def test_repeating_an_illegal_action_after_feedback_is_measurable_and_terminates
         def request(self, payload, timeout_seconds):
             captured.append(payload)
             return {"directive": {"kind": "action", "name": "extract_failing_test", "arguments": {}}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AlwaysIllegalActionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AlwaysIllegalActionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2), registry=_test_live_registry())
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert adapter.metrics.termination_reason == "invalid_model_response"
@@ -649,7 +1320,7 @@ def test_all_provider_completed_invalid_directives_terminate_as_invalid_model_re
             return {"usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}, "directive": {"kind": "not-a-directive"}}
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1))
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(ControllerSnapshot("invalid-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
@@ -819,7 +1490,7 @@ def test_model_timing_accumulates_transport_only_across_requests_and_retries():
             if calls["count"] == 1:
                 raise LiveTransportError("retry", kind="provider_failure")
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "timed"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=TimedTransport(), limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=1), clock=lambda: now[0])
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=TimedTransport(), limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=1), registry=_test_live_registry(), clock=lambda: now[0])
     snapshot = ControllerSnapshot("timed-run", task.task_id, ControllerState.REPRODUCE, 0, ControllerBudgetLimits.from_task_constraints(task.constraints), ControllerBudgetState(), HypothesisLedger())
     adapter.next_directive(snapshot)
     now[0] += 4.0

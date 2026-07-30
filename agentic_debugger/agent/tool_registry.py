@@ -7,7 +7,7 @@ import math
 import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import Callable, TypeAlias
+from typing import Callable, Mapping, TypeAlias
 
 from agentic_debugger.agent.controller_policy import (
     ActionName,
@@ -276,6 +276,10 @@ class ToolSpec:
     argument_validator: ToolArgumentValidator
     handler: ToolHandler
     version: str = "1"
+    # Live adapters use this declaration to expose the exact argument shape
+    # accepted by the validator. It is optional for older/offline callers,
+    # which may register a private test tool without a wire contract.
+    argument_contract: Mapping[str, object] | None = None
 
     def __post_init__(self) -> None:
         if type(self.name) is not ActionName:
@@ -285,6 +289,16 @@ class ToolSpec:
         if not callable(self.handler):
             raise ToolRegistryError("invalid tool handler")
         _validate_version(self.version)
+        if self.argument_contract is not None:
+            if type(self.argument_contract) is not dict:
+                raise ToolRegistryError("invalid argument contract")
+            try:
+                contract = _detach_json_dict(
+                    self.argument_contract, max_bytes=MAX_TOOL_ARGUMENT_BYTES
+                )
+            except _JsonCopyError as exc:
+                raise ToolRegistryError("invalid argument contract") from exc
+            object.__setattr__(self, "argument_contract", contract)
 
 
 def action_name_from_action(action: Action) -> ActionName | None:
@@ -395,6 +409,21 @@ class ToolRegistry:
 
     def names(self) -> tuple[ActionName, ...]:
         return tuple(spec.name for spec in self.specs)
+
+    def argument_contracts(self) -> dict[str, dict[str, object]]:
+        """Return declared wire contracts for tools that provide one."""
+        contracts: dict[str, dict[str, object]] = {}
+        for spec in self.specs:
+            if spec.argument_contract is None:
+                continue
+            try:
+                contracts[spec.name.value] = _detach_json_dict(
+                    spec.argument_contract,
+                    max_bytes=MAX_TOOL_ARGUMENT_BYTES,
+                )
+            except _JsonCopyError as exc:
+                raise ToolRegistryError("invalid argument contract") from exc
+        return contracts
 
     def get(self, name: ActionName) -> ToolSpec:
         if type(name) is not ActionName:

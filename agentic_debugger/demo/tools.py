@@ -38,7 +38,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
-from agentic_debugger.agent.controller_policy import ActionName, PdbPolicy
+from agentic_debugger.agent.controller_policy import (
+    ActionName,
+    HypothesisConfidence,
+    PdbPolicy,
+)
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import (
     ToolExecutionError,
@@ -127,10 +131,13 @@ def _json_safe(value: Any, label: str) -> Any:
 def _validator(
     required: dict[str, type],
     optional: Optional[dict[str, type]] = None,
+    *,
+    enums: Optional[dict[str, tuple[object, ...]]] = None,
 ) -> Callable[[dict[str, object]], dict[str, object]]:
     """Build a strict argument validator that rejects unknown keys."""
 
     optional = optional or {}
+    enums = enums or {}
     known = set(required) | set(optional)
 
     def validate(arguments: dict[str, object]) -> dict[str, object]:
@@ -152,8 +159,30 @@ def _validator(
                 raise _safe_rejection(f"argument {name} must be non-empty")
             if expected is int and value < 0:
                 raise _safe_rejection(f"argument {name} must be non-negative")
+            if name in enums and value not in enums[name]:
+                raise _safe_rejection(f"argument {name} has an unsupported value")
         return dict(arguments)
 
+    def type_name(expected: type) -> str:
+        return {str: "string", int: "integer", bool: "boolean"}.get(
+            expected, expected.__name__
+        )
+
+    properties = {}
+    for name, expected in {**required, **optional}.items():
+        constraint = {"type": type_name(expected)}
+        if expected is str:
+            constraint["min_length"] = 1
+        if expected is int:
+            constraint["minimum"] = 0
+        if name in enums:
+            constraint["enum"] = list(enums[name])
+        properties[name] = constraint
+    validate.argument_contract = {  # type: ignore[attr-defined]
+        "required": list(required),
+        "properties": properties,
+        "additional_properties": False,
+    }
     return validate
 
 
@@ -324,7 +353,13 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
                 context.record_error(action.name, exc)
                 raise
 
-        return ToolSpec(name, validator, guarded, version="demo-1")
+        return ToolSpec(
+            name,
+            validator,
+            guarded,
+            version="demo-1",
+            argument_contract=getattr(validator, "argument_contract", {}),
+        )
 
     # -- reproduction and tests -------------------------------------------
 
@@ -614,7 +649,10 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
                         "target_file": str,
                         "target_symbol": str,
                         "confidence": str,
-                    }
+                    },
+                    enums={
+                        "confidence": tuple(item.value for item in HypothesisConfidence)
+                    },
                 ),
                 handle_express_hypothesis,
             ),

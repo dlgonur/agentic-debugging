@@ -316,6 +316,7 @@ def _canonicalize_registry(registry: object) -> ToolRegistry:
                 argument_validator=spec.argument_validator,
                 handler=spec.handler,
                 version=spec.version,
+                argument_contract=spec.argument_contract,
             ))
         except Exception:
             _input("registry")

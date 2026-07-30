@@ -7,13 +7,27 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Mapping, Protocol
 from agentic_debugger.agent.controller import ControllerRunConfig, ControllerRunResult, ControllerStopReason, DeterministicController
-from agentic_debugger.agent.controller_policy import ActionName, ControllerBudgetLimits, ControllerBudgetState, HypothesisConfidence, HypothesisLedger, HypothesisStatus
+from agentic_debugger.agent.controller_policy import (
+    ActionName,
+    BudgetKind,
+    ControllerBudgetLimits,
+    ControllerBudgetState,
+    HypothesisConfidence,
+    HypothesisLedger,
+    HypothesisStatus,
+    PdbGateContext,
+    PdbPolicy,
+    allowed_actions_for_state,
+    budget_kind_for_action,
+    decide_pdb_access,
+)
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
 from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
 from agentic_debugger.demo.catalog import scenario_for
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.runner import CURATED_RELATIVE_ROOT, localization_record
+from agentic_debugger.agent.tool_registry import MAX_TOOL_ARGUMENT_BYTES, ToolRegistry, _detach_json_dict
 from agentic_debugger.demo.tools import DemoToolContext, build_registry, legal_reproduction_phases, prepare_pdb_probe
 from agentic_debugger.evaluation.runner import bounded_error, load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
@@ -52,7 +66,7 @@ class LiveModelAdapterError(ModelAdapterError):
         self.detail = text if len(text) <= MAX_REJECTION_DETAIL_CHARS else text[:MAX_REJECTION_DETAIL_CHARS - 3] + "..."
 
 LIVE_SCHEMA_VERSION = "1.0"
-LIVE_PROTOCOL_VERSION = "1.2"
+LIVE_PROTOCOL_VERSION = "1.3"
 LIVE_CONFIG_SCHEMA_VERSION = "1.0"
 MAX_MODEL_RESPONSE_BYTES = 1_048_576
 MAX_COMMAND_ARGUMENTS = 32
@@ -63,8 +77,6 @@ LIVE_DIRECTIVE_SCHEMA={
     "revise_hypothesis":{"kind":"revise_hypothesis","required":["hypothesis_id","statement","confidence","evidence_refs","requires_runtime_evidence"],"constraints":{"confidence":{"type":"string","enum":[item.value for item in HypothesisConfidence]}}},
     "set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"],"constraints":{"status":{"type":"string","enum":[item.value for item in HypothesisStatus if item is not HypothesisStatus.ACTIVE]}}},
 }
-LIVE_ACTION_CONTRACTS={ActionName.RUN_REPRODUCTION.value:{"phase":{"type":"string","enum":[]}},ActionName.RUN_REGRESSION_TESTS.value:{},ActionName.CLASSIFY_OUTCOME.value:{},ActionName.FIND_FUNCTION.value:{"name":"string","path":"string"},ActionName.GET_SOURCE_WINDOW.value:{"path":"string","line":"integer"},ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value:{"hypothesis_id":"string","statement":"string","target_file":"string","target_symbol":"string","confidence":{"type":"string","enum":[item.value for item in HypothesisConfidence]}},ActionName.APPLY_PATCH.value:{"patch":"unified-diff string"},ActionName.REVERT_PATCH.value:{},ActionName.SYNTAX_CHECK.value:{},ActionName.START_PDB_SESSION.value:{},ActionName.GET_STACK_SUMMARY.value:{},ActionName.GET_FRAME_LOCALS.value:{"frame_id":"integer","pause_generation":"integer"},ActionName.SAFE_EVAL_EXPRESSION.value:{"frame_id":"integer","pause_generation":"integer","expression":"string"},ActionName.STOP_PDB_SESSION.value:{}}
-
 class LiveCaseStatus(str, Enum):
     RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
 
@@ -263,14 +275,101 @@ def _require_field(value: Mapping[str, Any], key: str) -> Any:
     except (KeyError, TypeError):
         raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, f"missing '{key}'") from None
 
-def _action_contracts_for_state(state: ControllerState) -> dict[str, dict[str, Any]]:
-    contracts = {name: dict(arguments) for name, arguments in LIVE_ACTION_CONTRACTS.items()}
-    contracts[ActionName.RUN_REPRODUCTION.value] = {
-        "phase": {"type": "string", "enum": list(legal_reproduction_phases(state))}
-    }
-    return contracts
+_PDB_ACTIONS = frozenset({
+    ActionName.START_PDB_SESSION,
+    ActionName.GET_STACK_SUMMARY,
+    ActionName.GET_FRAME,
+    ActionName.GET_FRAME_LOCALS,
+    ActionName.SAFE_EVAL_EXPRESSION,
+    ActionName.INSPECT_CALLER_FRAME,
+    ActionName.STOP_PDB_SESSION,
+})
+_SESSION_ACTIONS = frozenset({
+    ActionName.GET_STACK_SUMMARY,
+    ActionName.GET_FRAME,
+    ActionName.GET_FRAME_LOCALS,
+    ActionName.SAFE_EVAL_EXPRESSION,
+    ActionName.INSPECT_CALLER_FRAME,
+    ActionName.STOP_PDB_SESSION,
+})
 
-def _validate_enum_constrained_arguments(name: ActionName, arguments: Mapping[str, Any], state: ControllerState) -> None:
+
+def _directive_schema_for_state(state: ControllerState) -> dict[str, dict[str, Any]]:
+    """Expose only directive kinds the deterministic controller can apply."""
+
+    kinds = {"action", "transition"}
+    if state is ControllerState.UNDERSTAND:
+        kinds.update({"add_hypothesis", "revise_hypothesis", "set_hypothesis_status"})
+    elif state is ControllerState.RUNTIME_EVIDENCE:
+        kinds.update({"revise_hypothesis", "set_hypothesis_status"})
+    order = (
+        "action",
+        "transition",
+        "add_hypothesis",
+        "revise_hypothesis",
+        "set_hypothesis_status",
+    )
+    return {
+        kind: _detach_json_dict(
+            LIVE_DIRECTIVE_SCHEMA[kind],
+            max_bytes=MAX_TOOL_ARGUMENT_BYTES,
+        )
+        for kind in order
+        if kind in kinds
+    }
+
+
+def _action_contracts_for_state(
+    state: ControllerState,
+    *,
+    registry: ToolRegistry,
+    policy: DemoPolicy | None = None,
+    session_active: bool = False,
+    pdb_available: bool = True,
+    pdb_observations_remaining: int | None = None,
+) -> dict[str, dict[str, Any]]:
+    """Return the effective contract derived from the supplied registry."""
+
+    if type(registry) is not ToolRegistry:
+        raise LiveConfigurationError("live tool registry is required")
+    contracts = registry.argument_contracts()
+    registered = set(registry.names())
+    effective = set(allowed_actions_for_state(state)) & registered
+    if policy is DemoPolicy.STATIC_BASELINE or not pdb_available:
+        effective -= _PDB_ACTIONS
+    if state is ControllerState.RUNTIME_EVIDENCE:
+        if session_active:
+            effective.discard(ActionName.START_PDB_SESSION)
+        else:
+            effective -= _SESSION_ACTIONS
+    if pdb_observations_remaining is not None and pdb_observations_remaining <= 0:
+        effective = {
+            action
+            for action in effective
+            if budget_kind_for_action(action) is not BudgetKind.PDB_OBSERVATIONS
+        }
+        if not session_active:
+            effective.discard(ActionName.START_PDB_SESSION)
+    result: dict[str, dict[str, Any]] = {}
+    for action in ActionName:
+        if action not in effective or action.value not in contracts:
+            continue
+        result[action.value] = dict(contracts[action.value])
+    if ActionName.RUN_REPRODUCTION.value in result:
+        properties = result[ActionName.RUN_REPRODUCTION.value].get("properties")
+        if not isinstance(properties, Mapping) or "phase" not in properties:
+            raise LiveConfigurationError("registry run_reproduction contract is not validator-derived")
+        phase = dict(properties["phase"])
+        phase["enum"] = list(legal_reproduction_phases(state))
+        properties = dict(properties)
+        properties["phase"] = phase
+        result[ActionName.RUN_REPRODUCTION.value]["properties"] = properties
+    return _detach_json_dict(result, max_bytes=MAX_TOOL_ARGUMENT_BYTES)
+def _validate_enum_constrained_arguments(
+    name: ActionName,
+    arguments: Mapping[str, Any],
+    contracts: Mapping[str, Mapping[str, Any]],
+) -> None:
     """Reject an argument value outside its advertised, state-specific enum.
 
     Only arguments whose contract already declares an ``enum`` (currently
@@ -278,13 +377,23 @@ def _validate_enum_constrained_arguments(name: ActionName, arguments: Mapping[st
     ``_action_contracts_for_state`` already advertises to the model, so the
     contract stays the single source of truth.
     """
-    contract = _action_contracts_for_state(state).get(name.value, {})
-    for argument_name, spec in contract.items():
+    contract = contracts.get(name.value, {})
+    properties = contract.get("properties", contract)
+    for argument_name, spec in properties.items():
         if isinstance(spec, Mapping) and "enum" in spec and arguments.get(argument_name) not in spec["enum"]:
             raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, f"'{argument_name}' must be one of {list(spec['enum'])}")
 
-def _legal_transition_targets(state: ControllerState) -> list[str]:
-    return [candidate.value for candidate in ControllerState if candidate in TRANSITION_GRAPH[state]]
+def _legal_transition_targets(
+    state: ControllerState,
+    *,
+    pdb_transition_allowed: bool = True,
+) -> list[str]:
+    return [
+        candidate.value
+        for candidate in ControllerState
+        if candidate in TRANSITION_GRAPH[state]
+        and (candidate is not ControllerState.RUNTIME_EVIDENCE or pdb_transition_allowed)
+    ]
 
 def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
     """Unwrap the provider envelope without silently guessing when it is ambiguous.
@@ -301,10 +410,36 @@ def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
         raise _rejected(DirectiveRejectionCategory.AMBIGUOUS_ENVELOPE, "response has both a top-level 'kind' and a nested 'directive'")
     return response["directive"] if wrapped else response
 
-def _parse(value: Any, snapshot: ControllerSnapshot) -> ModelDirective:
+def _parse(
+    value: Any,
+    snapshot: ControllerSnapshot,
+    *,
+    action_contracts: Mapping[str, Mapping[str, Any]] | None = None,
+    legal_transition_targets: set[str] | None = None,
+    directive_kinds: set[str] | None = None,
+) -> ModelDirective:
     if not isinstance(value, Mapping):
         raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "directive must be a JSON object")
     kind = value.get("kind")
+    # ``kind`` is provider-controlled JSON.  Check its shape before using it
+    # in set membership so arrays and objects cannot escape the bounded
+    # provider-completed invalid-directive layer as unhashable values.
+    if type(kind) is not str:
+        raise _rejected(
+            DirectiveRejectionCategory.MALFORMED_DIRECTIVE,
+            "unrecognized or missing directive 'kind'",
+        )
+    known_kinds = set(LIVE_DIRECTIVE_SCHEMA)
+    if kind not in known_kinds:
+        raise _rejected(
+            DirectiveRejectionCategory.MALFORMED_DIRECTIVE,
+            "unrecognized or missing directive 'kind'",
+        )
+    if directive_kinds is not None and kind not in directive_kinds:
+        raise _rejected(
+            DirectiveRejectionCategory.ILLEGAL_ACTION,
+            f"directive kind '{kind}' is not legal in state '{snapshot.state.value}'",
+        )
     if kind == "action":
         arguments = _require_field(value, "arguments")
         if not isinstance(arguments, Mapping):
@@ -313,9 +448,13 @@ def _parse(value: Any, snapshot: ControllerSnapshot) -> ModelDirective:
             name = ActionName(_require_field(value, "name"))
         except ValueError:
             raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized action name") from None
-        if name not in snapshot.allowed_actions:
+        effective_actions = {
+            ActionName(name) for name in action_contracts
+        } if action_contracts is not None else set(snapshot.allowed_actions)
+        if name not in effective_actions:
             raise _rejected(DirectiveRejectionCategory.ILLEGAL_ACTION, f"action '{name.value}' is not allowed in state '{snapshot.state.value}'")
-        _validate_enum_constrained_arguments(name, arguments, snapshot.state)
+        if action_contracts is not None:
+            _validate_enum_constrained_arguments(name, arguments, action_contracts)
         try:
             return ActionDirective(name, dict(arguments))
         except ModelAdapterError:
@@ -326,7 +465,9 @@ def _parse(value: Any, snapshot: ControllerSnapshot) -> ModelDirective:
         except ValueError:
             raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized target_state") from None
         reason = _require_field(value, "reason")
-        if target not in TRANSITION_GRAPH[snapshot.state]:
+        if legal_transition_targets is not None and target.value not in legal_transition_targets:
+            raise _rejected(DirectiveRejectionCategory.ILLEGAL_TRANSITION, f"'{target.value}' is not reachable from '{snapshot.state.value}'")
+        if legal_transition_targets is None and target not in TRANSITION_GRAPH[snapshot.state]:
             raise _rejected(DirectiveRejectionCategory.ILLEGAL_TRANSITION, f"'{target.value}' is not reachable from '{snapshot.state.value}'")
         try:
             return TransitionDirective(target, reason)
@@ -362,17 +503,96 @@ def _parse(value: Any, snapshot: ControllerSnapshot) -> ModelDirective:
     raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized or missing directive 'kind'")
 
 class LiveModelAdapter:
-    def __init__(self,*,task,policy,config,transport,limits,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic):
-        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]
+    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic):
+        if type(registry) is not ToolRegistry:
+            raise LiveConfigurationError("live tool registry is required")
+        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]
+        self._failure_reproduced = False
+        self._pdb_session_active = False
+        self._runtime_transition_authorized = False
     @staticmethod
     def _hypotheses(snapshot):
         return [{"hypothesis_id":item.hypothesis_id,"statement":item.statement,"confidence":item.confidence.value,"status":item.status.value,"evidence_refs":list(item.evidence_refs),"requires_runtime_evidence":item.requires_runtime_evidence,"revision":item.revision} for item in snapshot.hypotheses.hypotheses]
+    def _observe_snapshot(self, snapshot: ControllerSnapshot) -> None:
+        observation = snapshot.last_observation
+        if observation is None or observation.status.value != "ok":
+            return
+        payload = observation.payload
+        if observation.name == ActionName.RUN_REPRODUCTION.value and payload.get("phase") == "baseline":
+            if type(payload.get("failure_reproduced")) is bool:
+                self._failure_reproduced = payload["failure_reproduced"]
+        elif observation.name == ActionName.START_PDB_SESSION.value:
+            self._pdb_session_active = payload.get("state") == "paused"
+        elif observation.name == ActionName.STOP_PDB_SESSION.value:
+            self._pdb_session_active = payload.get("stopped") is True
+            if self._pdb_session_active:
+                self._pdb_session_active = False
+
+    def _pdb_gate(self, snapshot: ControllerSnapshot) -> object:
+        active = snapshot.hypotheses.active_hypotheses()
+        source_state = snapshot.state
+        if source_state is ControllerState.RUNTIME_EVIDENCE:
+            # RuntimeEvidence is reached only after an authorized transition
+            # from Understand. This keeps the accepted gate's source-state
+            # semantics while preserving the lifecycle state in the request.
+            source_state = ControllerState.UNDERSTAND
+        return decide_pdb_access(
+            PdbPolicy.DISABLED
+            if self.policy is DemoPolicy.STATIC_BASELINE
+            else PdbPolicy.ON_UNCERTAINTY,
+            PdbGateContext(
+                source_state=source_state,
+                failure_reproduced=self._failure_reproduced,
+                remaining_pdb_observations=max(
+                    0,
+                    snapshot.budget_limits.max_pdb_observations
+                    - snapshot.budget_state.pdb_observations,
+                ),
+                failed_patch_attempts=snapshot.budget_state.patch_attempts,
+                active_hypothesis=active[0] if active else None,
+            ),
+        )
+
+    def _runtime_transition_allowed(self, snapshot: ControllerSnapshot) -> bool:
+        if self.policy is DemoPolicy.STATIC_BASELINE:
+            return False
+        return bool(self._pdb_gate(snapshot).allowed)
+
+    def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
+        pdb_observations_remaining = max(
+            0,
+            snapshot.budget_limits.max_pdb_observations
+            - snapshot.budget_state.pdb_observations,
+        )
+        pdb_available = (
+            self.policy is not DemoPolicy.STATIC_BASELINE
+            and (
+                snapshot.state is ControllerState.RUNTIME_EVIDENCE
+                and self._runtime_transition_authorized
+                or snapshot.state is not ControllerState.RUNTIME_EVIDENCE
+            )
+        )
+        return _action_contracts_for_state(
+            snapshot.state,
+            registry=self.registry,
+            policy=self.policy,
+            session_active=self._pdb_session_active,
+            pdb_available=pdb_available,
+            pdb_observations_remaining=pdb_observations_remaining,
+        )
     def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
-        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":LIVE_DIRECTIVE_SCHEMA,"action_contracts":_action_contracts_for_state(snapshot.state),"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":[x.value for x in snapshot.allowed_actions],"legal_transition_targets":_legal_transition_targets(snapshot.state),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        contracts = self._effective_contract(snapshot)
+        runtime_allowed = self._runtime_transition_allowed(snapshot)
+        effective_actions = list(contracts)
+        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
     def next_directive(self,snapshot):
+        self._observe_snapshot(snapshot)
+        if snapshot.state is ControllerState.RUNTIME_EVIDENCE and not self._runtime_transition_authorized:
+            self._runtime_transition_authorized = self._runtime_transition_allowed(snapshot)
+        effective_contract = self._effective_contract(snapshot)
         logical_request_index = snapshot.model_call_index
-        history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":[x.value for x in snapshot.allowed_actions],"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
+        history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
         self.history.append(history_entry)
         del self.history[:-32]
         rejection: dict[str, Any] | None = None
@@ -394,7 +614,10 @@ class LiveModelAdapter:
                 self.metrics.model_responses+=1
                 self.metrics.usage(response.get("usage"))
                 raw_directive=_resolve_raw_directive(response)
-                directive=_parse(raw_directive,snapshot)
+                contracts = effective_contract
+                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._runtime_transition_allowed(snapshot))))
+                if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
+                    self._runtime_transition_authorized = True
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
                 return directive
             except LiveTransportError as exc:
@@ -513,9 +736,10 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
         workspace=TaskWorkspace(str(repo/CURATED_RELATIVE_ROOT/task_id),parent_dir=str(case_dir))
         probe=prepare_pdb_probe(repo/CURATED_RELATIVE_ROOT/task_id,scenario_for(task_id),case_dir) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
         context=DemoToolContext(task=task,workspace=workspace,patch="",probe=probe)
-        adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id)
+        registry=build_registry(context,pdb_policy=pdb_policy_for(policy))
+        adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id)
         metrics=adapter.metrics
-        controller=DeterministicController(build_registry(context,pdb_policy=pdb_policy_for(policy)),adapter,ControllerRunConfig(max_model_calls=limits.max_controller_steps))
+        controller=DeterministicController(registry,adapter,ControllerRunConfig(max_model_calls=limits.max_controller_steps))
         try:
             result=controller.run(ControllerSnapshot(run_id,task_id,ControllerState.REPRODUCE,0,ControllerBudgetLimits.from_task_constraints(task.constraints),ControllerBudgetState(),HypothesisLedger()))
         except KeyboardInterrupt:

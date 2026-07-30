@@ -207,6 +207,54 @@ def test_tool_spec_and_registry_are_strict_and_immutable():
     assert extended.names() == (ActionName.RUN_TESTS, ActionName.GET_FAILURE_TRACE)
 
 
+def test_tool_contracts_are_fully_detached_at_constructor_and_accessor_boundaries():
+    source_contract = {
+        "required": ["value"],
+        "properties": {
+            "value": {
+                "type": "string",
+                "enum": ["first", "second"],
+            }
+        },
+        "additional_properties": False,
+    }
+    subject = ToolSpec(
+        ActionName.RUN_TESTS,
+        lambda args: args,
+        lambda _action, _args: ToolResult(ObservationStatus.OK, {}, "ok"),
+        argument_contract=source_contract,
+    )
+
+    source_contract["properties"]["value"]["enum"].append("caller-mutated")
+    source_contract["required"].append("caller-mutated")
+    assert subject.argument_contract == {
+        "required": ["value"],
+        "properties": {
+            "value": {"type": "string", "enum": ["first", "second"]}
+        },
+        "additional_properties": False,
+    }
+
+    registry = ToolRegistry((subject,))
+    first = registry.argument_contracts()
+    first[ActionName.RUN_TESTS.value]["properties"]["value"]["enum"].append(
+        "accessor-mutated"
+    )
+    first[ActionName.RUN_TESTS.value]["required"].append("accessor-mutated")
+    second = registry.argument_contracts()
+
+    assert second == {
+        ActionName.RUN_TESTS.value: {
+            "required": ["value"],
+            "properties": {
+                "value": {"type": "string", "enum": ["first", "second"]}
+            },
+            "additional_properties": False,
+        }
+    }
+    assert subject.argument_contract == second[ActionName.RUN_TESTS.value]
+
+
 def test_dispatch_success_detaches_at_each_boundary_and_correlates():
     original = {"nested": [1]}
     seen = {}

@@ -76,11 +76,12 @@ repetition, and limit configuration before any comparison is attempted.
 
 The model command receives a bounded JSON request containing protocol/version,
 evaluation/case/run/trajectory identity, task context, policy, controller
-state, allowed actions, state-specific action contracts, authoritative legal
+state, effective allowed actions, state-specific action contracts, authoritative legal
 transition targets, budget limits/state, hypotheses, last observation, a
-`directive_feedback` field, and up to 32 bounded history entries. The live
-wire protocol is version 1.2; version 1.1 and earlier must not be interpreted
-as having the `directive_feedback` field or its meaning. Each request has a
+`directive_feedback` field, and up to 32 bounded history entries. The current
+live wire protocol is version 1.3. Protocol 1.2 introduced the bounded
+`directive_feedback` field; historical 1.2 evidence must not be interpreted as
+advertising the current 1.3 effective-contract semantics. Each request has a
 globally unique request ID plus explicit logical model-call and
 transport-attempt indexes. A retry changes the transport-attempt index and
 request ID while retaining one bounded history entry for the logical call.
@@ -89,6 +90,38 @@ Validate advertises only `post_patch`. Enum-backed confidence and status
 fields expose their accepted values. Tool rejections retain the
 `dispatch_reason` and may include a bounded, redacted diagnostic; arbitrary
 exception text is not forwarded.
+
+The effective action contract is authoritative for each request. Every
+protocol-1.3 request is built from the exact `ToolRegistry` supplied to both
+the live adapter and deterministic controller; there is no registry-less
+contract fallback. Its action names are the intersection of the
+controller-state allowlist, the actual registered live tool names, policy
+availability, and the current PDB session lifecycle. Each registered live tool declares the argument contract used by
+its validator, including required/optional fields, exact types, non-empty
+string and non-negative integer constraints, enum values, and rejection of
+additional properties; unregistered controller actions are not advertised. Before a
+PDB session starts, stack/frame/evaluation/stop actions are absent. While a
+session is active, `start_pdb_session` is absent and only lifecycle-valid
+observations and stop operations are exposed. When the remaining PDB
+observation budget is zero, all PDB observation-consuming actions disappear
+from the contract; an active session still exposes `stop_pdb_session` for
+cleanup. Directive kinds are likewise
+state-scoped: hypothesis add/revise/status directives appear only where the
+controller can apply them.
+
+`RuntimeEvidence` is not a model-selected shortcut. The live adapter calls the
+accepted `decide_pdb_access` policy function before permitting a transition
+into that state. The static policy always denies it. The uncertainty policy
+requires a reproduced failure, remaining PDB budget, an active hypothesis,
+and either low confidence or `requires_runtime_evidence=true`. The same
+decision is used for the request's legal transition targets, so a provider
+cannot bypass the gate by returning a hidden transition. Protocol 1.3 is the
+R5 wire version: it introduces policy-scoped effective directive contracts,
+state-scoped directive schemas, nested validator-derived argument contracts,
+and machine-enforced PDB transition availability. It preserves protocol-1.2
+request IDs, accounting fields, feedback categories, and other compatible
+fields. Historical protocol-1.2 evidence remains historical and is not
+relabelled.
 
 The provider-neutral command convention is: a transport/process/network
 failure may use a nonzero command exit; a provider completion with an invalid
@@ -111,8 +144,10 @@ raw provider text — so a non-null `directive_feedback` on a retry is safe to
 forward: `{"category": <one of the five rejection categories below>,
 "message": <a bounded, pre-authored string identifying the specific problem>,
 "rejected_transport_attempt": <the 1-based attempt that was rejected>}`. The
-five rejection categories are `illegal_action` (a real action name not legal
-in the current controller state), `illegal_transition` (a real target state
+five rejection categories are `illegal_action` (a recognized action name or
+directive kind that is illegal in the current controller state, including
+state-illegal `add_hypothesis`, `revise_hypothesis`, or
+`set_hypothesis_status` directives), `illegal_transition` (a real target state
 not reachable from the current state), `invalid_argument_value` (a value that
 fails a declared argument contract, e.g. an out-of-enum
 `run_reproduction.phase` or hypothesis `confidence`/`status`),
