@@ -1,23 +1,23 @@
 {
   "manifest_schema_version": "1.0",
-  "manifest_id": "quixbugs-gcd-smoke-v1",
+  "manifest_id": "quixbugs-kheapsort-smoke-v1",
   "dataset": "QuixBugs",
-  "task_id": "quixbugs-gcd-smoke-v1",
+  "task_id": "quixbugs-kheapsort-smoke-v1",
   "authority": {
     "official_repository": "https://github.com/jkoppel/QuixBugs",
     "official_repository_revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
     "default_branch": "master"
   },
   "target": {
-    "algorithm": "gcd",
+    "algorithm": "kheapsort",
     "language": "python",
-    "buggy_path": "python_programs/gcd.py",
-    "corrected_path": "correct_python_programs/gcd.py",
-    "pytest_path": "python_testcases/test_gcd.py",
+    "buggy_path": "python_programs/kheapsort.py",
+    "corrected_path": "correct_python_programs/kheapsort.py",
+    "pytest_path": "python_testcases/test_kheapsort.py",
     "support_paths": [
       "conftest.py",
       "python_testcases/load_testdata.py",
-      "json_testcases/gcd.json"
+      "json_testcases/kheapsort.json"
     ],
     "selected_cwd": "."
   },
@@ -41,10 +41,12 @@
     "workspace_writes": "single-owned-host-backed-bind-mount"
   },
   "oracle": {
-    "bug_category": "off-by-argument-order",
-    "target_symbols": ["gcd"],
-    "root_cause_summary": "gcd(a % b, b) never advances b toward the base case, so every case but b == 0 recurses forever.",
-    "runtime_evidence_hint": "RecursionError on every non-trivial (a, b) pair."
+    "bug_category": "wrong-loop-range",
+    "target_symbols": [
+      "kheapsort"
+    ],
+    "root_cause_summary": "the main loop iterates `for x in arr:` instead of `for x in arr[k:]:`, re-pushing the first k elements that already seeded the heap and skipping the intended pushpop count.",
+    "runtime_evidence_hint": "wrong output length/order for k > 0, since the first k elements are pushed onto the heap twice."
   },
   "licensing": {
     "license": "MIT",
@@ -54,16 +56,15 @@
     "authorized_use": "local-non-redistributed-research-execution"
   },
   "test_data": {
-    "source_path": "json_testcases/gcd.json",
-    "case_count": 6,
+    "source_path": "json_testcases/kheapsort.json",
+    "case_count": 4,
     "baseline_expected_pass_count": 1,
-    "baseline_expected_fail_count": 5,
-    "note": "The buggy python_programs/gcd.py computes gcd(a % b, b); b never changes across recursive calls, so only the trivial b==0 case ([17, 0] -> 17) passes on the buggy baseline and every other case recurses to RecursionError. This is real upstream dataset behavior, not synthesized or curated."
+    "baseline_expected_fail_count": 3,
+    "note": "3 of 4 official parametrized cases fail on the buggy baseline (the k=0 case still passes since arr[0:] == arr); real upstream data, confirmed by a live pytest run."
   },
   "unresolved_assumptions": [
-    "Only 1 of 6 gcd parametrized cases passes on the buggy baseline, so tests.pass_to_pass has exactly 1 entry under the schema's relaxed >=1 floor (agentic_debugger/evaluation/task_schema.py, lowered from >=2 specifically to accommodate this real external-dataset shape without fabricating a second passing node).",
-    "conftest.py, python_testcases/load_testdata.py, and json_testcases/gcd.json are non-target support files required for pytest collection; they are acquired as part of the whole pinned repository rather than individually curated.",
     "Python 3.10.12 (the system interpreter already present in the approved Ubuntu-22.04 WSL distro) is used because QuixBugs' README does not pin an exact Python version; pytest is pinned to 7.4.4 and both are recorded in the environment fingerprint.",
-    "Exact resource-profile byte/second values were sized empirically against the real gcd/pytest workload (peak RSS ~27MB, wall time <0.1s) and are additionally live self-tested for enforcement immediately before the real smoke runs; they are not metadata-only claims."
+    "conftest.py and python_testcases/load_testdata.py are non-target support files required for pytest collection; they are acquired as part of the whole pinned repository rather than individually curated.",
+    "Exact resource-profile byte/second values were sized empirically against the real gcd/pytest workload (peak RSS ~27MB, wall time <0.1s) and are additionally live self-tested for enforcement immediately before each real task runs; they are not metadata-only claims. The same profile is reused unmodified across all eight-task-baseline tasks since this task's baseline/oracle wall time was also sub-second in reconnaissance."
   ]
 }

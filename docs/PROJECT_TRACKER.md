@@ -308,6 +308,60 @@ Notes:
 - [x] Offline PDB-policy directive-path audit (Task 10B-R4; completed without live/model call)
 - [x] Task 10B-R5 — Policy-Scoped Live Contract Repair v1 (commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`; protocol `1.3`; final audit accepted)
 - [x] Resource-Limited QuixBugs Fallback Real Smoke v1 (baseline `96526fc`; branch `feature/quixbugs-resource-limited-smoke-v1`)
+- [x] QuixBugs Eight-Task Gold Baseline v1 (baseline `4063fa4`; branch `feature/quixbugs-eight-task-baseline-v1`)
+
+### QuixBugs Eight-Task Gold Baseline v1
+
+Expands the accepted single-task `gcd` smoke into a reproducible eight-task
+no-model baseline on the same pinned revision
+`4257f44b0ff1181dedaedee6a447e133219fcebf`, reusing the adapter, WSL runner,
+resource profile, environment, source checkout, patch lifecycle, and
+`EvaluationVerifier` unmodified in behavior. Validates dataset eligibility,
+gold patches, verifier behavior, runtime stability, and evidence quality —
+does not evaluate a model or PDB.
+
+- Generalization: `agentic_debugger/quixbugs/adapter.py`'s manifest validation
+  and `to_debug_task()` were narrowly generalized from a literal `"gcd"` pin
+  to a derived `quixbugs-<algorithm>-smoke-v1` identity with fail-closed
+  path-naming consistency checks and a new required per-task `oracle` manifest
+  section. All 50 original adapter tests plus 13 new generalization tests
+  pass (63 total); the final full unit suite passed with 1952 passed /
+  2 skipped.
+- Selection: deterministic alphabetical order over the pinned repository's
+  `json_testcases`-backed test files (excluding `gcd`), then formal execution
+  through the resource-limited runner. 11 unique candidates executed through
+  the resource-limited runner (8 selected reaching the `EvaluationVerifier`
+  + 3 excluded). Excluded:
+  `bitcount` and `find_first_in_sorted` (discovery-stage — buggy baseline
+  never terminates for at least one case — safely killed by the enforced
+  CPU-time/wall-clock limits, not a hang on the host; tests ran through the
+  resource-limited runner but did not reach the `EvaluationVerifier`) and
+  `get_factors` (pre-verifier schema-construction stage — 11 collected nodes
+  push `verifier_command_count` to 26, past
+  `task_schema.Constraints.max_test_runs`'s `[1, 20]` range — a
+  schema-representability limit, not weakened; preflight/discovery/oracle/
+  gold-patch all succeeded through the resource-limited runner, but
+  `DebugTask` construction raised `SchemaValidationError` before the
+  `EvaluationVerifier` could run, so `get_factors` did not reach the
+  `EvaluationVerifier`; replaced by `kth`). Historical compliance with the
+  12-unique-candidate cap is **unproven** (the exploratory unsandboxed
+  triage inventory cannot be reconstructed from surviving evidence); the
+  prior "11 of 12" claim has been removed. For future runs only static
+  file/metadata inspection may occur outside the resource-limited runner,
+  and the 12-unique-attempted-algorithm cap is enforced in the orchestration
+  path.
+- Selected 8: `gcd`, `bucketsort`, `find_in_sorted`, `flatten`, `kth`,
+  `hanoi`, `is_valid_parenthesization`, `kheapsort`. Every gold patch touched
+  exactly one file (1-2 hunks); every task reached `COMPLETED`/`RESOLVED`
+  with F2P/P2P/full-suite all passing, canonical fixture hash unchanged, and
+  workspace lifecycle `CLEANED`. 49/49 total collected nodes passed
+  post-patch across all eight tasks (100% solved rate, 100% full-suite pass
+  rate). Pinned source re-verified clean (exact pin, no modifications) after
+  the full run; WSL `runs/` directory holds only the persistent `selftest/`
+  scaffold, confirming every disposable per-task workspace was removed.
+- Final verdict: **ACCEPT CANDIDATE — EIGHT-TASK BASELINE COMPLETE**. See
+  `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md` and
+  `_ai-review/quixbugs-eight-task-baseline-v1/` for full evidence.
 
 ### Resource-Limited QuixBugs Fallback Real Smoke v1
 

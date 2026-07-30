@@ -25,7 +25,13 @@ Bu blok nedeniyle dar kapsamlı bir QuixBugs (Python `gcd`) fallback
 resource-limited real no-model smoke tamamlandı ve kabul edildi:
 pinned revision `4257f44b0ff1181dedaedee6a447e133219fcebf`, verdict
 `ACCEPT CANDIDATE — REAL SMOKE PASSED`; bkz. `docs/QUIXBUGS_SMOKE_USAGE_V1.md`.
-Bu sadece altyapıyı doğrular; model, PDB veya geniş benchmark kampanyası
+Bu tek-task smoke, aynı pinned revision üzerinde sekiz-task no-model gold
+baseline'a genişletildi (`gcd`, `bucketsort`, `find_in_sorted`, `flatten`,
+`kth`, `hanoi`, `is_valid_parenthesization`, `kheapsort`): 8/8 seçilen task
+çözüldü (gold patch uçtan uca doğrulandı), verdict
+`ACCEPT CANDIDATE — EIGHT-TASK BASELINE COMPLETE`; bkz.
+`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`. İkisi de sadece altyapıyı
+doğrular; model, PDB veya geniş benchmark kampanyası
 çalıştırılmadı. Dataset execution, broader evaluation, fine-tuning, RAG
 genişletmesi, preference optimization (DPO/RLHF), containment hardening ve
 final teknik rapor hâlâ future work olarak kalır; bu not stajın veya daha

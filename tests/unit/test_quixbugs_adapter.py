@@ -89,6 +89,90 @@ def test_unknown_task_id_is_rejected() -> None:
         adapter().manifest.select("quixbugs-does-not-exist")
 
 
+# ---- Generalization beyond the single gcd task ------------------------------
+
+
+SECOND_MANIFEST = ROOT / "research" / "quixbugs" / "BUCKETSORT_SMOKE_MANIFEST_V1.json"
+
+
+def test_second_real_manifest_loads_with_its_own_algorithm_and_oracle() -> None:
+    manifest = QuixBugsManifest.load(SECOND_MANIFEST)
+
+    assert manifest.algorithm == "bucketsort"
+    assert manifest.manifest_id == "quixbugs-bucketsort-smoke-v1"
+    assert manifest.task_id == "quixbugs-bucketsort-smoke-v1"
+    assert manifest.buggy_path == "python_programs/bucketsort.py"
+    assert manifest.corrected_path == "correct_python_programs/bucketsort.py"
+    assert manifest.pytest_path == "python_testcases/test_bucketsort.py"
+    assert manifest.oracle["target_symbols"] == ["bucketsort"]
+    assert manifest.oracle["bug_category"]
+    assert "python_testcases/load_testdata.py" in manifest.support_paths
+    # every eight-task-baseline manifest is pinned to the same reused venv/environment
+    assert manifest.fingerprint != QuixBugsManifest.load(MANIFEST).fingerprint
+
+
+def test_second_manifest_bug_id_and_title_are_derived_not_hardcoded() -> None:
+    second = QuixBugsAdapter.from_manifest(SECOND_MANIFEST)
+    assert second.source_provenance()["bug_id"] == "bucketsort"
+
+    commands = second.build_commands(fail_to_pass=["t::a"], pass_to_pass=["t::b"])
+    source = TaskSource("external", "sources/quixbugs", second.source_provenance())
+    task = second.to_debug_task(source, commands)
+    assert "bucketsort" in task.title
+    assert "gcd" not in task.title
+    assert task.oracle.target_symbols == ["bucketsort"]
+    assert task.constraints.allowed_write_paths == ["python_programs/bucketsort.py"]
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        # target.algorithm must match the buggy/corrected/pytest path naming convention
+        lambda data: data["target"].update({"buggy_path": "python_programs/gcd_other.py"}),
+        lambda data: data["target"].update({"algorithm": "Gcd"}),
+        lambda data: data["target"].update({"algorithm": "gcd", "language": "javascript"}),
+        # manifest_id/task_id must be the derived quixbugs-<algorithm>-smoke-v1 identity
+        lambda data: data.update({"manifest_id": "quixbugs-not-derived-smoke-v1"}),
+        lambda data: data.update({"task_id": "quixbugs-not-derived-smoke-v1"}),
+        # oracle section is now required and structurally validated
+        lambda data: data.pop("oracle"),
+        lambda data: data["oracle"].update({"bug_category": ""}),
+        lambda data: data["oracle"].update({"target_symbols": []}),
+        lambda data: data["oracle"].update({"root_cause_summary": ""}),
+        lambda data: data["oracle"].update({"runtime_evidence_hint": ""}),
+    ],
+)
+def test_generalized_manifest_validation_rejects_mismatches(tmp_path: Path, mutation) -> None:
+    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    mutation(data)
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(QuixBugsManifestValidationError):
+        QuixBugsManifest.load(path)
+
+
+def test_manifest_rejects_algorithm_too_long_for_the_shared_task_id_pattern(tmp_path: Path) -> None:
+    # max-length target.algorithm (64 chars) makes the derived
+    # "quixbugs-<algorithm>-smoke-v1" identity exceed DebugTask's shared
+    # TASK_ID_PATTERN (max 64 chars total) -- must fail closed at manifest
+    # load time, not only later when to_debug_task() builds a DebugTask.
+    data = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    long_algorithm = "a" * 64
+    data["target"].update({
+        "algorithm": long_algorithm,
+        "buggy_path": f"python_programs/{long_algorithm}.py",
+        "corrected_path": f"correct_python_programs/{long_algorithm}.py",
+        "pytest_path": f"python_testcases/test_{long_algorithm}.py",
+    })
+    data["manifest_id"] = data["task_id"] = f"quixbugs-{long_algorithm}-smoke-v1"
+    path = tmp_path / "manifest.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+
+    with pytest.raises(QuixBugsManifestValidationError, match="not a valid task_id"):
+        QuixBugsManifest.load(path)
+
+
 # ---- TaskSource / DebugTask mapping -----------------------------------------
 
 

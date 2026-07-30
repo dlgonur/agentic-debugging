@@ -1,0 +1,140 @@
+{
+  "manifest_schema_version": "1.0",
+  "manifest_id": "quixbugs-eight-task-pilot-v1",
+  "dataset": "QuixBugs",
+  "authority": {
+    "official_repository": "https://github.com/jkoppel/QuixBugs",
+    "official_repository_revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+    "default_branch": "master"
+  },
+  "environment": {
+    "python_version": "3.10.12",
+    "python_source": "system /usr/bin/python3 in the approved Ubuntu-22.04 WSL2 distro",
+    "venv_strategy": "python3 -m venv --without-pip; bootstrap pip via https://bootstrap.pypa.io/get-pip.py (network, dependency-prep phase only); pip install pinned pytest",
+    "pinned_packages": {"pytest": "7.4.4"},
+    "expected_fingerprint": "4cee35b2f786fc4857e468abb87269cc932eefab10af6b163a162e2c50bd6d83"
+  },
+  "resource_profile": {
+    "mechanism": "prlimit",
+    "cpu_seconds": 5,
+    "memory_bytes": 268435456,
+    "max_processes": 8,
+    "wall_clock_timeout_seconds": 30,
+    "retained_output_chars": 20000,
+    "network_denied": true,
+    "workspace_writes": "single-owned-host-backed-bind-mount"
+  },
+  "selected_tasks": [
+    {
+      "algorithm": "gcd",
+      "manifest_path": "research/quixbugs/GCD_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-gcd-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_gcd.py -q -p no:cacheprovider",
+      "candidate_order": 0,
+      "candidate_role": "previously-accepted-smoke-reused"
+    },
+    {
+      "algorithm": "bucketsort",
+      "manifest_path": "research/quixbugs/BUCKETSORT_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-bucketsort-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_bucketsort.py -q -p no:cacheprovider",
+      "candidate_order": 2,
+      "candidate_role": "eligible"
+    },
+    {
+      "algorithm": "find_in_sorted",
+      "manifest_path": "research/quixbugs/FIND_IN_SORTED_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-find-in-sorted-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_find_in_sorted.py -q -p no:cacheprovider",
+      "candidate_order": 4,
+      "candidate_role": "eligible"
+    },
+    {
+      "algorithm": "flatten",
+      "manifest_path": "research/quixbugs/FLATTEN_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-flatten-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_flatten.py -q -p no:cacheprovider",
+      "candidate_order": 5,
+      "candidate_role": "eligible"
+    },
+    {
+      "algorithm": "kth",
+      "manifest_path": "research/quixbugs/KTH_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-kth-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_kth.py -q -p no:cacheprovider",
+      "candidate_order": 10,
+      "candidate_role": "eligible-replacement-for-get_factors"
+    },
+    {
+      "algorithm": "hanoi",
+      "manifest_path": "research/quixbugs/HANOI_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-hanoi-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_hanoi.py -q -p no:cacheprovider",
+      "candidate_order": 7,
+      "candidate_role": "eligible"
+    },
+    {
+      "algorithm": "is_valid_parenthesization",
+      "manifest_path": "research/quixbugs/IS_VALID_PARENTHESIZATION_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_is_valid_parenthesization.py -q -p no:cacheprovider",
+      "candidate_order": 8,
+      "candidate_role": "eligible"
+    },
+    {
+      "algorithm": "kheapsort",
+      "manifest_path": "research/quixbugs/KHEAPSORT_SMOKE_MANIFEST_V1.json",
+      "task_id": "quixbugs-kheapsort-smoke-v1",
+      "test_command": "python -m pytest python_testcases/test_kheapsort.py -q -p no:cacheprovider",
+      "candidate_order": 9,
+      "candidate_role": "eligible"
+    }
+  ],
+  "excluded_candidates": [
+    {
+      "algorithm": "bitcount",
+      "candidate_order": 1,
+      "reason": "buggy python_programs/bitcount.py (`n ^= n - 1` instead of `n &= n - 1`) does not terminate for any tested input -- it converges to n == 1 and then loops forever, so the buggy baseline has no reproducible pass/fail node, only a resource-limit-enforced kill. Fails the 'at least one reproducible failing node' eligibility rule.",
+      "evidence": "live per-node pytest run under the resource-limited WSL sandbox returned exit_code=137 (SIGKILL, the exact prlimit CPU-time-limit kill signature also proven live in setup.resource_readiness.cpu_limit_enforced), not a clean 0/1 exit."
+    },
+    {
+      "algorithm": "find_first_in_sorted",
+      "candidate_order": 3,
+      "reason": "buggy python_programs/find_first_in_sorted.py (`while lo <= hi:` instead of `while lo < hi:`) does not terminate for at least one official parametrized case -- the search bound never converges. Fails the 'reproducible failing node' eligibility rule for that node (mixed with genuinely reproducible failures on other nodes), so baseline classification cannot be established as fully reproducible under the resource-limited verifier.",
+      "evidence": "live per-node pytest run under the resource-limited WSL sandbox returned exit_code=137 (SIGKILL, the exact prlimit CPU-time-limit kill signature) for node input_data2, not a clean 0/1 exit."
+    },
+    {
+      "algorithm": "get_factors",
+      "candidate_order": 6,
+      "reason": "get_factors collects 11 real pytest nodes (10 F2P + 1 P2P); verifier_command_count(10, 1) = 4 + 2*11 = 26, which exceeds agentic_debugger/evaluation/task_schema.py's Constraints.max_test_runs range of [1, 20]. The full collected node set must be declared as fail_to_pass+pass_to_pass in its entirety (EvaluationVerifier._run_collection requires an exact match), so nodes cannot be dropped to fit under the cap without weakening baseline-classification eligibility. This is a schema-representability blocker, not a resource or reproducibility failure: preflight passed, live discovery classified 10 F2P/1 P2P exactly as expected, the independent --correct oracle passed 11/11, and the gold patch was generated and hashed successfully -- construction of the DebugTask itself raised SchemaValidationError before the verifier could run. Excluded and replaced by kth (7 collected nodes, verifier_command_count = 18, within range).",
+      "evidence": "live run through the generalized QuixBugsAdapter + resource-limited WSL sandbox up to gold-patch generation; DebugTask construction raised `SchemaValidationError: constraints.max_test_runs must be in range [1, 20], got 26`. Full evidence: _ai-review/quixbugs-eight-task-baseline-v1/exclusion-evidence/GET_FACTORS_EXCLUDED_MANIFEST_V1.json and the aggregate report."
+    }
+  ],
+  "candidate_cap": 12,
+  "candidates_executed_through_resource_limited_runner": 11,
+  "candidate_accounting": {
+    "selected_count": 8,
+    "excluded_count": 3,
+    "total_through_resource_limited_runner": 11,
+    "completed_verifier_count": 8,
+    "resource_limited_runner_execution_count": 11,
+    "excluded_by_stage": {
+      "discovery_excluded": [
+        {"algorithm": "bitcount", "stage": "discovery", "reason": "non-terminating buggy baseline -- no reproducible failing node; killed by the resource-limited sandbox's CPU-time limit (exit_code=137). Tests were executed through the resource-limited runner but did not reach the EvaluationVerifier."},
+        {"algorithm": "find_first_in_sorted", "stage": "discovery", "reason": "non-terminating buggy baseline for at least one node -- not fully reproducible; killed by the resource-limited sandbox's CPU-time limit (exit_code=137). Tests were executed through the resource-limited runner but did not reach the EvaluationVerifier."}
+      ],
+      "pre_verifier_schema_excluded": [
+        {"algorithm": "get_factors", "stage": "pre_verifier_schema_construction", "reason": "11 collected nodes (10 F2P + 1 P2P) -> verifier_command_count(10,1)=26 exceeds Constraints.max_test_runs range [1, 20]; preflight/discovery/oracle/gold-patch all succeeded through the resource-limited runner, but DebugTask construction raised SchemaValidationError before the EvaluationVerifier could run. get_factors did NOT reach the EvaluationVerifier."}
+      ]
+    },
+    "stage_distinction": {
+      "completed_verifier": "Algorithm reached the EvaluationVerifier and produced a COMPLETED/RESOLVED outcome (8 algorithms: the selected eight).",
+      "resource_limited_runner_execution": "Algorithm's tests were executed through the resource-limited WSL/Bubblewrap runner, regardless of whether they reached the EvaluationVerifier (11 algorithms: the 8 completed-verifier + bitcount + find_first_in_sorted + get_factors). get_factors reached discovery and gold-patch generation but NOT the EvaluationVerifier.",
+      "historical_unsandboxed_triage": "An unknown number of additional algorithms were screened via unsandboxed pytest runs under a shell timeout during exploratory triage before formal execution. This was test execution outside the resource-limited runner, not read-only metadata inspection."
+    },
+    "historical_cap_compliance": "unproven",
+    "historical_cap_compliance_note": "The exact historical inventory of every algorithm whose tests were executed during the unsandboxed exploratory triage cannot be proven from the surviving evidence -- the triage was exploratory and not fully logged. Therefore historical compliance with the 12-unique-candidate cap cannot be asserted. The 11-of-12 claim has been removed. What can be proven: 11 unique algorithms were executed through the resource-limited runner (8 completed-verifier + 3 excluded), and of those 3 excluded, get_factors did not reach the EvaluationVerifier. For future runs, only static file/metadata inspection may occur outside the resource-limited runner, and the 12-unique-attempted-algorithm cap is enforced in the orchestration path.",
+    "future_runs_policy": "Fail-closed at 12 unique attempted algorithms. The orchestration script enforces this cap before any task execution. Only static file/metadata inspection (no test execution) may occur outside the resource-limited runner."
+  },
+  "selection_method": "deterministic alphabetical order over the pinned repository's json_testcases-backed python_testcases/test_*.py files (excluding gcd, already accepted), then formally executed one at a time through the generalized QuixBugsAdapter + resource-limited WSL runner pipeline until 7 additional eligible tasks were found alongside the already-accepted gcd task. get_factors was formally executed through the resource-limited runner, found schema-incompatible (not resource- or reproducibility-incompatible), excluded, and replaced by the next alphabetical candidate, kth. Historical exploratory triage used unsandboxed pytest runs under a shell timeout (test execution outside the resource-limited runner, not read-only metadata inspection); the exact inventory of that triage is unproven."
+}

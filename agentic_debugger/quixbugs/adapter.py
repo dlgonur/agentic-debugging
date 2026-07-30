@@ -1,9 +1,14 @@
-"""Fail-closed QuixBugs (gcd) adapter for the resource-limited no-model smoke.
+"""Fail-closed QuixBugs adapter for the resource-limited no-model baseline.
 
 QuixBugs is the fallback dataset while BugsInPy remains license-gated. This
-module is deliberately scoped to exactly one task (Python ``gcd``). It does
-not build a second evaluation framework: source acquisition follows the same
-pinned-Git pattern already accepted for BugsInPy, workspace ownership reuses
+module supports any single pinned QuixBugs Python task whose manifest
+declares a ``target.algorithm`` matching the upstream ``python_programs/
+<algorithm>.py`` / ``correct_python_programs/<algorithm>.py`` /
+``python_testcases/test_<algorithm>.py`` naming convention (originally
+scoped to exactly one task, Python ``gcd``, and generalized for the
+eight-task baseline). It does not build a second evaluation framework:
+source acquisition follows the same pinned-Git pattern already accepted for
+BugsInPy, workspace ownership reuses
 :class:`agentic_debugger.bugsinpy.adapter.ExternalWorkspace` directly, and the
 official gold-patch smoke is executed by the existing
 :class:`agentic_debugger.evaluation.verifier.EvaluationVerifier` through the
@@ -36,9 +41,20 @@ from agentic_debugger.runtime.workspace import TaskWorkspace
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 _MANIFEST_SCHEMA = "1.0"
-_MANIFEST_ID = "quixbugs-gcd-smoke-v1"
 _DATASET = "QuixBugs"
 _APPROVED_URL = "https://github.com/jkoppel/QuixBugs"
+_ALGORITHM = re.compile(r"^[a-z][a-z0-9_]{1,63}$")
+
+
+def _manifest_identity(algorithm: str) -> str:
+    """Derive the required manifest_id/task_id from target.algorithm.
+
+    Generalizes the identity that was previously pinned to the single
+    literal ``quixbugs-gcd-smoke-v1``: any pinned QuixBugs Python task now
+    gets the same deterministic ``quixbugs-<algorithm-with-hyphens>-smoke-v1``
+    identity, keeping the shared DebugTask task_id pattern (hyphens only).
+    """
+    return f"quixbugs-{algorithm.replace('_', '-')}-smoke-v1"
 
 
 class QuixBugsManifestValidationError(ValueError):
@@ -151,6 +167,10 @@ class QuixBugsManifest:
         return self._data["authority"]["official_repository"]
 
     @property
+    def algorithm(self) -> str:
+        return self._data["target"]["algorithm"]
+
+    @property
     def buggy_path(self) -> str:
         return self._data["target"]["buggy_path"]
 
@@ -163,6 +183,10 @@ class QuixBugsManifest:
         return self._data["target"]["pytest_path"]
 
     @property
+    def support_paths(self) -> tuple[str, ...]:
+        return tuple(self._data["target"]["support_paths"])
+
+    @property
     def cwd(self) -> str:
         return self._data["target"]["selected_cwd"]
 
@@ -173,6 +197,10 @@ class QuixBugsManifest:
     @property
     def environment(self) -> Mapping[str, Any]:
         return copy.deepcopy(self._data["environment"])
+
+    @property
+    def oracle(self) -> Mapping[str, Any]:
+        return copy.deepcopy(self._data["oracle"])
 
     def select(self, task_id: str) -> Mapping[str, Any]:
         if task_id != self.task_id:
@@ -301,7 +329,7 @@ class QuixBugsAdapter:
             "upstream_repository": self.manifest.official_repository,
             "upstream_revision": self.manifest.authority_revision,
             "project": "quixbugs",
-            "bug_id": "gcd",
+            "bug_id": self.manifest.algorithm,
             "buggy_revision": self.manifest.authority_revision,
             "fixed_revision": self.manifest.authority_revision,
         }
@@ -325,12 +353,26 @@ class QuixBugsAdapter:
     def to_debug_task(self, source: TaskSource, commands: QuixBugsCommands) -> DebugTask:
         if not isinstance(source, TaskSource) or source.kind != "external":
             raise QuixBugsTaskMappingError("QuixBugs tasks require an external source binding")
+        algorithm = self.manifest.algorithm
+        oracle = self.manifest.oracle
+        denied_write_paths = sorted(
+            {
+                "tests",
+                "task.json",
+                self.manifest.pytest_path,
+                self.manifest.corrected_path,
+                "conftest.py",
+                "json_testcases",
+                ".git",
+                *self.manifest.support_paths,
+            }
+        )
         mapping = {
             "schema_version": "1.0",
             "task_id": self.manifest.task_id,
-            "title": "QuixBugs Python gcd resource-limited smoke",
+            "title": f"QuixBugs Python {algorithm} resource-limited smoke",
             "description": (
-                f"Repair the regression exposed by {len(commands.fail_to_pass)} failing gcd nodes "
+                f"Repair the regression exposed by {len(commands.fail_to_pass)} failing {algorithm} nodes "
                 f"(e.g. {commands.fail_to_pass[0]}) in the pinned QuixBugs buggy revision. Uses the "
                 "existing test, patch, and verifier workflow."
             ),
@@ -351,15 +393,7 @@ class QuixBugsAdapter:
             },
             "constraints": {
                 "allowed_write_paths": [self.manifest.buggy_path],
-                "denied_write_paths": [
-                    "tests",
-                    "task.json",
-                    self.manifest.pytest_path,
-                    self.manifest.corrected_path,
-                    "conftest.py",
-                    "json_testcases",
-                    ".git",
-                ],
+                "denied_write_paths": denied_write_paths,
                 "network_allowed": False,
                 "external_services_allowed": False,
                 "max_patch_attempts": 1,
@@ -367,13 +401,13 @@ class QuixBugsAdapter:
                 "max_pdb_observations": 0,
             },
             "oracle": {
-                "bug_category": "off-by-argument-order",
+                "bug_category": oracle["bug_category"],
                 "target_files": [self.manifest.buggy_path],
-                "target_symbols": ["gcd"],
-                "root_cause_summary": "gcd(a % b, b) never advances b toward the base case, so every case but b == 0 recurses forever.",
-                "runtime_evidence_hint": "RecursionError on every non-trivial (a, b) pair.",
+                "target_symbols": list(oracle["target_symbols"]),
+                "root_cause_summary": oracle["root_cause_summary"],
+                "runtime_evidence_hint": oracle["runtime_evidence_hint"],
             },
-            "tags": ["quixbugs", "gcd", "no-model-smoke", "resource-limited", "selected-suite-only"],
+            "tags": ["quixbugs", algorithm, "no-model-smoke", "resource-limited", "selected-suite-only"],
         }
         return DebugTask.from_mapping(mapping)
 
@@ -435,7 +469,7 @@ class QuixBugsSourceAcquirer:
 
 
 def build_gold_patch(buggy_text: str, corrected_text: str, path: str) -> str:
-    """Build the evaluator-only unified diff between the buggy and corrected gcd source."""
+    """Build the evaluator-only unified diff between one task's buggy and corrected source."""
     if buggy_text == corrected_text:
         raise QuixBugsTaskMappingError("gold patch is empty; buggy and corrected sources are identical")
     diff_lines = list(
@@ -483,23 +517,30 @@ class QuixBugsSmokeRunner:
     def discover(self, execution_context: VerifiedExecutionContext, workspace: TaskWorkspace) -> DiscoveryRecord:
         runner = TestRunner(workspace, execution_context=execution_context)
         cwd = self.adapter.manifest.cwd
+        algorithm = self.adapter.manifest.algorithm
         timeout = int(self.adapter.manifest.resource_profile["wall_clock_timeout_seconds"])
         collection = runner.run_tests(self.adapter.collection_argv(), cwd, timeout, kind=TestRunKind.SELECTED)
         if collection.launch_error or collection.command_result.exit_code != 0:
-            raise DiscoveryError("pytest collection failed for the pinned gcd test file")
+            raise DiscoveryError(f"pytest collection failed for the pinned {algorithm} test file")
         collected = _parse_collected_nodes(collection.command_result.stdout)
         if not collected:
-            raise DiscoveryError("pytest collection returned no gcd test nodes")
+            raise DiscoveryError(f"pytest collection returned no {algorithm} test nodes")
         outcomes: dict[str, bool] = {}
         for node in collected:
             result = runner.run_tests(self.adapter.node_run_argv(node), cwd, timeout, kind=TestRunKind.SELECTED)
             if result.launch_error or result.command_result.exit_code not in (0, 1):
-                raise DiscoveryError(f"baseline run for {node!r} did not produce a clean pass/fail result")
+                raise DiscoveryError(
+                    f"baseline run for {node!r} did not produce a clean pass/fail result "
+                    f"(exit_code={result.command_result.exit_code!r}, timed_out={result.timed_out!r}, "
+                    f"launch_error={result.launch_error!r}) -- likely a non-terminating buggy baseline, "
+                    "safely bounded by the resource-limited sandbox's CPU-time/wall-clock limits rather "
+                    "than a clean test failure"
+                )
             outcomes[node] = result.command_result.exit_code == 0
         f2p_candidates = tuple(node for node in collected if not outcomes[node])
         p2p_candidates = tuple(node for node in collected if outcomes[node])
         if not f2p_candidates:
-            raise DiscoveryError("no reproducible failing gcd node was found on the buggy baseline")
+            raise DiscoveryError(f"no reproducible failing {algorithm} node was found on the buggy baseline")
         oracle = runner.run_tests(self.adapter.oracle_correct_argv(), cwd, timeout, kind=TestRunKind.SELECTED)
         oracle_summary = _last_summary_line(oracle.command_result.stdout)
         return DiscoveryRecord(tuple(collected), outcomes, f2p_candidates, p2p_candidates, oracle.command_result.exit_code, oracle_summary)
@@ -644,11 +685,8 @@ def _validate_manifest(data: Any) -> None:
         raise QuixBugsManifestValidationError("manifest root must be an object")
     if data.get("manifest_schema_version") != _MANIFEST_SCHEMA:
         raise QuixBugsManifestValidationError("unsupported manifest schema version")
-    if data.get("manifest_id") != _MANIFEST_ID or data.get("dataset") != _DATASET:
+    if data.get("dataset") != _DATASET:
         raise QuixBugsManifestValidationError("manifest identity is unsupported")
-    task_id = data.get("task_id")
-    if not isinstance(task_id, str) or not re.fullmatch(r"[a-z0-9][a-z0-9-]{2,63}", task_id):
-        raise QuixBugsManifestValidationError("invalid task_id")
     authority = data.get("authority")
     if not isinstance(authority, dict) or not _SHA1.fullmatch(str(authority.get("official_repository_revision", ""))):
         raise QuixBugsManifestValidationError("authority lacks a pinned official revision")
@@ -660,15 +698,43 @@ def _validate_manifest(data: Any) -> None:
     for field in ("algorithm", "language", "buggy_path", "corrected_path", "pytest_path", "selected_cwd"):
         if not isinstance(target.get(field), str) or not target[field]:
             raise QuixBugsManifestValidationError(f"target.{field} must be a non-empty string")
-    if target["algorithm"] != "gcd":
-        raise QuixBugsManifestValidationError("this smoke is pinned to the gcd task only")
+    algorithm = target["algorithm"]
+    if not _ALGORITHM.fullmatch(algorithm):
+        raise QuixBugsManifestValidationError("target.algorithm must be a lowercase snake_case identifier")
+    if target["language"] != "python":
+        raise QuixBugsManifestValidationError("this smoke only supports QuixBugs Python tasks")
+    expected_paths = {
+        "buggy_path": f"python_programs/{algorithm}.py",
+        "corrected_path": f"correct_python_programs/{algorithm}.py",
+        "pytest_path": f"python_testcases/test_{algorithm}.py",
+    }
+    for field, expected in expected_paths.items():
+        if target[field] != expected:
+            raise QuixBugsManifestValidationError(f"target.{field} must be {expected!r} for target.algorithm {algorithm!r}, got {target[field]!r}")
     for label in ("buggy_path", "corrected_path", "pytest_path"):
         _safe_relative_or_raise(target[label], f"target.{label}")
+    expected_identity = _manifest_identity(algorithm)
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{2,63}", expected_identity):
+        raise QuixBugsManifestValidationError(f"derived identity {expected_identity!r} is not a valid task_id (algorithm name too long)")
+    if data.get("manifest_id") != expected_identity or data.get("task_id") != expected_identity:
+        raise QuixBugsManifestValidationError(f"manifest_id and task_id must both be the derived identity {expected_identity!r}")
     support = target.get("support_paths")
     if not isinstance(support, list) or not all(isinstance(item, str) and item for item in support):
         raise QuixBugsManifestValidationError("target.support_paths must be a list of non-empty strings")
     for item in support:
         _safe_relative_or_raise(item, "target.support_paths entry")
+    oracle = data.get("oracle")
+    if not isinstance(oracle, dict):
+        raise QuixBugsManifestValidationError("oracle section is required")
+    if not isinstance(oracle.get("bug_category"), str) or not oracle["bug_category"]:
+        raise QuixBugsManifestValidationError("oracle.bug_category must be a non-empty string")
+    target_symbols = oracle.get("target_symbols")
+    if not isinstance(target_symbols, list) or not target_symbols or not all(isinstance(item, str) and item for item in target_symbols):
+        raise QuixBugsManifestValidationError("oracle.target_symbols must be a non-empty list of non-empty strings")
+    if not isinstance(oracle.get("root_cause_summary"), str) or not oracle["root_cause_summary"]:
+        raise QuixBugsManifestValidationError("oracle.root_cause_summary must be a non-empty string")
+    if not isinstance(oracle.get("runtime_evidence_hint"), str) or not oracle["runtime_evidence_hint"]:
+        raise QuixBugsManifestValidationError("oracle.runtime_evidence_hint must be a non-empty string")
     environment = data.get("environment")
     if not isinstance(environment, dict) or not isinstance(environment.get("python_version"), str) or not environment["python_version"]:
         raise QuixBugsManifestValidationError("environment.python_version is required")
@@ -745,7 +811,7 @@ def _dependency_gate(manifest: QuixBugsManifest, facts: QuixBugsPreflightFacts) 
         "manifest_fingerprint": manifest.fingerprint,
         "authority_revision": manifest.authority_revision,
         "project": "quixbugs",
-        "bug_id": "gcd",
+        "bug_id": manifest.algorithm,
         "buggy_revision": manifest.authority_revision,
         "recipe_path": expected_recipe_path,
         "recipe_sha256": expected_recipe_sha256,
@@ -795,7 +861,7 @@ def _cleanup_gate(facts: QuixBugsPreflightFacts) -> QuixGateResult:
 
 
 def _target_gate(facts: QuixBugsPreflightFacts) -> QuixGateResult:
-    return _boolean_gate(QuixGateName.TARGET_ANNOTATION_REVIEW, facts.target_annotation_reviewed, "gcd target annotation requires explicit review before execution")
+    return _boolean_gate(QuixGateName.TARGET_ANNOTATION_REVIEW, facts.target_annotation_reviewed, "target annotation requires explicit review before execution")
 
 
 def _is_within(path: Path, parent: Path) -> bool:
