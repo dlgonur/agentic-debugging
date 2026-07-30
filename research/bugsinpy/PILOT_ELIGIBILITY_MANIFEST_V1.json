@@ -1,0 +1,922 @@
+{
+  "manifest_schema_version": "1.0",
+  "manifest_id": "bugsinpy-pilot-eligibility-v1",
+  "dataset": "BugsInPy",
+  "selection_status": "proposed_metadata_verified_execution_unverified",
+  "authority": {
+    "official_repository": "https://github.com/soarsmu/BugsInPy",
+    "official_repository_revision": "11c5f1eea954a42132cfd06bf257766a7963e0fd",
+    "official_repository_revision_date": "2025-10-09",
+    "official_paper": "https://arxiv.org/abs/2401.15481",
+    "metadata_scope": "Only the official BugsInPy framework metadata was inspected. No project revision was checked out, no benchmark command was executed, and no dependency was installed.",
+    "source_snapshot_path_outside_repository": "C:/tmp/bugsinpy-official-meta-v1",
+    "source_snapshot_disposition": "temporary external inspection material; not copied into this repository"
+  },
+  "pilot_target": {
+    "task_count": 8,
+    "minimum_project_count": 4,
+    "minimum_bug_family_count": 4,
+    "selected_project_count": 4,
+    "selected_bug_family_count": 7,
+    "proposed_evaluation_matrix": "8 tasks x 2 policies x 2 repetitions = 32 cases",
+    "policy_pair": [
+      "static-baseline",
+      "pdb-on-uncertainty"
+    ],
+    "selection_bias_note": "The slice is intentionally pytest-compatible and avoids unittest-only entries for the first adapter slice. This improves contract fit but is not representative of the full BugsInPy population."
+  },
+  "eligibility_vocabulary": {
+    "metadata_verified": "Official bug.info, run_test.sh, project.info, requirements.txt, and isolated bug_patch.txt were present in the pinned snapshot.",
+    "execution_verified": "Baseline and regression commands were run in a disposable contained environment and passed the adapter preflight. This status is not claimed in this manifest.",
+    "proposed_with_gates": "Suitable for the pilot candidate set, but execution, PDB, containment, and licensing gates remain open.",
+    "excluded": "Not proposed for this pilot. No task in this exact eight-task candidate set is silently substituted."
+  },
+  "tasks": [
+    {
+      "pilot_task_id": "bugsinpy-fastapi-001",
+      "bugsinpy": {
+        "project": "fastapi",
+        "bug_id": 1,
+        "project_url": "https://github.com/tiangolo/fastapi",
+        "buggy_revision": "766157bfb4e7dfccba09ab398e8ec444d14e947c",
+        "fixed_revision": "3397d4d69a9c2d64c1219fcbf291ea5697a4abb8",
+        "metadata_paths": [
+          "projects/fastapi/project.info",
+          "projects/fastapi/bugs/1/bug.info",
+          "projects/fastapi/bugs/1/run_test.sh",
+          "projects/fastapi/bugs/1/requirements.txt",
+          "projects/fastapi/bugs/1/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.8.3",
+        "pythonpath": "unknown",
+        "official_dependency_recipe": "projects/fastapi/bugs/1/requirements.txt",
+        "official_setup_script": "none present in bug directory",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "pytest tests/test_jsonable_encoder.py::test_encode_model_with_default",
+        "argv": [
+          "pytest",
+          "tests/test_jsonable_encoder.py::test_encode_model_with_default"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tests/test_jsonable_encoder.py",
+        "failing_test_identity": "tests/test_jsonable_encoder.py::test_encode_model_with_default",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tests/test_jsonable_encoder.py::test_encode_model_with_default"
+        ],
+        "pass_to_pass_candidates": [
+          "tests/test_jsonable_encoder.py::test_custom_encoders",
+          "tests/test_request_body_parameters_media_type.py::test_openapi_schema"
+        ],
+        "pass_to_pass_source_basis": "Official projects/fastapi/fastapi-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "The adapter must construct an explicit pytest node set and verify collection before execution.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "API/data-shaping contract",
+        "basis": "The official isolated patch propagates response-model exclusion options through encoding and routing paths.",
+        "confidence": "medium; annotation is project-level inference, not native BugsInPy metadata"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for call-chain and argument-propagation debugging",
+        "expected_pdb_reachability": "likely reachable through a local pytest client path; unverified",
+        "candidate_changed_files": [
+          "fastapi/applications.py",
+          "fastapi/encoders.py",
+          "fastapi/openapi/utils.py",
+          "fastapi/routing.py"
+        ],
+        "target_symbols": "unknown; must be annotated from the buggy source before execution",
+        "breakpoint_plan": "unverified; choose a changed pure-Python function on the selected test path"
+      },
+      "setup_complexity": {
+        "level": "high",
+        "evidence": "requirements.txt contains a large pinned dependency set, including packages with possible native wheels/builds",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "unknown",
+        "network": "unknown; dependency acquisition must be completed before network lockdown",
+        "database": "possible in project dependency inventory; selected-test use unverified",
+        "native_library": "possible",
+        "gui": "unknown",
+        "long_runtime": "unknown",
+        "nondeterminism": "unknown",
+        "notes": "Metadata alone cannot establish that the selected test is offline and deterministic."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "offline/no-external-service proof",
+          "contained dependency provenance",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Run no commands until containment is available; verify buggy and fixed outcomes, collection, P2P nodes, full-suite behavior, PDB pause, and cleanup."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/1/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/1/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/1/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/1/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-fastapi-009",
+      "bugsinpy": {
+        "project": "fastapi",
+        "bug_id": 9,
+        "project_url": "https://github.com/tiangolo/fastapi",
+        "buggy_revision": "a7a92bc63768ccee3f3afc2b73b2c581928dfe75",
+        "fixed_revision": "c5817912d2be25bb310bf9da517882f57bbe7bb5",
+        "metadata_paths": [
+          "projects/fastapi/project.info",
+          "projects/fastapi/bugs/9/bug.info",
+          "projects/fastapi/bugs/9/run_test.sh",
+          "projects/fastapi/bugs/9/requirements.txt",
+          "projects/fastapi/bugs/9/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.8.3",
+        "pythonpath": "unknown",
+        "official_dependency_recipe": "projects/fastapi/bugs/9/requirements.txt",
+        "official_setup_script": "none present in bug directory",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "pytest tests/test_request_body_parameters_media_type.py::test_openapi_schema",
+        "argv": [
+          "pytest",
+          "tests/test_request_body_parameters_media_type.py::test_openapi_schema"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tests/test_request_body_parameters_media_type.py",
+        "failing_test_identity": "tests/test_request_body_parameters_media_type.py::test_openapi_schema",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tests/test_request_body_parameters_media_type.py::test_openapi_schema"
+        ],
+        "pass_to_pass_candidates": [
+          "tests/test_jsonable_encoder.py::test_encode_model_with_default",
+          "tests/test_custom_route_class.py::test_route_classes"
+        ],
+        "pass_to_pass_source_basis": "Official projects/fastapi/fastapi-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Explicit pytest node set required; collection must show each declared node exactly once.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "API/data-shaping contract",
+        "basis": "The official isolated patch carries a body media_type from parameter metadata into the generated body schema.",
+        "confidence": "high for the patch-level label; still not a native BugsInPy category"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for data-flow and generated-schema debugging",
+        "expected_pdb_reachability": "likely reachable through local schema construction; unverified",
+        "candidate_changed_files": [
+          "fastapi/dependencies/utils.py"
+        ],
+        "target_symbols": "unknown; must be annotated from the buggy source before execution",
+        "breakpoint_plan": "unverified; target get_body_field or a directly reached changed statement"
+      },
+      "setup_complexity": {
+        "level": "high",
+        "evidence": "same large pinned FastAPI-era dependency inventory as the project slice",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "unknown",
+        "network": "unknown",
+        "database": "possible in dependency inventory; selected-test use unverified",
+        "native_library": "possible",
+        "gui": "unknown",
+        "long_runtime": "unknown",
+        "nondeterminism": "unknown",
+        "notes": "The test name suggests schema generation, but that does not prove offline behavior."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "offline/no-external-service proof",
+          "contained dependency provenance",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "The official entrypoint is recorded, but no baseline, regression, PDB, full-suite, or cleanup result exists yet."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/9/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/9/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/9/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/fastapi/bugs/9/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-httpie-001",
+      "bugsinpy": {
+        "project": "httpie",
+        "bug_id": 1,
+        "project_url": "https://github.com/jakubroztocil/httpie/",
+        "buggy_revision": "001bda19450ad85c91345eea3cfa3991e1d492ba",
+        "fixed_revision": "5300b0b490b8db48fac30b5e32164be93dc574b7",
+        "metadata_paths": [
+          "projects/httpie/project.info",
+          "projects/httpie/bugs/1/bug.info",
+          "projects/httpie/bugs/1/run_test.sh",
+          "projects/httpie/bugs/1/requirements.txt",
+          "projects/httpie/bugs/1/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.7.3",
+        "pythonpath": "unknown",
+        "official_dependency_recipe": "projects/httpie/bugs/1/requirements.txt",
+        "official_setup_script": "none present in bug directory",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "pytest tests/test_downloads.py::TestDownloadUtils::test_unique_filename",
+        "argv": [
+          "pytest",
+          "tests/test_downloads.py::TestDownloadUtils::test_unique_filename"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tests/test_downloads.py",
+        "failing_test_identity": "tests/test_downloads.py::TestDownloadUtils::test_unique_filename",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tests/test_downloads.py::TestDownloadUtils::test_unique_filename"
+        ],
+        "pass_to_pass_candidates": [
+          "tests/test_config.py::test_config_dir_not_writeable",
+          "tests/test_redirects.py::TestRedirects::test_max_redirects"
+        ],
+        "pass_to_pass_source_basis": "Official projects/httpie/httpie-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Use explicit pytest node IDs; do not invoke network-capable tests until the sandbox and local-service policy are proven.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "filesystem/name-length boundary",
+        "basis": "The official isolated patch adds filename trimming and filesystem name-length handling before suffix allocation.",
+        "confidence": "high for the patch-level label; not a native BugsInPy category"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for boundary-state and exception-path inspection",
+        "expected_pdb_reachability": "likely reachable through a local filename helper; unverified",
+        "candidate_changed_files": [
+          "httpie/downloads.py"
+        ],
+        "target_symbols": "unknown; candidate functions include get_unique_filename and trim_filename_if_needed",
+        "breakpoint_plan": "unverified; prefer a pure helper path with a local temporary-directory input"
+      },
+      "setup_complexity": {
+        "level": "medium",
+        "evidence": "requirements include pytest-httpbin/httpbin and an older pinned dependency set",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "possible local HTTP test service via pytest-httpbin; unverified for this node",
+        "network": "unknown; must be denied during execution unless a local-only proof exists",
+        "database": "unknown",
+        "native_library": "possible through cffi/brotli dependencies",
+        "gui": "unknown",
+        "long_runtime": "unknown",
+        "nondeterminism": "unknown",
+        "notes": "This task is retained as a candidate but is not execution-ready until the dependency and local-service boundary is demonstrated."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "local-only test proof",
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "dependency provenance",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Determine whether the selected test imports or starts any HTTP service; verify full-suite behavior without network."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/1/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/1/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/1/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/1/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-httpie-002",
+      "bugsinpy": {
+        "project": "httpie",
+        "bug_id": 2,
+        "project_url": "https://github.com/jakubroztocil/httpie/",
+        "buggy_revision": "356e0436510fee70b4071fac58be81c0a0a7db59",
+        "fixed_revision": "e18b609ef7d867d6efa0efe42c832be5e0d09338",
+        "metadata_paths": [
+          "projects/httpie/project.info",
+          "projects/httpie/bugs/2/bug.info",
+          "projects/httpie/bugs/2/run_test.sh",
+          "projects/httpie/bugs/2/requirements.txt",
+          "projects/httpie/bugs/2/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.7.3",
+        "pythonpath": "unknown",
+        "official_dependency_recipe": "projects/httpie/bugs/2/requirements.txt",
+        "official_setup_script": "none present in bug directory",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "pytest tests/test_redirects.py::TestRedirects::test_max_redirects",
+        "argv": [
+          "pytest",
+          "tests/test_redirects.py::TestRedirects::test_max_redirects"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tests/test_redirects.py",
+        "failing_test_identity": "tests/test_redirects.py::TestRedirects::test_max_redirects",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tests/test_redirects.py::TestRedirects::test_max_redirects"
+        ],
+        "pass_to_pass_candidates": [
+          "tests/test_downloads.py::TestDownloadUtils::test_unique_filename",
+          "tests/test_config.py::test_config_dir_not_writeable"
+        ],
+        "pass_to_pass_source_basis": "Official projects/httpie/httpie-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Explicit pytest node IDs only; network access must remain denied.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "request-policy/control-flow propagation",
+        "basis": "The official isolated patch propagates max_redirects into the requests session and adjusts error handling context.",
+        "confidence": "medium; the label is an adapter annotation, not native BugsInPy metadata"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "medium to high for configuration-to-client data flow",
+        "expected_pdb_reachability": "possible through a mocked/local request path; unverified",
+        "candidate_changed_files": [
+          "httpie/client.py",
+          "httpie/core.py"
+        ],
+        "target_symbols": "unknown; candidate function is get_response",
+        "breakpoint_plan": "unverified; must prove no external network and stable local response fixture"
+      },
+      "setup_complexity": {
+        "level": "medium",
+        "evidence": "requirements include pytest-httpbin/httpbin and old requests/pytest versions",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "possible local HTTP test service; unverified",
+        "network": "high risk unless test fixture is fully local; execution must be denied by default",
+        "database": "unknown",
+        "native_library": "possible through cffi/brotli dependencies",
+        "gui": "unknown",
+        "long_runtime": "unknown",
+        "nondeterminism": "possible due redirect/server timing; unverified",
+        "notes": "This is a useful family candidate but a stricter containment gate than the pure helper tasks."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "local-only request proof",
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "dependency provenance",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Verify the max-redirects test does not require a network-capable server and that PDB can pause before request completion."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/2/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/2/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/2/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/httpie/bugs/2/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-tqdm-002",
+      "bugsinpy": {
+        "project": "tqdm",
+        "bug_id": 2,
+        "project_url": "https://github.com/tqdm/tqdm",
+        "buggy_revision": "bef86db56654d271838b145ad77f7040a73a7b4d",
+        "fixed_revision": "127af5caf19e7d29c346f5ca8a9c7ef3004b664b",
+        "metadata_paths": [
+          "projects/tqdm/project.info",
+          "projects/tqdm/bugs/2/bug.info",
+          "projects/tqdm/bugs/2/run_test.sh",
+          "projects/tqdm/bugs/2/requirements.txt",
+          "projects/tqdm/bugs/2/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.6.9",
+        "pythonpath": "tqdm/build/lib/",
+        "official_dependency_recipe": "projects/tqdm/bugs/2/requirements.txt",
+        "official_setup_script": "projects/tqdm/bugs/2/setup.sh",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "python3 -m pytest tqdm/tests/tests_tqdm.py::test_format_meter",
+        "argv": [
+          "python3",
+          "-m",
+          "pytest",
+          "tqdm/tests/tests_tqdm.py::test_format_meter"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tqdm/tests/tests_tqdm.py",
+        "failing_test_identity": "tqdm/tests/tests_tqdm.py::test_format_meter",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tqdm/tests/tests_tqdm.py::test_format_meter"
+        ],
+        "pass_to_pass_candidates": [
+          "tqdm/tests/tests_contrib.py::test_enumerate",
+          "tqdm/tests/tests_tqdm.py::test_bool"
+        ],
+        "pass_to_pass_source_basis": "Official projects/tqdm/tqdm-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Use python3 -m pytest with explicit nodes and the recorded pythonpath handling.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "terminal/display representation",
+        "basis": "The official isolated patch changes progress-bar rendering and ANSI-aware display trimming.",
+        "confidence": "high for the patch-level label; not a native BugsInPy category"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for pure formatting and state inspection",
+        "expected_pdb_reachability": "likely reachable in a local deterministic formatting test; unverified",
+        "candidate_changed_files": [
+          "tqdm/std.py",
+          "tqdm/utils.py"
+        ],
+        "target_symbols": "unknown; candidate functions include format_meter and disp_trim",
+        "breakpoint_plan": "unverified; choose a changed pure-Python formatting function"
+      },
+      "setup_complexity": {
+        "level": "low to medium",
+        "evidence": "small pinned requirements set plus setup.sh installs the package and test tools",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "unlikely from metadata; unverified",
+        "network": "must be disabled after dependency acquisition; test behavior unverified",
+        "database": "unlikely from metadata; unverified",
+        "native_library": "unknown",
+        "gui": "unlikely from metadata; unverified",
+        "long_runtime": "unknown",
+        "nondeterminism": "possible from terminal width/time formatting; unverified",
+        "notes": "This is one of the lower-complexity candidates but still requires the pinned old interpreter/toolchain."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "Python 3.6.9/toolchain availability",
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "deterministic terminal environment",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Verify terminal-width/environment normalization and that the selected node is collected exactly once on the reference platform."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/2/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/2/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/2/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/2/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-tqdm-003",
+      "bugsinpy": {
+        "project": "tqdm",
+        "bug_id": 3,
+        "project_url": "https://github.com/tqdm/tqdm",
+        "buggy_revision": "c2599e3cd6087429f48bae34347ec5d2473c8392",
+        "fixed_revision": "73962a47026dd980ac0758820efc9c41cbf938e0",
+        "metadata_paths": [
+          "projects/tqdm/project.info",
+          "projects/tqdm/bugs/3/bug.info",
+          "projects/tqdm/bugs/3/run_test.sh",
+          "projects/tqdm/bugs/3/requirements.txt",
+          "projects/tqdm/bugs/3/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.6.9",
+        "pythonpath": "tqdm/build/lib/",
+        "official_dependency_recipe": "projects/tqdm/bugs/3/requirements.txt",
+        "official_setup_script": "projects/tqdm/bugs/3/setup.sh",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "python3 -m pytest tqdm/tests/tests_tqdm.py::test_bool",
+        "argv": [
+          "python3",
+          "-m",
+          "pytest",
+          "tqdm/tests/tests_tqdm.py::test_bool"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tqdm/tests/tests_tqdm.py",
+        "failing_test_identity": "tqdm/tests/tests_tqdm.py::test_bool",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tqdm/tests/tests_tqdm.py::test_bool"
+        ],
+        "pass_to_pass_candidates": [
+          "tqdm/tests/tests_tqdm.py::test_format_meter",
+          "tqdm/tests/tests_contrib.py::test_enumerate"
+        ],
+        "pass_to_pass_source_basis": "Official projects/tqdm/tqdm-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Use python3 -m pytest with explicit nodes and the recorded pythonpath handling.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "object protocol / truthiness contract",
+        "basis": "The official isolated patch implements __bool__ and __nonzero__ according to total, iterable, and undefined states.",
+        "confidence": "high for the patch-level label; not a native BugsInPy category"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for state-dependent branch inspection",
+        "expected_pdb_reachability": "likely reachable in a local object test; unverified",
+        "candidate_changed_files": [
+          "tqdm/_tqdm.py"
+        ],
+        "target_symbols": "unknown; candidate symbols are tqdm.__bool__ and tqdm.__nonzero__",
+        "breakpoint_plan": "unverified; choose a changed method line reached by test_bool"
+      },
+      "setup_complexity": {
+        "level": "low to medium",
+        "evidence": "small pinned requirements set plus setup.sh installs the package and test tools",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "unlikely from metadata; unverified",
+        "network": "must be disabled after dependency acquisition; test behavior unverified",
+        "database": "unlikely from metadata; unverified",
+        "native_library": "unknown",
+        "gui": "unlikely from metadata; unverified",
+        "long_runtime": "unknown",
+        "nondeterminism": "low expected but unverified",
+        "notes": "Old Python and package-install requirements remain a gate."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "Python 3.6.9/toolchain availability",
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Verify all truthiness branches and exact selected-node output on the reference platform."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/3/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/3/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/3/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/tqdm/bugs/3/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-thefuck-001",
+      "bugsinpy": {
+        "project": "thefuck",
+        "bug_id": 1,
+        "project_url": "https://github.com/nvbn/thefuck",
+        "buggy_revision": "2ced7a7f33ae0bec3ffc7a43ce95330bdf6cfcb9",
+        "fixed_revision": "444908ce1c17767ef4aaf9e0b4950497914f7f63",
+        "metadata_paths": [
+          "projects/thefuck/project.info",
+          "projects/thefuck/bugs/1/bug.info",
+          "projects/thefuck/bugs/1/run_test.sh",
+          "projects/thefuck/bugs/1/requirements.txt",
+          "projects/thefuck/bugs/1/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.7.0",
+        "pythonpath": "unknown",
+        "official_dependency_recipe": "projects/thefuck/bugs/1/requirements.txt",
+        "official_setup_script": "none present in bug directory",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "pytest tests/rules/test_pip_unknown_command.py::test_get_new_command",
+        "argv": [
+          "pytest",
+          "tests/rules/test_pip_unknown_command.py::test_get_new_command"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tests/rules/test_pip_unknown_command.py",
+        "failing_test_identity": "tests/rules/test_pip_unknown_command.py::test_get_new_command",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tests/rules/test_pip_unknown_command.py::test_get_new_command"
+        ],
+        "pass_to_pass_candidates": [
+          "tests/test_utils.py::test_get_all_executables_pathsep",
+          "tests/test_argument_parser.py::test_parse"
+        ],
+        "pass_to_pass_source_basis": "Official projects/thefuck/thefuck-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Explicit pytest nodes; deny shell/network side effects unless the test is proven pure.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "quoted-token parser boundary",
+        "basis": "The official isolated patch broadens quoted command-token extraction from alphabetic-only to any non-quote characters.",
+        "confidence": "high for the patch-level label; not a native BugsInPy category"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for pure parsing and transformation inspection",
+        "expected_pdb_reachability": "likely reachable in a local rule test; unverified",
+        "candidate_changed_files": [
+          "thefuck/rules/pip_unknown_command.py"
+        ],
+        "target_symbols": "unknown; candidate symbol is get_new_command",
+        "breakpoint_plan": "unverified; choose the regular-expression extraction path"
+      },
+      "setup_complexity": {
+        "level": "medium",
+        "evidence": "requirements include pexpect, psutil, pyte, and terminal-oriented packages",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "possible shell command fixtures; unverified",
+        "network": "unknown; must be disabled",
+        "database": "unknown",
+        "native_library": "possible through psutil/terminal packages",
+        "gui": "unknown",
+        "long_runtime": "unknown",
+        "nondeterminism": "possible from environment-shaped command fixtures",
+        "notes": "Keep only if the selected test is confirmed pure and does not spawn a shell."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "prove no shell/process/network side effect",
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Inspect the selected test's runtime behavior without executing it in this task; confirm no shell or external command is launched."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/1/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/1/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/1/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/1/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    },
+    {
+      "pilot_task_id": "bugsinpy-thefuck-002",
+      "bugsinpy": {
+        "project": "thefuck",
+        "bug_id": 2,
+        "project_url": "https://github.com/nvbn/thefuck",
+        "buggy_revision": "40ab4eb62db57627bff10cf029d29c94704086a2",
+        "fixed_revision": "78ef9eec88f43d5727986be2237f6e0e250cbbbc",
+        "metadata_paths": [
+          "projects/thefuck/project.info",
+          "projects/thefuck/bugs/2/bug.info",
+          "projects/thefuck/bugs/2/run_test.sh",
+          "projects/thefuck/bugs/2/requirements.txt",
+          "projects/thefuck/bugs/2/bug_patch.txt"
+        ]
+      },
+      "environment": {
+        "python_version": "3.7.0",
+        "pythonpath": "unknown",
+        "official_dependency_recipe": "projects/thefuck/bugs/2/requirements.txt",
+        "official_setup_script": "none present in bug directory",
+        "interpreter_verification": "unverified",
+        "platform_verification": "unverified; Linux is the proposed reference platform"
+      },
+      "reproduction": {
+        "official_entrypoint": "pytest tests/test_utils.py::test_get_all_executables_pathsep",
+        "argv": [
+          "pytest",
+          "tests/test_utils.py::test_get_all_executables_pathsep"
+        ],
+        "cwd": "project root (exact adapter-relative cwd unverified)",
+        "failing_test_file": "tests/test_utils.py",
+        "failing_test_identity": "tests/test_utils.py::test_get_all_executables_pathsep",
+        "buggy_expected_result": "failure expected from official BugsInPy bug definition; execution unverified",
+        "fixed_expected_result": "pass expected from official fixed revision; execution unverified",
+        "verification_status": "metadata_verified_execution_unverified"
+      },
+      "regression_oracle": {
+        "fail_to_pass": [
+          "tests/test_utils.py::test_get_all_executables_pathsep"
+        ],
+        "pass_to_pass_candidates": [
+          "tests/rules/test_pip_unknown_command.py::test_get_new_command",
+          "tests/test_argument_parser.py::test_parse"
+        ],
+        "pass_to_pass_source_basis": "Official projects/thefuck/thefuck-pass.txt inventory; compatibility with the buggy revision is unverified.",
+        "bounded_selected_suite": "Explicit pytest nodes; environment PATH must be deterministic and process/network access denied.",
+        "full_project_suite": "unknown; official full-suite argv and deterministic duration are not recorded in this manifest",
+        "gold_patch_use": "evaluator-only reference; never agent-visible"
+      },
+      "bug_family": {
+        "label": "platform path-separator compatibility",
+        "basis": "The official isolated patch replaces a hard-coded colon split with os.pathsep.",
+        "confidence": "high for the patch-level label; not a native BugsInPy category"
+      },
+      "debugger_relevance": {
+        "expected_relevance": "high for environment-state and branch inspection",
+        "expected_pdb_reachability": "likely reachable in a local filesystem enumeration path; unverified",
+        "candidate_changed_files": [
+          "thefuck/utils.py"
+        ],
+        "target_symbols": "unknown; candidate symbol is get_all_executables",
+        "breakpoint_plan": "unverified; use a deterministic PATH fixture and no host PATH leakage"
+      },
+      "setup_complexity": {
+        "level": "medium",
+        "evidence": "same terminal/process-oriented requirements as thefuck bug 1",
+        "repository_setup": "no project checkout or setup was performed"
+      },
+      "requirements_risk": {
+        "external_service": "possible process/terminal interaction; unverified",
+        "network": "unknown; must be disabled",
+        "database": "unknown",
+        "native_library": "possible through psutil/terminal packages",
+        "gui": "unknown",
+        "long_runtime": "unknown",
+        "nondeterminism": "high risk from host PATH and filesystem contents unless fully replaced",
+        "notes": "Retain only if the adapter can provide a deterministic PATH and filesystem fixture."
+      },
+      "licensing": {
+        "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
+        "underlying_project_license": "unverified",
+        "redistribution": "not cleared",
+        "local_research_use": "requires license and notice review before acquisition or execution",
+        "status": "gated"
+      },
+      "eligibility": {
+        "status": "proposed_with_gates",
+        "blocking_gates": [
+          "deterministic PATH/filesystem fixture",
+          "baseline failure and P2P preservation",
+          "target-symbol and breakpoint review",
+          "no process/network side effects",
+          "license/notice review"
+        ]
+      },
+      "unresolved_verification_items": [
+        "Verify that the isolated test can run with a synthetic PATH and no host filesystem dependency; otherwise replace this candidate and record the replacement."
+      ],
+      "source_references": [
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/project.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/2/bug.info",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/2/run_test.sh",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/2/requirements.txt",
+        "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/projects/thefuck/bugs/2/bug_patch.txt",
+        "https://arxiv.org/abs/2401.15481"
+      ]
+    }
+  ],
+  "cross_task_gates": [
+    "Pin and record the BugsInPy metadata revision and every project revision before acquisition.",
+    "Review the underlying project license, notices, and BugsInPy redistribution terms; do not redistribute artifacts while status is unknown.",
+    "Acquire dependencies only in a disposable contained environment, with provenance and hashes recorded; do not install them on the host.",
+    "Prove each buggy baseline fails its exact F2P node, each selected P2P node passes on the buggy revision, and the fixed revision passes the declared regression suite.",
+    "Resolve target files, target symbols, breakpoint lines, and a stable pytest-aware PDB entry point from the buggy source.",
+    "Reject any task requiring external network, external services, databases, GUI, native-library build uncertainty, unbounded runtime, or nondeterministic fixtures in the first pilot.",
+    "Run the five curated fixtures as the architecture smoke gate before any external task execution.",
+    "Record task-level evidence and failure taxonomy; do not pool historical curated or live-model evidence with this pilot."
+  ],
+  "source_references": [
+    "https://github.com/soarsmu/BugsInPy/tree/11c5f1eea954a42132cfd06bf257766a7963e0fd",
+    "https://github.com/soarsmu/BugsInPy/blob/11c5f1eea954a42132cfd06bf257766a7963e0fd/README.md",
+    "https://arxiv.org/abs/2401.15481"
+  ]
+}
