@@ -118,7 +118,7 @@ def test_records_and_mappings_are_detached_and_immutable():
 def test_direct_debug_task_uses_complete_schema_validation_and_detachment():
     base = package_load_task(FIXTURE)
     malformed = [
-        replace(base, tests=replace(base.tests, fail_to_pass=["tests/a.py::test_one", "tests/a.py::test_two"])),
+        replace(base, tests=replace(base.tests, fail_to_pass=[base.tests.fail_to_pass[0], base.tests.fail_to_pass[0]])),
         replace(base, tests=replace(base.tests, pass_to_pass=[base.tests.pass_to_pass[0], base.tests.pass_to_pass[0]])),
         replace(base, reproduction=replace(base.reproduction, argv=[])),
         replace(base, reproduction=replace(base.reproduction, timeout_seconds=0)),

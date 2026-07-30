@@ -43,10 +43,17 @@ Corrective-feedback recovery occurred in 4 of 6 observed feedback episodes.
 This small, fixture-specific matrix does not establish causal PDB
 effectiveness or general model reliability; see `docs/PROJECT_TRACKER.md`.
 
-The current engineering priority is the documentation-defined BugsInPy
-eligibility manifest and adapter design. No external dataset execution or
-larger live policy comparison is justified until containment, task mapping,
-and a controlled real-model path that actually opens PDB are ready.
+BugsInPy execution remains blocked by its license gate. A resource-limited
+QuixBugs (Python `gcd`) real no-model smoke has now completed successfully
+through the accepted WSL2/Bubblewrap infrastructure, extended with a
+live-self-tested `prlimit` CPU/memory/process-count profile: pinned revision
+`4257f44b0ff1181dedaedee6a447e133219fcebf`, verdict
+`ACCEPT CANDIDATE — REAL SMOKE PASSED`. See
+`docs/QUIXBUGS_SMOKE_USAGE_V1.md`. This validates infrastructure only; no
+model, PDB, or broader benchmark campaign was run. No external dataset
+execution or larger live policy comparison is justified until containment,
+task mapping, and a controlled real-model path that actually opens PDB are
+ready.
 
 Dataset and Evaluation Decision v1 selects BugsInPy as the primary external
 dataset, QuixBugs Python as fallback, and the current five curated fixtures as

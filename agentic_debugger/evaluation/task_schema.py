@@ -167,10 +167,9 @@ class Tests:
         fail_to_pass = _ensure_list_of_non_empty_strs(
             m["fail_to_pass"], "tests.fail_to_pass"
         )
-        if len(fail_to_pass) != 1:
+        if len(fail_to_pass) < 1:
             raise SchemaValidationError(
-                "tests.fail_to_pass must contain exactly 1 node ID "
-                f"for schema v1, got {len(fail_to_pass)}"
+                "tests.fail_to_pass must contain at least 1 node ID"
             )
         if len(fail_to_pass) != len(set(fail_to_pass)):
             raise SchemaValidationError(
@@ -180,9 +179,9 @@ class Tests:
         pass_to_pass = _ensure_list_of_non_empty_strs(
             m["pass_to_pass"], "tests.pass_to_pass"
         )
-        if len(pass_to_pass) < 2:
+        if len(pass_to_pass) < 1:
             raise SchemaValidationError(
-                "tests.pass_to_pass must have at least 2 entries"
+                "tests.pass_to_pass must have at least 1 entry"
             )
         if len(pass_to_pass) != len(set(pass_to_pass)):
             raise SchemaValidationError(
@@ -317,7 +316,7 @@ class Constraints:
             m["max_patch_attempts"], "constraints.max_patch_attempts", 1, 3
         )
         max_test_runs = _validate_int_range(
-            m["max_test_runs"], "constraints.max_test_runs", 1, 10
+            m["max_test_runs"], "constraints.max_test_runs", 1, 20
         )
         max_pdb_observations = _validate_int_range(
             m["max_pdb_observations"], "constraints.max_pdb_observations", 0, 20

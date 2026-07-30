@@ -151,8 +151,20 @@ class TestDebugTaskRejections:
         mapping = valid_task_mapping
         dup = mapping["tests"]["fail_to_pass"][0]
         mapping["tests"]["fail_to_pass"] = [dup, dup]
-        with pytest.raises(SchemaValidationError, match="exactly 1 node ID"):
+        with pytest.raises(SchemaValidationError, match="duplicate"):
             DebugTask.from_mapping(mapping)
+
+    def test_multiple_fail_to_pass_entries_accepted(self, valid_task_mapping):
+        mapping = valid_task_mapping
+        mapping["tests"]["fail_to_pass"] = [
+            mapping["tests"]["fail_to_pass"][0],
+            "other::test_a",
+            "other::test_b",
+            "other::test_c",
+            "other::test_d",
+        ]
+        task = DebugTask.from_mapping(mapping)
+        assert len(task.tests.fail_to_pass) == 5
 
     def test_duplicate_pass_to_pass_rejected(self, valid_task_mapping):
         mapping = valid_task_mapping
@@ -216,6 +228,18 @@ class TestDebugTaskRejections:
         with pytest.raises(SchemaValidationError, match="range"):
             DebugTask.from_mapping(mapping)
 
+    def test_max_test_runs_accepts_a_real_multi_node_verifier_lifecycle(self, valid_task_mapping):
+        mapping = valid_task_mapping
+        mapping["constraints"]["max_test_runs"] = 16
+        task = DebugTask.from_mapping(mapping)
+        assert task.constraints.max_test_runs == 16
+
+    def test_max_test_runs_exceeds_max_rejected(self, valid_task_mapping):
+        mapping = valid_task_mapping
+        mapping["constraints"]["max_test_runs"] = 21
+        with pytest.raises(SchemaValidationError, match="range"):
+            DebugTask.from_mapping(mapping)
+
     def test_pdb_observations_exceeds_max_rejected(self, valid_task_mapping):
         mapping = valid_task_mapping
         mapping["constraints"]["max_pdb_observations"] = 25
@@ -244,11 +268,17 @@ class TestDebugTaskRejections:
         with pytest.raises(SchemaValidationError, match="string"):
             DebugTask.from_mapping(mapping)
 
-    def test_p2p_too_few_rejected(self, valid_task_mapping):
+    def test_p2p_empty_rejected(self, valid_task_mapping):
+        mapping = valid_task_mapping
+        mapping["tests"]["pass_to_pass"] = []
+        with pytest.raises(SchemaValidationError, match="at least 1"):
+            DebugTask.from_mapping(mapping)
+
+    def test_p2p_single_entry_accepted(self, valid_task_mapping):
         mapping = valid_task_mapping
         mapping["tests"]["pass_to_pass"] = ["only_one::test"]
-        with pytest.raises(SchemaValidationError, match="at least 2"):
-            DebugTask.from_mapping(mapping)
+        task = DebugTask.from_mapping(mapping)
+        assert task.tests.pass_to_pass == ["only_one::test"]
 
     def test_unknown_reproduction_field_rejected(self, valid_task_mapping):
         mapping = valid_task_mapping
@@ -344,20 +374,20 @@ class TestDebugTaskRejections:
 
     # --- Issue 2: curated test and argv contract tests ---
 
-    def test_fail_to_pass_exactly_one_rejected_empty(self, valid_task_mapping):
+    def test_fail_to_pass_empty_rejected(self, valid_task_mapping):
         mapping = valid_task_mapping
         mapping["tests"]["fail_to_pass"] = []
-        with pytest.raises(SchemaValidationError, match="exactly 1"):
+        with pytest.raises(SchemaValidationError, match="at least 1"):
             DebugTask.from_mapping(mapping)
 
-    def test_fail_to_pass_exactly_one_rejected_two(self, valid_task_mapping):
+    def test_fail_to_pass_two_entries_accepted(self, valid_task_mapping):
         mapping = valid_task_mapping
         mapping["tests"]["fail_to_pass"] = [
             "tests/a::test_x",
             "tests/b::test_y",
         ]
-        with pytest.raises(SchemaValidationError, match="exactly 1"):
-            DebugTask.from_mapping(mapping)
+        task = DebugTask.from_mapping(mapping)
+        assert task.tests.fail_to_pass == ["tests/a::test_x", "tests/b::test_y"]
 
     def test_full_suite_argv_empty_element_rejected(self, valid_task_mapping):
         mapping = valid_task_mapping

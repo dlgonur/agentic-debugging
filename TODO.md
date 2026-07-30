@@ -19,13 +19,17 @@ legal-directive recovery gözlendi. Bu küçük, fixture-specific sonuç causal 
 etkinliği, policy üstünlüğü veya genel model güvenilirliği kanıtı değildir.
 
 Maddeler aşağıda `[x]` ile işaretlenmiş ve neye dayandığı not edilmiştir; tam
-kanıt kaydı için `docs/PROJECT_TRACKER.md`'e bakınız. Mevcut aktif mühendislik
-önceliği, `docs/DATASET_EVALUATION_DECISION_V1.md` ile seçilen BugsInPy
-uygunluk manifesti ve adapter tasarımını hazırlamaktır. Dataset execution,
-broader evaluation, fine-tuning, RAG genişletmesi, preference optimization
-(DPO/RLHF), containment hardening ve final teknik rapor hâlâ future work
-olarak kalır; bu not stajın veya daha geniş araştırma projesinin tamamlandığı
-anlamına gelmez.
+kanıt kaydı için `docs/PROJECT_TRACKER.md`'e bakınız. BugsInPy execution hâlâ
+license gate nedeniyle bloke; bu blok kaldırılmadı, sadece bekletiliyor.
+Bu blok nedeniyle dar kapsamlı bir QuixBugs (Python `gcd`) fallback
+resource-limited real no-model smoke tamamlandı ve kabul edildi:
+pinned revision `4257f44b0ff1181dedaedee6a447e133219fcebf`, verdict
+`ACCEPT CANDIDATE — REAL SMOKE PASSED`; bkz. `docs/QUIXBUGS_SMOKE_USAGE_V1.md`.
+Bu sadece altyapıyı doğrular; model, PDB veya geniş benchmark kampanyası
+çalıştırılmadı. Dataset execution, broader evaluation, fine-tuning, RAG
+genişletmesi, preference optimization (DPO/RLHF), containment hardening ve
+final teknik rapor hâlâ future work olarak kalır; bu not stajın veya daha
+geniş araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Daily requirement
 
@@ -43,7 +47,7 @@ anlamına gelmez.
 
 - [x] Hugging Face ve açık kaynak platformlarda debugging ve bug-fix veri setlerini araştır. (Dataset and Evaluation Decision v1.)
 - [x] SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J ve QuixBugs veri setlerini karşılaştır. (Dataset and Evaluation Decision v1.)
-- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (BugsInPy primary, QuixBugs fallback; sequencing decisions recorded in the decision document.)
+- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (BugsInPy primary, QuixBugs fallback; sequencing decisions recorded in the decision document. BugsInPy execution license-gated; QuixBugs gcd resource-limited real no-model smoke completed and accepted — bkz. docs/QUIXBUGS_SMOKE_USAGE_V1.md.)
 - [ ] Veri setlerini analiz et ve eğitim/test ayrımını hazırla.
 
 ## Phase 3 — Model and Fine-tuning

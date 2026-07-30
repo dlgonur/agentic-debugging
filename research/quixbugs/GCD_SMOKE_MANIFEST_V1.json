@@ -1,0 +1,63 @@
+{
+  "manifest_schema_version": "1.0",
+  "manifest_id": "quixbugs-gcd-smoke-v1",
+  "dataset": "QuixBugs",
+  "task_id": "quixbugs-gcd-smoke-v1",
+  "authority": {
+    "official_repository": "https://github.com/jkoppel/QuixBugs",
+    "official_repository_revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+    "default_branch": "master"
+  },
+  "target": {
+    "algorithm": "gcd",
+    "language": "python",
+    "buggy_path": "python_programs/gcd.py",
+    "corrected_path": "correct_python_programs/gcd.py",
+    "pytest_path": "python_testcases/test_gcd.py",
+    "support_paths": [
+      "conftest.py",
+      "python_testcases/load_testdata.py",
+      "json_testcases/gcd.json"
+    ],
+    "selected_cwd": "."
+  },
+  "environment": {
+    "python_version": "3.10.12",
+    "python_source": "system /usr/bin/python3 in the approved Ubuntu-22.04 WSL2 distro",
+    "venv_strategy": "python3 -m venv --without-pip; bootstrap pip via https://bootstrap.pypa.io/get-pip.py (network, dependency-prep phase only); pip install pinned pytest",
+    "pinned_packages": {
+      "pytest": "7.4.4"
+    },
+    "expected_fingerprint": "4cee35b2f786fc4857e468abb87269cc932eefab10af6b163a162e2c50bd6d83"
+  },
+  "resource_profile": {
+    "mechanism": "prlimit",
+    "cpu_seconds": 5,
+    "memory_bytes": 268435456,
+    "max_processes": 8,
+    "wall_clock_timeout_seconds": 30,
+    "retained_output_chars": 20000,
+    "network_denied": true,
+    "workspace_writes": "single-owned-host-backed-bind-mount"
+  },
+  "licensing": {
+    "license": "MIT",
+    "license_path": "LICENSE",
+    "legal_notes_path": "legal_notes.txt",
+    "summary": "MIT license (Copyright 2017-2019 James Koppel). legal_notes.txt documents the Quixey-bankruptcy IP situation and creator Liron Shapira's explicit written consent to use the dataset. Supports local, non-redistributed research execution.",
+    "authorized_use": "local-non-redistributed-research-execution"
+  },
+  "test_data": {
+    "source_path": "json_testcases/gcd.json",
+    "case_count": 6,
+    "baseline_expected_pass_count": 1,
+    "baseline_expected_fail_count": 5,
+    "note": "The buggy python_programs/gcd.py computes gcd(a % b, b); b never changes across recursive calls, so only the trivial b==0 case ([17, 0] -> 17) passes on the buggy baseline and every other case recurses to RecursionError. This is real upstream dataset behavior, not synthesized or curated."
+  },
+  "unresolved_assumptions": [
+    "Only 1 of 6 gcd parametrized cases passes on the buggy baseline, so tests.pass_to_pass has exactly 1 entry under the schema's relaxed >=1 floor (agentic_debugger/evaluation/task_schema.py, lowered from >=2 specifically to accommodate this real external-dataset shape without fabricating a second passing node).",
+    "conftest.py, python_testcases/load_testdata.py, and json_testcases/gcd.json are non-target support files required for pytest collection; they are acquired as part of the whole pinned repository rather than individually curated.",
+    "Python 3.10.12 (the system interpreter already present in the approved Ubuntu-22.04 WSL distro) is used because QuixBugs' README does not pin an exact Python version; pytest is pinned to 7.4.4 and both are recorded in the environment fingerprint.",
+    "Exact resource-profile byte/second values were sized empirically against the real gcd/pytest workload (peak RSS ~27MB, wall time <0.1s) and are additionally live self-tested for enforcement immediately before the real smoke runs; they are not metadata-only claims."
+  ]
+}

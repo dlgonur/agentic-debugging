@@ -307,6 +307,55 @@ Notes:
 - [x] Four-case OpenCode Zen descriptive matrix (2 static + 2 PDB-on-uncertainty; exact locked order; matrix/evidence accepted; PDB openings 0)
 - [x] Offline PDB-policy directive-path audit (Task 10B-R4; completed without live/model call)
 - [x] Task 10B-R5 — Policy-Scoped Live Contract Repair v1 (commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`; protocol `1.3`; final audit accepted)
+- [x] Resource-Limited QuixBugs Fallback Real Smoke v1 (baseline `96526fc`; branch `feature/quixbugs-resource-limited-smoke-v1`)
+
+### Resource-Limited QuixBugs Fallback Real Smoke v1
+
+BugsInPy execution remains license-gated and its WSL real-smoke was also
+fail-closed on CPU/memory/process-count enforcement (see the accepted
+`bugsinpy-wsl-real-smoke-v1` evidence package: `IMPLEMENTED — REAL SMOKE
+BLOCKED`). This narrow follow-on unblocks the resource-limit gate and uses it
+to complete one genuine, real, no-model smoke against QuixBugs Python `gcd`
+instead — infrastructure validation only, no model/PDB/broader campaign.
+
+- Mechanism: live-tested `prlimit` (not cgroup v2/`systemd-run`) composed
+  inside the existing `bwrap --unshare-all` sandbox. `agentic_debugger/bugsinpy/wsl.py`
+  gained `ResourceLimits`, `build_prlimit_argv`, `self_test_resource_limits`,
+  and a fail-closed `prepare_resource_isolation` gate; `create_verified_context`
+  gained an optional `runner=` parameter. All prior BugsInPy tests kept
+  passing unmodified (default no-`runner` path is unchanged).
+- Repository: `https://github.com/jkoppel/QuixBugs`, default branch `master`,
+  pinned revision `4257f44b0ff1181dedaedee6a447e133219fcebf`. License MIT;
+  `legal_notes.txt` documents explicit creator consent (Liron Shapira).
+  Supports local, non-redistributed research execution.
+- Environment: system `/usr/bin/python3` 3.10.12 in the approved
+  Ubuntu-22.04 WSL2 distro; task-local venv built with `--copies` (required —
+  the default symlink venv is invisible through the `\\wsl.localhost\` Windows
+  bridge because its final symlink hop is an absolute host path); pip
+  bootstrapped via `get-pip.py`; `pytest==7.4.4` pinned.
+- Live self-tests: all 7 existing Bubblewrap checks passed, plus 3 new
+  resource checks — CPU-time (`--cpu=5`, killed exit 137), address-space
+  (`--as=256MiB`, clean `MemoryError`), process-count (`--nproc=8`, blocked
+  after exceeding the cap). The gate only opens after this live evidence.
+- Real dataset finding: the buggy `gcd(a % b, b)` never advances `b`, so every
+  case but the trivial `b == 0` one recurses to `RecursionError`. Of 6 official
+  parametrized cases, exactly 1 passes on the buggy baseline and 5 fail. This
+  required lowering `DebugTask.tests.pass_to_pass`'s minimum from 2 to 1 entries
+  in `agentic_debugger/evaluation/task_schema.py` (backward compatible; every
+  existing curated/BugsInPy task already supplies ≥2) rather than fabricating a
+  second passing node, per explicit user confirmation during planning.
+- Storage: WSL-owned root under `~/.local/share/agentic-debugging-internship/quixbugs-smoke-v1/`
+  (outside `/mnt/c`) with `sources/`, `python-env/`, `cache/` persistent and
+  only `runs/<uuid>/` disposable. `QuixBugsSmokeRunner.ensure_source()` acquires
+  the pin once and only re-verifies (never re-clones) on later runs.
+- Result: pytest collection/baseline/oracle discovery matched the predicted
+  5-fail/1-pass split exactly; gold patch generated via `difflib` and hashed;
+  `EvaluationVerifier.evaluate()` returned `COMPLETED`/`RESOLVED` with F2P 1/1,
+  P2P 1/1, full suite 2/2, canonical fixture unchanged, workspace `CLEANED`.
+  Disposable workspace removed; persistent source/venv/cache retained.
+- Final verdict: **ACCEPT CANDIDATE — REAL SMOKE PASSED**. See
+  `docs/QUIXBUGS_SMOKE_USAGE_V1.md` and
+  `_ai-review/quixbugs-resource-limited-smoke-v1/` for full evidence.
 
 ## Last Updated
 

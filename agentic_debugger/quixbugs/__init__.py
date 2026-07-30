@@ -1,0 +1,41 @@
+"""QuixBugs (gcd) manifest, preflight, and external-workspace adapter."""
+
+from agentic_debugger.quixbugs.adapter import (
+    DiscoveryError,
+    DiscoveryRecord,
+    QuixBugsAdapter,
+    QuixBugsCommands,
+    QuixBugsManifest,
+    QuixBugsManifestValidationError,
+    QuixBugsPreflightFacts,
+    QuixBugsSmokeRunner,
+    QuixBugsSourceAcquirer,
+    QuixBugsTaskMappingError,
+    QuixGateName,
+    QuixGateStatus,
+    QuixPreflightReport,
+    QuixSmokeEvidence,
+    build_gold_patch,
+    sha256_of,
+    verifier_command_count,
+)
+
+__all__ = [
+    "DiscoveryError",
+    "DiscoveryRecord",
+    "QuixBugsAdapter",
+    "QuixBugsCommands",
+    "QuixBugsManifest",
+    "QuixBugsManifestValidationError",
+    "QuixBugsPreflightFacts",
+    "QuixBugsSmokeRunner",
+    "QuixBugsSourceAcquirer",
+    "QuixBugsTaskMappingError",
+    "QuixGateName",
+    "QuixGateStatus",
+    "QuixPreflightReport",
+    "QuixSmokeEvidence",
+    "build_gold_patch",
+    "sha256_of",
+    "verifier_command_count",
+]
