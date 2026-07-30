@@ -419,6 +419,51 @@ class Oracle:
 
 
 @dataclass(frozen=True)
+class TaskSource:
+    """Typed source binding for curated and external task roots."""
+
+    kind: str
+    path: str
+    provenance: Dict[str, str]
+
+    @staticmethod
+    def from_mapping(m: Any) -> "TaskSource":
+        if not isinstance(m, dict):
+            raise SchemaValidationError("source must be a mapping")
+        _check_required_fields(m, {"kind", "path", "provenance"}, "source")
+        _check_no_unknown_fields(m, {"kind", "path", "provenance"}, "source")
+        kind = m["kind"]
+        if kind not in {"curated", "external"}:
+            raise SchemaValidationError("source.kind must be curated or external")
+        path = _validate_path_relative(m["path"], "source.path")
+        provenance = m["provenance"]
+        required = {
+            "dataset", "manifest_id", "manifest_fingerprint", "upstream_repository",
+            "upstream_revision", "project", "bug_id", "buggy_revision", "fixed_revision",
+        }
+        if not isinstance(provenance, dict):
+            raise SchemaValidationError("source.provenance must be a mapping")
+        _check_required_fields(provenance, required, "source.provenance")
+        _check_no_unknown_fields(provenance, required, "source.provenance")
+        if not all(isinstance(value, str) and value for value in provenance.values()):
+            raise SchemaValidationError("source.provenance values must be non-empty strings")
+        normalized = path.replace("\\", "/")
+        if kind == "curated" and not normalized.startswith(FIXTURE_PATH_PREFIX):
+            raise SchemaValidationError("curated source.path must be inside the curated fixture root")
+        if kind == "external" and normalized.startswith(FIXTURE_PATH_PREFIX):
+            raise SchemaValidationError("external source.path must not use the curated fixture root")
+        return TaskSource(kind, path, dict(provenance))
+
+    def to_mapping(self) -> Dict[str, Any]:
+        return {"kind": self.kind, "path": self.path, "provenance": dict(self.provenance)}
+
+    def agent_visible_mapping(self) -> Dict[str, Any]:
+        provenance = dict(self.provenance)
+        provenance.pop("fixed_revision", None)
+        return {"kind": self.kind, "path": self.path, "provenance": provenance}
+
+
+@dataclass(frozen=True)
 class DebugTask:
     schema_version: str
     task_id: str
@@ -431,6 +476,7 @@ class DebugTask:
     constraints: Constraints
     oracle: Oracle
     tags: List[str]
+    source: Optional[TaskSource] = None
 
     @staticmethod
     def from_mapping(m: Any) -> DebugTask:
@@ -467,6 +513,7 @@ class DebugTask:
                 "constraints",
                 "oracle",
                 "tags",
+                "source",
             },
             "task",
         )
@@ -490,11 +537,14 @@ class DebugTask:
             m["fixture_path"], "task.fixture_path"
         )
         normalized_fixture = fixture_path.replace("\\", "/")
-        if not normalized_fixture.startswith(FIXTURE_PATH_PREFIX):
+        source = TaskSource.from_mapping(m["source"]) if "source" in m else None
+        if source is None and not normalized_fixture.startswith(FIXTURE_PATH_PREFIX):
             raise SchemaValidationError(
                 f"task.fixture_path must be inside "
                 f"{FIXTURE_PATH_PREFIX!r}, got {fixture_path!r}"
             )
+        if source is not None and source.path != fixture_path:
+            raise SchemaValidationError("task.fixture_path must equal source.path")
 
         reproduction = Reproduction.from_mapping(m["reproduction"])
         tests = Tests.from_mapping(m["tests"])
@@ -522,6 +572,7 @@ class DebugTask:
             constraints=constraints,
             oracle=oracle,
             tags=clean_tags,
+            source=source,
         )
 
     @staticmethod
@@ -533,7 +584,7 @@ class DebugTask:
         return DebugTask.from_mapping(data)
 
     def to_mapping(self) -> Dict[str, Any]:
-        return {
+        result = {
             "schema_version": self.schema_version,
             "task_id": self.task_id,
             "title": self.title,
@@ -546,8 +597,13 @@ class DebugTask:
             "oracle": self.oracle.to_mapping(),
             "tags": list(self.tags),
         }
+        if self.source is not None:
+            result["source"] = self.source.to_mapping()
+        return result
 
     def agent_visible_mapping(self) -> Dict[str, Any]:
         result = self.to_mapping()
         del result["oracle"]
+        if self.source is not None:
+            result["source"] = self.source.agent_visible_mapping()
         return result

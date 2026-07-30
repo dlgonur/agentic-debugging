@@ -16,6 +16,7 @@ from agentic_debugger.runtime.exceptions import (
     CommandExecutionError,
     CommandRequestError,
 )
+from agentic_debugger.runtime.execution import VerifiedExecutionContext
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 _MAX_OUTPUT_CHARS = 20_000
@@ -141,8 +142,9 @@ class CommandRunner:
     processes including descendant processes where the platform permits.
     """
 
-    def __init__(self, workspace: TaskWorkspace) -> None:
+    def __init__(self, workspace: TaskWorkspace, execution_context: Optional[VerifiedExecutionContext] = None) -> None:
         self._workspace = workspace
+        self._execution_context = execution_context
 
     def run(
         self,
@@ -154,6 +156,14 @@ class CommandRunner:
         _validate_timeout(timeout_seconds)
 
         resolved_cwd = self._workspace.resolve_path(cwd, must_exist=True)
+        if self._execution_context is not None:
+            self._execution_context.bind_cwd(cwd)
+            bound_argv = self._execution_context.bind_argv(argv)
+            bound_env = self._execution_context.build_environment(self._workspace.root)
+            result = self._execution_context.runner.run(bound_argv, resolved_cwd, timeout_seconds, bound_env)
+            if not isinstance(result, CommandResult):
+                raise CommandExecutionError("containment runner returned an invalid command result")
+            return result
 
         start = time.monotonic()
         timed_out = False

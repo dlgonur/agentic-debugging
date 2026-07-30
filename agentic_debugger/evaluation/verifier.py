@@ -39,6 +39,7 @@ from agentic_debugger.evaluation.runner import (
     normalize_output,
 )
 from agentic_debugger.evaluation.task_schema import DebugTask
+from agentic_debugger.runtime.execution import VerifiedExecutionContext
 from agentic_debugger.runtime.exceptions import (
     PatchApplyError,
     PatchAuthorizationError,
@@ -89,6 +90,7 @@ class EvaluationVerifier:
         workspace_parent: Optional[str] = None,
         workspace_factory: Callable[..., TaskWorkspace] = TaskWorkspace,
         test_runner_factory: Callable[[TaskWorkspace], TestRunner] = TestRunner,
+        execution_context: Optional[VerifiedExecutionContext] = None,
     ) -> None:
         if not isinstance(repository_root, str) or not repository_root:
             raise EvaluationInvariantError("repository_root must be non-empty")
@@ -102,9 +104,15 @@ class EvaluationVerifier:
         self._workspace_parent = workspace_parent
         self._workspace_factory = workspace_factory
         self._test_runner_factory = test_runner_factory
+        self._execution_context = execution_context
 
     def evaluate(self, task: Any, candidate_patch: str) -> EvaluationResult:
         loaded = load_task(task)
+        if loaded.source is not None and loaded.source.kind == "external":
+            if self._execution_context is None:
+                raise EvaluationInputError("external task requires a verified execution context")
+            if self._test_runner_factory is not TestRunner:
+                raise EvaluationInvariantError("external task cannot use an unbound test runner factory")
         _validate_candidate_patch(candidate_patch)
         fixture = self._fixture_path(loaded)
         state = _EvaluationState(loaded.constraints.max_test_runs)
@@ -130,7 +138,10 @@ class EvaluationVerifier:
                 else:
                     state.workspace_prepared = True
                     state.workspace_record = WorkspaceRecord(LifecycleStatus.PREPARED, True, False, False, False, before_hash, None, None)
-                    runner = self._test_runner_factory(workspace)
+                    if self._execution_context is not None:
+                        runner = TestRunner(workspace, execution_context=self._execution_context)
+                    else:
+                        runner = self._test_runner_factory(workspace)
                     self._run_baseline(loaded, runner, state, workspace)
                     if not state.baseline_valid:
                         if state.timeout:
@@ -223,12 +234,15 @@ class EvaluationVerifier:
         return _state_result(task, state)
 
     def _fixture_path(self, task: DebugTask) -> str:
-        fixture = os.path.realpath(os.path.join(self._repository_root, task.fixture_path))
+        source_path = task.source.path if task.source is not None else task.fixture_path
+        if task.source is not None and task.source.kind == "external" and source_path.replace("\\", "/").startswith("agentic_debugger/datasets/curated/"):
+            raise EvaluationInputError("external task source cannot use curated fixture namespace")
+        fixture = os.path.realpath(os.path.join(self._repository_root, source_path))
         root = os.path.realpath(self._repository_root)
         if os.path.commonpath([fixture, root]) != root:
-            raise EvaluationInputError("task fixture escapes repository root")
+            raise EvaluationInputError("task source escapes repository root")
         if not os.path.isdir(fixture):
-            raise EvaluationInputError("task fixture does not exist")
+            raise EvaluationInputError("task source does not exist")
         return fixture
 
     def _make_workspace(self, fixture: str) -> TaskWorkspace:

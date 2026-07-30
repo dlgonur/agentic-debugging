@@ -7,6 +7,7 @@ from typing import Dict, List, Optional, Any
 from agentic_debugger.evaluation.task_schema import DebugTask
 from agentic_debugger.runtime.command_runner import CommandResult, CommandRunner
 from agentic_debugger.runtime.exceptions import CommandExecutionError
+from agentic_debugger.runtime.execution import VerifiedExecutionContext
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
@@ -48,9 +49,10 @@ class TestRunner:
         self,
         workspace: TaskWorkspace,
         command_runner: Optional[CommandRunner] = None,
+        execution_context: Optional[VerifiedExecutionContext] = None,
     ) -> None:
         self._workspace = workspace
-        self._runner = command_runner or CommandRunner(workspace)
+        self._runner = command_runner or CommandRunner(workspace, execution_context)
 
     def run_reproduction(self, task: DebugTask) -> TestRunResult:
         argv = task.reproduction.argv
