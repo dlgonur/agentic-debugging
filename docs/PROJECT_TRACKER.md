@@ -21,6 +21,7 @@ Rules:
 - [x] 0.1.1 Created initial diary draft: diary/day_01.md.
 - [x] 0.1.2 Created day 02 draft from cross-report synthesis: research/reports/synthesis/diary_day_02_draft.md.
 - [x] 0.1.3 Normalize diary entries into final daily format.
+- [x] 0.1.4 Extend the consolidated diary through 30 July 2026, including Tasks 10A, 10B-R1/R3, the Zen matrix, the R4 audit, and the R5 source closeout.
 
 ---
 
@@ -62,7 +63,7 @@ Rules:
 ### 1.3 Subtasks / Log
 
 - [x] 1.3.1 Read RepairAgent.
-- [ ] 1.3.2 Verify debug-gym.
+- [x] 1.3.2 Verify debug-gym.
 - [ ] 1.3.3 Verify Debug2Fix.
 - [ ] 1.3.4 Verify FramePilot / ADI.
 - [ ] 1.3.5 Verify EnIGMA.
@@ -78,11 +79,11 @@ Rules:
 
 ### 1.5 Subtasks / Log
 
-- [ ] 1.5.1 Read ChatDBG system details.
+- [x] 1.5.1 Read ChatDBG system details.
 - [x] 1.5.2 Read SWE-Agent ACI details.
 - [x] 1.5.3 Read OpenHands architecture details.
 - [x] 1.5.4 Read AutoCodeRover retrieval and SBFL details.
-- [ ] 1.5.5 Read Agentless localization/repair/validation details.
+- [x] 1.5.5 Read Agentless localization/repair/validation details.
 - [x] 1.5.6 Produce system capability matrix v1.
 
 ---
@@ -102,7 +103,7 @@ Rules:
 - [ ] 2.2.3 Verify Defects4J.
 - [ ] 2.2.4 Verify QuixBugs.
 - [ ] 2.3.1 Decide first evaluation dataset.
-- [ ] 2.4.1 Prepare small reproducible Python bug subset.
+- [x] 2.4.1 Prepare small reproducible Python bug subset (five curated pytest-compatible fixtures; Task 6).
 
 ---
 
@@ -138,10 +139,10 @@ Rules:
 - [x] 4.3.3 Build deterministic test-run tool.
 - [x] 4.3.4 Build deterministic patch-apply tool.
 - [x] 4.4.1 Build single-agent controller loop.
-- [ ] 4.5.1 Add localization output.
-- [ ] 4.5.2 Add root-cause explanation output.
-- [ ] 4.5.3 Add patch proposal output.
-- [ ] 4.5.4 Add verifier pass.
+- [x] 4.5.1 Add localization output.
+- [x] 4.5.2 Add root-cause explanation output.
+- [x] 4.5.3 Add patch proposal output.
+- [x] 4.5.4 Add verifier pass.
 - [x] 4.6.0 MVP Task 1 — Foundation Contracts and Event Skeleton v1 (commit 347f74d)
 - [x] 4.6.1 MVP Task 2 — Workspace and Command/Test Runtime v1 (commit 778d38c)
 - [x] 4.6.2 MVP Task 3 — Source Retrieval and Deterministic Patch Lifecycle v1 (commit e396799)
@@ -154,7 +155,13 @@ Rules:
 - [x] 4.6.9 MVP Task 5 — Controller State Machine and Tool Policy v1 (feature/mvp-controller-v1, commits 532214e, e2187e2, 365dc49 and 43d00c8)
 - [x] 4.6.10 MVP Task 6 — Curated Benchmark Fixtures v1 (feature/mvp-curated-bugs-v1, commit eedcccb)
 - [x] 4.6.11 MVP Task 7 — Verifier and Evaluation Runner v1 (feature/mvp-verifier-runner-v1, commit 1b0af78)
+- [x] 4.6.11a MVP Task 8 — Golden Trajectories v1 (commit ab9b8b7181524acf329b25f3547eb8a9e0695228)
 - [x] 4.6.12 MVP Task 9 — First End-to-End Demonstration (commit e7031fa796a738fc80de4c673607eee72254ce56)
+- [x] 4.6.13 Task 10A — Real-Model Evaluation Harness v1 (commit 14a0287a763553038549eb8d84d6d9f8a432f44a)
+- [x] 4.6.14 Task 10B-R1 — Live Protocol and Accounting Repair v1 (commit 2996f16f7c95baf0860d0736d8ab67d13af60b9e; protocol 1.1)
+- [x] 4.6.15 Task 10B-R3 — Invalid Directive Retry Feedback v1 (commit 1bb1d5251cc732f331ce2f5fdd163d9e46309d29; protocol 1.2)
+- [x] 4.6.16 Task 10B-R4 — Offline PDB-policy Directive-Path Audit (no live/model call)
+- [x] 4.6.17 Task 10B-R5 — Policy-Scoped Live Contract Repair v1 (commit 63fa27cc4d30490b9770ead3ce14b4b6d3ddf222; protocol 1.3)
 
 ---
 
@@ -181,16 +188,16 @@ Rules:
 
 ### 6.x Subtasks / Log
 
-- [ ] 6.1.1 Start with PDB only.
-- [ ] 6.1.2 Define PDB command schema.
+- [x] 6.1.1 Start with PDB only.
+- [x] 6.1.2 Define PDB command schema.
 - [ ] 6.1.3 Implement post-mortem PDB entry for failing Python script/test.
-- [ ] 6.2.1 Serialize debugger outputs into model-readable structured text.
-- [ ] 6.3.1 Support stack inspection.
-- [ ] 6.3.2 Support local variable inspection.
-- [ ] 6.3.3 Support expression evaluation.
-- [ ] 6.3.4 Support stepping / next / continue.
-- [ ] 6.4.1 Feed debugger findings into patch proposal.
-- [ ] 6.4.2 Validate patch with tests.
+- [x] 6.2.1 Serialize debugger outputs into model-readable structured text.
+- [x] 6.3.1 Support stack inspection.
+- [x] 6.3.2 Support local variable inspection.
+- [x] 6.3.3 Support expression evaluation.
+- [x] 6.3.4 Support stepping / next / continue.
+- [x] 6.4.1 Feed debugger findings into patch proposal.
+- [x] 6.4.2 Validate patch with tests.
 
 ---
 
@@ -201,12 +208,12 @@ Rules:
 
 ### 7.x Subtasks / Log
 
-- [ ] 7.1.1 Define localization metric.
+- [x] 7.1.1 Define localization metric (`CORRECT_TARGET_SYMBOL` and related localization outcomes).
 - [ ] 7.1.2 Define root-cause explanation metric.
-- [ ] 7.1.3 Define patch correctness metric.
-- [ ] 7.1.4 Define cost/runtime metric.
-- [ ] 7.1.5 Define debugger-action metric.
-- [ ] 7.2.1 Prepare demo scenario.
+- [x] 7.1.3 Define patch correctness metric (verifier outcome, fail-to-pass, pass-to-pass, and full-suite consistency).
+- [x] 7.1.4 Define cost/runtime metric (transport timing and provider-reported usage/cost metadata with qualification).
+- [x] 7.1.5 Define debugger-action metric (PDB openings, observations, action counts, and policy restrictions).
+- [x] 7.2.1 Prepare demo scenario (Task 9 deterministic five-task, two-policy demonstration).
 - [ ] 7.2.2 Prepare final technical report outline.
 
 ---
@@ -215,14 +222,13 @@ Rules:
 
 Current active items:
 
-- Task 10A complete and accepted: Real-Model Evaluation Harness v1.
-- Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1 (protocol version 1.1).
-- Task 10B-R3 complete and accepted: Invalid Directive Retry Feedback v1, accepted implementation/merge commit `1bb1d5251cc732f331ce2f5fdd163d9e46309d29` (protocol version 1.2).
-- The private-runner retry-recovery diagnostic directly observed both successful and failed corrective-feedback episodes; it did not resolve the case or open PDB.
-- The locked four-case OpenCode Zen matrix completed on `curated-none-handling-001` with `deepseek-v4-flash-free` variant `max`: static policy resolved 2/2 cases; PDB-on-uncertainty resolved 0/2 and both cases terminated with underlying reason `invalid_model_response` before PDB opened.
-- Across the matrix, corrective-feedback recovery occurred in 4 of 6 observed episodes. The matrix is descriptive, fixture-specific, model-specific, and provider-route-specific; it supports no causal PDB-effectiveness or policy-superiority claim.
-- Current engineering focus: offline analysis of why the PDB policy path continues to emit illegal or malformed directives before reaching PDB. Do not expand the live comparison until a controlled real-model path actually opens PDB.
-- Post-MVP research, dataset, model, and broader evaluation work remains active or deferred as noted below.
+- Task 10B-R4 is complete: the offline PDB-policy directive-path audit identified concrete contract/gating defects without making any live provider, model, OpenCode, or network call.
+- Task 10B-R5 is complete and accepted: Policy-Scoped Live Contract Repair v1, source/merge commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, current protocol version `1.3`.
+- Final Git state after source closeout: `HEAD = main = origin/main = 63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`; the R5 feature branch was deleted locally and remotely; the working tree and index were clean.
+- R5 final validation collected 2,110 tests: 2,108 passed and 2 skipped. The final immutable audit ZIP SHA-256 is `6f65acf77a43b1f44897e2bd3b846a47d63114ec9b59c7b9a38e341a8e0a2e82`.
+- The accepted four-case Zen matrix remains descriptive only. Its PDB-on-uncertainty cases opened PDB 0/2 times, so it still supports no causal PDB-effectiveness or policy-superiority claim.
+- No new live/model run is authorized or scheduled. The immediate task is documentation-only closure and new-chat handoff; the next substantive internship task must be selected as a separate bounded campaign.
+- Post-MVP research, dataset, model, RAG, fine-tuning, preference optimization, broader evaluation, and final-report work remains active or deferred as indicated by the phase checkboxes.
 
 Notes:
 
@@ -266,7 +272,12 @@ Notes:
 - Six corrective-feedback episodes were observed: 4 `RECOVERED_AFTER_FEEDBACK`, 2 `INVALID_AFTER_FEEDBACK`, and 0 `INTERRUPTED_AFTER_FEEDBACK`. This 4/6 descriptive recovery fraction is not a causal estimate or generalized reliability claim.
 - The historical OpenCode Go baseline and the OpenCode Zen free-model matrix use different provider routes and must not be pooled as one provider population.
 - Because neither PDB-enabled matrix case opened PDB, the matrix still does not measure PDB effectiveness. It supports no claim that static debugging is superior, that PDB is harmful, or that protocol 1.2 caused a higher success rate.
-- The next engineering step is an offline audit of the PDB-policy directive path before any larger live comparison.
+- Task 10B-R4 offline audit completed. It found that the live PDB policy did not fully machine-enforce `decide_pdb_access`, advertised actions outside the exact state/registry/policy/lifecycle/budget intersection, exposed lifecycle-invalid PDB actions, and allowed some state-illegal hypothesis directives to bypass protocol-1.2 corrective feedback.
+- Task 10B-R5 repaired the live boundary in four bounded stages: policy-scoped transition/action enforcement; total directive-kind parsing and validator-contract parity; protocol `1.3` plus deep contract detachment; and mandatory exact-registry plus PDB-observation-budget filtering.
+- Protocol `1.3` now has one authoritative nested validator-derived action-contract shape. `LiveModelAdapter` fails closed without an exact `ToolRegistry`; no manually maintained flat fallback remains.
+- Effective PDB actions are filtered by authoritative budget classification. At zero remaining PDB observations, observation-consuming actions disappear; an active session retains `stop_pdb_session` for cleanup, and hidden exhausted actions receive bounded `illegal_action` feedback before controller execution.
+- R5 changed exactly seven tracked files and was accepted after final focused, unit/golden, integration, collection, manifest, hash, CRC, secret-scan, and Git-state review. No live/model/network/OpenCode call occurred.
+- The next step is this documentation-only closure and a new-chat handoff. Any later real-model validation requires separate explicit authorization and must remain narrow; the previous matrix must not be reused as evidence of PDB effectiveness.
 - The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. This does not complete the broader research or internship project: dataset expansion/inventory, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
 - Hostile-code filesystem, process and network containment remains deferred.
 - Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
@@ -293,22 +304,9 @@ Notes:
 - [x] Minimal controlled retry-recovery diagnostic (private-runner operator tooling; mixed episode result; no PDB opening)
 - [x] Private-runner feedback evidence, episode classification, locked matrix, and enforceable stop-gate hardening
 - [x] Four-case OpenCode Zen descriptive matrix (2 static + 2 PDB-on-uncertainty; exact locked order; matrix/evidence accepted; PDB openings 0)
-- [ ] Offline PDB-policy directive-path audit (next engineering task; no live call required)
+- [x] Offline PDB-policy directive-path audit (Task 10B-R4; completed without live/model call)
+- [x] Task 10B-R5 — Policy-Scoped Live Contract Repair v1 (commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`; protocol `1.3`; final audit accepted)
 
 ## Last Updated
 
-2026-07-29
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+2026-07-30

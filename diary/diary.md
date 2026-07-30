@@ -1,6 +1,6 @@
 # Agentic Debugging Staj Defteri
 
-Bu dosyada 13–22 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama ve ilk prototip altyapısı geliştirme çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
+Bu dosyada 13–30 Temmuz 2026 tarihleri arasında yürüttüğüm araştırma, mimari planlama, prototip geliştirme, gerçek-model değerlendirme altyapısı ve güvenli closeout çalışmalarını gün gün kaydettim. Çalışmaları yalnızca sonuç olarak değil; aldığım teknik kararlar, karşılaştığım problemler, yaptığım doğrulamalar ve öğrendiğim kavramlarla birlikte yazdım.
 
 ---
 
@@ -1847,3 +1847,109 @@ Ayrıca bir policy'nin “PDB-enabled” olması, PDB'nin gerçekten kullanıld�
 ### Sonuç / Bir Sonraki Adım
 
 Task 10B-R3 source repair'i kabul edildi ve small repeated matrix tamamlandı. Otomatik veya manuel tekrar planlanmıyor. Bir sonraki mühendislik adımı, live provider kullanmadan PDB-policy directive path'ini offline olarak audit etmektir. PDB'nin gerçekten açılabildiği kontrollü bir real-model path gösterilmeden daha büyük static-versus-PDB karşılaştırması yapılmayacaktır.
+
+---
+
+## 30 Temmuz 2026
+
+**Çalışmanın Konusu:** PDB-policy directive path offline audit'i, Task 10B-R5 policy-scoped live contract repair'i, final validation ve Git closeout
+
+### Offline Audit ve Kök Neden Analizi
+
+Bugün önce Task 10B-R3 sonrasında kalan PDB-policy problemini live provider çağrısı yapmadan offline olarak inceledim. Önceki dört-case matrix'te `pdb-on-uncertainty` case'leri PDB açılmadan illegal veya malformed directive nedeniyle sonlanmıştı. Bu yüzden amaç yeni bir model deneyi yapmak değil, modelin gördüğü wire contract ile deterministic controller'ın gerçekten kabul ettiği davranış arasındaki farkları bulmaktı.
+
+R4 offline audit'i aşağıdaki source-level problemleri ortaya çıkardı:
+
+- Live `pdb-on-uncertainty` yolu, kabul edilmiş `decide_pdb_access` kararını request contract seviyesinde machine-enforce etmiyordu.
+- Advertise edilen action listesi; controller state allowlist'i, gerçek tool registry, policy, PDB lifecycle ve kalan observation budget'ının kesişimi değildi.
+- Henüz PDB session açılmadan session-dependent action'lar gösterilebiliyordu.
+- State-illegal hypothesis directive'leri, protocol 1.2 corrective-feedback yoluna girmeden controller tarafına ulaşabiliyordu.
+- Bazı testler doğru gate sırasını doğrulamak yerine PDB'nin hypothesis lifecycle'dan önce açıldığı eski davranışı sabitliyordu.
+
+Bu audit sonucunda problemin yalnız model kalitesi veya provider randomness olmadığı; live contract'ın bazı durumlarda controller'ın gerçek acceptance boundary'sini doğru temsil etmediği görüldü.
+
+### Task 10B-R5 Repair Campaign
+
+R5 çalışması aynı bounded source campaign içinde birkaç bağımsız review ve dar repair turuyla tamamlandı.
+
+İlk R5 implementasyonu:
+
+- `decide_pdb_access` sonucunu live transition availability içinde machine-enforce etti.
+- Static policy'nin `RuntimeEvidence` state'ine geçmesini engelledi.
+- `pdb-on-uncertainty` geçişini reproduced failure, kalan PDB budget'ı ve runtime evidence gerektiren aktif hypothesis koşullarına bağladı.
+- Effective action setini state allowlist, gerçek registry, policy ve lifecycle kesişiminden türetti.
+- State-illegal hypothesis directive'lerini bounded `illegal_action` feedback ve retry accounting yoluna aldı.
+
+R5-R1 turunda iki contract boşluğu düzeltildi:
+
+- JSON-compatible fakat hashlenemeyen `kind` değerleri (`[]` veya `{}` gibi) artık `TypeError` üretmek yerine deterministik `malformed_directive` feedback'i alıyor.
+- Validator'ın non-empty string ve non-negative integer kuralları wire action contract'larına da yansıtıldı.
+
+R5-R2 turunda wire contract semantiğinin protocol 1.2'den farklı olduğu kabul edildi ve current protocol sürümü `1.3` yapıldı. Historical protocol-1.2 evidence yeniden etiketlenmedi. Ayrıca ToolRegistry argument contract'ları, directive schema ve request action contract'ları bounded deep-copy yoluyla tamamen detached hale getirildi; bir transport veya caller'ın nested metadata'yı mutate ederek sonraki request'leri değiştirmesi engellendi.
+
+R5-R3 turunda son iki authoritative-contract problemi kapatıldı:
+
+- `LiveModelAdapter` artık exact bir `ToolRegistry` olmadan fail-closed çalışıyor; registry-less flat `LIVE_ACTION_CONTRACTS` fallback'i tamamen kaldırıldı.
+- Kalan PDB observation budget'ı sıfıra ulaştığında observation-consuming action'lar advertise edilmiyor. Aktif session'da cleanup için `stop_pdb_session` kalıyor; inactive session'da `start_pdb_session` ve session-dependent action'lar görünmüyor.
+- Model gizlenmiş, budget-exhausted bir PDB action'ı üretirse directive controller'a gönderilmeden bounded `illegal_action` feedback alıyor ve configured retry sınırları içinde legal bir action'a dönebiliyor.
+
+Protocol `1.3`; request identity, logical-call ve transport-attempt accounting, usage/cost alanları, timeout, redaction, bounded history, cleanup ve verifier semantiği korunarak authoritative hale getirildi. R4 ve R5 boyunca hiçbir live provider, model, OpenCode veya network çağrısı yapılmadı.
+
+### Final Validation ve Evidence
+
+Final R5-R3 candidate için bağımsız immutable audit paketi oluşturuldu:
+
+- Audit ZIP SHA-256: `6f65acf77a43b1f44897e2bd3b846a47d63114ec9b59c7b9a38e341a8e0a2e82`
+- ZIP CRC: passed
+- Manifest: 183/183
+- SHA256SUMS: 184/184
+- Secret-like finding: 0
+- Tracked changed files: exact 7
+- `git diff --check`: clean
+
+Offline test sonuçları:
+
+- Focused live R5-R3: 23 passed, 62 deselected
+- Focused ToolRegistry contract: 1 passed, 44 deselected
+- Combined live and registry unit modules: 130 passed
+- Unit and golden trajectories: 1,761 passed, 2 skipped, 5 warnings
+- Integration: 347 passed
+- Collection: 2,110 tests
+- Partition total: 2,108 passed, 2 skipped
+
+Skip ve warning'ler passed olarak gösterilmedi. Testler yalnız deterministic in-process transport ve local fixtures kullandı.
+
+### Commit, Merge ve Line-Ending Doğrulaması
+
+Accepted source değişiklikleri exact yedi dosya ile `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222` commit'ine kaydedildi:
+
+```text
+fix: enforce policy-scoped live contracts
+```
+
+Commit 1,114 insertion ve 68 deletion içeriyor. Feature branch remote'a gönderildi, `main` üzerine fast-forward merge edildi, `main` pushlandı ve feature branch local ile remote'dan silindi. Final durumda:
+
+```text
+HEAD = main = origin/main
+63fa27cc4d30490b9770ead3ce14b4b6d3ddf222
+```
+
+İlk closeout doğrulamasında working-tree CRLF byte hash'leri ile Git'in LF-normalized blob hash'leri doğrudan karşılaştırıldığı için commit sonrasında false mismatch oluştu. Script push ve merge öncesinde durdu. Candidate içeriği Git-normalized biçimde yeniden doğrulandığında commit blob'larının accepted audit candidate ile aynı olduğu kanıtlandı ve aynı commit üzerinden güvenli biçimde closeout tamamlandı. Bu olay source defect değil, evidence script'indeki line-ending normalization varsayımıydı.
+
+### Repository Hygiene
+
+Yeni sohbet handoff'u öncesinde disposable local artifacts temizlendi. `.pytest_cache` ve `.task10a-*` geçici workspace klasörleri silindi. `.claude`, `.codex` ve `_ai-review` klasörlerinin local configuration veya review evidence içerebileceği için korunması gerektiği doğrulandı; bunlar hash'i doğrulanmış yerel arşivden geri yüklendi. Repository source, tests, docs, prompts, research ve diary yapısı korunarak Git working tree temiz bırakıldı.
+
+### Öğrendiklerim
+
+Bugünkü çalışma, modelin gördüğü action contract'ın yalnız şematik olarak doğru olmasının yeterli olmadığını gösterdi. Advertise edilen her action, o exact state, registry, policy, lifecycle ve budget altında gerçekten çalıştırılabilir olmalı. Aksi halde model legal görünen fakat controller'ın reddedeceği bir seçim yapabiliyor.
+
+Wire payload'ın alanları aynı kalsa bile semantik ve structural contract değiştiğinde protocol version kararının açık biçimde verilmesi gerektiğini öğrendim. Nested contract metadata'nın mutable referanslarla paylaşılması da request isolation açısından gerçek bir correctness riski oluşturuyor.
+
+Git evidence doğrulamasında working-tree bytes ile committed blob bytes'ın line-ending normalization nedeniyle farklı olabileceğini gördüm. Hash karşılaştırmasının hangi representation üzerinde yapıldığı açıkça belirtilmeli. Ayrıca bir klasörün Git tarafından ignore edilmesi, onun gereksiz veya disposable olduğu anlamına gelmiyor; local agent configuration ve review evidence cache klasörlerinden ayrı değerlendirilmelidir.
+
+### Sonuç / Bir Sonraki Adım
+
+Task 10B-R5 source campaign'i kabul edildi ve Git closeout tamamlandı. Repository `main` branch'i `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222` commit'inde temiz ve `origin/main` ile eşit durumda.
+
+Önceki matrix PDB açmadığı için PDB effectiveness iddiası hâlâ desteklenmiyor. Yeni bir live/model çalıştırması otomatik olarak planlanmayacak. Bir sonraki adım bu diary ve `docs/PROJECT_TRACKER.md` güncellemesini ayrı bir documentation-only closeout ile kaydetmek, ardından yeni sohbet handoff'unda daha geniş internship roadmap'inden seçilecek bir sonraki bounded görevi belirlemektir. Herhangi bir yeni live validation ancak ayrıca ve açıkça yetkilendirilirse tasarlanacaktır.
