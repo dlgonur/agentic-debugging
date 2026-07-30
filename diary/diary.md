@@ -1953,3 +1953,15 @@ Git evidence doğrulamasında working-tree bytes ile committed blob bytes'ın li
 Task 10B-R5 source campaign'i kabul edildi ve Git closeout tamamlandı. Repository `main` branch'i `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222` commit'inde temiz ve `origin/main` ile eşit durumda.
 
 Önceki matrix PDB açmadığı için PDB effectiveness iddiası hâlâ desteklenmiyor. Yeni bir live/model çalıştırması otomatik olarak planlanmayacak. Bir sonraki adım bu diary ve `docs/PROJECT_TRACKER.md` güncellemesini ayrı bir documentation-only closeout ile kaydetmek, ardından yeni sohbet handoff'unda daha geniş internship roadmap'inden seçilecek bir sonraki bounded görevi belirlemektir. Herhangi bir yeni live validation ancak ayrıca ve açıkça yetkilendirilirse tasarlanacaktır.
+
+## 2026-07-30 — Dataset and Evaluation Decision v1
+
+Bugün Dataset and Evaluation Decision v1 çalışmasını documentation-only olarak tamamladım. Canlı repository, testler ve Git durumu authoritative source olarak korundu; Codebase Memory yalnız navigation için kullanıldı ve hiçbir graph artifact oluşturulmadı.
+
+SWE-bench Lite/Verified, BugsInPy, QuixBugs ve Defects4J'yi birincil kaynaklarla karşılaştırdım. BugsInPy'yi primary external dataset, QuixBugs Python'ı düşük maliyetli fallback ve mevcut beş curated fixture'ı architecture smoke gate olarak seçtim. SWE-bench'i sonraki repository-scale aşamaya, Defects4J'yi ise Python/PDB track dışında bıraktım.
+
+Minimum pilot tasarımını en az 8 BugsInPy task'ı, en az 4 project ve 4 bug family, static/PDB eşleştirilmiş politikaları ve iki repetition ile 32 case olarak tanımladım. Önce schema, baseline, F2P/P2P, full-suite, PDB lifecycle, replay, cleanup ve fixture immutability smoke gate'leri geçmeli. PDB hiç açılmazsa bu PDB effectiveness sonucu değil, readiness/contract sonucu sayılacak.
+
+Mevcut verifier'ın curated-only, pytest/node-ID specific ve trusted-local olduğunu; post-mortem pytest debugging, root-cause metric, statement-level localization, environment provenance ve OS-level containment gereksinimlerinin açık gaps olduğunu kaydettim. Bu nedenle hiçbir dataset indirilmedi veya çalıştırılmadı; dependency, live model, provider, OpenCode ve network çağrısı yapılmadı.
+
+RAG araştırma karşılaştırması için NO-GO-FOR-NOW, SFT için DEFER ve DPO/preference optimization için NO-GO-FOR-NOW kararı verdim. Bir sonraki bounded görev BugsInPy eligibility manifesti, adapter tasarımı ve containment checklist'i; bu karar kapsamında runtime source veya test değişikliği yapılmadı.

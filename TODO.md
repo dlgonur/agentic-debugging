@@ -7,9 +7,9 @@ Bu plan içinde bazı maddeler, fine-tuning veya RAG üzerinden değil,
 deterministic tool'lar ve verifier-backed bir controller agent üzerinden
 (Task 1-9), ardından Task 10A real-model evaluation harness, Task 10B-R1 live
 protocol/accounting repair ve Task 10B-R3 invalid-directive retry feedback
-repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R3'ün accepted commit'i
-`1bb1d5251cc732f331ce2f5fdd163d9e46309d29`, live wire protocol sürümü
-`1.2`'dir.
+repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/merge commit'i
+`63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, live wire protocol sürümü
+`1.3`'tür.
 
 Private operator runner üzerinden tek fixture, iki policy ve policy başına iki
 repetition içeren dört-case descriptive matrix tamamlandı. Static policy 2/2
@@ -20,11 +20,12 @@ etkinliği, policy üstünlüğü veya genel model güvenilirliği kanıtı değ
 
 Maddeler aşağıda `[x]` ile işaretlenmiş ve neye dayandığı not edilmiştir; tam
 kanıt kaydı için `docs/PROJECT_TRACKER.md`'e bakınız. Mevcut aktif mühendislik
-önceliği, PDB policy yolunun PDB'ye ulaşmadan neden illegal veya malformed
-directive ürettiğini offline olarak incelemektir. Dataset expansion, broader
-evaluation, fine-tuning, RAG genişletmesi, preference optimization (DPO/RLHF),
-containment hardening ve final teknik rapor hâlâ future work olarak kalır; bu
-not stajın veya daha geniş araştırma projesinin tamamlandığı anlamına gelmez.
+önceliği, `docs/DATASET_EVALUATION_DECISION_V1.md` ile seçilen BugsInPy
+uygunluk manifesti ve adapter tasarımını hazırlamaktır. Dataset execution,
+broader evaluation, fine-tuning, RAG genişletmesi, preference optimization
+(DPO/RLHF), containment hardening ve final teknik rapor hâlâ future work
+olarak kalır; bu not stajın veya daha geniş araştırma projesinin tamamlandığı
+anlamına gelmez.
 
 ## Daily requirement
 
@@ -40,9 +41,9 @@ not stajın veya daha geniş araştırma projesinin tamamlandığı anlamına ge
 
 ## Phase 2 — Dataset Research
 
-- [ ] Hugging Face ve açık kaynak platformlarda debugging ve bug-fix veri setlerini araştır.
-- [ ] SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J ve QuixBugs veri setlerini karşılaştır.
-- [ ] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç.
+- [x] Hugging Face ve açık kaynak platformlarda debugging ve bug-fix veri setlerini araştır. (Dataset and Evaluation Decision v1.)
+- [x] SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J ve QuixBugs veri setlerini karşılaştır. (Dataset and Evaluation Decision v1.)
+- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (BugsInPy primary, QuixBugs fallback; sequencing decisions recorded in the decision document.)
 - [ ] Veri setlerini analiz et ve eğitim/test ayrımını hazırla.
 
 ## Phase 3 — Model and Fine-tuning

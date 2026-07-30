@@ -90,19 +90,19 @@ Rules:
 
 ## 2. Phase 2 — Dataset Research
 
-- [ ] 2.1 Research debugging and bug-fix datasets on Hugging Face and open-source platforms.
-- [ ] 2.2 Compare SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J, and QuixBugs.
-- [ ] 2.3 Select datasets suitable for fine-tuning, RAG, and evaluation.
+- [x] 2.1 Research debugging and bug-fix datasets on Hugging Face and open-source platforms.
+- [x] 2.2 Compare SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J, and QuixBugs.
+- [x] 2.3 Select datasets suitable for fine-tuning, RAG, and evaluation. (BugsInPy primary; QuixBugs fallback; sequencing decisions recorded in Dataset and Evaluation Decision v1.)
 - [ ] 2.4 Analyze datasets and prepare train/test splits.
 
 ### 2.x Subtasks / Log
 
-- [ ] 2.1.1 Build dataset inventory.
-- [ ] 2.2.1 Verify SWE-bench variants.
-- [ ] 2.2.2 Verify BugsInPy.
-- [ ] 2.2.3 Verify Defects4J.
-- [ ] 2.2.4 Verify QuixBugs.
-- [ ] 2.3.1 Decide first evaluation dataset.
+- [x] 2.1.1 Build dataset inventory. (Dataset and Evaluation Decision v1.)
+- [x] 2.2.1 Verify SWE-bench variants. (Primary official sources recorded; execution deferred.)
+- [x] 2.2.2 Verify BugsInPy. (Primary official paper/repository sources recorded; execution deferred.)
+- [x] 2.2.3 Verify Defects4J. (Primary official repository/paper sources recorded; Python/PDB track no-go-for-now.)
+- [x] 2.2.4 Verify QuixBugs. (Primary official repository/paper sources recorded; fallback decision.)
+- [x] 2.3.1 Decide first evaluation dataset. (BugsInPy primary; QuixBugs fallback; five curated fixtures as smoke gate.)
 - [x] 2.4.1 Prepare small reproducible Python bug subset (five curated pytest-compatible fixtures; Task 6).
 
 ---
@@ -224,11 +224,12 @@ Current active items:
 
 - Task 10B-R4 is complete: the offline PDB-policy directive-path audit identified concrete contract/gating defects without making any live provider, model, OpenCode, or network call.
 - Task 10B-R5 is complete and accepted: Policy-Scoped Live Contract Repair v1, source/merge commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, current protocol version `1.3`.
-- Final Git state after source closeout: `HEAD = main = origin/main = 63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`; the R5 feature branch was deleted locally and remotely; the working tree and index were clean.
+- This decision branch starts from accepted baseline `51e7dc0faabe84a36d60486c420de9ba0af95878`; documentation changes in this task are intentionally not source changes.
 - R5 final validation collected 2,110 tests: 2,108 passed and 2 skipped. The final immutable audit ZIP SHA-256 is `6f65acf77a43b1f44897e2bd3b846a47d63114ec9b59c7b9a38e341a8e0a2e82`.
 - The accepted four-case Zen matrix remains descriptive only. Its PDB-on-uncertainty cases opened PDB 0/2 times, so it still supports no causal PDB-effectiveness or policy-superiority claim.
-- No new live/model run is authorized or scheduled. The immediate task is documentation-only closure and new-chat handoff; the next substantive internship task must be selected as a separate bounded campaign.
-- Post-MVP research, dataset, model, RAG, fine-tuning, preference optimization, broader evaluation, and final-report work remains active or deferred as indicated by the phase checkboxes.
+- No new live/model run or dataset execution is authorized or scheduled. Dataset and Evaluation Decision v1 is the documentation-only decision point; the next bounded implementation task is the BugsInPy eligibility manifest and adapter design.
+- The decision selects BugsInPy as primary, QuixBugs Python as fallback, and the five current curated fixtures as an architecture smoke gate. RAG is NO-GO-FOR-NOW for a research comparison, SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW.
+- Post-MVP research, containment, dataset execution, broader evaluation, model training, and final-report work remains active or deferred as indicated by the phase checkboxes.
 
 Notes:
 
@@ -277,10 +278,10 @@ Notes:
 - Protocol `1.3` now has one authoritative nested validator-derived action-contract shape. `LiveModelAdapter` fails closed without an exact `ToolRegistry`; no manually maintained flat fallback remains.
 - Effective PDB actions are filtered by authoritative budget classification. At zero remaining PDB observations, observation-consuming actions disappear; an active session retains `stop_pdb_session` for cleanup, and hidden exhausted actions receive bounded `illegal_action` feedback before controller execution.
 - R5 changed exactly seven tracked files and was accepted after final focused, unit/golden, integration, collection, manifest, hash, CRC, secret-scan, and Git-state review. No live/model/network/OpenCode call occurred.
-- The next step is this documentation-only closure and a new-chat handoff. Any later real-model validation requires separate explicit authorization and must remain narrow; the previous matrix must not be reused as evidence of PDB effectiveness.
-- The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. This does not complete the broader research or internship project: dataset expansion/inventory, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
+- Dataset and Evaluation Decision v1 is the current documentation-only decision. Any later dataset or real-model validation requires separate explicit authorization and must remain narrow; the previous matrix must not be reused as evidence of PDB effectiveness.
+- The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. Dataset inventory and primary/fallback selection are now documented in Dataset and Evaluation Decision v1; external dataset execution, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
 - Hostile-code filesystem, process and network containment remains deferred.
-- Adaptive PDB gating, BugsInPy, and Tier 3/supporting-paper reading remain deferred.
+- Adaptive PDB gating and Tier 3/supporting-paper reading remain deferred. BugsInPy is selected as the primary external target, but its eligibility manifest, adapter, containment, and execution remain future work.
 - Planned decomposition:
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - [x] Task 4B — Breakpoints and Execution Control

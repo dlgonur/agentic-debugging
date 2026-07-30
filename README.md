@@ -29,9 +29,10 @@ An MVP agentic debugging implementation is accepted through Task 9: a single
 controller agent, typed deterministic tools (file read, code search, test
 run, patch apply), PDB session/runtime skills, and a verifier-backed patch
 workflow. Task 10A added the real-model evaluation harness. Task 10B-R1
-repaired the initial live protocol and accounting contracts, and Task 10B-R3
-added bounded invalid-directive retry feedback in accepted commit
-`1bb1d5251cc732f331ce2f5fdd163d9e46309d29` (protocol version `1.2`).
+repaired the initial live protocol and accounting contracts, Task 10B-R3
+added bounded invalid-directive retry feedback, and Task 10B-R5 completed the
+policy-scoped contract repair in accepted source/merge commit
+`63fa27cc4d30490b9770ead3ce14b4b6d3ddf222` (protocol version `1.3`).
 
 A private-runner, four-case descriptive matrix has also completed on
 `curated-none-handling-001` through OpenCode Zen using
@@ -42,13 +43,15 @@ Corrective-feedback recovery occurred in 4 of 6 observed feedback episodes.
 This small, fixture-specific matrix does not establish causal PDB
 effectiveness or general model reliability; see `docs/PROJECT_TRACKER.md`.
 
-The current engineering priority is an offline audit of why the PDB policy
-path continues to produce illegal or malformed directives before reaching
-PDB. No larger live policy comparison is justified until a controlled
-real-model path actually opens PDB.
+The current engineering priority is the documentation-defined BugsInPy
+eligibility manifest and adapter design. No external dataset execution or
+larger live policy comparison is justified until containment, task mapping,
+and a controlled real-model path that actually opens PDB are ready.
 
-Dataset expansion, broader evaluation, fine-tuning, RAG expansion beyond the
-implemented tool foundations, preference optimization (DPO/RLHF), containment
-hardening, and final technical reporting remain future work — see `TODO.md`
-for the phase-level roadmap. This status does not represent completion of the
-broader internship or research project.
+Dataset and Evaluation Decision v1 selects BugsInPy as the primary external
+dataset, QuixBugs Python as fallback, and the current five curated fixtures as
+the architecture smoke gate. RAG is NO-GO-FOR-NOW for a research comparison,
+SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW. Dataset
+execution, broader evaluation, containment hardening, and final technical
+reporting remain future work — see `TODO.md` and
+`docs/DATASET_EVALUATION_DECISION_V1.md`.
