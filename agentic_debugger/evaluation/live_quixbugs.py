@@ -28,6 +28,7 @@ from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, Con
 from agentic_debugger.agent.model_adapter import ControllerSnapshot
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.bugsinpy.adapter import ExternalWorkspace
+from agentic_debugger.bugsinpy.wsl import ResourceLimits, to_wsl_path
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.tools import DemoToolContext, build_registry
 from agentic_debugger.evaluation.live import (
@@ -57,6 +58,15 @@ from agentic_debugger.quixbugs.adapter import (
     QuixBugsSourceAcquirer,
     QuixPreflightReport,
 )
+from agentic_debugger.quixbugs.contained_pdb import (
+    QUIXBUGS_PDB_OBSERVATION_BUDGET,
+    QUIXBUGS_PDB_TASK_ID,
+    ContainedPdbSession,
+    contained_pdb_preflight,
+    materialize_pdb_runtime_bundle,
+    prepare_quixbugs_gcd_pdb_probe,
+)
+from agentic_debugger.runtime.execution import PdbLaunchPlan
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
@@ -66,15 +76,29 @@ class QuixBugsLiveConfigurationError(LiveConfigurationError):
     WSL/Bubblewrap contact."""
 
 
-#: The only policy a QuixBugs live case may run under. There is no PDB probe
-#: infrastructure for QuixBugs tasks, and static policy must remain genuinely
-#: static, so this is a module constant rather than an accepted parameter.
+#: Compatibility default for the accepted static QuixBugs live path.
 QUIXBUGS_LIVE_POLICY = DemoPolicy.STATIC_BASELINE
 
 #: This integration proves the smallest coherent feasibility path for exactly
 #: one QuixBugs task and one repetition; a caller asking for anything else is
 #: a configuration error, not a silently-widened scope.
 QUIXBUGS_LIVE_REPETITIONS = 1
+QUIXBUGS_PDB_MODEL_ID = "opencode/deepseek-v4-flash-free"
+QUIXBUGS_PDB_VARIANT = "max"
+QUIXBUGS_PDB_PROVIDER = "OpenCode Zen"
+
+
+def _validate_quixbugs_pdb_model_config(config: LiveModelConfig) -> None:
+    if config.model_name != QUIXBUGS_PDB_MODEL_ID:
+        raise QuixBugsLiveConfigurationError(
+            f"QuixBugs PDB case requires model {QUIXBUGS_PDB_MODEL_ID!r}"
+        )
+    command = list(config.command)
+    pairs = {(command[index], command[index + 1]) for index in range(len(command) - 1)}
+    if ("--model", QUIXBUGS_PDB_MODEL_ID) not in pairs or ("--variant", QUIXBUGS_PDB_VARIANT) not in pairs:
+        raise QuixBugsLiveConfigurationError(
+            "QuixBugs PDB case requires the exact OpenCode Zen model and max variant in the transport command"
+        )
 
 
 def _blocked_quixbugs_case(
@@ -133,6 +157,7 @@ def run_live_quixbugs_case(
     transport: ModelTransport,
     evaluation_id: str = "local",
     repetition: int = 1,
+    policy: DemoPolicy = QUIXBUGS_LIVE_POLICY,
 ) -> LiveCaseResult:
     """Run exactly one QuixBugs live case through the accepted live pipeline.
 
@@ -149,10 +174,17 @@ def run_live_quixbugs_case(
         raise QuixBugsLiveConfigurationError("QuixBugs live case requires a verified execution context")
     if type(repetition) is not int or repetition != QUIXBUGS_LIVE_REPETITIONS:
         raise QuixBugsLiveConfigurationError("QuixBugs live case supports exactly one repetition")
+    if type(policy) is not DemoPolicy or policy not in {QUIXBUGS_LIVE_POLICY, DemoPolicy.PDB_ON_UNCERTAINTY}:
+        raise QuixBugsLiveConfigurationError("unsupported QuixBugs live policy")
+    if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
+        _validate_quixbugs_pdb_model_config(config)
 
     adapter = QuixBugsAdapter.from_manifest(manifest_path)
     task_id = adapter.manifest.task_id
-    policy = QUIXBUGS_LIVE_POLICY
+    if policy is DemoPolicy.PDB_ON_UNCERTAINTY and task_id != QUIXBUGS_PDB_TASK_ID:
+        raise QuixBugsLiveConfigurationError(
+            f"QuixBugs PDB case is locked to {QUIXBUGS_PDB_TASK_ID!r}, got {task_id!r}"
+        )
     case_id = f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"
     run_id = f"live-{case_id}"
     started = time.monotonic()
@@ -177,6 +209,7 @@ def run_live_quixbugs_case(
     controller_failed = False
     external: Optional[ExternalWorkspace] = None
     task = None
+    pdb_evidence: Optional[dict[str, Any]] = None
     try:
         if not project_root.is_dir():
             raise QuixBugsLiveConfigurationError(
@@ -192,6 +225,53 @@ def run_live_quixbugs_case(
         external.verifier_workspace_parent.mkdir(parents=True, exist_ok=True)
         external.assert_contained(external.verifier_workspace_parent)
 
+        probe = None
+        launch_plan = None
+        bundle_hashes = None
+        if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
+            probe = prepare_quixbugs_gcd_pdb_probe(project_root, external.verifier_workspace_parent)
+            launch_plan = PdbLaunchPlan(
+                python_executable=facts.execution_context.environment.python_executable,
+                driver=probe.script,
+                target=probe.script,
+                breakpoints=(probe.breakpoint_line,),
+                cwd=adapter.manifest.cwd,
+                argv=(probe.script,),
+                environment=dict(facts.execution_context.environment.environment),
+            )
+            contained_report = contained_pdb_preflight(
+                task_id=adapter.manifest.task_id,
+                execution_context=facts.execution_context,
+                external_parent=facts.external_parent,
+                repository_root=str(repo),
+                launch_plan=launch_plan,
+                expected_python_executable=facts.execution_context.environment.python_executable,
+                expected_cwd=adapter.manifest.cwd,
+                expected_target=probe.script,
+                expected_breakpoints=(probe.breakpoint_line,),
+                pdb_observation_budget=QUIXBUGS_PDB_OBSERVATION_BUDGET,
+            )
+            pdb_evidence = {
+                "provider": QUIXBUGS_PDB_PROVIDER,
+                "model_id": QUIXBUGS_PDB_MODEL_ID,
+                "variant": QUIXBUGS_PDB_VARIANT,
+                "policy": policy.value,
+                "observation_budget": QUIXBUGS_PDB_OBSERVATION_BUDGET,
+                "contained_preflight": contained_report.to_mapping(),
+                "contained_preflight_gate_open": contained_report.authorized,
+                "launch_plan": launch_plan.to_mapping(),
+            }
+            if not contained_report.authorized:
+                raise QuixBugsLiveConfigurationError(
+                    "contained-PDB preflight blocked: " + ",".join(contained_report.blocked_gates)
+                )
+            bundle_dir = external.root / "pdb-runtime-bundle"
+            bundle_hashes = materialize_pdb_runtime_bundle(bundle_dir)
+            pdb_evidence["pdb_runtime_bundle_hashes"] = dict(bundle_hashes)
+            pdb_runtime_root_posix = to_wsl_path(
+                str(bundle_dir), facts.execution_context.runner.process.distro
+            )
+
         smoke = QuixBugsSmokeRunner(adapter, QuixBugsSourceAcquirer())
         discovery_workspace = TaskWorkspace(str(project_root), parent_dir=str(external.verifier_workspace_parent))
         try:
@@ -201,12 +281,38 @@ def run_live_quixbugs_case(
 
         commands = adapter.build_commands(fail_to_pass=discovery.f2p_candidates, pass_to_pass=discovery.p2p_candidates)
         source = TaskSource("external", "quixbugs", adapter.source_provenance())
-        task = adapter.to_debug_task(source, commands)
+        task = adapter.to_debug_task(
+            source,
+            commands,
+            pdb_observation_budget=(
+                QUIXBUGS_PDB_OBSERVATION_BUDGET
+                if policy is DemoPolicy.PDB_ON_UNCERTAINTY
+                else 0
+            ),
+        )
 
         workspace = TaskWorkspace(str(project_root), parent_dir=str(external.verifier_workspace_parent))
-        context = DemoToolContext(
-            task=task, workspace=workspace, patch="", probe=None, execution_context=facts.execution_context,
-        )
+        if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
+            def _pdb_session_factory(ws: TaskWorkspace) -> ContainedPdbSession:
+                return ContainedPdbSession(
+                    ws,
+                    runner=facts.execution_context.runner,
+                    pdb_runtime_root_posix=pdb_runtime_root_posix,
+                    resource_limits=ResourceLimits(
+                        cpu_seconds=int(adapter.manifest.resource_profile["cpu_seconds"]),
+                        memory_bytes=int(adapter.manifest.resource_profile["memory_bytes"]),
+                        max_processes=int(adapter.manifest.resource_profile["max_processes"]),
+                    ),
+                )
+            context = DemoToolContext(
+                task=task, workspace=workspace, patch="", probe=probe,
+                execution_context=facts.execution_context,
+                pdb_session_factory=_pdb_session_factory,
+            )
+        else:
+            context = DemoToolContext(
+                task=task, workspace=workspace, patch="", probe=None, execution_context=facts.execution_context,
+            )
         registry = build_registry(context, pdb_policy=pdb_policy_for(policy))
         live_adapter = LiveModelAdapter(
             task=task, policy=policy, config=config, transport=transport, limits=limits, registry=registry,
@@ -216,7 +322,7 @@ def run_live_quixbugs_case(
         controller = DeterministicController(registry, live_adapter, ControllerRunConfig(max_model_calls=limits.max_controller_steps))
         try:
             result = controller.run(
-                ControllerSnapshot(
+        ControllerSnapshot(
                     run_id, task_id, ControllerState.REPRODUCE, 0,
                     ControllerBudgetLimits.from_task_constraints(task.constraints),
                     ControllerBudgetState(), HypothesisLedger(),
@@ -251,6 +357,15 @@ def run_live_quixbugs_case(
         ).evaluate(task, context.candidate_patch),
         extra_cleanup=cleanup_external,
         extra_cleanup_owned=external is not None,
+        evidence=(
+            {
+                **(pdb_evidence or {}),
+                "pdb_gate_decisions": list(live_adapter.pdb_gate_decisions) if live_adapter else [],
+                "directive_rejections": list(live_adapter.directive_rejections) if live_adapter else [],
+            }
+            if policy is DemoPolicy.PDB_ON_UNCERTAINTY
+            else None
+        ),
     )
 
 
@@ -266,6 +381,7 @@ def run_live_quixbugs_evaluation(
     repetitions: int = 1,
     evaluation_id: Optional[str] = None,
     transport_factory=None,
+    policy: DemoPolicy = QUIXBUGS_LIVE_POLICY,
 ) -> dict[str, Any]:
     """Run the complete one-task, one-policy, one-repetition QuixBugs live report.
 
@@ -278,16 +394,24 @@ def run_live_quixbugs_evaluation(
         raise LiveOptInError("live execution requires explicit authorization")
     if type(repetitions) is not int or repetitions != QUIXBUGS_LIVE_REPETITIONS:
         raise LiveConfigurationError("QuixBugs live evaluation supports exactly one repetition")
+    if type(policy) is not DemoPolicy or policy not in {QUIXBUGS_LIVE_POLICY, DemoPolicy.PDB_ON_UNCERTAINTY}:
+        raise LiveConfigurationError("unsupported QuixBugs live policy")
 
     evaluation_id, run_label = _new_evaluation_identity(evaluation_id)
     adapter = QuixBugsAdapter.from_manifest(manifest_path)
     task_id = adapter.manifest.task_id
-    policy = QUIXBUGS_LIVE_POLICY
+    if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
+        if task_id != QUIXBUGS_PDB_TASK_ID:
+            raise LiveConfigurationError(
+                f"QuixBugs PDB evaluation is locked to {QUIXBUGS_PDB_TASK_ID!r}"
+            )
+        _validate_quixbugs_pdb_model_config(config)
 
     transport = transport_factory() if transport_factory else JsonlCommandTransport(config, max_output_bytes=limits.max_response_bytes)
     case = run_live_quixbugs_case(
         repository_root=repository_root, manifest_path=manifest_path, sources_parent=sources_parent,
         facts=facts, config=config, limits=limits, transport=transport, evaluation_id=evaluation_id, repetition=1,
+        policy=policy,
     )
     case_mapping = case.to_mapping()
     completed = bool(case_mapping["reporting"]["completed"])
@@ -321,6 +445,9 @@ def run_live_quixbugs_evaluation(
 __all__ = [
     "QUIXBUGS_LIVE_POLICY",
     "QUIXBUGS_LIVE_REPETITIONS",
+    "QUIXBUGS_PDB_MODEL_ID",
+    "QUIXBUGS_PDB_VARIANT",
+    "QUIXBUGS_PDB_PROVIDER",
     "QuixBugsLiveConfigurationError",
     "run_live_quixbugs_case",
     "run_live_quixbugs_evaluation",

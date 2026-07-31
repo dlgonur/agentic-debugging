@@ -78,7 +78,7 @@ LIVE_DIRECTIVE_SCHEMA={
     "set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"],"constraints":{"status":{"type":"string","enum":[item.value for item in HypothesisStatus if item is not HypothesisStatus.ACTIVE]}}},
 }
 class LiveCaseStatus(str, Enum):
-    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
+    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
 
 _SECRET_KEY=re.compile(r"(?:api[_-]?key|access[_-]?key|auth(?:orization)?|credential|password|secret|token|private[_-]?key)",re.I)
 _SECRET_VALUE=re.compile(r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+")
@@ -204,11 +204,15 @@ class JsonlCommandTransport:
     def __init__(self,config,*,max_output_bytes=MAX_MODEL_RESPONSE_BYTES):
         if type(max_output_bytes) is not int or not 1024<=max_output_bytes<=4*1024*1024: raise LiveConfigurationError("max response bytes is invalid")
         self.config=config; self.max_output_bytes=max_output_bytes
+    @staticmethod
+    def subprocess_environment():
+        environment={"PATH":os.environ.get("PATH",""),"PYTHONIOENCODING":"utf-8"}
+        if os.name=="nt" and os.environ.get("SystemRoot"): environment["SystemRoot"]=os.environ["SystemRoot"]
+        return environment
     def request(self,payload,timeout_seconds):
         try: request_bytes=(json.dumps(payload,ensure_ascii=False,allow_nan=False)+"\n").encode("utf-8")
         except (TypeError,ValueError,UnicodeError): raise LiveTransportError("model request could not be serialized",kind="request_serialization") from None
-        environment={"PATH":os.environ.get("PATH",""),"PYTHONIOENCODING":"utf-8"}
-        if os.name=="nt" and os.environ.get("SystemRoot"): environment["SystemRoot"]=os.environ["SystemRoot"]
+        environment=self.subprocess_environment()
         try:
             process=subprocess.Popen(list(self.config.command),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=False,env=environment,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=="nt" else 0)
         except (OSError,ValueError): raise LiveTransportError("model command could not be launched",kind="launch_error") from None
@@ -506,7 +510,7 @@ class LiveModelAdapter:
     def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
-        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]
+        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]
         self._failure_reproduced = False
         self._pdb_session_active = False
         self._runtime_transition_authorized = False
@@ -536,7 +540,7 @@ class LiveModelAdapter:
             # from Understand. This keeps the accepted gate's source-state
             # semantics while preserving the lifecycle state in the request.
             source_state = ControllerState.UNDERSTAND
-        return decide_pdb_access(
+        decision = decide_pdb_access(
             PdbPolicy.DISABLED
             if self.policy is DemoPolicy.STATIC_BASELINE
             else PdbPolicy.ON_UNCERTAINTY,
@@ -552,6 +556,18 @@ class LiveModelAdapter:
                 active_hypothesis=active[0] if active else None,
             ),
         )
+        self.pdb_gate_decisions.append({
+            "source_state": source_state.value,
+            "failure_reproduced": self._failure_reproduced,
+            "remaining_pdb_observations": max(0, snapshot.budget_limits.max_pdb_observations - snapshot.budget_state.pdb_observations),
+            "failed_patch_attempts": snapshot.budget_state.patch_attempts,
+            "active_hypothesis_id": active[0].hypothesis_id if active else None,
+            "active_hypothesis_confidence": active[0].confidence.value if active else None,
+            "active_hypothesis_requires_runtime_evidence": active[0].requires_runtime_evidence if active else None,
+            "allowed": decision.allowed,
+            "reason": decision.reason.value,
+        })
+        return decision
 
     def _runtime_transition_allowed(self, snapshot: ControllerSnapshot) -> bool:
         if self.policy is DemoPolicy.STATIC_BASELINE:
@@ -627,6 +643,7 @@ class LiveModelAdapter:
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
             except LiveModelAdapterError as exc:
                 rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt+1}
+                self.directive_rejections.append(dict(rejection))
                 self.metrics.error("invalid_model_response")
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="invalid_model_response"; raise
@@ -639,8 +656,12 @@ class LiveModelAdapter:
 
 @dataclass(frozen=True)
 class LiveCaseResult:
-    task_id:str; policy:str; repetition:int; status:LiveCaseStatus; controller:dict[str,Any]; verifier:dict[str,Any]; measurements:dict[str,Any]; reporting:dict[str,Any]; events_jsonl:str; diagnostics:tuple[str,...]=(); case_id:str=""; run_id:str=""; trajectory_id:str=""
-    def to_mapping(self): return redact_for_recording({"schema_version":LIVE_SCHEMA_VERSION,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id,"task_id":self.task_id,"policy":self.policy,"repetition":self.repetition,"status":self.status.value,"controller":self.controller,"verifier":self.verifier,"measurements":self.measurements,"reporting":self.reporting,"events_jsonl":self.events_jsonl,"diagnostics":list(self.diagnostics)})
+    task_id:str; policy:str; repetition:int; status:LiveCaseStatus; controller:dict[str,Any]; verifier:dict[str,Any]; measurements:dict[str,Any]; reporting:dict[str,Any]; events_jsonl:str; diagnostics:tuple[str,...]=(); case_id:str=""; run_id:str=""; trajectory_id:str=""; evidence:dict[str,Any]|None=None
+    def to_mapping(self):
+        result={"schema_version":LIVE_SCHEMA_VERSION,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id,"task_id":self.task_id,"policy":self.policy,"repetition":self.repetition,"status":self.status.value,"controller":self.controller,"verifier":self.verifier,"measurements":self.measurements,"reporting":self.reporting,"events_jsonl":self.events_jsonl,"diagnostics":list(self.diagnostics)}
+        if self.evidence is not None:
+            result["evidence"]=self.evidence
+        return redact_for_recording(result)
 
 @dataclass(frozen=True)
 class RejectedLiveReport:
@@ -727,7 +748,7 @@ def _interrupted_case_result(task_id:str,policy:DemoPolicy,repetition:int,evalua
         trajectory_id=f"live-{case_id}",
     )
 
-def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,context,workspace,result,metrics,live_adapter,started,interrupted,controller_failed,diagnostics,verify,extra_cleanup,extra_cleanup_owned):
+def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,context,workspace,result,metrics,live_adapter,started,interrupted,controller_failed,diagnostics,verify,extra_cleanup,extra_cleanup_owned,evidence=None):
     """Shared verifier/event/cleanup/status/report tail for one live case.
 
     Both the curated (:func:`_acceptance_live_case`) and QuixBugs
@@ -793,6 +814,11 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     elif result is None: status=LiveCaseStatus.HARNESS_ERROR
     elif result.stop_reason is ControllerStopReason.DIRECTIVE_REJECTED: status=LiveCaseStatus.CONTROLLER_REJECTED
     elif result.final_state is not ControllerState.DONE: status=LiveCaseStatus.CONTROLLER_FAILED
+    elif policy is DemoPolicy.PDB_ON_UNCERTAINTY and not any(
+        step.action and step.action.name in {ActionName.GET_STACK_SUMMARY.value, ActionName.GET_FRAME_LOCALS.value, ActionName.SAFE_EVAL_EXPRESSION.value}
+        and step.observation and step.observation.status.value == "ok"
+        for step in (result.steps if result is not None else ())
+    ): status=LiveCaseStatus.PDB_NOT_REACHED
     elif verifier is None: status=LiveCaseStatus.UNRESOLVED
     elif verifier.status.value!="COMPLETED": status=LiveCaseStatus.VERIFIER_FAILED
     elif verifier.outcome is not None and verifier.outcome.value=="RESOLVED": status=LiveCaseStatus.RESOLVED
@@ -803,7 +829,7 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     pdb_success=0; pdb_failed=0
     if result is not None:
         for step in result.steps:
-            if step.action and step.action.name in {ActionName.START_PDB_SESSION,ActionName.GET_STACK_SUMMARY,ActionName.GET_FRAME_LOCALS,ActionName.SAFE_EVAL_EXPRESSION}:
+            if step.action and step.action.name in {ActionName.GET_STACK_SUMMARY,ActionName.GET_FRAME_LOCALS,ActionName.SAFE_EVAL_EXPRESSION}:
                 if step.observation and step.observation.status.value=="ok": pdb_success+=1
                 else: pdb_failed+=1
     model_phase_ms=int(live_adapter.model_phase_elapsed_seconds*1000) if live_adapter else 0
@@ -824,6 +850,7 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         case_id=case_id,
         run_id=run_id,
         trajectory_id=run_id,
+        evidence=evidence,
     )
 
 def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local"):

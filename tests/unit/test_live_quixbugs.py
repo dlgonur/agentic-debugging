@@ -20,6 +20,7 @@ from __future__ import annotations
 import inspect
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -67,6 +68,13 @@ def config() -> LiveModelConfig:
     return LiveModelConfig("test-model", ("test-model-command",))
 
 
+def pdb_config() -> LiveModelConfig:
+    return LiveModelConfig(
+        "opencode/deepseek-v4-flash-free",
+        ("transport-wrapper", "--model", "opencode/deepseek-v4-flash-free", "--variant", "max"),
+    )
+
+
 def limits() -> LiveRunLimits:
     return LiveRunLimits(max_model_requests=32, max_controller_steps=32)
 
@@ -93,6 +101,7 @@ class FakeContainmentRunner:
         self.calls: list[tuple[list[str], str, float, dict]] = []
         self.boundary_guarantee: dict = {}
         self.resource_isolation_ready = True
+        self.process = SimpleNamespace(distro="Ubuntu-22.04")
 
     def run(self, argv, cwd, timeout_seconds, env):
         self.calls.append((argv, cwd, timeout_seconds, env))
@@ -275,6 +284,62 @@ class NeverCalledTransport:
         raise AssertionError("transport must not be contacted")
 
 
+class FakeContainedPdbSession:
+    starts = 0
+
+    def __init__(self, workspace, **_kwargs):
+        self.workspace = workspace
+        self.started = False
+
+    def start(self):
+        type(self).starts += 1
+
+    def start_paused_target(self, script, breakpoints):
+        self.started = True
+        return {"state": "paused", "script": script, "line": breakpoints[0], "function": "gcd"}
+
+    def get_stack_summary(self):
+        return {"pause_generation": 1, "frames": [{"frame_id": 0, "function": "gcd", "script": "python_programs/gcd.py", "line": 5}]}
+
+    def get_frame_locals(self, frame_id, pause_generation):
+        return {"frame_id": frame_id, "pause_generation": pause_generation, "locals": [{"name": "a", "value": "35"}, {"name": "b", "value": "21"}]}
+
+    def stop(self):
+        self.started = False
+
+
+class PdbScriptedTransport:
+    def __init__(self, *, use_pdb: bool):
+        self.requests: list[dict[str, Any]] = []
+        self.index = 0
+        self.directives = [
+            {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
+            {"kind": "transition", "target_state": "Understand", "reason": "baseline reproduced"},
+        ]
+        if use_pdb:
+            self.directives.extend([
+                {"kind": "add_hypothesis", "hypothesis_id": "runtime-h1", "statement": "The failing recursion needs runtime evidence.", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": True},
+                {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "uncertainty requires runtime evidence"},
+                {"kind": "action", "name": "start_pdb_session", "arguments": {}},
+                {"kind": "action", "name": "get_stack_summary", "arguments": {}},
+                {"kind": "action", "name": "get_frame_locals", "arguments": {"frame_id": 0, "pause_generation": 1}},
+                {"kind": "action", "name": "stop_pdb_session", "arguments": {}},
+                {"kind": "transition", "target_state": "Failed", "reason": "runtime observations collected; no patch submitted in this probe"},
+            ])
+        else:
+            self.directives.extend(_no_pdb_scripted_directives(FIX_PATCH)[2:])
+
+    def request(self, payload, timeout_seconds):
+        self.requests.append(payload)
+        serialized = json.dumps(payload)
+        assert "oracle" not in payload["task"]
+        assert not any(secret in serialized for secret in _ORACLE_SECRETS)
+        assert "corrected_path" not in serialized and "fixed_revision" not in serialized
+        directive = self.directives[min(self.index, len(self.directives) - 1)]
+        self.index += 1
+        return {"directive": directive, "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+
 # ---- No silent fallback to curated fixtures ---------------------------------
 
 
@@ -305,12 +370,14 @@ def test_quixbugs_task_id_is_distinct_from_every_curated_fixture_name() -> None:
 # ---- Exactly one task, one static repetition, no PDB substitution ----------
 
 
-def test_only_static_baseline_policy_can_ever_be_scheduled() -> None:
+def test_static_is_default_and_pdb_mode_is_explicitly_available() -> None:
     assert live_quixbugs.QUIXBUGS_LIVE_POLICY is DemoPolicy.STATIC_BASELINE
     case_params = inspect.signature(live_quixbugs.run_live_quixbugs_case).parameters
     evaluation_params = inspect.signature(live_quixbugs.run_live_quixbugs_evaluation).parameters
-    assert "policy" not in case_params and "policies" not in case_params
-    assert "policy" not in evaluation_params and "policies" not in evaluation_params
+    assert case_params["policy"].default is DemoPolicy.STATIC_BASELINE
+    assert evaluation_params["policy"].default is DemoPolicy.STATIC_BASELINE
+    assert live_quixbugs.QUIXBUGS_PDB_MODEL_ID == "opencode/deepseek-v4-flash-free"
+    assert live_quixbugs.QUIXBUGS_PDB_VARIANT == "max"
 
 
 def test_case_rejects_any_repetition_other_than_one(tmp_path: Path) -> None:
@@ -338,6 +405,26 @@ def test_evaluation_requires_explicit_authorization(tmp_path: Path) -> None:
         live_quixbugs.run_live_quixbugs_evaluation(
             repository_root=str(ROOT), authorization=None, manifest_path=str(MANIFEST),
             sources_parent=str(tmp_path / "sources"), facts=facts, config=config(), limits=limits(),
+        )
+
+
+def test_pdb_mode_rejects_wrong_model_or_variant_before_transport(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        )
+
+
+def test_pdb_mode_rejects_another_quixbugs_task(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json"),
+            sources_parent=str(tmp_path / "sources"), facts=facts, config=pdb_config(), limits=limits(),
+            transport=NeverCalledTransport(), policy=DemoPolicy.PDB_ON_UNCERTAINTY,
         )
 
 
@@ -458,6 +545,56 @@ def test_full_pipeline_unresolved_reflects_verifier_not_controller_claim(tmp_pat
     assert case.controller["final_state"] == "Done"
     assert case.status is LiveCaseStatus.UNRESOLVED
     assert case.verifier["outcome"] == "NO_OP"
+
+
+def test_live_model_triggered_pdb_uses_contained_session_and_returns_observations(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(live_quixbugs, "QuixBugsSourceAcquirer", FakeSourceAcquirer)
+    monkeypatch.setattr(live_quixbugs, "to_wsl_path", lambda path, distro: "/fake/pdb-runtime-bundle")
+    monkeypatch.setattr(live_quixbugs, "ContainedPdbSession", FakeContainedPdbSession)
+    FakeContainedPdbSession.starts = 0
+    facts = _fake_facts(tmp_path, authorized=True)
+    sources_parent = _prepare_pinned_source(tmp_path)
+    transport = PdbScriptedTransport(use_pdb=True)
+
+    case = live_quixbugs.run_live_quixbugs_case(
+        repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(sources_parent),
+        facts=facts, config=pdb_config(), limits=limits(), transport=transport,
+        evaluation_id="quixbugs-gcd-pdb-test", policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+    )
+
+    assert case.status is LiveCaseStatus.CONTROLLER_FAILED
+    assert FakeContainedPdbSession.starts == 1
+    assert case.policy == "pdb-on-uncertainty"
+    assert case.measurements["successful_pdb_observation_count"] == 2
+    assert case.measurements["failed_pdb_observation_count"] == 0
+    assert case.evidence is not None
+    assert case.evidence["contained_preflight"]["authorized"] is True
+    assert any(item["allowed"] is True for item in case.evidence["pdb_gate_decisions"])
+    event_names = {step.get("name") for step in json.loads("[" + ",".join(line for line in case.events_jsonl.splitlines()) + "]")}
+    assert event_names >= {"start_pdb_session", "get_stack_summary", "get_frame_locals", "stop_pdb_session"}
+    assert list((tmp_path / "external").iterdir()) == []
+
+
+def test_pdb_policy_without_model_triggered_observation_is_not_reachability_success(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(live_quixbugs, "QuixBugsSourceAcquirer", FakeSourceAcquirer)
+    monkeypatch.setattr(live_quixbugs, "to_wsl_path", lambda path, distro: "/fake/pdb-runtime-bundle")
+    monkeypatch.setattr(live_quixbugs, "ContainedPdbSession", FakeContainedPdbSession)
+    monkeypatch.setattr(live_quixbugs, "EvaluationVerifier", FakeVerifier)
+    FakeVerifier.status = "COMPLETED"
+    FakeVerifier.outcome = "RESOLVED"
+    facts = _fake_facts(tmp_path, authorized=True)
+    sources_parent = _prepare_pinned_source(tmp_path)
+
+    case = live_quixbugs.run_live_quixbugs_case(
+        repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(sources_parent),
+        facts=facts, config=pdb_config(), limits=limits(), transport=PdbScriptedTransport(use_pdb=False),
+        evaluation_id="quixbugs-gcd-pdb-no-reach", policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+    )
+
+    assert case.status is LiveCaseStatus.PDB_NOT_REACHED
+    assert case.measurements["successful_pdb_observation_count"] == 0
+    assert case.verifier["outcome"] == "RESOLVED"
+
 
 
 def test_evaluation_report_is_schema_valid_and_single_case(tmp_path: Path, monkeypatch) -> None:

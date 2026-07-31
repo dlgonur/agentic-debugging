@@ -1,5 +1,5 @@
-"""Operator entry point: protocol-1.3 live-model feasibility case for the
-pinned QuixBugs ``gcd`` task, policy ``static-baseline``, 1 repetition.
+"""Operator entry point: protocol-1.3 live-model reachability case for the
+pinned QuixBugs ``gcd`` task, policy ``pdb-on-uncertainty``, 1 repetition.
 
 This script is not part of the automated test suite. It is the smallest
 coherent path that carries the already-accepted QuixBugs ``gcd`` task
@@ -47,19 +47,21 @@ from agentic_debugger.evaluation.live import (  # noqa: E402
     render_live_report,
     validate_live_report,
 )
+from agentic_debugger.demo.policies import DemoPolicy  # noqa: E402
 from agentic_debugger.evaluation.live_quixbugs import (  # noqa: E402
     QuixBugsLiveConfigurationError,
     run_live_quixbugs_evaluation,
 )
 from agentic_debugger.quixbugs.adapter import QuixBugsAdapter, QuixBugsPreflightFacts  # noqa: E402
 from agentic_debugger.runtime.execution import DependencyPreparation  # noqa: E402
+from scripts.opencode_protocol_transport import verify_opencode_launcher  # noqa: E402
 
 DISTRO = "Ubuntu-22.04"
 EXTERNAL_ROOT_POSIX = "/home/benya/.local/share/agentic-debugging-internship/quixbugs-smoke-v1"
 PYTEST_VERSION = "7.4.4"
 PYTHON_VERSION = "3.10.12"
 DEFAULT_MANIFEST = REPO_ROOT / "research" / "quixbugs" / "GCD_SMOKE_MANIFEST_V1.json"
-DEFAULT_MODEL_NAME = "deepseek-v4-flash-free"
+DEFAULT_MODEL_NAME = "opencode/deepseek-v4-flash-free"
 
 
 class ReadinessError(RuntimeError):
@@ -198,6 +200,14 @@ def main(argv: list[str] | None = None) -> int:
         return _rejected(str(exc), output, human_output)
 
     try:
+        launcher_preflight = verify_opencode_launcher()
+        preflight_path = output.with_name("opencode-launcher-preflight.json")
+        preflight_path.parent.mkdir(parents=True, exist_ok=True)
+        preflight_path.write_text(json.dumps(launcher_preflight, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    except (OSError, RuntimeError) as exc:
+        return _rejected(f"blocked before any provider contact: {exc}", output, human_output)
+
+    try:
         process, runner, root_host, venv_posix, env_fingerprint = _verify_environment_ready()
     except ReadinessError as exc:
         return _rejected(f"blocked before any provider contact: {exc}", output, human_output)
@@ -228,6 +238,7 @@ def main(argv: list[str] | None = None) -> int:
             repository_root=str(REPO_ROOT), authorization=LiveExecutionAuthorization.authorize(True, True),
             manifest_path=args.manifest, sources_parent=sources_host, facts=facts, config=config, limits=limits,
             repetitions=1, evaluation_id=args.run_label,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
         )
     except (LiveConfigurationError, LiveOptInError, QuixBugsLiveConfigurationError) as exc:
         return _rejected(str(exc), output, human_output)
