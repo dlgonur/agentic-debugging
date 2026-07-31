@@ -12,6 +12,39 @@
     "source_snapshot_path_outside_repository": "C:/tmp/bugsinpy-official-meta-v1",
     "source_snapshot_disposition": "temporary external inspection material; not copied into this repository"
   },
+  "licensing_review": {
+    "review_id": "bugsinpy-license-gate-v1",
+    "report_path": "docs/BUGSINPY_LICENSE_GATE_V1.md",
+    "dataset_verdict": "BLOCKED",
+    "formal_license_status": "UNKNOWN",
+    "redistribution_verdict": "BLOCKED",
+    "private_local_research_use_verdict": "UNKNOWN",
+    "operational_execution_gate": "BLOCKED",
+    "local_use_evidence": "The exact BugsInPy README expressly instructs users to clone, configure, checkout, compile, and test the benchmark for reproducible research. This is intended-use evidence, not a blanket license or redistribution grant.",
+    "operator_approval_status": "UNKNOWN; Onur has not approved proceeding under the current ambiguity.",
+    "operational_block_reasons": [
+      "Redistribution is not licensed by an identified BugsInPy term.",
+      "Private local research-use legal status is unresolved.",
+      "Containment and dependency gates are independently incomplete."
+    ],
+    "project_verdicts": {
+      "fastapi": "CLEAR_WITH_CONDITIONS",
+      "httpie": "CLEAR_WITH_CONDITIONS",
+      "tqdm": "CLEAR_WITH_CONDITIONS",
+      "thefuck": "CLEAR_WITH_CONDITIONS"
+    },
+    "project_verdict_record_ids": {
+      "fastapi": "bugsinpy-project-fastapi",
+      "httpie": "bugsinpy-project-httpie",
+      "tqdm": "bugsinpy-project-tqdm",
+      "thefuck": "bugsinpy-project-thefuck"
+    },
+    "overall_pilot_verdict": "BLOCKED",
+    "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+    "canonical_record_path": "research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json",
+    "review_package_matrix": "_ai-review/bugsinpy-license-gate-v1/license-verification-matrix.json",
+    "evidence_policy": "Only sanitized URLs, exact revisions, paths, hashes, attribution summaries, verdicts, and aggregate results may enter tracked files or _ai-review/."
+  },
   "pilot_target": {
     "task_count": 8,
     "minimum_project_count": 4,
@@ -116,10 +149,29 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "MIT",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-fastapi",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "fastapi-766157-license",
+          "fastapi-3397d4-license"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "If project source is later redistributed, retain the FastAPI MIT notice and the exact revision/hash evidence.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -224,10 +276,29 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "MIT",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-fastapi",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "fastapi-a7a92b-license",
+          "fastapi-c58179-license"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "If project source is later redistributed, retain the FastAPI MIT notice and the exact revision/hash evidence.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -256,7 +327,7 @@
       "bugsinpy": {
         "project": "httpie",
         "bug_id": 1,
-        "project_url": "https://github.com/jakubroztocil/httpie/",
+        "project_url": "https://github.com/httpie/httpie",
         "buggy_revision": "001bda19450ad85c91345eea3cfa3991e1d492ba",
         "fixed_revision": "5300b0b490b8db48fac30b5e32164be93dc574b7",
         "metadata_paths": [
@@ -332,10 +403,31 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "BSD-3-Clause",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-httpie",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "httpie-001bda-license",
+          "httpie-001bda-authors",
+          "httpie-5300b0-license",
+          "httpie-5300b0-authors"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "If project source is later redistributed, retain the HTTPie BSD-3-Clause notice and AUTHORS.rst attribution for the exact revision.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -364,7 +456,7 @@
       "bugsinpy": {
         "project": "httpie",
         "bug_id": 2,
-        "project_url": "https://github.com/jakubroztocil/httpie/",
+        "project_url": "https://github.com/httpie/httpie",
         "buggy_revision": "356e0436510fee70b4071fac58be81c0a0a7db59",
         "fixed_revision": "e18b609ef7d867d6efa0efe42c832be5e0d09338",
         "metadata_paths": [
@@ -441,10 +533,31 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "BSD-3-Clause",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-httpie",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "httpie-356e04-license",
+          "httpie-356e04-authors",
+          "httpie-e18b60-license",
+          "httpie-e18b60-authors"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "If project source is later redistributed, retain the HTTPie BSD-3-Clause notice and AUTHORS.rst attribution for the exact revision.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -552,10 +665,29 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "MPL-2.0; repository is mixed file-scoped MIT/MPL-2.0",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-tqdm",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "tqdm-bef86d-licence",
+          "tqdm-127af5-licence"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "Treat tqdm as mixed MIT/MPL-2.0 file-scoped licensing; the selected changed files must be reviewed under the applicable scope before redistribution.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -662,10 +794,29 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "MIT; repository is mixed file-scoped MIT/MPL-2.0",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-tqdm",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "tqdm-c2599e-licence",
+          "tqdm-73962a-licence"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "The selected tqdm/_tqdm.py path is named MIT in LICENCE; preserve that MIT notice and do not generalize it to the repository.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -769,10 +920,29 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "MIT",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-thefuck",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "thefuck-2ced7a-license",
+          "thefuck-444908-license"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "If project source is later redistributed, retain the thefuck MIT notice and exact revision/hash evidence.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",
@@ -876,10 +1046,29 @@
       },
       "licensing": {
         "bugsinpy_license": "unknown; no root LICENSE file was present in the inspected official snapshot",
-        "underlying_project_license": "unverified",
+        "underlying_project_license": "MIT",
         "redistribution": "not cleared",
         "local_research_use": "requires license and notice review before acquisition or execution",
-        "status": "gated"
+        "status": "gated",
+        "gate_status": "BLOCKED",
+        "dataset_record_id": "bugsinpy-authority-11c5f1ee",
+        "project_record_id": "bugsinpy-project-thefuck",
+        "dataset_verdict": "BLOCKED",
+        "formal_license_status": "UNKNOWN",
+        "project_verdict": "CLEAR_WITH_CONDITIONS",
+        "task_verdict": "BLOCKED",
+        "reviewed_license_record_ids": [
+          "thefuck-40ab4e-license",
+          "thefuck-78ef9e-license"
+        ],
+        "private_local_research_use_verdict": "UNKNOWN",
+        "operational_execution_gate": "BLOCKED",
+        "redistribution_verdict": "BLOCKED",
+        "conditions": [
+          "Current project policy does not authorize acquisition or execution while private local-use status is UNKNOWN and containment/dependency gates are incomplete; this is an operational fail-closed decision, not a legal conclusion.",
+          "If project source is later redistributed, retain the thefuck MIT notice and exact revision/hash evidence.",
+          "Publish only sanitized task IDs, revisions, hashes, gate records, and aggregate results; do not place source, patches, tests, or raw license text in this repository."
+        ]
       },
       "eligibility": {
         "status": "proposed_with_gates",

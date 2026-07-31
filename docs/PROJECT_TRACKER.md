@@ -223,70 +223,148 @@ Rules:
 
 ## Current Focus
 
-Current active items:
+Current state (2026-07-31):
 
-- Task 10B-R4 is complete: the offline PDB-policy directive-path audit identified concrete contract/gating defects without making any live provider, model, OpenCode, or network call.
-- Task 10B-R5 is complete and accepted: Policy-Scoped Live Contract Repair v1, source/merge commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, current protocol version `1.3`.
-- This decision branch starts from accepted baseline `51e7dc0faabe84a36d60486c420de9ba0af95878`; documentation changes in this task are intentionally not source changes.
-- R5 final validation collected 2,110 tests: 2,108 passed and 2 skipped. The final immutable audit ZIP SHA-256 is `6f65acf77a43b1f44897e2bd3b846a47d63114ec9b59c7b9a38e341a8e0a2e82`.
-- The accepted four-case Zen matrix remains descriptive only. Its PDB-on-uncertainty cases opened PDB 0/2 times, so it still supports no causal PDB-effectiveness or policy-superiority claim.
-- No new live/model run or dataset execution is authorized or scheduled. Dataset and Evaluation Decision v1 is the documentation-only decision point; the next bounded implementation task is the BugsInPy eligibility manifest and adapter design.
-- The decision selects BugsInPy as primary, QuixBugs Python as fallback, and the five current curated fixtures as an architecture smoke gate. RAG is NO-GO-FOR-NOW for a research comparison, SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW.
-- Post-MVP research, containment, dataset execution, broader evaluation, model training, and final-report work remains active or deferred as indicated by the phase checkboxes.
-- **2026-07-31: Model, RAG, Fine-Tuning and DPO Decision Gate v1 and Final Technical Report and Demo Package v1 are complete and accepted**, documentation-only, baseline `2236775`. Decision Gate v1 (`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) reaffirms RAG NO-GO-FOR-NOW, SFT DEFER, and DPO NO-GO-FOR-NOW from Dataset and Evaluation Decision v1, adds PROCEED (narrow) on future model-access strategy (one real-dataset single-task static-baseline live case as the smallest credible next experiment, on the existing free-tier route, before any paid/multi-model expansion), and records that the eight-task QuixBugs gold baseline is sufficient for infrastructure validation only — not model selection, training, or generalization claims. Final Technical Report v1 (`docs/FINAL_TECHNICAL_REPORT_V1.md`) and Demo Guide v1 (`docs/DEMO_GUIDE_V1.md`) synthesize the full project to date; the Demo Guide reuses only existing entry points (no parallel demo framework) and its Task 9 command was re-verified live on this checkout. No model, RAG, training, PDB, or paid API ran during this campaign; the accepted QuixBugs benchmark campaigns were not rerun.
+- QuixBugs static live feasibility is complete and accepted: Resource-Limited
+  QuixBugs Fallback Real Smoke v1 and QuixBugs Eight-Task Gold Baseline v1 both
+  passed on the pinned QuixBugs revision, no-model, infrastructure validation
+  only.
+- The contained PDB runtime is complete and accepted (Task 4 family, Task 9
+  demonstration).
+- The earlier four-case curated-fixture OpenCode Zen matrix is a historical,
+  descriptive-only record (kept as separate [historical] entries in the log
+  and notes below; it is not the protocol-1.3 probe). Static policy resolved
+  2/2 cases; PDB-on-uncertainty opened PDB 0/2 times and both PDB cases
+  terminated with underlying reason `invalid_model_response`, so that matrix
+  supports no PDB-effectiveness claim.
+- The later protocol-1.3 QuixBugs `gcd` live-model PDB reachability probe
+  (accepted at a143e62d54a7cf25f56ba743a020cc19b472c762) terminated with
+  underlying reason `invalid_model_response`: the returned malformed
+  provider-completed objects received bounded adapter feedback
+  (`malformed_directive`), there was no controller-accepted directive in the
+  final accepted case, baseline reproduction was not reached in that final
+  case, the PDB gate never opened, and no PDB-effectiveness claim is
+  supported.
+- The BugsInPy eligibility manifest and the BugsInPy adapter already exist and
+  are not future work: `research/bugsinpy/PILOT_ELIGIBILITY_MANIFEST_V1.json`
+  and `agentic_debugger/bugsinpy/{adapter,wsl,wsl_preparation,smoke}.py` are
+  tracked and tested.
+- The BugsInPy licensing and redistribution gate v1 is now the current BLOCKED
+  authority (`docs/BUGSINPY_LICENSE_GATE_V1.md` and
+  `research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json`): dataset verdict BLOCKED,
+  formal license status UNKNOWN, redistribution BLOCKED, private local
+  research-use UNKNOWN, operational execution gate BLOCKED, all eight task
+  verdicts BLOCKED, overall pilot verdict BLOCKED. The offline validator fails
+  closed on exact dataset authority identity, project repository identity,
+  task project verdict equality, and exact buggy/fixed license-record
+  coverage.
+- No BugsInPy acquisition, dependency preparation, containment execution, or
+  benchmark execution is authorized.
+- The next allowable engineering task is metadata-only containment/preflight
+  enforcement, not adapter design or source execution: the preflight must
+  fail closed while the dataset verdict is BLOCKED and refuse source
+  acquisition and execution.
+- No new live/model run or dataset execution is authorized or scheduled.
+  Dataset and Evaluation Decision v1 and Model/RAG/SFT/DPO Decision Gate v1
+  remain the documentation-only decisions; the accepted QuixBugs campaigns
+  were not rerun.
 
-Notes:
+### Historical log (preserved for the record; not current state)
 
-- Task 4A complete.
-- Task 4B complete.
-- Task 4C complete.
-- Task 4D complete.
-- parent Task 4 complete.
-- Task 5 complete.
-- Task 5 was fast-forward merged into `main` at `43d00c8`.
-- Task 6 complete: five curated pytest-compatible bug fixtures were reviewed, repaired, merged and pushed.
-- Task 6 was fast-forward merged into main at eedcccb.
-- Task 7 complete: Verifier and Evaluation Runner v1.
-- Task 7 was fast-forward merged into main at 1b0af78.
-- Task 7 provides authoritative DebugTask loading and validation, disposable workspace preparation, canonical fixture immutability checks, baseline reproduction, F2P/P2P execution, candidate unified-diff application, syntax validation, post-patch reproduction, exact test-node collection, full-suite consistency checks, bounded typed result records, deterministic JSON-compatible mappings, workspace-relative path normalization, cleanup lifecycle reporting, verifier command accounting separate from controller max_test_runs, and trusted-local execution-boundary disclosure.
-- Task 7 evaluates trusted local benchmark fixtures and benign candidate patches. It is not an OS-level hostile-code security sandbox.
-- Task 8 complete: Golden Trajectories v1 (commit ab9b8b7). At the Task 8 implementation closeout point, main and origin/main point to ab9b8b7.
-- Task 8 provides immutable record/replay architecture, RunEvent sequence validation, controller state transition reconstruction, action/observation linkage, semantic trajectory projection and first-mismatch reporting, scripted model sequences with exact model-call accounting (rejecting exhausted/unused outputs), static/PDB-gated/deterministic-rejection trajectories, verifier integration, provider/network attempt guards, portable disposable workspace handling, and exception-safe cleanup across success/rejection/exhaustion/PDB/tool/evaluator/cleanup-error paths.
-- Task 8 is not an OS-level hostile-code sandbox and does not claim causal PDB efficacy proof for agentic debugging.
-- Task 9 complete and accepted: First End-to-End Demonstration, implementation commit `e7031fa796a738fc80de4c673607eee72254ce56`.
-- Task 9 integrated the real controller, tool registry, workspace, test runner, source-skill, PatchManager, PDB session, event replay, and Task 7 verifier paths into an offline, deterministic demonstration over five curated tasks and two policies. The implementation scope was 19 changed files, 6709 insertions, and 75 deletions; no external model-provider execution was used.
-- The accepted demonstration covered 5 curated tasks × 2 policies = 10 cases: controller Done 10/10, verifier COMPLETED / RESOLVED 10/10, fail-to-pass 10/10, pass-to-pass 22/22, localization `CORRECT_TARGET_SYMBOL` in all 10 cases, full suite passed for every case, canonical fixtures unchanged 10/10, disposable workspaces cleaned 10/10, provider attempts 0, and network attempts 0.
-- Static policy covered 5/5 verifier COMPLETED, 5/5 RESOLVED, 5/5 fail-to-pass, 11/11 pass-to-pass, and 0 PDB observations. PDB-on-uncertainty covered the same 5/5, 5/5, 5/5, and 11/11 results with 21 successful PDB observations.
-- The two clean strict demonstration executions produced identical deterministic views: 10 semantic trajectories compared and 0 semantic differences; the generated source-tree digest matched the accepted live tree and no stale summary placeholder values remained.
-- Task 9 validation passed: focused Task 9 suite 177 tests; relevant controller/PDB/replay/golden/evaluator regression suite 1229 passed with 2 warnings; full repository suite 2020 passed, 2 skipped, and 5 warnings; compile validation and whitespace validation passed. The skips and warnings were pre-existing. One managed-sandbox `.pytest_cache` permission warning occurred during evidence inventory generation and was not a product defect.
-- Static-versus-PDB parity is structural because both policies use the same deterministic offline catalog repair. The demonstration does not establish causal PDB superiority. Provider/network guards measure in-process attempts and are not an operating-system-level network sandbox.
-- Task 10A complete and accepted: Real-Model Evaluation Harness v1, implementation commit `14a0287a763553038549eb8d84d6d9f8a432f44a`.
-- Task 10A delivers an explicitly authorized, offline-by-default real-model evaluation harness over the existing integrated runtime. It provides dual explicit live-access authorization before configuration is read, credential-free configuration, credential-shaped configuration and argv rejection, secret-safe events, diagnostics, JSON reports, and human reports, UUID-based evaluation identities, unique namespaces for reports, cases, runs, trajectories, and requests, duplicate task and policy rejection, stable credential-free configuration fingerprinting, full controller/tool-registry/policy/PDB/patch-lifecycle/RunEvent/localization/verifier/cleanup integration, accepted-patch-only verifier submission, static-policy PDB prohibition, positive PDB-enabled live-path validation, bounded model requests/retries/stdin/stdout-stderr/request-timeouts/model-transport timing, explicit unknown provider token fields, non-destructive workspace ownership and cleanup, versioned machine-readable reports, human-readable reports, authoritative report-schema validation before configured CLI output, coherent resolved/unresolved/rejected/failed/cleanup-failed/interrupted/partial semantics, deterministic local fake and fault-injection validation, and no external provider execution during Task 10A.
-- Task 10A does not claim that a real model solved any task, does not claim PDB improves model performance, and does not claim a provider-specific integration has been validated.
-- Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1, accepted implementation/merge commit `2996f16f7c95baf0860d0736d8ab67d13af60b9e`. It exposed truthful state-specific action and transition contracts and preserved unique transport-attempt identities, bounded rejection diagnostics, and usage accounting for provider-completed invalid model responses. The live wire protocol version became `1.1`.
-- The private Task 10B live runner remains operator tooling outside this repository. The original controlled live baseline evidence package (SHA-256 `87ac568c74aaa4b6d2e726003a5a1cafd238215411f691dd3aaa7d46e135db08`) received verdict `ACCEPT`; the baseline received verdict `ACCEPT_WITH_LIMITATION`.
-- In that original baseline, the static policy result was `RESOLVED`. The PDB policy terminated with underlying reason `invalid_model_response`; the case-status layer reported `PROVIDER_ERROR`, which is not evidence of a provider outage. The model repeated the illegal action `extract_failing_test`, and PDB was never opened.
-- Task 10B-R3 complete and accepted: Invalid Directive Retry Feedback v1, accepted implementation/merge commit `1bb1d5251cc732f331ce2f5fdd163d9e46309d29`. It added bounded, redacted, structured `directive_feedback` after provider-completed invalid directives while preserving retry identity, accounting, and transport-failure semantics. The live wire protocol version became `1.2`.
-- Task 10B-R3 evidence was archived outside the repository with SHA-256 `4b32ec09a2f6bae58c63c42123bbfd9323711f2c07d4ecc6024c97aaed360b5c`.
-- A minimal retry-recovery diagnostic then ran through the private runner. Its evidence package SHA-256 is `4681de9c02ca8f222cf6067293e59a8dd3c1eb605d4ee4be245ddf13e9cea88a`. The diagnostic directly observed one legal recovery after feedback and one later failed recovery in the same case; the case still terminated with `invalid_model_response`, did not attempt a patch, and never opened PDB.
-- Private-runner follow-up work added protocol-1.2 compatibility, direct sanitized feedback evidence, episode classification, a locked small repeated matrix profile, per-case stop gates, aggregate budget enforcement, infrastructure exception closure, redaction hardening, and telemetry fail-closed behavior. This tooling remains outside the repository and is not part of the source commit history.
-- The final locked matrix used OpenCode Zen provider ID `opencode`, model ID `deepseek-v4-flash-free`, variant `max`, fixture `curated-none-handling-001`, policies `static-baseline` and `pdb-on-uncertainty`, two repetitions per policy, four total cases, and concurrency 1.
-- The matrix evidence package SHA-256 is `96675c3995683169c440411deef84429277bcf5289c03375863f6bc65b3ac43d`; the evidence package and matrix execution received verdict `ACCEPT`, while experimental interpretation remains limited.
-- Static policy resolved 2/2 cases and produced 2/2 accepted patches. PDB-on-uncertainty resolved 0/2 cases; both terminated with underlying reason `invalid_model_response`, no patch or verifier phase was reached, and PDB openings were 0/2.
-- Across all four cases, there were 31 logical model calls, 37 transport attempts, 226,385 provider-reported total tokens, provider-reported cost metadata of 0, and approximately 396.5 seconds wall-clock duration. Provider-reported cost metadata is descriptive and is not proof of actual billing.
-- Six corrective-feedback episodes were observed: 4 `RECOVERED_AFTER_FEEDBACK`, 2 `INVALID_AFTER_FEEDBACK`, and 0 `INTERRUPTED_AFTER_FEEDBACK`. This 4/6 descriptive recovery fraction is not a causal estimate or generalized reliability claim.
-- The historical OpenCode Go baseline and the OpenCode Zen free-model matrix use different provider routes and must not be pooled as one provider population.
-- Because neither PDB-enabled matrix case opened PDB, the matrix still does not measure PDB effectiveness. It supports no claim that static debugging is superior, that PDB is harmful, or that protocol 1.2 caused a higher success rate.
-- Task 10B-R4 offline audit completed. It found that the live PDB policy did not fully machine-enforce `decide_pdb_access`, advertised actions outside the exact state/registry/policy/lifecycle/budget intersection, exposed lifecycle-invalid PDB actions, and allowed some state-illegal hypothesis directives to bypass protocol-1.2 corrective feedback.
-- Task 10B-R5 repaired the live boundary in four bounded stages: policy-scoped transition/action enforcement; total directive-kind parsing and validator-contract parity; protocol `1.3` plus deep contract detachment; and mandatory exact-registry plus PDB-observation-budget filtering.
-- Protocol `1.3` now has one authoritative nested validator-derived action-contract shape. `LiveModelAdapter` fails closed without an exact `ToolRegistry`; no manually maintained flat fallback remains.
-- Effective PDB actions are filtered by authoritative budget classification. At zero remaining PDB observations, observation-consuming actions disappear; an active session retains `stop_pdb_session` for cleanup, and hidden exhausted actions receive bounded `illegal_action` feedback before controller execution.
-- R5 changed exactly seven tracked files and was accepted after final focused, unit/golden, integration, collection, manifest, hash, CRC, secret-scan, and Git-state review. No live/model/network/OpenCode call occurred.
-- Dataset and Evaluation Decision v1 is the current documentation-only decision. Any later dataset or real-model validation requires separate explicit authorization and must remain narrow; the previous matrix must not be reused as evidence of PDB effectiveness.
-- The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. Dataset inventory and primary/fallback selection are now documented in Dataset and Evaluation Decision v1; external dataset execution, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
-- Hostile-code filesystem, process and network containment remains deferred.
-- Adaptive PDB gating and Tier 3/supporting-paper reading remain deferred. BugsInPy is selected as the primary external target, but its eligibility manifest, adapter, containment, and execution remain future work.
-- Planned decomposition:
+- [historical] Task 10B-R4 is complete: the offline PDB-policy directive-path
+  audit identified concrete contract/gating defects without making any live
+  provider, model, OpenCode, or network call.
+- [historical] Task 10B-R5 is complete and accepted: Policy-Scoped Live
+  Contract Repair v1, source/merge commit
+  `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, current protocol version `1.3`.
+- [historical] This decision branch started from accepted baseline
+  `51e7dc0faabe84a36d60486c420de9ba0af95878`; its documentation changes were
+  intentionally not source changes.
+- [historical] R5 final validation collected 2,110 tests: 2,108 passed and 2
+  skipped. The final immutable audit ZIP SHA-256 is
+  `6f65acf77a43b1f44897e2bd3b846a47d63114ec9b59c7b9a38e341a8e0a2e82`.
+- [historical] The accepted four-case Zen matrix was descriptive only. Its
+  PDB-on-uncertainty cases opened PDB 0/2 times, so it still supports no
+  causal PDB-effectiveness or policy-superiority claim.
+- [historical] Dataset and Evaluation Decision v1 selected BugsInPy as
+  primary, QuixBugs Python as fallback, and the five current curated fixtures
+  as an architecture smoke gate; RAG was NO-GO-FOR-NOW for a research
+  comparison, SFT was DEFER, and DPO/preference optimization was
+  NO-GO-FOR-NOW. The eligibility manifest and adapter have since been
+  implemented and the licensing gate is now the current authority.
+- [historical] Post-MVP research, containment, dataset execution, broader
+  evaluation, model training, and final-report work remained active or
+  deferred as indicated by the phase checkboxes.
+- [historical] 2026-07-31: Model, RAG, Fine-Tuning and DPO Decision Gate v1
+  and Final Technical Report and Demo Package v1 were complete and accepted,
+  documentation-only, baseline `2236775`. Decision Gate v1
+  (`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) reaffirmed RAG NO-GO-FOR-NOW,
+  SFT DEFER, and DPO NO-GO-FOR-NOW from Dataset and Evaluation Decision v1,
+  added PROCEED (narrow) on future model-access strategy (one real-dataset
+  single-task static-baseline live case as the smallest credible next
+  experiment, on the existing free-tier route, before any paid/multi-model
+  expansion), and recorded that the eight-task QuixBugs gold baseline is
+  sufficient for infrastructure validation only — not model selection,
+  training, or generalization claims. Final Technical Report v1
+  (`docs/FINAL_TECHNICAL_REPORT_V1.md`) and Demo Guide v1
+  (`docs/DEMO_GUIDE_V1.md`) synthesized the full project to date; the Demo
+  Guide reused only existing entry points (no parallel demo framework) and its
+  Task 9 command was re-verified live on this checkout. No model, RAG,
+  training, PDB, or paid API ran during that campaign; the accepted QuixBugs
+  benchmark campaigns were not rerun.
+
+### Historical notes (preserved for the record; not current state)
+
+- [historical] Task 4A complete.
+- [historical] Task 4B complete.
+- [historical] Task 4C complete.
+- [historical] Task 4D complete.
+- [historical] parent Task 4 complete.
+- [historical] Task 5 complete.
+- [historical] Task 5 was fast-forward merged into `main` at `43d00c8`.
+- [historical] Task 6 complete: five curated pytest-compatible bug fixtures were reviewed, repaired, merged and pushed.
+- [historical] Task 6 was fast-forward merged into main at eedcccb.
+- [historical] Task 7 complete: Verifier and Evaluation Runner v1.
+- [historical] Task 7 was fast-forward merged into main at 1b0af78.
+- [historical] Task 7 provides authoritative DebugTask loading and validation, disposable workspace preparation, canonical fixture immutability checks, baseline reproduction, F2P/P2P execution, candidate unified-diff application, syntax validation, post-patch reproduction, exact test-node collection, full-suite consistency checks, bounded typed result records, deterministic JSON-compatible mappings, workspace-relative path normalization, cleanup lifecycle reporting, verifier command accounting separate from controller max_test_runs, and trusted-local execution-boundary disclosure.
+- [historical] Task 7 evaluates trusted local benchmark fixtures and benign candidate patches. It is not an OS-level hostile-code security sandbox.
+- [historical] Task 8 complete: Golden Trajectories v1 (commit ab9b8b7). At the Task 8 implementation closeout point, main and origin/main point to ab9b8b7.
+- [historical] Task 8 provides immutable record/replay architecture, RunEvent sequence validation, controller state transition reconstruction, action/observation linkage, semantic trajectory projection and first-mismatch reporting, scripted model sequences with exact model-call accounting (rejecting exhausted/unused outputs), static/PDB-gated/deterministic-rejection trajectories, verifier integration, provider/network attempt guards, portable disposable workspace handling, and exception-safe cleanup across success/rejection/exhaustion/PDB/tool/evaluator/cleanup-error paths.
+- [historical] Task 8 is not an OS-level hostile-code sandbox and does not claim causal PDB efficacy proof for agentic debugging.
+- [historical] Task 9 complete and accepted: First End-to-End Demonstration, implementation commit `e7031fa796a738fc80de4c673607eee72254ce56`.
+- [historical] Task 9 integrated the real controller, tool registry, workspace, test runner, source-skill, PatchManager, PDB session, event replay, and Task 7 verifier paths into an offline, deterministic demonstration over five curated tasks and two policies. The implementation scope was 19 changed files, 6709 insertions, and 75 deletions; no external model-provider execution was used.
+- [historical] The accepted demonstration covered 5 curated tasks × 2 policies = 10 cases: controller Done 10/10, verifier COMPLETED / RESOLVED 10/10, fail-to-pass 10/10, pass-to-pass 22/22, localization `CORRECT_TARGET_SYMBOL` in all 10 cases, full suite passed for every case, canonical fixtures unchanged 10/10, disposable workspaces cleaned 10/10, provider attempts 0, and network attempts 0.
+- [historical] Static policy covered 5/5 verifier COMPLETED, 5/5 RESOLVED, 5/5 fail-to-pass, 11/11 pass-to-pass, and 0 PDB observations. PDB-on-uncertainty covered the same 5/5, 5/5, 5/5, and 11/11 results with 21 successful PDB observations.
+- [historical] The two clean strict demonstration executions produced identical deterministic views: 10 semantic trajectories compared and 0 semantic differences; the generated source-tree digest matched the accepted live tree and no stale summary placeholder values remained.
+- [historical] Task 9 validation passed: focused Task 9 suite 177 tests; relevant controller/PDB/replay/golden/evaluator regression suite 1229 passed with 2 warnings; full repository suite 2020 passed, 2 skipped, and 5 warnings; compile validation and whitespace validation passed. The skips and warnings were pre-existing. One managed-sandbox `.pytest_cache` permission warning occurred during evidence inventory generation and was not a product defect.
+- [historical] Static-versus-PDB parity is structural because both policies use the same deterministic offline catalog repair. The demonstration does not establish causal PDB superiority. Provider/network guards measure in-process attempts and are not an operating-system-level network sandbox.
+- [historical] Task 10A complete and accepted: Real-Model Evaluation Harness v1, implementation commit `14a0287a763553038549eb8d84d6d9f8a432f44a`.
+- [historical] Task 10A delivers an explicitly authorized, offline-by-default real-model evaluation harness over the existing integrated runtime. It provides dual explicit live-access authorization before configuration is read, credential-free configuration, credential-shaped configuration and argv rejection, secret-safe events, diagnostics, JSON reports, and human reports, UUID-based evaluation identities, unique namespaces for reports, cases, runs, trajectories, and requests, duplicate task and policy rejection, stable credential-free configuration fingerprinting, full controller/tool-registry/policy/PDB/patch-lifecycle/RunEvent/localization/verifier/cleanup integration, accepted-patch-only verifier submission, static-policy PDB prohibition, positive PDB-enabled live-path validation, bounded model requests/retries/stdin/stdout-stderr/request-timeouts/model-transport timing, explicit unknown provider token fields, non-destructive workspace ownership and cleanup, versioned machine-readable reports, human-readable reports, authoritative report-schema validation before configured CLI output, coherent resolved/unresolved/rejected/failed/cleanup-failed/interrupted/partial semantics, deterministic local fake and fault-injection validation, and no external provider execution during Task 10A.
+- [historical] Task 10A does not claim that a real model solved any task, does not claim PDB improves model performance, and does not claim a provider-specific integration has been validated.
+- [historical] Task 10B-R1 complete and accepted: Live Protocol and Accounting Repair v1, accepted implementation/merge commit `2996f16f7c95baf0860d0736d8ab67d13af60b9e`. It exposed truthful state-specific action and transition contracts and preserved unique transport-attempt identities, bounded rejection diagnostics, and usage accounting for provider-completed invalid model responses. The live wire protocol version became `1.1`.
+- [historical] The private Task 10B live runner remains operator tooling outside this repository. The original controlled live baseline evidence package (SHA-256 `87ac568c74aaa4b6d2e726003a5a1cafd238215411f691dd3aaa7d46e135db08`) received verdict `ACCEPT`; the baseline received verdict `ACCEPT_WITH_LIMITATION`.
+- [historical] In that original baseline, the static policy result was `RESOLVED`. The PDB policy terminated with underlying reason `invalid_model_response`; the case-status layer reported `PROVIDER_ERROR`, which is not evidence of a provider outage. The model repeated the illegal action `extract_failing_test`, and PDB was never opened.
+- [historical] Task 10B-R3 complete and accepted: Invalid Directive Retry Feedback v1, accepted implementation/merge commit `1bb1d5251cc732f331ce2f5fdd163d9e46309d29`. It added bounded, redacted, structured `directive_feedback` after provider-completed invalid directives while preserving retry identity, accounting, and transport-failure semantics. The live wire protocol version became `1.2`.
+- [historical] Task 10B-R3 evidence was archived outside the repository with SHA-256 `4b32ec09a2f6bae58c63c42123bbfd9323711f2c07d4ecc6024c97aaed360b5c`.
+- [historical] A minimal retry-recovery diagnostic then ran through the private runner. Its evidence package SHA-256 is `4681de9c02ca8f222cf6067293e59a8dd3c1eb605d4ee4be245ddf13e9cea88a`. The diagnostic directly observed one legal recovery after feedback and one later failed recovery in the same case; the case still terminated with `invalid_model_response`, did not attempt a patch, and never opened PDB.
+- [historical] Private-runner follow-up work added protocol-1.2 compatibility, direct sanitized feedback evidence, episode classification, a locked small repeated matrix profile, per-case stop gates, aggregate budget enforcement, infrastructure exception closure, redaction hardening, and telemetry fail-closed behavior. This tooling remains outside the repository and is not part of the source commit history.
+- [historical] The final locked matrix used OpenCode Zen provider ID `opencode`, model ID `deepseek-v4-flash-free`, variant `max`, fixture `curated-none-handling-001`, policies `static-baseline` and `pdb-on-uncertainty`, two repetitions per policy, four total cases, and concurrency 1.
+- [historical] The matrix evidence package SHA-256 is `96675c3995683169c440411deef84429277bcf5289c03375863f6bc65b3ac43d`; the evidence package and matrix execution received verdict `ACCEPT`, while experimental interpretation remains limited.
+- [historical] Static policy resolved 2/2 cases and produced 2/2 accepted patches. PDB-on-uncertainty resolved 0/2 cases; both terminated with underlying reason `invalid_model_response`, no patch or verifier phase was reached, and PDB openings were 0/2.
+- [historical] Across all four cases, there were 31 logical model calls, 37 transport attempts, 226,385 provider-reported total tokens, provider-reported cost metadata of 0, and approximately 396.5 seconds wall-clock duration. Provider-reported cost metadata is descriptive and is not proof of actual billing.
+- [historical] Six corrective-feedback episodes were observed: 4 `RECOVERED_AFTER_FEEDBACK`, 2 `INVALID_AFTER_FEEDBACK`, and 0 `INTERRUPTED_AFTER_FEEDBACK`. This 4/6 descriptive recovery fraction is not a causal estimate or generalized reliability claim.
+- [historical] The historical OpenCode Go baseline and the OpenCode Zen free-model matrix use different provider routes and must not be pooled as one provider population.
+- [historical] Because neither PDB-enabled matrix case opened PDB, the matrix still does not measure PDB effectiveness. It supports no claim that static debugging is superior, that PDB is harmful, or that protocol 1.2 caused a higher success rate.
+- [historical] Task 10B-R4 offline audit completed. It found that the live PDB policy did not fully machine-enforce `decide_pdb_access`, advertised actions outside the exact state/registry/policy/lifecycle/budget intersection, exposed lifecycle-invalid PDB actions, and allowed some state-illegal hypothesis directives to bypass protocol-1.2 corrective feedback.
+- [historical] Task 10B-R5 repaired the live boundary in four bounded stages: policy-scoped transition/action enforcement; total directive-kind parsing and validator-contract parity; protocol `1.3` plus deep contract detachment; and mandatory exact-registry plus PDB-observation-budget filtering.
+- [historical] Protocol `1.3` now has one authoritative nested validator-derived action-contract shape. `LiveModelAdapter` fails closed without an exact `ToolRegistry`; no manually maintained flat fallback remains.
+- [historical] Effective PDB actions are filtered by authoritative budget classification. At zero remaining PDB observations, observation-consuming actions disappear; an active session retains `stop_pdb_session` for cleanup, and hidden exhausted actions receive bounded `illegal_action` feedback before controller execution.
+- [historical] R5 changed exactly seven tracked files and was accepted after final focused, unit/golden, integration, collection, manifest, hash, CRC, secret-scan, and Git-state review. No live/model/network/OpenCode call occurred.
+- [historical] Dataset and Evaluation Decision v1 is the current documentation-only decision. Any later dataset or real-model validation requires separate explicit authorization and must remain narrow; the previous matrix must not be reused as evidence of PDB effectiveness.
+- [historical] The accepted ten-task implementation sequence (Tasks 1–9 plus Task 10A) is complete. Dataset inventory and primary/fallback selection are now documented in Dataset and Evaluation Decision v1; external dataset execution, training-data work, fine-tuning, RAG beyond the implemented tool foundations, DPO/RLHF, broad benchmarking, and later technical evaluation work remain deferred, partial, or not started where indicated by the phase checkboxes.
+- [historical] Hostile-code filesystem, process and network containment remains deferred.
+- [historical] Adaptive PDB gating and Tier 3/supporting-paper reading remain deferred. BugsInPy is selected as the primary external target. The BugsInPy licensing and redistribution gate is complete and remains BLOCKED at the dataset level; the BugsInPy adapter and eligibility manifest already exist; containment enforcement and execution remain future work.
+- [historical] Planned decomposition (all completed):
   - [x] Task 4A — PDB Session Lifecycle and Protocol Foundation
   - [x] Task 4B — Breakpoints and Execution Control
     - [x] Task 4B1 — One-Shot Target Run to First Breakpoint
@@ -467,6 +545,71 @@ runs no model, provider, OpenCode, RAG, training, PDB, or paid API.
   decision report, final technical report and demo guide copies, review
   findings, validation output, a diff against `2236775`, direct copies of
   every changed/new tracked file, and exact `git status`.
+
+### BugsInPy Licensing and Redistribution Gate v1
+
+The documentation and manifest gate is complete against accepted baseline
+a143e62d54a7cf25f56ba743a020cc19b472c762. The exact BugsInPy authority
+revision is 11c5f1eea954a42132cfd06bf257766a7963e0fd. Exact buggy and fixed
+project revisions were checked for FastAPI, HTTPie, tqdm, and thefuck using
+bounded public GitHub tree metadata and individual license/notice files.
+
+- Dataset verdict: BLOCKED for redistribution. Formal BugsInPy license status is
+  UNKNOWN: the complete non-truncated recursive tree response matched no
+  conventional license/notice filename pattern, and the README has no explicit
+  permission for metadata, isolated patches, scripts, tests, or repository
+  structure.
+- Private local research-use status is UNKNOWN. The exact README expressly
+  instructs users to clone, configure, checkout, compile, and test for
+  reproducible research; that is intended-use evidence, not a blanket license
+  or redistribution grant. The operational execution gate remains BLOCKED by
+  current project policy, because the ambiguity is unresolved, Onur has not
+  approved proceeding, and containment/dependency gates are incomplete. This
+  is a fail-closed project decision, not a legal conclusion that local use is
+  prohibited.
+- Canonical machine-readable record: research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json.
+  The _ai-review matrix is a direct consistency copy only; clean checkouts must
+  resolve the manifest record IDs and run the validator without _ai-review.
+- Project verdicts: FastAPI CLEAR_WITH_CONDITIONS (MIT); HTTPie
+  CLEAR_WITH_CONDITIONS (BSD-3-Clause plus AUTHORS.rst); tqdm
+  CLEAR_WITH_CONDITIONS (file-scoped MIT/MPL-2.0); thefuck
+  CLEAR_WITH_CONDITIONS (MIT).
+- All eight task verdicts and the overall pilot verdict are BLOCKED because
+  each task materially depends on the unresolved BugsInPy metadata/patch
+  terms.
+- The tracked repository and _ai-review/ may contain only sanitized URLs,
+  exact revisions, paths, SHA-256 hashes, gate records, bounded retrieval
+  metadata, and aggregate results. Do not add upstream source, BugsInPy
+  patches, tests, environments, caches, raw logs, credentials, or model
+  candidate diffs.
+- No benchmark, dependency preparation, model, OpenCode, containment, or
+  upstream execution occurred. The next containment task must refuse source
+  acquisition while the operational gate is BLOCKED and require both resolved
+  private-use/redistribution terms and explicit Onur approval before a future
+  gate change.
+- Full report: docs/BUGSINPY_LICENSE_GATE_V1.md. Evidence package:
+  _ai-review/bugsinpy-license-gate-v1/.
+- A bounded material repair closed the validator's fail-open gaps without
+  changing any verdict: the offline validator now requires manifest dataset
+  verdict equality, exact task project-verdict equality, exact buggy/fixed
+  license-record coverage derived from repository and revisions, a locked
+  BugsInPy authority revision chain, dataset/tree identity and evidence
+  hashes, and per-project repository identity on every file record. All
+  accepted verdicts are unchanged: BugsInPy BLOCKED, projects
+  CLEAR_WITH_CONDITIONS, all eight tasks BLOCKED, overall pilot BLOCKED.
+- A second bounded material repair made expected evidence contract-derived
+  rather than mutable-record-derived: one project-level artifact contract now
+  pins each project's repository, required artifact paths, record kinds, and
+  SPDX metadata (FastAPI LICENSE/MIT; HTTPie LICENSE/BSD-3-Clause plus
+  AUTHORS.rst; tqdm LICENCE with file-scoped MIT/MPL-2.0 and a non-empty
+  project scope note; thefuck LICENSE.md/MIT). Every file record must carry a
+  canonical lowercase 40-hex revision, exact source_url and revision_url,
+  matching path/kind/SPDX metadata, and a unique repository/revision/path
+  identity; project coverage must match the selected revisions exactly
+  (rejecting missing artifacts, extra unselected revisions, and unused
+  records), and each task's reviewed IDs must be unique and exactly equal the
+  required artifact records for its own buggy/fixed revisions. All accepted
+  verdicts remain unchanged.
 
 ## Last Updated
 

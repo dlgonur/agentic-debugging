@@ -1,0 +1,116 @@
+{
+  "schema_version": "1.0",
+  "task_id": "bugsinpy-license-gate-v1",
+  "canonical_record_path": "research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json",
+  "accepted_baseline": "a143e62d54a7cf25f56ba743a020cc19b472c762",
+  "file_records": [
+    {"id":"fastapi-766157-license","repository":"tiangolo/fastapi","revision":"766157bfb4e7dfccba09ab398e8ec444d14e947c","path":"LICENSE","source_url":"https://raw.githubusercontent.com/tiangolo/fastapi/766157bfb4e7dfccba09ab398e8ec444d14e947c/LICENSE","revision_url":"https://github.com/tiangolo/fastapi/tree/766157bfb4e7dfccba09ab398e8ec444d14e947c","sha256":"4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2018 Sebastián Ramírez","terms_same_at_buggy_and_fixed":true},
+    {"id":"fastapi-3397d4-license","repository":"tiangolo/fastapi","revision":"3397d4d69a9c2d64c1219fcbf291ea5697a4abb8","path":"LICENSE","source_url":"https://raw.githubusercontent.com/tiangolo/fastapi/3397d4d69a9c2d64c1219fcbf291ea5697a4abb8/LICENSE","revision_url":"https://github.com/tiangolo/fastapi/tree/3397d4d69a9c2d64c1219fcbf291ea5697a4abb8","sha256":"4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2018 Sebastián Ramírez","terms_same_at_buggy_and_fixed":true},
+    {"id":"fastapi-a7a92b-license","repository":"tiangolo/fastapi","revision":"a7a92bc63768ccee3f3afc2b73b2c581928dfe75","path":"LICENSE","source_url":"https://raw.githubusercontent.com/tiangolo/fastapi/a7a92bc63768ccee3f3afc2b73b2c581928dfe75/LICENSE","revision_url":"https://github.com/tiangolo/fastapi/tree/a7a92bc63768ccee3f3afc2b73b2c581928dfe75","sha256":"4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2018 Sebastián Ramírez","terms_same_at_buggy_and_fixed":true},
+    {"id":"fastapi-c58179-license","repository":"tiangolo/fastapi","revision":"c5817912d2be25bb310bf9da517882f57bbe7bb5","path":"LICENSE","source_url":"https://raw.githubusercontent.com/tiangolo/fastapi/c5817912d2be25bb310bf9da517882f57bbe7bb5/LICENSE","revision_url":"https://github.com/tiangolo/fastapi/tree/c5817912d2be25bb310bf9da517882f57bbe7bb5","sha256":"4ec89ffc81485b97fec584b2d4a961032eeffe834453894fd9c1274906cc744e","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2018 Sebastián Ramírez","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-001bda-license","repository":"httpie/httpie","revision":"001bda19450ad85c91345eea3cfa3991e1d492ba","path":"LICENSE","source_url":"https://raw.githubusercontent.com/httpie/httpie/001bda19450ad85c91345eea3cfa3991e1d492ba/LICENSE","revision_url":"https://github.com/httpie/httpie/tree/001bda19450ad85c91345eea3cfa3991e1d492ba","sha256":"bf6c2c46fdaa00d4883540936f29acf26a43d937ba66151c75a1041b34f771be","record_kind":"license","spdx_identifier":"BSD-3-Clause","attribution":"Copyright © 2012-2016 Jakub Roztocil <jakub@roztocil.co>","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-001bda-authors","repository":"httpie/httpie","revision":"001bda19450ad85c91345eea3cfa3991e1d492ba","path":"AUTHORS.rst","source_url":"https://raw.githubusercontent.com/httpie/httpie/001bda19450ad85c91345eea3cfa3991e1d492ba/AUTHORS.rst","revision_url":"https://github.com/httpie/httpie/tree/001bda19450ad85c91345eea3cfa3991e1d492ba","sha256":"70609266f6ba97ff996d013a5043f2101ae4f6f3d80af0cec616d242b1af5819","record_kind":"attribution_notice","spdx_identifier":null,"attribution":"Jakub Roztocil and listed patches/ideas contributors","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-5300b0-license","repository":"httpie/httpie","revision":"5300b0b490b8db48fac30b5e32164be93dc574b7","path":"LICENSE","source_url":"https://raw.githubusercontent.com/httpie/httpie/5300b0b490b8db48fac30b5e32164be93dc574b7/LICENSE","revision_url":"https://github.com/httpie/httpie/tree/5300b0b490b8db48fac30b5e32164be93dc574b7","sha256":"bf6c2c46fdaa00d4883540936f29acf26a43d937ba66151c75a1041b34f771be","record_kind":"license","spdx_identifier":"BSD-3-Clause","attribution":"Copyright © 2012-2016 Jakub Roztocil <jakub@roztocil.co>","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-5300b0-authors","repository":"httpie/httpie","revision":"5300b0b490b8db48fac30b5e32164be93dc574b7","path":"AUTHORS.rst","source_url":"https://raw.githubusercontent.com/httpie/httpie/5300b0b490b8db48fac30b5e32164be93dc574b7/AUTHORS.rst","revision_url":"https://github.com/httpie/httpie/tree/5300b0b490b8db48fac30b5e32164be93dc574b7","sha256":"70609266f6ba97ff996d013a5043f2101ae4f6f3d80af0cec616d242b1af5819","record_kind":"attribution_notice","spdx_identifier":null,"attribution":"Jakub Roztocil and listed patches/ideas contributors","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-356e04-license","repository":"httpie/httpie","revision":"356e0436510fee70b4071fac58be81c0a0a7db59","path":"LICENSE","source_url":"https://raw.githubusercontent.com/httpie/httpie/356e0436510fee70b4071fac58be81c0a0a7db59/LICENSE","revision_url":"https://github.com/httpie/httpie/tree/356e0436510fee70b4071fac58be81c0a0a7db59","sha256":"bf6c2c46fdaa00d4883540936f29acf26a43d937ba66151c75a1041b34f771be","record_kind":"license","spdx_identifier":"BSD-3-Clause","attribution":"Copyright © 2012-2016 Jakub Roztocil <jakub@roztocil.co>","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-356e04-authors","repository":"httpie/httpie","revision":"356e0436510fee70b4071fac58be81c0a0a7db59","path":"AUTHORS.rst","source_url":"https://raw.githubusercontent.com/httpie/httpie/356e0436510fee70b4071fac58be81c0a0a7db59/AUTHORS.rst","revision_url":"https://github.com/httpie/httpie/tree/356e0436510fee70b4071fac58be81c0a0a7db59","sha256":"9995bdb4617503d6df210baace2291f3bb53b4f769bbbc36df0f34eb91ce7de7","record_kind":"attribution_notice","spdx_identifier":null,"attribution":"Jakub Roztocil and listed patches/ideas contributors","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-e18b60-license","repository":"httpie/httpie","revision":"e18b609ef7d867d6efa0efe42c832be5e0d09338","path":"LICENSE","source_url":"https://raw.githubusercontent.com/httpie/httpie/e18b609ef7d867d6efa0efe42c832be5e0d09338/LICENSE","revision_url":"https://github.com/httpie/httpie/tree/e18b609ef7d867d6efa0efe42c832be5e0d09338","sha256":"bf6c2c46fdaa00d4883540936f29acf26a43d937ba66151c75a1041b34f771be","record_kind":"license","spdx_identifier":"BSD-3-Clause","attribution":"Copyright © 2012-2016 Jakub Roztocil <jakub@roztocil.co>","terms_same_at_buggy_and_fixed":true},
+    {"id":"httpie-e18b60-authors","repository":"httpie/httpie","revision":"e18b609ef7d867d6efa0efe42c832be5e0d09338","path":"AUTHORS.rst","source_url":"https://raw.githubusercontent.com/httpie/httpie/e18b609ef7d867d6efa0efe42c832be5e0d09338/AUTHORS.rst","revision_url":"https://github.com/httpie/httpie/tree/e18b609ef7d867d6efa0efe42c832be5e0d09338","sha256":"9995bdb4617503d6df210baace2291f3bb53b4f769bbbc36df0f34eb91ce7de7","record_kind":"attribution_notice","spdx_identifier":null,"attribution":"Jakub Roztocil and listed patches/ideas contributors","terms_same_at_buggy_and_fixed":true},
+    {"id":"tqdm-bef86d-licence","repository":"tqdm/tqdm","revision":"bef86db56654d271838b145ad77f7040a73a7b4d","path":"LICENCE","source_url":"https://raw.githubusercontent.com/tqdm/tqdm/bef86db56654d271838b145ad77f7040a73a7b4d/LICENCE","revision_url":"https://github.com/tqdm/tqdm/tree/bef86db56654d271838b145ad77f7040a73a7b4d","sha256":"1bbf12d09d437844527b3cdaba01d379dac651b5cbb5ebb0d764274684d2680b","record_kind":"license","spdx_identifiers":["MIT","MPL-2.0"],"attribution":"Collaborative work; named exceptions include Casper da Costa-Luis, Google Inc., and Noam Yorav-Raphael","terms_same_at_buggy_and_fixed":true,"scope_note":"files:* is MPLv2.0 unless otherwise stated; named file-scoped MIT exceptions apply."},
+    {"id":"tqdm-127af5-licence","repository":"tqdm/tqdm","revision":"127af5caf19e7d29c346f5ca8a9c7ef3004b664b","path":"LICENCE","source_url":"https://raw.githubusercontent.com/tqdm/tqdm/127af5caf19e7d29c346f5ca8a9c7ef3004b664b/LICENCE","revision_url":"https://github.com/tqdm/tqdm/tree/127af5caf19e7d29c346f5ca8a9c7ef3004b664b","sha256":"1bbf12d09d437844527b3cdaba01d379dac651b5cbb5ebb0d764274684d2680b","record_kind":"license","spdx_identifiers":["MIT","MPL-2.0"],"attribution":"Collaborative work; named exceptions include Casper da Costa-Luis, Google Inc., and Noam Yorav-Raphael","terms_same_at_buggy_and_fixed":true,"scope_note":"files:* is MPLv2.0 unless otherwise stated; named file-scoped MIT exceptions apply."},
+    {"id":"tqdm-c2599e-licence","repository":"tqdm/tqdm","revision":"c2599e3cd6087429f48bae34347ec5d2473c8392","path":"LICENCE","source_url":"https://raw.githubusercontent.com/tqdm/tqdm/c2599e3cd6087429f48bae34347ec5d2473c8392/LICENCE","revision_url":"https://github.com/tqdm/tqdm/tree/c2599e3cd6087429f48bae34347ec5d2473c8392","sha256":"1bbf12d09d437844527b3cdaba01d379dac651b5cbb5ebb0d764274684d2680b","record_kind":"license","spdx_identifiers":["MIT","MPL-2.0"],"attribution":"Collaborative work; named exceptions include Casper da Costa-Luis, Google Inc., and Noam Yorav-Raphael","terms_same_at_buggy_and_fixed":true,"scope_note":"files:* is MPLv2.0 unless otherwise stated; named file-scoped MIT exceptions apply."},
+    {"id":"tqdm-73962a-licence","repository":"tqdm/tqdm","revision":"73962a47026dd980ac0758820efc9c41cbf938e0","path":"LICENCE","source_url":"https://raw.githubusercontent.com/tqdm/tqdm/73962a47026dd980ac0758820efc9c41cbf938e0/LICENCE","revision_url":"https://github.com/tqdm/tqdm/tree/73962a47026dd980ac0758820efc9c41cbf938e0","sha256":"1bbf12d09d437844527b3cdaba01d379dac651b5cbb5ebb0d764274684d2680b","record_kind":"license","spdx_identifiers":["MIT","MPL-2.0"],"attribution":"Collaborative work; named exceptions include Casper da Costa-Luis, Google Inc., and Noam Yorav-Raphael","terms_same_at_buggy_and_fixed":true,"scope_note":"files:* is MPLv2.0 unless otherwise stated; named file-scoped MIT exceptions apply."},
+    {"id":"thefuck-2ced7a-license","repository":"nvbn/thefuck","revision":"2ced7a7f33ae0bec3ffc7a43ce95330bdf6cfcb9","path":"LICENSE.md","source_url":"https://raw.githubusercontent.com/nvbn/thefuck/2ced7a7f33ae0bec3ffc7a43ce95330bdf6cfcb9/LICENSE.md","revision_url":"https://github.com/nvbn/thefuck/tree/2ced7a7f33ae0bec3ffc7a43ce95330bdf6cfcb9","sha256":"7d3488ddac804320f8f5ee437bc5530dd2e698fb0d481b11e8da504f19229707","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2015-2018 Vladimir Iakovlev","terms_same_at_buggy_and_fixed":true},
+    {"id":"thefuck-444908-license","repository":"nvbn/thefuck","revision":"444908ce1c17767ef4aaf9e0b4950497914f7f63","path":"LICENSE.md","source_url":"https://raw.githubusercontent.com/nvbn/thefuck/444908ce1c17767ef4aaf9e0b4950497914f7f63/LICENSE.md","revision_url":"https://github.com/nvbn/thefuck/tree/444908ce1c17767ef4aaf9e0b4950497914f7f63","sha256":"7d3488ddac804320f8f5ee437bc5530dd2e698fb0d481b11e8da504f19229707","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2015-2018 Vladimir Iakovlev","terms_same_at_buggy_and_fixed":true},
+    {"id":"thefuck-40ab4e-license","repository":"nvbn/thefuck","revision":"40ab4eb62db57627bff10cf029d29c94704086a2","path":"LICENSE.md","source_url":"https://raw.githubusercontent.com/nvbn/thefuck/40ab4eb62db57627bff10cf029d29c94704086a2/LICENSE.md","revision_url":"https://github.com/nvbn/thefuck/tree/40ab4eb62db57627bff10cf029d29c94704086a2","sha256":"7d3488ddac804320f8f5ee437bc5530dd2e698fb0d481b11e8da504f19229707","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2015-2018 Vladimir Iakovlev","terms_same_at_buggy_and_fixed":true},
+    {"id":"thefuck-78ef9e-license","repository":"nvbn/thefuck","revision":"78ef9eec88f43d5727986be2237f6e0e250cbbbc","path":"LICENSE.md","source_url":"https://raw.githubusercontent.com/nvbn/thefuck/78ef9eec88f43d5727986be2237f6e0e250cbbbc/LICENSE.md","revision_url":"https://github.com/nvbn/thefuck/tree/78ef9eec88f43d5727986be2237f6e0e250cbbbc","sha256":"7d3488ddac804320f8f5ee437bc5530dd2e698fb0d481b11e8da504f19229707","record_kind":"license","spdx_identifier":"MIT","attribution":"Copyright (c) 2015-2018 Vladimir Iakovlev","terms_same_at_buggy_and_fixed":true}
+  ],
+  "dataset_records": [
+    {
+      "id": "bugsinpy-authority-11c5f1ee",
+      "record_kind": "dataset_verdict",
+      "repository": "soarsmu/BugsInPy",
+      "revision": "11c5f1eea954a42132cfd06bf257766a7963e0fd",
+      "source_url": "https://github.com/soarsmu/BugsInPy/tree/11c5f1eea954a42132cfd06bf257766a7963e0fd",
+      "verdict": "BLOCKED",
+      "formal_license_status": "UNKNOWN",
+      "redistribution_verdict": "BLOCKED",
+      "private_local_research_use_verdict": "UNKNOWN",
+      "operational_execution_gate": "BLOCKED",
+      "readme_url": "https://raw.githubusercontent.com/soarsmu/BugsInPy/11c5f1eea954a42132cfd06bf257766a7963e0fd/README.md",
+      "readme_sha256": "3e356958a2869c1a84511e8b7a4fd84bdbef9069f2d34cb18d4985fcb07efa83",
+      "tree_evidence": {
+        "api_url": "https://api.github.com/repos/soarsmu/BugsInPy/git/trees/11c5f1eea954a42132cfd06bf257766a7963e0fd?recursive=1",
+        "http_status": 200,
+        "resolved_tree_sha": "11c5f1eea954a42132cfd06bf257766a7963e0fd",
+        "recursive_result_truncated": false,
+        "searched_filename_pattern": "(?i)(^|/)(license|licence|copying|notice|copyright|authors?|contributors?)(\\.[^/]*)?$",
+        "matching_paths": [],
+        "response_sha256": "1593a89c0374c9688d556b4db1bb037c38935f165431d09d3bed667f3ee7d6e5",
+        "sanitized_result_sha256": "9f5922ee991180ef2a6150b84283795b2c93338cfd46f38f898015a409fadb82",
+        "response_byte_length": 693919,
+        "retrieved_at_utc": "2026-07-31T19:07:24.9670304Z",
+        "credential_prompts_disabled": true,
+        "complete_repository_acquired": false
+      },
+      "finding": "The complete requested recursive tree response matched no conventional license/notice filename pattern. README usage instructions are intended-use evidence, not a license or redistribution grant.",
+      "operational_block_reasons": [
+        "No governing BugsInPy dataset license or explicit redistribution permission identified.",
+        "Private local research-use legal status remains UNKNOWN.",
+        "Onur has not approved proceeding under that ambiguity.",
+        "Containment and dependency gates are independently incomplete."
+      ]
+    }
+  ],
+  "project_records": [
+    {
+      "id": "bugsinpy-project-fastapi",
+      "record_kind": "project_verdict",
+      "project": "fastapi",
+      "repository": "tiangolo/fastapi",
+      "verdict": "CLEAR_WITH_CONDITIONS",
+      "spdx_identifiers": ["MIT"],
+      "file_record_ids": ["fastapi-766157-license", "fastapi-3397d4-license", "fastapi-a7a92b-license", "fastapi-c58179-license"],
+      "same_terms_at_buggy_and_fixed_revisions": true
+    },
+    {
+      "id": "bugsinpy-project-httpie",
+      "record_kind": "project_verdict",
+      "project": "httpie",
+      "repository": "httpie/httpie",
+      "verdict": "CLEAR_WITH_CONDITIONS",
+      "spdx_identifiers": ["BSD-3-Clause"],
+      "file_record_ids": ["httpie-001bda-license", "httpie-001bda-authors", "httpie-5300b0-license", "httpie-5300b0-authors", "httpie-356e04-license", "httpie-356e04-authors", "httpie-e18b60-license", "httpie-e18b60-authors"],
+      "same_terms_at_buggy_and_fixed_revisions": true
+    },
+    {
+      "id": "bugsinpy-project-tqdm",
+      "record_kind": "project_verdict",
+      "project": "tqdm",
+      "repository": "tqdm/tqdm",
+      "verdict": "CLEAR_WITH_CONDITIONS",
+      "spdx_identifiers": ["MIT", "MPL-2.0"],
+      "file_record_ids": ["tqdm-bef86d-licence", "tqdm-127af5-licence", "tqdm-c2599e-licence", "tqdm-73962a-licence"],
+      "same_terms_at_buggy_and_fixed_revisions": true,
+      "scope_note": "Mixed file-scoped terms; tqdm/std.py and tqdm/utils.py require MPL-2.0-aware handling, while tqdm/_tqdm.py is an explicitly named MIT exception."
+    },
+    {
+      "id": "bugsinpy-project-thefuck",
+      "record_kind": "project_verdict",
+      "project": "thefuck",
+      "repository": "nvbn/thefuck",
+      "verdict": "CLEAR_WITH_CONDITIONS",
+      "spdx_identifiers": ["MIT"],
+      "file_record_ids": ["thefuck-2ced7a-license", "thefuck-444908-license", "thefuck-40ab4e-license", "thefuck-78ef9e-license"],
+      "same_terms_at_buggy_and_fixed_revisions": true
+    }
+  ],
+  "record_resolution_contract": {
+    "dataset_record_id": "Resolve against dataset_records[].id.",
+    "project_record_id": "Resolve against project_records[].id.",
+    "reviewed_license_record_ids": "Resolve each value against file_records[].id.",
+    "all_ids": "IDs must be unique across dataset_records, project_records, and file_records; duplicate or missing IDs fail validation.",
+    "verdict_propagation": "Each task's dataset_record_id, project_record_id, reviewed_license_record_ids, dataset_verdict, project_verdict, and task_verdict must agree with the resolved records and the manifest-level verdict map."
+  },
+  "verdict": "BLOCKED"
+}
