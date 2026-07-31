@@ -727,33 +727,25 @@ def _interrupted_case_result(task_id:str,policy:DemoPolicy,repetition:int,evalua
         trajectory_id=f"live-{case_id}",
     )
 
-def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local"):
-    repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve(); task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
-    case_id=f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"; run_id=f"live-{case_id}"; started=time.monotonic()
-    case_dir=None; workspace=None; context=None; result=None; verifier=None; adapter=None; metrics=LiveModelMetrics(); events=""; diagnostics=[]; interrupted=False; harness_failed=False; controller_failed=False; verifier_failed=False; event_failed=False; verifier_started=False
-    try:
-        case_dir=_owned_case_dir(parent)
-        workspace=TaskWorkspace(str(repo/CURATED_RELATIVE_ROOT/task_id),parent_dir=str(case_dir))
-        probe=prepare_pdb_probe(repo/CURATED_RELATIVE_ROOT/task_id,scenario_for(task_id),case_dir) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
-        context=DemoToolContext(task=task,workspace=workspace,patch="",probe=probe)
-        registry=build_registry(context,pdb_policy=pdb_policy_for(policy))
-        adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id)
-        metrics=adapter.metrics
-        controller=DeterministicController(registry,adapter,ControllerRunConfig(max_model_calls=limits.max_controller_steps))
-        try:
-            result=controller.run(ControllerSnapshot(run_id,task_id,ControllerState.REPRODUCE,0,ControllerBudgetLimits.from_task_constraints(task.constraints),ControllerBudgetState(),HypothesisLedger()))
-        except KeyboardInterrupt:
-            interrupted=True; diagnostics.append("controller interrupted by operator")
-        except Exception as exc:
-            controller_failed=True; diagnostics.append(redact_for_recording(bounded_error(exc)))
-    except KeyboardInterrupt:
-        interrupted=True; diagnostics.append("run interrupted by operator")
-    except Exception as exc:
-        harness_failed=True; diagnostics.append(redact_for_recording(bounded_error(exc)))
+def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,context,workspace,result,metrics,live_adapter,started,interrupted,controller_failed,diagnostics,verify,extra_cleanup,extra_cleanup_owned):
+    """Shared verifier/event/cleanup/status/report tail for one live case.
+
+    Both the curated (:func:`_acceptance_live_case`) and QuixBugs
+    (:mod:`agentic_debugger.evaluation.live_quixbugs`) live case pipelines
+    converge here so verifier invocation, event projection, cleanup
+    accounting, status classification, and report assembly stay a single
+    accepted implementation rather than two independently maintained copies.
+    ``verify`` is a zero-argument callable invoked only under the exact same
+    guarded conditions the original curated-only implementation used;
+    ``extra_cleanup`` performs the caller-owned case-directory cleanup (a
+    local temp directory for curated cases, an owned external WSL workspace
+    for QuixBugs cases) and returns ``(removed, error)``.
+    """
+    verifier=None; verifier_started=False; verifier_failed=False; event_failed=False; events=""
     if result is not None and context is not None and result.final_state is ControllerState.DONE and context.patch_applied and context.candidate_patch:
         try:
             verifier_started=True
-            verifier=EvaluationVerifier(str(repo),workspace_parent=str(case_dir)).evaluate(task,context.candidate_patch)
+            verifier=verify()
         except KeyboardInterrupt:
             interrupted=True; diagnostics.append("verifier interrupted by operator")
         except Exception as exc:
@@ -780,7 +772,7 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
             interrupted=True; cleanup_errors.append("task workspace cleanup interrupted")
         except Exception as exc: cleanup_errors.append(redact_for_recording(bounded_error(exc)))
     try:
-        case_removed,case_error=_remove_owned_case_dir(case_dir,parent)
+        case_removed,case_error=extra_cleanup()
     except KeyboardInterrupt:
         case_removed=False; case_error="case cleanup interrupted"; interrupted=True
     except Exception as exc:
@@ -814,10 +806,10 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
             if step.action and step.action.name in {ActionName.START_PDB_SESSION,ActionName.GET_STACK_SUMMARY,ActionName.GET_FRAME_LOCALS,ActionName.SAFE_EVAL_EXPRESSION}:
                 if step.observation and step.observation.status.value=="ok": pdb_success+=1
                 else: pdb_failed+=1
-    model_phase_ms=int(adapter.model_phase_elapsed_seconds*1000) if adapter else 0
+    model_phase_ms=int(live_adapter.model_phase_elapsed_seconds*1000) if live_adapter else 0
     measurements=metrics.to_mapping(); measurements.update({"successful_pdb_observation_count":pdb_success,"failed_pdb_observation_count":pdb_failed,"tool_call_count":len(context.tool_calls) if context else 0,"case_elapsed_duration_ms":int((time.monotonic()-started)*1000),"model_phase_elapsed_duration_ms":model_phase_ms,"model_transport_duration_ms":model_phase_ms,"elapsed_scope":"case_observed; model_phase=transport_only"})
     completed=status not in {LiveCaseStatus.INCOMPLETE,LiveCaseStatus.CLEANUP_FAILED}
-    reporting={"mode":"live","completed":completed,"partial":not completed,"interrupted":interrupted,"event_recorded":bool(events),"cleanup":"cleaned" if case_removed and not cleanup_errors else "failed","case_directory_owned":case_dir is not None}
+    reporting={"mode":"live","completed":completed,"partial":not completed,"interrupted":interrupted,"event_recorded":bool(events),"cleanup":"cleaned" if case_removed and not cleanup_errors else "failed","case_directory_owned":extra_cleanup_owned}
     return LiveCaseResult(
         task_id=task_id,
         policy=policy.value,
@@ -832,6 +824,38 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
         case_id=case_id,
         run_id=run_id,
         trajectory_id=run_id,
+    )
+
+def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local"):
+    repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve(); task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
+    case_id=f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"; run_id=f"live-{case_id}"; started=time.monotonic()
+    case_dir=None; workspace=None; context=None; result=None; live_adapter=None; metrics=LiveModelMetrics(); diagnostics=[]; interrupted=False; controller_failed=False
+    try:
+        case_dir=_owned_case_dir(parent)
+        workspace=TaskWorkspace(str(repo/CURATED_RELATIVE_ROOT/task_id),parent_dir=str(case_dir))
+        probe=prepare_pdb_probe(repo/CURATED_RELATIVE_ROOT/task_id,scenario_for(task_id),case_dir) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
+        context=DemoToolContext(task=task,workspace=workspace,patch="",probe=probe)
+        registry=build_registry(context,pdb_policy=pdb_policy_for(policy))
+        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id)
+        metrics=live_adapter.metrics
+        controller=DeterministicController(registry,live_adapter,ControllerRunConfig(max_model_calls=limits.max_controller_steps))
+        try:
+            result=controller.run(ControllerSnapshot(run_id,task_id,ControllerState.REPRODUCE,0,ControllerBudgetLimits.from_task_constraints(task.constraints),ControllerBudgetState(),HypothesisLedger()))
+        except KeyboardInterrupt:
+            interrupted=True; diagnostics.append("controller interrupted by operator")
+        except Exception as exc:
+            controller_failed=True; diagnostics.append(redact_for_recording(bounded_error(exc)))
+    except KeyboardInterrupt:
+        interrupted=True; diagnostics.append("run interrupted by operator")
+    except Exception as exc:
+        diagnostics.append(redact_for_recording(bounded_error(exc)))
+    return _finalize_live_case(
+        task_id=task_id,policy=policy,repetition=repetition,case_id=case_id,run_id=run_id,config=config,
+        task=task,context=context,workspace=workspace,result=result,metrics=metrics,live_adapter=live_adapter,
+        started=started,interrupted=interrupted,controller_failed=controller_failed,diagnostics=diagnostics,
+        verify=lambda: EvaluationVerifier(str(repo),workspace_parent=str(case_dir)).evaluate(task,context.candidate_patch),
+        extra_cleanup=lambda: _remove_owned_case_dir(case_dir,parent),
+        extra_cleanup_owned=case_dir is not None,
     )
 
 run_live_case=_acceptance_live_case

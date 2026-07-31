@@ -73,6 +73,7 @@ from agentic_debugger.runtime.exceptions import (
     WorkspaceError,
 )
 from agentic_debugger.runtime.patcher import PatchManager
+from agentic_debugger.runtime.execution import VerifiedExecutionContext
 from agentic_debugger.runtime.pdb_session import PdbSession
 from agentic_debugger.runtime.test_runner import TestRunKind, TestRunner
 from agentic_debugger.runtime.workspace import TaskWorkspace
@@ -256,13 +257,15 @@ class DemoToolContext:
         workspace: TaskWorkspace,
         patch: str,
         probe: Optional[PdbProbe],
+        execution_context: Optional[VerifiedExecutionContext] = None,
     ) -> None:
         self.task = task
         self.workspace = workspace
         self.patch = patch
         self.candidate_patch = ""
         self.probe = probe
-        self.test_runner = TestRunner(workspace)
+        self.execution_context = execution_context
+        self.test_runner = TestRunner(workspace, execution_context=execution_context)
         self.patch_manager = PatchManager(
             workspace,
             list(task.constraints.allowed_write_paths),
