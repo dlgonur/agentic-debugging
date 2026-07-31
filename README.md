@@ -66,7 +66,27 @@ actually opens PDB are ready.
 Dataset and Evaluation Decision v1 selects BugsInPy as the primary external
 dataset, QuixBugs Python as fallback, and the current five curated fixtures as
 the architecture smoke gate. RAG is NO-GO-FOR-NOW for a research comparison,
-SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW. Dataset
-execution, broader evaluation, containment hardening, and final technical
-reporting remain future work — see `TODO.md` and
-`docs/DATASET_EVALUATION_DECISION_V1.md`.
+SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW. See `TODO.md`
+and `docs/DATASET_EVALUATION_DECISION_V1.md`.
+
+The Model, RAG, Fine-Tuning and DPO Decision Gate v1
+(`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) and the Final Technical Report
+and Demo Package v1 (`docs/FINAL_TECHNICAL_REPORT_V1.md`,
+`docs/DEMO_GUIDE_V1.md`) are complete and accepted as of 2026-07-31,
+documentation-only, from baseline `2236775`. The Decision Gate reaffirms RAG
+NO-GO-FOR-NOW, SFT DEFER, and DPO NO-GO-FOR-NOW, adds PROCEED (narrow) on
+future model-access strategy — the smallest credible next experiment is one
+QuixBugs task under the static-baseline policy through the existing
+protocol-1.3 live harness on the already-used free-tier route, not a broader
+or paid campaign — and records that the eight-task QuixBugs baseline is
+sufficient evidence for infrastructure validation only, not for model
+selection, training, or generalization claims. The Final Technical Report
+synthesizes the architecture, dataset/provenance decisions, sandbox and
+containment boundaries, BugsInPy's license block, the QuixBugs methodology
+and results (and what they do not prove), and limitations/future work. The
+Demo Guide reuses only existing entry points (the Task 9 offline demo and the
+QuixBugs WSL smoke/baseline scripts); it adds no parallel demo framework and
+states plainly that it validates evaluation infrastructure, not model
+debugging performance. No model, RAG, training, PDB, or paid API ran to
+produce any of this, and the accepted QuixBugs benchmark campaigns were not
+rerun.

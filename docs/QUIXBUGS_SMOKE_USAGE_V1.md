@@ -136,8 +136,7 @@ Verdict: **`ACCEPT CANDIDATE — REAL SMOKE PASSED`**
   and corrected `gcd.py`, hashed, and confirmed to touch only
   `python_programs/gcd.py`
 - `EvaluationVerifier.evaluate()` through the prepared `VerifiedExecutionContext`:
-  status `COMPLETED`, outcome `RESOLVED`, F2P 1/1 passed post-patch, P2P 1/1
-  passed, full suite (the 2 declared nodes) 2/2 passed, canonical fixture
+  status `COMPLETED`, outcome `RESOLVED`, F2P 5/5 passed post-patch, P2P 1/1 passed, full suite (all 6 collected nodes) 6/6 passed, canonical fixture
   hash unchanged before/after, workspace lifecycle `CLEANED`
 - Disposable run workspace removed; pinned source, venv, and cache persisted
 

@@ -203,8 +203,8 @@ Rules:
 
 ## 7. Phase 7 — Evaluation and Final Report
 
-- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime.
-- [ ] 7.2 Prepare a working agentic debugging demo and technical report.
+- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Metrics are defined — see 7.1.1-7.1.5 — but no real model has been evaluated against an external dataset yet, so there is no cross-dataset model result to report against these metrics.)
+- [x] 7.2 Prepare a working agentic debugging demo and technical report. (Demo Guide v1 and Final Technical Report v1 completed and accepted 2026-07-31 — infrastructure/evaluation-platform demo and report, explicitly not a model-debugging-performance demo; see below.)
 
 ### 7.x Subtasks / Log
 
@@ -214,7 +214,10 @@ Rules:
 - [x] 7.1.4 Define cost/runtime metric (transport timing and provider-reported usage/cost metadata with qualification).
 - [x] 7.1.5 Define debugger-action metric (PDB openings, observations, action counts, and policy restrictions).
 - [x] 7.2.1 Prepare demo scenario (Task 9 deterministic five-task, two-policy demonstration).
-- [ ] 7.2.2 Prepare final technical report outline.
+- [x] 7.2.2 Prepare final technical report outline. (Superseded by the completed Final Technical Report v1 — `docs/FINAL_TECHNICAL_REPORT_V1.md`.)
+- [x] 7.2.3 Model, RAG, Fine-Tuning and DPO Decision Gate v1 — `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`. PROCEED (narrow) on model-access strategy, NO-GO-FOR-NOW on RAG, DEFER on SFT, NO-GO-FOR-NOW on DPO; eight QuixBugs tasks judged sufficient for infrastructure validation only, not model selection, training, or generalization claims.
+- [x] 7.2.4 Final Technical Report v1 — `docs/FINAL_TECHNICAL_REPORT_V1.md`. Documentation-only synthesis of architecture, dataset/provenance, boundaries, BugsInPy/QuixBugs findings, exact results and their limits, and future work.
+- [x] 7.2.5 Demo Guide v1 — `docs/DEMO_GUIDE_V1.md`. Reuses existing entry points only (Task 9 demo, `scripts/quixbugs_live_smoke.py`, `scripts/quixbugs_eight_task_baseline.py`); no parallel demo framework. The Task 9 demo command was re-verified live on this checkout; the QuixBugs WSL entry points were verified by source/CLI inspection only (not re-executed, per instruction not to re-run accepted benchmarks).
 
 ---
 
@@ -230,6 +233,7 @@ Current active items:
 - No new live/model run or dataset execution is authorized or scheduled. Dataset and Evaluation Decision v1 is the documentation-only decision point; the next bounded implementation task is the BugsInPy eligibility manifest and adapter design.
 - The decision selects BugsInPy as primary, QuixBugs Python as fallback, and the five current curated fixtures as an architecture smoke gate. RAG is NO-GO-FOR-NOW for a research comparison, SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW.
 - Post-MVP research, containment, dataset execution, broader evaluation, model training, and final-report work remains active or deferred as indicated by the phase checkboxes.
+- **2026-07-31: Model, RAG, Fine-Tuning and DPO Decision Gate v1 and Final Technical Report and Demo Package v1 are complete and accepted**, documentation-only, baseline `2236775`. Decision Gate v1 (`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) reaffirms RAG NO-GO-FOR-NOW, SFT DEFER, and DPO NO-GO-FOR-NOW from Dataset and Evaluation Decision v1, adds PROCEED (narrow) on future model-access strategy (one real-dataset single-task static-baseline live case as the smallest credible next experiment, on the existing free-tier route, before any paid/multi-model expansion), and records that the eight-task QuixBugs gold baseline is sufficient for infrastructure validation only — not model selection, training, or generalization claims. Final Technical Report v1 (`docs/FINAL_TECHNICAL_REPORT_V1.md`) and Demo Guide v1 (`docs/DEMO_GUIDE_V1.md`) synthesize the full project to date; the Demo Guide reuses only existing entry points (no parallel demo framework) and its Task 9 command was re-verified live on this checkout. No model, RAG, training, PDB, or paid API ran during this campaign; the accepted QuixBugs benchmark campaigns were not rerun.
 
 Notes:
 
@@ -309,6 +313,8 @@ Notes:
 - [x] Task 10B-R5 — Policy-Scoped Live Contract Repair v1 (commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`; protocol `1.3`; final audit accepted)
 - [x] Resource-Limited QuixBugs Fallback Real Smoke v1 (baseline `96526fc`; branch `feature/quixbugs-resource-limited-smoke-v1`)
 - [x] QuixBugs Eight-Task Gold Baseline v1 (baseline `4063fa4`; branch `feature/quixbugs-eight-task-baseline-v1`)
+- [x] Model, RAG, Fine-Tuning and DPO Decision Gate v1 (baseline `2236775`; branch `feature/model-decision-final-report-v1`)
+- [x] Final Technical Report and Demo Package v1 (baseline `2236775`; branch `feature/model-decision-final-report-v1`)
 
 ### QuixBugs Eight-Task Gold Baseline v1
 
@@ -411,6 +417,57 @@ instead — infrastructure validation only, no model/PDB/broader campaign.
   `docs/QUIXBUGS_SMOKE_USAGE_V1.md` and
   `_ai-review/quixbugs-resource-limited-smoke-v1/` for full evidence.
 
+### Model, RAG, Fine-Tuning and DPO Decision Gate v1 + Final Technical Report and Demo Package v1
+
+Documentation-only campaign, baseline `2236775`, branch
+`feature/model-decision-final-report-v1`. Produces three new documents and
+updates README/TODO/this tracker/diary; adds no runtime source code and
+runs no model, provider, OpenCode, RAG, training, PDB, or paid API.
+
+- `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`: explicit PROCEED/DEFER/
+  NO-GO-FOR-NOW verdicts for future model-access strategy (PROCEED, narrow),
+  repository RAG (NO-GO-FOR-NOW), SFT (DEFER), DPO/preference optimization
+  (NO-GO-FOR-NOW), and whether the eight QuixBugs tasks are sufficient for
+  infrastructure validation (yes), model selection (no), training (no), and
+  generalization claims (no). Names the smallest credible next experiment
+  (one QuixBugs task, static-baseline policy, free-tier model, through the
+  protocol-1.3 harness) and trigger conditions for each decision, without
+  authorizing that experiment to run in this campaign.
+- `docs/FINAL_TECHNICAL_REPORT_V1.md`: a stand-alone technical report
+  covering the research question, architecture/execution lifecycle,
+  dataset/provenance decisions, sandbox/resource/Git/credential/fail-closed
+  boundaries, BugsInPy license-block findings, the QuixBugs fallback and
+  eight-task methodology, exact results and their explicit non-claims,
+  model/RAG/SFT/DPO decisions, limitations, validity threats,
+  reproducibility, future work, and final contribution.
+- `docs/DEMO_GUIDE_V1.md`: reuses only existing entry points — the Task 9
+  offline demo (`python -m agentic_debugger.demo`), the one-task QuixBugs
+  smoke (`scripts/quixbugs_live_smoke.py`), and the eight-task baseline
+  (`scripts/quixbugs_eight_task_baseline.py --skip-excluded`). No parallel
+  demo framework was created. While preparing this guide, the Task 9 demo
+  was re-run live on this checkout (`--output-dir ... --strict`, exit `0`,
+  10 cases) and a documentation gap was found and fixed: `--list-tasks`
+  also requires `--output-dir`, which the guide's first draft omitted. The
+  QuixBugs WSL entry points were verified by source/CLI-help inspection
+  only (`-h` output matches documented flags) — they were **not**
+  re-executed, per the instruction not to rerun accepted benchmark
+  campaigns.
+- README.md, TODO.md, and this tracker were updated to mark both remaining
+  tasks (the Decision Gate and the Final Report/Demo Package) complete, and
+  the diary gained a 2026-07-31 entry.
+- Independent review: one read-only Explore-agent review pass over the new
+  documents and the diff, verifying internal consistency, evidence backing,
+  and that no claim overstates the underlying accepted evidence.
+- Validation performed: targeted demo re-run (above), `python -m compileall`
+  over the repository, JSON manifest re-validation (`json.load` over every
+  tracked `research/**/*.json` manifest), and `git diff --check`. No
+  accepted benchmark campaign and no known-hanging test path were rerun.
+- Review package: `_ai-review/model-decision-final-report-v1/` (local,
+  gitignored via `.git/info/exclude`, uncommitted) — campaign brief,
+  decision report, final technical report and demo guide copies, review
+  findings, validation output, a diff against `2236775`, direct copies of
+  every changed/new tracked file, and exact `git status`.
+
 ## Last Updated
 
-2026-07-30
+2026-07-31

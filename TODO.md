@@ -32,10 +32,27 @@ baseline'a genişletildi (`gcd`, `bucketsort`, `find_in_sorted`, `flatten`,
 `ACCEPT CANDIDATE — EIGHT-TASK BASELINE COMPLETE`; bkz.
 `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`. İkisi de sadece altyapıyı
 doğrular; model, PDB veya geniş benchmark kampanyası
-çalıştırılmadı. Dataset execution, broader evaluation, fine-tuning, RAG
-genişletmesi, preference optimization (DPO/RLHF), containment hardening ve
-final teknik rapor hâlâ future work olarak kalır; bu not stajın veya daha
-geniş araştırma projesinin tamamlandığı anlamına gelmez.
+çalıştırılmadı.
+
+2026-07-31 tarihinde, Model/RAG/Fine-Tuning/DPO Decision Gate v1
+(`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) ve Final Technical Report
+and Demo Package v1 (`docs/FINAL_TECHNICAL_REPORT_V1.md`,
+`docs/DEMO_GUIDE_V1.md`) documentation-only olarak tamamlandı ve kabul
+edildi (baseline `2236775`). Decision Gate; future model-access strategy
+için PROCEED (dar kapsamlı — mevcut free-tier route üzerinde tek QuixBugs
+task'ı, sadece static-baseline policy), repository RAG için NO-GO-FOR-NOW,
+SFT için DEFER, DPO/preference optimization için NO-GO-FOR-NOW kararlarını
+kaydediyor; sekiz-task QuixBugs baseline'ın yalnız altyapı doğrulaması için
+yeterli olduğunu, model seçimi, training veya generalization iddiası için
+yeterli olmadığını açıkça belirtiyor. Final rapor ve demo guide mevcut
+altyapıyı (Task 9 offline demo, QuixBugs tek-task ve sekiz-task WSL entry
+point'leri) yeniden kullanıyor; paralel bir demo framework'ü oluşturulmadı.
+Bu çalışma sırasında da hiçbir model, provider, RAG, training, PDB veya paid
+API çalıştırılmadı ve kabul edilen benchmark kampanyaları yeniden
+çalıştırılmadı. Dataset execution genişlemesi (BugsInPy'nin license block'u
+hâlâ açık), fine-tuning, RAG genişletmesi ve preference optimization
+(DPO/RLHF) hâlâ future work olarak kalır; bu not stajın veya daha geniş
+araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Daily requirement
 
@@ -86,5 +103,5 @@ geniş araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 7 — Evaluation and Final Report
 
-- [ ] Sonuçları başarı oranı, localization accuracy, test pass rate, maliyet ve çalışma süresi açısından değerlendir.
-- [ ] Çalışan bir agentic debugging demosu ve teknik rapor hazırla.
+- [ ] Sonuçları başarı oranı, localization accuracy, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Metrikler tanımlı; ancak henüz hiçbir external dataset üzerinde gerçek bir model çalıştırılmadığı için bu metriklere karşı raporlanacak bir model sonucu yok.)
+- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı 2026-07-31 — Final Technical Report v1 ve Demo Guide v1; bu bir altyapı/evaluation-platform demosu ve raporudur, model debugging performance demosu değildir. Bkz. `docs/FINAL_TECHNICAL_REPORT_V1.md`, `docs/DEMO_GUIDE_V1.md`, `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`.)
