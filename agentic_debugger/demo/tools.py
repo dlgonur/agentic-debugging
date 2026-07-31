@@ -258,6 +258,7 @@ class DemoToolContext:
         patch: str,
         probe: Optional[PdbProbe],
         execution_context: Optional[VerifiedExecutionContext] = None,
+        pdb_session_factory: Callable[[TaskWorkspace], PdbSession] = PdbSession,
     ) -> None:
         self.task = task
         self.workspace = workspace
@@ -265,6 +266,12 @@ class DemoToolContext:
         self.candidate_patch = ""
         self.probe = probe
         self.execution_context = execution_context
+        # Defaults to plain host-local ``PdbSession`` construction, preserving
+        # the accepted demo/live behavior exactly. A caller that must run the
+        # debugger over external/untrusted code (e.g. a contained WSL/
+        # Bubblewrap boundary) injects a factory that builds a session bound
+        # to that boundary instead -- the host-local path is never implied.
+        self.pdb_session_factory = pdb_session_factory
         self.test_runner = TestRunner(workspace, execution_context=execution_context)
         self.patch_manager = PatchManager(
             workspace,
@@ -549,7 +556,7 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
         context.pdb_workspace = workspace
         # Register the session before starting it so a failed start is still
         # stopped and its workspace removed by release_pdb().
-        session = PdbSession(workspace)
+        session = context.pdb_session_factory(workspace)
         context.pdb_session = session
         try:
             session.start()

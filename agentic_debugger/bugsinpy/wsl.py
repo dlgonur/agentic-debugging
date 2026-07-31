@@ -150,13 +150,35 @@ def build_wsl_command(command: Sequence[str], *, distro: str = DISTRO, cwd: str 
     return result + ["--", "bash", "--noprofile", "--norc", "-c", shlex.join(list(command))]
 
 
-def build_bwrap_command(command: Sequence[str], *, workspace: str, python_root: str, empty_dir: str, cwd: str = "/workspace") -> list[str]:
-    """Build the Bubblewrap policy with one host-backed persistent RW mount."""
+def build_bwrap_command(
+    command: Sequence[str],
+    *,
+    workspace: str,
+    python_root: str,
+    empty_dir: str,
+    cwd: str = "/workspace",
+    extra_ro_binds: Sequence[tuple[str, str]] = (),
+) -> list[str]:
+    """Build the Bubblewrap policy with one host-backed persistent RW mount.
+
+    ``extra_ro_binds`` optionally adds further read-only mounts (e.g. a small
+    owned code bundle needed by a persistent in-sandbox worker) after the
+    existing fixed mounts and before the one writable ``/workspace`` bind, so
+    the accepted one-owned-writable-mount policy is unchanged. Empty by
+    default, which reproduces the exact prior argv byte-for-byte.
+    """
     for name, value in (("workspace", workspace), ("python_root", python_root), ("empty_dir", empty_dir)):
         if not value.startswith("/") or ".." in Path(value).parts:
             raise ValueError(f"{name} must be an absolute WSL path without traversal")
     if not command or any(not isinstance(item, str) or not item for item in command):
         raise ValueError("Bubblewrap command must be a non-empty argv")
+    extra_bind_args: list[str] = []
+    for source, destination in extra_ro_binds:
+        if not source.startswith("/") or ".." in Path(source).parts:
+            raise ValueError("extra_ro_binds source must be an absolute WSL path without traversal")
+        if not destination.startswith("/") or ".." in Path(destination).parts:
+            raise ValueError("extra_ro_binds destination must be an absolute WSL path without traversal")
+        extra_bind_args += ["--ro-bind", source, destination]
     # The tmpfs root removes unrelated WSL roots. Runtime paths are read-only;
     # only /workspace is a persistent host-backed writable mount. /tmp and the
     # hidden locations are read-only binds of an owned empty directory.
@@ -167,6 +189,7 @@ def build_bwrap_command(command: Sequence[str], *, workspace: str, python_root: 
         "--proc", "/proc", "--dev", "/dev", "--ro-bind", empty_dir, "/home",
         "--ro-bind", empty_dir, "/mnt", "--ro-bind", empty_dir, "/media", "--ro-bind", empty_dir, "/tmp",
         "--ro-bind", empty_dir, "/var", "--dir", "/opt", "--ro-bind", python_root, "/opt/python",
+        *extra_bind_args,
         "--bind", workspace, "/workspace", "--chdir", cwd, "--", *command,
     ]
 
@@ -174,6 +197,22 @@ def build_bwrap_command(command: Sequence[str], *, workspace: str, python_root: 
 def fingerprint_environment(values: Mapping[str, str]) -> str:
     canonical = json.dumps(dict(sorted(values.items())), sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def build_env_wrapped_command(command: Sequence[str], environment: Mapping[str, str] | None = None) -> list[str]:
+    """Wrap ``command`` with ``env -i`` plus an explicitly reviewed key allowlist.
+
+    Shared by :meth:`WslProcess.run` (one-shot commands) and any persistent
+    process launcher (e.g. a contained interactive worker) that must reuse the
+    exact same credential/environment-denial policy without inheriting the
+    invoking process's real environment into WSL.
+    """
+    values = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
+    values.update(environment or {})
+    allowed = _SAFE_ENV_KEYS | {"PATH", "HOME", "PWD", "TMPDIR"}
+    if any(key not in allowed for key in values):
+        raise WslGateError("unreviewed environment variable requested")
+    return ["env", "-i", *[f"{key}={value}" for key, value in sorted(values.items())], *command]
 
 
 class WslProcess:
@@ -185,12 +224,7 @@ class WslProcess:
         self.distro = distro
 
     def run(self, argv: Sequence[str], *, cwd: str | None = None, environment: Mapping[str, str] | None = None, timeout_seconds: float = 120) -> CommandResult:
-        values = {"PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "LANG": "C"}
-        values.update(environment or {})
-        allowed = _SAFE_ENV_KEYS | {"PATH", "HOME", "PWD", "TMPDIR"}
-        if any(key not in allowed for key in values):
-            raise WslGateError("unreviewed environment variable requested")
-        command = ["env", "-i", *[f"{key}={value}" for key, value in sorted(values.items())], *argv]
+        command = build_env_wrapped_command(argv, environment)
         return _subprocess_result(build_wsl_command(command, distro=self.distro, cwd=cwd), timeout_seconds=timeout_seconds)
 
 

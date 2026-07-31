@@ -1,0 +1,132 @@
+{
+  "canonical_source_unchanged": true,
+  "cleanup_attempted": true,
+  "cleanup_error": null,
+  "cleanup_succeeded": true,
+  "contained_preflight": {
+    "authorized": true,
+    "blocked_gates": [],
+    "gates": [
+      {
+        "name": "execution_context_ready",
+        "reason": "explicitly verified",
+        "status": "PASS"
+      },
+      {
+        "name": "resource_isolation_ready",
+        "reason": "explicitly verified",
+        "status": "PASS"
+      },
+      {
+        "name": "containment_ready",
+        "reason": "explicitly verified",
+        "status": "PASS"
+      },
+      {
+        "name": "launch_plan_identity",
+        "reason": "explicitly verified",
+        "status": "PASS"
+      },
+      {
+        "name": "observation_budget_positive",
+        "reason": "explicitly verified",
+        "status": "PASS"
+      }
+    ],
+    "task_id": "quixbugs-gcd-smoke-v1"
+  },
+  "controller_final_state": "Failed",
+  "controller_stop_reason": "failed",
+  "diagnostics": [],
+  "events_jsonl": "{\"event_id\":\"event-000000000\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":0},\"directive_kind\":\"action\",\"model_call_index\":0,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":0,\"state\":\"Reproduce\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000001\",\"event_type\":\"action\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"run_reproduction\",\"payload\":{\"action\":{\"action_id\":\"action-000000000\",\"arguments\":{\"phase\":\"baseline\"},\"name\":\"run_reproduction\",\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"state\":\"Reproduce\",\"task_id\":\"quixbugs-gcd-smoke-v1\"}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":1,\"state\":\"Reproduce\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000002\",\"event_type\":\"observation\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"run_reproduction\",\"payload\":{\"observation\":{\"action_id\":\"action-000000000\",\"name\":\"run_reproduction\",\"observation_id\":\"observation-000000000\",\"payload\":{\"dispatch_reason\":\"ok\",\"exit_code\":1,\"expected_exit_code\":1,\"failure_reproduced\":true,\"node_id\":\"python_testcases/test_gcd.py::test_gcd[input_data1-13]\",\"passed\":false,\"phase\":\"baseline\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"status\":\"ok\",\"summary\":\"baseline reproduction executed\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"truncated\":false}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":2,\"state\":\"Reproduce\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000003\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"transition\",\"model_call_index\":1,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":3,\"state\":\"Reproduce\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000004\",\"event_type\":\"transition\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"state_transition\",\"payload\":{\"reason\":\"baseline failure reproduced through the contained external runner\",\"source_state\":\"Reproduce\",\"target_state\":\"Understand\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":4,\"state\":\"Understand\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000005\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"add_hypothesis\",\"model_call_index\":2,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":5,\"state\":\"Understand\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000006\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"transition\",\"model_call_index\":3,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":6,\"state\":\"Understand\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000007\",\"event_type\":\"transition\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"state_transition\",\"payload\":{\"reason\":\"controller PDB gate allowed access (allowed); collecting bounded runtime evidence\",\"source_state\":\"Understand\",\"target_state\":\"RuntimeEvidence\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":7,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000008\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"action\",\"model_call_index\":4,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":8,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000009\",\"event_type\":\"action\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"start_pdb_session\",\"payload\":{\"action\":{\"action_id\":\"action-000000004\",\"arguments\":{},\"name\":\"start_pdb_session\",\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\"}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":9,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000010\",\"event_type\":\"observation\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"start_pdb_session\",\"payload\":{\"observation\":{\"action_id\":\"action-000000004\",\"name\":\"start_pdb_session\",\"observation_id\":\"observation-000000004\",\"payload\":{\"breakpoint_line\":5,\"dispatch_reason\":\"ok\",\"focus_function\":\"gcd\",\"function\":\"gcd\",\"line\":5,\"script\":\"python_programs/gcd.py\",\"state\":\"paused\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"status\":\"ok\",\"summary\":\"runtime probe paused at the declared breakpoint\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"truncated\":false}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":10,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000011\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":1,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":0,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"action\",\"model_call_index\":5,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":11,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000012\",\"event_type\":\"action\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"get_stack_summary\",\"payload\":{\"action\":{\"action_id\":\"action-000000005\",\"arguments\":{},\"name\":\"get_stack_summary\",\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\"}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":12,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000013\",\"event_type\":\"observation\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"get_stack_summary\",\"payload\":{\"observation\":{\"action_id\":\"action-000000005\",\"name\":\"get_stack_summary\",\"observation_id\":\"observation-000000005\",\"payload\":{\"dispatch_reason\":\"ok\",\"frames\":[{\"frame_id\":0,\"function\":\"gcd\",\"is_current\":true,\"line\":5,\"script\":\"python_programs/gcd.py\"},{\"frame_id\":1,\"function\":\"_demo_runtime_probe\",\"is_current\":false,\"line\":30,\"script\":\"python_programs/gcd.py\"},{\"frame_id\":2,\"function\":\"<module>\",\"is_current\":false,\"line\":33,\"script\":\"python_programs/gcd.py\"}],\"pause_generation\":1,\"script\":\"python_programs/gcd.py\",\"state\":\"paused\",\"total_frames\":3,\"truncated\":false},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"status\":\"ok\",\"summary\":\"bounded stack summary collected\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"truncated\":false}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":13,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000014\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":2,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":1,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"action\",\"model_call_index\":6,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":14,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000015\",\"event_type\":\"action\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"get_frame_locals\",\"payload\":{\"action\":{\"action_id\":\"action-000000006\",\"arguments\":{\"frame_id\":0,\"pause_generation\":1},\"name\":\"get_frame_locals\",\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\"}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":15,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000016\",\"event_type\":\"observation\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"get_frame_locals\",\"payload\":{\"observation\":{\"action_id\":\"action-000000006\",\"name\":\"get_frame_locals\",\"observation_id\":\"observation-000000006\",\"payload\":{\"dispatch_reason\":\"ok\",\"frame_id\":0,\"locals\":[{\"name\":\"a\",\"value\":{\"entries\":[],\"items\":[],\"kind\":\"int\",\"size\":6,\"special\":null,\"truncated\":false,\"type\":\"builtins.int\",\"value\":35}},{\"name\":\"b\",\"value\":{\"entries\":[],\"items\":[],\"kind\":\"int\",\"size\":5,\"special\":null,\"truncated\":false,\"type\":\"builtins.int\",\"value\":21}}],\"pause_generation\":1,\"state\":\"paused\",\"total_count\":2,\"truncated\":false},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"status\":\"ok\",\"summary\":\"bounded frame locals collected\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"truncated\":false}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":16,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000017\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":2,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":2,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"action\",\"model_call_index\":7,\"stop_reason\":null},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":17,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000018\",\"event_type\":\"action\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"stop_pdb_session\",\"payload\":{\"action\":{\"action_id\":\"action-000000007\",\"arguments\":{},\"name\":\"stop_pdb_session\",\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\"}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":18,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000019\",\"event_type\":\"observation\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"stop_pdb_session\",\"payload\":{\"observation\":{\"action_id\":\"action-000000007\",\"name\":\"stop_pdb_session\",\"observation_id\":\"observation-000000007\",\"payload\":{\"dispatch_reason\":\"ok\",\"session_started\":true,\"stopped\":true,\"workspace_removed\":true},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"status\":\"ok\",\"summary\":\"PDB session stopped and its workspace released\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"truncated\":false}},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":19,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000020\",\"event_type\":\"decision\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"controller_decision\",\"payload\":{\"budget_after\":{\"patch_attempts\":0,\"pdb_observations\":2,\"source_observations\":0,\"test_runs\":1},\"budget_before\":{\"patch_attempts\":0,\"pdb_observations\":2,\"source_observations\":0,\"test_runs\":1},\"directive_kind\":\"transition\",\"model_call_index\":8,\"stop_reason\":\"failed\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":20,\"state\":\"RuntimeEvidence\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000021\",\"event_type\":\"transition\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"state_transition\",\"payload\":{\"reason\":\"deterministic reachability case complete; patch verification is out of scope for this infrastructure task\",\"source_state\":\"RuntimeEvidence\",\"target_state\":\"Failed\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":21,\"state\":\"Failed\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n{\"event_id\":\"event-000000022\",\"event_type\":\"final\",\"metadata\":{\"cost\":null,\"duration_ms\":null,\"model\":null,\"tokens\":null,\"tool_version\":\"quixbugs-gcd-pdb-reachability-v1\"},\"name\":\"run_finished\",\"payload\":{\"final_state\":\"Failed\",\"model_calls\":9,\"stop_reason\":\"failed\"},\"run_id\":\"pdb-reachability-059056410256498981c4891b79ce6879\",\"schema_version\":\"1.0\",\"sequence\":22,\"state\":\"Failed\",\"task_id\":\"quixbugs-gcd-smoke-v1\",\"timestamp\":\"2026-07-31T10:18:01.018216Z\"}\n",
+  "gate_decisions": [
+    {
+      "allowed": true,
+      "reason": "allowed"
+    }
+  ],
+  "launch_plan": {
+    "argv": [
+      "python_programs/gcd.py"
+    ],
+    "breakpoints": [
+      5
+    ],
+    "cwd": ".",
+    "driver": "python_programs/gcd.py",
+    "environment": {},
+    "python_executable": "\\\\wsl.localhost\\Ubuntu-22.04\\home\\benya\\.local\\share\\agentic-debugging-internship\\quixbugs-smoke-v1\\python-env\\py310\\bin\\python",
+    "target": "python_programs/gcd.py"
+  },
+  "pdb_observations": {
+    "failed_pdb_observation_count": 0,
+    "successful_pdb_observation_count": 2
+  },
+  "pdb_runtime_bundle_hashes": {
+    "agentic_debugger/__init__.py": "44d83657313eb93e9bb74b9638ea2ba44b51f084f3455e48e1459499b9b79a1d",
+    "agentic_debugger/runtime/__init__.py": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "agentic_debugger/runtime/exceptions.py": "9793535228c0c196f51634746833f802b09104a5d52247c4dc8f1b1495531ab5",
+    "agentic_debugger/runtime/pdb_protocol.py": "1ebb429c6267ebb0b5263200e64485054338b48bc00a6cb1553e2b915010c5f2",
+    "agentic_debugger/runtime/pdb_worker.py": "aec3f7910205d557b9f7e695bc62dbbcd54210aee76a50b0ebd6ec7606c3d1f2"
+  },
+  "quixbugs_preflight": {
+    "authorized": true,
+    "blocked_gates": [],
+    "gates": [
+      {
+        "name": "manifest_valid",
+        "reason": "manifest loaded and schema-validated",
+        "status": "PASS"
+      },
+      {
+        "name": "supported_platform",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "pinned_upstream_source",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "project_license_review",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "python_runtime_available",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "dependency_install_boundary",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "test_command_availability",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "containment_ready",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "workspace_cleanup_ready",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      },
+      {
+        "name": "target_annotation_review",
+        "reason": "explicitly cleared",
+        "status": "PASS"
+      }
+    ],
+    "manifest_fingerprint": "1283df988641829bc0643bba1a9fa96fc97ccd9f8476f9e9692e45df8cfaf852",
+    "task_id": "quixbugs-gcd-smoke-v1"
+  },
+  "task_id": "quixbugs-gcd-smoke-v1",
+  "verdict": "REACHABILITY_CASE_PASSED"
+}

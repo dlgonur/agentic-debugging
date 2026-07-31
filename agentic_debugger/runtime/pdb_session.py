@@ -361,6 +361,20 @@ class PdbSession:
             bootstrap,
         ]
 
+    def _worker_cwd(self) -> str:
+        """Windows-side ``Popen`` cwd for the worker process.
+
+        Defaults to the workspace root (unchanged behavior for the host-local
+        launch path). A subclass whose ``_get_worker_argv`` launches the
+        worker through an external bridge (e.g. WSL) may override this: the
+        worker's real working directory is then controlled entirely by that
+        bridge, and the Windows-side cwd only needs to be a directory
+        ``subprocess.Popen`` can actually start from (a UNC workspace root is
+        not always accepted there).
+        """
+
+        return self._workspace.root
+
     def start(self) -> None:
         with self._state_lock:
             if self._state != PdbSessionState.NEW:
@@ -382,7 +396,7 @@ class PdbSession:
         try:
             proc = subprocess.Popen(
                 argv,
-                cwd=self._workspace.root,
+                cwd=self._worker_cwd(),
                 stdin=subprocess.PIPE,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
@@ -596,6 +610,21 @@ class PdbSession:
             f"within {_CLEANUP_WAIT_TIMEOUT}s"
         )
 
+    def _expected_worker_pid(self) -> Optional[int]:
+        """PID the handshake must match against ``self._proc.pid``, or ``None``
+        to skip that check.
+
+        Defaults to the spawned process's own PID (unchanged host-local
+        behavior): the worker IS that direct child process, so an exact match
+        is a meaningful confused-deputy defense. A subclass that launches the
+        worker through an external bridge into a different PID namespace
+        (e.g. WSL2, whose Linux PIDs cannot equal a Windows process ID by
+        construction) overrides this to ``None``; the handshake still checks
+        protocol version and process liveness.
+        """
+
+        return self._proc.pid
+
     def _handshake(self) -> None:
         request = PdbRequest(
             protocol_version=PROTOCOL_VERSION,
@@ -622,10 +651,11 @@ class PdbSession:
 
         worker_info = PdbWorkerInfo.from_mapping(response.result)
 
-        if worker_info.pid != self._proc.pid:
+        expected_pid = self._expected_worker_pid()
+        if expected_pid is not None and worker_info.pid != expected_pid:
             raise PdbSessionError(
                 f"Worker PID mismatch: handshake reported "
-                f"{worker_info.pid}, actual {self._proc.pid}"
+                f"{worker_info.pid}, actual {expected_pid}"
             )
         if worker_info.protocol_version != PROTOCOL_VERSION:
             raise PdbProtocolError(

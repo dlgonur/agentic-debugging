@@ -350,9 +350,13 @@ class QuixBugsAdapter:
         )
         return QuixPreflightReport(self.manifest.task_id, self.manifest.fingerprint, gates)
 
-    def to_debug_task(self, source: TaskSource, commands: QuixBugsCommands) -> DebugTask:
+    def to_debug_task(
+        self, source: TaskSource, commands: QuixBugsCommands, *, pdb_observation_budget: int = 0
+    ) -> DebugTask:
         if not isinstance(source, TaskSource) or source.kind != "external":
             raise QuixBugsTaskMappingError("QuixBugs tasks require an external source binding")
+        if type(pdb_observation_budget) is not int or pdb_observation_budget < 0:
+            raise QuixBugsTaskMappingError("pdb_observation_budget must be a non-negative int")
         algorithm = self.manifest.algorithm
         oracle = self.manifest.oracle
         denied_write_paths = sorted(
@@ -398,7 +402,7 @@ class QuixBugsAdapter:
                 "external_services_allowed": False,
                 "max_patch_attempts": 1,
                 "max_test_runs": commands.max_test_runs,
-                "max_pdb_observations": 0,
+                "max_pdb_observations": pdb_observation_budget,
             },
             "oracle": {
                 "bug_category": oracle["bug_category"],
