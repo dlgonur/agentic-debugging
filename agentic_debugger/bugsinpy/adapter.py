@@ -29,6 +29,15 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Sequence
 from agentic_debugger.evaluation.task_schema import DebugTask, TaskSource
 from agentic_debugger.runtime.execution import PdbLaunchPlan, VerifiedExecutionContext
 from agentic_debugger.evaluation.verifier import EvaluationResult, EvaluationVerifier
+from agentic_debugger.bugsinpy.metadata_preflight import (
+    AuthoritySnapshot,
+    DEFAULT_GATE_PATH,
+    DEFAULT_MANIFEST_PATH,
+    BugsInPyMetadataPreflight,
+    BugsInPyOperationPermit,
+    MetadataPreflightDecision,
+    PreflightAuthorizationError,
+)
 
 
 _SHA1 = re.compile(r"^[0-9a-f]{40}$")
@@ -40,15 +49,9 @@ _MANIFEST_ID = "bugsinpy-pilot-eligibility-v1"
 _DATASET = "BugsInPy"
 _DEFAULT_TIMEOUT = 60
 _EXTERNAL_ROOT_MARKER = ".bugsinpy-external-workspace-owner"
-_EXPECTED_PUBLIC_GIT_URLS = {
-    "https://github.com/soarsmu/BugsInPy",
-    "https://github.com/jakubroztocil/httpie/",
-    "https://github.com/nvbn/thefuck",
-    "https://github.com/tiangolo/fastapi",
-    "https://github.com/tqdm/tqdm",
-}
 _SHELL_TOKENS = {"&&", "||", ";", "|", ">", ">>", "<", "`"}
 _UNKNOWN = {"unknown", "unverified", "gated", "possible"}
+_RECEIPT_ISSUER = object()
 
 
 class ManifestValidationError(ValueError):
@@ -94,6 +97,7 @@ class PreflightFacts:
     """Explicit operator/environment facts.  Missing facts never pass a gate."""
 
     platform: Optional[str] = None
+    operator_authorization_state: str = "absent"
     python_executable: Optional[str] = None
     python_version: Optional[str] = None
     python_available: bool = False
@@ -163,7 +167,7 @@ class NormalizedCommands:
 class SmokeEvidence:
     task_id: str
     verdict: str
-    preflight: PreflightReport
+    preflight: PreflightReport | MetadataPreflightDecision
     commands: Optional[NormalizedCommands]
     evaluation: Optional[EvaluationResult]
     cleanup_attempted: bool
@@ -187,11 +191,100 @@ class SmokeEvidence:
         }
 
 
+class AcquiredSourceReceipt:
+    """Issuer-bound receipt for one successfully materialized source root."""
+
+    __slots__ = ("_task_id", "_url", "_revision", "_root", "_authority_snapshot", "_run_id", "_acquisition_permit", "_issuer", "_initialized")
+
+    def __setattr__(self, name: str, value: object) -> None:
+        if getattr(self, "_initialized", False):
+            raise AttributeError("acquired source receipts are immutable")
+        object.__setattr__(self, name, value)
+
+    def __init__(
+        self,
+        task_id: str,
+        url: str,
+        revision: str,
+        root: Path,
+        authority_snapshot: AuthoritySnapshot,
+        run_id: str,
+        acquisition_permit: BugsInPyOperationPermit,
+        *,
+        _issuer: object,
+    ) -> None:
+        if _issuer is not _RECEIPT_ISSUER:
+            raise TypeError("acquired source receipts are issued by GitSourceAcquirer only")
+        object.__setattr__(self, "_task_id", task_id)
+        object.__setattr__(self, "_url", url.rstrip("/"))
+        object.__setattr__(self, "_revision", revision)
+        object.__setattr__(self, "_root", root)
+        object.__setattr__(self, "_authority_snapshot", authority_snapshot)
+        object.__setattr__(self, "_run_id", run_id)
+        object.__setattr__(self, "_acquisition_permit", acquisition_permit)
+        object.__setattr__(self, "_issuer", _issuer)
+        object.__setattr__(self, "_initialized", True)
+
+    @property
+    def task_id(self) -> str:
+        return self._task_id
+
+    @property
+    def url(self) -> str:
+        return self._url
+
+    @property
+    def revision(self) -> str:
+        return self._revision
+
+    @property
+    def root(self) -> Path:
+        return self._root
+
+    @property
+    def authority_snapshot(self) -> AuthoritySnapshot:
+        return self._authority_snapshot
+
+    @property
+    def run_id(self) -> str:
+        return self._run_id
+
+    def _valid_for(self, *, task_id: str, url: str, revision: str, authority_snapshot: AuthoritySnapshot, acquisition_permit: BugsInPyOperationPermit) -> bool:
+        return (
+            self._issuer is _RECEIPT_ISSUER
+            and self._task_id == task_id
+            and self._url == url.rstrip("/")
+            and self._revision == revision
+            and self._authority_snapshot == authority_snapshot
+            and self._acquisition_permit is acquisition_permit
+            and acquisition_permit.operation == "acquire_source"
+            and acquisition_permit.task_id == task_id
+            and acquisition_permit.run_id == self._run_id
+        )
+
+
 class SourceAcquirer(Protocol):
-    def acquire(self, url: str, revision: str, destination: Path) -> Path:
+    def acquire(
+        self,
+        url: str,
+        revision: str,
+        destination: Path,
+        *,
+        task_id: str,
+        preflight_decision: MetadataPreflightDecision,
+        permit: BugsInPyOperationPermit,
+    ) -> AcquiredSourceReceipt:
         """Acquire exactly one pinned Git revision into ``destination``."""
 
-    def read_gold_patch(self, framework_root: Path, metadata_path: str) -> str:
+    def read_gold_patch(
+        self,
+        framework_source: AcquiredSourceReceipt,
+        metadata_path: str,
+        *,
+        task_id: str,
+        preflight_decision: MetadataPreflightDecision,
+        permit: BugsInPyOperationPermit,
+    ) -> str:
         """Read the evaluator-only official patch from the framework snapshot."""
 
 
@@ -238,12 +331,31 @@ class BugsInPyManifest:
 class BugsInPyAdapter:
     """Manifest loader, command normalizer, preflight, and DebugTask bridge."""
 
-    def __init__(self, manifest: BugsInPyManifest) -> None:
+    def __init__(
+        self,
+        manifest: BugsInPyManifest,
+        *,
+        manifest_path: Optional[str | os.PathLike[str]] = None,
+        gate_path: str | os.PathLike[str] = DEFAULT_GATE_PATH,
+    ) -> None:
         self.manifest = manifest
+        self.metadata_boundary = BugsInPyMetadataPreflight(
+            manifest_path=manifest_path or DEFAULT_MANIFEST_PATH,
+            gate_path=gate_path,
+        )
 
     @classmethod
     def from_manifest(cls, path: str | os.PathLike[str]) -> "BugsInPyAdapter":
-        return cls(BugsInPyManifest.load(path))
+        return cls(BugsInPyManifest.load(path), manifest_path=path)
+
+    def metadata_preflight(
+        self,
+        pilot_task_id: Optional[str],
+        operation: Optional[str],
+        **kwargs: Any,
+    ) -> MetadataPreflightDecision:
+        """Run the shared authority-backed boundary without touching source."""
+        return self.metadata_boundary.decide(pilot_task_id, operation, **kwargs)
 
     def select(self, pilot_task_id: str) -> Mapping[str, Any]:
         return self.manifest.select(pilot_task_id)
@@ -471,11 +583,70 @@ class ExternalWorkspace:
 class GitSourceAcquirer:
     """Pinned Git acquisition.  It is only callable after preflight auth."""
 
-    def acquire(self, url: str, revision: str, destination: Path) -> Path:
+    def __init__(self, *, preflight_boundary: Optional[BugsInPyMetadataPreflight] = None) -> None:
+        self.preflight_boundary = preflight_boundary or BugsInPyMetadataPreflight()
+
+    def _require_permit(
+        self,
+        *,
+        task_id: str,
+        operation: str,
+        preflight_decision: MetadataPreflightDecision,
+        permit: BugsInPyOperationPermit,
+    ) -> None:
+        if not isinstance(preflight_decision, MetadataPreflightDecision) or not preflight_decision.allowed:
+            raise PreflightAuthorizationError("BugsInPy operation requires an ALLOW metadata decision")
+        if preflight_decision.task_id != task_id or preflight_decision.requested_operation != operation:
+            raise PreflightAuthorizationError("BugsInPy operation permit has the wrong task or operation")
+        if preflight_decision.permit is not permit or not isinstance(permit, BugsInPyOperationPermit):
+            raise PreflightAuthorizationError("BugsInPy operation permit is not issuer-bound to the decision")
+        try:
+            fresh = self.preflight_boundary.decide(
+                task_id,
+                operation,
+                operator_authorization_state="approved",
+                containment_readiness=True,
+                dependency_readiness=True,
+                evidence_handling="unspecified",
+            )
+        except Exception as exc:
+            raise PreflightAuthorizationError("BugsInPy operation permit authority is unavailable") from exc
+        if not fresh.allowed or fresh.authority_snapshot is None:
+            raise PreflightAuthorizationError("BugsInPy operation permit authority is revoked")
+        if preflight_decision.authority_snapshot != fresh.authority_snapshot:
+            raise PreflightAuthorizationError("BugsInPy operation decision authority snapshot is stale or mismatched")
+        if not fresh.authority_snapshot.canonical_paths:
+            raise PreflightAuthorizationError("production acquisition requires canonical tracked authority paths")
+        if not permit._valid_for(
+            task_id=task_id,
+            operation=operation,
+            authority_snapshot=fresh.authority_snapshot,
+            run_id=preflight_decision.run_id,
+        ):
+            raise PreflightAuthorizationError("BugsInPy operation permit is stale or mismatched")
+
+    def acquire(
+        self,
+        url: str,
+        revision: str,
+        destination: Path,
+        *,
+        task_id: Optional[str] = None,
+        preflight_decision: Optional[MetadataPreflightDecision] = None,
+        permit: Optional[BugsInPyOperationPermit] = None,
+    ) -> AcquiredSourceReceipt:
         if not _SHA1.fullmatch(revision):
             raise ValueError("source revision must be a full lowercase Git SHA-1")
-        if url not in _EXPECTED_PUBLIC_GIT_URLS:
+        if not isinstance(url, str) or not url.startswith("https://github.com/") or url.endswith(".git"):
             raise ValueError("source URL is not an approved public HTTPS BugsInPy repository")
+        self._require_permit(
+            task_id=task_id or "",
+            operation="acquire_source",
+            preflight_decision=preflight_decision,
+            permit=permit,
+        )
+        if (url.rstrip("/"), revision) not in permit.allowed_source_pairs:
+            raise PreflightAuthorizationError("source URL and revision are outside the task permit scope")
         if not _owned_external_root(destination.parent):
             raise PermissionError("Git acquisition requires an owned external workspace")
         if not _is_within(destination.resolve(), destination.parent.resolve()):
@@ -488,13 +659,60 @@ class GitSourceAcquirer:
         actual = _run_git(["rev-parse", "HEAD"], destination).stdout.strip()
         if actual != revision:
             raise RuntimeError(f"pinned revision mismatch: expected {revision}, got {actual}")
-        return destination
+        if not isinstance(preflight_decision, MetadataPreflightDecision) or not isinstance(permit, BugsInPyOperationPermit) or preflight_decision.authority_snapshot is None:
+            raise PreflightAuthorizationError("successful acquisition has no issuer-bound authority context")
+        return AcquiredSourceReceipt(
+            task_id,
+            url,
+            revision,
+            destination.resolve(),
+            preflight_decision.authority_snapshot,
+            preflight_decision.run_id,
+            permit,
+            _issuer=_RECEIPT_ISSUER,
+        )
 
-    def read_gold_patch(self, framework_root: Path, metadata_path: str) -> str:
-        if not metadata_path.startswith("projects/") or ".." in Path(metadata_path).parts:
+    def read_gold_patch(
+        self,
+        framework_source: AcquiredSourceReceipt,
+        metadata_path: str,
+        *,
+        task_id: Optional[str] = None,
+        preflight_decision: Optional[MetadataPreflightDecision] = None,
+        permit: Optional[BugsInPyOperationPermit] = None,
+    ) -> str:
+        self._require_permit(
+            task_id=task_id or "",
+            operation="verify_patch",
+            preflight_decision=preflight_decision,
+            permit=permit,
+        )
+        if not isinstance(preflight_decision, MetadataPreflightDecision) or not isinstance(permit, BugsInPyOperationPermit):
+            raise PreflightAuthorizationError("patch reading requires issuer-bound authorization")
+        snapshot = preflight_decision.authority_snapshot
+        expected_revision = snapshot.authority_revisions.get("manifest") if snapshot is not None else None
+        if (
+            snapshot is None
+            or not isinstance(framework_source, AcquiredSourceReceipt)
+            or not framework_source._valid_for(
+                task_id=task_id or "",
+                url="https://github.com/soarsmu/BugsInPy",
+                revision=expected_revision or "",
+                authority_snapshot=snapshot,
+                acquisition_permit=framework_source._acquisition_permit,
+            )
+            or framework_source.url != "https://github.com/soarsmu/BugsInPy"
+            or framework_source.revision != expected_revision
+            or framework_source.run_id != framework_source._acquisition_permit.run_id
+        ):
+            raise PreflightAuthorizationError("patch reading requires the exact issuer-bound BugsInPy framework receipt")
+        normalized_metadata_path = metadata_path.replace("\\", "/")
+        if normalized_metadata_path not in permit.allowed_metadata_paths:
+            raise PreflightAuthorizationError("patch metadata path is outside the task permit scope")
+        if not normalized_metadata_path.startswith("projects/") or ".." in Path(normalized_metadata_path).parts:
             raise ValueError("gold patch path escapes the framework snapshot")
-        path = (framework_root / metadata_path).resolve()
-        if not _is_within(path, framework_root.resolve()) or not path.is_file():
+        path = (framework_source.root / normalized_metadata_path).resolve()
+        if not _is_within(path, framework_source.root.resolve()) or not path.is_file():
             raise FileNotFoundError(path)
         return path.read_text(encoding="utf-8")
 
@@ -516,6 +734,36 @@ class NoModelSmokeRunner:
         repository_root: Optional[str] = None,
         target_symbols: Optional[Sequence[str]] = None,
     ) -> SmokeEvidence:
+        decision = self.adapter.metadata_preflight(
+            pilot_task_id,
+            "reproduce_bug",
+            operator_authorization_state=facts.operator_authorization_state,
+            containment_readiness=facts.containment_ready,
+            dependency_readiness=facts.dependency_install_boundary_ready,
+        )
+        if not decision.allowed:
+            return SmokeEvidence(pilot_task_id or "", "REAL_SMOKE_BLOCKED", decision, None, None, False, True, None)
+
+        acquisition_decision = self.adapter.metadata_preflight(
+            pilot_task_id,
+            "acquire_source",
+            operator_authorization_state=facts.operator_authorization_state,
+            containment_readiness=facts.containment_ready,
+            dependency_readiness=facts.dependency_install_boundary_ready,
+        )
+        if not acquisition_decision.allowed or acquisition_decision.permit is None:
+            return SmokeEvidence(pilot_task_id or "", "REAL_SMOKE_BLOCKED", acquisition_decision, None, None, False, True, None)
+
+        patch_decision = self.adapter.metadata_preflight(
+            pilot_task_id,
+            "verify_patch",
+            operator_authorization_state=facts.operator_authorization_state,
+            containment_readiness=facts.containment_ready,
+            dependency_readiness=facts.dependency_install_boundary_ready,
+        )
+        if not patch_decision.allowed or patch_decision.permit is None:
+            return SmokeEvidence(pilot_task_id or "", "REAL_SMOKE_BLOCKED", patch_decision, None, None, False, True, None)
+
         entry = self.adapter.select(pilot_task_id)
         commands = self.adapter.normalize(entry)
         report = self.adapter.preflight(pilot_task_id, facts, target_symbols=target_symbols, repository_root=repository_root)
@@ -542,18 +790,32 @@ class NoModelSmokeRunner:
                 "https://github.com/soarsmu/BugsInPy",
                 self.adapter.manifest.authority_revision,
                 external.source_dir / "bugsinpy-framework",
+                task_id=pilot_task_id,
+                preflight_decision=acquisition_decision,
+                permit=acquisition_decision.permit,
             )
             project = entry["bugsinpy"]
             project_root = self.acquirer.acquire(
-                project["project_url"], project["buggy_revision"], external.source_dir / project["project"]
+                project["project_url"],
+                project["buggy_revision"],
+                external.source_dir / project["project"],
+                task_id=pilot_task_id,
+                preflight_decision=acquisition_decision,
+                permit=acquisition_decision.permit,
             )
-            source = external.materialize_project(project_root, project["project"], self.adapter.source_provenance(entry))
-            external.assert_contained(project_root)
+            source = external.materialize_project(project_root.root, project["project"], self.adapter.source_provenance(entry))
+            external.assert_contained(project_root.root)
             debug_task = self.adapter.to_debug_task(entry, source, target_symbols=target_symbols)
             gold_paths = [path for path in project["metadata_paths"] if path.replace("\\", "/").endswith("bug_patch.txt")]
             if len(gold_paths) != 1:
                 raise TaskMappingError("exactly one gold patch metadata path is required")
-            gold_patch = self.acquirer.read_gold_patch(framework, gold_paths[0])
+            gold_patch = self.acquirer.read_gold_patch(
+                framework,
+                gold_paths[0],
+                task_id=pilot_task_id,
+                preflight_decision=patch_decision,
+                permit=patch_decision.permit,
+            )
             phase = "verifier"
             verifier = self.verifier_factory(
                 str(external.root),

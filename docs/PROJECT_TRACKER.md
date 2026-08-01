@@ -223,6 +223,12 @@ Rules:
 
 ## Current Focus
 
+### BugsInPy licensing and metadata preflight
+
+- [x] Licensing gate completed at `da39c55`.
+- [x] Metadata-only BugsInPy preflight is the active task (`bugsinpy-metadata-preflight-v1`).
+- [ ] BugsInPy source acquisition and execution remain unauthorized; no containment implementation or benchmark execution is approved.
+
 Current state (2026-07-31):
 
 - QuixBugs static live feasibility is complete and accepted: Resource-Limited

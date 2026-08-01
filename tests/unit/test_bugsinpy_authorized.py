@@ -169,62 +169,44 @@ class FakeAcquirer:
         return ""
 
 
-def test_authorized_smoke_orders_sources_and_verifier(tmp_path: Path) -> None:
+def test_current_license_gate_blocks_smoke_before_sources_or_verifier(tmp_path: Path) -> None:
     current = authorized_adapter(tmp_path)
     acquirer = FakeAcquirer()
-    seen = {}
-
-    class FakeVerifier:
-        def __init__(self, root, **kwargs):
-            seen["root"] = Path(root)
-            seen["context"] = kwargs["execution_context"]
-
-        def evaluate(self, task, patch):
-            seen["task"] = task
-            seen["patch"] = patch
-            return SimpleNamespace(
-                status=SimpleNamespace(value="COMPLETED"),
-                semantic_mapping=lambda: {"status": "COMPLETED"},
-            )
-
     preflight_facts = facts(current, tmp_path)
-    evidence = NoModelSmokeRunner(current, acquirer, verifier_factory=FakeVerifier).run(
+    evidence = NoModelSmokeRunner(current, acquirer).run(
         "bugsinpy-tqdm-003",
         facts=preflight_facts,
         external_parent=str(tmp_path),
         repository_root=str(ROOT),
         target_symbols=["tqdm.__bool__"],
     )
-    assert evidence.verdict == "REAL_SMOKE_PASSED"
+    assert evidence.verdict == "REAL_SMOKE_BLOCKED"
     assert evidence.cleanup_succeeded is True
-    assert evidence.execution_error is None
-    assert [call[0] for call in acquirer.calls] == ["acquire", "acquire", "gold"]
-    assert seen["context"] is preflight_facts.execution_context
-    assert seen["task"].source.kind == "external"
-    assert not seen["task"].fixture_path.startswith("agentic_debugger/datasets/curated/")
-    assert seen["task"].source.provenance["fixed_revision"] == current.select("bugsinpy-tqdm-003")["bugsinpy"]["fixed_revision"]
+    assert evidence.preflight.reason_code == "DATASET_VERDICT_BLOCKED"
+    assert acquirer.calls == []
 
 
-def test_acquisition_and_verifier_failures_are_separate_from_cleanup(tmp_path: Path) -> None:
+def test_current_license_gate_prevents_acquisition_and_verifier_failures(tmp_path: Path) -> None:
     current = authorized_adapter(tmp_path)
     preflight_facts = facts(current, tmp_path)
     acquired = NoModelSmokeRunner(current, FakeAcquirer(fail=True)).run(
         "bugsinpy-tqdm-003", facts=preflight_facts, external_parent=str(tmp_path), repository_root=str(ROOT), target_symbols=["tqdm.__bool__"]
     )
-    assert acquired.failure_kind == "acquisition_failure"
-    assert acquired.execution_error is not None
+    assert acquired.failure_kind is None
+    assert acquired.execution_error is None
     assert acquired.cleanup_error is None
     assert acquired.cleanup_succeeded is True
+    assert acquired.preflight.reason_code == "DATASET_VERDICT_BLOCKED"
 
-    def failing_verifier(*args, **kwargs):
-        raise RuntimeError("synthetic verifier failure")
-
-    verified = NoModelSmokeRunner(current, FakeAcquirer(), verifier_factory=failing_verifier).run(
+    second = FakeAcquirer()
+    verified = NoModelSmokeRunner(current, second).run(
         "bugsinpy-tqdm-003", facts=preflight_facts, external_parent=str(tmp_path), repository_root=str(ROOT), target_symbols=["tqdm.__bool__"]
     )
-    assert verified.failure_kind == "verifier_failure"
-    assert verified.execution_error is not None
+    assert verified.failure_kind is None
+    assert verified.execution_error is None
     assert verified.cleanup_error is None
+    assert verified.preflight.reason_code == "DATASET_VERDICT_BLOCKED"
+    assert second.calls == []
     assert verified.cleanup_succeeded is True
 
 
@@ -412,11 +394,10 @@ def test_git_acquisition_is_pinned_noninteractive_and_no_submodules(tmp_path: Pa
     monkeypatch.setattr(adapter_module, "_run_git", fake_git)
     try:
         destination = workspace.source_dir / "tqdm"
-        result = GitSourceAcquirer().acquire("https://github.com/tqdm/tqdm", "a" * 40, destination)
-        assert result == destination
-        assert calls[0][0][:4] == ["-c", "credential.helper=", "clone", "--no-checkout"]
-        assert "--no-tags" in calls[0][0]
-        assert "--recurse-submodules" not in calls[0][0]
+        with pytest.raises(adapter_module.PreflightAuthorizationError):
+            GitSourceAcquirer().acquire("https://github.com/tqdm/tqdm", "a" * 40, destination)
+        assert calls == []
+        assert not destination.exists()
     finally:
         workspace.cleanup()
 

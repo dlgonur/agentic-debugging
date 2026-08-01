@@ -3,6 +3,7 @@
 from agentic_debugger.bugsinpy.adapter import (
     BugsInPyAdapter,
     BugsInPyManifest,
+    AcquiredSourceReceipt,
     ExternalWorkspace,
     GateName,
     GateStatus,
@@ -13,6 +14,14 @@ from agentic_debugger.bugsinpy.adapter import (
     PreflightReport,
     TaskMappingError,
     normalize_pytest_commands,
+)
+from agentic_debugger.bugsinpy.metadata_preflight import (
+    BugsInPyMetadataPreflight,
+    BugsInPyOperation,
+    BugsInPyOperationPermit,
+    MetadataPreflightDecision,
+    PreflightAuthorizationError,
+    PreflightReasonCode,
 )
 from agentic_debugger.evaluation.task_schema import TaskSource
 from agentic_debugger.runtime.execution import (
@@ -26,6 +35,7 @@ from agentic_debugger.runtime.execution import (
 __all__ = [
     "BugsInPyAdapter",
     "BugsInPyManifest",
+    "AcquiredSourceReceipt",
     "ExternalWorkspace",
     "GateName",
     "GateStatus",
@@ -42,4 +52,10 @@ __all__ = [
     "PreparedEnvironment",
     "TaskSource",
     "VerifiedExecutionContext",
+    "BugsInPyMetadataPreflight",
+    "BugsInPyOperation",
+    "BugsInPyOperationPermit",
+    "MetadataPreflightDecision",
+    "PreflightAuthorizationError",
+    "PreflightReasonCode",
 ]
