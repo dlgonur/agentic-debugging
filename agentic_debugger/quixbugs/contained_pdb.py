@@ -1,4 +1,4 @@
-"""Contained PDB runtime path for exactly ``quixbugs-gcd-smoke-v1``.
+"""Contained PDB runtime path for pinned QuixBugs Python tasks.
 
 This module adds the smallest coherent path that lets the already-accepted
 controller, PDB protocol, and QuixBugs infrastructure collect real runtime
@@ -319,8 +319,8 @@ class ContainedPdbSession(PdbSession):
             raise PdbSessionError(str(exc)) from exc
 
 
-def prepare_quixbugs_gcd_pdb_probe(project_root: Path, parent_dir: Path) -> PdbProbe:
-    """Copy the pinned gcd checkout and append one module-level probe driver.
+def prepare_quixbugs_pdb_probe(project_root: Path, parent_dir: Path, runtime_probe: RuntimeProbe) -> PdbProbe:
+    """Copy one pinned QuixBugs checkout and append a reviewed probe driver.
 
     Mirrors :func:`agentic_debugger.demo.tools.prepare_pdb_probe` exactly: the
     pinned checkout is never written to; a disposable copy receives one
@@ -330,19 +330,25 @@ def prepare_quixbugs_gcd_pdb_probe(project_root: Path, parent_dir: Path) -> PdbP
     """
 
     workspace = TaskWorkspace(str(project_root), parent_dir=str(parent_dir))
-    module = Path(workspace.root) / _GCD_RUNTIME_PROBE.module_path
+    module = Path(workspace.root) / runtime_probe.module_path
     if not module.is_file():
-        raise ContainedPdbError(f"probe module is missing from the pinned checkout copy: {_GCD_RUNTIME_PROBE.module_path}")
+        raise ContainedPdbError(f"probe module is missing from the pinned checkout copy: {runtime_probe.module_path}")
     original = module.read_text(encoding="utf-8")
-    breakpoint_line = resolve_probe_breakpoint(original, _GCD_RUNTIME_PROBE)
-    module.write_text(original + probe_driver_source(_GCD_RUNTIME_PROBE), encoding="utf-8", newline="\n")
+    breakpoint_line = resolve_probe_breakpoint(original, runtime_probe)
+    module.write_text(original + probe_driver_source(runtime_probe), encoding="utf-8", newline="\n")
     return PdbProbe(
         source_dir=Path(workspace.root),
         parent_dir=parent_dir,
-        script=_GCD_RUNTIME_PROBE.module_path,
+        script=runtime_probe.module_path,
         breakpoint_line=breakpoint_line,
-        focus_function=_GCD_RUNTIME_PROBE.focus_function,
+        focus_function=runtime_probe.focus_function,
     )
+
+
+def prepare_quixbugs_gcd_pdb_probe(project_root: Path, parent_dir: Path) -> PdbProbe:
+    """Backward-compatible wrapper for the accepted gcd reachability case."""
+
+    return prepare_quixbugs_pdb_probe(project_root, parent_dir, _GCD_RUNTIME_PROBE)
 
 
 class ContainedPdbGateName(str, Enum):
@@ -938,6 +944,35 @@ class _Blocked(Exception):
         self.contained_report = contained_report
 
 
+def _validate_quixbugs_runtime_probe_identity(adapter: QuixBugsAdapter, runtime_probe: RuntimeProbe, sources_parent: str) -> int:
+    """Validate task-local probe identity before creating any owned workspace.
+
+    The generic boundary cannot trust a caller that merely supplies a probe
+    object.  The module, focus symbol, and resolved breakpoint are checked
+    against the selected task manifest and its pinned checkout first.
+    """
+    manifest = adapter.manifest
+    module_path = runtime_probe.module_path
+    if module_path != manifest.buggy_path:
+        raise ContainedPdbError("runtime probe module is not the selected task buggy path")
+    if module_path == manifest.corrected_path or module_path == manifest.pytest_path or module_path in manifest.support_paths:
+        raise ContainedPdbError("runtime probe points to corrected, test, or support material")
+    if runtime_probe.focus_function not in manifest.oracle["target_symbols"]:
+        raise ContainedPdbError("runtime probe focus is not a reviewed target symbol")
+    project_root = Path(sources_parent).resolve() / "quixbugs"
+    module = project_root / module_path
+    try:
+        module.relative_to(project_root)
+    except ValueError as exc:
+        raise ContainedPdbError("runtime probe escapes the selected QuixBugs source") from exc
+    if not module.is_file():
+        raise ContainedPdbError("runtime probe module is not present in the pinned checkout")
+    breakpoint_line = resolve_probe_breakpoint(module.read_text(encoding="utf-8"), runtime_probe)
+    if not isinstance(breakpoint_line, int) or breakpoint_line <= 0:
+        raise ContainedPdbError("runtime probe breakpoint did not resolve inside the selected module")
+    return breakpoint_line
+
+
 def run_quixbugs_gcd_pdb_reachability_case(
     *,
     repository_root: str,
@@ -946,6 +981,10 @@ def run_quixbugs_gcd_pdb_reachability_case(
     facts: QuixBugsPreflightFacts,
     resource_limits: ResourceLimits,
     tool_version: str = "quixbugs-gcd-pdb-reachability-v1",
+    runtime_probe: Optional[RuntimeProbe] = None,
+    hypothesis_id: Optional[str] = None,
+    hypothesis_statement: Optional[str] = None,
+    _enforce_generic_probe_identity: bool = False,
 ) -> ContainedPdbReachabilityResult:
     """Run exactly one deterministic, no-model PDB reachability case.
 
@@ -958,8 +997,22 @@ def run_quixbugs_gcd_pdb_reachability_case(
     """
 
     adapter = QuixBugsAdapter.from_manifest(manifest_path)
-    if adapter.manifest.task_id != QUIXBUGS_PDB_TASK_ID:
-        raise ContainedPdbError(f"this reachability case is scoped to {QUIXBUGS_PDB_TASK_ID!r} only, got {adapter.manifest.task_id!r}")
+    runtime_probe = runtime_probe or _GCD_RUNTIME_PROBE
+    if hypothesis_id is None:
+        hypothesis_id = "quixbugs-gcd-runtime-evidence-v1"
+    if hypothesis_statement is None:
+        hypothesis_statement = (
+            "Low-confidence hypothesis: the defect concerns the target function's "
+            "argument or state transition; bounded runtime evidence is required "
+            "before proposing a root cause."
+        )
+    if runtime_probe is _GCD_RUNTIME_PROBE and adapter.manifest.task_id != QUIXBUGS_PDB_TASK_ID:
+        raise ContainedPdbError(f"the default reachability probe is scoped to {QUIXBUGS_PDB_TASK_ID!r}, got {adapter.manifest.task_id!r}")
+
+    # The exported generic entry point enables this check.  The historical gcd
+    # wrapper deliberately retains its accepted preflight-blocked behavior.
+    if _enforce_generic_probe_identity:
+        _validate_quixbugs_runtime_probe_identity(adapter, runtime_probe, sources_parent)
 
     repo = Path(repository_root).resolve()
     quixbugs_report = adapter.preflight(facts, repository_root=str(repo))
@@ -994,7 +1047,7 @@ def run_quixbugs_gcd_pdb_reachability_case(
         external.verifier_workspace_parent.mkdir(parents=True, exist_ok=True)
         external.assert_contained(external.verifier_workspace_parent)
 
-        probe = prepare_quixbugs_gcd_pdb_probe(project_root, external.verifier_workspace_parent)
+        probe = prepare_quixbugs_pdb_probe(project_root, external.verifier_workspace_parent, runtime_probe)
 
         launch_plan = PdbLaunchPlan(
             python_executable=execution_context.environment.python_executable,
@@ -1056,12 +1109,8 @@ def run_quixbugs_gcd_pdb_reachability_case(
         registry = build_registry(context, pdb_policy=pdb_policy_for(QUIXBUGS_PDB_POLICY))
 
         driver = DeterministicPdbReachabilityDriver(
-            hypothesis_id="quixbugs-gcd-runtime-evidence-v1",
-            hypothesis_statement=(
-                "Low-confidence hypothesis: the defect concerns how arguments are threaded "
-                "through gcd's own recursive call; runtime evidence of the first call's stack "
-                "and locals is required before proposing a root cause."
-            ),
+            hypothesis_id=hypothesis_id,
+            hypothesis_statement=hypothesis_statement,
             gate_policy=pdb_policy_for(QUIXBUGS_PDB_POLICY),
         )
         controller = DeterministicController(registry, driver, ControllerRunConfig(max_model_calls=16))
@@ -1191,6 +1240,34 @@ def run_quixbugs_gcd_pdb_reachability_case(
     )
 
 
+def run_quixbugs_pdb_reachability_case(
+    *,
+    repository_root: str,
+    manifest_path: str,
+    sources_parent: str,
+    facts: QuixBugsPreflightFacts,
+    resource_limits: ResourceLimits,
+    runtime_probe: RuntimeProbe,
+    hypothesis_id: str,
+    hypothesis_statement: str,
+    tool_version: str = "quixbugs-paired-pilot-pdb-qualification-v1",
+) -> ContainedPdbReachabilityResult:
+    """Run the same real contained PDB path with a task-local reviewed probe."""
+
+    return run_quixbugs_gcd_pdb_reachability_case(
+        repository_root=repository_root,
+        manifest_path=manifest_path,
+        sources_parent=sources_parent,
+        facts=facts,
+        resource_limits=resource_limits,
+        runtime_probe=runtime_probe,
+        hypothesis_id=hypothesis_id,
+        hypothesis_statement=hypothesis_statement,
+        tool_version=tool_version,
+        _enforce_generic_probe_identity=True,
+    )
+
+
 __all__ = [
     "QUIXBUGS_PDB_TASK_ID",
     "QUIXBUGS_PDB_POLICY",
@@ -1211,6 +1288,8 @@ __all__ = [
     "evaluate_reachability_sequence_from_events",
     "materialize_pdb_runtime_bundle",
     "prepare_quixbugs_gcd_pdb_probe",
+    "prepare_quixbugs_pdb_probe",
+    "run_quixbugs_pdb_reachability_case",
     "run_quixbugs_gcd_pdb_reachability_case",
     "validate_events_jsonl",
 ]

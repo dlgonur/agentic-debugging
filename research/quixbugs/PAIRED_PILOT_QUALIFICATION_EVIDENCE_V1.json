@@ -1,0 +1,589 @@
+{
+  "evidence_schema_version": "quixbugs-paired-pilot-qualification-evidence-v2",
+  "network_activity": false,
+  "provider_contacted": false,
+  "qualification_contract_hash": "7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d",
+  "screened_task_count": 7,
+  "screening": [
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "bb6b165d89e10347461c31d4d0db4086194759819a6d006e4f22af8a9c9bf37c",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 7,
+          "focus_function": "bucketsort",
+          "module_path": "python_programs/bucketsort.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "1cc4197c2ee524ec8dd3a45c0e943acf31fa429cb8b179195334f51ff939b9fd",
+        "source_hash_before": "1cc4197c2ee524ec8dd3a45c0e943acf31fa429cb8b179195334f51ff939b9fd",
+        "source_restoration_status": "PASS",
+        "test_sha256": "b5f3915b983f869cd87935c4b82246695aedc03400fe44114f7352dc02a6e65e",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-bucketsort-smoke-v1",
+      "verifier_status": "PASS"
+    },
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "7b1015b12595557f85d2d163e1baf6bdd093a9dc7487ebadeb18ba85a750d63f",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 5,
+          "focus_function": "binsearch",
+          "module_path": "python_programs/find_in_sorted.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+        "source_hash_before": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+        "source_restoration_status": "PASS",
+        "test_sha256": "a943c5c1df1e87360308b23341a651da9cfb31b1f1e2954cdca75c2cf4b6ba54",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-find-in-sorted-smoke-v1",
+      "verifier_status": "PASS"
+    },
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "e015d02196a99a25fc886aad663781b6821fa383d9ca21b93e53ff9b8bbc569a",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 7,
+          "focus_function": "flatten",
+          "module_path": "python_programs/flatten.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+        "source_hash_before": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+        "source_restoration_status": "PASS",
+        "test_sha256": "8751773222d9310f75ef92e2111298a12e24389cb03aa62b905bcd6ae55f8ee5",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-flatten-smoke-v1",
+      "verifier_status": "PASS"
+    },
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "41488414644ebd217417c086f7faaba52d53f5a3edc458298f4ba2c666c0d325",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 4,
+          "focus_function": "hanoi",
+          "module_path": "python_programs/hanoi.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "edd1ceeb79b556a6d15e3bc21f625c5776b46c10f94a754531d39a6f7e120f9e",
+        "source_hash_before": "edd1ceeb79b556a6d15e3bc21f625c5776b46c10f94a754531d39a6f7e120f9e",
+        "source_restoration_status": "PASS",
+        "test_sha256": "a93f11847b7cc48409035229316cdfd5ee5ca209fb95d2cb9be3aaf419e2fb98",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-hanoi-smoke-v1",
+      "verifier_status": "PASS"
+    },
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "40b62664efe96cfe3ebd67cc970b48aab71a1e17447b636f24495a683feb99db",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 3,
+          "focus_function": "is_valid_parenthesization",
+          "module_path": "python_programs/is_valid_parenthesization.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "2340cddfce49b055a5a7a70c3341351bf130702512278bafaed5d5b345d0ba60",
+        "source_hash_before": "2340cddfce49b055a5a7a70c3341351bf130702512278bafaed5d5b345d0ba60",
+        "source_restoration_status": "PASS",
+        "test_sha256": "484b2e67707900e6ef0cff1df83ef441d39fcc3f56afdd9180ff1363fc7d1f76",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1",
+      "verifier_status": "PASS"
+    },
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "843b9f8c1e0fad1a19584f61d8eaf054d275ffd3fd153ad4e84ff75f54c2a8d4",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 8,
+          "focus_function": "kheapsort",
+          "module_path": "python_programs/kheapsort.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "0cabf3d462d941ec01f261f2d794d960ab8ba497c42140cedbc3c872f772cea8",
+        "source_hash_before": "0cabf3d462d941ec01f261f2d794d960ab8ba497c42140cedbc3c872f772cea8",
+        "source_restoration_status": "PASS",
+        "test_sha256": "7751ea3a7611406695c84ed254eddc2afdc17eb3e5962bb9a494b3a307953d7a",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-kheapsort-smoke-v1",
+      "verifier_status": "PASS"
+    },
+    {
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "screening_evidence": {
+        "baseline_deterministic_across_two_checks": true,
+        "baseline_reproduced": true,
+        "contained_pdb_reachability_status": "PASS",
+        "dependency_status": "PASS",
+        "deterministic_baseline_status": "PASS",
+        "independent_verifier": {
+          "canonical_fixture_unchanged": true,
+          "cleanup_succeeded": true,
+          "diagnostic_present": false,
+          "expected_f2p_p2p_behavior": true,
+          "lifecycle_succeeded": true,
+          "outcome": "NO_OP",
+          "status": "COMPLETED",
+          "timeout": false
+        },
+        "manifest_fingerprint": "ed09c371e59f78a0a182021d386aa7dfc6323d8dd3eccc507ccfa9786092ee22",
+        "oracle_or_gold_material_in_record": false,
+        "owned_workspaces_removed": true,
+        "pdb": {
+          "allowed_gate_openings": 1,
+          "canonical_source_unchanged": true,
+          "cleanup_succeeded": true,
+          "contained_preflight_authorized": true,
+          "diagnostics_empty": true,
+          "events_valid": true,
+          "failed_observations": 0,
+          "gate_decisions": [
+            {
+              "allowed": true,
+              "reason": "allowed"
+            }
+          ],
+          "launch_plan_present": true,
+          "qualification_passes": true,
+          "quixbugs_preflight_authorized": true,
+          "rejected_gate_decisions": 0,
+          "runtime_bundle_provenance_present": true,
+          "sequence_ok": true,
+          "sessions_started": 1,
+          "successful_observations": 2,
+          "total_gate_decisions": 1,
+          "verdict": "REACHABILITY_CASE_PASSED"
+        },
+        "runtime_probe": {
+          "breakpoint_line": 9,
+          "focus_function": "kth",
+          "module_path": "python_programs/kth.py"
+        },
+        "screened": true,
+        "screening_passed": true,
+        "source_hash_after": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+        "source_hash_before": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+        "source_restoration_status": "PASS",
+        "test_sha256": "89c57596f6deaf8564c0bf076f41c3a293af694ba45c0c8b764a7913fe492e70",
+        "verifier_status": "PASS"
+      },
+      "source_restoration_status": "PASS",
+      "task_id": "quixbugs-kth-smoke-v1",
+      "verifier_status": "PASS"
+    }
+  ],
+  "selected_full_qualification": [
+    {
+      "gold_oracle_material_in_record": false,
+      "private_correct_evaluator": {
+        "canonical_fixture_unchanged": true,
+        "cleanup_succeeded": true,
+        "diagnostic_present": false,
+        "expected_f2p_p2p_behavior": true,
+        "lifecycle_succeeded": true,
+        "outcome": "RESOLVED",
+        "smoke_verdict": "REAL_SMOKE_PASSED",
+        "status": "COMPLETED",
+        "timeout": false
+      },
+      "private_correct_qualification_passes": true,
+      "screening_pdb": {
+        "allowed_gate_openings": 1,
+        "canonical_source_unchanged": true,
+        "cleanup_succeeded": true,
+        "contained_preflight_authorized": true,
+        "diagnostics_empty": true,
+        "events_valid": true,
+        "failed_observations": 0,
+        "gate_decisions": [
+          {
+            "allowed": true,
+            "reason": "allowed"
+          }
+        ],
+        "launch_plan_present": true,
+        "qualification_passes": true,
+        "quixbugs_preflight_authorized": true,
+        "rejected_gate_decisions": 0,
+        "runtime_bundle_provenance_present": true,
+        "sequence_ok": true,
+        "sessions_started": 1,
+        "successful_observations": 2,
+        "total_gate_decisions": 1,
+        "verdict": "REACHABILITY_CASE_PASSED"
+      },
+      "task_id": "quixbugs-find-in-sorted-smoke-v1"
+    },
+    {
+      "gold_oracle_material_in_record": false,
+      "private_correct_evaluator": {
+        "canonical_fixture_unchanged": true,
+        "cleanup_succeeded": true,
+        "diagnostic_present": false,
+        "expected_f2p_p2p_behavior": true,
+        "lifecycle_succeeded": true,
+        "outcome": "RESOLVED",
+        "smoke_verdict": "REAL_SMOKE_PASSED",
+        "status": "COMPLETED",
+        "timeout": false
+      },
+      "private_correct_qualification_passes": true,
+      "screening_pdb": {
+        "allowed_gate_openings": 1,
+        "canonical_source_unchanged": true,
+        "cleanup_succeeded": true,
+        "contained_preflight_authorized": true,
+        "diagnostics_empty": true,
+        "events_valid": true,
+        "failed_observations": 0,
+        "gate_decisions": [
+          {
+            "allowed": true,
+            "reason": "allowed"
+          }
+        ],
+        "launch_plan_present": true,
+        "qualification_passes": true,
+        "quixbugs_preflight_authorized": true,
+        "rejected_gate_decisions": 0,
+        "runtime_bundle_provenance_present": true,
+        "sequence_ok": true,
+        "sessions_started": 1,
+        "successful_observations": 2,
+        "total_gate_decisions": 1,
+        "verdict": "REACHABILITY_CASE_PASSED"
+      },
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1"
+    },
+    {
+      "gold_oracle_material_in_record": false,
+      "private_correct_evaluator": {
+        "canonical_fixture_unchanged": true,
+        "cleanup_succeeded": true,
+        "diagnostic_present": false,
+        "expected_f2p_p2p_behavior": true,
+        "lifecycle_succeeded": true,
+        "outcome": "RESOLVED",
+        "smoke_verdict": "REAL_SMOKE_PASSED",
+        "status": "COMPLETED",
+        "timeout": false
+      },
+      "private_correct_qualification_passes": true,
+      "screening_pdb": {
+        "allowed_gate_openings": 1,
+        "canonical_source_unchanged": true,
+        "cleanup_succeeded": true,
+        "contained_preflight_authorized": true,
+        "diagnostics_empty": true,
+        "events_valid": true,
+        "failed_observations": 0,
+        "gate_decisions": [
+          {
+            "allowed": true,
+            "reason": "allowed"
+          }
+        ],
+        "launch_plan_present": true,
+        "qualification_passes": true,
+        "quixbugs_preflight_authorized": true,
+        "rejected_gate_decisions": 0,
+        "runtime_bundle_provenance_present": true,
+        "sequence_ok": true,
+        "sessions_started": 1,
+        "successful_observations": 2,
+        "total_gate_decisions": 1,
+        "verdict": "REACHABILITY_CASE_PASSED"
+      },
+      "task_id": "quixbugs-hanoi-smoke-v1"
+    }
+  ]
+}

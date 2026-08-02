@@ -1,0 +1,85 @@
+{
+  "schema_version": "quixbugs-source-integrity-v1",
+  "tasks": [
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "1cc4197c2ee524ec8dd3a45c0e943acf31fa429cb8b179195334f51ff939b9fd",
+      "implementation_path": "python_programs/bucketsort.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-bucketsort-smoke-v1",
+      "test_path": "python_testcases/test_bucketsort.py",
+      "test_sha256": "b5f3915b983f869cd87935c4b82246695aedc03400fe44114f7352dc02a6e65e"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+      "implementation_path": "python_programs/find_in_sorted.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-find-in-sorted-smoke-v1",
+      "test_path": "python_testcases/test_find_in_sorted.py",
+      "test_sha256": "a943c5c1df1e87360308b23341a651da9cfb31b1f1e2954cdca75c2cf4b6ba54"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+      "implementation_path": "python_programs/flatten.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-flatten-smoke-v1",
+      "test_path": "python_testcases/test_flatten.py",
+      "test_sha256": "8751773222d9310f75ef92e2111298a12e24389cb03aa62b905bcd6ae55f8ee5"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "d68e155c2af40d787f617f03c596005edabee3d9e33626b9185d83650895636f",
+      "implementation_path": "python_programs/gcd.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-gcd-smoke-v1",
+      "test_path": "python_testcases/test_gcd.py",
+      "test_sha256": "1e0f36211d258a295ec11359495202ff8491736ffe3a9b56336c1a633a1af589"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "edd1ceeb79b556a6d15e3bc21f625c5776b46c10f94a754531d39a6f7e120f9e",
+      "implementation_path": "python_programs/hanoi.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-hanoi-smoke-v1",
+      "test_path": "python_testcases/test_hanoi.py",
+      "test_sha256": "a93f11847b7cc48409035229316cdfd5ee5ca209fb95d2cb9be3aaf419e2fb98"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "2340cddfce49b055a5a7a70c3341351bf130702512278bafaed5d5b345d0ba60",
+      "implementation_path": "python_programs/is_valid_parenthesization.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1",
+      "test_path": "python_testcases/test_is_valid_parenthesization.py",
+      "test_sha256": "484b2e67707900e6ef0cff1df83ef441d39fcc3f56afdd9180ff1363fc7d1f76"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "0cabf3d462d941ec01f261f2d794d960ab8ba497c42140cedbc3c872f772cea8",
+      "implementation_path": "python_programs/kheapsort.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-kheapsort-smoke-v1",
+      "test_path": "python_testcases/test_kheapsort.py",
+      "test_sha256": "7751ea3a7611406695c84ed254eddc2afdc17eb3e5962bb9a494b3a307953d7a"
+    },
+    {
+      "authority_record_provenance": "accepted-eight-task-baseline-evidence",
+      "buggy_source_sha256": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+      "implementation_path": "python_programs/kth.py",
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "task_id": "quixbugs-kth-smoke-v1",
+      "test_path": "python_testcases/test_kth.py",
+      "test_sha256": "89c57596f6deaf8564c0bf076f41c3a293af694ba45c0c8b764a7913fe492e70"
+    }
+  ]
+}

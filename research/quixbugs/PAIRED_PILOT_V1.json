@@ -1,0 +1,1061 @@
+{
+  "accepted_baseline": "fe91deb273f485c75ad50f58d0623b947f22631a",
+  "authority": {
+    "default_branch": "master",
+    "license_boundary": "existing local canonical QuixBugs material only",
+    "repository": "https://github.com/jkoppel/QuixBugs",
+    "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf"
+  },
+  "budgets": {
+    "max_accepted_directives": 64,
+    "max_hypotheses": 3,
+    "max_logical_model_calls": 64,
+    "max_malformed_directive_feedback_cycles": 2,
+    "max_patch_submissions": 1,
+    "max_pdb_gate_openings": 3,
+    "max_pdb_observations": 3,
+    "max_public_evidence_bytes": 20000,
+    "max_total_provider_process_attempts": 192,
+    "max_total_transport_retries": 128,
+    "max_transport_attempts_per_logical_call": 3,
+    "max_transport_retries_per_logical_call": 2,
+    "max_verifier_runs": 20,
+    "per_call_timeout_seconds": 60,
+    "total_case_timeout_seconds": 900
+  },
+  "campaign_commit_binding": {
+    "accepted_campaign_commit": null,
+    "authorization_fields": [
+      "accepted_campaign_commit",
+      "campaign_manifest_hash",
+      "model",
+      "permitted_case_ids",
+      "protocol",
+      "provider",
+      "qualification_contract_hash",
+      "variant",
+      "expected_opencode_version",
+      "expected_catalog_fingerprint",
+      "zero_price_required",
+      "no_fallback_required"
+    ],
+    "catalog_binding": "EXACT_NON_NULL_AUTHORIZATION_FINGERPRINT",
+    "catalog_binding_procedure_allowed": false,
+    "dry_run_campaign_commit": null,
+    "live_authorization_required": true,
+    "planning_baseline_commit": "fe91deb273f485c75ad50f58d0623b947f22631a"
+  },
+  "campaign_id": "quixbugs-paired-pilot-v1",
+  "campaign_version": 1,
+  "case_order": [
+    {
+      "case_hash": "5b49fef43188eb825ae9bb2d2b87f5cee32e8d80eb0d898651c21c8409fdafdb",
+      "case_id": "quixbugs-paired-pilot-v1:quixbugs-find-in-sorted-smoke-v1:pdb-on-uncertainty",
+      "order_index": 1,
+      "policy": "pdb-on-uncertainty",
+      "task_id": "quixbugs-find-in-sorted-smoke-v1"
+    },
+    {
+      "case_hash": "5cef9afac2de485d6991a12acbdb0f2c73dc4632e437bd731e1b22675f13b079",
+      "case_id": "quixbugs-paired-pilot-v1:quixbugs-find-in-sorted-smoke-v1:static-baseline",
+      "order_index": 2,
+      "policy": "static-baseline",
+      "task_id": "quixbugs-find-in-sorted-smoke-v1"
+    },
+    {
+      "case_hash": "614b3d92c6361b8a34bb2dba603e65faa2c2f684f30625ecd223bf96f9fd010e",
+      "case_id": "quixbugs-paired-pilot-v1:quixbugs-hanoi-smoke-v1:static-baseline",
+      "order_index": 3,
+      "policy": "static-baseline",
+      "task_id": "quixbugs-hanoi-smoke-v1"
+    },
+    {
+      "case_hash": "a7d2b45eaea604a8efd6bed80d5284f3fbccf49207bbdc006161ff95478e6601",
+      "case_id": "quixbugs-paired-pilot-v1:quixbugs-is-valid-parenthesization-smoke-v1:pdb-on-uncertainty",
+      "order_index": 4,
+      "policy": "pdb-on-uncertainty",
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1"
+    },
+    {
+      "case_hash": "c262e8ac27c437033deea0e6c3b3fb2312bac5758ee096f09f1125add25eb007",
+      "case_id": "quixbugs-paired-pilot-v1:quixbugs-is-valid-parenthesization-smoke-v1:static-baseline",
+      "order_index": 5,
+      "policy": "static-baseline",
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1"
+    },
+    {
+      "case_hash": "dde99dd90dcc8717f647d70bcacccbad57b8e1aa0d311e07826e07ca7f6c9bf6",
+      "case_id": "quixbugs-paired-pilot-v1:quixbugs-hanoi-smoke-v1:pdb-on-uncertainty",
+      "order_index": 6,
+      "policy": "pdb-on-uncertainty",
+      "task_id": "quixbugs-hanoi-smoke-v1"
+    }
+  ],
+  "dataset": "QuixBugs",
+  "execution_kinds": {
+    "DRY_RUN": {
+      "accepted_code_commit": null,
+      "campaign_commit": null,
+      "live_route_claim": false,
+      "synthetic_transport": true
+    },
+    "LIVE_CASE": {
+      "authorization_required": true,
+      "provider_preflight_required": true,
+      "synthetic_transport": false
+    }
+  },
+  "fair_pair_contract": {
+    "pdb_policy_access": "only through the real policy gate; PDB not reached is valid",
+    "shared": [
+      "task material",
+      "public protocol request",
+      "model",
+      "variant",
+      "transport",
+      "logical-call budget",
+      "retry policy",
+      "timeouts",
+      "controller limits",
+      "patch constraints",
+      "independent verifier",
+      "restoration checks",
+      "containment",
+      "telemetry",
+      "evidence schema"
+    ],
+    "static_baseline_pdb_counts": {
+      "gate_openings": 0,
+      "observations": 0,
+      "sessions_started": 0
+    }
+  },
+  "freeze_status": "FROZEN_BEFORE_LIVE",
+  "inventory": [
+    {
+      "algorithm": "bucketsort",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "ELIGIBLE",
+      "implementation_path": "python_programs/bucketsort.py",
+      "manifest_path": "research/quixbugs/BUCKETSORT_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-bucketsort-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "for i, count in enumerate(arr):",
+        "call_expression": "bucketsort([1, 0, 1], 2)",
+        "focus_function": "bucketsort",
+        "inspect_names": [
+          "counts",
+          "i",
+          "count"
+        ],
+        "module_path": "python_programs/bucketsort.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "1cc4197c2ee524ec8dd3a45c0e943acf31fa429cb8b179195334f51ff939b9fd",
+      "task_id": "quixbugs-bucketsort-smoke-v1",
+      "test_path": "python_testcases/test_bucketsort.py",
+      "test_sha256": "b5f3915b983f869cd87935c4b82246695aedc03400fe44114f7352dc02a6e65e",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "find_in_sorted",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "SELECTED",
+      "implementation_path": "python_programs/find_in_sorted.py",
+      "manifest_path": "research/quixbugs/FIND_IN_SORTED_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-find-in-sorted-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "mid =",
+        "call_expression": "find_in_sorted([1, 2], 3)",
+        "focus_function": "binsearch",
+        "inspect_names": [
+          "arr",
+          "x"
+        ],
+        "module_path": "python_programs/find_in_sorted.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+      "task_id": "quixbugs-find-in-sorted-smoke-v1",
+      "test_path": "python_testcases/test_find_in_sorted.py",
+      "test_sha256": "a943c5c1df1e87360308b23341a651da9cfb31b1f1e2954cdca75c2cf4b6ba54",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "flatten",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "ELIGIBLE",
+      "implementation_path": "python_programs/flatten.py",
+      "manifest_path": "research/quixbugs/FLATTEN_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-flatten-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "yield flatten(x)",
+        "call_expression": "list(flatten([[1], 2]))",
+        "focus_function": "flatten",
+        "inspect_names": [
+          "arr",
+          "x"
+        ],
+        "module_path": "python_programs/flatten.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+      "task_id": "quixbugs-flatten-smoke-v1",
+      "test_path": "python_testcases/test_flatten.py",
+      "test_sha256": "8751773222d9310f75ef92e2111298a12e24389cb03aa62b905bcd6ae55f8ee5",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "gcd",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": "Repeatedly used for transport and contained-PDB engineering and prior live-model implementation; excluded before ranking.",
+      "exclusion_status": "EXCLUDED",
+      "implementation_path": "python_programs/gcd.py",
+      "manifest_path": "research/quixbugs/GCD_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "YES",
+      "source_restoration_status": "PASS",
+      "source_sha256": "d68e155c2af40d787f617f03c596005edabee3d9e33626b9185d83650895636f",
+      "task_id": "quixbugs-gcd-smoke-v1",
+      "test_path": "python_testcases/test_gcd.py",
+      "test_sha256": "1e0f36211d258a295ec11359495202ff8491736ffe3a9b56336c1a633a1af589",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "hanoi",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "SELECTED",
+      "implementation_path": "python_programs/hanoi.py",
+      "manifest_path": "research/quixbugs/HANOI_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-hanoi-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "helper =",
+        "call_expression": "hanoi(2)",
+        "focus_function": "hanoi",
+        "inspect_names": [
+          "height",
+          "start",
+          "end"
+        ],
+        "module_path": "python_programs/hanoi.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "edd1ceeb79b556a6d15e3bc21f625c5776b46c10f94a754531d39a6f7e120f9e",
+      "task_id": "quixbugs-hanoi-smoke-v1",
+      "test_path": "python_testcases/test_hanoi.py",
+      "test_sha256": "a93f11847b7cc48409035229316cdfd5ee5ca209fb95d2cb9be3aaf419e2fb98",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "is_valid_parenthesization",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "SELECTED",
+      "implementation_path": "python_programs/is_valid_parenthesization.py",
+      "manifest_path": "research/quixbugs/IS_VALID_PARENTHESIZATION_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-is-valid-parenthesization-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "depth = 0",
+        "call_expression": "is_valid_parenthesization('(')",
+        "focus_function": "is_valid_parenthesization",
+        "inspect_names": [
+          "parens",
+          "depth"
+        ],
+        "module_path": "python_programs/is_valid_parenthesization.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "2340cddfce49b055a5a7a70c3341351bf130702512278bafaed5d5b345d0ba60",
+      "task_id": "quixbugs-is-valid-parenthesization-smoke-v1",
+      "test_path": "python_testcases/test_is_valid_parenthesization.py",
+      "test_sha256": "484b2e67707900e6ef0cff1df83ef441d39fcc3f56afdd9180ff1363fc7d1f76",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "kheapsort",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "ELIGIBLE",
+      "implementation_path": "python_programs/kheapsort.py",
+      "manifest_path": "research/quixbugs/KHEAPSORT_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-kheapsort-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "yield heapq.heappushpop(heap, x)",
+        "call_expression": "list(kheapsort([2, 1, 3], 1))",
+        "focus_function": "kheapsort",
+        "inspect_names": [
+          "heap",
+          "x",
+          "k"
+        ],
+        "module_path": "python_programs/kheapsort.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "0cabf3d462d941ec01f261f2d794d960ab8ba497c42140cedbc3c872f772cea8",
+      "task_id": "quixbugs-kheapsort-smoke-v1",
+      "test_path": "python_testcases/test_kheapsort.py",
+      "test_sha256": "7751ea3a7611406695c84ed254eddc2afdc17eb3e5962bb9a494b3a307953d7a",
+      "verifier_status": "PASS"
+    },
+    {
+      "algorithm": "kth",
+      "contained_pdb_reachability_status": "PASS",
+      "dependency_status": "PASS",
+      "deterministic_baseline_status": "PASS",
+      "exclusion_reason": null,
+      "exclusion_status": "ELIGIBLE",
+      "implementation_path": "python_programs/kth.py",
+      "manifest_path": "research/quixbugs/KTH_SMOKE_MANIFEST_V1.json",
+      "prior_live_use": "NO",
+      "qualification_evidence_ref": "quixbugs-kth-smoke-v1",
+      "runtime_probe": {
+        "breakpoint_anchor": "if k < num_less:",
+        "call_expression": "kth([2, 1, 3], 1)",
+        "focus_function": "kth",
+        "inspect_names": [
+          "pivot",
+          "num_less",
+          "num_lessoreq"
+        ],
+        "module_path": "python_programs/kth.py"
+      },
+      "source_restoration_status": "PASS",
+      "source_sha256": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+      "task_id": "quixbugs-kth-smoke-v1",
+      "test_path": "python_testcases/test_kth.py",
+      "test_sha256": "89c57596f6deaf8564c0bf076f41c3a293af694ba45c0c8b764a7913fe492e70",
+      "verifier_status": "PASS"
+    }
+  ],
+  "outcome_schema": {
+    "campaign_stop_contract": {
+      "applies_only_to": "subsequent unstarted cases",
+      "authority_check_binding": "ISSUER_BOUND_VALIDATED_AUTHORITY_CHECK_CAPABILITY",
+      "block_kind": "campaign-stop",
+      "catalog_freeze": "EXACT_NON_NULL_AUTHORIZATION_FINGERPRINT",
+      "exact_route_required": true,
+      "reason_to_trigger_compatibility": {
+        "authority_check_only": [
+          "TRACKED_SOURCE_CHANGED",
+          "MANIFEST_HASH_CHANGED",
+          "QUALIFICATION_CONTRACT_CHANGED"
+        ],
+        "prior_case_only": [
+          "TRANSPORT_EVIDENCE_LOSS",
+          "SOURCE_MUTATION",
+          "CLEANUP_FAILURE",
+          "RESULT_SCHEMA_INCONSISTENCY"
+        ],
+        "prior_case_or_compatible_authority": [
+          "CONTAINMENT_UNCERTAINTY",
+          "VERIFIER_INTEGRITY_FAILURE"
+        ]
+      },
+      "structured_trigger_and_reason_evidence_required": true,
+      "trigger_must_precede_blocked_case": true,
+      "trigger_result_binding": "ISSUER_BOUND_VALIDATED_CASE_RESULT_CAPABILITY",
+      "typed_reason_fields": true,
+      "zero_case_activity": true,
+      "capability_issuer": "private_validator_issuer_sentinel",
+      "plain_mapping_validated_flag_accepted": false
+    },
+    "campaign_stop_evidence_fields": [
+      "reason_code",
+      "trigger_case_id",
+      "pre_case_authority_check_identity",
+      "evidence_reference",
+      "confirmed",
+      "expected_evidence_complete",
+      "observed_evidence_complete",
+      "expected_containment_confirmed",
+      "observed_containment_confirmed",
+      "expected_source_hash",
+      "observed_source_hash",
+      "expected_cleanup_succeeded",
+      "observed_cleanup_succeeded",
+      "expected_verifier_integrity",
+      "observed_verifier_integrity",
+      "schema_error_code",
+      "expected_source_authority_hash",
+      "observed_source_authority_hash",
+      "expected_manifest_hash",
+      "observed_manifest_hash",
+      "expected_qualification_contract_hash",
+      "observed_qualification_contract_hash",
+      "trigger_result_sha256",
+      "authority_check_record_sha256"
+    ],
+    "campaign_stop_reason_codes": [
+      "TRANSPORT_EVIDENCE_LOSS",
+      "CONTAINMENT_UNCERTAINTY",
+      "SOURCE_MUTATION",
+      "CLEANUP_FAILURE",
+      "VERIFIER_INTEGRITY_FAILURE",
+      "RESULT_SCHEMA_INCONSISTENCY",
+      "TRACKED_SOURCE_CHANGED",
+      "MANIFEST_HASH_CHANGED",
+      "QUALIFICATION_CONTRACT_CHANGED"
+    ],
+    "counter_semantics": {
+      "case_duration": "wall_clock_duration_seconds <= total_case_timeout_seconds",
+      "directive_feedback": "valid_directives <= logical_model_calls; malformed_directive_rejections <= max_malformed_directive_feedback_cycles; bounded_directive_feedback_events >= malformed_directive_rejections",
+      "gate_counts": "derived from actual boolean gate decisions",
+      "observations": "successful plus failed named observation counts; each requires a started session",
+      "sessions_started": "actual start_pdb_session lifecycle events; never gate-list length",
+      "transport": "provider_process_attempts <= logical_model_calls * max_transport_attempts_per_logical_call; retries <= logical_model_calls * max_transport_retries_per_logical_call and retries <= attempts"
+    },
+    "execution_kind_block_matrix": {
+      "DRY_RUN": {
+        "accepted_code_commit": null,
+        "blocked_block_kind": "dry-run",
+        "campaign_commit": null,
+        "synthetic_transport": true,
+        "terminal_statuses": [
+          "BLOCKED",
+          "INVALID_MODEL_RESPONSE"
+        ]
+      },
+      "LIVE_CASE_BLOCKED": {
+        "blocked_block_kinds": [
+          "live-pre-provider",
+          "campaign-stop"
+        ],
+        "pre_provider_zero_activity": true,
+        "synthetic_transport": false
+      },
+      "LIVE_CASE_COMPLETED": {
+        "exact_route_required": true,
+        "successful_preflight_required": true,
+        "zero_pricing_required": true
+      }
+    },
+    "execution_kinds": [
+      "DRY_RUN",
+      "LIVE_CASE"
+    ],
+    "infrastructure_stage_matrix": {
+      "cleanup": {
+        "allowed_reason_codes": [
+          "CLEANUP_FAILURE"
+        ],
+        "classification": "CLEANUP"
+      },
+      "containment_pre_provider": {
+        "allowed_reason_codes": [
+          "CONTAINMENT_FAILURE"
+        ],
+        "classification": "PRE_PROVIDER"
+      },
+      "controller": {
+        "allowed_reason_codes": [
+          "CONTROLLER_FAILURE",
+          "RESULT_SCHEMA_INCONSISTENCY"
+        ],
+        "classification": "CONTROLLER"
+      },
+      "evidence_packaging": {
+        "allowed_reason_codes": [
+          "EVIDENCE_PACKAGING_FAILURE",
+          "RESULT_SCHEMA_INCONSISTENCY"
+        ],
+        "classification": "EVIDENCE_PACKAGING"
+      },
+      "pdb_runtime": {
+        "allowed_reason_codes": [
+          "CONTAINMENT_FAILURE",
+          "PDB_RUNTIME_FAILURE"
+        ],
+        "classification": "PDB_RUNTIME"
+      },
+      "pre_provider": {
+        "allowed_reason_codes": [
+          "CONTAINMENT_FAILURE",
+          "ROUTE_PREFLIGHT_FAILURE",
+          "WORKSPACE_FAILURE"
+        ],
+        "classification": "PRE_PROVIDER"
+      },
+      "provider_transport": {
+        "allowed_reason_codes": [
+          "PROVIDER_PROCESS_FAILURE",
+          "TRANSPORT_EVIDENCE_LOSS"
+        ],
+        "classification": "PROVIDER_TRANSPORT"
+      },
+      "verifier": {
+        "allowed_reason_codes": [
+          "VERIFIER_FAILURE",
+          "VERIFIER_INTEGRITY_FAILURE"
+        ],
+        "classification": "VERIFIER"
+      },
+      "workspace_pre_provider": {
+        "allowed_reason_codes": [
+          "WORKSPACE_FAILURE"
+        ],
+        "classification": "PRE_PROVIDER"
+      }
+    },
+    "pdb_not_reached_contract": {
+      "baseline_reproduction": true,
+      "completed_nonmalformed_response": true,
+      "execution_kind": "LIVE_CASE",
+      "logical_model_calls_minimum": 1,
+      "policy": "pdb-on-uncertainty",
+      "reason_codes": [
+        "PDB_NOT_REACHED_NO_GATE",
+        "PDB_NOT_REACHED_GATE_REJECTED"
+      ],
+      "successful_preflight": true,
+      "synthetic_transport": false,
+      "zero_allowed_gates": true,
+      "zero_observations": true,
+      "zero_sessions": true
+    },
+    "preflight_failure_contract": {
+      "authorization_invalid_artifact_digest_required_unless_missing": true,
+      "catalog_failure_requires_explicit_category_and_error": true,
+      "catalog_failure_requires_not_run_route": true,
+      "controlling_failure_precedence": [
+        "LIVE_AUTHORIZATION_INVALID",
+        "MANIFEST_HASH_CHANGED",
+        "QUALIFICATION_CONTRACT_CHANGED",
+        "TRACKED_SOURCE_CHANGED",
+        "CAMPAIGN_COMMIT_MISMATCH",
+        "PROVIDER_MISMATCH",
+        "MODEL_MISMATCH",
+        "VARIANT_MISMATCH",
+        "PROTOCOL_MISMATCH",
+        "OPENCODE_VERSION_MISMATCH",
+        "CATALOG_PREFLIGHT_FAILED",
+        "MODEL_INACTIVE",
+        "VARIANT_UNAVAILABLE",
+        "NONZERO_PRICING",
+        "PAID_FALLBACK_REQUIRED",
+        "ALTERNATE_PROVIDER_REQUIRED"
+      ],
+      "observed_route_mismatch_only": "LIVE_CASE BLOCKED with block_kind live-pre-provider",
+      "unique_predicates": true,
+      "version_mismatch_requires_distinct_expected_and_observed_versions": true,
+      "zero_activity": true
+    },
+    "preflight_failure_evidence_fields": [
+      "failure_category",
+      "expected_provider",
+      "observed_provider",
+      "expected_model",
+      "observed_model",
+      "expected_variant",
+      "observed_variant",
+      "expected_protocol",
+      "observed_protocol",
+      "expected_opencode_version",
+      "observed_opencode_version",
+      "expected_catalog_fingerprint",
+      "observed_catalog_fingerprint",
+      "observed_input_price",
+      "observed_output_price",
+      "paid_fallback_required",
+      "alternate_provider_required",
+      "expected_manifest_hash",
+      "observed_manifest_hash",
+      "expected_qualification_contract_hash",
+      "observed_qualification_contract_hash",
+      "expected_source_authority_hash",
+      "observed_source_authority_hash",
+      "expected_campaign_commit",
+      "observed_campaign_commit",
+      "authorization_artifact_hash",
+      "authorization_validation_error",
+      "observed_active_model_status",
+      "observed_variant_available",
+      "catalog_failure_category",
+      "catalog_failure_error",
+      "evidence_reference"
+    ],
+    "required_fields": [
+      "qualification_contract_hash",
+      "execution_kind",
+      "campaign_manifest_hash",
+      "accepted_code_commit",
+      "case_id",
+      "order_index",
+      "task_id",
+      "policy",
+      "planning_baseline_commit",
+      "campaign_commit",
+      "provider",
+      "model",
+      "variant",
+      "route_observation",
+      "public_request_hash",
+      "source_revision",
+      "source_hash",
+      "logical_model_calls",
+      "provider_process_attempts",
+      "retries",
+      "valid_directives",
+      "malformed_directive_rejections",
+      "bounded_directive_feedback_events",
+      "baseline_reproduction",
+      "controller_states_visited",
+      "hypotheses_created",
+      "pdb_gate_decisions",
+      "pdb_sessions_started",
+      "successful_pdb_observations",
+      "failed_pdb_observations",
+      "pdb_counts",
+      "patch_submissions",
+      "verifier_runs",
+      "independent_verifier_result",
+      "transport_evidence",
+      "terminal_status",
+      "termination_reason",
+      "prompt_tokens",
+      "completion_tokens",
+      "reasoning_tokens",
+      "provider_reported_cost",
+      "wall_clock_duration_seconds",
+      "public_evidence_bytes",
+      "canonical_source_restoration",
+      "owned_workspace_cleanup",
+      "evidence_consistency",
+      "candidate_hash",
+      "resource_ids",
+      "terminal_reason_code",
+      "terminal_transport_evidence",
+      "infrastructure_evidence",
+      "blocked_evidence",
+      "preflight_failure_evidence",
+      "campaign_stop_evidence",
+      "repair_outcome"
+    ],
+    "route_failure_reason_codes": [
+      "PROVIDER_MISMATCH",
+      "MODEL_MISMATCH",
+      "VARIANT_MISMATCH",
+      "PROTOCOL_MISMATCH",
+      "MODEL_INACTIVE",
+      "VARIANT_UNAVAILABLE",
+      "NONZERO_PRICING",
+      "PAID_FALLBACK_REQUIRED",
+      "ALTERNATE_PROVIDER_REQUIRED",
+      "CATALOG_PREFLIGHT_FAILED",
+      "OPENCODE_VERSION_MISMATCH",
+      "MANIFEST_HASH_CHANGED",
+      "QUALIFICATION_CONTRACT_CHANGED",
+      "TRACKED_SOURCE_CHANGED",
+      "CAMPAIGN_COMMIT_MISMATCH",
+      "LIVE_AUTHORIZATION_INVALID"
+    ],
+    "schema_version": "quixbugs-paired-pilot-result-v1",
+    "terminal_attempt_contract": {
+      "completed_statuses": {
+        "final_attempt_classification": "COMPLETED_RESPONSE",
+        "process_exit_code": 0,
+        "provider_completed_response": true,
+        "provider_error_category": null,
+        "timed_out": false
+      },
+      "invalid_model_response": "MALFORMED_RESPONSE",
+      "provider_error": [
+        "PROVIDER_ERROR",
+        "TRANSPORT_ERROR",
+        "TIMEOUT"
+      ]
+    },
+    "terminal_evidence_fields": {
+      "blocked_evidence": [
+        "block_kind",
+        "reason_code",
+        "confirmed",
+        "evidence_reference"
+      ],
+      "infrastructure_evidence": [
+        "stage",
+        "reason_code",
+        "confirmed_failure",
+        "classification",
+        "terminal_classification",
+        "provider_attempt_index",
+        "prior_lifecycle_completed",
+        "evidence_reference",
+        "source_mutation_observed",
+        "expected_source_hash"
+      ],
+      "repair_outcome": [
+        "NO_CANDIDATE",
+        "REJECTED",
+        "RESOLVED"
+      ],
+      "terminal_transport_evidence": [
+        "final_attempt_classification",
+        "process_exit_code",
+        "timed_out",
+        "provider_error_category",
+        "provider_completed_response",
+        "evidence_reference"
+      ]
+    },
+    "terminal_status_rules": {
+      "BLOCKED": "bounded non-live or fail-closed result with explicit reason",
+      "INFRASTRUCTURE_ERROR": {
+        "contract": "Structured stage-specific infrastructure failure with coherent prior transport lifecycle",
+        "repair_outcome": "Verifier RESOLVED requires repair_outcome RESOLVED; infrastructure terminal status remains visible and is not a clean resolved case"
+      },
+      "INVALID_MODEL_RESPONSE": "completed malformed response evidence with provider_error false",
+      "PDB_NOT_REACHED": "PDB policy only, all PDB activity counters zero",
+      "PROVIDER_ERROR": "provider/transport evidence required",
+      "RESOLVED": "COMPLETED verifier with RESOLVED outcome and accepted repair",
+      "UNRESOLVED": "COMPLETED verifier with non-resolved outcome"
+    },
+    "terminal_statuses": [
+      "RESOLVED",
+      "UNRESOLVED",
+      "PDB_NOT_REACHED",
+      "INVALID_MODEL_RESPONSE",
+      "PROVIDER_ERROR",
+      "INFRASTRUCTURE_ERROR",
+      "BLOCKED"
+    ],
+    "cross_case_capability_contract": {
+      "prior_results": "Only ValidatedCaseResultBinding instances issued by validate_case_results_in_order are accepted; plain mappings and caller-created validated flags are rejected.",
+      "authority_checks": "Only ValidatedAuthorityCheckBinding instances issued by validate_authority_checks are accepted; records must first pass validate_authority_check_record.",
+      "binding_fields": [
+        "canonical_record_or_result",
+        "sha256",
+        "case_id",
+        "task_id",
+        "order_index",
+        "campaign_manifest_hash",
+        "campaign_commit",
+        "private_issuer_sentinel"
+      ],
+      "fail_closed": true
+    }
+  },
+  "pilot_size": {
+    "future_live_cases": 6,
+    "interpretation": "descriptive feasibility pilot; not statistically powered and not evidence of policy superiority",
+    "policies_per_task": 2,
+    "repetitions_per_pair": 1,
+    "tasks": 3
+  },
+  "planning_baseline_commit": "fe91deb273f485c75ad50f58d0623b947f22631a",
+  "public_private_boundary": {
+    "gold_patch_in_public_records": false,
+    "oracle_material_in_public_records": false,
+    "private_correct_candidate_in_public_records": false,
+    "provider_requests_use": "public task material, frozen protocol, and task constraints only",
+    "qualification_details_in_provider_requests": false,
+    "qualification_evidence_storage": "local review package only, sanitized of oracle/gold content"
+  },
+  "qualification_contract": {
+    "authority": {
+      "repository": "https://github.com/jkoppel/QuixBugs",
+      "revision": "4257f44b0ff1181dedaedee6a447e133219fcebf"
+    },
+    "containment_runtime_limits": {
+      "cpu_seconds": 5,
+      "max_pdb_gate_openings": 3,
+      "max_pdb_observations": 3,
+      "max_processes": 8,
+      "memory_bytes": 268435456,
+      "network_denied": true,
+      "owned_workspace_cleanup_required": true,
+      "source_restoration_required": true
+    },
+    "contract_version": "quixbugs-paired-pilot-qualification-contract-v1",
+    "pdb_qualification": {
+      "canonical_source_unchanged": true,
+      "cleanup_succeeded": true,
+      "contained_preflight_authorized": true,
+      "diagnostics_empty": true,
+      "events_valid": true,
+      "launch_plan_present": true,
+      "minimum_allowed_gate_openings": 1,
+      "minimum_sessions_started": 1,
+      "minimum_successful_observations": 1,
+      "quixbugs_preflight_authorized": true,
+      "runtime_bundle_provenance_present": true,
+      "sequence_ok": true,
+      "verdict": "REACHABILITY_CASE_PASSED"
+    },
+    "selected_private_correct_qualification": {
+      "canonical_fixture_unchanged": true,
+      "cleanup_succeeded": true,
+      "expected_f2p_p2p_behavior": true,
+      "required_outcome": "RESOLVED",
+      "required_status": "COMPLETED",
+      "task_ids": [
+        "quixbugs-find-in-sorted-smoke-v1",
+        "quixbugs-is-valid-parenthesization-smoke-v1",
+        "quixbugs-hanoi-smoke-v1"
+      ]
+    },
+    "source_integrity_authority": {
+      "path": "research/quixbugs/QUIXBUGS_SOURCE_INTEGRITY_V1.json",
+      "schema_version": "quixbugs-source-integrity-v1",
+      "sha256": "a3ccf9d083f3405f0811b66c69a5e93d8a347d77b5f8ccb9d168d93102bd1977"
+    },
+    "tasks": [
+      {
+        "implementation_path": "python_programs/bucketsort.py",
+        "manifest_path": "research/quixbugs/BUCKETSORT_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "for i, count in enumerate(arr):",
+          "call_expression": "bucketsort([1, 0, 1], 2)",
+          "focus_function": "bucketsort",
+          "inspect_names": [
+            "counts",
+            "i",
+            "count"
+          ],
+          "module_path": "python_programs/bucketsort.py"
+        },
+        "source_sha256": "1cc4197c2ee524ec8dd3a45c0e943acf31fa429cb8b179195334f51ff939b9fd",
+        "task_id": "quixbugs-bucketsort-smoke-v1",
+        "task_manifest_fingerprint": "bb6b165d89e10347461c31d4d0db4086194759819a6d006e4f22af8a9c9bf37c",
+        "test_path": "python_testcases/test_bucketsort.py",
+        "test_sha256": "b5f3915b983f869cd87935c4b82246695aedc03400fe44114f7352dc02a6e65e"
+      },
+      {
+        "implementation_path": "python_programs/find_in_sorted.py",
+        "manifest_path": "research/quixbugs/FIND_IN_SORTED_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "mid =",
+          "call_expression": "find_in_sorted([1, 2], 3)",
+          "focus_function": "binsearch",
+          "inspect_names": [
+            "arr",
+            "x"
+          ],
+          "module_path": "python_programs/find_in_sorted.py"
+        },
+        "source_sha256": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+        "task_id": "quixbugs-find-in-sorted-smoke-v1",
+        "task_manifest_fingerprint": "7b1015b12595557f85d2d163e1baf6bdd093a9dc7487ebadeb18ba85a750d63f",
+        "test_path": "python_testcases/test_find_in_sorted.py",
+        "test_sha256": "a943c5c1df1e87360308b23341a651da9cfb31b1f1e2954cdca75c2cf4b6ba54"
+      },
+      {
+        "implementation_path": "python_programs/flatten.py",
+        "manifest_path": "research/quixbugs/FLATTEN_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "yield flatten(x)",
+          "call_expression": "list(flatten([[1], 2]))",
+          "focus_function": "flatten",
+          "inspect_names": [
+            "arr",
+            "x"
+          ],
+          "module_path": "python_programs/flatten.py"
+        },
+        "source_sha256": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+        "task_id": "quixbugs-flatten-smoke-v1",
+        "task_manifest_fingerprint": "e015d02196a99a25fc886aad663781b6821fa383d9ca21b93e53ff9b8bbc569a",
+        "test_path": "python_testcases/test_flatten.py",
+        "test_sha256": "8751773222d9310f75ef92e2111298a12e24389cb03aa62b905bcd6ae55f8ee5"
+      },
+      {
+        "implementation_path": "python_programs/hanoi.py",
+        "manifest_path": "research/quixbugs/HANOI_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "helper =",
+          "call_expression": "hanoi(2)",
+          "focus_function": "hanoi",
+          "inspect_names": [
+            "height",
+            "start",
+            "end"
+          ],
+          "module_path": "python_programs/hanoi.py"
+        },
+        "source_sha256": "edd1ceeb79b556a6d15e3bc21f625c5776b46c10f94a754531d39a6f7e120f9e",
+        "task_id": "quixbugs-hanoi-smoke-v1",
+        "task_manifest_fingerprint": "41488414644ebd217417c086f7faaba52d53f5a3edc458298f4ba2c666c0d325",
+        "test_path": "python_testcases/test_hanoi.py",
+        "test_sha256": "a93f11847b7cc48409035229316cdfd5ee5ca209fb95d2cb9be3aaf419e2fb98"
+      },
+      {
+        "implementation_path": "python_programs/is_valid_parenthesization.py",
+        "manifest_path": "research/quixbugs/IS_VALID_PARENTHESIZATION_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "depth = 0",
+          "call_expression": "is_valid_parenthesization('(')",
+          "focus_function": "is_valid_parenthesization",
+          "inspect_names": [
+            "parens",
+            "depth"
+          ],
+          "module_path": "python_programs/is_valid_parenthesization.py"
+        },
+        "source_sha256": "2340cddfce49b055a5a7a70c3341351bf130702512278bafaed5d5b345d0ba60",
+        "task_id": "quixbugs-is-valid-parenthesization-smoke-v1",
+        "task_manifest_fingerprint": "40b62664efe96cfe3ebd67cc970b48aab71a1e17447b636f24495a683feb99db",
+        "test_path": "python_testcases/test_is_valid_parenthesization.py",
+        "test_sha256": "484b2e67707900e6ef0cff1df83ef441d39fcc3f56afdd9180ff1363fc7d1f76"
+      },
+      {
+        "implementation_path": "python_programs/kheapsort.py",
+        "manifest_path": "research/quixbugs/KHEAPSORT_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "yield heapq.heappushpop(heap, x)",
+          "call_expression": "list(kheapsort([2, 1, 3], 1))",
+          "focus_function": "kheapsort",
+          "inspect_names": [
+            "heap",
+            "x",
+            "k"
+          ],
+          "module_path": "python_programs/kheapsort.py"
+        },
+        "source_sha256": "0cabf3d462d941ec01f261f2d794d960ab8ba497c42140cedbc3c872f772cea8",
+        "task_id": "quixbugs-kheapsort-smoke-v1",
+        "task_manifest_fingerprint": "843b9f8c1e0fad1a19584f61d8eaf054d275ffd3fd153ad4e84ff75f54c2a8d4",
+        "test_path": "python_testcases/test_kheapsort.py",
+        "test_sha256": "7751ea3a7611406695c84ed254eddc2afdc17eb3e5962bb9a494b3a307953d7a"
+      },
+      {
+        "implementation_path": "python_programs/kth.py",
+        "manifest_path": "research/quixbugs/KTH_SMOKE_MANIFEST_V1.json",
+        "runtime_probe": {
+          "breakpoint_anchor": "if k < num_less:",
+          "call_expression": "kth([2, 1, 3], 1)",
+          "focus_function": "kth",
+          "inspect_names": [
+            "pivot",
+            "num_less",
+            "num_lessoreq"
+          ],
+          "module_path": "python_programs/kth.py"
+        },
+        "source_sha256": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+        "task_id": "quixbugs-kth-smoke-v1",
+        "task_manifest_fingerprint": "ed09c371e59f78a0a182021d386aa7dfc6323d8dd3eccc507ccfa9786092ee22",
+        "test_path": "python_testcases/test_kth.py",
+        "test_sha256": "89c57596f6deaf8564c0bf076f41c3a293af694ba45c0c8b764a7913fe492e70"
+      }
+    ],
+    "verifier_qualification": {
+      "buggy_candidate": {
+        "canonical_fixture_unchanged": true,
+        "cleanup_succeeded": true,
+        "diagnostic_present": false,
+        "expected_f2p_p2p_behavior": true,
+        "lifecycle_succeeded": true,
+        "outcome": "NO_OP",
+        "status": "COMPLETED",
+        "timeout": false
+      },
+      "private_correct_candidate": {
+        "canonical_fixture_unchanged": true,
+        "cleanup_succeeded": true,
+        "diagnostic_present": false,
+        "expected_f2p_p2p_behavior": true,
+        "lifecycle_succeeded": true,
+        "outcome": "RESOLVED",
+        "status": "COMPLETED",
+        "timeout": false
+      }
+    }
+  },
+  "qualification_contract_hash": "7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d",
+  "qualification_evidence_path": "research/quixbugs/PAIRED_PILOT_QUALIFICATION_EVIDENCE_V1.json",
+  "qualification_evidence_sha256": "29851dd98da64a400b030d372d85d02a47f20b0b3cc6c696a6c750be29841c41",
+  "route": {
+    "active_model_status_required": "ACTIVE",
+    "alternate_provider": false,
+    "catalog_fingerprint": null,
+    "invoked_in_this_task": false,
+    "model": "opencode/deepseek-v4-flash-free",
+    "model_substitution": false,
+    "ollama_fallback": false,
+    "opencode_version": null,
+    "paid_fallback": false,
+    "preflight_before_first_call": true,
+    "preflight_success_required": true,
+    "protocol": "1.3",
+    "provider": "OpenCode Zen",
+    "require_zero_input_price": true,
+    "require_zero_output_price": true,
+    "variant": "max",
+    "variant_availability_required": true
+  },
+  "selection": {
+    "algorithm": "sort eligible task IDs canonically; hash quixbugs-paired-pilot-v1:<task-id>; sort by SHA-256; select first three",
+    "post_freeze_substitution": false,
+    "ranking": [
+      {
+        "selection_hash": "17bd4e8d78948c0b61698f6b98f6aa7f7042bc0726aa341e661c3fb24200c8cd",
+        "task_id": "quixbugs-find-in-sorted-smoke-v1"
+      },
+      {
+        "selection_hash": "2d4ecf4c619b54d3e537ecab4c7ba4b775af6018aaee768fdb607ada3dcf7e0b",
+        "task_id": "quixbugs-is-valid-parenthesization-smoke-v1"
+      },
+      {
+        "selection_hash": "633f23a64af5e026437644ee7d3925d160c33d8f08e21672ba78ba951fd9cbda",
+        "task_id": "quixbugs-hanoi-smoke-v1"
+      },
+      {
+        "selection_hash": "6e6db4eb268062be0f68ef8fb9655ed5037661a753eebe12247b268d2bcf9dfa",
+        "task_id": "quixbugs-bucketsort-smoke-v1"
+      },
+      {
+        "selection_hash": "c220e2ff20601707bb47d9554111f46d10e617745ad624ccc1d8276d1fa6158d",
+        "task_id": "quixbugs-kth-smoke-v1"
+      },
+      {
+        "selection_hash": "dbf660119910d6469fd70cb0e29186f1f271ee112b29ad5fee4d7fe2d6dd7e60",
+        "task_id": "quixbugs-kheapsort-smoke-v1"
+      },
+      {
+        "selection_hash": "df1d802cb46d2dd64a3343687eea199fad9d5b6c43ed598222828aef4f633213",
+        "task_id": "quixbugs-flatten-smoke-v1"
+      }
+    ],
+    "selected_count": 3,
+    "selected_task_ids": [
+      "quixbugs-find-in-sorted-smoke-v1",
+      "quixbugs-is-valid-parenthesization-smoke-v1",
+      "quixbugs-hanoi-smoke-v1"
+    ]
+  },
+  "source_integrity_authority": {
+    "path": "research/quixbugs/QUIXBUGS_SOURCE_INTEGRITY_V1.json",
+    "schema_version": "quixbugs-source-integrity-v1",
+    "sha256": "a3ccf9d083f3405f0811b66c69a5e93d8a347d77b5f8ccb9d168d93102bd1977"
+  },
+  "stop_rules": [
+    "No tracked-code or source changes after the first live case begins.",
+    "No task substitution, case rerun, or policy rerun after freeze.",
+    "Bounded within-case transport retries remain allowed; INVALID_MODEL_RESPONSE and PDB_NOT_REACHED are valid outcomes.",
+    "Stop before the next case on route/model/variant mismatch, nonzero price, paid/fallback route, evidence loss, containment uncertainty, source mutation, cleanup failure, schema inconsistency, verifier integrity failure, tracked source change, or manifest-hash change.",
+    "An infrastructure defect after campaign start ends version 1; repair requires a new version and preregistration.",
+    "Every case has a fresh provider process and fresh owned workspace; no conversation, directive feedback, filesystem state, or task memory carries between cases."
+  ]
+}

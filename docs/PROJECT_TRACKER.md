@@ -617,6 +617,17 @@ bounded public GitHub tree metadata and individual license/notice files.
   required artifact records for its own buggy/fixed revisions. All accepted
   verdicts remain unchanged.
 
+### QuixBugs Paired Pilot Planning and Qualification v1
+
+The QuixBugs paired-pilot plan and no-model qualification are the active task.
+The frozen manifest is research/quixbugs/PAIRED_PILOT_V1.json; it selects
+three tasks and six future static-baseline/PDB-policy cases by deterministic
+hash order. The harness defaults to validation and provides model-free
+validate, plan, dry-run, and qualify modes. No live campaign has been
+authorized or run, and no provider/model contact occurred for this task.
+
+BugsInPy execution remains BLOCKED and is out of scope for this pilot.
+
 ## Last Updated
 
-2026-07-31
+2026-08-01
