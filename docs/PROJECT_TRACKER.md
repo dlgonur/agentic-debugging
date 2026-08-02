@@ -229,6 +229,26 @@ Rules:
 - [x] Metadata-only BugsInPy preflight is the active task (`bugsinpy-metadata-preflight-v1`).
 - [ ] BugsInPy source acquisition and execution remain unauthorized; no containment implementation or benchmark execution is approved.
 
+Current state (2026-08-02):
+
+- The paired-pilot v2 contract and the operational routing authority are the
+  current project state: DeepSeek V4 Flash through the operator's OpenCode Go
+  subscription is the default implementation route when a task explicitly
+  authorizes model use; GPT-5.6 High in a separate ChatGPT conversation owns
+  literature review and deep-research work; research outputs are
+  non-authoritative until reviewed and incorporated into tracked project
+  artifacts. See `CURRENT_AGENT_ROSTER.md`.
+- The QuixBugs paired-pilot v2 planning manifest is frozen
+  (`research/quixbugs/PAIRED_PILOT_V2.json`); live execution remains
+  unavailable and fail-closed until a separate implementation task supplies an
+  explicit authorization artifact.
+- The accepted v1 paired-pilot files and historical results are unchanged and
+  remain the retained v1 authority. The earlier OpenCode Zen matrix claims
+  remain historical, descriptive-only records (kept as [historical] entries
+  below); they were not rewritten as OpenCode Go claims.
+- BugsInPy execution remains BLOCKED and is out of scope for the paired pilot.
+- No new live/model run or dataset execution is authorized or scheduled.
+
 Current state (2026-07-31):
 
 - QuixBugs static live feasibility is complete and accepted: Resource-Limited
@@ -628,6 +648,90 @@ authorized or run, and no provider/model contact occurred for this task.
 
 BugsInPy execution remains BLOCKED and is out of scope for this pilot.
 
+### QuixBugs Paired Pilot Route v2 and Research Ownership
+
+Contract and project-state update against accepted baseline
+`18e067f24c337e7215139373edc699a347cf2127` on branch
+`feature/quixbugs-paired-pilot-route-v2`. No model was run, no pilot provider
+was contacted, no nested OpenCode process was started, no live catalog was
+queried, no QuixBugs benchmark was executed, and no system-level change was
+made.
+
+- v2 is a derived paired-pilot contract, not a rewrite of v1:
+  `research/quixbugs/PAIRED_PILOT_V2.json` (campaign-manifest SHA-256
+  `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`)
+  freezes the same three selected tasks, the same six-case order (task/policy
+  sequence carried over from the accepted v1 manifest; case IDs re-stamped
+  with the `quixbugs-paired-pilot-v2` prefix), the same controller budgets,
+  protocol 1.3, the same qualification contract
+  (`7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d`), the
+  same source-integrity authority
+  (`a3ccf9d083f3405f0811b66c69a5e93d8a347d77b5f8ccb9d168d93102bd1977`), the
+  same public/private boundary, containment requirements, and no-rerun rules.
+- The route changed: the future Zen/free-tier route is replaced by the
+  operator-selected OpenCode Go subscription running DeepSeek V4 Flash. The
+  old zero input/output price eligibility rule is replaced by a fail-closed
+  subscription-route contract: authorized route is the OpenCode Go
+  subscription only; no Zen route, free-tier substitution, Ollama route,
+  alternate provider, model substitution, metered fallback, paid overage
+  route, or per-call billing fallback; if subscription entitlement or
+  billing-route evidence cannot be established before contact, the campaign
+  blocks before the first provider call. No exact catalog identifier, OpenCode
+  version, catalog fingerprint, account status, entitlement, or pricing
+  observation was invented; the exact runtime model/catalog identity remains
+  intentionally authorization-bound.
+- Provider-reported token and cost metadata remain truthful: v2 results do not
+  force reported cost to zero merely because access is subscription-based.
+  Authorization, route-observation, preflight-failure, result-validation, and
+  stop-rule contracts now represent subscription billing explicitly and
+  validate fail-closed (new preflight failure categories:
+  `SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED`, `ZEN_ROUTE_OBSERVED`,
+  `FREE_TIER_SUBSTITUTION`, `OLLAMA_ROUTE_OBSERVED`,
+  `MODEL_SUBSTITUTION_OBSERVED`, `RUNTIME_MODEL_ID_MISMATCH`,
+  `METERED_FALLBACK_REQUIRED`, `PAID_OVERAGE_REQUIRED`,
+  `PER_CALL_BILLING_FALLBACK`; new authorization failure categories:
+  `SUBSCRIPTION_ROUTE_REQUIRED`, `BILLING_ROUTE_MISMATCH`,
+  `RUNTIME_MODEL_ID_BINDING_MISSING`, `ENTITLEMENT_EVIDENCE_MISSING`,
+  `ZERO_PRICING_RULE_CONTRADICTION`).
+- `CURRENT_AGENT_ROSTER.md` is now the operational routing authority: DeepSeek
+  V4 Flash through OpenCode Go is the default implementation route when a task
+  explicitly authorizes model use; GPT-5.6 High in a separate ChatGPT
+  conversation owns literature review and deep-research work; research outputs
+  are non-authoritative until reviewed and incorporated into tracked project
+  artifacts; every task still requires explicit authorization for
+  provider/model execution; coding agents must not launch additional models,
+  research agents, MCP, benchmarks, or paid services unless the current task
+  explicitly authorizes them.
+- The validator entry point (`scripts/validate_quixbugs_paired_pilot.py`) now
+  validates every tracked supported manifest version (v1 and v2). The v1
+  files and historical results are preserved unchanged; the earlier OpenCode
+  Zen matrix claims in the README, diary, tracker, and v1 documents remain
+  labeled historical and were not rewritten as OpenCode Go claims.
+- Validation performed: paired-pilot validator for v1 and v2 (both valid),
+  full v1 paired-pilot unit suite (179 passed), new v2 paired-pilot unit
+  suite (88 passed), `python -m py_compile` on changed Python files, and
+  `git diff --check`. No live pilot and no accepted benchmark campaign was
+  run. Review package: `_ai-review/quixbugs-paired-pilot-route-v2/`.
+- A bounded material repair then made the v2 derivation fail closed: the
+  validator now requires and exactly validates `derived_from`
+  (`manifest_path` = `research/quixbugs/PAIRED_PILOT_V1.json`,
+  `manifest_sha256` = `5d84ea22820ca38ce80dd90a5d36e6f80160220178496950f9b45be41fae19ce`,
+  exactly the accepted contract fields), re-validates the tracked v1 manifest
+  to the accepted canonical hash, freezes the tracked v1 campaign
+  identity/version, and verifies that every v1-retained contract area
+  (qualification contract, qualification evidence binding, source-integrity
+  authority, selected tasks, frozen v1 selection ranking, six-case
+  task/policy order, budgets, public/private boundary, containment contract,
+  no-rerun rule) stays consistent with the accepted v1 authority. The
+  `MODEL_SUBSTITUTION_OBSERVED` evidence is now bound to the validated
+  authorization artifact: `evidence.expected_runtime_model_id` must equal the
+  authorization-bound value and `evidence.observed_runtime_model_id` must
+  equal the route observation, so evidence cannot rewrite both identities to
+  the observed value. Adversarial tests cover missing/wrong `derived_from`,
+  missing/drifted referenced v1 file, wrong v1 identity, v1-retained contract
+  drift, and the model-substitution forgery case. Post-repair counts: v2
+  suite 88 passed, combined paired-pilot suite 267 passed.
+
 ## Last Updated
 
-2026-08-01
+2026-08-02

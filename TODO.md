@@ -11,6 +11,31 @@ repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/
 `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, live wire protocol sürümü
 `1.3`'tür.
 
+### Routing ve iş sahipliği (2026-08-02 itibarıyla)
+
+- Model kullanımı açıkça yetkilendirilmiş görevlerde varsayılan implementation
+  route'u, operator'ün OpenCode Go aboneliği üzerinden DeepSeek V4 Flash'tır.
+  Bu route, paired-pilot v2 kontratında (`docs/QUIXBUGS_PAIRED_PILOT_V2.md`,
+  `research/quixbugs/PAIRED_PILOT_V2.json`) fail-closed abonelik koşullarıyla
+  dondurulmuştur: Zen route, free-tier ikamesi, Ollama, alternatif provider,
+  model substitution, metered/paid-overage/per-call billing fallback yoktur;
+  ilk provider çağrısından önce abonelik entitlement ve billing-route kanıtı
+  kurulamazsa kampanya o çağrıdan önce bloklanır. Eski OpenCode Zen
+  free-model matrix'i yalnızca historical, descriptive kayıttır.
+- Literatür taraması, deep research, kaynak doğrulama ve geniş karşılaştırmalı
+  araştırma; coding-agent oturumları dışında, ayrı bir ChatGPT
+  konuşmasındaki GPT-5.6 High tarafından yürütülür. Coding agent'lar yalnızca
+  review edilmiş repository araştırma artifact'lerini tüketebilir; görevleri
+  açık uçlu araştırma kampanyalarına genişletemez.
+- Araştırma çıktıları, tracked project artifact'lerine review edilip
+  işlenmeden authoritative değildir. Her görev, provider/model çalıştırmak
+  için hâlâ ayrı ve açık yetkilendirme gerektirir. Coding agent'lar, görev
+  açıkça yetkilendirmedikçe ek model, araştırma agent'ı, MCP, benchmark veya
+  paid servis başlatamaz. Bu sorumlulukların operasyonel sahibi
+  `CURRENT_AGENT_ROSTER.md` dosyasıdır.
+- Bu routing güncellemesi, aşağıdaki faz listesindeki hiçbir literatür, SFT,
+  RAG, DPO veya empirical-evaluation maddesini tamamlanmış işaretlemez.
+
 Private operator runner üzerinden tek fixture, iki policy ve policy başına iki
 repetition içeren dört-case descriptive matrix tamamlandı. Static policy 2/2
 case'i çözdü; PDB-on-uncertainty 0/2 case çözdü ve iki case de PDB açılmadan

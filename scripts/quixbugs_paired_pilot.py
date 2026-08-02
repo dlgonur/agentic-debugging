@@ -183,6 +183,84 @@ FROZEN_BUDGETS = {
     "max_public_evidence_bytes": 20000,
 }
 
+# ---- paired-pilot v2: OpenCode Go subscription route ----
+#
+# v2 replaces the v1 zero-price eligibility rule with a fail-closed
+# subscription-route contract.  The authorized route is the operator-selected
+# OpenCode Go subscription running DeepSeek V4 Flash; no Zen route, free-tier
+# substitution, Ollama route, alternate provider, model substitution, metered
+# fallback, paid overage route, or per-call billing fallback is permitted.
+# Subscription entitlement and billing-route evidence must be established
+# before the first provider call, otherwise the campaign blocks before that
+# call.  Provider-reported token and cost metadata are preserved truthfully and
+# are never forced to zero merely because access is subscription-based.
+CAMPAIGN_ID_V2 = "quixbugs-paired-pilot-v2"
+CAMPAIGN_VERSION_V2 = 2
+PLANNING_BASELINE_COMMIT_V2 = "18e067f24c337e7215139373edc699a347cf2127"
+MANIFEST_PATH_V2 = REPO_ROOT / "research" / "quixbugs" / "PAIRED_PILOT_V2.json"
+V1_MANIFEST_RELATIVE_PATH = "research/quixbugs/PAIRED_PILOT_V1.json"
+V1_MANIFEST_SHA256 = "5d84ea22820ca38ce80dd90a5d36e6f80160220178496950f9b45be41fae19ce"
+V1_DERIVED_FROM_FIELDS = ("manifest_path", "manifest_sha256", "note")
+SUBSCRIPTION_ROUTE_PROVIDER = "OpenCode Go"
+SUBSCRIPTION_ROUTE_MODEL = "deepseek-v4-flash"
+AUTHORIZED_BILLING_ROUTE = "SUBSCRIPTION"
+BILLING_ROUTE_VALUES = ("SUBSCRIPTION", "ZEN", "FREE_TIER", "OLLAMA", "METERED", "PER_CALL", "UNKNOWN")
+V2_PREFLIGHT_REASON_CODES = {
+    "SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED", "ZEN_ROUTE_OBSERVED", "FREE_TIER_SUBSTITUTION",
+    "OLLAMA_ROUTE_OBSERVED", "MODEL_SUBSTITUTION_OBSERVED", "RUNTIME_MODEL_ID_MISMATCH",
+    "METERED_FALLBACK_REQUIRED", "PAID_OVERAGE_REQUIRED", "PER_CALL_BILLING_FALLBACK",
+}
+ALL_PRE_PROVIDER_REASON_CODES = LIVE_PRE_PROVIDER_REASON_CODES | V2_PREFLIGHT_REASON_CODES
+V2_PREFLIGHT_FAILURE_FIELDS = (
+    "observed_billing_route", "subscription_entitlement_confirmed",
+    "expected_runtime_model_id", "observed_runtime_model_id", "model_substitution_observed",
+    "zen_route_observed", "free_tier_route_observed", "ollama_route_observed",
+    "metered_fallback_required", "paid_overage_required", "per_call_billing_fallback_required",
+)
+ALL_PREFLIGHT_FAILURE_FIELDS = PREFLIGHT_FAILURE_FIELDS + V2_PREFLIGHT_FAILURE_FIELDS
+V2_ROUTE_OBSERVATION_FIELDS = (
+    "runtime_model_id", "billing_route", "subscription_entitlement_confirmed",
+    "provider_reported_cost", "zen_used", "free_tier_used",
+    "metered_fallback_used", "paid_overage_used", "per_call_billing_used",
+    "model_substitution_observed",
+)
+V2_PREFLIGHT_FAILURE_PRECEDENCE = (
+    "LIVE_AUTHORIZATION_INVALID", "MANIFEST_HASH_CHANGED", "QUALIFICATION_CONTRACT_CHANGED",
+    "TRACKED_SOURCE_CHANGED", "CAMPAIGN_COMMIT_MISMATCH",
+    "ZEN_ROUTE_OBSERVED", "FREE_TIER_SUBSTITUTION", "OLLAMA_ROUTE_OBSERVED",
+    "METERED_FALLBACK_REQUIRED", "PAID_OVERAGE_REQUIRED", "PER_CALL_BILLING_FALLBACK",
+    "SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED",
+    "PROVIDER_MISMATCH", "MODEL_SUBSTITUTION_OBSERVED", "RUNTIME_MODEL_ID_MISMATCH",
+    "MODEL_MISMATCH", "VARIANT_MISMATCH", "PROTOCOL_MISMATCH",
+    "OPENCODE_VERSION_MISMATCH", "CATALOG_PREFLIGHT_FAILED", "MODEL_INACTIVE",
+    "VARIANT_UNAVAILABLE", "NONZERO_PRICING", "PAID_FALLBACK_REQUIRED",
+    "ALTERNATE_PROVIDER_REQUIRED",
+)
+V2_AUTHORIZATION_FAILURE_CODES = {
+    "SUBSCRIPTION_ROUTE_REQUIRED", "BILLING_ROUTE_MISMATCH", "RUNTIME_MODEL_ID_BINDING_MISSING",
+    "ENTITLEMENT_EVIDENCE_MISSING", "ZERO_PRICING_RULE_CONTRADICTION",
+}
+ALL_AUTHORIZATION_FAILURE_CODES = AUTHORIZATION_FAILURE_CODES | V2_AUTHORIZATION_FAILURE_CODES
+PRE_PROVIDER_REASON_FIELDS_V2 = {
+    "SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "observed_billing_route", "subscription_entitlement_confirmed", "evidence_reference"},
+    "ZEN_ROUTE_OBSERVED": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "observed_billing_route", "zen_route_observed", "evidence_reference"},
+    "FREE_TIER_SUBSTITUTION": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "observed_billing_route", "free_tier_route_observed", "evidence_reference"},
+    "OLLAMA_ROUTE_OBSERVED": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "observed_billing_route", "ollama_route_observed", "evidence_reference"},
+    "MODEL_SUBSTITUTION_OBSERVED": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "expected_runtime_model_id", "observed_runtime_model_id", "model_substitution_observed", "evidence_reference"},
+    "RUNTIME_MODEL_ID_MISMATCH": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "expected_runtime_model_id", "observed_runtime_model_id", "evidence_reference"},
+    "METERED_FALLBACK_REQUIRED": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "observed_billing_route", "metered_fallback_required", "evidence_reference"},
+    "PAID_OVERAGE_REQUIRED": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "paid_overage_required", "evidence_reference"},
+    "PER_CALL_BILLING_FALLBACK": {"expected_provider", "observed_provider", "expected_model", "observed_model", "expected_variant", "observed_variant", "expected_protocol", "observed_protocol", "observed_billing_route", "per_call_billing_fallback_required", "evidence_reference"},
+}
+V1_FROZEN_CASE_ORDER = (
+    ("quixbugs-find-in-sorted-smoke-v1", "pdb-on-uncertainty"),
+    ("quixbugs-find-in-sorted-smoke-v1", "static-baseline"),
+    ("quixbugs-hanoi-smoke-v1", "static-baseline"),
+    ("quixbugs-is-valid-parenthesization-smoke-v1", "pdb-on-uncertainty"),
+    ("quixbugs-is-valid-parenthesization-smoke-v1", "static-baseline"),
+    ("quixbugs-hanoi-smoke-v1", "pdb-on-uncertainty"),
+)
+
 
 class PilotError(ValueError):
     """A fail-closed manifest, evidence, or orchestration error."""
@@ -401,7 +479,7 @@ def _validate_qualification_evidence(manifest: Mapping[str, Any]) -> None:
     _require(evidence.get("screened_task_count") == 7, "screened task count is not seven")
 
 
-def selection_ranking(inventory: list[Mapping[str, Any]], *, allow_unqualified: bool = False) -> list[dict[str, str]]:
+def selection_ranking(inventory: list[Mapping[str, Any]], *, allow_unqualified: bool = False, campaign_id: str = CAMPAIGN_ID) -> list[dict[str, str]]:
     eligible = []
     for item in inventory:
         if item.get("exclusion_status") not in {"ELIGIBLE", "SELECTED"}:
@@ -409,7 +487,7 @@ def selection_ranking(inventory: list[Mapping[str, Any]], *, allow_unqualified: 
         checks = (item.get("prior_live_use") == "NO", _screening_passes(item) if not allow_unqualified else all(item.get(key) == "PASS" for key in ("dependency_status", "deterministic_baseline_status", "verifier_status", "source_restoration_status", "contained_pdb_reachability_status")))
         if all(checks):
             task_id = str(item["task_id"])
-            eligible.append((sha256_text(f"{CAMPAIGN_ID}:{task_id}"), task_id))
+            eligible.append((sha256_text(f"{campaign_id}:{task_id}"), task_id))
     return [
         {"task_id": task_id, "selection_hash": digest}
         for digest, task_id in sorted(eligible)
@@ -430,6 +508,38 @@ def case_order(selected: list[str]) -> list[dict[str, Any]]:
     for index, case in enumerate(sorted(cases, key=lambda item: item["case_hash"]), 1):
         case["order_index"] = index
     return sorted(cases, key=lambda item: item["order_index"])
+
+
+def case_order_v2(selected: list[str], *, campaign_id: str = CAMPAIGN_ID_V2) -> list[dict[str, Any]]:
+    """Frozen v1 six-case order re-stamped with the v2 campaign prefix.
+
+    The accepted v1 case order (task/policy sequence) is preserved verbatim;
+    only the case IDs and hashes are re-stamped with the v2 campaign prefix.
+    Re-hashing the v2 campaign ID would reorder the cases, which is
+    prohibited, so the v1 sequence is frozen explicitly.
+    """
+    _require(list(selected) == list(EXPECTED_SELECTED), "v2 selection is not the frozen v1 selection")
+    cases = []
+    for index, (task_id, policy) in enumerate(V1_FROZEN_CASE_ORDER, 1):
+        case_id = f"{campaign_id}:{task_id}:{policy}"
+        cases.append({
+            "case_id": case_id,
+            "task_id": task_id,
+            "policy": policy,
+            "case_hash": sha256_text(case_id),
+            "order_index": index,
+        })
+    return cases
+
+
+def _planning_baseline_for(manifest: Mapping[str, Any]) -> str:
+    if manifest.get("campaign_id") == CAMPAIGN_ID_V2:
+        return PLANNING_BASELINE_COMMIT_V2
+    return PLANNING_BASELINE_COMMIT
+
+
+def _is_subscription_route(manifest: Mapping[str, Any]) -> bool:
+    return manifest.get("route", {}).get("subscription_route") is True
 
 
 def _require(condition: bool, message: str) -> None:
@@ -703,10 +813,10 @@ class CampaignResultValidator:
         _require(result["campaign_manifest_hash"] == manifest_hash(manifest), "case is bound to another manifest")
         execution_kind = result["execution_kind"]
         _require(execution_kind in EXECUTION_KINDS, "unknown execution kind")
-        _require(result["planning_baseline_commit"] == PLANNING_BASELINE_COMMIT, "planning baseline binding mismatch")
+        _require(result["planning_baseline_commit"] == _planning_baseline_for(manifest), "planning baseline binding mismatch")
         campaign_commit = result["campaign_commit"]
         _require(campaign_commit is None or (isinstance(campaign_commit, str) and len(campaign_commit) == 40 and all(c in "0123456789abcdef" for c in campaign_commit)), "invalid campaign commit")
-        _require(campaign_commit != PLANNING_BASELINE_COMMIT, "planning baseline cannot be a campaign execution commit")
+        _require(campaign_commit != _planning_baseline_for(manifest), "planning baseline cannot be a campaign execution commit")
         _require(result["accepted_code_commit"] is None or result["accepted_code_commit"] == campaign_commit, "accepted code commit must equal campaign commit")
         _require(isinstance(result["case_id"], str) and isinstance(result["task_id"], str) and result["policy"] in POLICIES and type(result["order_index"]) is int, "invalid case identity types")
         allow_observed_route_mismatch = result["execution_kind"] == "LIVE_CASE" and result["terminal_status"] == "BLOCKED" and isinstance(result.get("blocked_evidence"), Mapping) and result["blocked_evidence"].get("block_kind") == "live-pre-provider"
@@ -800,7 +910,12 @@ class CampaignResultValidator:
                 entry = next(item for item in manifest["inventory"] if item["task_id"] == result["task_id"])
                 _require(result["source_hash"] == entry["source_sha256"], "LIVE_CASE source hash mismatch")
                 _require(result["route_observation"]["preflight_success"] is True and result["route_observation"]["active_model_status"] == "ACTIVE" and result["route_observation"]["variant_available"] is True, "LIVE_CASE route preflight did not succeed")
-                _require(result["route_observation"]["input_price"] == 0 and result["route_observation"]["output_price"] == 0 and result["provider_reported_cost"] == 0, "LIVE_CASE pricing is not zero")
+                if _is_subscription_route(manifest):
+                    _require(result["route_observation"]["billing_route"] == AUTHORIZED_BILLING_ROUTE and result["route_observation"]["subscription_entitlement_confirmed"] is True, "LIVE_CASE subscription billing route is not established")
+                    _require(result["route_observation"]["runtime_model_id"] == auth["expected_runtime_model_id"], "LIVE_CASE runtime model identity is not authorization-bound")
+                    _require(result["provider_reported_cost"] == result["route_observation"]["provider_reported_cost"], "LIVE_CASE provider-reported cost is not preserved")
+                else:
+                    _require(result["route_observation"]["input_price"] == 0 and result["route_observation"]["output_price"] == 0 and result["provider_reported_cost"] == 0, "LIVE_CASE pricing is not zero")
                 _require(result["route_observation"]["opencode_version"] == auth["expected_opencode_version"], "LIVE_CASE OpenCode version is not authorization-bound")
                 if auth.get("expected_catalog_fingerprint") is not None:
                     _require(result["route_observation"]["catalog_fingerprint"] == auth["expected_catalog_fingerprint"], "LIVE_CASE catalog fingerprint is not authorization-bound")
@@ -811,7 +926,12 @@ class CampaignResultValidator:
                     _require(result["public_request_hash"] is not None and result["source_hash"] is not None, "source-mutation infrastructure result lacks identity")
                     _require(result["source_revision"] == manifest["authority"]["revision"], "source-mutation source revision mismatch")
                     _require(result["route_observation"]["preflight_success"] is True and result["route_observation"]["active_model_status"] == "ACTIVE" and result["route_observation"]["variant_available"] is True, "source-mutation route preflight did not succeed")
-                    _require(result["route_observation"]["input_price"] == 0 and result["route_observation"]["output_price"] == 0 and result["provider_reported_cost"] == 0, "source-mutation pricing is not zero")
+                    if _is_subscription_route(manifest):
+                        _require(result["route_observation"]["billing_route"] == AUTHORIZED_BILLING_ROUTE and result["route_observation"]["subscription_entitlement_confirmed"] is True, "source-mutation subscription billing route is not established")
+                        _require(result["route_observation"]["runtime_model_id"] == auth["expected_runtime_model_id"], "source-mutation runtime model identity is not authorization-bound")
+                        _require(result["provider_reported_cost"] == result["route_observation"]["provider_reported_cost"], "source-mutation provider-reported cost is not preserved")
+                    else:
+                        _require(result["route_observation"]["input_price"] == 0 and result["route_observation"]["output_price"] == 0 and result["provider_reported_cost"] == 0, "source-mutation pricing is not zero")
                     _require(result["route_observation"]["opencode_version"] == auth["expected_opencode_version"], "source-mutation OpenCode version is not authorization-bound")
                     _require(result["route_observation"]["catalog_fingerprint"] == auth["expected_catalog_fingerprint"], "source-mutation catalog is not authorization-bound")
                 if campaign_stop:
@@ -843,21 +963,37 @@ def validate_manifest(
     require_screening: bool = True,
     require_qualification_binding: bool = True,
 ) -> str:
-    required = (
-        "campaign_id", "campaign_version", "freeze_status", "accepted_baseline",
-        "planning_baseline_commit", "authority", "inventory", "selection", "route",
-        "budgets", "case_order", "outcome_schema", "stop_rules",
-        "public_private_boundary", "campaign_commit_binding", "qualification_contract",
-        "qualification_contract_hash", "qualification_evidence_path", "qualification_evidence_sha256",
-        "source_integrity_authority",
+    """Validate a paired-pilot campaign manifest and return its canonical hash.
+
+    The campaign ID selects the version contract: the v1 manifest is frozen
+    with the OpenCode Zen zero-price route, while the v2 manifest is the
+    derived contract whose route is the operator-selected OpenCode Go
+    subscription with DeepSeek V4 Flash and fail-closed subscription billing.
+    """
+    campaign_id = manifest.get("campaign_id")
+    if campaign_id == CAMPAIGN_ID_V2:
+        return _validate_manifest_v2(
+            manifest,
+            require_screening=require_screening,
+            require_qualification_binding=require_qualification_binding,
+        )
+    if campaign_id != CAMPAIGN_ID:
+        raise PilotError("unknown campaign ID")
+    return _validate_manifest_v1(
+        manifest,
+        require_screening=require_screening,
+        require_qualification_binding=require_qualification_binding,
     )
-    for key in required:
-        _require(key in manifest, f"manifest missing {key}")
-    _require(manifest["campaign_id"] == CAMPAIGN_ID, "campaign ID mismatch")
-    _require(manifest["campaign_version"] == 1, "campaign version mismatch")
-    _require(manifest["freeze_status"] == "FROZEN_BEFORE_LIVE", "manifest is not frozen")
-    _require(manifest["accepted_baseline"] == PLANNING_BASELINE_COMMIT, "planning baseline mismatch")
-    _require(manifest["planning_baseline_commit"] == PLANNING_BASELINE_COMMIT, "planning baseline commit mismatch")
+
+
+def _validate_manifest_common(
+    manifest: Mapping[str, Any],
+    *,
+    require_screening: bool,
+    require_qualification_binding: bool,
+    selection_campaign_id: str,
+) -> None:
+    """Version-independent manifest contract shared by the v1 and v2 validators."""
     authority = manifest["authority"]
     _require(authority.get("repository") == "https://github.com/jkoppel/QuixBugs", "QuixBugs repository mismatch")
     _require(authority.get("revision") == "4257f44b0ff1181dedaedee6a447e133219fcebf", "QuixBugs revision mismatch")
@@ -924,21 +1060,91 @@ def validate_manifest(
                 derived = _screening_evidence_for(item)
                 _require(all(derived.get(key) == "PASS" for key in ("dependency_status", "deterministic_baseline_status", "verifier_status", "source_restoration_status", "contained_pdb_reachability_status")), f"stored inventory status is not supported by deep qualification evidence: {item['task_id']}")
     selection = manifest["selection"]
-    ranking = selection_ranking(inventory, allow_unqualified=not require_screening)
+    ranking = selection_ranking(inventory, allow_unqualified=not require_screening, campaign_id=selection_campaign_id)
     _require(selection.get("ranking") == ranking, "deterministic eligibility ranking mismatch")
     selected = selection.get("selected_task_ids")
     _require(selected == list(EXPECTED_SELECTED), "selected task set is not frozen to the ranked first three")
     _require(selection.get("selected_count") == 3, "exactly three tasks must be selected")
     _require(len(ranking) == 7, "gcd/prior-live exclusion must leave seven eligible tasks")
     _require(all(item["task_id"] in {entry["task_id"] for entry in ranking[:3]} for item in inventory if item["exclusion_status"] == "SELECTED"), "selected inventory flags disagree with ranking")
+    _require(manifest["budgets"] == FROZEN_BUDGETS, "frozen budgets mismatch")
+    _require(manifest["budgets"]["max_transport_attempts_per_logical_call"] == manifest["budgets"]["max_transport_retries_per_logical_call"] + 1, "per-call transport attempts/retries mismatch")
+    boundary = manifest["public_private_boundary"]
+    _require(boundary.get("oracle_material_in_public_records") is False, "oracle material must remain private")
+    _require(boundary.get("qualification_details_in_provider_requests") is False, "private qualification details must not enter provider requests")
+
+
+def _validate_v1_derivation_authority(manifest: Mapping[str, Any]) -> None:
+    """Fail-closed v2-to-v1 derivation binding.
+
+    The v2 manifest must declare that it derives from the accepted tracked v1
+    manifest, and every v1-retained contract area must stay consistent with
+    the accepted v1 authority except for the explicitly documented v2 changes
+    (route, authorization contract, case-ID restamping, planning baseline, and
+    result contract).  The v1 hash is never trusted from the v2 document: it
+    is compared against the frozen accepted constant and re-derived from the
+    tracked v1 file by full v1 validation.
+    """
+    derived = manifest.get("derived_from")
+    _require(isinstance(derived, Mapping), "v2 manifest is missing the derived_from authority")
+    _require(set(derived) == set(V1_DERIVED_FROM_FIELDS), "derived_from must contain exactly the accepted contract fields")
+    _require(derived["manifest_path"] == V1_MANIFEST_RELATIVE_PATH, "derived_from v1 manifest path mismatch")
+    _require(derived["manifest_sha256"] == V1_MANIFEST_SHA256, "derived_from v1 manifest hash mismatch")
+    _require(isinstance(derived["note"], str) and derived["note"], "derived_from note must be a non-empty string")
+    v1_path = REPO_ROOT / V1_MANIFEST_RELATIVE_PATH
+    _require(v1_path.is_file(), "referenced v1 manifest is missing")
+    v1_manifest = load_manifest(v1_path)
+    _require(validate_manifest(v1_manifest) == V1_MANIFEST_SHA256, "tracked v1 manifest does not produce the accepted canonical hash")
+    _require(v1_manifest["campaign_id"] == CAMPAIGN_ID and v1_manifest["campaign_version"] == 1, "tracked v1 campaign identity/version is not frozen")
+    for v2_key, v1_key in (
+        ("qualification_contract", "qualification_contract"),
+        ("qualification_evidence_path", "qualification_evidence_path"),
+        ("qualification_evidence_sha256", "qualification_evidence_sha256"),
+        ("source_integrity_authority", "source_integrity_authority"),
+        ("public_private_boundary", "public_private_boundary"),
+        ("budgets", "budgets"),
+    ):
+        _require(manifest[v2_key] == v1_manifest[v1_key], f"v1-retained contract area drifted: {v2_key}")
+    _require(manifest["selection"]["selected_task_ids"] == v1_manifest["selection"]["selected_task_ids"], "selected tasks drifted from the v1 authority")
+    _require(manifest["selection"]["ranking"] == v1_manifest["selection"]["ranking"], "frozen v1 selection ranking drifted")
+    _require([(case["task_id"], case["policy"]) for case in manifest["case_order"]] == [(case["task_id"], case["policy"]) for case in v1_manifest["case_order"]], "six-case task/policy order drifted from the v1 authority")
+    _require(manifest["qualification_contract"]["containment_runtime_limits"] == v1_manifest["qualification_contract"]["containment_runtime_limits"], "containment contract drifted from the v1 authority")
+    _require(v1_manifest["stop_rules"][1] in manifest["stop_rules"], "no-rerun rule drifted from the v1 authority")
+
+
+def _validate_manifest_v1(
+    manifest: Mapping[str, Any],
+    *,
+    require_screening: bool = True,
+    require_qualification_binding: bool = True,
+) -> str:
+    required = (
+        "campaign_id", "campaign_version", "freeze_status", "accepted_baseline",
+        "planning_baseline_commit", "authority", "inventory", "selection", "route",
+        "budgets", "case_order", "outcome_schema", "stop_rules",
+        "public_private_boundary", "campaign_commit_binding", "qualification_contract",
+        "qualification_contract_hash", "qualification_evidence_path", "qualification_evidence_sha256",
+        "source_integrity_authority",
+    )
+    for key in required:
+        _require(key in manifest, f"manifest missing {key}")
+    _require(manifest["campaign_id"] == CAMPAIGN_ID, "campaign ID mismatch")
+    _require(manifest["campaign_version"] == 1, "campaign version mismatch")
+    _require(manifest["freeze_status"] == "FROZEN_BEFORE_LIVE", "manifest is not frozen")
+    _require(manifest["accepted_baseline"] == PLANNING_BASELINE_COMMIT, "planning baseline mismatch")
+    _require(manifest["planning_baseline_commit"] == PLANNING_BASELINE_COMMIT, "planning baseline commit mismatch")
+    _validate_manifest_common(
+        manifest,
+        require_screening=require_screening,
+        require_qualification_binding=require_qualification_binding,
+        selection_campaign_id=CAMPAIGN_ID,
+    )
     route = manifest["route"]
     _require(route.get("provider") == "OpenCode Zen", "provider route mismatch")
     _require(route.get("model") == "opencode/deepseek-v4-flash-free", "model route mismatch")
     _require(route.get("variant") == "max" and route.get("protocol") == "1.3", "variant/protocol mismatch")
     _require(route.get("require_zero_input_price") and route.get("require_zero_output_price"), "zero pricing requirement missing")
     _require(not route.get("paid_fallback") and not route.get("alternate_provider") and not route.get("ollama_fallback") and not route.get("model_substitution"), "fallback or substitution is enabled")
-    _require(manifest["budgets"] == FROZEN_BUDGETS, "frozen budgets mismatch")
-    _require(manifest["budgets"]["max_transport_attempts_per_logical_call"] == manifest["budgets"]["max_transport_retries_per_logical_call"] + 1, "per-call transport attempts/retries mismatch")
     order = manifest["case_order"]
     expected_order = case_order(list(EXPECTED_SELECTED))
     _require(order == expected_order, "frozen case order mismatch")
@@ -954,9 +1160,6 @@ def validate_manifest(
     _require(set(schema.get("campaign_stop_evidence_fields", ())) == set(CAMPAIGN_STOP_EVIDENCE_FIELDS), "campaign-stop evidence schema mismatch")
     _require(schema.get("infrastructure_stage_matrix") == {stage: {"allowed_reason_codes": sorted(reasons), "classification": INFRASTRUCTURE_CLASSIFICATIONS[stage]} for stage, reasons in INFRASTRUCTURE_STAGE_MATRIX.items()}, "infrastructure stage matrix mismatch")
     _require(tuple(schema.get("preflight_failure_contract", {}).get("controlling_failure_precedence", ())) == PREFLIGHT_FAILURE_PRECEDENCE, "preflight precedence mismatch")
-    boundary = manifest["public_private_boundary"]
-    _require(boundary.get("oracle_material_in_public_records") is False, "oracle material must remain private")
-    _require(boundary.get("qualification_details_in_provider_requests") is False, "private qualification details must not enter provider requests")
     binding = manifest["campaign_commit_binding"]
     _require(binding.get("planning_baseline_commit") == PLANNING_BASELINE_COMMIT, "campaign binding planning baseline mismatch")
     _require(binding.get("live_authorization_required") is True, "live authorization requirement missing")
@@ -965,12 +1168,81 @@ def validate_manifest(
     return manifest_hash(manifest)
 
 
+def _validate_manifest_v2(
+    manifest: Mapping[str, Any],
+    *,
+    require_screening: bool = True,
+    require_qualification_binding: bool = True,
+) -> str:
+    required = (
+        "campaign_id", "campaign_version", "freeze_status", "accepted_baseline",
+        "planning_baseline_commit", "authority", "inventory", "selection", "route",
+        "budgets", "case_order", "outcome_schema", "stop_rules",
+        "public_private_boundary", "campaign_commit_binding", "qualification_contract",
+        "qualification_contract_hash", "qualification_evidence_path", "qualification_evidence_sha256",
+        "source_integrity_authority",
+    )
+    for key in required:
+        _require(key in manifest, f"manifest missing {key}")
+    _require(manifest["campaign_id"] == CAMPAIGN_ID_V2, "campaign ID mismatch")
+    _require(manifest["campaign_version"] == CAMPAIGN_VERSION_V2, "campaign version mismatch")
+    _require(manifest["freeze_status"] == "FROZEN_BEFORE_LIVE", "manifest is not frozen")
+    _require(manifest["accepted_baseline"] == PLANNING_BASELINE_COMMIT_V2, "planning baseline mismatch")
+    _require(manifest["planning_baseline_commit"] == PLANNING_BASELINE_COMMIT_V2, "planning baseline commit mismatch")
+    _validate_v1_derivation_authority(manifest)
+    _validate_manifest_common(
+        manifest,
+        require_screening=require_screening,
+        require_qualification_binding=require_qualification_binding,
+        selection_campaign_id=CAMPAIGN_ID,
+    )
+    route = manifest["route"]
+    _require(route.get("subscription_route") is True, "v2 route is not the subscription route")
+    _require(route.get("provider") == SUBSCRIPTION_ROUTE_PROVIDER, "provider route mismatch")
+    _require(route.get("model") == SUBSCRIPTION_ROUTE_MODEL, "model route mismatch")
+    _require(route.get("variant") == "max" and route.get("protocol") == "1.3", "variant/protocol mismatch")
+    _require(route.get("require_zero_input_price") is False and route.get("require_zero_output_price") is False, "v2 route must not require zero pricing")
+    _require(route.get("subscription_entitlement_required") is True and route.get("billing_route_evidence_required") is True, "subscription entitlement/billing-route requirement missing")
+    _require(route.get("runtime_model_id_required") is True, "exact runtime model identity requirement missing")
+    _require(route.get("provider_reported_cost_preserved") is True, "provider-reported cost preservation missing")
+    _require(not route.get("zen_route") and not route.get("free_tier_substitution") and not route.get("ollama_fallback") and not route.get("alternate_provider") and not route.get("model_substitution") and not route.get("metered_fallback") and not route.get("paid_overage_route") and not route.get("per_call_billing_fallback"), "fallback or substitution is enabled")
+    order = manifest["case_order"]
+    expected_order = case_order_v2(list(EXPECTED_SELECTED))
+    _require(order == expected_order, "frozen v1 case order mismatch")
+    _require(len(order) == 6 and len({item["case_id"] for item in order}) == 6, "case IDs must be six unique immutable records")
+    _require({(item["task_id"], item["policy"]) for item in order} == {(task, policy) for task in EXPECTED_SELECTED for policy in POLICIES}, "case pairing mismatch")
+    _require([(item["task_id"], item["policy"]) for item in order] == list(V1_FROZEN_CASE_ORDER), "six-case order deviates from the frozen v1 order")
+    schema = manifest["outcome_schema"]
+    _require(set(schema.get("terminal_statuses", ())) == set(TERMINAL_STATUSES), "terminal status set mismatch")
+    _require(schema.get("schema_version") == "quixbugs-paired-pilot-result-v2", "result schema version mismatch")
+    _require("repair_outcome" in schema.get("required_fields", ()), "repair outcome is not frozen in the result schema")
+    _require(set(schema.get("route_failure_reason_codes", ())) == ALL_PRE_PROVIDER_REASON_CODES, "preflight failure vocabulary mismatch")
+    _require(set(schema.get("campaign_stop_reason_codes", ())) == CAMPAIGN_STOP_REASON_CODES, "campaign-stop vocabulary mismatch")
+    _require(set(schema.get("preflight_failure_evidence_fields", ())) == set(ALL_PREFLIGHT_FAILURE_FIELDS), "preflight evidence schema mismatch")
+    _require(set(schema.get("campaign_stop_evidence_fields", ())) == set(CAMPAIGN_STOP_EVIDENCE_FIELDS), "campaign-stop evidence schema mismatch")
+    _require(schema.get("infrastructure_stage_matrix") == {stage: {"allowed_reason_codes": sorted(reasons), "classification": INFRASTRUCTURE_CLASSIFICATIONS[stage]} for stage, reasons in INFRASTRUCTURE_STAGE_MATRIX.items()}, "infrastructure stage matrix mismatch")
+    _require(tuple(schema.get("preflight_failure_contract", {}).get("controlling_failure_precedence", ())) == V2_PREFLIGHT_FAILURE_PRECEDENCE, "preflight precedence mismatch")
+    subscription_contract = schema.get("preflight_failure_contract", {}).get("subscription_route_contract")
+    _require(isinstance(subscription_contract, Mapping) and subscription_contract.get("authorized_billing_route") == AUTHORIZED_BILLING_ROUTE, "subscription route contract is missing the authorized billing route")
+    _require(all(subscription_contract.get(key) is True for key in ("entitlement_evidence_required_before_contact", "billing_route_evidence_required_before_contact", "exact_runtime_model_id_required_before_contact", "provider_reported_cost_preserved", "zen_route_excluded", "free_tier_substitution_excluded", "ollama_route_excluded", "alternate_provider_excluded", "model_substitution_excluded", "metered_fallback_excluded", "paid_overage_route_excluded", "per_call_billing_fallback_excluded")), "subscription route contract is incomplete")
+    _require(set(schema.get("route_observation_fields", ())) == set(("provider", "model", "variant", "protocol", "opencode_version", "catalog_fingerprint", "runtime_model_id", "billing_route", "subscription_entitlement_confirmed", "active_model_status", "variant_available", "input_price", "output_price", "provider_reported_cost", "paid_fallback_used", "alternate_provider_used", "ollama_used", "zen_used", "free_tier_used", "metered_fallback_used", "paid_overage_used", "per_call_billing_used", "model_substitution_observed", "preflight_success")), "route observation schema mismatch")
+    binding = manifest["campaign_commit_binding"]
+    _require(binding.get("planning_baseline_commit") == PLANNING_BASELINE_COMMIT_V2, "campaign binding planning baseline mismatch")
+    _require(binding.get("live_authorization_required") is True, "live authorization requirement missing")
+    _require(binding.get("accepted_campaign_commit") is None or (isinstance(binding.get("accepted_campaign_commit"), str) and len(binding["accepted_campaign_commit"]) == 40), "invalid accepted campaign commit binding")
+    _require(set(binding.get("authorization_fields", ())) >= {"accepted_campaign_commit", "campaign_manifest_hash", "qualification_contract_hash", "permitted_case_ids", "provider", "model", "variant", "protocol", "expected_opencode_version", "expected_catalog_fingerprint", "subscription_route_required", "expected_billing_route", "expected_runtime_model_id", "subscription_entitlement_confirmed", "no_fallback_required"}, "live authorization binding is incomplete")
+    return manifest_hash(manifest)
+
+
 def validate_route_observation(observation: Mapping[str, Any], route: Mapping[str, Any], *, allow_observed_mismatch: bool = False) -> None:
+    subscription = route.get("subscription_route") is True
     for key in ("provider", "model", "variant", "protocol"):
         _require(isinstance(observation.get(key), str) and observation[key], f"route observation missing {key}")
         if not allow_observed_mismatch:
             _require(observation.get(key) == route.get(key), f"route observation mismatch: {key}")
     required = ("opencode_version", "active_model_status", "variant_available", "catalog_fingerprint", "input_price", "output_price", "paid_fallback_used", "alternate_provider_used", "ollama_used", "preflight_success")
+    if subscription:
+        required = required + V2_ROUTE_OBSERVATION_FIELDS
     for key in required:
         _require(key in observation, f"route observation missing {key}")
     _require(observation.get("opencode_version") is None or (isinstance(observation.get("opencode_version"), str) and observation["opencode_version"]), "invalid OpenCode version")
@@ -980,16 +1252,56 @@ def validate_route_observation(observation: Mapping[str, Any], route: Mapping[st
     _require(catalog is None or (isinstance(catalog, str) and len(catalog) == 64 and all(c in "0123456789abcdef" for c in catalog)), "invalid catalog fingerprint")
     for key in ("input_price", "output_price"):
         _require(type(observation.get(key)) in (int, float) and not isinstance(observation[key], bool) and observation[key] >= 0, f"invalid {key}")
-        if not allow_observed_mismatch:
+        if not allow_observed_mismatch and not subscription:
             _require(observation[key] == 0, "provider pricing is not zero")
     for key in ("paid_fallback_used", "alternate_provider_used", "ollama_used", "preflight_success"):
         _require(observation.get(key) is False or observation.get(key) is True, f"invalid route boolean: {key}")
-    if not allow_observed_mismatch:
+    if subscription:
+        _validate_subscription_route_observation(observation, allow_observed_mismatch=allow_observed_mismatch)
+    elif not allow_observed_mismatch:
         _require(observation.get("paid_fallback_used") is False and observation.get("alternate_provider_used") is False and observation.get("ollama_used") is False, "fallback route used")
     if observation.get("preflight_success") is True:
         if not allow_observed_mismatch:
             _require(observation.get("active_model_status") == "ACTIVE" and observation.get("variant_available") is True, "successful preflight lacks active model/variant")
         _require(isinstance(observation.get("opencode_version"), str) and isinstance(catalog, str), "successful preflight lacks version/catalog fingerprint")
+
+
+def _validate_subscription_route_observation(observation: Mapping[str, Any], *, allow_observed_mismatch: bool) -> None:
+    """Fail-closed v2 subscription-route observation contract.
+
+    Pricing is recorded truthfully and is not an eligibility rule; the
+    eligibility rule is the subscription billing route.  A successful
+    preflight must establish the OpenCode Go subscription billing route,
+    confirm subscription entitlement, and bind the exact runtime model
+    identity, otherwise the campaign blocks before the first provider call.
+    """
+    billing = observation.get("billing_route")
+    _require(billing in BILLING_ROUTE_VALUES, "invalid observed billing route")
+    _require(type(observation.get("subscription_entitlement_confirmed")) is bool, "subscription entitlement confirmation must be boolean")
+    _require(observation.get("runtime_model_id") is None or (isinstance(observation.get("runtime_model_id"), str) and observation["runtime_model_id"]), "invalid runtime model identity")
+    _require(type(observation.get("provider_reported_cost")) in (int, float) and not isinstance(observation["provider_reported_cost"], bool) and observation["provider_reported_cost"] >= 0, "invalid provider-reported cost")
+    for key in ("zen_used", "free_tier_used", "metered_fallback_used", "paid_overage_used", "per_call_billing_used", "model_substitution_observed"):
+        _require(observation.get(key) is False or observation.get(key) is True, f"invalid subscription route boolean: {key}")
+    flag_for_route = {
+        "ZEN": ("zen_used",),
+        "FREE_TIER": ("free_tier_used",),
+        "OLLAMA": ("ollama_used",),
+        "METERED": ("metered_fallback_used",),
+        "PER_CALL": ("per_call_billing_used",),
+    }
+    for value, flags in flag_for_route.items():
+        expected_flag = billing == value
+        for flag in flags:
+            _require(observation.get(flag) is expected_flag, f"billing route {value} contradicts {flag}")
+    if billing == "SUBSCRIPTION":
+        for flag in ("zen_used", "free_tier_used", "ollama_used", "metered_fallback_used", "per_call_billing_used"):
+            _require(observation.get(flag) is False, f"subscription route uses fallback flag {flag}")
+    if observation.get("preflight_success") is True:
+        _require(billing == AUTHORIZED_BILLING_ROUTE and observation.get("subscription_entitlement_confirmed") is True, "successful preflight lacks subscription billing route/entitlement")
+        _require(isinstance(observation.get("runtime_model_id"), str) and observation["runtime_model_id"], "successful preflight lacks exact runtime model identity")
+        _require(observation.get("model_substitution_observed") is False, "successful preflight observes model substitution")
+        if not allow_observed_mismatch:
+            _require(observation.get("zen_used") is False and observation.get("free_tier_used") is False and observation.get("ollama_used") is False and observation.get("metered_fallback_used") is False and observation.get("paid_overage_used") is False and observation.get("per_call_billing_used") is False, "subscription preflight used a fallback route")
 
 
 def _authorization_failure_category(manifest: Mapping[str, Any], authorization: Mapping[str, Any] | None) -> str | None:
@@ -1004,7 +1316,7 @@ def _authorization_failure_category(manifest: Mapping[str, Any], authorization: 
     if authorization.get("qualification_contract_hash") != manifest.get("qualification_contract_hash"):
         return "QUALIFICATION_CONTRACT_MISMATCH"
     accepted = authorization.get("accepted_campaign_commit")
-    if not (isinstance(accepted, str) and len(accepted) == 40 and all(c in "0123456789abcdef" for c in accepted) and accepted != PLANNING_BASELINE_COMMIT):
+    if not (isinstance(accepted, str) and len(accepted) == 40 and all(c in "0123456789abcdef" for c in accepted) and accepted != _planning_baseline_for(manifest)):
         return "COMMIT_INVALID"
     if authorization.get("permitted_case_ids") != [case["case_id"] for case in manifest["case_order"]]:
         return "CASE_SET_MISMATCH"
@@ -1017,8 +1329,22 @@ def _authorization_failure_category(manifest: Mapping[str, Any], authorization: 
         return "CATALOG_BINDING_MISSING"
     if "catalog_binding_procedure" in authorization:
         return "CATALOG_BINDING_MISSING"
-    if authorization.get("zero_price_required") is not True or authorization.get("no_fallback_required") is not True:
-        return "FALLBACK_POLICY_MISMATCH"
+    if _is_subscription_route(manifest):
+        if authorization.get("subscription_route_required") is not True:
+            return "SUBSCRIPTION_ROUTE_REQUIRED"
+        if authorization.get("expected_billing_route") != AUTHORIZED_BILLING_ROUTE:
+            return "BILLING_ROUTE_MISMATCH"
+        if not (isinstance(authorization.get("expected_runtime_model_id"), str) and authorization["expected_runtime_model_id"]):
+            return "RUNTIME_MODEL_ID_BINDING_MISSING"
+        if authorization.get("subscription_entitlement_confirmed") is not True:
+            return "ENTITLEMENT_EVIDENCE_MISSING"
+        if authorization.get("zero_price_required") is True:
+            return "ZERO_PRICING_RULE_CONTRADICTION"
+        if authorization.get("no_fallback_required") is not True:
+            return "FALLBACK_POLICY_MISMATCH"
+    else:
+        if authorization.get("zero_price_required") is not True or authorization.get("no_fallback_required") is not True:
+            return "FALLBACK_POLICY_MISMATCH"
     return None
 
 
@@ -1036,6 +1362,47 @@ def _derive_preflight_failure_category(evidence: Mapping[str, Any], result: Mapp
         return "TRACKED_SOURCE_CHANGED"
     if evidence.get("expected_campaign_commit") != evidence.get("observed_campaign_commit") and evidence.get("expected_campaign_commit") is not None and evidence.get("observed_campaign_commit") is not None:
         return "CAMPAIGN_COMMIT_MISMATCH"
+    if _is_subscription_route(manifest):
+        billing = observed.get("billing_route")
+        if billing == "ZEN" or observed.get("zen_used") is True:
+            return "ZEN_ROUTE_OBSERVED"
+        if billing == "FREE_TIER" or observed.get("free_tier_used") is True:
+            return "FREE_TIER_SUBSTITUTION"
+        if billing == "OLLAMA" or observed.get("ollama_used") is True:
+            return "OLLAMA_ROUTE_OBSERVED"
+        if billing == "METERED" or observed.get("metered_fallback_used") is True:
+            return "METERED_FALLBACK_REQUIRED"
+        if observed.get("paid_overage_used") is True:
+            return "PAID_OVERAGE_REQUIRED"
+        if billing == "PER_CALL" or observed.get("per_call_billing_used") is True:
+            return "PER_CALL_BILLING_FALLBACK"
+        if billing != AUTHORIZED_BILLING_ROUTE or observed.get("subscription_entitlement_confirmed") is not True:
+            return "SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED"
+        if observed["provider"] != expected["provider"]:
+            return "PROVIDER_MISMATCH"
+        if observed["model"] != expected["model"]:
+            return "MODEL_SUBSTITUTION_OBSERVED" if evidence.get("model_substitution_observed") is True else "MODEL_MISMATCH"
+        expected_runtime_model_id = authorization.get("expected_runtime_model_id") if authorization else evidence.get("expected_runtime_model_id")
+        if isinstance(expected_runtime_model_id, str) and expected_runtime_model_id and isinstance(observed.get("runtime_model_id"), str) and observed["runtime_model_id"] and observed["runtime_model_id"] != expected_runtime_model_id:
+            return "RUNTIME_MODEL_ID_MISMATCH"
+        if observed["variant"] != expected["variant"]:
+            return "VARIANT_MISMATCH"
+        if observed["protocol"] != expected["protocol"]:
+            return "PROTOCOL_MISMATCH"
+        expected_version = authorization.get("expected_opencode_version") if authorization else evidence.get("expected_opencode_version")
+        if isinstance(expected_version, str) and expected_version and isinstance(observed.get("opencode_version"), str) and observed["opencode_version"] and observed["opencode_version"] != expected_version:
+            return "OPENCODE_VERSION_MISMATCH"
+        if evidence.get("catalog_failure_category") is not None or evidence.get("catalog_failure_error") is not None:
+            return "CATALOG_PREFLIGHT_FAILED"
+        if observed["active_model_status"] != "ACTIVE":
+            return "MODEL_INACTIVE"
+        if observed["variant_available"] is False:
+            return "VARIANT_UNAVAILABLE"
+        if observed["paid_fallback_used"] is True:
+            return "PAID_FALLBACK_REQUIRED"
+        if observed["alternate_provider_used"] is True or observed["ollama_used"] is True:
+            return "ALTERNATE_PROVIDER_REQUIRED"
+        return None
     if observed["provider"] != expected["provider"]:
         return "PROVIDER_MISMATCH"
     if observed["model"] != expected["model"]:
@@ -1063,14 +1430,16 @@ def _derive_preflight_failure_category(evidence: Mapping[str, Any], result: Mapp
 
 
 def _validate_preflight_failure_evidence(evidence: Mapping[str, Any], result: Mapping[str, Any], manifest: Mapping[str, Any], authorization: Mapping[str, Any] | None) -> None:
-    _require(all(field in evidence for field in PREFLIGHT_FAILURE_FIELDS), "preflight failure evidence is incomplete")
+    subscription = _is_subscription_route(manifest)
+    required_fields = ALL_PREFLIGHT_FAILURE_FIELDS if subscription else PREFLIGHT_FAILURE_FIELDS
+    _require(all(field in evidence for field in required_fields), "preflight failure evidence is incomplete")
     category = evidence.get("failure_category")
-    _require(category in LIVE_PRE_PROVIDER_REASON_CODES, "unknown preflight failure category")
+    _require(category in (ALL_PRE_PROVIDER_REASON_CODES if subscription else LIVE_PRE_PROVIDER_REASON_CODES), "unknown preflight failure category")
     _require(category == result["terminal_reason_code"], "preflight failure category mismatch")
     _require(category == _derive_preflight_failure_category(evidence, result, manifest, authorization), "preflight failure reason is not the derived controlling failure")
     _require(isinstance(evidence.get("evidence_reference"), str) and evidence["evidence_reference"], "preflight failure evidence reference is missing")
-    relevant = PRE_PROVIDER_REASON_FIELDS[category]
-    for field in PREFLIGHT_FAILURE_FIELDS:
+    relevant = PRE_PROVIDER_REASON_FIELDS_V2[category] if category in PRE_PROVIDER_REASON_FIELDS_V2 else PRE_PROVIDER_REASON_FIELDS[category]
+    for field in ALL_PREFLIGHT_FAILURE_FIELDS:
         if field not in relevant and field != "failure_category":
             _require(evidence.get(field) is None, f"preflight evidence has unrelated populated field: {field}")
     observed = result["route_observation"]
@@ -1129,6 +1498,48 @@ def _validate_preflight_failure_evidence(evidence: Mapping[str, Any], result: Ma
             _require(authorization is None and evidence["authorization_artifact_hash"] is None, "missing authorization must not claim an artifact hash")
         else:
             _require(isinstance(authorization, Mapping) and isinstance(evidence["authorization_artifact_hash"], str) and len(evidence["authorization_artifact_hash"]) == 64 and evidence["authorization_artifact_hash"] == sha256_text(canonical_json(authorization)), "authorization artifact digest is not bound")
+    elif category == "SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "entitlement evidence has a route mismatch")
+        _require(observed["billing_route"] != AUTHORIZED_BILLING_ROUTE or observed["subscription_entitlement_confirmed"] is not True, "entitlement predicate is not unique")
+        _require(observed["zen_used"] is False and observed["free_tier_used"] is False and observed["ollama_used"] is False and observed["metered_fallback_used"] is False and observed["paid_overage_used"] is False and observed["per_call_billing_used"] is False and observed["model_substitution_observed"] is False, "entitlement evidence overlaps a fallback/substitution route")
+        _require(evidence["observed_billing_route"] == observed["billing_route"] and evidence["subscription_entitlement_confirmed"] is observed["subscription_entitlement_confirmed"] and evidence["subscription_entitlement_confirmed"] is not True, "entitlement evidence is not route-bound")
+    elif category == "ZEN_ROUTE_OBSERVED":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "zen-route evidence has a route mismatch")
+        _require(observed["billing_route"] == "ZEN" and observed["zen_used"] is True and observed["paid_fallback_used"] is False and observed["alternate_provider_used"] is False and observed["metered_fallback_used"] is False and observed["paid_overage_used"] is False and observed["per_call_billing_used"] is False and observed["model_substitution_observed"] is False, "zen route predicate is not unique")
+        _require(evidence["observed_billing_route"] == "ZEN" and evidence["zen_route_observed"] is True, "zen route evidence is not exact")
+    elif category == "FREE_TIER_SUBSTITUTION":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "free-tier evidence has a route mismatch")
+        _require(observed["billing_route"] == "FREE_TIER" and observed["free_tier_used"] is True and observed["paid_fallback_used"] is False and observed["alternate_provider_used"] is False and observed["metered_fallback_used"] is False and observed["paid_overage_used"] is False and observed["per_call_billing_used"] is False and observed["model_substitution_observed"] is False, "free-tier predicate is not unique")
+        _require(evidence["observed_billing_route"] == "FREE_TIER" and evidence["free_tier_route_observed"] is True, "free-tier evidence is not exact")
+    elif category == "OLLAMA_ROUTE_OBSERVED":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "ollama-route evidence has a route mismatch")
+        _require(observed["billing_route"] == "OLLAMA" and observed["ollama_used"] is True and observed["paid_fallback_used"] is False and observed["alternate_provider_used"] is False and observed["metered_fallback_used"] is False and observed["paid_overage_used"] is False and observed["per_call_billing_used"] is False and observed["model_substitution_observed"] is False, "ollama route predicate is not unique")
+        _require(evidence["observed_billing_route"] == "OLLAMA" and evidence["ollama_route_observed"] is True, "ollama route evidence is not exact")
+    elif category == "MODEL_SUBSTITUTION_OBSERVED":
+        _require(isinstance(authorization, Mapping) and _authorization_failure_category(manifest, authorization) is None, "model substitution evidence requires a valid authorization")
+        expected_runtime_model_id = authorization["expected_runtime_model_id"]
+        _require(isinstance(expected_runtime_model_id, str) and expected_runtime_model_id, "model substitution evidence lacks an authorization-bound runtime model identity")
+        _require(observed["provider"] == expected_route["provider"] and observed["model"] != expected_route["model"] and observed["variant"] == expected_route["variant"] and observed["protocol"] == expected_route["protocol"], "model substitution predicate is not unique")
+        _require(observed["billing_route"] == AUTHORIZED_BILLING_ROUTE and observed["subscription_entitlement_confirmed"] is True and observed["model_substitution_observed"] is True, "model substitution is not a subscription-route observation")
+        _require(isinstance(observed.get("runtime_model_id"), str) and observed["runtime_model_id"], "model substitution observes an empty runtime model identity")
+        _require(evidence["model_substitution_observed"] is True, "model substitution evidence flag is not true")
+        _require(evidence["expected_runtime_model_id"] == expected_runtime_model_id, "model substitution expected runtime identity is not authorization-bound")
+        _require(evidence["observed_runtime_model_id"] == observed["runtime_model_id"], "model substitution observed runtime identity is not route-bound")
+    elif category == "RUNTIME_MODEL_ID_MISMATCH":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "runtime model identity evidence has a route mismatch")
+        _require(observed["billing_route"] == AUTHORIZED_BILLING_ROUTE and observed["subscription_entitlement_confirmed"] is True, "runtime model identity mismatch is not a subscription-route observation")
+        expected_runtime_model_id = authorization.get("expected_runtime_model_id") if authorization else None
+        _require(isinstance(expected_runtime_model_id, str) and expected_runtime_model_id and isinstance(observed.get("runtime_model_id"), str) and observed["runtime_model_id"] and observed["runtime_model_id"] != expected_runtime_model_id, "runtime model identity mismatch lacks distinct expected/observed identities")
+        _require(evidence["expected_runtime_model_id"] == expected_runtime_model_id and evidence["observed_runtime_model_id"] == observed["runtime_model_id"], "runtime model identity evidence is not exact")
+    elif category == "METERED_FALLBACK_REQUIRED":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "metered-fallback evidence has a route mismatch")
+        _require(observed["metered_fallback_used"] is True and observed["billing_route"] == "METERED" and evidence["observed_billing_route"] == "METERED" and evidence["metered_fallback_required"] is True, "metered fallback predicate is not unique")
+    elif category == "PAID_OVERAGE_REQUIRED":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "paid-overage evidence has a route mismatch")
+        _require(observed["paid_overage_used"] is True and evidence["paid_overage_required"] is True, "paid overage predicate is not unique")
+    elif category == "PER_CALL_BILLING_FALLBACK":
+        _require(all(observed[key] == expected_route[key] for key in route_keys), "per-call billing evidence has a route mismatch")
+        _require(observed["per_call_billing_used"] is True and observed["billing_route"] == "PER_CALL" and evidence["observed_billing_route"] == "PER_CALL" and evidence["per_call_billing_fallback_required"] is True, "per-call billing predicate is not unique")
 
 
 def result_sha256(result: Mapping[str, Any]) -> str:
@@ -1384,7 +1795,7 @@ def _validate_terminal_matrix(result: Mapping[str, Any], manifest: Mapping[str, 
         else:
             _require(blocked.get("confirmed") is True and blocked.get("block_kind") in {"live-pre-provider", "campaign-stop"}, "LIVE_CASE blocked result has invalid block kind")
             if blocked.get("block_kind") == "live-pre-provider":
-                _require(result["terminal_reason_code"] in LIVE_PRE_PROVIDER_REASON_CODES, "LIVE_CASE pre-provider block has invalid reason code")
+                _require(result["terminal_reason_code"] in (ALL_PRE_PROVIDER_REASON_CODES if _is_subscription_route(manifest) else LIVE_PRE_PROVIDER_REASON_CODES), "LIVE_CASE pre-provider block has invalid reason code")
                 _require(result["logical_model_calls"] == 0 and result["provider_process_attempts"] == 0 and result["retries"] == 0, "pre-provider block has provider activity")
                 _require(result["valid_directives"] == 0 and result["malformed_directive_rejections"] == 0 and result["bounded_directive_feedback_events"] == 0, "pre-provider block has response activity")
                 _require(result["hypotheses_created"] == 0 and result["patch_submissions"] == 0 and result["candidate_hash"] is None and result["verifier_runs"] == 0, "pre-provider block has case activity")
@@ -1503,16 +1914,20 @@ def public_case_record(manifest: Mapping[str, Any], case: Mapping[str, Any], *, 
     route_observation = {
         "provider": manifest["route"]["provider"], "model": manifest["route"]["model"], "variant": manifest["route"]["variant"], "protocol": manifest["route"]["protocol"],
         "opencode_version": None, "active_model_status": "NOT_RUN", "variant_available": False, "catalog_fingerprint": None,
-        "input_price": 0, "output_price": 0, "paid_fallback_used": False, "alternate_provider_used": False, "ollama_used": False, "preflight_success": False,
+        "runtime_model_id": None, "billing_route": "UNKNOWN", "subscription_entitlement_confirmed": False,
+        "input_price": 0, "output_price": 0, "provider_reported_cost": 0,
+        "paid_fallback_used": False, "alternate_provider_used": False, "ollama_used": False,
+        "zen_used": False, "free_tier_used": False, "metered_fallback_used": False, "paid_overage_used": False,
+        "per_call_billing_used": False, "model_substitution_observed": False, "preflight_success": False,
     }
-    preflight_failure_evidence = {field: None for field in PREFLIGHT_FAILURE_FIELDS}
+    preflight_failure_evidence = {field: None for field in ALL_PREFLIGHT_FAILURE_FIELDS}
     campaign_stop_evidence = {field: None for field in CAMPAIGN_STOP_EVIDENCE_FIELDS}
     campaign_stop_evidence.update({"confirmed": False})
     return {
         "qualification_contract_hash": manifest["qualification_contract_hash"],
         "execution_kind": "DRY_RUN",
         "campaign_manifest_hash": manifest_hash(manifest),
-        "planning_baseline_commit": PLANNING_BASELINE_COMMIT, "campaign_commit": None, "accepted_code_commit": None,
+        "planning_baseline_commit": _planning_baseline_for(manifest), "campaign_commit": None, "accepted_code_commit": None,
         "case_id": case["case_id"], "order_index": case["order_index"],
         "task_id": case["task_id"], "policy": policy,
         "provider": manifest["route"]["provider"], "model": manifest["route"]["model"], "variant": manifest["route"]["variant"], "route_observation": route_observation,

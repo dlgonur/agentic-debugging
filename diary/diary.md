@@ -1999,3 +1999,118 @@ Bağımsız review için read-only bir Explore-agent'a yeni dokümanları ve dif
 `_ai-review/model-decision-final-report-v1/` altında campaign brief, decision report, final rapor ve demo guide kopyaları, review findings, validation çıktısı, `2236775`'e karşı diff, değişen/yeni tracked dosyaların doğrudan kopyaları ve exact git status içeren review paketini oluşturdum; bu klasör `.git/info/exclude` üzerinden ignore edilip commit edilmeden bırakıldı.
 
 Hiçbir commit, push, merge, rebase, tag veya branch silme işlemi yapılmadı. Bir sonraki adım, Decision Gate'in önerdiği en küçük kredibl deneyi (tek QuixBugs task'ı, static-baseline policy, free-tier model, protocol-1.3 harness üzerinden) ayrıca yetkilendirilmiş bir oturumda çalıştırmaktır.
+
+## 2026-08-02 — QuixBugs Paired Pilot Route v2 ve Research Ownership
+
+Bugün, kabul edilen baseline `18e067f24c337e7215139373edc699a347cf2127`
+üzerinde `feature/quixbugs-paired-pilot-route-v2` branch'inde iki operator
+kararını contract ve project-state güncellemesi olarak kaydettim:
+
+1. Gelecek implementation ve live-pilot model erişimi, operator'ün OpenCode
+   Go aboneliği üzerinden DeepSeek V4 Flash kullanır; OpenCode Zen veya önceki
+   free-tier route değil.
+2. Literatür taraması, deep research, kaynak doğrulama ve geniş karşılaştırmalı
+   araştırma; coding-agent oturumları dışında, ayrı bir ChatGPT
+   konuşmasındaki GPT-5.6 High tarafından yürütülür. Coding agent'lar yalnızca
+   review edilmiş repository araştırma artifact'lerini tüketebilir.
+
+Hiçbir model çalıştırılmadı, pilot provider ile iletişim kurulmadı, nested
+OpenCode process başlatılmadı, canlı catalog sorgulanmadı, QuixBugs benchmark
+çalıştırılmadı, PDB qualification invoke edilmedi, dependency yüklenmedi ve
+sistem seviyesinde değişiklik yapılmadı.
+
+Önceki v1 paired-pilot dosyalarını ve historical sonuçları olduğu gibi
+korudum: `docs/QUIXBUGS_PAIRED_PILOT_V1.md`,
+`research/quixbugs/PAIRED_PILOT_V1.json` (hash
+`5d84ea22820ca38ce80dd90a5d36e6f80160220178496950f9b45be41fae19ce`),
+qualification contract (`7246d289...`), source-integrity authority
+(`a3ccf9d0...`) ve qualification evidence dosyası (`29851dd9...`) değişmedi.
+
+v2 kontratını v1'den türettim: `research/quixbugs/PAIRED_PILOT_V2.json`
+(campaign-manifest SHA-256
+`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`) aynı üç
+task'ı, aynı altı-case sırasını (task/policy sırası v1'den frozen taşındı;
+case ID'leri `quixbugs-paired-pilot-v2` prefix'iyle yeniden damgalandı), aynı
+controller budget'larını, protocol 1.3'ü, qualification contract'ı,
+source-integrity authority'sini, public/private boundary'sini, containment
+gereksinimlerini ve no-rerun kurallarını koruyor. Route değişti: eski Zen/
+free-tier route yerine OpenCode Go aboneliği + DeepSeek V4 Flash geldi; eski
+"zero input/output price" eligibility kuralı fail-closed abonelik-route
+kontratıyla değiştirildi (Zen yok, free-tier ikamesi yok, Ollama yok,
+alternate provider yok, model substitution yok, metered/paid-overage/per-call
+billing fallback yok; ilk provider çağrısından önce abonelik entitlement veya
+billing-route kanıtı kurulamazsa kampanya o çağrıdan önce bloklanır).
+Repository evidence'ında olmayan hiçbir exact catalog identifier, OpenCode
+version, catalog fingerprint, account status, entitlement veya pricing
+gözlemi uydurmadım; exact runtime model/catalog kimliği bilinçli olarak
+authorization-bound kaldı. Provider-reported token ve cost metadata doğru
+korunuyor; abonelik erişimi olduğu için reported cost sıfıra zorlanmıyor.
+
+Validator'ı iki versiyonu da destekleyecek şekilde genişlettim:
+`scripts/quixbugs_paired_pilot.py` artık v1 (OpenCode Zen) ve v2 (OpenCode Go
+subscription) manifestlerini ayrı kontratlarla doğruluyor; yeni preflight
+failure kategorileri (`SUBSCRIPTION_ENTITLEMENT_NOT_ESTABLISHED`,
+`ZEN_ROUTE_OBSERVED`, `FREE_TIER_SUBSTITUTION`, `OLLAMA_ROUTE_OBSERVED`,
+`MODEL_SUBSTITUTION_OBSERVED`, `RUNTIME_MODEL_ID_MISMATCH`,
+`METERED_FALLBACK_REQUIRED`, `PAID_OVERAGE_REQUIRED`,
+`PER_CALL_BILLING_FALLBACK`) ve yeni authorization failure kategorileri
+(`SUBSCRIPTION_ROUTE_REQUIRED`, `BILLING_ROUTE_MISMATCH`,
+`RUNTIME_MODEL_ID_BINDING_MISSING`, `ENTITLEMENT_EVIDENCE_MISSING`,
+`ZERO_PRICING_RULE_CONTRADICTION`) eklendi. `scripts/validate_quixbugs_paired_pilot.py`
+artık her iki tracked manifest versiyonunu doğruluyor. v1 davranışı
+değişmedi: mevcut 179 v1 testi aynen geçiyor.
+
+`CURRENT_AGENT_ROSTER.md` dosyasını operasyonel routing authority olarak
+kök dizine ekledim: model kullanımı açıkça yetkilendirilmiş görevlerde
+varsayılan implementation route DeepSeek V4 Flash + OpenCode Go aboneliği;
+literatür ve deep research sahibi ayrı ChatGPT konuşmasındaki GPT-5.6 High;
+araştırma çıktıları tracked artifact'lere işlenmeden authoritative değil; her
+görev provider/model çalıştırmak için ayrı yetkilendirme gerektirir; coding
+agent'lar görev açıkça yetkilendirmedikçe ek model, araştırma agent'ı, MCP,
+benchmark veya paid servis başlatamaz.
+
+`docs/PROJECT_TRACKER.md`, `README.md` ve `TODO.md`'yi güncelledim. README ve
+tracker'daki eski OpenCode Zen matrix iddialarını historical olarak etiketledim;
+OpenCode Go kullanmış gibi yeniden yazmadım. TODO.md'de yalnızca routing ve
+iş sahipliğini netleştiren not ekledim; literatür, SFT, RAG, DPO veya
+empirical-evaluation maddelerini destekleyici çalışma olmadan tamamlanmış
+işaretlemedim.
+
+Validasyon: paired-pilot validator her iki manifest için (v1 ve v2) geçti;
+v1 unit suite'i 179 passed; yeni v2 unit suite'i 88 passed (toplam 267);
+`python -m py_compile` değişen Python dosyalarında geçti; `git diff --check`
+temiz. Live pilot veya kabul edilmiş benchmark kampanyası çalıştırılmadı.
+Review paketini `_ai-review/quixbugs-paired-pilot-route-v2/` altında
+oluşturdum (bu klasör `.git/info/exclude` üzerinden ignore edildi, commit
+edilmedi). Hiçbir commit, push, merge, rebase, tag veya branch silme işlemi
+yapılmadı.
+
+Daha sonra aynı branch üzerinde bounded bir material repair tamamladım.
+`PAIRED_PILOT_V2.json`'daki `derived_from` otoritesi fail-closed hale geldi:
+validator artık `derived_from`'un varlığını, tam alan setini,
+`manifest_path`'in `research/quixbugs/PAIRED_PILOT_V1.json` olduğunu,
+`manifest_sha256`'nın kabul edilen `5d84ea22820ca38ce80dd90a5d36e6f80160220178496950f9b45be41fae19ce`
+hash'ine eşit olduğunu, referenced v1 dosyasının mevcut olduğunu, tracked v1
+manifestin tam v1 validasyonundan aynı canonical hash'i ürettiğini, v1
+campaign identity/version'ının frozen değerlerde olduğunu ve tüm
+v1-retained kontrat alanlarının (qualification contract, qualification
+evidence binding, source-integrity authority, seçilen task'lar, frozen v1
+selection ranking, altı-case task/policy sırası, budget'lar, public/private
+boundary, containment contract, no-rerun kuralı) kabul edilen v1 authority
+ile tutarlı olduğunu doğruluyor. `MODEL_SUBSTITUTION_OBSERVED` kanıtı da
+artık authorization artifact'ına bağlı: `evidence.expected_runtime_model_id`
+authorization-bound değere, `evidence.observed_runtime_model_id` route
+observation değerine eşit olmalı; iki kimliğin de observed değere yeniden
+yazıldığı forgery vakası reddediliyor. Adversarial testler eklendi (missing/
+wrong `derived_from`, eksik/driftli referenced v1 dosyası, yanlış v1
+identity, v1-retained kontrat drift'i ve model-substitution forgery vakası).
+Repair sonrası sayılar: v2 suite 88 passed, birleşik paired-pilot suite 267
+passed. Review paketi yeniden üretildi; `changes.diff` tek geçerli Git patch
+olarak temiz baseline export'una karşı `git apply --check` ile doğrulandı ve
+`final-files/` proje-relative yollarda byte-identical kopyalar içeriyor.
+
+Historical OpenCode Zen matrix'i ve dört-case sonuçları hâlâ geçerli
+descriptive kayıtlardır; v2 kontratı hiçbir live sonuç üretmedi. Bir sonraki
+adım, ayrı ve açık bir yetkilendirme artifact'ı ile ayrı bir implementation
+task'ta live entry point'in fail-closed kalmaya devam etmesi koşuluyla v2
+route'unun hayata geçirilmesidir.
