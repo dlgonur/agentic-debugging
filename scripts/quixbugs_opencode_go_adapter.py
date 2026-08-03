@@ -76,13 +76,20 @@ deterministic transport doubles.
 
 The operator preparation flow adds two focused operator-facing modes:
 
-* ``route-capture`` — a read-only command that runs only local/non-model
-  OpenCode inspection commands (``opencode.cmd --version`` and
+* ``route-capture`` — a read-only command that observes the OpenCode
+  launcher version and the exact catalog entry through the shared isolated
+  catalog-observation path (:func:`opencode_protocol_transport.observe_isolated_catalog`):
+  a temporary deterministic isolation root prepared with
+  ``route_mode="opencode-go"``, the exact effective configuration required
+  (enabled providers exactly ``["opencode-go"]`` plus the existing
+  permission/MCP/plugin/instruction/sharing/autoupdate denials), only
+  local/non-model inspection commands run (``opencode.cmd --version`` and
   ``opencode.cmd models opencode-go --verbose --pure``), never invokes
-  ``opencode run``, requires the exact operator-selected runtime model ID
-  and variant, locates exactly one active catalog entry, records its
-  observed status, variant availability, and finite pricing metadata,
-  rejects the historical Zen/free-tier identity, requires explicit
+  ``opencode run``, and the temporary isolation root is always removed after
+  capture (success or failure).  Requires the exact operator-selected
+  runtime model ID and variant, locates exactly one active catalog entry,
+  records its observed status, variant availability, and finite pricing
+  metadata, rejects the historical Zen/free-tier identity, requires explicit
   operator-supplied account status, subscription entitlement
   confirmation/reference, and a billing-route assertion, records every
   denial/fallback observation explicitly, and writes a strict
@@ -118,9 +125,15 @@ The deterministic catalog-entry fingerprint contract is implemented by
 selected catalog entry is serialized with the project's canonical JSON
 rules and SHA-256 of that canonical representation is the fingerprint used
 identically in route evidence, authorization, adapter configuration, and
-wrapper verification.  The wrapper's OpenCode Go preflight independently
-recomputes the selected entry fingerprint and compares it with the
-authorization-bound expected fingerprint before any model process may run.
+wrapper verification.  Route capture and the wrapper's OpenCode Go
+preflight both observe the catalog through the same shared isolated
+catalog-observation path
+(:func:`opencode_protocol_transport.observe_isolated_catalog`), so the
+observed entry and the fingerprint always come from one deterministic
+isolated OpenCode configuration; the wrapper independently recomputes the
+selected entry fingerprint from that shared observation and compares it
+with the authorization-bound expected fingerprint before any model process
+may run.
 """
 from __future__ import annotations
 
@@ -174,8 +187,6 @@ OPERATOR_BUNDLES_RELATIVE_DIR = "quixbugs-operator-bundles-v1"
 #: observed (read-only) when the operator runs the command after this task
 #: has been accepted and merged.
 TASK_BASELINE = "618c33ff186493892665ca1233c3edd8b2eec13f"
-#: Bounded capture of OpenCode inspection command output.
-MAX_CAPTURE_COMMAND_OUTPUT_BYTES = 1_000_000
 #: Placeholder/template markers rejected in operator-supplied values.
 _TEMPLATE_VALUE = re.compile(r"[<>]|placeholder", re.I)
 TEMPLATE_NOTE = (
@@ -2254,12 +2265,6 @@ def _reject_evidence_template_values(value: Any, path: str = "evidence") -> None
             _reject_evidence_template_values(item, f"{path}[{index}]")
 
 
-def _resolve_catalog_command() -> list[str]:
-    """The single OpenCode Go catalog inspection command: exactly
-    ``models opencode-go --verbose --pure`` (never ``models opencode``)."""
-    return ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"]
-
-
 def _parse_utc_timestamp(value: str) -> datetime | None:
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
@@ -2268,24 +2273,6 @@ def _parse_utc_timestamp(value: str) -> datetime | None:
     if parsed.tzinfo is None:
         parsed = parsed.replace(tzinfo=timezone.utc)
     return parsed.astimezone(timezone.utc)
-
-
-def _run_catalog_inspection() -> str:
-    """Run the single local/non-model catalog inspection command.
-
-    This is the only OpenCode catalog command the operator route capture
-    ever invokes; ``opencode run`` is never constructed or executed here.
-    """
-    completed = subprocess.run(
-        _resolve_catalog_command(),
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
-        errors="replace", timeout=30, check=False,
-    )
-    if completed.returncode != 0:
-        raise OpenCodeGoAdapterError(f"OpenCode model catalog inspection failed with exit code {completed.returncode}")
-    if len(completed.stdout) > MAX_CAPTURE_COMMAND_OUTPUT_BYTES:
-        raise OpenCodeGoAdapterError("OpenCode model catalog inspection output exceeded the bounded capture")
-    return completed.stdout
 
 
 def run_route_capture(
@@ -2302,17 +2289,25 @@ def run_route_capture(
 ) -> dict[str, Any]:
     """Read-only operator route capture.
 
-    Runs only local/non-model OpenCode inspection commands (launcher version
-    and model catalog inspection); never invokes ``opencode run``.  Requires
-    the exact operator-selected runtime model ID and variant, locates exactly
-    one active catalog entry, records its observed status, variant
-    availability, and finite pricing metadata, rejects the historical
-    Zen/free-tier identity, requires explicit operator-supplied account
-    status, subscription entitlement confirmation/reference, and a
-    billing-route assertion, records every denial/fallback observation
-    explicitly, and writes a strict ``quixbugs-route-evidence-v1`` artifact
-    (accepted by the existing live-runner validator) with create-once
-    semantics into the ignored ``operator/`` storage.  No credentials, auth
+    Observes the OpenCode launcher version and the exact selected catalog
+    entry through the shared isolated catalog-observation path
+    (:func:`transport.observe_isolated_catalog`): a temporary deterministic
+    isolation root prepared with ``route_mode="opencode-go"``, the exact
+    effective configuration required (enabled providers exactly
+    ``["opencode-go"]`` plus the existing permission/MCP/plugin/instruction/
+    sharing/autoupdate denials), and only local/non-model inspection commands
+    (launcher version and model catalog inspection); never invokes
+    ``opencode run`` and always removes the temporary isolation root after
+    capture (success or failure).  Requires the exact operator-selected
+    runtime model ID and variant, locates exactly one active catalog entry,
+    records its observed status, variant availability, and finite pricing
+    metadata, rejects the historical Zen/free-tier identity, requires
+    explicit operator-supplied account status, subscription entitlement
+    confirmation/reference, and a billing-route assertion, records every
+    denial/fallback observation explicitly, and writes a strict
+    ``quixbugs-route-evidence-v1`` artifact (accepted by the existing
+    live-runner validator) with create-once semantics into the ignored
+    ``operator/`` storage.  No credentials, auth
     tokens, cookies, or raw private account data are ever written.
     """
     observed_at = (now if now is not None else datetime.now(timezone.utc)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
@@ -2353,12 +2348,16 @@ def run_route_capture(
         raise OpenCodeGoAdapterError(f"route capture target already exists (create-once): {target}")
 
     try:
-        launcher = transport.verify_opencode_launcher()
+        observation = transport.observe_isolated_catalog(
+            runtime_model_id, variant,
+            route_mode=ADAPTER_ROUTE_MODE,
+        )
+        launcher = observation["launcher"]
         opencode_version = str(launcher["version"]).strip()
-        catalog_stdout = _run_catalog_inspection()
-        entry = transport.select_catalog_entry(catalog_stdout, runtime_model_id)
-        facts = transport.catalog_entry_facts(entry, variant)
-        fingerprint = transport.catalog_entry_fingerprint(entry)
+        entry = observation["entry"]
+        facts = observation["facts"]
+        fingerprint = observation["fingerprint"]
+        effective_provider_allowlist = observation["effective_config"]["enabled_providers"]
     except RuntimeError as exc:
         raise OpenCodeGoAdapterError(f"route capture rejected: {exc}") from exc
 
@@ -2404,6 +2403,15 @@ def run_route_capture(
         "runtime_model_id": runtime_model_id,
         "variant": variant,
         "model_family": model_family,
+        "observation_mode": {
+            "mode": "isolated-opencode-go",
+            "route_mode": ADAPTER_ROUTE_MODE,
+            "effective_provider_allowlist": effective_provider_allowlist,
+            "isolation_config_validated": True,
+            "temporary_isolation_cleaned": observation["temporary_isolation_cleaned"],
+            "run_invoked": False,
+            "model_requests": 0,
+        },
         "launcher": {"version": opencode_version, "resolved_path": launcher.get("resolved_path")},
         "catalog_entry": entry,
         "catalog_fingerprint": fingerprint,
@@ -2425,7 +2433,7 @@ def run_route_capture(
         "provider_contact_proof": {
             "run_invoked": False,
             "model_requests": 0,
-            "inspection_commands": [["opencode.cmd", "--version"], _resolve_catalog_command()],
+            "inspection_commands": observation["inspection_commands"],
         },
         "evidence_file": str(target),
         "evidence_sha256": hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest(),

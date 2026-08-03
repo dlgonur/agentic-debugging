@@ -1106,8 +1106,8 @@ route-capture and protocol-wrapper paths:
 - OpenCode Go mode now queries exactly `models opencode-go --verbose --pure`;
   `scripts/opencode_protocol_transport.py` resolves the catalog command by
   route mode (legacy mode keeps `models opencode` unchanged), and the
-  operator `route-capture` (`_resolve_catalog_command`) uses the Go provider
-  exclusively.
+  operator `route-capture` uses the Go provider exclusively (the route-mode
+  `_catalog_command` shared with the wrapper).
 - Go runtime identities must use the `opencode-go/` provider prefix
   (`GO_RUNTIME_ID_PREFIX` in the adapter; `OPENCODE_GO_RUNTIME_ID_PREFIX` in
   the wrapper): `opencode/`, the historical
@@ -1209,3 +1209,63 @@ review and real operator execution; not marked complete: real operator
 authorization execution, real route preflight, real OpenCode Go execution,
 the six-case live campaign, empirical evaluation, model performance, PDB
 effectiveness, RAG, SFT, DPO.
+
+2026-08-03 (OpenCode Go isolated route-capture environment repair, wrapper + route-capture)
+
+Fresh attempt quixbugs-paired-pilot-v2-attempt-4c7fc4445de54c8d9a33f8ab9a23fd97 reached
+all six case bindings but all 18 transport attempts failed before model inference with
+catalog fingerprint drift: the wrapper independently recomputed a fingerprint under its
+deterministic isolated OpenCode configuration that did not equal the authorization-bound
+expected fingerprint recorded by operator route capture under the ambient user OpenCode
+configuration (b3b63d9c... != b68d7e09...); all six cases ended PROVIDER_ERROR with zero
+directives/patches/verifier runs/tokens. The exact catalog-entry fingerprint contract was
+not weakened; route capture now observes the catalog under the SAME deterministic isolation
+environment and effective configuration contract the wrapper uses, through one shared
+isolated catalog-observation path:
+
+- scripts/opencode_protocol_transport.py: observe_isolated_catalog(...) is the single
+  explicit isolated catalog-observation path used by both operator route capture and wrapper
+  catalog verification. It creates a temporary deterministic isolation root (helper-owned
+  when isolation_root is None; wrapper-owned for the run phase), prepares it with
+  route_mode="opencode-go", requires the exact effective configuration (enabled providers
+  exactly ["opencode-go"] plus the existing permission/MCP/plugin/instruction/sharing/
+  autoupdate denials), runs only the local/non-model inspection commands under the isolated
+  environment (opencode.cmd --version and opencode.cmd models opencode-go --verbose --pure),
+  selects the exact opencode-go/deepseek-v4-flash entry through the shared
+  select/facts/fingerprint path, computes the existing exact-entry canonical JSON SHA-256
+  fingerprint, and always removes the helper-owned temporary isolation root (success or
+  failure); opencode run is never constructed or executed. The wrapper (_preflight and main)
+  passes its own root plus the authorization-bound expected fingerprint/version/runtime
+  identity so the independent fingerprint comparison happens inside the shared path; route
+  capture passes no expected fingerprint (pure observation). Catalog command/parse/route
+  checks were consolidated into _catalog_entry_observation and _enforce_catalog_route_checks
+  (legacy zero-cost gate and Go drift messages preserved byte-for-byte).
+- scripts/quixbugs_opencode_go_adapter.py: run_route_capture now calls
+  transport.observe_isolated_catalog(runtime_model_id, variant, route_mode="opencode-go");
+  the strict quixbugs-route-evidence-v1 schema, create-once semantics and operator-storage
+  boundary are unchanged; the companion capture record carries a bounded observation_mode
+  block (mode isolated-opencode-go, effective provider allowlist, isolation/config validation
+  passed, temporary isolation cleaned, run_invoked false, model_requests 0). No auth
+  contents, copied auth data, credentials, environment dumps, or unrestricted catalog output
+  are recorded. Ambient _run_catalog_inspection/_resolve_catalog_command and the 1 MB capture
+  bound were removed (the shared path is the only catalog source).
+- Legacy behavior unchanged: wrapper provider remains opencode, historical zero-cost checks
+  remain, no new legacy route-capture behavior.
+
+Focused tests: ambient and isolated catalog entries may differ and capture fingerprints the
+isolated entry (never the ambient entry, every inspection under the isolated environment);
+the capture fingerprint exactly equals the wrapper independent isolated recomputation (a
+wrapper preflight bound to the captured fingerprint passes); Go capture effective config
+allows exactly ["opencode-go"]; route capture never constructs/runs opencode run; temporary
+isolation cleanup on success and failure; catalog/version failures stay typed
+(catalog_command_failed) and bounded; shared helper keeps caller-owned-root cleanup to the
+caller, compares expected fingerprints when supplied, and preserves the legacy zero-cost
+gate; CLI integration fake shim now serves debug config with a fixture auth.
+
+Validation was intentionally not run (FirstMate owns validation); no real OpenCode command,
+catalog, provider, or paid endpoint was contacted; no commit/stage/push. The Authorized
+Six-Case Live Campaign TODO stays open pending a fresh attempt after this repair; both
+previous attempts remain classified as infrastructure-failed attempts, not valid
+experiments. Not marked complete: real operator authorization execution, real route
+preflight, real OpenCode Go execution, the six-case live campaign, empirical evaluation,
+model performance, PDB effectiveness, RAG, SFT, DPO.

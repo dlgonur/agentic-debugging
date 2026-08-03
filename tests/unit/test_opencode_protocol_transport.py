@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 import pytest
@@ -27,6 +28,29 @@ EFFECTIVE_CONFIG = json.dumps({
     "mode": {},
     "command": {},
 })
+
+GO_MODEL = "opencode-go/test-deepseek-v4-flash"
+GO_CATALOG = json.dumps({
+    "id": "test-deepseek-v4-flash",
+    "providerID": "opencode-go",
+    "status": "active",
+    "cost": {"input": 0.5, "output": 1.5, "cache": {"read": 0.25, "write": 0.25}},
+    "variants": {"max": {"reasoningEffort": "max"}},
+})
+GO_ZERO_CATALOG = json.dumps({
+    "id": "test-deepseek-v4-flash",
+    "providerID": "opencode-go",
+    "status": "active",
+    "cost": {"input": 0, "output": 0, "cache": {"read": 0, "write": 0}},
+    "variants": {"max": {"reasoningEffort": "max"}},
+})
+GO_CONFIG = json.dumps({
+    **transport._isolation_config(route_mode="opencode-go"),
+    "agent": {},
+    "mode": {},
+    "command": {},
+})
+GO_FINGERPRINT = transport.catalog_entry_fingerprint(json.loads(GO_CATALOG))
 
 
 def _completed(command: list[str], stdout: str = "", stderr: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -660,3 +684,197 @@ def test_parse_failure_secrets_in_both_streams_and_error_event_are_redacted(monk
     assert "stdout-secret" not in evidence
     assert "stderr-secret" not in evidence
     assert "<redacted>" in evidence
+
+
+# ---- shared isolated catalog-observation path (observe_isolated_catalog) -------
+
+
+def _pin_isolated_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, hex_value: str = "b" * 32) -> Path:
+    """Pin the helper-owned temporary isolation root under ``tmp_path``."""
+    monkeypatch.setattr(transport.tempfile, "gettempdir", lambda: str(tmp_path))
+    monkeypatch.setattr(transport.uuid, "uuid4", lambda: types.SimpleNamespace(hex=hex_value))
+    return tmp_path / f"agentic-opencode-isolated-catalog-{hex_value}"
+
+
+def _go_observation_fake(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, catalog: str = GO_CATALOG, version: str = "1.0.0", effective_config: str = GO_CONFIG) -> list:
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    calls: list = []
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append((command, dict(kwargs.get("env") or {})))
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout=version + "\n")
+        if command[1:3] == ["models", "opencode-go"]:
+            return _completed(command, stdout=catalog + "\n")
+        if command[1:3] == ["debug", "config"]:
+            return _completed(command, stdout=effective_config)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(transport.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    return calls
+
+
+def test_observe_isolated_catalog_uses_isolated_environment_and_cleans_root(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root = _pin_isolated_root(tmp_path, monkeypatch)
+    calls = _go_observation_fake(monkeypatch, tmp_path)
+    result = transport.observe_isolated_catalog(GO_MODEL, "max", route_mode="opencode-go")
+    assert result["fingerprint"] == GO_FINGERPRINT
+    assert result["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
+    assert result["effective_config"]["enabled_providers"] == ["opencode-go"]
+    assert result["temporary_isolation_cleaned"] is True
+    assert not root.exists()
+    # Every inspection ran under the isolated environment.
+    models_envs = [env for command, env in calls if command[1:3] == ["models", "opencode-go"]]
+    assert models_envs
+    assert models_envs[0]["OPENCODE_CONFIG"]
+    assert models_envs[0]["OPENCODE_DISABLE_PROJECT_CONFIG"] == "true"
+    assert models_envs[0]["HOME"] == str(root / "opencode-isolation")
+    # Exactly the two inspection commands plus the effective-config check;
+    # ``opencode run`` is never constructed or executed.
+    assert [command for command, _ in calls] == [
+        ["opencode.cmd", "--version"],
+        ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"],
+        ["opencode.cmd", "debug", "config", "--pure"],
+    ]
+    assert not any(len(command) > 2 and command[1] == "run" for command, _ in calls)
+
+
+def test_observe_isolated_catalog_cleans_root_and_stays_typed_on_failure(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    root = _pin_isolated_root(tmp_path, monkeypatch)
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    secret = "catalog token=hidden-isolation-secret exploded"
+    calls: list[list[str]] = []
+
+    def failing_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.0.0\n")
+        if command[1:3] == ["models", "opencode-go"]:
+            return _completed(command, stderr=secret, returncode=4)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(transport.subprocess, "run", failing_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    with pytest.raises(transport.CatalogFailureError) as exc:
+        transport.observe_isolated_catalog(GO_MODEL, "max", route_mode="opencode-go")
+    assert exc.value.classification == "catalog_command_failed"
+    assert "hidden-isolation-secret" not in str(exc.value.detail)
+    assert "hidden-isolation-secret" not in str(exc.value)
+    assert not root.exists()
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+
+
+def test_observe_isolated_catalog_independently_compares_expected_fingerprint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _pin_isolated_root(tmp_path, monkeypatch)
+    _go_observation_fake(monkeypatch, tmp_path)
+    result = transport.observe_isolated_catalog(
+        GO_MODEL, "max", route_mode="opencode-go",
+        expected_opencode_version="1.0.0",
+        expected_runtime_model_id=GO_MODEL,
+        expected_catalog_fingerprint=GO_FINGERPRINT,
+    )
+    assert result["fingerprint"] == GO_FINGERPRINT
+    with pytest.raises(RuntimeError, match="catalog fingerprint drift"):
+        transport.observe_isolated_catalog(
+            GO_MODEL, "max", route_mode="opencode-go",
+            expected_opencode_version="1.0.0",
+            expected_runtime_model_id=GO_MODEL,
+            expected_catalog_fingerprint="e" * 64,
+        )
+
+
+def test_observe_isolated_catalog_legacy_preserves_zero_cost_requirement(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The shared isolated observation keeps the historical legacy zero-cost
+    gate: a nonzero-priced catalog entry is rejected in legacy mode."""
+    root = _pin_isolated_root(tmp_path, monkeypatch)
+    legacy_config = json.dumps({
+        **transport._isolation_config(route_mode="legacy"),
+        "agent": {}, "mode": {}, "command": {},
+    })
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.18.10\n")
+        if command[1:3] == ["models", "opencode"]:
+            return _completed(command, stdout=GO_CATALOG + "\n")
+        if command[1:3] == ["debug", "config"]:
+            return _completed(command, stdout=legacy_config)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(transport.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    with pytest.raises(RuntimeError, match="not zero-cost"):
+        transport.observe_isolated_catalog(GO_MODEL, "max", route_mode="legacy")
+    assert not root.exists()
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+
+
+def test_observe_isolated_catalog_legacy_accepts_zero_prices_unchanged(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _pin_isolated_root(tmp_path, monkeypatch)
+    legacy_config = json.dumps({
+        **transport._isolation_config(route_mode="legacy"),
+        "agent": {}, "mode": {}, "command": {},
+    })
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    calls: list = []
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.18.10\n")
+        if command[1:3] == ["models", "opencode"]:
+            return _completed(command, stdout=GO_ZERO_CATALOG + "\n")
+        if command[1:3] == ["debug", "config"]:
+            return _completed(command, stdout=legacy_config)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(transport.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    result = transport.observe_isolated_catalog(GO_MODEL, "max", route_mode="legacy")
+    assert result["catalog"]["zero_cost"] is True
+    assert result["effective_config"]["enabled_providers"] == ["opencode"]
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+
+
+def test_observe_isolated_catalog_requires_exact_effective_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    _pin_isolated_root(tmp_path, monkeypatch)
+    wrong_config = json.dumps({
+        **transport._isolation_config(route_mode="opencode-go"),
+        "enabled_providers": ["opencode"],
+        "agent": {}, "mode": {}, "command": {},
+    })
+    _go_observation_fake(monkeypatch, tmp_path, effective_config=wrong_config)
+    with pytest.raises(RuntimeError, match="enabled provider allowlist"):
+        transport.observe_isolated_catalog(GO_MODEL, "max", route_mode="opencode-go")
+
+
+def test_observe_isolated_catalog_with_supplied_root_leaves_cleanup_to_caller(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """When the wrapper supplies its isolation root the helper does not own
+    cleanup and the isolation stays alive for the run phase."""
+    _pin_isolated_root(tmp_path, monkeypatch)
+    _go_observation_fake(monkeypatch, tmp_path)
+    root = tmp_path / "wrapper-root"
+    root.mkdir()
+    result = transport.observe_isolated_catalog(
+        GO_MODEL, "max", route_mode="opencode-go",
+        expected_opencode_version="1.0.0",
+        expected_runtime_model_id=GO_MODEL,
+        expected_catalog_fingerprint=GO_FINGERPRINT,
+        isolation_root=root,
+    )
+    assert result["temporary_isolation_cleaned"] is False
+    assert result["isolation"]["environment"]["OPENCODE_CONFIG"]
+    assert root.is_dir()
+    assert result["isolation"]["config_path"].is_file()

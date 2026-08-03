@@ -4,9 +4,16 @@ This is a command for the existing JsonlCommandTransport contract, not a
 controller or model adapter. OpenCode runs in a fresh empty directory and
 receives the request only as a public attached file. The wrapper returns the
 model's one JSON directive and records bounded, credential-redacted evidence.
-In OpenCode Go route mode the wrapper independently recomputes the exact
-selected catalog entry's deterministic fingerprint and compares it with the
-authorization-bound expected fingerprint before any model process may run.
+
+Route capture and wrapper catalog verification share one explicit isolated
+catalog-observation path (:func:`observe_isolated_catalog`): a temporary
+deterministic isolation root prepared with the exact route-mode isolation
+contract, the exact effective configuration is required, and the launcher
+version and the exact selected catalog entry are observed under that isolated
+environment. In OpenCode Go route mode the wrapper independently recomputes
+the exact selected catalog entry's deterministic fingerprint under the same
+isolated observation and compares it with the authorization-bound expected
+fingerprint before any model process may run.
 """
 from __future__ import annotations
 
@@ -584,19 +591,19 @@ def _preflight(args: argparse.Namespace) -> int:
     root.mkdir()
     evidence_path = Path(args.evidence_file) if args.evidence_file else None
     try:
-        isolation = _prepare_isolation(root, route_mode=args.route_mode)
         route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
-        launcher = verify_opencode_launcher(
-            isolation["environment"],
-            expected_version=route_binding["expected_opencode_version"] if route_binding is not None else None,
-        )
-        catalog = verify_opencode_catalog(
-            args.model, args.variant, isolation["environment"], cwd=root,
+        observation = observe_isolated_catalog(
+            args.model, args.variant,
             route_mode=args.route_mode,
+            expected_opencode_version=route_binding["expected_opencode_version"] if route_binding is not None else None,
             expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
             expected_catalog_fingerprint=route_binding["expected_catalog_fingerprint"] if route_binding is not None else None,
+            isolation_root=root,
         )
-        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root, route_mode=args.route_mode)
+        launcher = observation["launcher"]
+        catalog = observation["catalog"]
+        effective_config = observation["effective_config"]
+        isolation = observation["isolation"]
         request_file = root / "public-request.json"
         request_file.write_text("{}\n", encoding="utf-8")
         command = build_opencode_command(args.model, args.variant, root, request_file)
@@ -822,19 +829,60 @@ def _require_go_runtime_identity(model: str, route_mode: str) -> None:
         )
 
 
-def verify_opencode_catalog(
+def _enforce_catalog_route_checks(
+    entry: Mapping[str, Any],
+    model: str,
+    fingerprint: str,
+    *,
+    route_mode: str,
+    expected_runtime_model_id: str | None,
+    expected_catalog_fingerprint: str | None,
+) -> None:
+    """Route-mode checks on the exact selected catalog entry.
+
+    Legacy mode preserves the historical zero-cost requirement unchanged.
+    OpenCode Go mode rejects runtime-identity drift and, when an
+    authorization-bound expected fingerprint is supplied, independently
+    compares the recomputed exact-entry fingerprint with it (the shared
+    catalog observation never trusts the expected value; route capture
+    supplies no expected fingerprint and performs pure observation).
+    """
+    if route_mode == "legacy":
+        costs = entry.get("cost")
+        if any(costs.get(name) != 0 for name in ("input", "output")) or any(costs["cache"].get(name) != 0 for name in ("read", "write")):
+            raise RuntimeError("exact OpenCode model is not zero-cost")
+        return
+    if expected_runtime_model_id is not None and model != expected_runtime_model_id:
+        raise RuntimeError(
+            f"model identity {model!r} does not match the expected runtime model identity {expected_runtime_model_id!r}"
+        )
+    if expected_catalog_fingerprint is not None and fingerprint != expected_catalog_fingerprint:
+        raise RuntimeError(
+            f"catalog fingerprint drift: independently recomputed fingerprint {fingerprint} "
+            f"does not equal the authorization-bound expected fingerprint {expected_catalog_fingerprint}"
+        )
+
+
+def _catalog_entry_observation(
+    environment: dict[str, str],
+    cwd: Path | None,
+    *,
+    route_mode: str,
     model: str,
     variant: str,
-    environment: dict[str, str],
-    cwd: Path | None = None,
-    *,
-    route_mode: str = "legacy",
     expected_runtime_model_id: str | None = None,
     expected_catalog_fingerprint: str | None = None,
 ) -> dict[str, Any]:
-    if route_mode not in ROUTE_MODES:
-        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
-    _require_go_runtime_identity(model, route_mode)
+    """Run the route-mode catalog inspection and parse the exact selected
+    entry through the single shared select/facts/fingerprint path.
+
+    The one local/non-model inspection command is ``opencode.cmd models
+    <provider> --verbose --pure``; ``opencode run`` is never constructed or
+    executed here.  Returns the exact selected entry, the observed facts, the
+    deterministic exact-entry canonical JSON SHA-256 fingerprint, and the
+    route-mode catalog verification record.  A nonzero inspection exit is a
+    typed :class:`CatalogFailureError` with bounded, sanitized detail.
+    """
     completed = subprocess.run(
         _catalog_command(route_mode),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
@@ -849,35 +897,126 @@ def verify_opencode_catalog(
     entry = select_catalog_entry(completed.stdout, model)
     facts = catalog_entry_facts(entry, variant)
     fingerprint = catalog_entry_fingerprint(entry)
-    if route_mode == "legacy":
-        costs = entry.get("cost")
-        if any(costs.get(name) != 0 for name in ("input", "output")) or any(costs["cache"].get(name) != 0 for name in ("read", "write")):
-            raise RuntimeError("exact OpenCode model is not zero-cost")
-    elif route_mode == "opencode-go":
-        if expected_runtime_model_id is not None and model != expected_runtime_model_id:
-            raise RuntimeError(
-                f"model identity {model!r} does not match the expected runtime model identity {expected_runtime_model_id!r}"
-            )
-        if expected_catalog_fingerprint is None:
-            raise RuntimeError("OpenCode Go mode requires --expected-catalog-fingerprint")
-        recomputed = fingerprint
-        if recomputed != expected_catalog_fingerprint:
-            raise RuntimeError(
-                f"catalog fingerprint drift: independently recomputed fingerprint {recomputed} "
-                f"does not equal the authorization-bound expected fingerprint {expected_catalog_fingerprint}"
-            )
-        # OpenCode Go mode: catalog prices are preserved as observed; no
-        # hidden fallback, model selection, or Zen/free-tier inference.
+    _enforce_catalog_route_checks(
+        entry, model, fingerprint,
+        route_mode=route_mode,
+        expected_runtime_model_id=expected_runtime_model_id,
+        expected_catalog_fingerprint=expected_catalog_fingerprint,
+    )
     return {
-        "model": model,
-        "catalog_provider": LEGACY_CATALOG_PROVIDER if route_mode == "legacy" else OPENCODE_GO_CATALOG_PROVIDER,
-        "active": True,
-        "zero_cost": facts["input_price"] == 0 and facts["output_price"] == 0,
-        "catalog_fingerprint": fingerprint,
-        "variant": variant,
-        "variant_available": True,
-        "route_mode": route_mode,
+        "entry": entry,
+        "facts": facts,
+        "fingerprint": fingerprint,
+        "catalog": {
+            "model": model,
+            "catalog_provider": LEGACY_CATALOG_PROVIDER if route_mode == "legacy" else OPENCODE_GO_CATALOG_PROVIDER,
+            "active": True,
+            "zero_cost": facts["input_price"] == 0 and facts["output_price"] == 0,
+            "catalog_fingerprint": fingerprint,
+            "variant": variant,
+            "variant_available": True,
+            "route_mode": route_mode,
+        },
     }
+
+
+def verify_opencode_catalog(
+    model: str,
+    variant: str,
+    environment: dict[str, str],
+    cwd: Path | None = None,
+    *,
+    route_mode: str = "legacy",
+    expected_runtime_model_id: str | None = None,
+    expected_catalog_fingerprint: str | None = None,
+) -> dict[str, Any]:
+    if route_mode not in ROUTE_MODES:
+        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
+    _require_go_runtime_identity(model, route_mode)
+    if route_mode == "opencode-go" and expected_catalog_fingerprint is None:
+        raise RuntimeError("OpenCode Go mode requires --expected-catalog-fingerprint")
+    observation = _catalog_entry_observation(
+        environment, cwd, route_mode=route_mode, model=model, variant=variant,
+        expected_runtime_model_id=expected_runtime_model_id,
+        expected_catalog_fingerprint=expected_catalog_fingerprint,
+    )
+    return observation["catalog"]
+
+
+def observe_isolated_catalog(
+    model: str,
+    variant: str,
+    *,
+    route_mode: str = "legacy",
+    expected_opencode_version: str | None = None,
+    expected_runtime_model_id: str | None = None,
+    expected_catalog_fingerprint: str | None = None,
+    isolation_root: Path | None = None,
+) -> dict[str, Any]:
+    """The shared isolated catalog-observation path.
+
+    Operator route capture and wrapper catalog verification both observe the
+    OpenCode launcher version and the exact selected catalog entry under ONE
+    deterministic isolated OpenCode configuration: a fresh temporary
+    isolation root prepared with the exact route-mode isolation contract
+    (permission, MCP, plugin, instruction, sharing, and autoupdate denials
+    and the exact enabled-provider allowlist), the exact effective
+    configuration is required, and only the local/non-model inspection
+    commands run (``opencode.cmd --version`` and the route-mode ``models``
+    inspection); ``opencode run`` is never constructed or executed here.
+
+    When ``isolation_root`` is None the helper owns a temporary isolation
+    root and always removes it (success or failure) before returning.  When a
+    root is supplied the caller owns cleanup (the wrapper keeps the same
+    isolation alive for the run phase).  In OpenCode Go mode the wrapper
+    supplies the authorization-bound expected fingerprint and the helper
+    independently compares the recomputed exact-entry fingerprint with it;
+    route capture supplies no expected fingerprint (pure observation, no
+    fabricated binding).
+
+    Returns the launcher evidence, the catalog verification record, the exact
+    selected catalog entry, the observed facts, the deterministic
+    exact-entry canonical JSON SHA-256 fingerprint, the effective-configuration
+    validation, the exact inspection command inventory, the isolation record
+    (environment/config/auth copies needed by callers that continue into
+    ``opencode run``), and whether the helper-owned temporary isolation root
+    was cleaned.
+    """
+    if route_mode not in ROUTE_MODES:
+        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
+    _require_go_runtime_identity(model, route_mode)
+    created_root = isolation_root is None
+    root = (
+        isolation_root
+        if isolation_root is not None
+        else Path(tempfile.gettempdir()) / f"agentic-opencode-isolated-catalog-{uuid.uuid4().hex}"
+    )
+    if created_root:
+        root.mkdir()
+    try:
+        isolation = _prepare_isolation(root, route_mode=route_mode)
+        launcher = verify_opencode_launcher(isolation["environment"], expected_version=expected_opencode_version)
+        observation = _catalog_entry_observation(
+            isolation["environment"], root, route_mode=route_mode, model=model, variant=variant,
+            expected_runtime_model_id=expected_runtime_model_id,
+            expected_catalog_fingerprint=expected_catalog_fingerprint,
+        )
+        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root, route_mode=route_mode)
+        return {
+            "route_mode": route_mode,
+            "launcher": launcher,
+            "catalog": observation["catalog"],
+            "entry": observation["entry"],
+            "facts": observation["facts"],
+            "fingerprint": observation["fingerprint"],
+            "effective_config": effective_config,
+            "inspection_commands": [["opencode.cmd", "--version"], _catalog_command(route_mode)],
+            "isolation": isolation,
+            "temporary_isolation_cleaned": created_root,
+        }
+    finally:
+        if created_root:
+            shutil.rmtree(root, ignore_errors=True)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -910,19 +1049,19 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request_file = root / "public-request.json"
         request_file.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        isolation = _prepare_isolation(root, route_mode=args.route_mode)
         route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
-        launcher = verify_opencode_launcher(
-            isolation["environment"],
-            expected_version=route_binding["expected_opencode_version"] if route_binding is not None else None,
-        )
-        catalog = verify_opencode_catalog(
-            args.model, args.variant, isolation["environment"], cwd=root,
+        observation = observe_isolated_catalog(
+            args.model, args.variant,
             route_mode=args.route_mode,
+            expected_opencode_version=route_binding["expected_opencode_version"] if route_binding is not None else None,
             expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
             expected_catalog_fingerprint=route_binding["expected_catalog_fingerprint"] if route_binding is not None else None,
+            isolation_root=root,
         )
-        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root, route_mode=args.route_mode)
+        launcher = observation["launcher"]
+        catalog = observation["catalog"]
+        effective_config = observation["effective_config"]
+        isolation = observation["isolation"]
         command = build_opencode_command(args.model, args.variant, root, request_file)
         evidence_path = Path(args.evidence_file) if args.evidence_file else None
         _record(evidence_path, {

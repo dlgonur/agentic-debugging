@@ -89,20 +89,26 @@ class FakeGit:
 
 
 def _fake_opencode_shim(tmp_path: Path) -> Path:
-    """A deterministic fake ``opencode.cmd`` that only serves the two local
-    inspection commands; an accidental ``opencode run`` invocation exits
+    """A deterministic fake ``opencode.cmd`` that serves the two local
+    inspection commands plus the effective-configuration check under the
+    isolated environment; an accidental ``opencode run`` invocation exits
     nonzero."""
     fake_dir = tmp_path / "fake-opencode"
     fake_dir.mkdir()
     fake_impl = fake_dir / "fake_opencode.py"
     entry = json.dumps(FAKE_CATALOG_ENTRY, ensure_ascii=False)
     fake_impl.write_text(
-        "import json, sys\n"
+        "import json, os, sys\n"
         "args = sys.argv[1:]\n"
         "if args == ['--version']:\n"
         "    print('1.18.10')\n"
         "elif args[:2] == ['models', 'opencode-go']:\n"
         f"    print({entry!r})\n"
+        "elif args[:3] == ['debug', 'config', '--pure']:\n"
+        "    config_path = os.environ.get('OPENCODE_CONFIG')\n"
+        "    config = json.loads(open(config_path, encoding='utf-8').read()) if config_path and os.path.isfile(config_path) else {}\n"
+        "    config.update({'agent': {}, 'mode': {}, 'command': {}})\n"
+        "    print(json.dumps(config, ensure_ascii=False, sort_keys=True))\n"
         "elif args and args[0] == 'run':\n"
         "    raise SystemExit(91)\n"
         "else:\n"
@@ -117,6 +123,9 @@ def _fake_opencode_shim(tmp_path: Path) -> Path:
 def test_route_capture_cli_runs_only_local_inspection_commands(tmp_path, monkeypatch, capsys) -> None:
     shim_dir = _fake_opencode_shim(tmp_path)
     monkeypatch.setenv("PATH", str(shim_dir) + os.pathsep + os.environ.get("PATH", ""))
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
     monkeypatch.setattr(adapter, "OPERATOR_STORAGE", tmp_path / "operator")
     target = tmp_path / "operator" / "route-evidence" / "quixbugs-route-evidence-v1-cli-test.json"
     rc = adapter.main([
@@ -147,6 +156,11 @@ def test_route_capture_cli_runs_only_local_inspection_commands(tmp_path, monkeyp
     # The fake shim proves no ``opencode run`` was ever constructed: an
     # accidental invocation would have exited 91 and blocked the capture.
     assert result["mode"] == "route-capture"
+    capture_record = json.loads(target.with_suffix(".json.capture-record.json").read_text(encoding="utf-8"))
+    assert capture_record["observation_mode"]["mode"] == "isolated-opencode-go"
+    assert capture_record["observation_mode"]["effective_provider_allowlist"] == ["opencode-go"]
+    assert capture_record["observation_mode"]["isolation_config_validated"] is True
+    assert capture_record["observation_mode"]["temporary_isolation_cleaned"] is True
 
 
 def test_operator_bundle_to_route_preflight_only_handoff(tmp_path, monkeypatch, capsys) -> None:
