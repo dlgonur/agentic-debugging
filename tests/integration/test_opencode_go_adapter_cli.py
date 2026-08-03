@@ -316,8 +316,8 @@ def test_live_wire_requires_environment_and_facts(tmp_path, manifest, synthetic_
 
 def test_live_wire_completes_with_explicit_wiring(tmp_path, manifest, synthetic_executable, capsys, monkeypatch):
     """Full live wiring run with a synthetic executable, deterministic git
-    state, and an operator facts provider; the run is completed through the
-    accepted runner and package verification succeeds."""
+    state, and a task-bound operator facts provider; the run is completed
+    through the accepted runner and package verification succeeds."""
     monkeypatch.setattr(runner, "real_git_state", _clean_git_state)
     output_root = tmp_path / "attempt-out"
     artifacts = _write_artifacts(tmp_path, manifest, synthetic_executable, output_root)
@@ -327,7 +327,7 @@ def test_live_wire_completes_with_explicit_wiring(tmp_path, manifest, synthetic_
         "class _FakeFacts:\n"
         "    def __init__(self):\n"
         "        self.execution_context = object()\n"
-        "def provide():\n"
+        "def provide(manifest_path):\n"
         "    return _FakeFacts()\n",
         encoding="utf-8",
     )
@@ -360,6 +360,46 @@ def test_live_wire_completes_with_explicit_wiring(tmp_path, manifest, synthetic_
     finally:
         sys.path.remove(str(tmp_path))
         monkeypatch.delitem(sys.modules, "operator_facts_provider", raising=False)
+
+
+def test_live_wire_rejects_zero_argument_generic_facts_provider(tmp_path, manifest, synthetic_executable, capsys, monkeypatch):
+    """The task-bound facts contract rejects a zero-argument generic provider
+    before any case runs."""
+    monkeypatch.setattr(runner, "real_git_state", _clean_git_state)
+    output_root = tmp_path / "attempt-out"
+    artifacts = _write_artifacts(tmp_path, manifest, synthetic_executable, output_root)
+
+    provider_module = tmp_path / "operator_facts_provider_generic.py"
+    provider_module.write_text(
+        "class _FakeFacts:\n"
+        "    def __init__(self):\n"
+        "        self.execution_context = object()\n"
+        "def provide():\n"
+        "    return _FakeFacts()\n",
+        encoding="utf-8",
+    )
+    sys.path.insert(0, str(tmp_path))
+    try:
+        environment_artifact = tmp_path / "quixbugs-environment.json"
+        environment_artifact.write_text(json.dumps({
+            "repository_root": str(tmp_path / "repo"),
+            "sources_parent": str(tmp_path / "sources"),
+        }, indent=2, sort_keys=True), encoding="utf-8")
+        rc = adapter.main([
+            "live-wire",
+            "--authorization", str(artifacts["auth_path"]),
+            "--route-evidence-json", str(artifacts["evidence_path"]),
+            "--adapter-config", str(artifacts["config_path"]),
+            "--output", str(output_root),
+            "--quixbugs-environment-json", str(environment_artifact),
+            "--facts-provider", "operator_facts_provider_generic:provide",
+            "--confirm-opencode-go-adapter",
+        ])
+        assert rc == 2
+        assert "not task-bound" in capsys.readouterr().err
+    finally:
+        sys.path.remove(str(tmp_path))
+        monkeypatch.delitem(sys.modules, "operator_facts_provider_generic", raising=False)
 
 
 def test_validate_tracked_template_fails_as_active(tmp_path, manifest, synthetic_executable, capsys):

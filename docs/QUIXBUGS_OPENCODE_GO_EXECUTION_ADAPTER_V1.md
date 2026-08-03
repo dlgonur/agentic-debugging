@@ -27,9 +27,17 @@ Implementation:
   configuration);
 * `agentic_debugger/evaluation/live_quixbugs.py` — bounded backward-compatible
   extension: the accepted QuixBugs live case accepts an explicit
-  `pdb_identity_binding` (provider, model id, variant) and exposes the bounded
-  PDB gate decisions and malformed-directive rejections in the case evidence
-  for every policy (default behavior unchanged).
+  `pdb_identity_binding` (provider, model id, variant), an explicit
+  task-local `RuntimeProbe` for `pdb-on-uncertainty` (validated against the
+  selected task manifest and pinned checkout; the historical default gcd
+  probe keeps its gcd lock), and exposes the bounded PDB gate decisions and
+  malformed-directive rejections in the case evidence for every policy
+  (default behavior unchanged);
+* `scripts/quixbugs_live_wire_environment.py` — the small task-bound operator
+  facts provider (`provide(manifest_path) -> QuixBugsPreflightFacts` and
+  `describe_environment()` for `quixbugs-environment.json`), reusing the
+  accepted read-only WSL/Bubblewrap readiness; never installs/clones/resets/
+  cleans/downloads.
 
 ## Architecture and reuse of accepted paths
 
@@ -362,19 +370,55 @@ reconciles these counters with the campaign record, and the accepted
 boundary per frozen case, no shared model conversation across cases, and the
 frozen case order owned by the live runner. Static-baseline cases cannot use
 PDB (the accepted policy hard-lock plus frozen budget enforcement); PDB-on-
-uncertainty uses only the accepted controller gate and budgets, with the
+uncertainty receives the **exact task-local `RuntimeProbe` built from the
+frozen inventory entry's reviewed `runtime_probe` fields** for the selected
+task and uses only the accepted controller gate and budgets, with the
 runtime model identity bound explicitly through `pdb_identity_binding` (never
-the historical Zen identity). Model-visible inputs are exactly the accepted
-path's public inputs; corrected source, gold patch, evaluator oracle, private
-qualification evidence, and private authorization/account evidence are never
-exposed. The case runner maps every produced `LiveCaseResult` into the frozen
-runner outcome contract (terminal status/reason, transport and terminal
-transport evidence, PDB accounting from the controller gate decisions and the
-event trajectory, tokens/cost, verifier and patch accounting, cleanup and
-source restoration flags, request/source hashes) and never bypasses the live
-runner's ledger, terminal commitment, authority checks, stop rules, or result
-validator. Route drift, transport failure, malformed-response exhaustion,
-budget exhaustion, containment failure, verifier failure, cleanup failure, and
+the historical Zen identity).
+
+Probe binding rules:
+
+* the exact inventory entry is resolved per frozen case; a missing or
+  duplicated entry is rejected before any provider interaction;
+* the probe is built only from the entry's frozen `runtime_probe` fields
+  (`module_path`, `focus_function`, `call_expression`, `breakpoint_anchor`,
+  `inspect_names`) — never from corrected source, tests, model output, or
+  runtime guesses;
+* missing, malformed, mismatched (against `implementation_path` and the
+  frozen task manifest's buggy path, target symbols, corrected/test/support
+  material), and duplicate probe metadata is rejected before any provider
+  interaction (validated at case-runner construction for all six frozen
+  cases and re-validated per case);
+* the probe is passed to the live executor only for `pdb-on-uncertainty`;
+  static-baseline cases receive no probe;
+* the live case path independently re-validates the probe against the
+  selected task ID (the historical default gcd probe keeps its gcd lock),
+  the buggy module path, corrected-source exclusion, the reviewed target
+  symbol, source containment, and a resolvable breakpoint anchor, and
+  prepares it with `prepare_quixbugs_pdb_probe`.
+
+The facts-provider contract is **task-bound**: the case runner requests
+facts separately for every frozen case with the exact task manifest path
+(`provide(manifest_path: str) -> QuixBugsPreflightFacts`), requires an exact
+`QuixBugsPreflightFacts` result whose `DependencyPreparation` is bound to the
+selected task manifest (task ID, manifest fingerprint, authority revision,
+algorithm, pinned recipe), and rejects zero-argument generic facts providers,
+wrong-task facts, and malformed results before any provider interaction.
+Explicit operator selection remains `--facts-provider module:callable`;
+`scripts/quixbugs_live_wire_environment.py` provides the task-bound provider
+and `describe_environment()` for the `quixbugs-environment.json` artifact.
+
+Model-visible inputs are exactly the accepted path's public inputs; corrected
+source, gold patch, evaluator oracle, private qualification evidence, and
+private authorization/account evidence are never exposed. The case runner
+maps every produced `LiveCaseResult` into the frozen runner outcome contract
+(terminal status/reason, transport and terminal transport evidence, PDB
+accounting from the controller gate decisions and the event trajectory,
+tokens/cost, verifier and patch accounting, cleanup and source restoration
+flags, request/source hashes) and never bypasses the live runner's ledger,
+terminal commitment, authority checks, stop rules, or result validator.
+Route drift, transport failure, malformed-response exhaustion, budget
+exhaustion, containment failure, verifier failure, cleanup failure, and
 public/private evidence violations map to the existing typed stop/result
 contracts.
 
@@ -394,15 +438,22 @@ The operator path requires, for live wiring, all of: explicit `live-wire`
 mode, an external authorization-artifact path, an explicit route-evidence
 path, an explicit adapter-configuration path, an explicit attempt/output
 root, explicit confirmation that the operator intends to configure the
-OpenCode Go adapter, and a clean authorization-bound execution commit
-(verified against the actual repository). The CLI provides an adapter-config
-validation mode, a route/preflight-only mode with zero provider process
-creation, a synthetic adapter self-test mode that cannot contact a real
-executable, and a live wiring mode that remains unusable without an actively
-validated configuration and an explicitly constructed transport factory. It
-never defaults to OpenCode Go, any model, any executable, any environment, any
-account, or any provider transport, and has no hidden "best available model"
-or fallback route.
+OpenCode Go adapter, a clean authorization-bound execution commit
+(verified against the actual repository), an explicit
+`quixbugs-environment.json` artifact (repository root and sources parent,
+materialized from `scripts/quixbugs_live_wire_environment.py
+describe_environment()`), and an explicit task-bound facts provider
+(`--facts-provider module:callable` with the contract
+`provide(manifest_path: str) -> QuixBugsPreflightFacts`; the module's
+`provide` function is the operator-provided task-bound provider).
+Zero-argument generic facts providers are rejected. The CLI provides an
+adapter-config validation mode, a route/preflight-only mode with zero
+provider process creation, a synthetic adapter self-test mode that cannot
+contact a real executable, and a live wiring mode that remains unusable
+without an actively validated configuration and an explicitly constructed
+transport factory. It never defaults to OpenCode Go, any model, any
+executable, any environment, any account, or any provider transport, and
+has no hidden "best available model" or fallback route.
 
 ## Synthetic validation
 
@@ -455,9 +506,15 @@ measure model performance or PDB effectiveness; or advance RAG, SFT, or DPO.
 3. An actively validated adapter configuration (real operator-resolved
    executable inside the operator boundary, no placeholders; created by the
    same `operator-bundle` flow).
-4. The operator-supplied QuixBugs execution environment (repository root,
-   per-case task manifests, sources parent, verified execution context /
-   facts provider) for the case-runner binding.
+4. The operator-supplied QuixBugs execution environment for the case-runner
+   binding: the `quixbugs-environment.json` artifact (repository root,
+   per-case task manifests, sources parent) and the task-bound facts provider
+   selected with `--facts-provider module:callable`
+   (`provide(manifest_path: str) -> QuixBugsPreflightFacts`).
+   `scripts/quixbugs_live_wire_environment.py` exposes `describe_environment()`
+   (existing repository root and sources parent) and the `provide` facts
+   provider, which reuses the accepted read-only WSL/Bubblewrap readiness and
+   never installs/clones/resets/cleans/downloads.
 5. The operator explicitly authorizing the real campaign.
 
 The operator preparation flow (`route-capture` → `operator-bundle` →

@@ -236,6 +236,62 @@ route-capture and protocol-wrapper paths were repaired so that:
   validation); no real OpenCode command, catalog, provider, or paid endpoint
   was contacted; no commit/stage/push.
 
+## Current status (2026-08-03) — QuixBugs multi-task PDB live-wire repair
+
+The frozen six-case campaign starts with a `pdb-on-uncertainty` case
+(`quixbugs-find-in-sorted-smoke-v1`), but the established live path still
+locked PDB to the historical `quixbugs-gcd-smoke-v1` task, always prepared
+the gcd probe, could not execute the reviewed task-local probes frozen in
+`PAIRED_PILOT_V2.json`, and called one zero-argument generic facts provider
+per task while the QuixBugs dependency gate requires `DependencyPreparation`
+bound to the exact task manifest, fingerprint, algorithm, and revision —
+so `live-wire` aborted before the intended six-case comparison. The
+established live path was repaired (no parallel campaign runner):
+
+* `run_live_quixbugs_case` now takes an explicit task-local `RuntimeProbe`
+  for `pdb-on-uncertainty`: static-baseline accepts no probe and keeps zero
+  PDB access; PDB requires the selected task's own reviewed probe validated
+  against the task ID (the default gcd probe keeps its gcd lock), buggy
+  module path, corrected/test/support exclusion, reviewed target symbol,
+  source containment, and a resolvable breakpoint anchor; probe preparation
+  uses `prepare_quixbugs_pdb_probe`; the historical standalone GCD APIs and
+  their default GCD lock are unchanged, and the contained-PDB, resource,
+  cleanup, and identity gates are not weakened.
+* `OpenCodeGoCaseRunner` resolves the exact inventory entry per frozen case,
+  builds each PDB case's probe only from that entry's frozen `runtime_probe`
+  fields (never from corrected source, tests, model output, or runtime
+  guesses), rejects missing/malformed/mismatched/duplicate probe metadata
+  before provider interaction, and passes the probe only for
+  `pdb-on-uncertainty` (the three selected PDB tasks:
+  `quixbugs-find-in-sorted-smoke-v1`,
+  `quixbugs-is-valid-parenthesization-smoke-v1`, `quixbugs-hanoi-smoke-v1`).
+* The facts-provider contract is now task-bound:
+  `provide(manifest_path: str) -> QuixBugsPreflightFacts`; the case runner
+  requests facts separately for every frozen case with the exact manifest
+  path, requires an exact `QuixBugsPreflightFacts` result whose dependency
+  preparation matches the selected task manifest, and rejects zero-argument
+  generic facts, wrong-task facts, and malformed results. `--facts-provider
+  module:callable` remains the explicit operator selection.
+* `scripts/quixbugs_live_wire_environment.py` is the small operator facts
+  provider: it reuses the accepted read-only WSL/Bubblewrap environment
+  readiness (never installs/clones/resets/cleans/downloads), creates
+  task-bound verified facts from the selected manifest, and exposes
+  `describe_environment()` returning the existing repository root and
+  sources parent needed to materialize `quixbugs-environment.json`.
+* Focused tests prove per-case probe delivery, static zero-PDB preservation,
+  non-GCD PDB acceptance with a reviewed probe, pre-provider rejection of
+  missing/mismatched probe metadata, unchanged GCD legacy APIs, per-case
+  exact-manifest facts requests, wrong-task facts rejection, and six-case
+  binding entry with synthetic transport and no real provider.
+
+Validation was intentionally not run (FirstMate owns validation); no real
+OpenCode command, catalog, provider, or paid endpoint was contacted; no
+commit/stage/push. The live campaign TODO stays open pending FirstMate
+review and real operator execution; not marked complete: operator
+authorization execution, real route preflight, real OpenCode Go execution,
+the six-case live campaign, empirical evaluation, model performance, PDB
+effectiveness, RAG, SFT, and DPO.
+
 The QuixBugs paired-pilot v2 live-runner infrastructure is implemented and
 validated (runner-only, accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`):
 a strict versioned authorization contract

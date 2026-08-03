@@ -42,16 +42,31 @@ Scope and hard rules:
   controller, model adapter, protocol parsing, containment, verifier, PDB
   gate, event/trajectory logging, cleanup, and source restoration; one fresh
   transport/process/session boundary per frozen case; no shared model
-  conversation; static-baseline cases cannot use PDB; PDB-on-uncertainty uses
-  only the accepted controller gate and budgets; model-visible inputs are the
-  accepted path's public inputs (corrected source, gold patch, evaluator
-  oracle, private qualification evidence, and private authorization/account
-  evidence are never exposed); the case runner never bypasses the live
-  runner's ledger, terminal commitment, authority checks, stop rules, or
-  result validator, and route drift, transport failure, malformed-response
-  exhaustion, budget exhaustion, containment failure, verifier failure,
-  cleanup failure, and public/private evidence violations map to the existing
-  typed stop/result contracts.
+  conversation; static-baseline cases cannot use PDB; PDB-on-uncertainty
+  receives the exact task-local ``RuntimeProbe`` built from the frozen
+  inventory entry's reviewed ``runtime_probe`` fields for the selected task
+  (never derived from corrected source, tests, model output, or runtime
+  guesses) and uses only the accepted controller gate and budgets;
+  model-visible inputs are the accepted path's public inputs (corrected
+  source, gold patch, evaluator oracle, private qualification evidence, and
+  private authorization/account evidence are never exposed); the case runner
+  never bypasses the live runner's ledger, terminal commitment, authority
+  checks, stop rules, or result validator, and route drift, transport
+  failure, malformed-response exhaustion, budget exhaustion, containment
+  failure, verifier failure, cleanup failure, and public/private evidence
+  violations map to the existing typed stop/result contracts;
+* the facts-provider contract is task-bound: the case runner requests facts
+  separately for every frozen case with the exact task manifest path
+  (``provide(manifest_path: str) -> QuixBugsPreflightFacts``), requires an
+  exact ``QuixBugsPreflightFacts`` result whose dependency preparation is
+  bound to the selected task manifest, and rejects zero-argument generic
+  facts providers, wrong-task facts, and malformed results before any
+  provider interaction.  ``scripts/quixbugs_live_wire_environment.py`` is the
+  small operator facts-provider module: it reuses the accepted read-only
+  WSL/Bubblewrap readiness verification, never installs/clones/resets/cleans/
+  downloads, creates task-bound verified facts from the selected manifest,
+  and exposes ``describe_environment()`` for materializing
+  ``quixbugs-environment.json``.
 
 Nothing in this module contacts a live provider, model catalog, entitlement
 service, account, or paid endpoint, and the CLI never defaults into live
@@ -1409,11 +1424,19 @@ def _transport_error(kind: str, message: str, timed_out: bool = False):
 @dataclass(frozen=True)
 class QuixBugsCaseEnvironment:
     """Explicit operator-supplied QuixBugs execution environment for the
-    case-runner binding.  Nothing here may be defaulted."""
+    case-runner binding.  Nothing here may be defaulted.
+
+    ``facts_provider`` is the task-bound facts contract:
+    ``provide(manifest_path: str) -> QuixBugsPreflightFacts``.  The case
+    runner calls it separately for every frozen case with the exact task
+    manifest path, requires an exact ``QuixBugsPreflightFacts`` result, and
+    rejects zero-argument generic providers, wrong-task facts, and malformed
+    results before any provider interaction.
+    """
 
     repository_root: str
     sources_parent: str
-    facts_provider: Callable[[], Any]
+    facts_provider: Callable[[str], Any]
     manifest_path: str | None = None
 
 
@@ -1427,6 +1450,18 @@ class OpenCodeGoCaseRunner:
     boundary per case comes from the transport factory; the runner owns the
     frozen case order, ledger, terminal commitment, authority checks, stop
     rules, and result validation.
+
+    Task binding: every frozen case resolves its exact inventory entry; a
+    ``pdb-on-uncertainty`` case receives the task-local
+    :class:`agentic_debugger.demo.catalog.RuntimeProbe` built from that
+    entry's frozen, reviewed ``runtime_probe`` fields (never from corrected
+    source, tests, model output, or runtime guesses); missing, malformed,
+    mismatched, or duplicate probe metadata is rejected before any provider
+    interaction.  Facts are requested separately per case through the
+    task-bound provider contract
+    ``provide(manifest_path: str) -> QuixBugsPreflightFacts`` and must be an
+    exact ``QuixBugsPreflightFacts`` whose dependency preparation matches the
+    selected task manifest.
     """
 
     binding: RuntimeIdentityBinding
@@ -1447,17 +1482,182 @@ class OpenCodeGoCaseRunner:
             not isinstance(self.environment.manifest_path, str) or not self.environment.manifest_path
         ):
             raise OpenCodeGoAdapterError("case runner environment manifest_path is invalid")
+        self._validate_frozen_case_bindings()
+
+    def _inventory_entry_for(self, task_id: str) -> Mapping[str, Any]:
+        """Resolve the exact inventory entry for a frozen task ID.
+
+        Exactly one entry must exist; a missing or duplicated entry is
+        rejected before any provider interaction.
+        """
+        entries = [
+            item for item in self.manifest.get("inventory", [])
+            if isinstance(item, Mapping) and item.get("task_id") == task_id
+        ]
+        if not entries:
+            raise OpenCodeGoAdapterError(f"case runner cannot resolve the frozen inventory entry for task {task_id!r}")
+        if len(entries) > 1:
+            raise OpenCodeGoAdapterError(f"case runner found duplicate inventory entries for task {task_id!r}")
+        return entries[0]
 
     def _manifest_path_for(self, case: Mapping[str, Any]) -> str:
         if self.environment.manifest_path is not None:
             return self.environment.manifest_path
-        entry = next(
-            (item for item in self.manifest.get("inventory", []) if item.get("task_id") == case.get("task_id")),
-            None,
-        )
-        if entry is None or not isinstance(entry.get("manifest_path"), str) or not entry["manifest_path"]:
+        entry = self._inventory_entry_for(str(case.get("task_id")))
+        if not isinstance(entry.get("manifest_path"), str) or not entry["manifest_path"]:
             raise runner.LiveRunnerError(f"case runner cannot resolve the task manifest for case {case.get('case_id')}")
         return str((REPO_ROOT / entry["manifest_path"]).resolve())
+
+    def _runtime_probe_from_inventory(self, entry: Mapping[str, Any], task_manifest: Mapping[str, Any]) -> Any:
+        """Build the task-local ``RuntimeProbe`` from the frozen inventory
+        entry's reviewed ``runtime_probe`` fields.
+
+        The probe is never derived from corrected source, tests, model
+        output, or runtime guesses: it comes exclusively from the frozen
+        reviewed metadata, and the metadata itself is rejected when missing,
+        malformed, or mismatched against the selected task manifest.
+        """
+        from agentic_debugger.demo.catalog import RuntimeProbe
+
+        probe_value = entry.get("runtime_probe")
+        if not isinstance(probe_value, Mapping) or not probe_value:
+            raise OpenCodeGoAdapterError(
+                f"inventory entry for {entry.get('task_id')} carries no frozen runtime_probe metadata"
+            )
+        expected_fields = frozenset({"module_path", "focus_function", "call_expression", "breakpoint_anchor", "inspect_names"})
+        unknown = set(probe_value) - expected_fields
+        if unknown:
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe for {entry.get('task_id')} carries unknown fields: {sorted(unknown)}"
+            )
+        missing = expected_fields - set(probe_value)
+        if missing:
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe for {entry.get('task_id')} is missing fields: {sorted(missing)}"
+            )
+        module_path = probe_value["module_path"]
+        focus_function = probe_value["focus_function"]
+        call_expression = probe_value["call_expression"]
+        breakpoint_anchor = probe_value["breakpoint_anchor"]
+        inspect_names = probe_value["inspect_names"]
+        for name, value in (
+            ("module_path", module_path),
+            ("focus_function", focus_function),
+            ("call_expression", call_expression),
+            ("breakpoint_anchor", breakpoint_anchor),
+        ):
+            if type(value) is not str or not value:
+                raise OpenCodeGoAdapterError(
+                    f"inventory runtime_probe {name} for {entry.get('task_id')} is malformed"
+                )
+        if not isinstance(inspect_names, list) or not inspect_names or not all(type(name) is str and name for name in inspect_names):
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe inspect_names for {entry.get('task_id')} is malformed"
+            )
+        if len(set(inspect_names)) != len(inspect_names):
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe inspect_names for {entry.get('task_id')} must be unique"
+            )
+        implementation_path = entry.get("implementation_path")
+        if type(implementation_path) is not str or module_path != implementation_path:
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe module for {entry.get('task_id')} does not match its implementation_path"
+            )
+        target = task_manifest.get("target") if isinstance(task_manifest, Mapping) else None
+        oracle = task_manifest.get("oracle") if isinstance(task_manifest, Mapping) else None
+        if not isinstance(target, Mapping) or module_path != target.get("buggy_path"):
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe module for {entry.get('task_id')} does not match the frozen task manifest buggy path"
+            )
+        if module_path == target.get("corrected_path") or module_path == target.get("pytest_path") or module_path in target.get("support_paths", []):
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe for {entry.get('task_id')} points to corrected, test, or support material"
+            )
+        if not isinstance(oracle, Mapping) or not isinstance(oracle.get("target_symbols"), list) or focus_function not in oracle["target_symbols"]:
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe focus for {entry.get('task_id')} is not a reviewed target symbol"
+            )
+        try:
+            return RuntimeProbe(
+                module_path=module_path,
+                focus_function=focus_function,
+                call_source=call_expression,
+                anchor=breakpoint_anchor,
+                inspect_expressions=tuple(inspect_names),
+            )
+        except Exception as exc:
+            raise OpenCodeGoAdapterError(
+                f"inventory runtime_probe for {entry.get('task_id')} is not a valid RuntimeProbe: {type(exc).__name__}: {exc}"
+            ) from exc
+
+    def _validate_frozen_case_bindings(self) -> None:
+        """Reject missing, malformed, mismatched, or duplicate probe metadata
+        and unresolvable task manifests for all six frozen cases before any
+        provider interaction (case-runner construction time)."""
+        for case in self.manifest.get("case_order", []):
+            if not isinstance(case, Mapping) or not case.get("case_id") or not case.get("task_id"):
+                raise OpenCodeGoAdapterError("case runner found a malformed frozen case record")
+            entry = self._inventory_entry_for(str(case["task_id"]))
+            manifest_path = str((REPO_ROOT / entry["manifest_path"]).resolve()) if isinstance(entry.get("manifest_path"), str) and entry["manifest_path"] else None
+            if manifest_path is None:
+                raise OpenCodeGoAdapterError(
+                    f"case runner cannot resolve the task manifest for {case['task_id']}"
+                )
+            if not Path(manifest_path).is_file():
+                raise OpenCodeGoAdapterError(
+                    f"case runner task manifest is missing: {manifest_path}"
+                )
+            task_manifest = pilot.load_manifest(Path(manifest_path))
+            if str(case["policy"]) == "pdb-on-uncertainty":
+                self._runtime_probe_from_inventory(entry, task_manifest)
+
+    def _task_bound_facts(self, provider: Callable[[str], Any], manifest_path: str, task_id: str) -> Any:
+        """Request facts for the exact task manifest and reject wrong-task,
+        generic, or malformed facts before any provider interaction."""
+        from agentic_debugger.quixbugs.adapter import QuixBugsAdapter, QuixBugsPreflightFacts
+
+        try:
+            value = provider(manifest_path)
+        except TypeError as exc:
+            raise OpenCodeGoAdapterError(
+                f"facts provider rejected the exact manifest-path argument; the task-bound "
+                f"provide(manifest_path: str) -> QuixBugsPreflightFacts contract is required: {exc}"
+            ) from exc
+        except Exception as exc:
+            raise OpenCodeGoAdapterError(
+                f"facts provider failed for {manifest_path}: {type(exc).__name__}: {exc}"
+            ) from exc
+        if type(value) is not QuixBugsPreflightFacts:
+            raise OpenCodeGoAdapterError(
+                "facts provider must return exactly QuixBugsPreflightFacts"
+            )
+        context = value.execution_context
+        if context is None:
+            raise OpenCodeGoAdapterError(
+                "facts are not task-bound: no verified execution context was supplied"
+            )
+        dependencies = getattr(getattr(context, "environment", None), "dependencies", None)
+        if dependencies is None:
+            raise OpenCodeGoAdapterError(
+                "facts are not task-bound: dependency preparation is missing"
+            )
+        adapter = QuixBugsAdapter.from_manifest(manifest_path)
+        mismatches: list[str] = []
+        if str(getattr(dependencies, "pilot_task_id", "")) != task_id:
+            mismatches.append(f"pilot_task_id {getattr(dependencies, 'pilot_task_id', None)!r} != {task_id!r}")
+        if str(getattr(dependencies, "pilot_task_id", "")) != adapter.manifest.task_id:
+            mismatches.append("pilot_task_id does not match the selected task manifest task_id")
+        if str(getattr(dependencies, "manifest_fingerprint", "")) != adapter.manifest.fingerprint:
+            mismatches.append("manifest_fingerprint does not match the selected task manifest")
+        if str(getattr(dependencies, "authority_revision", "")) != adapter.manifest.authority_revision:
+            mismatches.append("authority_revision does not match the selected task manifest")
+        if str(getattr(dependencies, "bug_id", "")) != adapter.manifest.algorithm:
+            mismatches.append("bug_id does not match the selected task algorithm")
+        if mismatches:
+            raise OpenCodeGoAdapterError(
+                "facts dependency preparation does not match the selected task manifest: " + "; ".join(mismatches)
+            )
+        return value
 
     def _resolved_policy(self, policy_value: str) -> Any:
         if self.policy_resolver is not None:
@@ -1512,10 +1712,17 @@ class OpenCodeGoCaseRunner:
             from agentic_debugger.evaluation.live_quixbugs import run_live_quixbugs_case
 
             executor = run_live_quixbugs_case
-        facts = self.environment.facts_provider()
-        live_result = executor(
+        manifest_path = self._manifest_path_for(case)
+        task_id = str(case["task_id"])
+        entry = self._inventory_entry_for(task_id)
+        task_manifest = pilot.load_manifest(Path(manifest_path))
+        runtime_probe = None
+        if policy_value == "pdb-on-uncertainty":
+            runtime_probe = self._runtime_probe_from_inventory(entry, task_manifest)
+        facts = self._task_bound_facts(self.environment.facts_provider, manifest_path, task_id)
+        executor_kwargs: dict[str, Any] = dict(
             repository_root=self.environment.repository_root,
-            manifest_path=self._manifest_path_for(case),
+            manifest_path=manifest_path,
             sources_parent=self.environment.sources_parent,
             facts=facts,
             config=config,
@@ -1526,10 +1733,12 @@ class OpenCodeGoCaseRunner:
             policy=policy,
             pdb_identity_binding=pdb_binding,
         )
+        if policy_value == "pdb-on-uncertainty":
+            executor_kwargs["runtime_probe"] = runtime_probe
+        live_result = executor(**executor_kwargs)
         if getattr(inner, "drift_category", None) is not None:
             raise runner.RouteDriftError(inner.drift_category, f"route drift observed during case execution: {inner.drift_category}")
-        entry = next((item for item in self.manifest.get("inventory", []) if item.get("task_id") == case.get("task_id")), None)
-        source_hash = str(entry["source_sha256"]) if entry is not None else None
+        source_hash = str(entry["source_sha256"]) if isinstance(entry.get("source_sha256"), str) else None
         return _outcome_from_live_case(
             case, live_result, route_observation, inner,
             transport_attempts=inner.process_attempts,
@@ -2888,6 +3097,33 @@ def run_synthetic_selftest(
     }
 
 
+def _reject_zero_argument_facts_provider(provider_callable: Callable[..., Any]) -> None:
+    """Reject a zero-argument generic facts provider before any case runs.
+
+    The task-bound contract is ``provide(manifest_path: str) ->
+    QuixBugsPreflightFacts``.  A provider whose signature is inspectable and
+    declares no parameters cannot be task-bound and is rejected here; a
+    non-inspectable callable is additionally wrapped by the case runner's
+    per-case call gate (:meth:`OpenCodeGoCaseRunner._task_bound_facts`).
+    """
+    import inspect
+
+    try:
+        signature = inspect.signature(provider_callable)
+    except (TypeError, ValueError):
+        return
+    required = [
+        parameter
+        for parameter in signature.parameters.values()
+        if parameter.kind in (parameter.POSITIONAL_ONLY, parameter.POSITIONAL_OR_KEYWORD)
+    ]
+    if not required:
+        raise OpenCodeGoAdapterError(
+            "facts provider is not task-bound: the task-bound contract requires "
+            "provide(manifest_path: str) -> QuixBugsPreflightFacts, not a zero-argument generic provider"
+        )
+
+
 def run_live_wire(
     manifest_path: str | Path | None,
     authorization_path: str | Path | None,
@@ -2939,6 +3175,7 @@ def run_live_wire(
     except Exception as exc:
         raise OpenCodeGoAdapterError(f"facts provider could not be resolved: {exc}") from exc
     _cli_require(callable(provider_callable), "facts provider must resolve to a callable")
+    _reject_zero_argument_facts_provider(provider_callable)
 
     claim = Path(output_root)
     factory = OpenCodeGoTransportFactory(

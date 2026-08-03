@@ -10,12 +10,16 @@ when a QuixBugs task is requested.
 
 Only the resource-limited, WSL/Bubblewrap-verified execution boundary
 already accepted for QuixBugs (:mod:`agentic_debugger.quixbugs.adapter`) is
-used to run untrusted candidate code. Policy is hard-locked to
-``DemoPolicy.STATIC_BASELINE`` -- there is no parameter that selects
-``pdb-on-uncertainty`` for a QuixBugs live case, so PDB can neither be
-requested nor silently substituted. Source acquisition never clones or
-resets the pinned checkout: a missing or non-pinned checkout fails closed
-rather than acquiring one.
+used to run untrusted candidate code. Policy defaults to
+``DemoPolicy.STATIC_BASELINE``: a static case never accepts a PDB probe and
+never gains PDB access, because there is no parameter that requests a
+probe under that policy. ``pdb-on-uncertainty`` requires an explicit
+task-local ``RuntimeProbe`` that is identity-validated against the selected
+task manifest and its pinned checkout; the historical default gcd probe
+keeps its gcd lock, and PDB is never requested or silently substituted for
+any other selected task without that task's own reviewed probe. Source
+acquisition never clones or resets the pinned checkout: a missing or
+non-pinned checkout fails closed rather than acquiring one.
 """
 from __future__ import annotations
 
@@ -29,6 +33,7 @@ from agentic_debugger.agent.model_adapter import ControllerSnapshot
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.bugsinpy.adapter import ExternalWorkspace
 from agentic_debugger.bugsinpy.wsl import ResourceLimits, to_wsl_path
+from agentic_debugger.demo.catalog import RuntimeProbe
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.tools import DemoToolContext, build_registry
 from agentic_debugger.evaluation.live import (
@@ -59,12 +64,15 @@ from agentic_debugger.quixbugs.adapter import (
     QuixPreflightReport,
 )
 from agentic_debugger.quixbugs.contained_pdb import (
+    QUIXBUGS_GCD_RUNTIME_PROBE,
     QUIXBUGS_PDB_OBSERVATION_BUDGET,
     QUIXBUGS_PDB_TASK_ID,
+    ContainedPdbError,
     ContainedPdbSession,
     contained_pdb_preflight,
     materialize_pdb_runtime_bundle,
-    prepare_quixbugs_gcd_pdb_probe,
+    prepare_quixbugs_pdb_probe,
+    validate_quixbugs_runtime_probe_identity,
 )
 from agentic_debugger.runtime.execution import PdbLaunchPlan
 from agentic_debugger.runtime.workspace import TaskWorkspace
@@ -178,6 +186,34 @@ def _blocked_quixbugs_case(
     )
 
 
+def _validate_quixbugs_pdb_probe(
+    runtime_probe: Optional[RuntimeProbe],
+    adapter: QuixBugsAdapter,
+    sources_parent: str,
+) -> RuntimeProbe:
+    """Validate the explicit task-local PDB probe for the selected task.
+
+    ``pdb-on-uncertainty`` requires an exact reviewed :class:`RuntimeProbe`
+    for the selected task; the identity validator checks the probe against
+    the selected task ID (the default gcd probe is locked to the gcd task),
+    the buggy module path, corrected/test/support exclusion, the reviewed
+    target symbol, source containment inside the pinned checkout, and a
+    resolvable breakpoint anchor. A rejected probe raises a configuration
+    error before any provider, owned workspace, or WSL/Bubblewrap contact.
+    """
+    if runtime_probe is None:
+        raise QuixBugsLiveConfigurationError(
+            "QuixBugs PDB-on-uncertainty requires an explicit task-local RuntimeProbe for the selected task"
+        )
+    try:
+        validate_quixbugs_runtime_probe_identity(adapter, runtime_probe, sources_parent)
+    except ContainedPdbError as exc:
+        raise QuixBugsLiveConfigurationError(
+            f"QuixBugs PDB probe rejected for the selected task: {exc}"
+        ) from exc
+    return runtime_probe
+
+
 def run_live_quixbugs_case(
     *,
     repository_root: str,
@@ -190,6 +226,7 @@ def run_live_quixbugs_case(
     evaluation_id: str = "local",
     repetition: int = 1,
     policy: DemoPolicy = QUIXBUGS_LIVE_POLICY,
+    runtime_probe: Optional[RuntimeProbe] = None,
     pdb_identity_binding: Optional[tuple[str, str, str]] = None,
 ) -> LiveCaseResult:
     """Run exactly one QuixBugs live case through the accepted live pipeline.
@@ -201,10 +238,13 @@ def run_live_quixbugs_case(
     was supplied. The pinned checkout is only ever re-verified here, never
     cloned, reset, or cleaned.
 
-    ``pdb_identity_binding`` is the explicit (provider, model id, variant)
-    runtime identity for a PDB-on-uncertainty case, supplied by the OpenCode
-    Go execution adapter.  When absent the accepted historical OpenCode Zen
-    identity applies unchanged.
+    ``runtime_probe`` is the explicit task-local
+    :class:`~agentic_debugger.demo.catalog.RuntimeProbe` required for
+    ``pdb-on-uncertainty``. Static-baseline cases accept no probe and retain
+    zero PDB access. ``pdb_identity_binding`` is the explicit (provider,
+    model id, variant) runtime identity for a PDB-on-uncertainty case,
+    supplied by the OpenCode Go execution adapter. When absent the accepted
+    historical OpenCode Zen identity applies unchanged.
     """
     if type(facts) is not QuixBugsPreflightFacts:
         raise QuixBugsLiveConfigurationError("QuixBugs preflight facts are required")
@@ -214,15 +254,15 @@ def run_live_quixbugs_case(
         raise QuixBugsLiveConfigurationError("QuixBugs live case supports exactly one repetition")
     if type(policy) is not DemoPolicy or policy not in {QUIXBUGS_LIVE_POLICY, DemoPolicy.PDB_ON_UNCERTAINTY}:
         raise QuixBugsLiveConfigurationError("unsupported QuixBugs live policy")
+    if policy is DemoPolicy.STATIC_BASELINE and runtime_probe is not None:
+        raise QuixBugsLiveConfigurationError("static-baseline accepts no PDB probe")
     if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
         _validate_quixbugs_pdb_model_config(config, binding=pdb_identity_binding)
 
     adapter = QuixBugsAdapter.from_manifest(manifest_path)
     task_id = adapter.manifest.task_id
-    if policy is DemoPolicy.PDB_ON_UNCERTAINTY and task_id != QUIXBUGS_PDB_TASK_ID:
-        raise QuixBugsLiveConfigurationError(
-            f"QuixBugs PDB case is locked to {QUIXBUGS_PDB_TASK_ID!r}, got {task_id!r}"
-        )
+    if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
+        runtime_probe = _validate_quixbugs_pdb_probe(runtime_probe, adapter, sources_parent)
     case_id = f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"
     run_id = f"live-{case_id}"
     started = time.monotonic()
@@ -272,7 +312,9 @@ def run_live_quixbugs_case(
                 if pdb_identity_binding is not None
                 else (QUIXBUGS_PDB_PROVIDER, QUIXBUGS_PDB_MODEL_ID, QUIXBUGS_PDB_VARIANT)
             )
-            probe = prepare_quixbugs_gcd_pdb_probe(project_root, external.verifier_workspace_parent)
+            probe = prepare_quixbugs_pdb_probe(
+                project_root, external.verifier_workspace_parent, runtime_probe,
+            )
             launch_plan = PdbLaunchPlan(
                 python_executable=facts.execution_context.environment.python_executable,
                 driver=probe.script,
@@ -431,10 +473,12 @@ def run_live_quixbugs_evaluation(
 ) -> dict[str, Any]:
     """Run the complete one-task, one-policy, one-repetition QuixBugs live report.
 
-    Structurally restricted to exactly the accepted feasibility scope: one
-    manifest-selected QuixBugs task, ``static-baseline`` only, and exactly
-    one repetition. There is no parameter that can widen this to additional
-    tasks, policies, or repetitions.
+    Structurally restricted to exactly the accepted historical scope: one
+    manifest-selected QuixBugs task and exactly one repetition. PDB-on-
+    uncertainty here is the historical standalone gcd API: it is locked to
+    the gcd task and uses the default gcd runtime probe; any other selected
+    task must go through :func:`run_live_quixbugs_case` with its own explicit
+    task-local probe.
     """
     if type(authorization) is not LiveExecutionAuthorization:
         raise LiveOptInError("live execution requires explicit authorization")
@@ -458,6 +502,7 @@ def run_live_quixbugs_evaluation(
         repository_root=repository_root, manifest_path=manifest_path, sources_parent=sources_parent,
         facts=facts, config=config, limits=limits, transport=transport, evaluation_id=evaluation_id, repetition=1,
         policy=policy,
+        runtime_probe=(QUIXBUGS_GCD_RUNTIME_PROBE if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None),
     )
     case_mapping = case.to_mapping()
     completed = bool(case_mapping["reporting"]["completed"])
@@ -494,6 +539,7 @@ __all__ = [
     "QUIXBUGS_PDB_MODEL_ID",
     "QUIXBUGS_PDB_VARIANT",
     "QUIXBUGS_PDB_PROVIDER",
+    "QUIXBUGS_GCD_RUNTIME_PROBE",
     "QuixBugsLiveConfigurationError",
     "run_live_quixbugs_case",
     "run_live_quixbugs_evaluation",

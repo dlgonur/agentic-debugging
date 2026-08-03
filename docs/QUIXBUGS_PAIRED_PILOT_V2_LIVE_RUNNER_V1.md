@@ -41,6 +41,30 @@ does not create a parallel evaluation framework.
    `REJECTED`); case records are written per case; the ledger is updated
    atomically.
 
+## Case-runner contract (task binding)
+
+The explicitly configured case runner (the OpenCode Go execution adapter's
+`OpenCodeGoCaseRunner`) binds every frozen case to its task:
+
+* each `pdb-on-uncertainty` case receives the exact task-local `RuntimeProbe`
+  built from the frozen inventory entry's reviewed `runtime_probe` fields for
+  the selected task — never from corrected source, tests, model output, or
+  runtime guesses; static-baseline cases receive no probe and retain zero PDB
+  access; missing, malformed, mismatched, or duplicate probe metadata is
+  rejected before any provider interaction;
+* facts are requested separately per case through the task-bound contract
+  `provide(manifest_path: str) -> QuixBugsPreflightFacts` with the exact task
+  manifest path; the result must be an exact `QuixBugsPreflightFacts` whose
+  dependency preparation matches the selected task manifest (task ID,
+  manifest fingerprint, authority revision, algorithm, pinned recipe);
+  zero-argument generic facts providers, wrong-task facts, and malformed
+  results are rejected before any provider interaction.
+
+The runner itself never bypasses these bindings: it owns the frozen case
+order, ledger, terminal commitment, authority checks, stop rules, and result
+validation, and treats every case-runner rejection as a fail-closed typed
+abort or block.
+
 ## Authorization boundary
 
 The runner cannot create a provider process, transport request, or model call

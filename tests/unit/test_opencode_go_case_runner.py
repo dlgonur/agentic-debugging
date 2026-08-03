@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -16,6 +18,15 @@ sys.path.insert(0, str(REPO_ROOT))
 import quixbugs_opencode_go_adapter as adapter
 import quixbugs_live_runner_v2 as runner
 import quixbugs_paired_pilot as pilot
+
+from agentic_debugger.demo.catalog import RuntimeProbe
+from agentic_debugger.quixbugs.adapter import QuixBugsAdapter, QuixBugsPreflightFacts
+from agentic_debugger.runtime.execution import (
+    ContainmentGuarantee,
+    DependencyPreparation,
+    PreparedEnvironment,
+    VerifiedExecutionContext,
+)
 
 from opencode_go_test_support import prepare_wrapper_environment
 from test_opencode_go_transport_factory import (
@@ -99,12 +110,66 @@ def _events_jsonl(*, with_pdb_action: bool = False) -> str:
     return "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n"
 
 
-class FakeFacts:
-    def __init__(self) -> None:
-        self.execution_context = object()
+class _FakeRunner:
+    runner_id = "fake-go-case-runner"
+    resource_isolation_ready = True
+
+    def __init__(self, tmp_path: Path) -> None:
+        self._root = str(tmp_path.resolve())
+        self.boundary_guarantee: dict = {}
+
+    def run(self, argv, cwd, timeout_seconds, env):
+        raise AssertionError("the case-runner fake facts context must never run commands")
 
 
-def _harness(tmp_path, manifest, synthetic_executable, *, claim: bool = True):
+def _task_facts(tmp_path: Path, manifest_path: str) -> QuixBugsPreflightFacts:
+    """Exact QuixBugsPreflightFacts whose dependency preparation is bound to
+    the selected task manifest -- the same shape the real
+    scripts/quixbugs_live_wire_environment.provide() builds."""
+    adapter_obj = QuixBugsAdapter.from_manifest(manifest_path)
+    recipe = f"pytest=={adapter_obj.manifest.environment['pinned_packages']['pytest']}"
+    dependency = DependencyPreparation(
+        pilot_task_id=adapter_obj.manifest.task_id,
+        manifest_fingerprint=adapter_obj.manifest.fingerprint,
+        authority_revision=adapter_obj.manifest.authority_revision,
+        project="quixbugs",
+        bug_id=adapter_obj.manifest.algorithm,
+        buggy_revision=adapter_obj.manifest.authority_revision,
+        recipe_path=recipe,
+        recipe_sha256=hashlib.sha256(recipe.encode("utf-8")).hexdigest(),
+        installed_fingerprint=adapter_obj.manifest.environment["expected_fingerprint"],
+    )
+    environment = PreparedEnvironment(
+        str(tmp_path / "venv" / "bin" / "python"), "3.10.12", ".", (), {}, dependency,
+    )
+    containment = ContainmentGuarantee(
+        str(tmp_path.resolve()), _FakeRunner.runner_id, resource_limits={"cpu_seconds": "prlimit-enforced:5"},
+    )
+    fake_runner = _FakeRunner(tmp_path)
+    fake_runner.boundary_guarantee = containment.to_mapping()
+    context = VerifiedExecutionContext(environment, containment, fake_runner)
+    return QuixBugsPreflightFacts(
+        platform="linux",
+        pinned_source_verified=True,
+        license_reviewed=True,
+        dependency_install_boundary_ready=True,
+        workspace_cleanup_ready=True,
+        target_annotation_reviewed=True,
+        external_parent=str(tmp_path / "external"),
+        execution_context=context,
+    )
+
+
+def _facts_provider(tmp_path: Path, calls: list | None = None):
+    def _provide(manifest_path: str) -> QuixBugsPreflightFacts:
+        if calls is not None:
+            calls.append(str(manifest_path))
+        return _task_facts(tmp_path, str(manifest_path))
+
+    return _provide
+
+
+def _harness(tmp_path, manifest, synthetic_executable, *, claim: bool = True, facts_calls: list | None = None):
     authorization = _authorization(manifest, tmp_path)
     configuration = _configuration(manifest, tmp_path, synthetic_executable)
     configuration["authorization_hash"] = runner.authorization_hash(authorization)
@@ -150,7 +215,7 @@ def _harness(tmp_path, manifest, synthetic_executable, *, claim: bool = True):
     environment = adapter.QuixBugsCaseEnvironment(
         repository_root=str(tmp_path / "repo"),
         sources_parent=str(tmp_path / "sources"),
-        facts_provider=lambda: FakeFacts(),
+        facts_provider=_facts_provider(tmp_path, calls=facts_calls),
     )
     return {
         "authorization": authorization,
@@ -218,7 +283,12 @@ def test_case_runner_uses_fresh_transport_and_calls_accepted_executor(tmp_path, 
     def fake_executor(**kwargs):
         case = manifest["case_order"][call_index["value"]]
         call_index["value"] += 1
-        calls.append({"transport": kwargs["transport"], "policy": kwargs["policy"], "pdb_binding": kwargs.get("pdb_identity_binding")})
+        calls.append({
+            "transport": kwargs["transport"],
+            "policy": kwargs["policy"],
+            "pdb_binding": kwargs.get("pdb_identity_binding"),
+            "probe": kwargs.get("runtime_probe"),
+        })
         return FakeLiveResult(_live_mapping(manifest, case))
 
     runner_obj = adapter.OpenCodeGoCaseRunner(
@@ -245,8 +315,19 @@ def test_case_runner_uses_fresh_transport_and_calls_accepted_executor(tmp_path, 
     assert len(calls) == 2
     assert calls[0]["policy"].value == "pdb-on-uncertainty"
     assert calls[0]["pdb_binding"] == ("OpenCode Go", "opencode-go/test-deepseek-v4-flash", "max")
+    # The PDB case receives the task-local probe built from the frozen
+    # inventory entry for quixbugs-find-in-sorted-smoke-v1 -- never from
+    # corrected source, tests, model output, or runtime guesses.
+    probe = calls[0]["probe"]
+    assert type(probe) is RuntimeProbe
+    assert probe.module_path == "python_programs/find_in_sorted.py"
+    assert probe.focus_function == "binsearch"
+    assert probe.anchor == "mid ="
+    assert probe.call_source == "find_in_sorted([1, 2], 3)"
+    assert probe.inspect_expressions == ("arr", "x")
     assert calls[1]["policy"].value == "static-baseline"
     assert calls[1]["pdb_binding"] is None
+    assert "probe" not in calls[1] or calls[1]["probe"] is None
     assert outcome_one["terminal_status"] == "UNRESOLVED"
     assert outcome_two["terminal_status"] == "UNRESOLVED"
 
@@ -615,3 +696,341 @@ def test_pdb_not_reached_final_case_validates(tmp_path, manifest, synthetic_exec
         assert entry["terminal_reason_code"] == "PDB_NOT_REACHED_GATE_REJECTED"
         assert entry["pdb_counts"]["total_gate_decisions"] == 1
     runner.validate_campaign_record(record, manifest)
+
+
+# ---- task-local PDB probe binding ------------------------------------------
+
+
+def _inventory_probe_for(manifest, task_id) -> dict:
+    return copy.deepcopy(
+        next(item["runtime_probe"] for item in manifest["inventory"] if item["task_id"] == task_id)
+    )
+
+
+def test_three_selected_pdb_cases_receive_their_own_reviewed_probes(tmp_path, manifest, synthetic_executable):
+    """Each of the three selected PDB cases receives the exact task-local
+    probe built from its own frozen inventory entry -- never the gcd probe
+    and never anything derived from corrected source, tests, model output,
+    or runtime guesses."""
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    captured: dict[str, dict] = {}
+    attempt_identity = harness["authorization"]["campaign_attempt_identity"]
+
+    def fake_executor(**kwargs):
+        task_id = QuixBugsAdapter.from_manifest(kwargs["manifest_path"]).manifest.task_id
+        captured[task_id] = {"probe": kwargs.get("runtime_probe"), "policy": kwargs["policy"].value}
+        case = next(c for c in manifest["case_order"] if c["task_id"] == task_id and c["policy"] == kwargs["policy"].value)
+        return FakeLiveResult(_live_mapping(manifest, case))
+
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=harness["environment"], manifest=manifest, live_executor=fake_executor,
+    )
+    pdb_cases = [case for case in manifest["case_order"] if case["policy"] == "pdb-on-uncertainty"]
+    assert [case["task_id"] for case in pdb_cases] == [
+        "quixbugs-find-in-sorted-smoke-v1",
+        "quixbugs-is-valid-parenthesization-smoke-v1",
+        "quixbugs-hanoi-smoke-v1",
+    ]
+    for case in pdb_cases:
+        harness["factory"].prepare(case)
+        runner_obj(case, attempt_identity=attempt_identity,
+                   run_id=runner.deterministic_run_id(attempt_identity, case),
+                   session_id=f"s-{case['task_id']}", transport=object(),
+                   route_observation=harness["observed"], budgets=manifest["budgets"])
+
+    for task_id in ("quixbugs-find-in-sorted-smoke-v1", "quixbugs-is-valid-parenthesization-smoke-v1", "quixbugs-hanoi-smoke-v1"):
+        probe = captured[task_id]["probe"]
+        assert type(probe) is RuntimeProbe, task_id
+        frozen = _inventory_probe_for(manifest, task_id)
+        assert probe.module_path == frozen["module_path"]
+        assert probe.focus_function == frozen["focus_function"]
+        assert probe.call_source == frozen["call_expression"]
+        assert probe.anchor == frozen["breakpoint_anchor"]
+        assert probe.inspect_expressions == tuple(frozen["inspect_names"])
+        assert probe.module_path == next(
+            item["implementation_path"] for item in manifest["inventory"] if item["task_id"] == task_id
+        )
+    assert captured["quixbugs-find-in-sorted-smoke-v1"]["probe"].module_path == "python_programs/find_in_sorted.py"
+    assert captured["quixbugs-is-valid-parenthesization-smoke-v1"]["probe"].module_path == "python_programs/is_valid_parenthesization.py"
+    assert captured["quixbugs-hanoi-smoke-v1"]["probe"].module_path == "python_programs/hanoi.py"
+
+
+def test_static_cases_receive_no_probe(tmp_path, manifest, synthetic_executable):
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    captured: list[dict] = []
+    attempt_identity = harness["authorization"]["campaign_attempt_identity"]
+
+    def fake_executor(**kwargs):
+        captured.append(kwargs)
+        case = next(c for c in manifest["case_order"] if c["task_id"] == QuixBugsAdapter.from_manifest(kwargs["manifest_path"]).manifest.task_id and c["policy"] == kwargs["policy"].value)
+        return FakeLiveResult(_live_mapping(manifest, case))
+
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=harness["environment"], manifest=manifest, live_executor=fake_executor,
+    )
+    for case in manifest["case_order"]:
+        harness["factory"].prepare(case)
+        runner_obj(case, attempt_identity=attempt_identity,
+                   run_id=runner.deterministic_run_id(attempt_identity, case),
+                   session_id=f"s-{case['task_id']}", transport=object(),
+                   route_observation=harness["observed"], budgets=manifest["budgets"])
+    static_calls = [kwargs for kwargs in captured if kwargs["policy"].value == "static-baseline"]
+    assert len(static_calls) == 3
+    for kwargs in static_calls:
+        assert kwargs.get("runtime_probe") is None
+        assert kwargs.get("pdb_identity_binding") is None
+
+
+def test_missing_probe_metadata_fails_before_provider_execution(tmp_path, manifest, synthetic_executable):
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-find-in-sorted-smoke-v1")
+    del entry["runtime_probe"]
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="no frozen runtime_probe metadata"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+
+def test_mismatched_probe_metadata_fails_before_provider_execution(tmp_path, manifest, synthetic_executable):
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-find-in-sorted-smoke-v1")
+    entry["runtime_probe"]["module_path"] = "python_programs/hanoi.py"
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="does not match its implementation_path"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-find-in-sorted-smoke-v1")
+    entry["runtime_probe"]["focus_function"] = "not-a-reviewed-symbol"
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="not a reviewed target symbol"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-find-in-sorted-smoke-v1")
+    entry["runtime_probe"]["inspect_names"] = ["arr", "arr"]
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="inspect_names.*unique"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+
+def test_duplicate_inventory_entries_rejected_before_provider_execution(tmp_path, manifest, synthetic_executable):
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-find-in-sorted-smoke-v1")
+    mutated["inventory"].append(copy.deepcopy(entry))
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="duplicate inventory entries"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+
+def test_probe_metadata_never_derived_from_corrected_source_or_tests(tmp_path, manifest, synthetic_executable):
+    """Probe metadata is taken exclusively from the frozen inventory entry;
+    the runtime probe never targets corrected, test, or support material."""
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-find-in-sorted-smoke-v1")
+    entry["runtime_probe"]["module_path"] = "correct_python_programs/find_in_sorted.py"
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="does not match its implementation_path"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+    mutated = copy.deepcopy(manifest)
+    entry = next(item for item in mutated["inventory"] if item["task_id"] == "quixbugs-hanoi-smoke-v1")
+    entry["runtime_probe"]["module_path"] = "python_testcases/test_hanoi.py"
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="does not match its implementation_path"):
+        adapter.OpenCodeGoCaseRunner(
+            binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+            environment=harness["environment"], manifest=mutated,
+        )
+
+
+# ---- task-bound facts provider ---------------------------------------------
+
+
+def test_facts_requested_separately_with_exact_manifest_path(tmp_path, manifest, synthetic_executable):
+    facts_calls: list[str] = []
+    harness = _harness(tmp_path, manifest, synthetic_executable, facts_calls=facts_calls)
+    attempt_identity = harness["authorization"]["campaign_attempt_identity"]
+
+    def fake_executor(**kwargs):
+        case = next(c for c in manifest["case_order"] if c["task_id"] == QuixBugsAdapter.from_manifest(kwargs["manifest_path"]).manifest.task_id and c["policy"] == kwargs["policy"].value)
+        return FakeLiveResult(_live_mapping(manifest, case))
+
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=harness["environment"], manifest=manifest, live_executor=fake_executor,
+    )
+    for case in manifest["case_order"]:
+        harness["factory"].prepare(case)
+        runner_obj(case, attempt_identity=attempt_identity,
+                   run_id=runner.deterministic_run_id(attempt_identity, case),
+                   session_id=f"s-{case['task_id']}", transport=object(),
+                   route_observation=harness["observed"], budgets=manifest["budgets"])
+    expected_paths = {
+        str((REPO_ROOT / "research" / "quixbugs" / "FIND_IN_SORTED_SMOKE_MANIFEST_V1.json").resolve()),
+        str((REPO_ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json").resolve()),
+        str((REPO_ROOT / "research" / "quixbugs" / "IS_VALID_PARENTHESIZATION_SMOKE_MANIFEST_V1.json").resolve()),
+    }
+    assert len(facts_calls) == 6
+    assert set(facts_calls) == expected_paths
+    assert facts_calls.count(str((REPO_ROOT / "research" / "quixbugs" / "FIND_IN_SORTED_SMOKE_MANIFEST_V1.json").resolve())) == 2
+    assert facts_calls.count(str((REPO_ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json").resolve())) == 2
+    assert facts_calls.count(str((REPO_ROOT / "research" / "quixbugs" / "IS_VALID_PARENTHESIZATION_SMOKE_MANIFEST_V1.json").resolve())) == 2
+
+
+def test_wrong_task_dependency_facts_rejected_before_executor(tmp_path, manifest, synthetic_executable):
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    attempt_identity = harness["authorization"]["campaign_attempt_identity"]
+    executor_called = {"value": False}
+    hanoi_manifest = str((REPO_ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json").resolve())
+
+    def wrong_task_provider(manifest_path: str):
+        # Always returns facts bound to the hanoi manifest, even when the
+        # exact find-in-sorted manifest is requested.
+        return _task_facts(tmp_path, hanoi_manifest)
+
+    def fake_executor(**kwargs):
+        executor_called["value"] = True
+        case = next(c for c in manifest["case_order"] if c["policy"] == kwargs["policy"].value)
+        return FakeLiveResult(_live_mapping(manifest, case))
+
+    environment = adapter.QuixBugsCaseEnvironment(
+        repository_root=str(tmp_path / "repo"),
+        sources_parent=str(tmp_path / "sources"),
+        facts_provider=wrong_task_provider,
+    )
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=environment, manifest=manifest, live_executor=fake_executor,
+    )
+    case = next(c for c in manifest["case_order"] if c["task_id"] == "quixbugs-find-in-sorted-smoke-v1" and c["policy"] == "pdb-on-uncertainty")
+    harness["factory"].prepare(case)
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="does not match the selected task manifest"):
+        runner_obj(case, attempt_identity=attempt_identity,
+                   run_id=runner.deterministic_run_id(attempt_identity, case),
+                   session_id="s1", transport=object(),
+                   route_observation=harness["observed"], budgets=manifest["budgets"])
+    assert executor_called["value"] is False
+
+
+def test_zero_argument_generic_facts_provider_rejected(tmp_path, manifest, synthetic_executable):
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="not task-bound"):
+        adapter._reject_zero_argument_facts_provider(lambda: None)
+
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    attempt_identity = harness["authorization"]["campaign_attempt_identity"]
+
+    def fake_executor(**kwargs):
+        raise AssertionError("executor must not be called for a generic facts provider")
+
+    environment = adapter.QuixBugsCaseEnvironment(
+        repository_root=str(tmp_path / "repo"),
+        sources_parent=str(tmp_path / "sources"),
+        facts_provider=lambda: SimpleNamespace(execution_context=None),
+    )
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=environment, manifest=manifest, live_executor=fake_executor,
+    )
+    case = manifest["case_order"][1]
+    harness["factory"].prepare(case)
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="manifest-path argument"):
+        runner_obj(case, attempt_identity=attempt_identity,
+                   run_id=runner.deterministic_run_id(attempt_identity, case),
+                   session_id="s1", transport=object(),
+                   route_observation=harness["observed"], budgets=manifest["budgets"])
+
+
+def test_malformed_facts_result_rejected_before_executor(tmp_path, manifest, synthetic_executable):
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    attempt_identity = harness["authorization"]["campaign_attempt_identity"]
+
+    def malformed_provider(manifest_path: str):
+        return {"execution_context": None}
+
+    def fake_executor(**kwargs):
+        raise AssertionError("executor must not be called for malformed facts")
+
+    environment = adapter.QuixBugsCaseEnvironment(
+        repository_root=str(tmp_path / "repo"),
+        sources_parent=str(tmp_path / "sources"),
+        facts_provider=malformed_provider,
+    )
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=environment, manifest=manifest, live_executor=fake_executor,
+    )
+    case = manifest["case_order"][1]
+    harness["factory"].prepare(case)
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="exactly QuixBugsPreflightFacts"):
+        runner_obj(case, attempt_identity=attempt_identity,
+                   run_id=runner.deterministic_run_id(attempt_identity, case),
+                   session_id="s1", transport=object(),
+                   route_observation=harness["observed"], budgets=manifest["budgets"])
+
+
+def test_six_case_runner_enters_all_bindings_with_synthetic_transport(tmp_path, manifest, synthetic_executable):
+    """The full six-case runner enters every frozen case binding with
+    synthetic transport and no real provider: each PDB case receives its own
+    reviewed probe, each static case receives none, and facts are requested
+    per case with the exact manifest path."""
+    facts_calls: list[str] = []
+    harness = _harness(tmp_path, manifest, synthetic_executable, claim=False, facts_calls=facts_calls)
+    executor_calls: list[dict] = []
+
+    def fake_executor(**kwargs):
+        executor_calls.append(kwargs)
+        case = next(c for c in manifest["case_order"] if c["task_id"] == QuixBugsAdapter.from_manifest(kwargs["manifest_path"]).manifest.task_id and c["policy"] == kwargs["policy"].value)
+        return FakeLiveResult(_live_mapping(manifest, case))
+
+    runner_obj = adapter.OpenCodeGoCaseRunner(
+        binding=harness["binding"], configuration=harness["configuration"], factory=harness["factory"],
+        environment=harness["environment"], manifest=manifest, live_executor=fake_executor,
+    )
+    evidence = {k: v for k, v in harness["observed"].items() if k not in ("preflight_success", "execution_commit")}
+    record = runner.run_campaign(
+        manifest,
+        authorization=harness["authorization"],
+        output_root=harness["output_root"],
+        route_evidence_provider=lambda: evidence,
+        transport_factory=lambda case: harness["factory"].prepare(case),
+        case_runner=runner_obj,
+        git_state_provider=_clean_git_state,
+    )
+    assert record["status"] == "COMPLETED"
+    assert len(executor_calls) == 6
+    pdb_calls = [kwargs for kwargs in executor_calls if kwargs["policy"].value == "pdb-on-uncertainty"]
+    static_calls = [kwargs for kwargs in executor_calls if kwargs["policy"].value == "static-baseline"]
+    assert len(pdb_calls) == 3
+    assert len(static_calls) == 3
+    for kwargs in pdb_calls:
+        probe = kwargs["runtime_probe"]
+        task_id = QuixBugsAdapter.from_manifest(kwargs["manifest_path"]).manifest.task_id
+        frozen = _inventory_probe_for(manifest, task_id)
+        assert type(probe) is RuntimeProbe
+        assert probe.module_path == frozen["module_path"]
+        assert probe.focus_function == frozen["focus_function"]
+    for kwargs in static_calls:
+        assert kwargs.get("runtime_probe") is None
+        assert kwargs.get("pdb_identity_binding") is None
+    assert len(facts_calls) == 6
+    runner.validate_campaign_record(record, manifest)
+    package = runner.verify_attempt_package(harness["output_root"], manifest)
+    assert package["consistent"] is True

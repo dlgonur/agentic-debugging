@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 import agentic_debugger.evaluation.live_quixbugs as live_quixbugs
+from agentic_debugger.demo.catalog import RuntimeProbe
 from agentic_debugger.demo.policies import DemoPolicy
 from agentic_debugger.evaluation.live import (
     LiveCaseStatus,
@@ -121,18 +122,19 @@ def _dependencies(current: QuixBugsAdapter) -> DependencyPreparation:
 
     return DependencyPreparation(
         current.manifest.task_id, current.manifest.fingerprint, current.manifest.authority_revision,
-        "quixbugs", "gcd", current.manifest.authority_revision,
+        "quixbugs", current.manifest.algorithm, current.manifest.authority_revision,
         recipe_path, hashlib.sha256(recipe_path.encode("utf-8")).hexdigest(), current.manifest.environment["expected_fingerprint"],
     )
 
 
-def _fake_facts(tmp_path: Path, *, authorized: bool) -> QuixBugsPreflightFacts:
+def _fake_facts(tmp_path: Path, *, authorized: bool, task_adapter: QuixBugsAdapter | None = None) -> QuixBugsPreflightFacts:
+    current = task_adapter if task_adapter is not None else adapter()
     runner = FakeContainmentRunner()
     runner.resource_isolation_ready = authorized
     python_executable = tmp_path / "venv" / "bin" / "python"
     python_executable.parent.mkdir(parents=True, exist_ok=True)
     python_executable.write_text("fake interpreter", encoding="utf-8")
-    environment = PreparedEnvironment(str(python_executable), "3.10.12", ".", (), {}, _dependencies(adapter()))
+    environment = PreparedEnvironment(str(python_executable), "3.10.12", ".", (), {}, _dependencies(current))
     containment = ContainmentGuarantee(str(tmp_path.resolve()), runner.runner_id, resource_limits={"cpu_seconds": "prlimit-enforced:5"})
     runner.boundary_guarantee = containment.to_mapping()
     context = VerifiedExecutionContext(environment, containment, runner)
@@ -142,6 +144,7 @@ def _fake_facts(tmp_path: Path, *, authorized: bool) -> QuixBugsPreflightFacts:
         platform="linux",
         pinned_source_verified=authorized,
         license_reviewed=authorized,
+        dependency_install_boundary_ready=authorized,
         test_command_available=authorized,
         workspace_cleanup_ready=authorized,
         target_annotation_reviewed=authorized,
@@ -150,7 +153,13 @@ def _fake_facts(tmp_path: Path, *, authorized: bool) -> QuixBugsPreflightFacts:
     )
 
 
-def _prepare_pinned_source(tmp_path: Path) -> Path:
+def _prepare_pinned_source(
+    tmp_path: Path,
+    *,
+    algorithm: str = "gcd",
+    buggy: str = BUGGY_GCD,
+    corrected: str = CORRECT_GCD,
+) -> Path:
     """Populate every path PatchManager's denied-write policy must resolve.
 
     ``to_debug_task`` denies writes to ``tests``, ``task.json``, the pytest
@@ -163,14 +172,14 @@ def _prepare_pinned_source(tmp_path: Path) -> Path:
     sources_parent = tmp_path / "sources"
     project_root = sources_parent / "quixbugs"
     (project_root / "python_programs").mkdir(parents=True)
-    (project_root / "python_programs" / "gcd.py").write_text(BUGGY_GCD, encoding="utf-8")
+    (project_root / "python_programs" / f"{algorithm}.py").write_text(buggy, encoding="utf-8")
     (project_root / "correct_python_programs").mkdir(parents=True)
-    (project_root / "correct_python_programs" / "gcd.py").write_text(CORRECT_GCD, encoding="utf-8")
+    (project_root / "correct_python_programs" / f"{algorithm}.py").write_text(corrected, encoding="utf-8")
     (project_root / "python_testcases").mkdir(parents=True)
-    (project_root / "python_testcases" / "test_gcd.py").write_text("# fake test file, never executed\n", encoding="utf-8")
+    (project_root / "python_testcases" / f"test_{algorithm}.py").write_text("# fake test file, never executed\n", encoding="utf-8")
     (project_root / "python_testcases" / "load_testdata.py").write_text("# fake loader, never executed\n", encoding="utf-8")
     (project_root / "json_testcases").mkdir(parents=True)
-    (project_root / "json_testcases" / "gcd.json").write_text("[]", encoding="utf-8")
+    (project_root / "json_testcases" / f"{algorithm}.json").write_text("[]", encoding="utf-8")
     (project_root / "conftest.py").write_text("# fake conftest, never executed\n", encoding="utf-8")
     (project_root / "tests").mkdir(parents=True)
     (project_root / "task.json").write_text("{}", encoding="utf-8")
@@ -418,13 +427,38 @@ def test_pdb_mode_rejects_wrong_model_or_variant_before_transport(tmp_path: Path
         )
 
 
-def test_pdb_mode_rejects_another_quixbugs_task(tmp_path: Path) -> None:
+def test_pdb_mode_rejects_missing_task_local_probe(tmp_path: Path) -> None:
     facts = _fake_facts(tmp_path, authorized=True)
-    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError):
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="explicit task-local RuntimeProbe"):
         live_quixbugs.run_live_quixbugs_case(
-            repository_root=str(ROOT), manifest_path=str(ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json"),
-            sources_parent=str(tmp_path / "sources"), facts=facts, config=pdb_config(), limits=limits(),
-            transport=NeverCalledTransport(), policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        )
+
+
+def test_static_baseline_rejects_an_explicit_probe(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="static-baseline accepts no PDB probe"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=config(), limits=limits(), transport=NeverCalledTransport(),
+            runtime_probe=live_quixbugs.QUIXBUGS_GCD_RUNTIME_PROBE,
+        )
+
+
+def test_default_gcd_probe_keeps_its_gcd_lock(tmp_path: Path) -> None:
+    """A non-GCD task is no longer rejected merely because it is non-GCD, but
+    the historical default gcd probe itself stays locked to the gcd task."""
+    hanoi_manifest = ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json"
+    hanoi_adapter = QuixBugsAdapter.from_manifest(hanoi_manifest)
+    facts = _fake_facts(tmp_path, authorized=True, task_adapter=hanoi_adapter)
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match=r"locked to '?quixbugs-gcd-smoke-v1'?"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(hanoi_manifest), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            runtime_probe=live_quixbugs.QUIXBUGS_GCD_RUNTIME_PROBE,
         )
 
 
@@ -560,6 +594,7 @@ def test_live_model_triggered_pdb_uses_contained_session_and_returns_observation
         repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(sources_parent),
         facts=facts, config=pdb_config(), limits=limits(), transport=transport,
         evaluation_id="quixbugs-gcd-pdb-test", policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        runtime_probe=live_quixbugs.QUIXBUGS_GCD_RUNTIME_PROBE,
     )
 
     assert case.status is LiveCaseStatus.CONTROLLER_FAILED
@@ -589,6 +624,7 @@ def test_pdb_policy_without_model_triggered_observation_is_not_reachability_succ
         repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(sources_parent),
         facts=facts, config=pdb_config(), limits=limits(), transport=PdbScriptedTransport(use_pdb=False),
         evaluation_id="quixbugs-gcd-pdb-no-reach", policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        runtime_probe=live_quixbugs.QUIXBUGS_GCD_RUNTIME_PROBE,
     )
 
     assert case.status is LiveCaseStatus.PDB_NOT_REACHED
@@ -620,3 +656,174 @@ def test_evaluation_report_is_schema_valid_and_single_case(tmp_path: Path, monke
     assert validated["expected_case_count"] == 1
     assert len(validated["cases"]) == 1
     assert validated["completion"] == "complete"
+
+
+# ---- task-local PDB probe ---------------------------------------------------
+
+FIND_IN_SORTED_MANIFEST = ROOT / "research" / "quixbugs" / "FIND_IN_SORTED_SMOKE_MANIFEST_V1.json"
+
+#: Minimal fake buggy module for find_in_sorted whose own ``mid = ...``
+#: statement inside ``binsearch`` is the reviewed probe anchor.  Never
+#: executed: discovery is fully intercepted by the fake containment runner.
+FIND_IN_SORTED_BUGGY = (
+    "def find_in_sorted(arr, x):\n"
+    "    return binsearch(0, len(arr), arr, x)\n"
+    "\n"
+    "def binsearch(low, high, arr, x):\n"
+    "    mid = (low + high) // 2\n"
+    "    return mid\n"
+)
+FIND_IN_SORTED_CORRECTED = FIND_IN_SORTED_BUGGY.replace("return mid\n", "return arr[mid]\n")
+
+
+def _find_in_sorted_probe() -> RuntimeProbe:
+    return RuntimeProbe(
+        module_path="python_programs/find_in_sorted.py",
+        focus_function="binsearch",
+        call_source="find_in_sorted([1, 2], 3)",
+        anchor="mid =",
+        inspect_expressions=("arr", "x"),
+    )
+
+
+def test_non_gcd_pdb_case_accepts_its_reviewed_task_local_probe(tmp_path: Path, monkeypatch) -> None:
+    """A non-GCD PDB case is no longer rejected merely because it is
+    non-GCD: with the explicit task-local probe reviewed for
+    quixbugs-find-in-sorted-smoke-v1 the full contained-PDB pipeline runs."""
+    monkeypatch.setattr(live_quixbugs, "QuixBugsSourceAcquirer", FakeSourceAcquirer)
+    monkeypatch.setattr(live_quixbugs, "to_wsl_path", lambda path, distro: "/fake/pdb-runtime-bundle")
+    monkeypatch.setattr(live_quixbugs, "ContainedPdbSession", FakeContainedPdbSession)
+    FakeContainedPdbSession.starts = 0
+    task_adapter = QuixBugsAdapter.from_manifest(FIND_IN_SORTED_MANIFEST)
+    facts = _fake_facts(tmp_path, authorized=True, task_adapter=task_adapter)
+    sources_parent = _prepare_pinned_source(
+        tmp_path, algorithm="find_in_sorted", buggy=FIND_IN_SORTED_BUGGY, corrected=FIND_IN_SORTED_CORRECTED,
+    )
+    transport = PdbScriptedTransport(use_pdb=True)
+
+    case = live_quixbugs.run_live_quixbugs_case(
+        repository_root=str(ROOT), manifest_path=str(FIND_IN_SORTED_MANIFEST), sources_parent=str(sources_parent),
+        facts=facts, config=pdb_config(), limits=limits(), transport=transport,
+        evaluation_id="quixbugs-find-in-sorted-pdb-test", policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        runtime_probe=_find_in_sorted_probe(),
+    )
+
+    assert case.status is LiveCaseStatus.CONTROLLER_FAILED
+    assert case.policy == "pdb-on-uncertainty"
+    assert case.task_id == "quixbugs-find-in-sorted-smoke-v1"
+    assert FakeContainedPdbSession.starts == 1
+    assert case.measurements["successful_pdb_observation_count"] == 2
+    assert case.evidence is not None
+    assert case.evidence["contained_preflight"]["authorized"] is True
+    assert case.evidence["launch_plan"]["target"] == "python_programs/find_in_sorted.py"
+    assert case.evidence["launch_plan"]["breakpoints"] == [5]
+    assert any(item["allowed"] is True for item in case.evidence["pdb_gate_decisions"])
+    assert list((tmp_path / "external").iterdir()) == []
+
+
+def test_pdb_probe_validation_rejects_mismatched_module(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    wrong_probe = RuntimeProbe(
+        module_path="python_programs/hanoi.py", focus_function="hanoi",
+        call_source="hanoi(2)", anchor="helper =", inspect_expressions=("height",),
+    )
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="not the selected task buggy path"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY, runtime_probe=wrong_probe,
+        )
+
+
+def test_pdb_probe_validation_rejects_corrected_path_probe(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    corrected_probe = RuntimeProbe(
+        module_path="correct_python_programs/gcd.py", focus_function="gcd",
+        call_source="gcd(35, 21)", anchor="return gcd(", inspect_expressions=("a", "b"),
+    )
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="corrected, test, or support material"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY, runtime_probe=corrected_probe,
+        )
+
+
+def test_pdb_probe_validation_rejects_unreviewed_focus_symbol(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    unreviewed_probe = RuntimeProbe(
+        module_path="python_programs/gcd.py", focus_function="not_a_reviewed_symbol",
+        call_source="gcd(35, 21)", anchor="return gcd(", inspect_expressions=("a", "b"),
+    )
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="not a reviewed target symbol"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY, runtime_probe=unreviewed_probe,
+        )
+
+
+def test_pdb_probe_validation_rejects_non_runtime_probe_type(tmp_path: Path) -> None:
+    facts = _fake_facts(tmp_path, authorized=True)
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="exact RuntimeProbe"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(MANIFEST), sources_parent=str(tmp_path / "sources"),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY, runtime_probe={"module_path": "python_programs/gcd.py"},
+        )
+
+
+def test_pdb_probe_validation_rejects_unresolvable_anchor(tmp_path: Path) -> None:
+    task_adapter = QuixBugsAdapter.from_manifest(FIND_IN_SORTED_MANIFEST)
+    facts = _fake_facts(tmp_path, authorized=True, task_adapter=task_adapter)
+    sources_parent = _prepare_pinned_source(
+        tmp_path, algorithm="find_in_sorted", buggy=FIND_IN_SORTED_BUGGY, corrected=FIND_IN_SORTED_CORRECTED,
+    )
+    bad_probe = RuntimeProbe(
+        module_path="python_programs/find_in_sorted.py", focus_function="binsearch",
+        call_source="find_in_sorted([1, 2], 3)", anchor="low = 0", inspect_expressions=("arr", "x"),
+    )
+    with pytest.raises(live_quixbugs.QuixBugsLiveConfigurationError, match="exactly one match is required"):
+        live_quixbugs.run_live_quixbugs_case(
+            repository_root=str(ROOT), manifest_path=str(FIND_IN_SORTED_MANIFEST), sources_parent=str(sources_parent),
+            facts=facts, config=pdb_config(), limits=limits(), transport=NeverCalledTransport(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY, runtime_probe=bad_probe,
+        )
+
+
+def test_gcd_legacy_default_apis_remain_unchanged(tmp_path: Path) -> None:
+    """The historical standalone GCD APIs and their default GCD lock are
+    preserved: the gcd probe wrapper still prepares the default gcd probe,
+    the live evaluation entry point stays gcd-locked for PDB, and the gcd
+    task constant is unchanged."""
+    from agentic_debugger.quixbugs.contained_pdb import (
+        QUIXBUGS_PDB_TASK_ID,
+        prepare_quixbugs_gcd_pdb_probe,
+        prepare_quixbugs_pdb_probe,
+    )
+
+    assert QUIXBUGS_PDB_TASK_ID == "quixbugs-gcd-smoke-v1"
+    assert live_quixbugs.QUIXBUGS_PDB_TASK_ID == "quixbugs-gcd-smoke-v1"
+    assert live_quixbugs.QUIXBUGS_PDB_MODEL_ID == "opencode/deepseek-v4-flash-free"
+    assert live_quixbugs.QUIXBUGS_PDB_VARIANT == "max"
+
+    sources_parent = _prepare_pinned_source(tmp_path)
+    project_root = sources_parent / "quixbugs"
+    legacy_parent = tmp_path / "legacy-parent"
+    explicit_parent = tmp_path / "explicit-parent"
+    legacy_parent.mkdir()
+    explicit_parent.mkdir()
+    legacy = prepare_quixbugs_gcd_pdb_probe(project_root, legacy_parent)
+    explicit = prepare_quixbugs_pdb_probe(project_root, explicit_parent, live_quixbugs.QUIXBUGS_GCD_RUNTIME_PROBE)
+    assert legacy.script == explicit.script == "python_programs/gcd.py"
+    assert legacy.breakpoint_line == explicit.breakpoint_line
+    assert legacy.focus_function == explicit.focus_function == "gcd"
+
+    facts = _fake_facts(tmp_path, authorized=True)
+    with pytest.raises(LiveConfigurationError, match=r"locked to '?quixbugs-gcd-smoke-v1'?"):
+        live_quixbugs.run_live_quixbugs_evaluation(
+            repository_root=str(ROOT), authorization=LiveExecutionAuthorization.authorize(True, True),
+            manifest_path=str(ROOT / "research" / "quixbugs" / "HANOI_SMOKE_MANIFEST_V1.json"),
+            sources_parent=str(tmp_path / "sources"), facts=facts, config=pdb_config(), limits=limits(),
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        )

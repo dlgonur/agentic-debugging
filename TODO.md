@@ -440,3 +440,67 @@ Gercek operator preflight TODO maddesi acik tutuluyor (tekrarlanan Windows
 route capture bekleniyor). Hicbir test/build/lint/compile/dogrulama
 calistirilmadi (FirstMate'e aittir); gercek OpenCode komutu, catalog,
 provider veya paid endpoint calistirilmadi; commit/stage/push yapilmadi.
+
+### QuixBugs multi-task PDB live-wire repair (2026-08-03, adapter + live path)
+
+Frozen alti-case kampanyanin ilk case'i `pdb-on-uncertainty` oldugu halde
+live yolu PDB'yi yalnizca `QUIXBUGS_PDB_TASK_ID` (`quixbugs-gcd-smoke-v1`)
+icinde tutuyor, her PDB case'i icin `prepare_quixbugs_gcd_pdb_probe`
+kullaniyor, `PAIRED_PILOT_V2.json`'da dondurulmus task-local probe'larini
+calistiramiyor ve her task icin sifir-argumanli generic bir facts provider
+cagiriyordu (QuixBugs dependency gate'i ise `DependencyPreparation`'in exact
+task manifest/fingerprint/algorithm/revision'a baglanmasini gerektiriyor).
+Bu yuzden `live-wire` alti-case karsilastirmasini uretemeden abort ediyor.
+Bounded live-path repair (paralel campaign runner yok):
+
+- **Task-local PDB probe.** `run_live_quixbugs_case` explicit task-local
+  `RuntimeProbe` girdisi alir: static-baseline probe kabul etmez ve sifir
+  PDB erisimi korur; PDB-on-uncertainty secili task icin explicit reviewed
+  probe gerektirir; probe secili task ID'sine (varsayilan gcd probe'unun gcd
+  kilidi korunur), buggy modul path'ine, corrected-source/test/support
+  dislamasina, reviewed target symbol'a, kaynak containment'ina ve cozulebilir
+  breakpoint anchor'una karsi dogrulanir (`validate_quixbugs_runtime_probe_identity`,
+  artik public). Probe hazirligi `prepare_quixbugs_pdb_probe` ile yapilir;
+  tarihsel standalone gcd API'leri (`prepare_quixbugs_gcd_pdb_probe`,
+  `run_live_quixbugs_evaluation`'un gcd PDB kilidi, default GCD probe)
+  degismeden korunur; contained-PDB/resource/cleanup/identity gate'leri
+  zayiflatilmadi.
+- **Adapter case binding.** `OpenCodeGoCaseRunner` her frozen case icin exact
+  inventory entry'sini cozer (eksik/duplikat entry reddedilir), PDB case'lere
+  probe'u yalnizca o entry'nin frozen `runtime_probe` alanlarindan uretir
+  (corrected source/test/model ciktisi/runtime tahmininden asla turetmez),
+  missing/malformed/mismatched/duplicate probe metadata'sini provider
+  etkilesiminden once reddeder ve probe'u yalnizca `pdb-on-uncertainty`
+  icin gecirir. Uc secili PDB task'i: `quixbugs-find-in-sorted-smoke-v1`,
+  `quixbugs-is-valid-parenthesization-smoke-v1`, `quixbugs-hanoi-smoke-v1`.
+- **Task-bound facts provider.** Facts-provider kontrati
+  `provide(manifest_path: str) -> QuixBugsPreflightFacts` oldu: case runner
+  her frozen case icin ayri ayri exact manifest path'i ile cagirir, exact
+  `QuixBugsPreflightFacts` sonucu ister, dependency preparation'inin secili
+  task manifest'iyle eslesmesini zorunlu tutar; sifir-argumanli generic
+  facts, wrong-task facts ve malformed sonuclar provider oncesi reddedilir;
+  `--facts-provider module:callable` operator secimi korundu. Yeni operator
+  modulu `scripts/quixbugs_live_wire_environment.py`: accepted read-only
+  WSL/Bubblewrap readiness'ini yeniden kullanir (install/clone/reset/clean/
+  download yok), secili manifest'ten task-bound verified facts uretir ve
+  `quixbugs-environment.json` icin gereken repository root + sources parent'i
+  donduren `describe_environment()` aciklar. WSL execution mimarisi
+  kopyalanmadi.
+- **Testler.** Uc secili PDB case'inin her birine kendi exact reviewed
+  probe'unun gittigi, static case'lerin probe almadigi ve sifir PDB
+  erisimini korudugu, non-GCD PDB case'lerin yalnizca non-GCD olduklari icin
+  artik reddedilmedigi, missing/mismatched probe metadata'sinin provider
+  yurutmesinden once dustugu, GCD-only legacy/default API'lerin degismedigi,
+  facts'in her case icin exact manifest path'i ile ayri ayri istendigi,
+  wrong-task dependency facts'in reddedildigi ve alti-case runner'in gercek
+  provider olmadan synthetic transport ile tum alti binding'e girdigi
+  kanitlari eklendi (focused unit + integration). Baska kapsam genisletmesi
+  yapilmadi.
+
+Dogrulama bilincli olarak calistirilmadi (FirstMate'e aittir); gercek
+OpenCode komutu, catalog, provider veya paid endpoint calistirilmadi;
+commit/stage/push yapilmadi. Live kampanya TODO maddesi FirstMate review'i
+ve gercek operator yurutmesi bekledigi icin acik tutuldu: tamamlanmis
+isaretlenmez — operator authorization yurutmesi, gercek route preflight,
+gercek OpenCode Go execution, six-case live campaign, empirical evaluation,
+model performance, PDB effectiveness, RAG, SFT, DPO.

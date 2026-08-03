@@ -1135,3 +1135,77 @@ The existing real-operator-preflight TODO item stays open pending the
 repeated Windows route capture. No validation was run (FirstMate owns
 validation); no real OpenCode command, catalog, provider, or paid endpoint
 was contacted; no commit/stage/push.
+
+2026-08-03 (QuixBugs multi-task PDB live-wire repair, adapter + live path)
+
+Repair of the final live-wire integration blocker: the frozen six-case
+campaign starts with a pdb-on-uncertainty case
+(quixbugs-find-in-sorted-smoke-v1), but the established live path locked PDB
+to the historical quixbugs-gcd-smoke-v1 task, always prepared the gcd probe,
+could not execute the reviewed task-local probes frozen in
+PAIRED_PILOT_V2.json, and called one zero-argument generic facts provider per
+task while the QuixBugs dependency gate requires DependencyPreparation bound
+to the exact task manifest/fingerprint/algorithm/revision — so live-wire
+aborted before the six-case comparison. Bounded repair of the established
+live path (no parallel campaign runner):
+
+- Task-local PDB probe: run_live_quixbugs_case now takes an explicit
+  task-local RuntimeProbe for pdb-on-uncertainty; static-baseline accepts no
+  probe and keeps zero PDB access; PDB requires the selected task's own
+  reviewed probe validated against the selected task ID (the default gcd
+  probe keeps its gcd lock), buggy module path, corrected-source/test/support
+  exclusion, reviewed target symbol, source containment, and a resolvable
+  breakpoint anchor (validate_quixbugs_runtime_probe_identity is now public
+  in agentic_debugger/quixbugs/contained_pdb.py, with the corrected-source
+  exclusion check reachable ahead of the buggy-path match); probe preparation
+  uses prepare_quixbugs_pdb_probe; the historical standalone GCD APIs
+  (prepare_quixbugs_gcd_pdb_probe, the run_live_quixbugs_evaluation gcd PDB
+  lock, and the default GCD runtime probe) remain unchanged, and the
+  contained-PDB, resource, cleanup, and identity gates are not weakened.
+- Adapter case binding: OpenCodeGoCaseRunner resolves the exact inventory
+  entry per frozen case (missing/duplicate entries rejected at construction
+  for all six cases and re-validated per case), builds each PDB case's probe
+  only from the entry's frozen runtime_probe fields (module_path,
+  focus_function, call_expression, breakpoint_anchor, inspect_names; never
+  derived from corrected source, tests, model output, or runtime guesses),
+  rejects missing/malformed/mismatched/duplicate probe metadata before any
+  provider interaction, and passes the probe only for pdb-on-uncertainty. The
+  three selected PDB tasks are quixbugs-find-in-sorted-smoke-v1,
+  quixbugs-is-valid-parenthesization-smoke-v1, and quixbugs-hanoi-smoke-v1.
+- Task-bound facts provider: the contract is now
+  provide(manifest_path: str) -> QuixBugsPreflightFacts; the case runner
+  calls the provider separately for every frozen case with the exact manifest
+  path, requires an exact QuixBugsPreflightFacts result, and enforces that its
+  dependency preparation matches the selected task manifest (pilot_task_id,
+  manifest_fingerprint, authority_revision, bug_id); zero-argument generic
+  facts providers (rejected at live-wire resolution and wrapped at call
+  time), wrong-task facts, and malformed results fail before provider
+  execution; --facts-provider module:callable operator selection is
+  preserved.
+- Operator facts provider module (scripts/quixbugs_live_wire_environment.py):
+  reuses the accepted read-only WSL/Bubblewrap readiness verification
+  (_verify_environment_ready); never installs, clones, resets, cleans, or
+  downloads; creates task-bound verified facts from the selected manifest;
+  exposes describe_environment() returning the existing repository root and
+  sources parent needed to materialize quixbugs-environment.json. The WSL
+  execution architecture is not duplicated.
+- Tests (focused; no unrelated cleanup): each of the three selected PDB cases
+  receives its own exact reviewed probe; static cases receive no probe and
+  retain zero PDB access; non-GCD PDB cases are no longer rejected merely
+  because they are non-GCD (full contained-PDB pipeline on
+  find-in-sorted with its reviewed probe); missing/mismatched/duplicate probe
+  metadata fails before provider execution; GCD-only legacy/default APIs
+  remain unchanged; facts are requested separately with the exact manifest
+  path; wrong-task dependency facts are rejected before the executor; a
+  zero-argument generic facts provider is rejected; the six-case runner
+  enters all six case bindings with synthetic transport and no real provider;
+  the live-wire CLI integration fixtures were updated to the task-bound
+  contract and a zero-argument-provider rejection test was added.
+
+Validation was intentionally not run (FirstMate owns validation); no real
+OpenCode command, catalog, provider, or paid endpoint was contacted; no
+commit/stage/push. The live campaign TODO stays open pending FirstMate
+review and real operator execution; not marked complete: real operator
+authorization execution, real route preflight, real OpenCode Go execution,
+the six-case live campaign, empirical evaluation, model performance, PDB
+effectiveness, RAG, SFT, DPO.

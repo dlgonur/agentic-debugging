@@ -86,7 +86,7 @@ from agentic_debugger.bugsinpy.wsl import (
     build_wsl_command,
     to_wsl_path,
 )
-from agentic_debugger.demo.catalog import RuntimeProbe, probe_driver_source, resolve_probe_breakpoint
+from agentic_debugger.demo.catalog import DemoCatalogError, RuntimeProbe, probe_driver_source, resolve_probe_breakpoint
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.tools import DemoToolContext, PdbProbe, build_registry
 from agentic_debugger.events.logger import JsonlEventLogger
@@ -109,9 +109,9 @@ class ContainedPdbError(RuntimeError):
     """A contained-PDB precondition, identity check, or invariant is unmet."""
 
 
-#: This path is hard-scoped to exactly one pinned QuixBugs task; it is not a
-#: parameter, so a caller cannot select a different task, policy, or
-#: repetition count.
+#: The historical default reachability scope remains exactly one pinned
+#: QuixBugs task; the task-local probe path below is what lets a caller bind
+#: PDB-on-uncertainty to another selected task with an explicit reviewed probe.
 QUIXBUGS_PDB_TASK_ID = "quixbugs-gcd-smoke-v1"
 QUIXBUGS_PDB_POLICY = DemoPolicy.PDB_ON_UNCERTAINTY
 QUIXBUGS_PDB_REPETITIONS = 1
@@ -130,13 +130,18 @@ _PDB_RUNTIME_MODULES = ("pdb_worker.py", "pdb_protocol.py", "exceptions.py")
 #: The reviewed runtime probe for the pinned buggy python_programs/gcd.py.
 #: ``call_source`` is drawn from the docstring example already present in the
 #: buggy file itself (``gcd(35, 21) -> 7``), not from the manifest oracle.
-_GCD_RUNTIME_PROBE = RuntimeProbe(
+#: This object is also the historical default probe: the standalone GCD entry
+#: points keep their default GCD lock, and the shared identity validator
+#: rejects using this default probe for any other selected task.
+QUIXBUGS_GCD_RUNTIME_PROBE = RuntimeProbe(
     module_path="python_programs/gcd.py",
     focus_function="gcd",
     call_source="gcd(35, 21)",
     anchor="return gcd(",
     inspect_expressions=("a", "b"),
 )
+
+_GCD_RUNTIME_PROBE = QUIXBUGS_GCD_RUNTIME_PROBE
 
 
 def _is_within(path: Path, parent: Path) -> bool:
@@ -319,6 +324,21 @@ class ContainedPdbSession(PdbSession):
             raise PdbSessionError(str(exc)) from exc
 
 
+def _resolve_probe_breakpoint_checked(source_text: str, runtime_probe: RuntimeProbe) -> int:
+    """Resolve the probe anchor, converting the catalog's typed anchor error
+    into a :class:`ContainedPdbError`.
+
+    ``resolve_probe_breakpoint`` raises :class:`DemoCatalogError` for an
+    unresolvable or ambiguous anchor; the contained boundary converts exactly
+    that catalog error (never unrelated exceptions) so callers such as the
+    live-case path can expose one consistent typed configuration error.
+    """
+    try:
+        return resolve_probe_breakpoint(source_text, runtime_probe)
+    except DemoCatalogError as exc:
+        raise ContainedPdbError(str(exc)) from exc
+
+
 def prepare_quixbugs_pdb_probe(project_root: Path, parent_dir: Path, runtime_probe: RuntimeProbe) -> PdbProbe:
     """Copy one pinned QuixBugs checkout and append a reviewed probe driver.
 
@@ -334,7 +354,7 @@ def prepare_quixbugs_pdb_probe(project_root: Path, parent_dir: Path, runtime_pro
     if not module.is_file():
         raise ContainedPdbError(f"probe module is missing from the pinned checkout copy: {runtime_probe.module_path}")
     original = module.read_text(encoding="utf-8")
-    breakpoint_line = resolve_probe_breakpoint(original, runtime_probe)
+    breakpoint_line = _resolve_probe_breakpoint_checked(original, runtime_probe)
     module.write_text(original + probe_driver_source(runtime_probe), encoding="utf-8", newline="\n")
     return PdbProbe(
         source_dir=Path(workspace.root),
@@ -948,15 +968,24 @@ def _validate_quixbugs_runtime_probe_identity(adapter: QuixBugsAdapter, runtime_
     """Validate task-local probe identity before creating any owned workspace.
 
     The generic boundary cannot trust a caller that merely supplies a probe
-    object.  The module, focus symbol, and resolved breakpoint are checked
-    against the selected task manifest and its pinned checkout first.
+    object.  The probe must be an exact :class:`RuntimeProbe`, the default
+    gcd probe is locked to :data:`QUIXBUGS_PDB_TASK_ID` (a caller that wants
+    PDB on another selected task must supply that task's own reviewed probe),
+    and the module, focus symbol, and resolved breakpoint are checked against
+    the selected task manifest and its pinned checkout first.
     """
+    if type(runtime_probe) is not RuntimeProbe:
+        raise ContainedPdbError("runtime probe must be an exact RuntimeProbe")
     manifest = adapter.manifest
+    if runtime_probe is _GCD_RUNTIME_PROBE and manifest.task_id != QUIXBUGS_PDB_TASK_ID:
+        raise ContainedPdbError(
+            f"the default gcd runtime probe is locked to {QUIXBUGS_PDB_TASK_ID!r}, got {manifest.task_id!r}"
+        )
     module_path = runtime_probe.module_path
-    if module_path != manifest.buggy_path:
-        raise ContainedPdbError("runtime probe module is not the selected task buggy path")
     if module_path == manifest.corrected_path or module_path == manifest.pytest_path or module_path in manifest.support_paths:
         raise ContainedPdbError("runtime probe points to corrected, test, or support material")
+    if module_path != manifest.buggy_path:
+        raise ContainedPdbError("runtime probe module is not the selected task buggy path")
     if runtime_probe.focus_function not in manifest.oracle["target_symbols"]:
         raise ContainedPdbError("runtime probe focus is not a reviewed target symbol")
     project_root = Path(sources_parent).resolve() / "quixbugs"
@@ -967,10 +996,17 @@ def _validate_quixbugs_runtime_probe_identity(adapter: QuixBugsAdapter, runtime_
         raise ContainedPdbError("runtime probe escapes the selected QuixBugs source") from exc
     if not module.is_file():
         raise ContainedPdbError("runtime probe module is not present in the pinned checkout")
-    breakpoint_line = resolve_probe_breakpoint(module.read_text(encoding="utf-8"), runtime_probe)
+    breakpoint_line = _resolve_probe_breakpoint_checked(module.read_text(encoding="utf-8"), runtime_probe)
     if not isinstance(breakpoint_line, int) or breakpoint_line <= 0:
         raise ContainedPdbError("runtime probe breakpoint did not resolve inside the selected module")
     return breakpoint_line
+
+
+#: Public alias of the task-local probe-identity validator, used by the
+#: live-case path (:mod:`agentic_debugger.evaluation.live_quixbugs`) to gate
+#: an explicit task-local ``RuntimeProbe`` before any owned workspace,
+#: provider, or WSL/Bubblewrap contact.
+validate_quixbugs_runtime_probe_identity = _validate_quixbugs_runtime_probe_identity
 
 
 def run_quixbugs_gcd_pdb_reachability_case(
@@ -1273,6 +1309,7 @@ __all__ = [
     "QUIXBUGS_PDB_POLICY",
     "QUIXBUGS_PDB_REPETITIONS",
     "QUIXBUGS_PDB_OBSERVATION_BUDGET",
+    "QUIXBUGS_GCD_RUNTIME_PROBE",
     "ContainedPdbError",
     "ContainedPdbGateName",
     "ContainedPdbGateStatus",
@@ -1292,4 +1329,5 @@ __all__ = [
     "run_quixbugs_pdb_reachability_case",
     "run_quixbugs_gcd_pdb_reachability_case",
     "validate_events_jsonl",
+    "validate_quixbugs_runtime_probe_identity",
 ]
