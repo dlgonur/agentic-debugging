@@ -76,6 +76,70 @@ invented; the exact runtime model/catalog identity remains authorization-bound,
 and live execution remains unavailable until a separate implementation task
 supplies an explicit authorization artifact.
 
+## Current status (2026-08-03) — OpenCode Go execution adapter v1
+
+The OpenCode Go execution-adapter wiring is implemented and validated
+(adapter-only; no provider contact). `scripts/quixbugs_opencode_go_adapter.py`
+provides a strict versioned adapter-configuration contract
+(`quixbugs-opencode-go-execution-adapter-v1`; non-executable tracked template
+`research/quixbugs/OPENCODE_GO_EXECUTION_ADAPTER_TEMPLATE.json`, rejected as an
+active configuration; real configurations live outside tracked source in the
+ignored `operator/` location), a runtime identity binding that derives the
+exact catalog-qualified runtime model identity from validated authorization
+and route evidence and rejects the historical `opencode/deepseek-v4-flash-free`
+Zen identity, an explicit transport factory that adapts the accepted protocol
+transport with structured argv, explicit cwd, bounded environment allowlists,
+bounded stdout/stderr/diagnostics, process-group-aware timeout and cleanup,
+zero automatic retries/fallback/catalog queries, and binding revalidation
+before every provider process attempt, and a case-runner binding that reuses
+the accepted QuixBugs live path
+(`agentic_debugger/evaluation/live_quixbugs.py`) with one fresh transport/
+session/workspace boundary per frozen case, no shared model conversation,
+static-baseline PDB prohibition, PDB-on-uncertainty through the accepted
+controller gate and budgets (with the runtime identity bound explicitly, never
+the historical Zen identity), and full reconciliation with the live runner's
+ledger, terminal commitment, authority checks, stop rules, and result
+validator. CLI surface: `adapter-template`, `adapter-validate`,
+`route-preflight-only` (zero provider processes), `selftest` (synthetic only,
+via the deterministic network-incapable `scripts/opencode_go_synthetic_
+executable.py`), and `live-wire` (unusable without an actively validated
+configuration, explicit operator artifacts, and an explicitly constructed
+transport factory). This task used only synthetic executables, deterministic
+transport doubles, temporary fixtures, and fake route observations; the
+adapter requires, before the real campaign, a real operator authorization
+artifact, exact runtime route evidence passing preflight, the adapter's
+accepted commit bound in that authorization, the operator-supplied QuixBugs
+execution environment, and the operator's explicit authorization. See
+`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`. Not started and not
+marked complete: operator authorization, real route preflight, real OpenCode
+Go execution, the six-case live campaign, empirical evaluation, model
+performance, PDB effectiveness, RAG, SFT, and DPO; historical OpenCode Zen
+records remain historical.
+
+A bounded surgical repair (2026-08-03) then made the adapter command launch
+the accepted protocol wrapper (`scripts/opencode_protocol_transport.py`)
+explicitly — `[python, wrapper, --model <runtime id>, --variant <v>,
+--route-mode opencode-go, --expected-opencode-version <v>,
+--expected-catalog-fingerprint <hex>, --expected-runtime-model-id <id>,
+--expected-account-status <status>, --expected-billing-route SUBSCRIPTION]`
+with `--evidence-file` owned by the wrapper — instead of a direct OpenCode CLI
+command; direct-CLI bypass configurations are rejected
+(`DIRECT_OPENCODE_COMMAND_REJECTED`/`WRAPPER_NOT_BOUND`). The wrapper gained
+an explicit `legacy` (historical Zen zero-price behavior, unchanged) and
+`opencode-go` route mode (catalog prices preserved as observed, exact
+launcher-version binding, and the outer-validated model/fingerprint/account/
+billing-route evidence required and recorded; no hidden fallback or Zen/
+free-tier inference). The case execution cost is now the aggregate of the
+finite monetary costs explicitly reported by each provider response
+(`provider_telemetry.cost`) — absent stays absent, explicit zero stays zero,
+subscription never implies zero, the preflight route-observation cost is never
+used as the case execution cost — with the frozen v2 case validator's cost
+check relaxed accordingly (directly affected compatibility fix). Synthetic
+validation runs the fake OpenCode CLI through the real wrapper (request via
+stdin, bounded `opencode run` command construction, response reaching the
+model adapter boundary), covering absent/zero/positive cost propagation, and
+proves zero real provider calls.
+
 The QuixBugs paired-pilot v2 live-runner infrastructure is implemented and
 validated (runner-only, accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`):
 a strict versioned authorization contract

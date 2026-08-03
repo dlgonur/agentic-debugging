@@ -2375,3 +2375,149 @@ interruption proof (TERMINAL_COMMIT_MISSING), adversarial state proof,
 immutable completed campaign, verify_attempt_package consistency. Hicbir live
 campaign, benchmark, model veya paid endpoint calistirilmadi; commit/push
 yapilmadi.
+
+---
+
+## 3 Agustos 2026 - OpenCode Go execution adapter v1 (adapter-only)
+
+QuixBugs paired-pilot v2 live runner icin OpenCode Go execution-adapter
+wiring'ini tamamladim ve dogruladim. Bu gorev yalnizca adapter'i
+implemente edip dogruladi: hicbir canli provider, model, catalog, account,
+entitlement veya paid endpoint ile temas kurulmadi; gercek alti-case
+kampanya calistirilmadi. Yalnizca local synthetic executable'lar,
+deterministik transport double'lari, gecici repository'ler ve fake route
+observation'lari kullanildi.
+
+Yaptiklarim:
+
+1. **Strict adapter configuration kontrati**
+   (`scripts/quixbugs_opencode_go_adapter.py`,
+   `quixbugs-opencode-go-execution-adapter-v1`). Bilinmeyen/eksik alan,
+   yanlis tip, string shell command, bos argv elemani, relative/ambiguous
+   executable, shell metacharacter, operator boundary disinda executable/
+   working directory, gizli environment inheritance, credential-shaped icerik,
+   authorization/manifest/protocol/commit/route/catalog/model uyusmazligi ve
+   budget/timeout celiskisi reddedilir. Tracked template
+   (`research/quixbugs/OPENCODE_GO_EXECUTION_ADAPTER_TEMPLATE.json`)
+   `template: true` oldugu icin aktif config olarak reddedilir; gercek
+   konfigurasyonlar tracked disi `operator/` dizininde yasamalidir. Hicbir
+   gercek aktif config veya credential-bearing dosya commit edilmedi.
+
+2. **Runtime identity binding.** Runtime model/catalog kimligi yalnizca
+   dogrulanmis authorization ve route evidence'dan gelir; tarihsel OpenCode
+   Zen kimligi (`opencode/deepseek-v4-flash-free`) execution identity olarak
+   acikca reddedilir. Alias rewriting, catalog/version/variant/route-class/
+   billing-route drift ve gozlemlenen Zen/free-tier/Ollama/alternate-provider/
+   fallback durumlari typed `RouteDriftError` ile reddedilir ve accepted
+   `TRANSPORT_EVIDENCE_LOSS` infrastructure stop kontratina map'lenir.
+   Bagimlilik her provider process attempt oncesi yeniden dogrulanir;
+   provider'dan bagimsiz olarak gozlemlenen identity degerleri (model,
+   billing route, substitution marker'lari) evidencelara kaydedilir.
+
+3. **Transport factory.** Accepted protocol transport'u
+   (`opencode_protocol_transport.py`) structured argv, explicit cwd, bounded
+   environment allowlist, bounded stdout/stderr/diagnostics ve process-group-
+   aware timeout/cleanup ile adapte eder. Sifir otomatik retry (retry
+   muhasebesi accepted LiveModelAdapter'a aittir), sifir fallback, sifir
+   catalog sorgusu, global model secimi yok, onceki interaktif session
+   state'ine bagimlilik yok. Factory, validasyonu gecmis authorization,
+   execution commit, route observation, config ve binding gerektirir;
+   `prepare(case)` her frozen case icin tek fresh transport uretir ve
+   output/attempt ownership gate'lerini (.attempt-owner + STARTED ledger)
+   diskte dogrular. Provider-reported token/cost metadata dogru sekilde
+   tasinir; abonelik erisimi cost'u sifira zorlamaz; eksik cost verisi eksik
+   kalir; non-finite metadata reddedilir.
+
+4. **Case-runner binding.** Accepted QuixBugs live path'i
+   (`run_live_quixbugs_case`) yeniden kullanir: her frozen case icin bir fresh
+   transport/session/workspace, case'ler arasi paylasilan model konusmasi
+   yok, frozen case sirasi live runner'a aittir. Static-baseline case'ler PDB
+   acamaz; PDB-on-uncertainty yalnizca accepted controller gate ve budget'lar
+   ile calisir ve runtime model kimligi `pdb_identity_binding` ile acikca
+   baglanir (tarihsel Zen kimligi degil). Bu baglama icin
+   `agentic_debugger/evaluation/live_quixbugs.py`'ye geriye donuk uyumlu,
+   bounded bir uzanti ekledim: `pdb_identity_binding` parametresi ve her
+   policy icin case evidence'inda PDB gate kararlari + malformed-directive
+   red kayitlari (varsayilan davranis degismedi; mevcut 266+267+456 test
+   suite'i aynen gecti). Ledger, terminal commitment, authority checks, stop
+   rules ve result validator asla bypass edilmez; route drift, transport
+   failure, malformed-response exhaustion, budget exhaustion, containment/
+   verifier/cleanup failure ve public/private boundary ihlalleri accepted
+   typed stop/result kontratlarina map'lenir.
+
+5. **CLI.** `adapter-template`, `adapter-validate` (yapisal veya
+   authorization+route bagli), `route-preflight-only` (sifir provider
+   process), `selftest` (yalnizca synthetic) ve `live-wire` (explicit
+   authorization, route-evidence, adapter-config, output root, operator
+   onayi, QuixBugs environment artifact'i ve cozulebilir facts provider
+   gerektirir; aktif validate edilmis config ve explicit factory olmadan
+   kullanilamaz). OpenCode Go, model, executable, environment, account veya
+   provider transport icin hicbir varsayilan yok; gizli "best available
+   model" veya fallback route yok.
+
+6. **Synthetic executable**
+   (`scripts/opencode_go_synthetic_executable.py`). Deterministik, test-only,
+   network-incapable. Senaryolar: valid response, malformed-then-valid
+   recovery (request'in `directive_feedback` alanina gore), malformed
+   exhaustion, startup failure, timeout, oversized output, non-zero exit,
+   identity mismatch, model/route drift, missing usage, finite metadata,
+   non-finite metadata, credential output (redaction) ve child-process
+   cleanup. Sifir gercek OpenCode/provider/catalog/account cagrisi, network-
+   enabled komut yok, Zen/free-tier route yok, fallback yok, exact
+   process-attempt/logical-call muhasebesi, her case icin fresh boundary ve
+   dogru cleanup kanitlandi.
+
+Testler: yeni unit 76 passed (configuration 40, transport 24, case-runner
+12), yeni integration 10 passed; mevcut live-runner 266, paired-pilot 267,
+live-quixbugs/opencode-transport/live-evaluation/model-adapter/controller/
+controller-policy/quixbugs-adapter/verifier 456 passed; tam unit suite 2783
+passed (3 skipped); integration 357 passed; golden trajectories 11 passed;
+v1/v2 validators gecerli; py_compile ve git diff --check temiz. Hicbir live
+campaign, benchmark, model, provider, catalog veya paid endpoint
+calistirilmadi; gercek OpenCode binary'si calistirilmadi; commit/push
+yapilmadi. Gercek kampanya oncesi gerekenler: gercek operator authorization
+artifact'i, preflight'tan gecen gercek route evidence, adapter commit'inin
+authorization'a baglanmasi, operator saglanan QuixBugs execution environment
+ve operator'un acik yetkisi. Operator authorization, gercek route preflight,
+gercek OpenCode Go execution, six-case live campaign, empirical evaluation,
+model performance, PDB effectiveness, RAG, SFT ve DPO tamamlanmis
+isaretlenmedi; tarihsel OpenCode Zen kayitlari degismeden historical kaldi.
+
+---
+
+## 3 Agustos 2026 (ikinci islem) - OpenCode Go execution adapter v1 wrapper repair
+
+Adopter command'inin dogrudan OpenCode CLI komutu gibi gorunmesi yerine,
+accepted protocol wrapper'i acikca baslatmasini saglayan bounded surgical
+repair yaptim. Adapter argv artik `[python, scripts/opencode_protocol_transport.py,
+--model <runtime id>, --variant <v>, --route-mode opencode-go,
+--expected-opencode-version <v>, --expected-catalog-fingerprint <hex>,
+--expected-runtime-model-id <id>, --expected-account-status <status>,
+--expected-billing-route SUBSCRIPTION]` seklinde; `--evidence-file` yalnizca
+wrapper'in sahip oldugu arguman oldugu icin adapter ekliyor. Config validator
+wrapper'i bypass eden direct OpenCode CLI komutlarini ve eksik route-mode/
+route-binding flag'lerini reddediyor; tracked template wrapper formunda ve
+placeholders ile. Wrapper'a iki explicit route mode ekledim: `legacy`
+(varsayilan; tarihsel OpenCode Zen zero-price davranisi aynen korunuyor, mevcut
+30 wrapper testi gecti) ve `opencode-go` (catalog fiyatlari sifir gerektirmez,
+launcher version birebir eslesmeli, dis kontrat tarafindan dogrulanmis
+model/fingerprint/account/billing-route kaniti zorunlu ve evidence'da, gizli
+fallback/model secimi/Zen inference yok). Case execution cost artik her
+provider response'un acikca bildirdigi sonlu monetary cost'larin toplami;
+absent cost fabricated edilmiyor, acik sifir sifir kalir, abonelik sifir cost
+ima etmez, preflight route-observation cost case cost olarak kullanilmaz.
+Frozen v2 case validator'unun cost esitlik kontratini bu yeni dogru semantige
+gore gevsettim (dogrudan etkilenen compatibility fix; paired-pilot v2 suite 88
+passed). Synthetic executable'i fake OpenCode CLI'ye donusturdum: adapter
+transport -> GERCEK wrapper (stdin'den request) -> fake `opencode.cmd` shim ->
+synthetic -> wrapper extraction -> response, zinciri testlerde ve selftest'te
+uctan uca dogrulandi (malformed/recoveery, timeout, oversized, non-zero exit,
+identity/route drift, credential redaction, child cleanup, absent/zero/
+positive cost). Focused checks: yeni wrapper repair 12, configuration 45,
+transport 24, case-runner 13, CLI integration 10, wrapper transport 30,
+paired-pilot v2 88, cost-focused live-runner/paired-pilot 7 passed; py_compile
+ve git diff --check temiz. Hicbir live campaign, benchmark, model, provider,
+catalog veya paid endpoint calistirilmadi; gercek OpenCode binary'si
+calistirilmadi; commit/push yapilmadi. Gercek kampanya oncesi gerekenler ve
+tamamlanmamis isaretlenen maddeler degismedi; tarihsel OpenCode Zen kayitlari
+historical kaldi.

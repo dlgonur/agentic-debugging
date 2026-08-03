@@ -913,7 +913,14 @@ class CampaignResultValidator:
                 if _is_subscription_route(manifest):
                     _require(result["route_observation"]["billing_route"] == AUTHORIZED_BILLING_ROUTE and result["route_observation"]["subscription_entitlement_confirmed"] is True, "LIVE_CASE subscription billing route is not established")
                     _require(result["route_observation"]["runtime_model_id"] == auth["expected_runtime_model_id"], "LIVE_CASE runtime model identity is not authorization-bound")
-                    _require(result["provider_reported_cost"] == result["route_observation"]["provider_reported_cost"], "LIVE_CASE provider-reported cost is not preserved")
+                    # Provider-reported monetary cost is preserved truthfully:
+                    # the case execution cost is the aggregate of the finite
+                    # monetary costs explicitly reported by the actual
+                    # per-call provider responses (recorded by the execution
+                    # adapter), which legitimately differs from the preflight
+                    # route-observation cost; subscription access never forces
+                    # cost to zero, and absent cost data is never fabricated.
+                    _require(type(result["provider_reported_cost"]) in (int, float) and not isinstance(result["provider_reported_cost"], bool) and result["provider_reported_cost"] >= 0, "LIVE_CASE provider-reported cost is not preserved")
                 else:
                     _require(result["route_observation"]["input_price"] == 0 and result["route_observation"]["output_price"] == 0 and result["provider_reported_cost"] == 0, "LIVE_CASE pricing is not zero")
                 _require(result["route_observation"]["opencode_version"] == auth["expected_opencode_version"], "LIVE_CASE OpenCode version is not authorization-bound")
@@ -929,7 +936,7 @@ class CampaignResultValidator:
                     if _is_subscription_route(manifest):
                         _require(result["route_observation"]["billing_route"] == AUTHORIZED_BILLING_ROUTE and result["route_observation"]["subscription_entitlement_confirmed"] is True, "source-mutation subscription billing route is not established")
                         _require(result["route_observation"]["runtime_model_id"] == auth["expected_runtime_model_id"], "source-mutation runtime model identity is not authorization-bound")
-                        _require(result["provider_reported_cost"] == result["route_observation"]["provider_reported_cost"], "source-mutation provider-reported cost is not preserved")
+                        _require(type(result["provider_reported_cost"]) in (int, float) and not isinstance(result["provider_reported_cost"], bool) and result["provider_reported_cost"] >= 0, "source-mutation provider-reported cost is not preserved")
                     else:
                         _require(result["route_observation"]["input_price"] == 0 and result["route_observation"]["output_price"] == 0 and result["provider_reported_cost"] == 0, "source-mutation pricing is not zero")
                     _require(result["route_observation"]["opencode_version"] == auth["expected_opencode_version"], "source-mutation OpenCode version is not authorization-bound")

@@ -88,16 +88,48 @@ QUIXBUGS_PDB_VARIANT = "max"
 QUIXBUGS_PDB_PROVIDER = "OpenCode Zen"
 
 
-def _validate_quixbugs_pdb_model_config(config: LiveModelConfig) -> None:
-    if config.model_name != QUIXBUGS_PDB_MODEL_ID:
+def _validate_quixbugs_pdb_model_config(
+    config: LiveModelConfig,
+    *,
+    binding: Optional[tuple[str, str, str]] = None,
+) -> None:
+    """Validate the PDB-case model identity binding.
+
+    The historical default is the accepted OpenCode Zen identity
+    (``QUIXBUGS_PDB_MODEL_ID`` / ``QUIXBUGS_PDB_VARIANT``).  An explicit
+    ``binding`` (provider, model id, variant) supplied by the OpenCode Go
+    execution adapter replaces that historical identity for the PDB case; the
+    exact runtime model/catalog identity then always comes from validated
+    authorization and route evidence, never from a hardcoded default.
+    """
+    if binding is None:
+        if config.model_name != QUIXBUGS_PDB_MODEL_ID:
+            raise QuixBugsLiveConfigurationError(
+                f"QuixBugs PDB case requires model {QUIXBUGS_PDB_MODEL_ID!r}"
+            )
+        expected_model = QUIXBUGS_PDB_MODEL_ID
+        expected_variant = QUIXBUGS_PDB_VARIANT
+    else:
+        provider, model_id, variant = binding
+        if type(provider) is not str or type(model_id) is not str or type(variant) is not str:
+            raise QuixBugsLiveConfigurationError("QuixBugs PDB identity binding is malformed")
+        if not provider or not model_id or not variant:
+            raise QuixBugsLiveConfigurationError("QuixBugs PDB identity binding is incomplete")
+        if model_id == QUIXBUGS_PDB_MODEL_ID:
+            raise QuixBugsLiveConfigurationError(
+                "QuixBugs PDB identity binding must not reuse the historical OpenCode Zen model identity"
+            )
+        expected_model = model_id
+        expected_variant = variant
+    if config.model_name != expected_model:
         raise QuixBugsLiveConfigurationError(
-            f"QuixBugs PDB case requires model {QUIXBUGS_PDB_MODEL_ID!r}"
+            f"QuixBugs PDB case requires model {expected_model!r}"
         )
     command = list(config.command)
     pairs = {(command[index], command[index + 1]) for index in range(len(command) - 1)}
-    if ("--model", QUIXBUGS_PDB_MODEL_ID) not in pairs or ("--variant", QUIXBUGS_PDB_VARIANT) not in pairs:
+    if ("--model", expected_model) not in pairs or ("--variant", expected_variant) not in pairs:
         raise QuixBugsLiveConfigurationError(
-            "QuixBugs PDB case requires the exact OpenCode Zen model and max variant in the transport command"
+            "QuixBugs PDB case requires the exact bound model and variant in the transport command"
         )
 
 
@@ -158,6 +190,7 @@ def run_live_quixbugs_case(
     evaluation_id: str = "local",
     repetition: int = 1,
     policy: DemoPolicy = QUIXBUGS_LIVE_POLICY,
+    pdb_identity_binding: Optional[tuple[str, str, str]] = None,
 ) -> LiveCaseResult:
     """Run exactly one QuixBugs live case through the accepted live pipeline.
 
@@ -167,6 +200,11 @@ def run_live_quixbugs_case(
     or does not match the pinned revision, or no verified execution context
     was supplied. The pinned checkout is only ever re-verified here, never
     cloned, reset, or cleaned.
+
+    ``pdb_identity_binding`` is the explicit (provider, model id, variant)
+    runtime identity for a PDB-on-uncertainty case, supplied by the OpenCode
+    Go execution adapter.  When absent the accepted historical OpenCode Zen
+    identity applies unchanged.
     """
     if type(facts) is not QuixBugsPreflightFacts:
         raise QuixBugsLiveConfigurationError("QuixBugs preflight facts are required")
@@ -177,7 +215,7 @@ def run_live_quixbugs_case(
     if type(policy) is not DemoPolicy or policy not in {QUIXBUGS_LIVE_POLICY, DemoPolicy.PDB_ON_UNCERTAINTY}:
         raise QuixBugsLiveConfigurationError("unsupported QuixBugs live policy")
     if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
-        _validate_quixbugs_pdb_model_config(config)
+        _validate_quixbugs_pdb_model_config(config, binding=pdb_identity_binding)
 
     adapter = QuixBugsAdapter.from_manifest(manifest_path)
     task_id = adapter.manifest.task_id
@@ -229,6 +267,11 @@ def run_live_quixbugs_case(
         launch_plan = None
         bundle_hashes = None
         if policy is DemoPolicy.PDB_ON_UNCERTAINTY:
+            binding_provider, binding_model_id, binding_variant = (
+                pdb_identity_binding
+                if pdb_identity_binding is not None
+                else (QUIXBUGS_PDB_PROVIDER, QUIXBUGS_PDB_MODEL_ID, QUIXBUGS_PDB_VARIANT)
+            )
             probe = prepare_quixbugs_gcd_pdb_probe(project_root, external.verifier_workspace_parent)
             launch_plan = PdbLaunchPlan(
                 python_executable=facts.execution_context.environment.python_executable,
@@ -252,9 +295,9 @@ def run_live_quixbugs_case(
                 pdb_observation_budget=QUIXBUGS_PDB_OBSERVATION_BUDGET,
             )
             pdb_evidence = {
-                "provider": QUIXBUGS_PDB_PROVIDER,
-                "model_id": QUIXBUGS_PDB_MODEL_ID,
-                "variant": QUIXBUGS_PDB_VARIANT,
+                "provider": binding_provider,
+                "model_id": binding_model_id,
+                "variant": binding_variant,
                 "policy": policy.value,
                 "observation_budget": QUIXBUGS_PDB_OBSERVATION_BUDGET,
                 "contained_preflight": contained_report.to_mapping(),
@@ -348,6 +391,17 @@ def run_live_quixbugs_case(
         removed = not root.exists()
         return removed, (None if removed else "owned external workspace remains")
 
+    #: Bounded adapter-visible evidence for every policy: the controller PDB
+    #: gate decisions and the bounded malformed-directive rejection records
+    #: observed during this case.  For static-baseline cases the gate is
+    #: disabled, so the decision list is empty by construction.
+    case_evidence: dict[str, Any] = {
+        "pdb_gate_decisions": list(live_adapter.pdb_gate_decisions) if live_adapter else [],
+        "directive_rejections": list(live_adapter.directive_rejections) if live_adapter else [],
+    }
+    if pdb_evidence is not None:
+        case_evidence = {**pdb_evidence, **case_evidence}
+
     return _finalize_live_case(
         task_id=task_id, policy=policy, repetition=repetition, case_id=case_id, run_id=run_id, config=config,
         task=task, context=context, workspace=workspace, result=result, metrics=metrics, live_adapter=live_adapter,
@@ -357,15 +411,7 @@ def run_live_quixbugs_case(
         ).evaluate(task, context.candidate_patch),
         extra_cleanup=cleanup_external,
         extra_cleanup_owned=external is not None,
-        evidence=(
-            {
-                **(pdb_evidence or {}),
-                "pdb_gate_decisions": list(live_adapter.pdb_gate_decisions) if live_adapter else [],
-                "directive_rejections": list(live_adapter.directive_rejections) if live_adapter else [],
-            }
-            if policy is DemoPolicy.PDB_ON_UNCERTAINTY
-            else None
-        ),
+        evidence=case_evidence,
     )
 
 

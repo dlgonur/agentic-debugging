@@ -42,6 +42,14 @@ _ISOLATION_PERMISSION_DENIALS = {
     "question": "deny",
     "task": "deny",
 }
+
+#: Explicit route modes.  ``legacy`` (default) preserves the historical
+#: OpenCode Zen zero-price route behavior unchanged; ``opencode-go`` binds
+#: the exact model, variant, OpenCode version, catalog fingerprint, runtime
+#: model identity, account status, and billing-route evidence already
+#: validated by the outer authorization/preflight contract and does not
+#: require zero catalog prices.
+ROUTE_MODES = ("legacy", "opencode-go")
 _AGENTS_CONTENT = (
     "This task-owned workspace carries only the bounded public protocol request. "
     "Return one protocol directive; do not use tools, inspect repositories, edit files, or run shell commands."
@@ -237,8 +245,15 @@ def _numeric(value: Any) -> int | float | None:
 
 
 def _provider_telemetry(events: list[Any]) -> dict[str, Any] | None:
-    """Collect fields emitted by OpenCode without filling absent fields."""
+    """Collect fields emitted by OpenCode without filling absent fields.
+
+    Independently observed identity fields (``observed_model``,
+    ``observed_billing_route``, ``observed_model_substitution``) are passed
+    through when a provider emits them so the outer execution adapter can
+    revalidate the runtime identity binding from provider-reported state.
+    """
     result: dict[str, Any] = {}
+    _OBSERVED_IDENTITY_KEYS = ("observed_model", "observed_billing_route", "observed_model_substitution")
 
     def visit(value: Any) -> None:
         if isinstance(value, dict):
@@ -247,6 +262,8 @@ def _provider_telemetry(events: list[Any]) -> dict[str, Any] | None:
                     numeric = _numeric(item)
                     if numeric is not None:
                         result[key] = numeric
+                elif key in _OBSERVED_IDENTITY_KEYS and item is not None:
+                    result[key] = item
                 elif key == "cache" and isinstance(item, dict):
                     cache: dict[str, Any] = dict(result.get("cache", {}))
                     for cache_key in ("read", "write"):
@@ -477,8 +494,15 @@ def _preflight(args: argparse.Namespace) -> int:
     evidence_path = Path(args.evidence_file) if args.evidence_file else None
     try:
         isolation = _prepare_isolation(root)
-        launcher = verify_opencode_launcher(isolation["environment"])
-        catalog = verify_opencode_catalog(args.model, args.variant, isolation["environment"], cwd=root)
+        launcher = verify_opencode_launcher(
+            isolation["environment"],
+            expected_version=_expected_opencode_version(args),
+        )
+        catalog = verify_opencode_catalog(
+            args.model, args.variant, isolation["environment"], cwd=root,
+            route_mode=args.route_mode,
+            expected_runtime_model_id=_expected_runtime_model_id(args),
+        )
         effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root)
         request_file = root / "public-request.json"
         request_file.write_text("{}\n", encoding="utf-8")
@@ -488,6 +512,7 @@ def _preflight(args: argparse.Namespace) -> int:
         assertions = {
             "preflight": "passed",
             "provider_inference_started": False,
+            "route_mode": args.route_mode,
             "launcher": launcher,
             "catalog": catalog,
             "effective_config": effective_config,
@@ -503,6 +528,8 @@ def _preflight(args: argparse.Namespace) -> int:
             "agents_sha256": isolation["agents_sha256"],
             "command": command,
         }
+        if args.route_mode == "opencode-go":
+            assertions["route_binding"] = _route_binding_evidence(args)
         _record(evidence_path, assertions)
         print(json.dumps(assertions, ensure_ascii=False, sort_keys=True))
         return 0
@@ -513,6 +540,56 @@ def _preflight(args: argparse.Namespace) -> int:
         return 1
     finally:
         shutil.rmtree(root, ignore_errors=True)
+
+
+def _expected_opencode_version(args: argparse.Namespace) -> str | None:
+    if args.route_mode != "opencode-go":
+        return None
+    value = (args.expected_opencode_version or "").strip()
+    if not value:
+        raise RuntimeError("OpenCode Go mode requires --expected-opencode-version")
+    return value
+
+
+def _expected_runtime_model_id(args: argparse.Namespace) -> str | None:
+    if args.route_mode != "opencode-go":
+        return None
+    value = (args.expected_runtime_model_id or "").strip()
+    if not value:
+        raise RuntimeError("OpenCode Go mode requires --expected-runtime-model-id")
+    return value
+
+
+def _route_binding_evidence(args: argparse.Namespace) -> dict[str, Any]:
+    """The identity/route binding carried into OpenCode Go mode.
+
+    Every value was already validated by the outer authorization/preflight
+    contract; the wrapper requires them explicitly (fail closed on absence)
+    and records them, without re-querying any catalog/account/entitlement
+    service and without inferring Zen/free-tier use.
+    """
+    fingerprint = (args.expected_catalog_fingerprint or "").strip()
+    if not (len(fingerprint) == 64 and all(char in "0123456789abcdef" for char in fingerprint)):
+        raise RuntimeError("OpenCode Go mode requires --expected-catalog-fingerprint as a 64-hex string")
+    account_status = (args.expected_account_status or "").strip()
+    if not account_status:
+        raise RuntimeError("OpenCode Go mode requires --expected-account-status")
+    billing_route = (args.expected_billing_route or "").strip()
+    if not billing_route:
+        raise RuntimeError("OpenCode Go mode requires --expected-billing-route")
+    expected_version = _expected_opencode_version(args)
+    expected_runtime_model_id = _expected_runtime_model_id(args)
+    if args.model != expected_runtime_model_id:
+        raise RuntimeError(
+            f"model identity {args.model!r} does not match the expected runtime model identity {expected_runtime_model_id!r}"
+        )
+    return {
+        "expected_runtime_model_id": expected_runtime_model_id,
+        "expected_opencode_version": expected_version,
+        "expected_catalog_fingerprint": fingerprint,
+        "expected_account_status": account_status,
+        "expected_billing_route": billing_route,
+    }
 
 
 def _json_objects(value: str) -> list[dict[str, Any]]:
@@ -531,8 +608,13 @@ def _json_objects(value: str) -> list[dict[str, Any]]:
     return objects
 
 
-def verify_opencode_launcher(environment: dict[str, str] | None = None) -> dict[str, Any]:
-    """Verify the installed Windows launcher without contacting a model."""
+def verify_opencode_launcher(environment: dict[str, str] | None = None, *, expected_version: str | None = None) -> dict[str, Any]:
+    """Verify the installed Windows launcher without contacting a model.
+
+    ``expected_version`` (OpenCode Go mode) requires the observed launcher
+    version to equal the authorization-bound version exactly; the legacy mode
+    keeps the historical behavior (any non-empty version).
+    """
     launcher = shutil.which("opencode.cmd")
     if not launcher:
         raise RuntimeError("opencode.cmd was not found on PATH")
@@ -544,6 +626,10 @@ def verify_opencode_launcher(environment: dict[str, str] | None = None) -> dict[
     evidence = {"launcher": "opencode.cmd", "resolved_path": launcher, "returncode": completed.returncode, "version": version}
     if completed.returncode != 0 or not version:
         raise RuntimeError(f"opencode.cmd version preflight failed: {_redact(evidence)}")
+    if expected_version is not None:
+        if version != expected_version:
+            raise RuntimeError(f"OpenCode version drift: observed {version!r} != expected {expected_version!r}")
+        evidence["version_matches_expected"] = True
     return evidence
 
 
@@ -552,6 +638,9 @@ def verify_opencode_catalog(
     variant: str,
     environment: dict[str, str],
     cwd: Path | None = None,
+    *,
+    route_mode: str = "legacy",
+    expected_runtime_model_id: str | None = None,
 ) -> dict[str, Any]:
     completed = subprocess.run(
         ["opencode.cmd", "models", "opencode", "--verbose", "--pure"],
@@ -573,17 +662,36 @@ def verify_opencode_catalog(
     cache = costs.get("cache") if isinstance(costs, dict) else None
     if entry.get("status") != "active" or not isinstance(costs, dict) or not isinstance(cache, dict):
         raise RuntimeError("exact OpenCode model is not active or has incomplete pricing metadata")
-    if any(costs.get(name) != 0 for name in ("input", "output")) or any(cache.get(name) != 0 for name in ("read", "write")):
-        raise RuntimeError("exact OpenCode model is not zero-cost")
+    for name in ("input", "output"):
+        value = costs.get(name)
+        if type(value) not in (int, float) or isinstance(value, bool) or value < 0:
+            raise RuntimeError("exact OpenCode model has malformed pricing metadata")
+    for name in ("read", "write"):
+        value = cache.get(name)
+        if type(value) not in (int, float) or isinstance(value, bool) or value < 0:
+            raise RuntimeError("exact OpenCode model has malformed cache pricing metadata")
+    if route_mode not in ROUTE_MODES:
+        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
+    if route_mode == "legacy":
+        if any(costs.get(name) != 0 for name in ("input", "output")) or any(cache.get(name) != 0 for name in ("read", "write")):
+            raise RuntimeError("exact OpenCode model is not zero-cost")
+    elif route_mode == "opencode-go":
+        if expected_runtime_model_id is not None and model != expected_runtime_model_id:
+            raise RuntimeError(
+                f"model identity {model!r} does not match the expected runtime model identity {expected_runtime_model_id!r}"
+            )
+        # OpenCode Go mode: catalog prices are preserved as observed; no
+        # hidden fallback, model selection, or Zen/free-tier inference.
     variants = entry.get("variants")
     if not isinstance(variants, dict) or variant not in variants:
         raise RuntimeError("requested OpenCode model variant is unavailable")
     return {
         "model": model,
         "active": True,
-        "zero_cost": True,
+        "zero_cost": costs.get("input") == 0 and costs.get("output") == 0,
         "variant": variant,
         "variant_available": True,
+        "route_mode": route_mode,
     }
 
 
@@ -593,6 +701,12 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--variant", required=True)
     parser.add_argument("--evidence-file")
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--route-mode", choices=ROUTE_MODES, default="legacy")
+    parser.add_argument("--expected-opencode-version")
+    parser.add_argument("--expected-catalog-fingerprint")
+    parser.add_argument("--expected-runtime-model-id")
+    parser.add_argument("--expected-account-status")
+    parser.add_argument("--expected-billing-route")
     args = parser.parse_args(argv)
     if args.preflight:
         return _preflight(args)
@@ -612,13 +726,23 @@ def main(argv: list[str] | None = None) -> int:
         request_file = root / "public-request.json"
         request_file.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True), encoding="utf-8")
         isolation = _prepare_isolation(root)
-        launcher = verify_opencode_launcher(isolation["environment"])
-        catalog = verify_opencode_catalog(args.model, args.variant, isolation["environment"], cwd=root)
+        route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
+        launcher = verify_opencode_launcher(
+            isolation["environment"],
+            expected_version=route_binding["expected_opencode_version"] if route_binding is not None else None,
+        )
+        catalog = verify_opencode_catalog(
+            args.model, args.variant, isolation["environment"], cwd=root,
+            route_mode=args.route_mode,
+            expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
+        )
         effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root)
         command = build_opencode_command(args.model, args.variant, root, request_file)
         evidence_path = Path(args.evidence_file) if args.evidence_file else None
         _record(evidence_path, {
             "event": "transport_preflight",
+            "route_mode": args.route_mode,
+            "route_binding": route_binding,
             "launcher": launcher,
             "catalog": catalog,
             "effective_config": effective_config,

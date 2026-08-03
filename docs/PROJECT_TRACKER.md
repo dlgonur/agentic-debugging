@@ -848,6 +848,79 @@ made.
 
 ## Last Updated
 
+2026-08-03 (QuixBugs OpenCode Go execution adapter v1 task, adapter-only)
+
+The OpenCode Go execution-adapter wiring for the paired-pilot v2 live runner
+is implemented and validated with zero provider contact. Added:
+
+- Strict versioned adapter configuration contract
+  (`quixbugs-opencode-go-execution-adapter-v1`) in
+  `scripts/quixbugs_opencode_go_adapter.py`; tracked non-executable template
+  `research/quixbugs/OPENCODE_GO_EXECUTION_ADAPTER_TEMPLATE.json` (rejected as
+  an active configuration); active configurations live outside tracked source
+  in the ignored `operator/` location. Rejections: unknown/missing fields,
+  wrong types, string shell commands, empty argv elements, relative/ambiguous
+  executables, shell metacharacters, out-of-boundary executables/working
+  directories, hidden environment inheritance, credential-shaped content,
+  authorization/manifest/protocol/commit/route/catalog/model mismatches,
+  budget/timeout contradictions, and the historical
+  `opencode/deepseek-v4-flash-free` Zen identity as an execution identity.
+- Runtime identity binding derived from validated authorization + route
+  evidence; agreement enforced across configuration, authorization, route
+  observation, and transport invocation; alias/catalog/version/variant/
+  route-class/billing-route drift and any observed Zen/free-tier/Ollama/
+  alternate-provider/fallback state rejected via typed RouteDriftError that
+  maps to the accepted TRANSPORT_EVIDENCE_LOSS infrastructure stop contract;
+  independent identity observations recorded in bounded redacted evidence.
+- Explicit transport factory: structured argv only, explicit cwd, bounded
+  environment allowlist, bounded stdout/stderr/diagnostics, process-group-
+  aware timeout and tree cleanup, zero automatic retries/fallback/catalog
+  queries, no global-model or session-state reliance; construction requires
+  validated authorization/execution commit/route observation/configuration/
+  binding; per-case prepare() verifies the output/attempt ownership gates on
+  disk; the binding and gates are revalidated before every provider process
+  attempt. Provider-reported token/cost metadata propagates truthfully;
+  non-finite metadata is rejected; subscription access never forces cost to
+  zero.
+- Case-runner binding reusing `run_live_quixbugs_case` (bounded
+  backward-compatible extension of `agentic_debugger/evaluation/live_quixbugs.py`:
+  explicit `pdb_identity_binding` replacing the historical Zen PDB identity
+  only when supplied, and bounded PDB-gate/rejection evidence for every
+  policy; default behavior unchanged): one fresh transport/session/workspace
+  per frozen case, no shared conversation, static-baseline PDB prohibition,
+  PDB-on-uncertainty through the accepted controller gate and budgets, and
+  full reconciliation with the live runner's ledger, terminal commitment,
+  authority checks, stop rules, and result validator.
+- CLI surface: `adapter-template`, `adapter-validate` (structural or
+  authorization+route bound), `route-preflight-only` (zero provider
+  processes), `selftest` (synthetic only), and `live-wire` (requires explicit
+  authorization, route evidence, adapter config, output root, operator
+  confirmation, QuixBugs environment artifact, and a resolvable facts
+  provider; unusable without an actively validated configuration and an
+  explicitly constructed transport factory).
+- Deterministic network-incapable synthetic executable
+  (`scripts/opencode_go_synthetic_executable.py`) covering: valid response,
+  malformed-then-valid recovery, malformed exhaustion, startup failure,
+  timeout, oversized output, non-zero exit, identity/model/route drift,
+  missing usage, finite metadata, non-finite metadata, credential output, and
+  child-process cleanup. Zero real OpenCode/provider/catalog/account calls,
+  exact process-attempt/logical-call accounting, fresh per-case boundaries,
+  and correct cleanup proven by tests and the self-test mode.
+- Validation: new unit suites 76 passed (configuration 40, transport 24,
+  case-runner 12), new CLI integration suite 10 passed; existing live-runner
+  266, paired-pilot 267, live-quixbugs/opencode-transport/live-evaluation/
+  model-adapter/controller/controller-policy/quixbugs-adapter/verifier 456
+  passed; full unit suite 2783 passed (3 skipped); integration suite 357
+  passed; golden-trajectory suite 11 passed; v1 and v2 paired-pilot validators
+  pass; `python -m py_compile` on all changed Python files passes; `git diff
+  --check` clean. No live campaign, benchmark, model, provider, catalog, or
+  paid endpoint was contacted; no real OpenCode binary was executed.
+
+Not marked complete and not started: operator authorization, real route
+preflight, real OpenCode Go execution, the six-case live campaign, empirical
+evaluation, model performance, PDB effectiveness, RAG, SFT, and DPO.
+Historical OpenCode Zen records remain historical and unchanged.
+
 2026-08-02 (QuixBugs paired-pilot v2 live-runner infrastructure task)
 - Final (third) material repair round: (1) crash-safe terminal package
   commitment — terminalization is a three-step durable protocol
@@ -869,3 +942,41 @@ made.
   affected final case ID; pre-terminal drift is a separate campaign-level
   failure with affected case ID null. Post-repair counts: live-runner suite
   266 passed; paired-pilot suites 267 passed.
+
+2026-08-03 (OpenCode Go execution adapter v1 wrapper repair, adapter-only)
+
+Bounded surgical repair of the OpenCode Go execution adapter. (1) The active
+adapter command now explicitly launches the accepted protocol wrapper
+(scripts/opencode_protocol_transport.py) with the exact authorization-bound
+model identity, variant, and --route-mode opencode-go plus the route-binding
+flags (expected OpenCode version, catalog fingerprint, runtime model id,
+account status, billing route); --evidence-file is appended only because the
+wrapper owns that argument. Direct OpenCode CLI commands that bypass the
+wrapper are rejected (DIRECT_OPENCODE_COMMAND_REJECTED / WRAPPER_NOT_BOUND);
+the tracked template shows the wrapper form with placeholders only. (2) The
+wrapper gained explicit route modes: legacy (default; historical OpenCode Zen
+zero-price behavior preserved unchanged, all existing wrapper tests pass) and
+opencode-go (catalog prices preserved as observed and never required to be
+zero; launcher version must equal the expected version exactly; the
+outer-validated model/fingerprint/account/billing-route evidence is required
+and recorded; no hidden fallback, model selection, or Zen/free-tier
+inference). (3) The case execution cost is the aggregate of the finite
+monetary costs explicitly reported by each provider response; absent cost
+metadata stays absent (schema zero is the absence representation, never a
+fabricated reported zero), explicit zero stays zero, subscription access never
+implies zero, and the preflight route-observation cost is never used as the
+case execution cost. The frozen v2 case validator cost-equality check was
+relaxed to the truthful non-negative-finite contract (directly affected
+compatibility fix; paired-pilot v2 suite 88 passed). (4) Synthetic validation
+runs the fake OpenCode CLI through the real wrapper (request via stdin,
+bounded opencode run command, response reaching the model-adapter boundary),
+covering absent/zero/positive cost propagation, drift through wrapper
+telemetry, credential redaction, and child cleanup; zero real provider calls.
+Focused checks: wrapper repair 12, configuration 45, transport factory 24,
+case runner 13, CLI integration 10, wrapper transport 30, paired-pilot v2 88,
+cost-focused live-runner/paired-pilot 7 — all passed; py_compile and git diff
+--check clean. No live campaign, benchmark, model, provider, catalog, or paid
+endpoint contacted; no commit/stage/push. Not marked complete: operator
+authorization, real route preflight, real OpenCode Go execution, six-case
+live campaign, empirical evaluation, model performance, PDB effectiveness,
+RAG, SFT, DPO.

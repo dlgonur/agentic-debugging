@@ -233,3 +233,97 @@ drift PARTIAL + completed 5 / invalidated 1 / unstarted 0 uretir; pre-terminal
 drift ayri campaign-level failure'dir (affected case ID null). Repair sonrasi:
 live-runner suite 266 passed; paired-pilot suite'leri 267 passed. Hicbir live
 campaign, benchmark, model veya paid endpoint calistirilmadi.
+
+### OpenCode Go execution adapter v1 (2026-08-03, adapter-only)
+
+Paired-pilot v2 live runner icin OpenCode Go execution-adapter wiring'i
+tamamlandi ve dogrulandi (yalnizca adapter; hicbir provider temas yok):
+`scripts/quixbugs_opencode_go_adapter.py` - strict versioned adapter
+configuration kontrati (`quixbugs-opencode-go-execution-adapter-v1`; tracked
+non-executable template `research/quixbugs/OPENCODE_GO_EXECUTION_ADAPTER_TEMPLATE.json`
+aktif config olarak reddedilir; gercek konfigurasyonlar tracked disi `operator/`
+dizininde yasar), runtime identity binding (runtime model kimligi yalnizca
+dogrulanmis authorization + route evidence'dan gelir; tarihsel
+`opencode/deepseek-v4-flash-free` Zen kimligi execution identity olarak
+reddedilir; alias/catalog/version/variant/route-class drift ve Zen/free-tier/
+Ollama/alternate-provider/fallback durumlari typed `RouteDriftError` ile
+reddedilir), explicit transport factory (accepted protocol transport'un
+structured argv + explicit cwd + bounded env allowlist + bounded
+stdout/stderr/diagnostics + process-group-aware timeout/cleanup + sifir
+otomatik retry/fallback/catalog sorgusu ile adaptasyonu; her provider process
+attempt oncesi binding ve output/attempt ownership gate'leri yeniden
+dogrulanir), case-runner binding (accepted QuixBugs live path
+`run_live_quixbugs_case` uzerinden bir frozen case basina bir fresh
+transport/session/workspace; static-baseline PDB yasagi; PDB-on-uncertainty
+yalnizca accepted controller gate ve budget'lar ile, runtime identity
+`pdb_identity_binding` ile acikca baglanir; ledger/terminal commitment/
+authority checks/stop rules/result validator asla bypass edilmez; route drift,
+transport failure, malformed-response exhaustion, budget exhaustion,
+containment/verifier/cleanup failure ve public/private boundary ihlalleri
+accepted typed stop/result kontratlarina map'lenir) ve CLI
+(`adapter-template`, `adapter-validate`, `route-preflight-only` - sifir
+provider process, `selftest` - yalnizca synthetic,
+`live-wire` - aktif validate edilmis config + explicit operator artifact'lari
+olmadan kullanilamaz). Deterministik network-incapable synthetic executable
+(`scripts/opencode_go_synthetic_executable.py`) ile valid response, malformed
++ recovery, exhaustion, startup failure, timeout, oversized output, non-zero
+exit, identity/model/route drift, missing/non-finite usage, credential
+sanitization ve child-process cleanup senaryolari kanitlandi; sifir gercek
+OpenCode/provider/catalog/account cagrisi, network-enabled komut yok, Zen/
+free-tier route yok, fallback yok, exact process-attempt/logical-call
+muhasebesi ve her case icin fresh process/session boundary + dogru cleanup
+kanitlandi. Testler: yeni unit suite 76 passed (configuration 40 + transport
+24 + case-runner 12), yeni integration suite 10 passed; mevcut live-runner
+266, paired-pilot 267, live-quixbugs/transport/live/controller/verifier
+suites ve tam unit suite 2783 passed (3 skipped), integration 357, golden
+trajectories 11 passed; v1/v2 validators gecerli; py_compile ve git diff
+--check temiz. Gercek kampanya oncesi hala gerekli: gercek operator
+authorization artifact'i, preflight'tan gecen gercek route evidence, adapter
+commit'inin authorization'a baglanmasi, operator saglanan QuixBugs execution
+environment'i ve operator'un gercek kampanya icin acik yetkisi. Tamamlanmis
+isaretlenmez: operator authorization, gercek route preflight, gercek OpenCode
+Go execution, six-case live campaign, empirical evaluation, model
+performance, PDB effectiveness, RAG, SFT, DPO. Tarihsel OpenCode Zen
+kayitlari degismeden historical kaldi. Dokuman:
+`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`.
+
+### OpenCode Go execution adapter v1 - wrapper repair (2026-08-03, adapter-only)
+
+Bounded surgical repair: (1) adapter command artik dogrudan OpenCode CLI
+komutu degil, accepted protocol wrapper'i
+(`scripts/opencode_protocol_transport.py`) acikca baslatiyor - `[python,
+wrapper, --model <runtime id>, --variant <v>, --route-mode opencode-go,
+--expected-opencode-version <v>, --expected-catalog-fingerprint <hex>,
+--expected-runtime-model-id <id>, --expected-account-status <status>,
+--expected-billing-route SUBSCRIPTION]`; `--evidence-file` yalnizca wrapper'in
+sahip oldugu arguman oldugu icin adapter tarafindan eklenir. Wrapper'i bypass
+eden direct OpenCode CLI komutlari `DIRECT_OPENCODE_COMMAND_REJECTED` /
+`WRAPPER_NOT_BOUND` ile reddedilir; `--route-mode opencode-go` ve tum
+route-binding flag'lari config degerlerine baglanir (`ROUTE_MODE_NOT_BOUND`,
+`ROUTE_BINDING_FLAGS_MISSING`). (2) Wrapper'a minimal route mode eklendi:
+`legacy` (varsayilan; tarihsel OpenCode Zen zero-price davranisi degismeden
+korunur) ve `opencode-go` (catalog fiyatlari oldugu gibi korunur, sifir
+gerektirmez; launcher version `--expected-opencode-version` ile birebir
+eslesmeli; model/fingerprint/account/billing-route kaniti dis authorization/
+preflight kontrati tarafindan dogrulanmis olarak zorunlu tutulur ve evidence'da
+kaydedilir; gizli fallback, model secimi, catalog/account yeniden sorgusu ve
+Zen/free-tier inference yok). (3) Case execution cost artik her provider
+response'un acikca bildirdigi sonlu monetary cost'larin toplamidir
+(`provider_telemetry.cost`): absent cost fabricated edilmez (schema sifir
+yokluk temsili), acik sifir sifir kalir, abonelik erisimi sifir cost ima
+etmez, preflight route-observation cost case cost olarak kullanilmaz; frozen
+v2 case validator'unun cost esitligi kontratu buna gore gevsetildi (dogrudan
+etkilenen compatibility fix). (4) Synthetic validation artik fake OpenCode
+CLI'yi GERCEK wrapper uzerinden calistiriyor (stdin uzerinden request, bounded
+`opencode run` komutu kurulumu, response model-adapter sinirina ulasiyor);
+absent/zero/positive cost ayrimi kanitlandi; sifir gercek provider cagrisi.
+Focused checks: yeni wrapper repair suite 12, configuration 45, transport 24,
+case-runner 13, CLI integration 10, wrapper transport 30, paired-pilot v2 88
+passed; live-runner ve paired-pilot cost odakli testler 7 passed; py_compile
+ve git diff --check temiz. Gercek kampanya oncesi gerekenler degismedi
+(gercek authorization, gercek route evidence, adapter commit baglama,
+operator QuixBugs environment'i, operator yetkisi); operator authorization,
+gercek route preflight, gercek OpenCode Go execution, six-case live campaign,
+empirical evaluation, model performance, PDB effectiveness, RAG, SFT ve DPO
+tamamlanmis isaretlenmedi; tarihsel OpenCode Zen kayitlari degismeden
+historical kaldi.

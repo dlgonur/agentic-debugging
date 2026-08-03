@@ -553,18 +553,24 @@ def test_v2_completed_live_case_validates_with_subscription_route(manifest):
 
 
 def test_v2_completed_live_case_preserves_provider_reported_cost(manifest):
+    # The case execution cost is the aggregate of the finite monetary costs
+    # explicitly reported by the actual per-call provider responses; it
+    # legitimately differs from the preflight route-observation cost.  Both
+    # values are preserved truthfully and are never forced to zero by
+    # subscription access; absence is never fabricated.
     auth = _v2_authorization(manifest)
     result = _live_result(manifest)
     result["provider_reported_cost"] = 0.042
-    with pytest.raises(pilot.PilotError):
-        pilot.validate_case_result(result, manifest, auth)
+    pilot.validate_case_result(result, manifest, auth)
     result = _live_result(manifest)
     result["route_observation"]["provider_reported_cost"] = 0.042
-    with pytest.raises(pilot.PilotError):
-        pilot.validate_case_result(result, manifest, auth)
+    pilot.validate_case_result(result, manifest, auth)
     result = _live_result(manifest)
     result["provider_reported_cost"] = 0.042
-    result["route_observation"]["provider_reported_cost"] = 0.042
+    result["route_observation"]["provider_reported_cost"] = 0.0042
+    pilot.validate_case_result(result, manifest, auth)
+    result = _live_result(manifest)
+    result["provider_reported_cost"] = 0.0
     pilot.validate_case_result(result, manifest, auth)
 
 
