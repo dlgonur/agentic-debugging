@@ -1,5 +1,12 @@
 """Shared fixtures: wrapper-form adapter configuration and the fake OpenCode
-shim environment used by the OpenCode Go execution adapter tests."""
+shim environment used by the OpenCode Go execution adapter tests.
+
+The fake launcher directory provides BOTH the ``opencode.cmd`` batch shim
+(for the short local inspection commands that may continue through the
+launcher) AND a deterministic compiled fake native ``opencode.exe`` (the
+real protocol wrapper resolves and version-proves the native executable and
+invokes it directly for ``opencode run``).
+"""
 
 from __future__ import annotations
 
@@ -54,8 +61,10 @@ def wrapper_environment_allowlist() -> list[str]:
 
 
 def prepare_wrapper_environment(tmp_path: Path, synthetic_executable: Path) -> dict[str, str]:
-    """Create the fake ``opencode.cmd`` shim and the fake profile with
-    synthetic auth state, and return the transport environment override."""
+    """Create the fake ``opencode.cmd`` shim, the compiled fake native
+    ``opencode.exe`` in the trusted npm package layout, and the fake profile
+    with synthetic auth state, and return the transport environment
+    override."""
     synthetic_executable = synthetic_executable.resolve()
     shim_dir = tmp_path / "fake-bin"
     shim_dir.mkdir(exist_ok=True)
@@ -64,6 +73,9 @@ def prepare_wrapper_environment(tmp_path: Path, synthetic_executable: Path) -> d
         "@echo off\r\n" + f'"{sys.executable}" "{synthetic_executable}" %*\r\n',
         encoding="utf-8",
     )
+    native_bin = shim_dir / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin"
+    native_bin.mkdir(parents=True, exist_ok=True)
+    synthetic.build_fake_native_executable(native_bin, target_script=synthetic_executable)
     profile = tmp_path / "fake-profile"
     auth = profile / ".local" / "share" / "opencode" / "auth.json"
     auth.parent.mkdir(parents=True, exist_ok=True)
@@ -75,3 +87,25 @@ def prepare_wrapper_environment(tmp_path: Path, synthetic_executable: Path) -> d
         "TMP": str(tmp_path),
         "TEMP": str(tmp_path),
     }
+
+
+def prepare_fake_launcher_dir(tmp_path: Path) -> dict[str, str]:
+    """A deterministic fake launcher directory for MOCKED subprocess tests,
+    mirroring the production npm layout.
+
+    Creates ``opencode.cmd`` plus a dummy ``opencode.exe`` regular file at
+    the trusted npm package location
+    ``<launcher-dir>\\node_modules\\opencode-ai\\node_modules\\opencode-windows-x64\\bin\\opencode.exe``
+    so the wrapper's trusted npm-package native resolution (root containment,
+    regular file) succeeds.  ``shutil.which`` must be monkeypatched to return
+    ``fixture["launcher"]`` and the mocked ``subprocess.run`` must answer
+    ``[fixture["native"], "--version"]`` with the expected version.
+    """
+    fake_bin = tmp_path / "fake-launcher"
+    fake_bin.mkdir(parents=True, exist_ok=True)
+    launcher = fake_bin / "opencode.cmd"
+    launcher.write_text("@echo off\r\n", encoding="utf-8")
+    native = fake_bin / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin" / "opencode.exe"
+    native.parent.mkdir(parents=True, exist_ok=True)
+    native.write_bytes(b"dummy native executable fixture (mocked subprocess tests)")
+    return {"launcher": str(launcher), "native": str(native), "bin": str(fake_bin)}

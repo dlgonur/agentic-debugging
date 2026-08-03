@@ -18,11 +18,13 @@ sys.path.insert(0, str(REPO_ROOT / "tests" / "unit"))
 
 from scripts import opencode_protocol_transport as wrapper
 
+import opencode_go_synthetic_executable as synthetic
 import quixbugs_opencode_go_adapter as adapter
 import quixbugs_live_runner_v2 as runner
 import quixbugs_paired_pilot as pilot
 
 from opencode_go_test_support import (
+    prepare_fake_launcher_dir,
     prepare_wrapper_environment,
     synthetic_catalog_fingerprint,
     wrapper_command,
@@ -85,6 +87,7 @@ def _run_wrapper_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, route_
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     calls: list[list[str]] = []
     args = GO_ARGS if route_mode == "opencode-go" else ["--model", MODEL, "--variant", "max"]
     if expected_version is not None:
@@ -97,7 +100,7 @@ def _run_wrapper_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, route_
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout=version + "\n")
         if command[1:3] in (["models", "opencode"], ["models", "opencode-go"]):
             return _completed(command, stdout=catalog + "\n")
@@ -106,7 +109,7 @@ def _run_wrapper_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, route_
         return _completed(command, stdout='{"type": "text", "part": {"text": "{\\"kind\\": \\"stop\\", \\"reason\\": \\"ok\\"}"}}\n')
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
-    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: launcher["launcher"])
     payload = request or {"task": "public-only"}
     monkeypatch.setattr(wrapper.sys, "stdin", io.StringIO(json.dumps(payload) + "\n"))
     rc = wrapper.main(args + ["--evidence-file", str(evidence)])
@@ -134,11 +137,12 @@ def test_legacy_default_route_mode_preserves_historical_behavior(monkeypatch: py
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout="1.18.10\n")
         if command[1:3] == ["models", "opencode"]:
             return _completed(command, stdout=ZERO_CATALOG + "\n")
@@ -147,7 +151,7 @@ def test_legacy_default_route_mode_preserves_historical_behavior(monkeypatch: py
         return _completed(command, stdout='{"type": "text", "part": {"text": "{\\"kind\\": \\"stop\\", \\"reason\\": \\"ok\\"}"}}\n')
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
-    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: launcher["launcher"])
     monkeypatch.setattr(wrapper.sys, "stdin", io.StringIO('{"task": "public-only"}\n'))
     rc = wrapper.main(["--model", MODEL, "--variant", "max", "--evidence-file", str(evidence)])
     assert rc == 0
@@ -173,7 +177,14 @@ def test_opencode_go_mode_accepts_nonzero_catalog_prices(monkeypatch: pytest.Mon
     assert preflight["route_binding"]["expected_account_status"] == "ACTIVE"
     assert preflight["route_binding"]["expected_billing_route"] == "SUBSCRIPTION"
     assert preflight["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
-    assert any(len(command) > 2 and command[1] == "run" and "--file" in command for command in captured["calls"])
+    run_command = next(
+        (command for command in captured["calls"] if len(command) > 2 and command[1] == "run"),
+        None,
+    )
+    assert run_command is not None
+    assert "--file" not in run_command
+    assert wrapper.PUBLIC_REQUEST_START in run_command[2]
+    assert wrapper.PUBLIC_REQUEST_END in run_command[2]
 
 
 def _write_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, route_mode: str) -> dict:
@@ -233,20 +244,21 @@ def test_opencode_go_preflight_catalog_failure_evidence_is_typed_bounded_and_san
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     calls: list[list[str]] = []
     secret = "catalog api_key=super-secret-catalog-value drift"
     oversized = "diagnostic " + ("x" * (wrapper._CATALOG_FAILURE_DIAGNOSTIC_LIMIT * 2))
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout="1.0.0\n")
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=oversized, stderr=secret, returncode=3)
         raise AssertionError(f"unexpected OpenCode command: {command}")
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
-    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: launcher["launcher"])
     rc = wrapper.main(["--preflight"] + GO_ARGS + ["--evidence-file", str(evidence)])
     assert rc == 1
     failure = json.loads(evidence.read_text(encoding="utf-8"))
@@ -299,16 +311,17 @@ def test_opencode_go_mode_rejects_other_provider_identities_before_run(monkeypat
         auth = tmp_path / f"auth-{model.split('/')[0]}.json"
         auth.write_text("synthetic auth fixture", encoding="utf-8")
         monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+        launcher = prepare_fake_launcher_dir(tmp_path)
         calls: list[list[str]] = []
 
         def fake_run(command: list[str], **kwargs):
             calls.append(command)
-            if command == ["opencode.cmd", "--version"]:
+            if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
                 return _completed(command, stdout="1.0.0\n")
             raise AssertionError(f"catalog/provider command must not run for rejected identity {model!r}: {command}")
 
         monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
-        monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+        monkeypatch.setattr(wrapper.shutil, "which", lambda name: launcher["launcher"])
         monkeypatch.setattr(wrapper.sys, "stdin", io.StringIO('{"task": "public-only"}\n'))
         args = [
             "--model", model,
@@ -351,11 +364,12 @@ def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkey
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout="1.0.0\n")
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=GO_CATALOG + "\n")
@@ -364,7 +378,7 @@ def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkey
         raise AssertionError(f"unexpected OpenCode command: {command}")
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
-    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: launcher["launcher"])
     rc = wrapper.main(["--preflight"] + GO_ARGS + ["--evidence-file", str(evidence)])
     assert rc == 0
     result = json.loads(capsys.readouterr().out)
@@ -373,6 +387,7 @@ def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkey
     assert result["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
     assert result["route_binding"]["expected_catalog_fingerprint"] == GO_FINGERPRINT
     assert result["effective_config"]["enabled_providers"] == ["opencode-go"]
+    assert result["native_executable"]["native_version"] == "1.0.0"
     assert not any(len(command) > 2 and command[1] == "run" for command in calls)
 
 
@@ -381,11 +396,12 @@ def test_opencode_go_preflight_fingerprint_mismatch_blocks_before_run(monkeypatc
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     calls: list[list[str]] = []
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout="1.0.0\n")
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=GO_CATALOG + "\n")
@@ -394,7 +410,7 @@ def test_opencode_go_preflight_fingerprint_mismatch_blocks_before_run(monkeypatc
         raise AssertionError(f"unexpected OpenCode command: {command}")
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
-    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: launcher["launcher"])
     rc = wrapper.main(["--preflight"] + GO_ARGS + ["--expected-catalog-fingerprint", "e" * 64, "--evidence-file", str(evidence)])
     assert rc == 1
     assert "catalog fingerprint drift" in evidence.read_text(encoding="utf-8")
@@ -613,9 +629,15 @@ def test_request_reaches_wrapper_through_stdin_and_fake_opencode_chain(tmp_path,
                 preflight = record
     assert preflight is not None
     assert preflight["route_mode"] == "opencode-go"
-    assert preflight["command"][0] == "opencode.cmd"
+    assert preflight["command"][0].endswith("opencode.exe")
+    assert "opencode.cmd" not in preflight["command"]
     assert preflight["command"][1] == "run"
-    assert "--pure" in preflight["command"] and "--file" in preflight["command"]
+    assert "--pure" in preflight["command"] and "--file" not in preflight["command"]
+    assert preflight["message_is_single_positional"] is True
+    assert preflight["file_argument_absent"] is True
+    assert preflight["message_inline_request_present"] is True
+    assert preflight["native_executable"]["version_matches_launcher"] is True
+    assert preflight["command_line_within_native_bound"] is True
     assert preflight["route_binding"]["expected_runtime_model_id"] == MODEL
 
 
@@ -679,3 +701,172 @@ def test_zero_real_provider_calls_evidence(tmp_path, manifest, synthetic_executa
     assert preflight["launcher"]["resolved_path"].endswith("fake-bin\\opencode.cmd")
     assert preflight["isolation"]["mcp_disabled"] is True
     assert preflight["isolation"]["plugins_disabled"] is True
+
+
+# ---- inline public request + schema-aware extraction through the real chain -
+
+
+def _state_legal_payload(state: str) -> dict:
+    """A protocol-1.3-shaped request for one frozen controller state with the
+    state's legal directive schema, action contracts, and targets embedded."""
+    schema = {
+        "action": {"kind": "action", "required": ["name", "arguments"]},
+        "transition": {"kind": "transition", "required": ["target_state", "reason"]},
+    }
+    if state in ("Understand", "RuntimeEvidence"):
+        schema["add_hypothesis"] = {"kind": "add_hypothesis", "required": ["hypothesis_id", "statement", "confidence", "evidence_refs", "requires_runtime_evidence"]}
+        schema["revise_hypothesis"] = {"kind": "revise_hypothesis", "required": ["hypothesis_id", "statement", "confidence", "evidence_refs", "requires_runtime_evidence"]}
+    if state == "Reproduce":
+        contracts = {
+            "run_reproduction": {
+                "additional_properties": False,
+                "properties": {"phase": {"enum": ["baseline"], "min_length": 1, "type": "string"}},
+                "required": ["phase"],
+            }
+        }
+        allowed = ["run_reproduction"]
+        legal = ["Understand", "Failed"]
+    elif state == "Understand":
+        contracts = {
+            "find_function": {
+                "additional_properties": False,
+                "properties": {
+                    "name": {"min_length": 1, "type": "string"},
+                    "path": {"min_length": 1, "type": "string"},
+                },
+                "required": ["name", "path"],
+            }
+        }
+        allowed = ["find_function"]
+        legal = ["Patch", "Done", "Failed"]
+    else:
+        contracts = {
+            "get_frame": {
+                "additional_properties": False,
+                "properties": {"frame_index": {"type": "integer"}},
+                "required": ["frame_index"],
+            }
+        }
+        allowed = ["get_frame"]
+        legal = ["Understand", "Failed"]
+    return {
+        "synthetic_scenario": "state-legal",
+        "directive_schema": schema,
+        "action_contracts": contracts,
+        "controller": {"state": state, "allowed_actions": allowed, "legal_transition_targets": legal},
+    }
+
+
+def test_chain_inline_request_reaches_synthetic_cli_through_message(tmp_path, manifest, synthetic_executable) -> None:
+    """The canonical public request travels inline inside the OpenCode user
+    message (never a model-readable file); the synthetic CLI recovers it from
+    the message and the wrapper's schema-aware extraction accepts the result."""
+    transport = _chain_transport(tmp_path, manifest, synthetic_executable, scenario="state-legal")
+    response = transport.request(_state_legal_payload("Reproduce"), 30.0)
+    assert response["directive"] == {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+    assert response["provider_telemetry"]["cost"] == 0.0042
+    evidence = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "attempt-out" / "private").glob("opencode-go-transport-chain-state-legal*.jsonl")
+    )
+    records = [json.loads(line) for line in evidence.splitlines() if line.strip()]
+    preflight = next(item for item in records if item.get("event") == "transport_preflight")
+    assert preflight["file_argument_absent"] is True
+    assert preflight["request_byte_count"] == len(wrapper.canonical_public_request(_state_legal_payload("Reproduce")).encode("utf-8"))
+    assert "public-request.json" not in " ".join(str(item.get("command", "")) for item in records)
+
+
+@pytest.mark.parametrize(
+    ("state", "expected"),
+    [
+        ("Reproduce", {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}),
+        ("Understand", synthetic.DIRECTIVE_ADD_HYPOTHESIS),
+        ("RuntimeEvidence", synthetic.DIRECTIVE_REVISE_HYPOTHESIS),
+    ],
+)
+def test_chain_each_frozen_controller_state_receives_its_legal_directive(tmp_path, manifest, synthetic_executable, state, expected) -> None:
+    """Every frozen controller state accepts its legal action/transition/
+    hypothesis directive through the real wrapper + synthetic provider."""
+    transport = _chain_transport(tmp_path, manifest, synthetic_executable, scenario=f"state-legal-{state}")
+    response = transport.request(_state_legal_payload(state), 30.0)
+    assert response["directive"] == expected
+
+
+def test_chain_copied_request_plus_one_valid_directive_is_accepted(tmp_path, manifest, synthetic_executable) -> None:
+    """A response that copies the entire embedded request JSON and appends one
+    valid directive is accepted: the copied request object fails directive
+    validation, never heuristic key stripping."""
+    transport = _chain_transport(tmp_path, manifest, synthetic_executable, scenario="copied-request-plus-valid")
+    response = transport.request(_state_legal_payload("Reproduce"), 30.0)
+    assert response["directive"] == {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+
+
+def test_chain_tool_call_text_with_one_valid_directive_is_accepted(tmp_path, manifest, synthetic_executable) -> None:
+    """DSML tool-call text that tries to read the request file is ignored and
+    the single valid directive is accepted; the tool call itself stays denied."""
+    transport = _chain_transport(tmp_path, manifest, synthetic_executable, scenario="tool-call-text")
+    response = transport.request(_state_legal_payload("Reproduce"), 30.0)
+    assert response["directive"] == {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+
+
+def test_chain_large_frozen_request_survives_native_execution(tmp_path, manifest, synthetic_executable) -> None:
+    """A request at the top of the frozen size range (canonical >= 8661
+    bytes, complete inline message > 9000 bytes) travels intact through the
+    real wrapper and the fake native executable: no batch shim, no ``--file``,
+    no shell, and no truncation."""
+    transport = _chain_transport(tmp_path, manifest, synthetic_executable, scenario="state-legal")
+    payload = _state_legal_payload("Reproduce")
+    payload["task"] = {
+        "title": "quixbugs-hanoi-smoke-v1",
+        "description": "x" * 8300,
+        "tests": {"fail_to_pass": ["a", "b"], "pass_to_pass": ["c"]},
+    }
+    canonical = wrapper.canonical_public_request(payload)
+    assert len(canonical.encode("utf-8")) >= 8661
+    assert len(wrapper.build_user_message(payload).encode("utf-8")) > 9000
+    response = transport.request(payload, 60.0)
+    assert response["directive"] == {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+    evidence = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "attempt-out" / "private").glob("opencode-go-transport-chain-state-legal*.jsonl")
+    )
+    records = [json.loads(line) for line in evidence.splitlines() if line.strip()]
+    preflight = next(item for item in records if item.get("event") == "transport_preflight")
+    assert preflight["command"][0].endswith("opencode.exe")
+    assert "opencode.cmd" not in preflight["command"]
+    assert preflight["file_argument_absent"] is True
+    assert preflight["message_byte_count"] > 9000
+    assert preflight["request_within_public_evidence_budget"] is True
+    assert preflight["command_line_within_native_bound"] is True
+    assert preflight["request_byte_count"] == len(canonical.encode("utf-8"))
+
+
+def test_chain_protocol_directive_rejection_carries_compact_correction(tmp_path, manifest, synthetic_executable) -> None:
+    """A provider-completed invalid directive becomes the accepted bounded
+    directive rejection carrying the exact correction message, never the full
+    previous model response, and stays inside the retry/feedback budget."""
+    transport = _chain_transport(tmp_path, manifest, synthetic_executable, scenario="malformed-always")
+    payload = _state_legal_payload("Reproduce")
+    payload["synthetic_scenario"] = "malformed-always"
+    from agentic_debugger.evaluation.live import DirectiveRejectionCategory, LiveModelAdapterError
+
+    with pytest.raises(LiveModelAdapterError) as exc:
+        transport.request(payload, 30.0)
+    assert exc.value.category is DirectiveRejectionCategory.MALFORMED_DIRECTIVE
+    assert "no JSON object in the output" in exc.value.detail
+    assert "kind: [action|transition]" in exc.value.detail
+    assert "One JSON object only" in exc.value.detail
+    assert "No tools/code fence/explanation" in exc.value.detail
+    assert len(exc.value.detail) <= 200
+    assert "this is not a directive" not in exc.value.detail
+    assert transport.last_provider_error_category == "invalid_directive"
+    evidence = "\n".join(
+        path.read_text(encoding="utf-8")
+        for path in (tmp_path / "attempt-out" / "private").glob("opencode-go-transport-chain-malformed-always*.jsonl")
+    )
+    rejection = next(
+        json.loads(line) for line in evidence.splitlines()
+        if line.strip() and json.loads(line).get("event") == "provider_directive_rejection"
+    )
+    assert rejection["classification"] == "no_json_object"
+    assert "this is not a directive" not in rejection["correction_message"]

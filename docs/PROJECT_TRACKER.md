@@ -337,6 +337,231 @@ matching validated terminal campaign.json; artifact creation failures
 terminalize `ABORTED`/`OUTPUT_INTEGRITY_FAILURE`. Post-repair counts:
 live-runner suite 251 passed; paired-pilot suites 267 passed.
 
+### OpenCode Go directive transport repair v1 (2026-08-03, transport-only)
+
+The first provider-connected six-case attempt
+(`quixbugs-paired-pilot-v2-attempt-705aa04741064933b84767e095cd95bf`)
+reached the real OpenCode Go model (16 logical model calls, 10 accepted
+directives, $0.008036 provider-reported cost) but all six cases produced zero
+hypotheses, PDB sessions, patch submissions, and verifier runs; accepted
+directives were limited to baseline reproduction and the transition to
+Understand. Transport evidence proved two related protocol failures: (A) the
+model tried to open the `--file`-supplied `public-request.json` with Read,
+Bash, or PowerShell (emitting DSML tool-call text instead of a directive;
+Read/Bash must stay denied); (B) direct answers frequently used structurally
+invalid envelopes such as `{"action":"find_function","name":"hanoi","path":"..."}`
+and the extractor rejected any output containing multiple JSON objects before
+checking whether exactly one was a valid directive. Bounded transport-only
+repair (campaign, controller, case runner, PDB gates, facts provider,
+verifier, authorization, and route identity unchanged):
+
+- Inline public request: the sanitized request now travels inside the single
+  OpenCode user message as canonical compact JSON between explicit
+  `=== BEGIN PUBLIC REQUEST ===` / `=== END PUBLIC REQUEST ===` delimiters
+  (one argv value, never shell interpolation; evidence records only
+  `request_sha256` + `request_byte_count`); the message carries a brief
+  protocol instruction, compact exact output-shape examples (action,
+  transition, add_hypothesis, revise_hypothesis), and explicit prohibitions
+  (no code fences, explanations, tool calls, protocol/version wrappers, or
+  alternate envelopes; the embedded request is authoritative); the message
+  must fit `MAX_PUBLIC_EVIDENCE_BYTES = 20000` (frozen
+  `max_public_evidence_bytes`); `--file` was removed from the real
+  `opencode run` command; isolated `--dir` and every permission denial
+  (read/bash/edit/write) were preserved.
+- Schema-aware extraction: every JSON object candidate is validated through
+  the strict protocol-1.3 parser against the request's embedded
+  `directive_schema`, `action_contracts`, and `controller` context; exactly
+  one valid directive is accepted, zero is rejected (`no_valid_directive`),
+  and more than one is rejected (`ambiguous_json_output`); copied
+  request/config objects are ignored only because they fail directive
+  validation, never through heuristic key stripping; wrong envelopes,
+  unknown fields, and malformed arguments are never normalized. Requests
+  without `directive_schema` keep the historical single-object extraction.
+- Correction feedback: rejected directives return a provider-completed
+  `directive_error` response with one compact machine-generated correction
+  message (precise failure, the required `kind in [...]` envelope for the
+  current allowed kinds, "return one JSON object only", no tools/code
+  fence/explanation, never the previous response, within the accepted
+  200-character rejection-detail bound); the adapter converts it into the
+  accepted `LiveModelAdapterError` rejection so the existing bounded
+  directive-feedback cycle carries the exact correction to the model (retry,
+  directive-feedback, PDB, and patch budgets unchanged).
+- Command/audit contract: preflight and effective-command validation enforce
+  the new inline contract (single non-empty positional message, no trailing
+  positionals, no `--file`, no shell, no repository working directory, no
+  read/bash/edit/write tools); audit evidence records only request hash and
+  byte count. The synthetic executable recovers the request from the inline
+  message and gained `state-legal`, `copied-request-plus-valid`, and
+  `tool-call-text` scenarios.
+
+Focused tests prove: inline message content between delimiters; the real
+command has no `--file` and one positional message; Read/Bash stay denied;
+one valid directive surrounded by prose and copied non-directive JSON is
+accepted; two valid directives are ambiguous; zero valid directives are
+rejected; alternate envelopes (`action`, `params`/`payload`, protocol/version
+wrappers) are rejected; malformed action arguments are rejected; bounded
+correction feedback contains the exact failure without the full prior
+response; every frozen controller state receives its legal
+action/transition/hypothesis directive through the real wrapper plus
+synthetic provider output (Reproduce action, Understand add_hypothesis,
+RuntimeEvidence revise_hypothesis); wrapper preflight still creates no
+provider inference; legacy behavior is unchanged. The `705aa047...` attempt
+is classified as provider-connected but protocol-invalid (not a valid
+static-versus-PDB experiment); the Authorized Six-Case Live Campaign TODO
+remains open. No test/build/lint/compile/validation was run (FirstMate owns
+it); no real OpenCode command, catalog, provider, or paid endpoint ran; no
+commit/stage/push was made.
+
+
+### OpenCode Go native-executable directive transport repair v2 (2026-08-03, transport-only)
+
+Replay against the provider-connected attempt `705aa047...` proved the
+previous inline-message design still blocked the campaign: 27 unique public
+requests (canonical 4515-8661 bytes), only 14 fit the 7800-byte message
+ceiling, 13 failed closed before provider execution, and every frozen case's
+Understand-stage request was too large (complete inline messages
+9189-9752 bytes). The public-evidence contract permits 20000 bytes; the
+cmd.exe batch-shim line limit (~8191 characters), not the protocol budget,
+was the blocker. Bounded transport-only repair (campaign, controller, case
+runner, PDB gates, facts provider, verifier, authorization, and route
+identity unchanged):
+
+- Native executable execution: model execution invokes the native
+  `opencode.exe` directly (batch-shim bypass). The wrapper begins from the
+  independently verified `opencode.cmd` launcher path, resolves the native
+  `opencode.exe` through the trusted npm package root
+  (`<launcher-dir>\node_modules\opencode-ai`; explicit allowlist of
+  package-managed relative locations, including the established
+  `node_modules\opencode-windows-x64\bin\opencode.exe`, the baseline x64
+  platform package, and the direct package `bin`; hard-linked copies of the
+  single platform binary count as one; exactly one unique native binary must
+  remain), requires it to be a regular executable file contained in the
+  trusted root (no symlink/reparse escape) and to report the exact same
+  OpenCode version as the launcher (same-installation proof; OpenCode Go
+  mode additionally requires the exact authorization-bound version), fails
+  closed otherwise (zero, multiple distinct, and path-escape candidates),
+  uses the absolute native path as argv[0] with `shell=False`, keeps the
+  isolated `--dir` and every permission denial, retains the exact
+  model/variant/route binding, and never falls back silently to the batch
+  shim, PATH lookup, environment-supplied executable paths, PowerShell,
+  shell interpolation, or another
+  executable. Short non-model inspection commands may continue through the
+  launcher. Only bounded launcher/native identity evidence is recorded.
+- Restored public-evidence budget: the 7800-byte message ceiling was
+  removed; the 20,000-byte public-evidence limit applies to the canonical
+  public request serialization, not to the complete user message (canonical
+  up to and including `MAX_PUBLIC_EVIDENCE_BYTES = 20000` accepted, message
+  constructed unchanged); the fully constructed
+  native command is checked against `MAX_NATIVE_COMMAND_LINE_CHARS = 30000`
+  (`subprocess.list2cmdline`, below the CreateProcess maximum) and fails
+  closed before process creation. No batch shim, response file, shell, or
+  model-readable attachment. The 8661-byte canonical Understand request and
+  its complete inline scaffolding (9752 bytes) construct successfully.
+- Strict top-level directive fields: the schema-aware validator rejects
+  unknown top-level fields per kind (action/transition/add_hypothesis/
+  revise_hypothesis/set_hypothesis_status field sets); missing and
+  additional fields are rejected, never normalized or stripped;
+  action-argument contract validation unchanged.
+- Precise bounded correction feedback: the correction message carries the
+  actual candidate-validation reason (e.g. `unknown argument field 'extra'`,
+  `missing required argument 'path'`, `action 'x' is not allowed in state
+  'Understand'`); single invalid candidate -> exact bounded reason; multiple
+  candidates with none valid -> deterministic bounded reason without full
+  model output; more than one valid -> ambiguous reason. <= 200 characters;
+  precise reason, legal `kind: [...]` envelope, "one JSON object only", no
+  tools/code fence/explanation; never the prior response; malformed alternate
+  envelopes are never converted.
+- Preserved diagnostic classifications: empty output, text without a
+  protocol directive, no JSON object, zero valid directives, and multiple
+  valid directives remain distinct; only directly affected stale test
+  expectations updated.
+
+Focused tests: frozen request-size range (>= 8661-byte canonical, > 9000-byte
+message, native command construction, no `.cmd`/`--file`/shell/truncation);
+> 20000-byte requests fail closed; native command-line bound enforced;
+native `opencode.exe` resolution same-directory/version-bound/fail-closed;
+extra top-level fields rejected per kind; precise candidate reason reaches
+bounded correction feedback; one valid directive among copied non-directive
+JSON accepted; two valid directives ambiguous; Read/Bash/edit/write denied;
+wrapper preflight zero provider inference; legacy unchanged. Deterministic
+synthetic fixtures only (a compiled fake native `opencode.exe` forwarder
+plus the fake launcher shim); no real OpenCode or provider call. Attempt
+`705aa047...` remains classified as provider-connected but protocol-invalid;
+the Authorized Six-Case Live Campaign TODO stays open pending FirstMate
+review and a fresh real attempt. No test/build/lint/compile/validation was
+run (FirstMate owns it); no real OpenCode command, catalog, provider, or
+paid endpoint ran; nothing was committed.
+
+### OpenCode Go npm-native + full public-evidence budget repair v3 (2026-08-03, transport-only)
+
+FirstMate material review found two remaining transport-contract gaps and
+three stale focused-test assertions. Bounded transport-only repair
+(campaign, controller, case runner, PDB gates, facts provider, verifier,
+authorization, route identity, and isolation unchanged):
+
+- Trusted npm-native resolution: the same-directory-only assumption was
+  replaced with a deterministic fail-closed npm-installation resolution
+  contract. The wrapper begins only from the independently verified
+  `opencode.cmd` launcher path, defines the trusted npm package root as
+  `<launcher-dir>\node_modules\opencode-ai`, and resolves the native
+  executable exclusively from an explicit allowlist of package-managed
+  relative locations under that root — the established Windows x64
+  platform-package path `node_modules\opencode-windows-x64\bin\opencode.exe`,
+  the baseline x64 platform package, and the direct package `bin` (the npm
+  shim's own target). The genuine npm layout hard-links the single platform
+  binary into these locations, so candidates sharing one file identity count
+  as one; exactly one unique native binary must remain. Every candidate must
+  resolve to an absolute path inside the trusted root (no symlink/reparse
+  escape) and exist as a regular executable file; zero, multiple distinct,
+  and path-escape candidates fail closed. The resolved native must report
+  the exact same version as the launcher (and, in Go mode, the exact
+  authorization-bound version) and is used as argv[0] with `shell=False`;
+  arbitrary recursive searches, PATH lookup, environment-supplied executable
+  paths, shell interpolation, PowerShell execution, parsing an unrestricted
+  command from the batch file, and fallback to `opencode.cmd` are rejected
+  by construction. Evidence records only the resolution strategy
+  (`npm-package-layout`), the bounded package-relative native path, and the
+  regular-file/root-containment/version-match flags. Real machine inspection
+  confirmed the established npm layout (launcher
+  `C:\Users\benya\AppData\Roaming\npm\opencode.cmd`; native
+  `...\node_modules\opencode-ai\bin\opencode.exe` plus the two platform
+  packages, all hard-links of the single 174 MB binary; no sibling exe). All
+  synthetic fixtures mirror the production layout (native under
+  `node_modules\opencode-ai\node_modules\opencode-windows-x64\bin\`); a
+  sibling-only `opencode.exe` is never trusted.
+- Full 20 KB public-evidence support: the 20,000-byte public-evidence limit
+  applies to `canonical_public_request(request).encode("utf-8")`, not to the
+  complete user message. Canonical requests up to and including 20000 bytes
+  are accepted (FirstMate reproduced: canonical 18914 bytes, complete
+  message 20005 bytes — previously rejected), canonical requests above
+  20000 bytes fail closed, the canonical request is never truncated,
+  reduced, summarized, split, or mutated, the complete message is
+  constructed unchanged, and the fully constructed native command remains
+  independently bounded by `MAX_NATIVE_COMMAND_LINE_CHARS = 30000`
+  (`subprocess.list2cmdline`) failing before process creation.
+- Stale focused-test corrections (no runtime weakening): the inline message
+  assertion compares lowercase to lowercase; pure prose preserves the
+  established `no_json_object` classification (not `no_valid_directive`);
+  the route-capture inspection inventory includes the native executable's
+  `--version` proof while still proving no command uses the `run`
+  subcommand.
+
+Focused tests: nested npm x64 native binary resolves; resolved native
+remains under the trusted `opencode-ai` root; zero/multiple-distinct/
+path-escape candidates fail closed; sibling `opencode.exe` not implicitly
+trusted; native version bound to launcher and authorization; route capture
+and wrapper share the same resolved native identity; route capture never
+invokes `opencode run`; real model execution uses the nested native
+executable directly (no `.cmd`, shell, PowerShell, response file, or
+`--file`); canonical 20000-byte boundary; frozen 8661-byte request and
+>9000-byte message still construct; Read/Bash/edit/write and all isolation
+denials intact; strict top-level fields and precise bounded correction
+feedback unchanged. Attempt `705aa047...` remains classified as
+provider-connected but protocol-invalid; the Authorized Six-Case Live
+Campaign TODO stays open pending FirstMate review and a fresh real attempt.
+No test/build/lint/compile/validation was run (FirstMate owns it); no real
+OpenCode command, catalog, provider, or paid endpoint ran; nothing was
+committed.
 ### BugsInPy licensing and metadata preflight
 
 - [x] Licensing gate completed at `da39c55`.
@@ -847,6 +1072,72 @@ made.
   suite 88 passed, combined paired-pilot suite 267 passed.
 
 ## Last Updated
+
+2026-08-03 (OpenCode Go npm-native + full public-evidence budget repair v3,
+transport-only)
+
+The directive transport now resolves the native `opencode.exe` through the
+trusted npm package root (`<launcher-dir>\node_modules\opencode-ai`; explicit
+allowlist including the established
+`node_modules\opencode-windows-x64\bin\opencode.exe`; hard-linked copies of
+the single platform binary count as one; exactly one unique binary; root
+containment, regular file, launcher/authorization version equality; zero,
+multiple distinct, and path-escape candidates fail closed) and invokes it
+directly for `opencode run` (`shell=False`, never a silent fallback), and the
+20,000-byte public-evidence limit applies to the canonical public request
+serialization (not the complete user message) with the fully constructed
+native command independently bounded by
+`MAX_NATIVE_COMMAND_LINE_CHARS = 30000`. The three stale focused-test
+assertions were corrected without runtime weakening. Attempt `705aa047...`
+remains classified as provider-connected but protocol-invalid; the
+Authorized Six-Case Live Campaign TODO stays open. No validation was run
+(FirstMate owns it); no real provider/catalog/OpenCode command ran; nothing
+was committed.
+
+Earlier history:
+
+2026-08-03 (OpenCode Go native-executable directive transport repair v2,
+transport-only)
+
+The directive transport now executes the model through the native
+`opencode.exe` (resolved from the verified `opencode.cmd` launcher, same
+directory, regular file, exact same version, fail closed), bypassing the
+cmd.exe batch-shim line limit, so the inline user message supports the full
+frozen public-evidence budget (`MAX_PUBLIC_EVIDENCE_BYTES = 20000`) with the
+canonical request never reduced or truncated; the fully constructed native
+command is bounded by `MAX_NATIVE_COMMAND_LINE_CHARS = 30000`
+(`subprocess.list2cmdline`) and fails closed before process creation. The
+schema-aware validator rejects unknown top-level directive fields, the
+bounded correction feedback carries the precise candidate-validation reason
+(never the prior response), and the established diagnostic classifications
+are preserved. Attempt `705aa047...` remains classified as provider-connected
+but protocol-invalid; the Authorized Six-Case Live Campaign TODO stays open.
+No validation was run (FirstMate owns it); no real provider/catalog/OpenCode
+command ran; nothing was committed.
+
+Earlier history:
+
+2026-08-03 (OpenCode Go directive transport repair v1, transport-only)
+
+The OpenCode Go directive transport was repaired for the first
+provider-connected six-case attempt (`705aa047...`): the sanitized public
+request now travels inline inside the single OpenCode user message between
+explicit delimiters (`--file` removed from the real `opencode run` command;
+Read/Bash/edit/write stay denied), extraction is schema-aware (every JSON
+candidate is validated against the request's embedded directive schema,
+action contracts, and controller context; exactly one valid directive is
+accepted, zero/ambiguous rejected), and rejected directives return one
+compact machine-generated correction message that flows through the existing
+bounded directive-feedback cycle (never the previous model response).
+Preflight/effective-command validation and audit evidence (request hash +
+byte count only) follow the inline contract; legacy extraction without
+`directive_schema` is unchanged. Attempt `705aa047...` is classified as
+provider-connected but protocol-invalid, not a valid static-versus-PDB
+experiment; the Authorized Six-Case Live Campaign TODO stays open. No
+validation was run (FirstMate owns it); no real provider/catalog/OpenCode
+command ran; nothing was committed.
+
+Earlier history:
 
 2026-08-03 (QuixBugs OpenCode Go execution adapter v1 task, adapter-only)
 

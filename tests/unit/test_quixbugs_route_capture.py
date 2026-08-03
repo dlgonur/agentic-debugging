@@ -21,6 +21,8 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "tests" / "unit"))
 
+from opencode_go_test_support import prepare_fake_launcher_dir
+
 import quixbugs_opencode_go_adapter as adapter
 import quixbugs_live_runner_v2 as runner
 import quixbugs_paired_pilot as pilot
@@ -88,12 +90,13 @@ def _monkeypatch_capture(
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     calls: list[list[str]] = []
     effective = effective_config if effective_config is not None else GO_EFFECTIVE_CONFIG
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout=VERSION + "\n")
         if command[1:3] == ["models", "opencode-go"]:
             if observed_environments is not None:
@@ -107,7 +110,7 @@ def _monkeypatch_capture(
         raise AssertionError(f"unexpected OpenCode command during capture: {command}")
 
     monkeypatch.setattr(transport.subprocess, "run", fake_run)
-    monkeypatch.setattr(transport.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(transport.shutil, "which", lambda name: launcher["launcher"])
     return calls
 
 
@@ -366,10 +369,11 @@ def test_route_capture_records_isolated_observation_mode(tmp_path, monkeypatch) 
     assert observation_mode["temporary_isolation_cleaned"] is True
     assert observation_mode["run_invoked"] is False
     assert observation_mode["model_requests"] == 0
-    assert capture_record["provider_contact_proof"]["inspection_commands"] == [
-        ["opencode.cmd", "--version"],
-        ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"],
-    ]
+    inspection_commands = capture_record["provider_contact_proof"]["inspection_commands"]
+    assert inspection_commands[0] == ["opencode.cmd", "--version"]
+    assert inspection_commands[1][0].endswith("opencode.exe") and inspection_commands[1][1] == "--version"
+    assert inspection_commands[2] == ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"]
+    assert capture_record["native_executable"]["version_matches_launcher"] is True
     assert captured["result"]["run_invoked"] is False
 
 
@@ -390,16 +394,18 @@ def test_route_capture_cleans_temporary_isolation_on_success_and_failure(tmp_pat
     assert not root.exists()
 
     calls: list[list[str]] = []
+    failing_launcher = prepare_fake_launcher_dir(tmp_path)
 
     def failing_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [failing_launcher["native"], "--version"]:
             return _completed(command, stdout=VERSION + "\n")
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout="", returncode=5)
         raise AssertionError(f"unexpected OpenCode command during failing capture: {command}")
 
     monkeypatch.setattr(transport.subprocess, "run", failing_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: failing_launcher["launcher"])
     with pytest.raises(adapter.OpenCodeGoAdapterError, match="route capture rejected"):
         adapter.run_route_capture(
             MODEL, VARIANT,
@@ -512,18 +518,20 @@ def test_route_capture_catalog_and_version_failures_remain_typed_and_bounded(tmp
     auth = tmp_path / "auth.json"
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    launcher = prepare_fake_launcher_dir(tmp_path)
     secret = "catalog token=super-secret-capture-token exploded"
     calls: list[list[str]] = []
 
     def failing_run(command: list[str], **kwargs):
         calls.append(command)
-        if command == ["opencode.cmd", "--version"]:
+        if command == ["opencode.cmd", "--version"] or command == [launcher["native"], "--version"]:
             return _completed(command, stdout=VERSION + "\n")
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stderr=secret, returncode=3)
         raise AssertionError(f"unexpected OpenCode command during failing capture: {command}")
 
     monkeypatch.setattr(transport.subprocess, "run", failing_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: launcher["launcher"])
     with pytest.raises(adapter.OpenCodeGoAdapterError, match="catalog_command_failed") as exc:
         adapter.run_route_capture(
             MODEL, VARIANT,
@@ -559,16 +567,17 @@ def test_route_capture_catalog_and_version_failures_remain_typed_and_bounded(tmp
 def test_route_capture_never_constructs_or_invokes_opencode_run(tmp_path, monkeypatch) -> None:
     captured = _capture(tmp_path, monkeypatch)
     calls = captured["calls"]
-    # The actual command inventory is the proof: the capture runs exactly the
-    # three local inspection commands under the isolated environment and
-    # never constructs an ``opencode run`` invocation (no command contains
-    # the ``run`` subcommand).
+    # The actual command inventory is the proof: the capture runs the launcher
+    # and native-executable version proofs plus the local inspection commands
+    # under the isolated environment and never constructs an ``opencode run``
+    # invocation (no command contains the ``run`` subcommand).
+    native = tmp_path / "fake-launcher" / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin" / "opencode.exe"
     assert calls == [
         ["opencode.cmd", "--version"],
+        [str(native), "--version"],
         ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"],
         ["opencode.cmd", "debug", "config", "--pure"],
     ]
-    assert all(command[0] == "opencode.cmd" for command in calls)
-    assert all("run" not in command for command in calls)
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
     assert captured["result"]["run_invoked"] is False
     assert captured["result"]["model_requests"] == 0

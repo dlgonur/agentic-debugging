@@ -1412,6 +1412,36 @@ class OpenCodeGoTransport:
             else:
                 self.last_provider_error_category = "invalid_response"
                 raise _transport_error("invalid_response", "provider cost metadata is malformed")
+        directive_error = parsed.get("directive_error")
+        if isinstance(directive_error, Mapping):
+            # The protocol wrapper rejected the provider-completed directive
+            # (zero valid candidates or ambiguous output) and returned one
+            # compact machine-generated correction message.  Convert it into
+            # the accepted bounded directive-rejection contract so the
+            # existing bounded directive-feedback cycle carries the exact
+            # correction to the model on the next transport attempt; it is
+            # never a transport/process failure and never contains the
+            # previous model response.
+            from agentic_debugger.evaluation.live import DirectiveRejectionCategory, LiveModelAdapterError
+
+            message = directive_error.get("message")
+            if not isinstance(message, str) or not message:
+                self.last_provider_error_category = "invalid_response"
+                raise _transport_error("invalid_response", "provider directive rejection is malformed")
+            self.last_provider_error_category = "invalid_directive"
+            self._record("attempt", {
+                "event": "provider_directive_rejection",
+                "case_id": self.case_id,
+                "attempt": self.process_attempts,
+                "provider_exit_code": 0,
+                "classification": directive_error.get("classification"),
+                "correction_message": message,
+            })
+            raise LiveModelAdapterError(
+                "invalid model directive",
+                category=DirectiveRejectionCategory.MALFORMED_DIRECTIVE,
+                detail=message,
+            )
         return parsed
 
     def _validate_usage(self, usage: Mapping[str, Any]) -> None:
@@ -2413,6 +2443,15 @@ def run_route_capture(
             "model_requests": 0,
         },
         "launcher": {"version": opencode_version, "resolved_path": launcher.get("resolved_path")},
+        "native_executable": {
+            "resolution_strategy": observation["native"].get("resolution_strategy"),
+            "path": observation["native"].get("native_executable"),
+            "package_relative_path": observation["native"].get("package_relative_path"),
+            "version": observation["native"].get("native_version"),
+            "regular_file": observation["native"].get("regular_file"),
+            "root_containment": observation["native"].get("root_containment"),
+            "version_matches_launcher": observation["native"].get("version_matches_launcher"),
+        },
         "catalog_entry": entry,
         "catalog_fingerprint": fingerprint,
         "observed_facts": facts,
@@ -2875,6 +2914,16 @@ def run_synthetic_selftest(
             f'"{interpreter}" "{synthetic_executable}" %*\r\n',
             encoding="utf-8",
         )
+    # The real wrapper resolves and version-proves the native ``opencode.exe``
+    # through the trusted npm package layout before model execution; the
+    # self-test provides a deterministic compiled fake native executable at
+    # the nested platform-package location.
+    from opencode_go_synthetic_executable import build_fake_native_executable
+
+    native_bin = shim_dir / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin"
+    native_bin.mkdir(parents=True, exist_ok=True)
+    if not (native_bin / "opencode.exe").is_file():
+        build_fake_native_executable(native_bin, target_script=synthetic_executable)
     fake_profile = synthetic_root / "fake-profile"
     fake_auth = fake_profile / ".local" / "share" / "opencode" / "auth.json"
     fake_auth.parent.mkdir(parents=True, exist_ok=True)

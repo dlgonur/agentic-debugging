@@ -2,8 +2,14 @@
 
 This is a command for the existing JsonlCommandTransport contract, not a
 controller or model adapter. OpenCode runs in a fresh empty directory and
-receives the request only as a public attached file. The wrapper returns the
-model's one JSON directive and records bounded, credential-redacted evidence.
+receives the sanitized public request inline inside the single user message
+(between explicit delimiters), never through a model-readable file: every
+permission is denied, so the model cannot read any file or call any tool.
+The wrapper extracts the model's one JSON directive through the strict
+protocol-1.3 schema-aware extraction (validating every JSON object candidate
+against the directive schema, action contracts, and controller context
+embedded in the request, accepting exactly one fully valid directive) and
+records bounded, credential-redacted evidence.
 
 Route capture and wrapper catalog verification share one explicit isolated
 catalog-observation path (:func:`observe_isolated_catalog`): a temporary
@@ -28,17 +34,93 @@ import sys
 import tempfile
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 
 _SECRET_KEY = re.compile(r"(?:api[_-]?key|access[_-]?key|auth(?:orization)?|credential|password|secret|token|private[_-]?key)", re.I)
 _SECRET_VALUE = re.compile(r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+")
 _MAX_EVIDENCE_CHARS = 1_000_000
 _MAX_EVIDENCE_FIELD_CHARS = 16_384
+#: Explicit delimiters bounding the canonical public request inside the inline
+#: OpenCode user message.  The model must never read files; the request is
+#: supplied directly in the message between these exact markers.  The
+#: test-only synthetic executable mirrors these exact delimiters to recover
+#: the request from the message.
+PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
+PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
+#: The frozen paired-pilot v2 public-evidence byte budget
+#: (``max_public_evidence_bytes = 20000``).  The bound applies to the
+#: canonical public request serialization
+#: (:func:`canonical_public_request`), never to the complete inline user
+#: message: a canonical request up to and including 20000 bytes is accepted
+#: and its complete message is constructed unchanged (the fully constructed
+#: native command is independently bounded by
+#: :data:`MAX_NATIVE_COMMAND_LINE_CHARS`).
+MAX_PUBLIC_EVIDENCE_BYTES = 20_000
+#: Conservative native Windows command-line bound for the FULLY constructed
+#: ``opencode run`` argv: ``subprocess.list2cmdline(command)`` must stay below
+#: the Windows CreateProcess command-line maximum (32767 characters).  Model
+#: execution invokes the native ``opencode.exe`` directly (never the cmd.exe
+#: batch shim, whose ~8191-character line limit no longer applies), so the
+#: inline message can carry the full public request up to the public-evidence
+#: bound.
+MAX_NATIVE_COMMAND_LINE_CHARS = 30_000
+#: The trusted npm package root relative to the verified ``opencode.cmd``
+#: launcher directory; the native executable must belong to this root.
+NPM_PACKAGE_ROOT_RELATIVE = "node_modules/opencode-ai"
+#: The explicit allowlist of package-managed native executable locations
+#: relative to the trusted npm package root (ordered).  Only these explicit
+#: relative locations are ever considered; arbitrary recursive searches, PATH
+#: lookup, environment-supplied executable paths, shell interpolation,
+#: PowerShell execution, parsing an unrestricted command from the batch file,
+#: and fallback to ``opencode.cmd`` are rejected by construction.  The
+#: established Windows x64 platform-package path is required; the baseline
+#: x64 platform package and the direct package ``bin`` (the npm shim's own
+#: invocation target) are allowed because the installed package layout
+#: genuinely ships them.
+NATIVE_EXECUTABLE_CANDIDATES = (
+    "node_modules/opencode-windows-x64/bin/opencode.exe",
+    "node_modules/opencode-windows-x64-baseline/bin/opencode.exe",
+    "bin/opencode.exe",
+)
+#: Mirrors of the accepted protocol-1.3 directive field bounds
+#: (``agentic_debugger.agent.model_adapter`` / ``controller_policy``).
+MAX_DIRECTIVE_ARGUMENT_BYTES = 32_768
+MAX_DIRECTIVE_REASON_BYTES = 2_048
+MAX_DIRECTIVE_STATEMENT_BYTES = 4_096
+MAX_DIRECTIVE_HYPOTHESIS_ID_BYTES = 128
+MAX_DIRECTIVE_EVIDENCE_REF_BYTES = 256
+MAX_DIRECTIVE_EVIDENCE_REF_COUNT = 64
+HYPOTHESIS_CONFIDENCE_VALUES = ("low", "medium", "high")
+HYPOTHESIS_STATUS_VALUES = ("supported", "rejected", "discarded")
+#: The exact allowed top-level directive fields per protocol-1.3 kind.
+#: Candidates carrying any additional top-level field are rejected strictly;
+#: nothing is normalized or stripped.
+DIRECTIVE_TOP_LEVEL_FIELDS = {
+    "action": frozenset({"kind", "name", "arguments"}),
+    "transition": frozenset({"kind", "target_state", "reason"}),
+    "add_hypothesis": frozenset({"kind", "hypothesis_id", "statement", "confidence", "evidence_refs", "requires_runtime_evidence"}),
+    "revise_hypothesis": frozenset({"kind", "hypothesis_id", "statement", "confidence", "evidence_refs", "requires_runtime_evidence"}),
+    "set_hypothesis_status": frozenset({"kind", "hypothesis_id", "status"}),
+}
 PROTOCOL_INSTRUCTION = (
     "Return exactly one protocol-1.3 directive JSON object. "
-    "The attached public JSON request is the sole task context. "
-    "Do not inspect repositories, edit files, run shell commands, or use unrelated tools."
+    "The public request between the delimiters below is the complete bounded "
+    "context; the allowed directive kinds, action names, and argument "
+    "contracts inside it are authoritative. "
+    "Do not read files and do not call tools: every permission is denied."
+)
+DIRECTIVE_OUTPUT_EXAMPLES = (
+    '{"kind":"action","name":"run_reproduction","arguments":{"phase":"baseline"}} '
+    '{"kind":"transition","target_state":"Understand","reason":"baseline reproduced"} '
+    '{"kind":"add_hypothesis","hypothesis_id":"h-1","statement":"suspected root cause","confidence":"medium","evidence_refs":[],"requires_runtime_evidence":false} '
+    '{"kind":"revise_hypothesis","hypothesis_id":"h-1","statement":"narrowed root cause","confidence":"high","evidence_refs":["obs-1"],"requires_runtime_evidence":true}'
+)
+DIRECTIVE_OUTPUT_PROHIBITIONS = (
+    "Return one JSON object only. No code fences, no explanation, no tool "
+    "calls, no protocol or version wrapper fields, and no alternate envelope "
+    "('action', 'params', 'payload'); use only the kinds and contracts from "
+    "the embedded request."
 )
 _ISOLATION_PERMISSION_DENIALS = {
     "*": "deny",
@@ -71,8 +153,11 @@ OPENCODE_GO_CATALOG_PROVIDER = "opencode-go"
 #: and any other provider is rejected before model execution.
 OPENCODE_GO_RUNTIME_ID_PREFIX = "opencode-go/"
 _AGENTS_CONTENT = (
-    "This task-owned workspace carries only the bounded public protocol request. "
-    "Return one protocol directive; do not use tools, inspect repositories, edit files, or run shell commands."
+    "This task-owned workspace carries only the bounded public protocol request, "
+    "supplied inline in your message between the BEGIN/END PUBLIC REQUEST "
+    "delimiters; every permission is denied. "
+    "Return one protocol directive; do not use tools, do not read files, do not "
+    "inspect repositories, edit files, or run shell commands."
 )
 
 
@@ -94,9 +179,13 @@ def _redact(value: Any) -> Any:
 
 
 class JsonExtractionError(ValueError):
-    def __init__(self, classification: str, detail: str) -> None:
+    def __init__(self, classification: str, detail: str, reason: str | None = None) -> None:
         super().__init__(detail)
         self.classification = classification
+        #: The precise bounded validation reason for a rejected directive
+        #: (e.g. ``unknown argument field 'extra'``); never the full model
+        #: output.
+        self.reason = reason
 
 
 class CatalogFailureError(RuntimeError):
@@ -161,7 +250,12 @@ def _failure_evidence(exc: Exception) -> dict[str, Any]:
 
 
 def _json_from_text(text: str) -> dict[str, Any]:
-    """Extract exactly one top-level JSON object without protocol validation."""
+    """Extract exactly one top-level JSON object without protocol validation.
+
+    Historical behavior for requests that carry no protocol-1.3
+    ``directive_schema`` (legacy route / minimal requests): any output with
+    more than one JSON object stays ambiguous and is rejected unchanged.
+    """
     decoder = json.JSONDecoder()
     clean = _strip_ansi(text)
     candidates: list[dict[str, Any]] = []
@@ -185,6 +279,264 @@ def _json_from_text(text: str) -> dict[str, Any]:
     if len(candidates) > 1:
         raise JsonExtractionError("ambiguous_json_output", "OpenCode output contained multiple JSON objects")
     return candidates[0]
+
+
+def _request_directive_schema(request: Mapping[str, Any]) -> dict[str, Any]:
+    schema = request.get("directive_schema")
+    return schema if isinstance(schema, Mapping) and schema else {}
+
+
+def _request_controller(request: Mapping[str, Any]) -> dict[str, Any]:
+    controller = request.get("controller")
+    return controller if isinstance(controller, Mapping) else {}
+
+
+def _request_action_contracts(request: Mapping[str, Any]) -> dict[str, Any]:
+    contracts = request.get("action_contracts")
+    return contracts if isinstance(contracts, Mapping) else {}
+
+
+def _validate_text_field(value: Any, maximum_bytes: int) -> str | None:
+    if type(value) is not str or not value or value != value.strip():
+        return "text field must be a non-empty string without surrounding whitespace"
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return "text field is not valid UTF-8"
+    if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
+        return "text field contains control characters"
+    if len(encoded) > maximum_bytes:
+        return "text field exceeds the byte bound"
+    return None
+
+
+def _validate_action_arguments(name: str, arguments: Any, contracts: Mapping[str, Any]) -> str | None:
+    """Validate action arguments against the embedded argument contract.
+
+    The embedded contracts are authoritative: required fields must be
+    present, unknown fields are rejected when the contract declares
+    ``additional_properties: false``, and every declared property type,
+    enum, and minimum length is enforced.  Malformed arguments are rejected
+    strictly; the bounded directive-feedback cycle performs correction.
+    """
+    contract = contracts.get(name)
+    if not isinstance(contract, Mapping):
+        return f"action '{name}' has no embedded argument contract"
+    properties = contract.get("properties")
+    if not isinstance(properties, Mapping):
+        properties = contract
+    required = contract.get("required")
+    if isinstance(required, list):
+        for field in required:
+            if field not in arguments:
+                return f"missing required argument '{field}'"
+    if contract.get("additional_properties") is False:
+        unknown = set(arguments) - set(properties)
+        if unknown:
+            return f"unknown argument field '{sorted(unknown)[0]}'"
+    for field, spec in properties.items():
+        if field not in arguments:
+            continue
+        if not isinstance(spec, Mapping):
+            continue
+        value = arguments[field]
+        type_name = spec.get("type")
+        type_ok = {
+            "string": type(value) is str,
+            "integer": type(value) is int and not isinstance(value, bool),
+            "number": type(value) in (int, float) and not isinstance(value, bool),
+            "boolean": type(value) is bool,
+            "array": isinstance(value, list),
+            "object": isinstance(value, dict),
+            "null": value is None,
+        }.get(type_name, True)
+        if not type_ok:
+            return f"argument '{field}' has the wrong type"
+        enum = spec.get("enum")
+        if isinstance(enum, list) and value not in enum:
+            return f"argument '{field}' must be one of {list(enum)}"
+        if type_name == "string" and type(value) is str and isinstance(spec.get("min_length"), int) and len(value) < spec["min_length"]:
+            return f"argument '{field}' is too short"
+    return None
+
+
+def _validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> str | None:
+    """Strict protocol-1.3 directive validation of one candidate.
+
+    Mirrors the accepted protocol-1.3 directive parser
+    (:func:`agentic_debugger.evaluation.live._parse`) against the state
+    embedded in the request: the ``directive_schema`` declares the legal
+    directive kinds, ``controller.allowed_actions`` and ``action_contracts``
+    declare the legal actions and their argument contracts, and
+    ``controller.legal_transition_targets`` declares the legal transition
+    targets.  Returns ``None`` when the candidate is a fully valid directive
+    and a bounded failure reason otherwise.  Wrong envelopes, unknown fields,
+    and malformed arguments are never normalized.
+    """
+    if not isinstance(candidate, Mapping):
+        return "directive must be a JSON object"
+    schema = _request_directive_schema(request)
+    if not schema:
+        return "request carries no directive schema"
+    kind = candidate.get("kind")
+    if type(kind) is not str or kind not in schema:
+        return "unrecognized or missing directive 'kind'"
+    unknown_fields = set(candidate) - DIRECTIVE_TOP_LEVEL_FIELDS.get(kind, frozenset())
+    if unknown_fields:
+        return f"unknown top-level field '{sorted(unknown_fields)[0]}'"
+    controller = _request_controller(request)
+    state = controller.get("state")
+    if kind == "action":
+        name = candidate.get("name")
+        if type(name) is not str:
+            return "unrecognized action name"
+        contracts = _request_action_contracts(request)
+        if name not in contracts:
+            return f"action '{name}' is not allowed in state '{state}'"
+        allowed = controller.get("allowed_actions")
+        if isinstance(allowed, list) and name not in allowed:
+            return f"action '{name}' is not allowed in state '{state}'"
+        arguments = candidate.get("arguments")
+        if not isinstance(arguments, Mapping):
+            return "'arguments' must be a JSON object"
+        failure = _validate_action_arguments(name, arguments, contracts)
+        if failure is not None:
+            return failure
+        try:
+            serialized = json.dumps(arguments, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+            if len(serialized.encode("utf-8")) > MAX_DIRECTIVE_ARGUMENT_BYTES:
+                return "action arguments exceed the byte bound"
+        except (TypeError, ValueError, OverflowError, UnicodeError):
+            return "action arguments are not strict finite JSON"
+        return None
+    if kind == "transition":
+        target = candidate.get("target_state")
+        legal = controller.get("legal_transition_targets")
+        if type(target) is not str or not isinstance(legal, list) or target not in legal:
+            return f"'{target}' is not reachable from '{state}'"
+        reason = candidate.get("reason")
+        failure = _validate_text_field(reason, MAX_DIRECTIVE_REASON_BYTES)
+        if failure is not None:
+            return "'reason' failed validation"
+        return None
+    if kind in ("add_hypothesis", "revise_hypothesis"):
+        hypothesis_id = candidate.get("hypothesis_id")
+        failure = _validate_text_field(hypothesis_id, MAX_DIRECTIVE_HYPOTHESIS_ID_BYTES)
+        if failure is not None or any(
+            not ("a" <= char <= "z" or "A" <= char <= "Z" or "0" <= char <= "9" or char in "-_.")
+            for char in str(hypothesis_id)
+        ):
+            return "'hypothesis_id' failed validation"
+        failure = _validate_text_field(candidate.get("statement"), MAX_DIRECTIVE_STATEMENT_BYTES)
+        if failure is not None:
+            return "'statement' failed validation"
+        confidence = candidate.get("confidence")
+        if type(confidence) is not str or confidence not in HYPOTHESIS_CONFIDENCE_VALUES:
+            return "'confidence' must be low, medium, or high"
+        evidence_refs = candidate.get("evidence_refs")
+        if not isinstance(evidence_refs, list) or len(evidence_refs) > MAX_DIRECTIVE_EVIDENCE_REF_COUNT:
+            return "'evidence_refs' must be a JSON array within the bound"
+        seen: set[str] = set()
+        for reference in evidence_refs:
+            failure = _validate_text_field(reference, MAX_DIRECTIVE_EVIDENCE_REF_BYTES)
+            if failure is not None or reference in seen:
+                return "'evidence_refs' failed validation"
+            seen.add(reference)
+        if type(candidate.get("requires_runtime_evidence")) is not bool:
+            return "'requires_runtime_evidence' must be a boolean"
+        return None
+    if kind == "set_hypothesis_status":
+        hypothesis_id = candidate.get("hypothesis_id")
+        failure = _validate_text_field(hypothesis_id, MAX_DIRECTIVE_HYPOTHESIS_ID_BYTES)
+        if failure is not None or any(
+            not ("a" <= char <= "z" or "A" <= char <= "Z" or "0" <= char <= "9" or char in "-_.")
+            for char in str(hypothesis_id)
+        ):
+            return "'hypothesis_id' failed validation"
+        status = candidate.get("status")
+        if type(status) is not str or status not in HYPOTHESIS_STATUS_VALUES:
+            return "unrecognized hypothesis status"
+        return None
+    return "unrecognized or missing directive 'kind'"
+
+
+def _extract_directive(text: str, request: Mapping[str, Any]) -> dict[str, Any]:
+    """Schema-aware protocol-1.3 directive extraction.
+
+    Enumerates every complete JSON object in the model text and validates
+    each candidate through the strict protocol-1.3 directive parser
+    (:func:`_validate_directive_candidate`) against the schema embedded in
+    the request.  The result is accepted only when exactly one candidate is a
+    fully valid directive; zero valid candidates are rejected and more than
+    one valid candidate is rejected as ambiguous.  Copied request/config JSON
+    objects are ignored only because they fail directive validation, never
+    through heuristic key stripping.
+
+    Rejections carry a precise bounded reason for the bounded correction
+    feedback: when exactly one JSON candidate exists but is invalid, the
+    exact validation reason (e.g. ``unknown argument field 'extra'``); when
+    multiple candidates exist and none validate, a deterministic bounded
+    reason without the full model output.  Requests without a protocol-1.3
+    ``directive_schema`` keep the historical single-object extraction
+    (:func:`_json_from_text`) unchanged.
+    """
+    if not _request_directive_schema(request):
+        return _json_from_text(text)
+    candidates = _json_objects(text)
+    if not candidates:
+        raise JsonExtractionError(
+            "no_json_object",
+            "OpenCode output did not contain a directive JSON object",
+            reason="no JSON object in the output",
+        )
+    valid: list[dict[str, Any]] = []
+    for candidate in candidates:
+        if _validate_directive_candidate(candidate, request) is None:
+            valid.append(candidate)
+    if not valid:
+        if len(candidates) == 1:
+            reason = _validate_directive_candidate(candidates[0], request) or "no valid protocol directive"
+        else:
+            reason = "no JSON object in the output was a valid protocol directive"
+        raise JsonExtractionError(
+            "no_valid_directive",
+            "OpenCode output contained no valid protocol directive",
+            reason=reason,
+        )
+    if len(valid) > 1:
+        raise JsonExtractionError(
+            "ambiguous_json_output",
+            "OpenCode output contained multiple valid protocol directives",
+            reason="more than one valid protocol directive in the output",
+        )
+    return valid[0]
+
+
+def _correction_message(classification: str, request: Mapping[str, Any], reason: str | None = None) -> str:
+    """One compact machine-generated correction message for a rejected
+    directive.
+
+    Carries the precise bounded validation reason (never the previous model
+    response), the required top-level kind envelope for the currently allowed
+    directive kinds, the one-JSON-object rule, and the no-tools/code-fence/
+    explanation rule.  The message is at most 200 characters (the accepted
+    bounded rejection-detail limit) so the exact correction survives the
+    bounded directive-feedback cycle untouched; when a pathological reason
+    and a five-kind envelope would overflow the bound, only the reason tail
+    is truncated.
+    """
+    schema = _request_directive_schema(request)
+    kinds = sorted(schema) if schema else ["action", "transition"]
+    union = "|".join(kinds)
+    if classification == "ambiguous_json_output":
+        precise = reason or "more than one valid protocol directive"
+    else:
+        precise = reason or "no valid protocol directive"
+    fixed = f". One JSON object only; kind: [{union}]. No tools/code fence/explanation."
+    room = 200 - len(fixed)
+    if len(precise) > room:
+        precise = precise[: max(0, room - 1)] + "…"
+    return precise + fixed
 
 
 def _event_text(event: Any) -> list[str]:
@@ -395,19 +747,97 @@ def _record(path: Path | None, record: dict[str, Any]) -> None:
         stream.write(payload + "\n")
 
 
-def build_opencode_command(
-    model: str,
-    variant: str,
-    root: Path,
-    request_file: Path,
-    message: str = PROTOCOL_INSTRUCTION,
-) -> list[str]:
+def canonical_public_request(request: Mapping[str, Any]) -> str:
+    """The canonical compact JSON serialization of the public request.
+
+    Uses the project's canonical JSON rules (sorted keys, compact separators,
+    ASCII-escaped, strict finite JSON) shared by the deterministic
+    catalog-entry fingerprint contract (:func:`catalog_entry_fingerprint`).
+    """
+    if not isinstance(request, Mapping):
+        raise ValueError("OpenCode protocol request must be an object")
+    return json.dumps(request, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False)
+
+
+def build_user_message(request: Mapping[str, Any]) -> str:
+    """The single inline OpenCode user message for one protocol request.
+
+    The message carries a brief protocol instruction, the canonical public
+    request between the explicit :data:`PUBLIC_REQUEST_START` /
+    :data:`PUBLIC_REQUEST_END` delimiters, compact exact output-shape examples
+    (action, transition, add_hypothesis, revise_hypothesis), and explicit
+    prohibitions against code fences, explanations, tool calls,
+    protocol/version wrappers, and alternate envelopes.  The allowed actions
+    and their argument contracts inside the embedded request are authoritative.
+
+    The 20,000-byte public-evidence limit applies to the canonical public
+    request serialization (:func:`canonical_public_request`), never to the
+    complete user message: a canonical request up to and including
+    :data:`MAX_PUBLIC_EVIDENCE_BYTES` bytes is accepted and its complete
+    message is constructed unchanged (the canonical request is never
+    truncated, reduced, summarized, split, or mutated).  The fully
+    constructed native command is independently bounded by
+    :data:`MAX_NATIVE_COMMAND_LINE_CHARS` in
+    :func:`build_opencode_command`; exceeding either bound fails closed
+    before any model process may run.
+    """
+    if not isinstance(request, Mapping):
+        raise ValueError("OpenCode protocol request must be an object")
+    canonical = canonical_public_request(request)
+    request_byte_count = len(canonical.encode("utf-8"))
+    if request_byte_count > MAX_PUBLIC_EVIDENCE_BYTES:
+        raise ValueError(
+            f"OpenCode canonical public request exceeds the public-evidence byte budget "
+            f"({request_byte_count} > {MAX_PUBLIC_EVIDENCE_BYTES})"
+        )
+    message = (
+        PROTOCOL_INSTRUCTION
+        + " "
+        + PUBLIC_REQUEST_START
+        + " "
+        + canonical
+        + " "
+        + PUBLIC_REQUEST_END
+        + " "
+        + "Exact output shapes: "
+        + DIRECTIVE_OUTPUT_EXAMPLES
+        + " "
+        + DIRECTIVE_OUTPUT_PROHIBITIONS
+    )
+    return message
+
+
+def build_opencode_command(model: str, variant: str, root: Path, message: str, executable: str | Path) -> list[str]:
+    """The full ``opencode run`` argv for model execution.
+
+    ``executable`` is the absolute native ``opencode.exe`` path resolved and
+    version-proven from the verified batch launcher (see
+    :func:`verify_opencode_native_executable`); it is used directly as
+    argv[0] with ``shell=False`` and there is never a silent fallback to the
+    ``opencode.cmd`` batch shim, PATH ambiguity, PowerShell, or shell
+    interpolation.  The isolated ``--dir`` is retained.
+
+    The fully constructed command must fit inside
+    :data:`MAX_NATIVE_COMMAND_LINE_CHARS` (``subprocess.list2cmdline``
+    character count, a documented bound below the Windows CreateProcess
+    command-line maximum of 32767); exceeding it fails closed before process
+    creation.
+    """
     if not isinstance(message, str) or not message.strip():
         raise ValueError("OpenCode positional protocol message must be non-empty")
-    return [
-        "opencode.cmd", "run", message, "--pure", "--format", "json", "--model", model, "--variant", variant,
-        "--dir", str(root), "--file", str(request_file),
+    if not isinstance(executable, (str, Path)) or not str(executable).strip():
+        raise ValueError("OpenCode native executable path must be supplied")
+    command = [
+        str(executable), "run", message, "--pure", "--format", "json",
+        "--model", model, "--variant", variant, "--dir", str(root),
     ]
+    command_line = subprocess.list2cmdline(command)
+    if len(command_line) > MAX_NATIVE_COMMAND_LINE_CHARS:
+        raise ValueError(
+            f"OpenCode native command line exceeds the safety bound "
+            f"({len(command_line)} > {MAX_NATIVE_COMMAND_LINE_CHARS} characters)"
+        )
+    return command
 
 
 def _windows_profile_path() -> Path:
@@ -601,24 +1031,39 @@ def _preflight(args: argparse.Namespace) -> int:
             isolation_root=root,
         )
         launcher = observation["launcher"]
+        native = observation["native"]
         catalog = observation["catalog"]
         effective_config = observation["effective_config"]
         isolation = observation["isolation"]
-        request_file = root / "public-request.json"
-        request_file.write_text("{}\n", encoding="utf-8")
-        command = build_opencode_command(args.model, args.variant, root, request_file)
-        if not command[command.index("run") + 1].strip() or command.index(command[2]) > command.index("--file"):
-            raise RuntimeError("final OpenCode command failed message ordering validation")
+        message = build_user_message({})
+        command = build_opencode_command(args.model, args.variant, root, message, executable=native["native_executable"])
+        if not command[command.index("run") + 1].strip():
+            raise RuntimeError("final OpenCode command failed message validation")
+        if command.index("run") != 1 or command.index("--pure") != 3 or "--file" in command:
+            raise RuntimeError("final OpenCode command failed the inline request message contract")
+        if command[command.index("--dir") + 2:] != []:
+            raise RuntimeError("final OpenCode command carries trailing positional values")
         assertions = {
             "preflight": "passed",
             "provider_inference_started": False,
             "route_mode": args.route_mode,
             "launcher": launcher,
+            "native_executable": native,
             "catalog": catalog,
             "effective_config": effective_config,
             "message_nonempty": bool(command[2].strip()),
-            "message_before_file": command.index(command[2]) < command.index("--file"),
-            "trailing_positional_values_after_file": command.index("--file") + 2 < len(command),
+            "message_is_single_positional": command.index("run") == 1 and command.index("--pure") == 3,
+            "file_argument_absent": "--file" not in command,
+            "trailing_positional_values_absent": command[command.index("--dir") + 2:] == [],
+            "message_inline_request_present": (
+                PUBLIC_REQUEST_START in command[2] and PUBLIC_REQUEST_END in command[2]
+            ),
+            "message_byte_count": len(command[2].encode("utf-8")),
+            "request_within_public_evidence_budget": (
+                len(canonical_public_request({}).encode("utf-8")) <= MAX_PUBLIC_EVIDENCE_BYTES
+            ),
+            "command_line_character_count": len(subprocess.list2cmdline(command)),
+            "command_line_within_native_bound": len(subprocess.list2cmdline(command)) <= MAX_NATIVE_COMMAND_LINE_CHARS,
             "agents_present_during_preflight": isolation["agents_path"].is_file(),
             "config_copy_present_during_preflight": isolation["config_path"].is_file(),
             "auth_copy_present_during_preflight": isolation["auth_copy"].is_file(),
@@ -694,18 +1139,31 @@ def _route_binding_evidence(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def _json_objects(value: str) -> list[dict[str, Any]]:
+    """Enumerate the TOP-LEVEL JSON objects in the text.
+
+    Nested objects inside a decoded object are not separate candidates: a
+    single directive attempt with nested ``arguments`` counts as exactly one
+    candidate, so the schema-aware extraction can carry the exact validation
+    reason of the one candidate the model produced.
+    """
     decoder = json.JSONDecoder()
     objects: list[dict[str, Any]] = []
     clean = _strip_ansi(value)
-    for offset, char in enumerate(clean):
-        if char != "{":
+    offset = 0
+    while offset < len(clean):
+        if clean[offset] != "{":
+            offset += 1
             continue
         try:
-            candidate, _ = decoder.raw_decode(clean[offset:])
+            candidate, end = decoder.raw_decode(clean[offset:])
         except json.JSONDecodeError:
+            offset += 1
             continue
         if isinstance(candidate, dict):
             objects.append(candidate)
+            offset += end
+        else:
+            offset += 1
     return objects
 
 
@@ -795,6 +1253,127 @@ def verify_opencode_launcher(environment: dict[str, str] | None = None, *, expec
     evidence = {"launcher": "opencode.cmd", "resolved_path": launcher, "returncode": completed.returncode, "version": version}
     if completed.returncode != 0 or not version:
         raise RuntimeError(f"opencode.cmd version preflight failed: {_redact(evidence)}")
+    if expected_version is not None:
+        if version != expected_version:
+            raise RuntimeError(f"OpenCode version drift: observed {version!r} != expected {expected_version!r}")
+        evidence["version_matches_expected"] = True
+    return evidence
+
+
+def _native_file_identity(path: Path) -> tuple[int, int]:
+    """The file identity (device, file index) used to detect that the npm
+    layout hard-links ONE platform binary into multiple package locations."""
+    stat = path.stat()
+    return (stat.st_dev, stat.st_ino)
+
+
+def _npm_package_root(launcher_path: str) -> Path:
+    """The trusted npm package root derived ONLY from the verified launcher.
+
+    ``<launcher-directory>\\node_modules\\opencode-ai`` resolved to an
+    absolute path; the native executable must belong to this root.
+    """
+    if not isinstance(launcher_path, str) or not launcher_path:
+        raise RuntimeError("OpenCode launcher path is missing")
+    launcher = Path(launcher_path).resolve()
+    package_root = (launcher.parent / "node_modules" / "opencode-ai").resolve()
+    if not package_root.is_absolute():
+        raise RuntimeError("trusted npm package root is not an absolute path")
+    if not package_root.is_dir():
+        raise RuntimeError(f"trusted npm package root is missing or not a directory: {package_root}")
+    return package_root
+
+
+def _resolve_native_executable(launcher_path: str) -> Path:
+    """Resolve the native ``opencode.exe`` of the trusted npm installation.
+
+    Begins only from the independently verified absolute ``opencode.cmd``
+    launcher path and resolves the native executable exclusively from the
+    explicit allowlist of package-managed relative locations under the
+    trusted ``opencode-ai`` npm package root
+    (:data:`NATIVE_EXECUTABLE_CANDIDATES`).  Every candidate must resolve to
+    an absolute path that remains inside the trusted root (no symlink/reparse
+    escape) and must exist as a regular executable file.  The genuine npm
+    layout hard-links the single platform binary into the package ``bin`` and
+    the platform-package ``bin`` locations, so candidates sharing one file
+    identity count as one; exactly one unique native binary must remain.
+    Zero candidates, multiple distinct candidates, and path-escape candidates
+    fail closed.  Never PATH lookup, environment-supplied executable paths,
+    shell interpolation, PowerShell execution, parsing an unrestricted
+    command from the batch file, or a fallback to ``opencode.cmd``.
+    """
+    package_root = _npm_package_root(launcher_path)
+    candidates: list[tuple[Path, tuple[int, int]]] = []
+    for relative in NATIVE_EXECUTABLE_CANDIDATES:
+        candidate = (package_root / relative).resolve()
+        if not candidate.is_absolute():
+            continue
+        try:
+            candidate.relative_to(package_root)
+        except ValueError:
+            continue  # symlink/reparse escape from the trusted root
+        if not candidate.is_file():
+            continue
+        candidates.append((candidate, _native_file_identity(candidate)))
+    if not candidates:
+        raise RuntimeError(
+            f"native OpenCode executable was not found under the trusted npm package root: {package_root}"
+        )
+    unique: dict[tuple[int, int], Path] = {}
+    for candidate, identity in candidates:
+        unique.setdefault(identity, candidate)
+    if len(unique) > 1:
+        raise RuntimeError(
+            "multiple distinct native OpenCode executable candidates under the trusted npm package root"
+        )
+    return next(iter(unique.values()))
+
+
+def verify_opencode_native_executable(
+    environment: dict[str, str],
+    *,
+    launcher_path: str,
+    launcher_version: str,
+    expected_version: str | None = None,
+) -> dict[str, Any]:
+    """Prove the native ``opencode.exe`` represents the same installation.
+
+    Resolves the native executable through the trusted npm-installation
+    resolution contract (:func:`_resolve_native_executable`), requires it to
+    be a regular file contained in the trusted ``opencode-ai`` package root,
+    and requires it to report the exact same OpenCode version as the batch
+    launcher (proving both represent the same installed OpenCode
+    installation).  OpenCode Go mode additionally requires the exact
+    authorization-bound version.  Fails closed if the native executable
+    cannot be resolved or its version differs.  Returns bounded resolution
+    evidence only — resolution strategy, the package-relative native path,
+    and the regular-file/root-containment/version-match flags — never
+    executable bytes or unrestricted environment data.
+    """
+    native = _resolve_native_executable(launcher_path)
+    package_root = _npm_package_root(launcher_path)
+    completed = subprocess.run(
+        [str(native), "--version"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
+        env=environment,
+    )
+    version = (completed.stdout or completed.stderr or "").strip()
+    evidence: dict[str, Any] = {
+        "resolution_strategy": "npm-package-layout",
+        "native_executable": str(native),
+        "package_relative_path": str(native.relative_to(package_root)),
+        "native_version": version,
+        "regular_file": True,
+        "root_containment": True,
+        "returncode": completed.returncode,
+    }
+    if completed.returncode != 0 or not version:
+        raise RuntimeError(f"native OpenCode executable version preflight failed: {_redact(evidence)}")
+    if version != launcher_version:
+        raise RuntimeError(
+            f"native OpenCode executable version drift: observed {version!r} != launcher {launcher_version!r}"
+        )
+    evidence["version_matches_launcher"] = True
     if expected_version is not None:
         if version != expected_version:
             raise RuntimeError(f"OpenCode version drift: observed {version!r} != expected {expected_version!r}")
@@ -962,8 +1541,12 @@ def observe_isolated_catalog(
     (permission, MCP, plugin, instruction, sharing, and autoupdate denials
     and the exact enabled-provider allowlist), the exact effective
     configuration is required, and only the local/non-model inspection
-    commands run (``opencode.cmd --version`` and the route-mode ``models``
+    commands run (``opencode.cmd --version``, the native
+    ``opencode.exe --version`` proof, and the route-mode ``models``
     inspection); ``opencode run`` is never constructed or executed here.
+    The native ``opencode.exe`` sibling of the batch launcher is resolved
+    and version-proven against the launcher (same installation) and, in
+    OpenCode Go mode, against the authorization-bound expected version.
 
     When ``isolation_root`` is None the helper owns a temporary isolation
     root and always removes it (success or failure) before returning.  When a
@@ -974,13 +1557,13 @@ def observe_isolated_catalog(
     route capture supplies no expected fingerprint (pure observation, no
     fabricated binding).
 
-    Returns the launcher evidence, the catalog verification record, the exact
-    selected catalog entry, the observed facts, the deterministic
-    exact-entry canonical JSON SHA-256 fingerprint, the effective-configuration
-    validation, the exact inspection command inventory, the isolation record
-    (environment/config/auth copies needed by callers that continue into
-    ``opencode run``), and whether the helper-owned temporary isolation root
-    was cleaned.
+    Returns the launcher evidence, the bounded native-executable identity
+    evidence, the catalog verification record, the exact selected catalog
+    entry, the observed facts, the deterministic exact-entry canonical JSON
+    SHA-256 fingerprint, the effective-configuration validation, the exact
+    inspection command inventory, the isolation record (environment/config/
+    auth copies needed by callers that continue into ``opencode run``), and
+    whether the helper-owned temporary isolation root was cleaned.
     """
     if route_mode not in ROUTE_MODES:
         raise RuntimeError(f"unsupported route mode: {route_mode!r}")
@@ -996,6 +1579,12 @@ def observe_isolated_catalog(
     try:
         isolation = _prepare_isolation(root, route_mode=route_mode)
         launcher = verify_opencode_launcher(isolation["environment"], expected_version=expected_opencode_version)
+        native = verify_opencode_native_executable(
+            isolation["environment"],
+            launcher_path=launcher["resolved_path"],
+            launcher_version=str(launcher["version"]),
+            expected_version=expected_opencode_version,
+        )
         observation = _catalog_entry_observation(
             isolation["environment"], root, route_mode=route_mode, model=model, variant=variant,
             expected_runtime_model_id=expected_runtime_model_id,
@@ -1005,12 +1594,17 @@ def observe_isolated_catalog(
         return {
             "route_mode": route_mode,
             "launcher": launcher,
+            "native": native,
             "catalog": observation["catalog"],
             "entry": observation["entry"],
             "facts": observation["facts"],
             "fingerprint": observation["fingerprint"],
             "effective_config": effective_config,
-            "inspection_commands": [["opencode.cmd", "--version"], _catalog_command(route_mode)],
+            "inspection_commands": [
+                ["opencode.cmd", "--version"],
+                [native["native_executable"], "--version"],
+                _catalog_command(route_mode),
+            ],
             "isolation": isolation,
             "temporary_isolation_cleaned": created_root,
         }
@@ -1046,9 +1640,13 @@ def main(argv: list[str] | None = None) -> int:
     root = Path(tempfile.gettempdir()) / f"agentic-opencode-transport-{uuid.uuid4().hex}"
     root.mkdir()
     command: list[str] = []
+    request_sha256: str | None = None
+    request_byte_count: int | None = None
     try:
-        request_file = root / "public-request.json"
-        request_file.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+        message = build_user_message(request)
+        canonical_request = canonical_public_request(request)
+        request_sha256 = hashlib.sha256(canonical_request.encode("utf-8")).hexdigest()
+        request_byte_count = len(canonical_request.encode("utf-8"))
         route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
         observation = observe_isolated_catalog(
             args.model, args.variant,
@@ -1059,21 +1657,28 @@ def main(argv: list[str] | None = None) -> int:
             isolation_root=root,
         )
         launcher = observation["launcher"]
+        native = observation["native"]
         catalog = observation["catalog"]
         effective_config = observation["effective_config"]
         isolation = observation["isolation"]
-        command = build_opencode_command(args.model, args.variant, root, request_file)
+        command = build_opencode_command(args.model, args.variant, root, message, executable=native["native_executable"])
         evidence_path = Path(args.evidence_file) if args.evidence_file else None
         _record(evidence_path, {
             "event": "transport_preflight",
             "route_mode": args.route_mode,
             "route_binding": route_binding,
             "launcher": launcher,
+            "native_executable": native,
             "catalog": catalog,
             "effective_config": effective_config,
             "command": command,
-            "message_length": len(PROTOCOL_INSTRUCTION),
-            "message_before_file": command.index(PROTOCOL_INSTRUCTION) < command.index("--file"),
+            "request_sha256": request_sha256,
+            "request_byte_count": request_byte_count,
+            "message_byte_count": len(message.encode("utf-8")),
+            "request_within_public_evidence_budget": request_byte_count <= MAX_PUBLIC_EVIDENCE_BYTES,
+            "command_line_character_count": len(subprocess.list2cmdline(command)),
+            "command_line_within_native_bound": len(subprocess.list2cmdline(command)) <= MAX_NATIVE_COMMAND_LINE_CHARS,
+            "file_argument_absent": "--file" not in command,
             "isolation": {
                 "config_path": str(isolation["config_path"]),
                 "config_sha256": hashlib.sha256(isolation["config_path"].read_bytes()).hexdigest(),
@@ -1102,7 +1707,8 @@ def main(argv: list[str] | None = None) -> int:
         if completed.returncode != 0:
             _record(Path(args.evidence_file) if args.evidence_file else None, {
                 "event": "provider_exit_failure", "model": args.model, "variant": args.variant,
-                "command": command, "request": request, "provider_exit_code": completed.returncode,
+                "command": command, "request_sha256": request_sha256, "request_byte_count": request_byte_count,
+                "provider_exit_code": completed.returncode,
                 "provider_stdout": raw_stdout, "provider_stderr": raw_stderr,
                 "error": "OpenCode exited nonzero; directive parsing was not attempted",
             })
@@ -1118,18 +1724,58 @@ def main(argv: list[str] | None = None) -> int:
             raise JsonExtractionError(classification, "provider output did not contain an extractable assistant directive text")
         text = "\n".join(text_parts) if text_parts else raw_stdout
         try:
-            directive = _json_from_text(text)
+            directive = _extract_directive(text, request)
         except ValueError as exc:
-            classification = (
-                "ambiguous_json_output"
-                if getattr(exc, "classification", None) == "ambiguous_json_output"
-                else _parse_failure_classification(raw_stdout, events, text_parts, structured_errors)
-            )
+            raw_classification = getattr(exc, "classification", None)
+            if raw_classification == "ambiguous_json_output":
+                classification = "ambiguous_json_output"
+            elif raw_classification == "no_json_object":
+                if not (raw_stdout or "").strip():
+                    classification = "empty_output"
+                elif _request_directive_schema(request):
+                    classification = "no_json_object"
+                else:
+                    classification = _parse_failure_classification(raw_stdout, events, text_parts, structured_errors)
+            else:
+                classification = raw_classification or _parse_failure_classification(raw_stdout, events, text_parts, structured_errors)
             _record(Path(args.evidence_file) if args.evidence_file else None, {
                 "event": "directive_extraction_failure",
                 "failure_classification": classification,
                 "error": f"{type(exc).__name__}: {exc}",
             })
+            if _request_directive_schema(request):
+                # Protocol-1.3 path: a rejected directive returns a bounded
+                # directive rejection with one compact machine-generated
+                # correction message carrying the precise bounded validation
+                # reason; the existing bounded directive-feedback cycle
+                # carries it to the model on the next attempt.  The
+                # provider-completed response keeps usage/cost truthful.
+                rejection_reason = getattr(exc, "reason", None)
+                response: dict[str, Any] = {
+                    "directive_error": {
+                        "classification": classification,
+                        "message": _correction_message(classification, request, reason=rejection_reason),
+                    }
+                }
+                usage = _usage(events)
+                telemetry = _provider_telemetry(events)
+                if usage:
+                    response["usage"] = usage
+                if telemetry:
+                    response["provider_telemetry"] = telemetry
+                _record(Path(args.evidence_file) if args.evidence_file else None, {
+                    "event": "directive_rejection_response",
+                    "model": args.model, "variant": args.variant, "command": command,
+                    "request_sha256": request_sha256, "request_byte_count": request_byte_count,
+                    "classification": classification,
+                    "validation_reason": rejection_reason,
+                    "correction_message": response["directive_error"]["message"],
+                    "response": response,
+                    "usage": usage,
+                    "provider_telemetry": telemetry,
+                })
+                print(json.dumps(response, ensure_ascii=False), flush=True)
+                return 0
             raise
         response: dict[str, Any] = {"directive": directive}
         usage = _usage(events)
@@ -1139,7 +1785,8 @@ def main(argv: list[str] | None = None) -> int:
         if telemetry:
             response["provider_telemetry"] = telemetry
         _record(Path(args.evidence_file) if args.evidence_file else None, {
-            "model": args.model, "variant": args.variant, "command": command, "request": request,
+            "model": args.model, "variant": args.variant, "command": command,
+            "request_sha256": request_sha256, "request_byte_count": request_byte_count,
             "provider_exit_code": completed.returncode, "provider_stdout": raw_stdout,
             "provider_stderr": raw_stderr, "response": response, "usage": usage,
             "provider_telemetry": telemetry,
@@ -1149,13 +1796,17 @@ def main(argv: list[str] | None = None) -> int:
     except subprocess.TimeoutExpired as exc:
         _record(Path(args.evidence_file) if args.evidence_file else None, {
             "event": "provider_timeout", "model": args.model, "variant": args.variant,
-            "command": command, "request": request, "provider_stdout": exc.stdout or exc.output or "",
+            "command": command, "request_sha256": request_sha256, "request_byte_count": request_byte_count,
+            "provider_stdout": exc.stdout or exc.output or "",
             "provider_stderr": exc.stderr or "", "error": f"TimeoutExpired: {exc}",
         })
         print(f"OpenCode transport failed: TimeoutExpired: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
-        record = {"model": args.model, "variant": args.variant, "command": command, "request": request}
+        record: dict[str, Any] = {"model": args.model, "variant": args.variant, "command": command}
+        if request_sha256 is not None:
+            record["request_sha256"] = request_sha256
+            record["request_byte_count"] = request_byte_count
         record.update(_failure_evidence(exc))
         _record(Path(args.evidence_file) if args.evidence_file else None, record)
         print(f"OpenCode transport failed: {type(exc).__name__}: {exc}", file=sys.stderr)

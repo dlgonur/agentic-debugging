@@ -140,6 +140,60 @@ stdin, bounded `opencode run` command construction, response reaching the
 model adapter boundary), covering absent/zero/positive cost propagation, and
 proves zero real provider calls.
 
+A bounded directive-transport repair (2026-08-03, transport-only) fixed the
+final protocol blocker exposed by the first provider-connected six-case
+attempt (`705aa047...`; provider-connected but protocol-invalid, not a valid
+static-versus-PDB experiment): the sanitized public request is now supplied
+inline inside the single OpenCode user message (canonical compact JSON
+between `=== BEGIN PUBLIC REQUEST ===` / `=== END PUBLIC REQUEST ===`
+delimiters) instead of a model-readable `--file` (removed from the real
+`opencode run` command; Read/Bash/edit/write stay denied, isolated `--dir`
+kept); directive extraction is schema-aware - every JSON object candidate is
+validated against the directive schema, action contracts, and controller
+context embedded in the request, exactly one fully valid directive is
+accepted, zero/ambiguous are rejected, strict top-level directive fields are
+enforced (additional fields rejected, never normalized), and copied
+request/config objects are ignored only because they fail directive
+validation; rejected directives return one compact machine-generated
+correction message (the precise bounded validation reason, required
+`kind: [...]` envelope, one-JSON-object rule, no tools/code fence/
+explanation, never the previous response) that the adapter converts into the
+accepted bounded directive-rejection so the existing directive-feedback
+cycle carries the exact correction to the model.
+
+A follow-up material repair (2026-08-03, transport-only) replaced the
+cmd.exe batch-shim message ceiling with native executable execution: the
+wrapper begins from the verified `opencode.cmd` launcher, resolves the
+native `opencode.exe` through the trusted npm package root
+(`<launcher-dir>\node_modules\opencode-ai` — established path
+`node_modules\opencode-windows-x64\bin\opencode.exe`, with the baseline x64
+platform package and the direct package `bin` explicitly allowlisted;
+hard-linked copies of the single platform binary count as one; exactly one
+unique native binary must remain; root containment, regular file, and
+version equality with the launcher and the authorization-bound expected
+version are required; zero, multiple distinct, and path-escape candidates
+fail closed) and invokes it directly for `opencode run` (`shell=False`,
+never a silent fallback to the batch shim, PATH lookup, PowerShell, shell
+interpolation, or another executable), so the inline message supports the
+full frozen public-evidence budget. The 20,000-byte public-evidence limit
+applies to the canonical public request serialization, not to the complete
+user message — the actual frozen Understand-stage messages are 9189-9752
+bytes and canonical requests up to 20000 bytes are accepted with the
+canonical request never reduced or truncated. The fully constructed native
+command is checked against a conservative Windows command-line bound
+(`MAX_NATIVE_COMMAND_LINE_CHARS = 30000` via `subprocess.list2cmdline`,
+below the CreateProcess maximum) and fails closed before process creation.
+Short inspection commands may continue through the launcher; only bounded
+resolution evidence (strategy, package-relative native path,
+regular-file/root-containment/version-match flags) is recorded. Diagnostic
+classifications (empty output, text without a protocol directive, no JSON
+object, zero valid directives, multiple valid directives) are preserved.
+Preflight/effective-command validation follows the inline contract, and
+audit evidence records only the request hash and byte count. Legacy
+extraction without a protocol
+`directive_schema` is unchanged. The Authorized Six-Case Live Campaign
+remains open.
+
 ## Current status (2026-08-03) — Operator Authorization and Real Route Preflight v1
 
 The operator preparation flow is implemented and packaged (operator-only;

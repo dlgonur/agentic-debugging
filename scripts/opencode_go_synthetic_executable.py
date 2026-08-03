@@ -18,11 +18,12 @@ Contract (mirrors the real ``opencode`` CLI surface used by the wrapper):
   (``OPENCODE_CONFIG``) plus the empty agent/mode/command keys the wrapper
   expects.
 * ``run <message> --pure --format json --model <id> --variant <v>
-  --dir <root> --file <request-file>`` — reads the request file written by
-  the wrapper from its stdin request and emits protocol-1.3-style JSON event
-  lines (a text part carrying the directive plus a ``step_finish`` event
-  with tokens/cost) selected by the request's ``synthetic_scenario`` field
-  (default ``valid``).
+  --dir <root>`` — recovers the canonical public request from the inline
+  message (between the exact ``=== BEGIN PUBLIC REQUEST ===`` /
+  ``=== END PUBLIC REQUEST ===`` delimiters the real protocol wrapper writes)
+  and emits protocol-1.3-style JSON event lines (a text part carrying the
+  directive plus a ``step_finish`` event with tokens/cost) selected by the
+  request's ``synthetic_scenario`` field (default ``valid``).
 
 Properties (enforced by the scenario table):
 
@@ -43,6 +44,17 @@ Scenarios (``synthetic_scenario`` in the request file):
 * ``malformed-then-valid`` — first attempt (request carries
   ``directive_feedback: null``) emits malformed text; later attempts emit a
   valid directive.
+* ``state-legal`` — emits the legal protocol directive for the request's
+  ``controller.state``: an action in ``Reproduce``, an add_hypothesis
+  directive in ``Understand``, a revise_hypothesis directive in
+  ``RuntimeEvidence``, and a stop directive otherwise.
+* ``copied-request-plus-valid`` — copies the entire embedded request JSON
+  into the output and appends one valid directive, exercising the wrapper's
+  schema-aware extraction (the copied request object must fail directive
+  validation, never heuristic key stripping).
+* ``tool-call-text`` — emits DSML tool-call text that tries to read the
+  request file, plus one valid directive; the wrapper must reject the tool
+  call text and accept the single valid directive.
 * ``malformed-always`` — every attempt emits malformed text.
 * ``timeout`` — sleeps far beyond the wrapper call timeout.
 * ``timeout-with-child`` — sleeps and spawns a child process that keeps
@@ -70,6 +82,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -100,7 +113,32 @@ SYNTHETIC_CATALOG_ENTRIES = [
     for model_id in SYNTHETIC_MODEL_IDS
 ]
 
+#: The exact inline-request delimiters the real protocol wrapper writes into
+#: the OpenCode user message (:data:`opencode_protocol_transport.PUBLIC_REQUEST_START`
+#: / ``..._END``); the synthetic CLI recovers the request from the message,
+#: never from a file, mirroring the real model-facing contract.
+PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
+PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
+
 DIRECTIVE_STOP = {"kind": "stop", "reason": "synthetic-success"}
+
+DIRECTIVE_ACTION_BASELINE = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+DIRECTIVE_ADD_HYPOTHESIS = {
+    "kind": "add_hypothesis",
+    "hypothesis_id": "h-1",
+    "statement": "synthetic root-cause hypothesis",
+    "confidence": "medium",
+    "evidence_refs": [],
+    "requires_runtime_evidence": False,
+}
+DIRECTIVE_REVISE_HYPOTHESIS = {
+    "kind": "revise_hypothesis",
+    "hypothesis_id": "h-1",
+    "statement": "synthetic revised root-cause hypothesis",
+    "confidence": "high",
+    "evidence_refs": ["obs-1"],
+    "requires_runtime_evidence": True,
+}
 
 
 def _catalog() -> str:
@@ -141,6 +179,21 @@ def _emit_step_finish(extra: dict[str, Any]) -> None:
             part[key] = extra[key]
     sys.stdout.write(json.dumps({"type": "step_finish", "part": part}, ensure_ascii=False) + "\n")
     sys.stdout.flush()
+
+
+def _state_legal_directive(request: dict[str, Any]) -> dict[str, Any]:
+    """The legal protocol directive for the request's current controller
+    state; used by the ``state-legal`` synthetic scenario."""
+    controller = request.get("controller")
+    state = controller.get("state") if isinstance(controller, dict) else None
+    contracts = request.get("action_contracts")
+    if state == "Reproduce" and isinstance(contracts, dict) and "run_reproduction" in contracts:
+        return DIRECTIVE_ACTION_BASELINE
+    if state == "Understand":
+        return DIRECTIVE_ADD_HYPOTHESIS
+    if state == "RuntimeEvidence":
+        return DIRECTIVE_REVISE_HYPOTHESIS
+    return DIRECTIVE_STOP
 
 
 def _run_behavior(request: dict[str, Any]) -> int:
@@ -184,6 +237,24 @@ def _run_behavior(request: dict[str, Any]) -> int:
         _emit_text(json.dumps(DIRECTIVE_STOP, ensure_ascii=False))
         _emit_step_finish({"tokens": {"input": 11, "output": 5}, "cost": 0.0})
         return 0
+    if scenario == "state-legal":
+        _emit_text(json.dumps(_state_legal_directive(request), ensure_ascii=False))
+        _emit_step_finish({"tokens": {"input": 11, "output": 5}, "cost": 0.0042})
+        return 0
+    if scenario == "copied-request-plus-valid":
+        _emit_text(json.dumps(request, ensure_ascii=False) + "\n" + json.dumps(_state_legal_directive(request), ensure_ascii=False))
+        _emit_step_finish({"tokens": {"input": 11, "output": 5}, "cost": 0.0042})
+        return 0
+    if scenario == "tool-call-text":
+        _emit_text(
+            'Let me read the request file.\n<||DSML||tool_calls>\n'
+            '<||DSML||invoke name="Bash">\n'
+            '<||DSML||parameter name="command" string="true">type public-request.json</||DSML||parameter>\n'
+            "</||DSML||invoke>\n</||DSML||tool_calls>\n"
+            + json.dumps(_state_legal_directive(request), ensure_ascii=False)
+        )
+        _emit_step_finish({"tokens": {"input": 11, "output": 5}, "cost": 0.0042})
+        return 0
     if scenario == "identity-mismatch":
         _emit_text(json.dumps(DIRECTIVE_STOP, ensure_ascii=False))
         _emit_step_finish({"tokens": {"input": 11, "output": 5}, "cost": 0.0, "observed_model": "opencode-go/some-other-model"})
@@ -214,11 +285,21 @@ def _run_behavior(request: dict[str, Any]) -> int:
     return 0
 
 
-def _request_from_file(path: str | None) -> dict[str, Any]:
-    if path is None or not Path(path).is_file():
+def _request_from_message(message: str | None) -> dict[str, Any]:
+    if not isinstance(message, str) or not message:
+        return {}
+    start = message.find(PUBLIC_REQUEST_START)
+    if start < 0:
+        return {}
+    start += len(PUBLIC_REQUEST_START)
+    end = message.find(PUBLIC_REQUEST_END, start)
+    if end < 0:
+        return {}
+    payload = message[start:end].strip()
+    if not payload:
         return {}
     try:
-        value = json.loads(Path(path).read_text(encoding="utf-8"))
+        value = json.loads(payload)
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
@@ -278,9 +359,161 @@ def main(argv: list[str] | None = None) -> int:
         sys.stdout.write(_effective_config())
         return 0
     if args[0] == "run":
-        return _run_behavior(_request_from_file(_argv_value(args, "--file")))
+        return _run_behavior(_request_from_message(_argv_value(args, "run")))
     sys.stderr.write(f"synthetic opencode: unsupported command {args[0]!r}\n")
     return 2
+
+
+# ---- fake native executable fixture (test-only) ------------------------------
+#
+# The real protocol wrapper resolves and invokes the native ``opencode.exe``
+# directly for ``opencode run`` (bypassing the cmd.exe batch shim).  Test
+# fixtures and the adapter self-test therefore need a deterministic fake
+# native ``opencode.exe``: a tiny compiled console forwarder that invokes
+# ``<interpreter> <target_script> <args...>`` with no shell and propagates
+# stdout/stderr and the exit code.  The forwarder is compiled once per
+# (interpreter, target_script) pair per session via PowerShell Add-Type and
+# copied into each fake launcher directory, so the real wrapper's
+# native-executable resolution, version proof, and model-execution invocation
+# run against a deterministic fake native executable.
+
+_FORWARDER_SOURCE = r"""
+using System;
+using System.Diagnostics;
+using System.IO;
+using System.Text;
+public static class OpenCodeForwarder
+{
+    private static readonly string Python = {{PYTHON}};
+    private static readonly string Script = {{SCRIPT}};
+
+    private static string Quote(string arg)
+    {
+        var sb = new StringBuilder();
+        sb.Append('"');
+        for (int i = 0; i < arg.Length; i++)
+        {
+            char c = arg[i];
+            if (c == '\\')
+            {
+                int run = 0;
+                while (i < arg.Length && arg[i] == '\\') { run++; i++; }
+                i--;
+                bool followedByQuote = i + 1 < arg.Length && arg[i + 1] == '"';
+                sb.Append('\\', followedByQuote ? run * 2 : run);
+            }
+            else if (c == '"')
+            {
+                sb.Append('\\');
+                sb.Append('"');
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        sb.Append('"');
+        return sb.ToString();
+    }
+
+    public static int Main(string[] args)
+    {
+        string outFile = Path.GetTempFileName();
+        string errFile = Path.GetTempFileName();
+        var psi = new ProcessStartInfo();
+        psi.FileName = Python;
+        psi.UseShellExecute = false;
+        psi.RedirectStandardOutput = true;
+        psi.RedirectStandardError = true;
+        var tail = new StringBuilder();
+        tail.Append(Quote(Script));
+        foreach (string arg in args) tail.Append(' ').Append(Quote(arg));
+        psi.Arguments = tail.ToString();
+        int exitCode = 1;
+        using (var p = Process.Start(psi))
+        {
+            string stdout = p.StandardOutput.ReadToEnd();
+            string stderr = p.StandardError.ReadToEnd();
+            p.WaitForExit();
+            exitCode = p.ExitCode;
+            try { File.WriteAllText(outFile, stdout); } catch (Exception) { }
+            try { File.WriteAllText(errFile, stderr); } catch (Exception) { }
+        }
+        try { Console.Out.Write(File.ReadAllText(outFile)); } catch (Exception) { }
+        try { Console.Error.Write(File.ReadAllText(errFile)); } catch (Exception) { }
+        try { File.Delete(outFile); } catch (Exception) { }
+        try { File.Delete(errFile); } catch (Exception) { }
+        return exitCode;
+    }
+}
+"""
+
+_FORWARDER_CACHE: dict[tuple[str, str], Path] = {}
+
+
+def _cs_string_literal(value: str) -> str:
+    return '"' + value.replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _compile_forwarder(interpreter: str, target_script: str) -> Path:
+    """Compile (once per session per interpreter/script pair) the fake native
+    executable forwarder via PowerShell Add-Type; returns the compiled exe."""
+    import shutil as _shutil
+
+    key = (interpreter, target_script)
+    cached = _FORWARDER_CACHE.get(key)
+    if cached is not None and cached.is_file():
+        return cached
+    # Windows PowerShell 5.1 (``powershell.exe``) supports Add-Type
+    # -OutputType ConsoleApplication; prefer it over PowerShell 7 (whose
+    # Add-Type -OutputType is unsupported on newer .NET).
+    powershell = _shutil.which("powershell") or _shutil.which("pwsh")
+    if not powershell:
+        raise RuntimeError("PowerShell is required to build the fake native executable fixture")
+    work = Path(tempfile.gettempdir()) / f"opencode-go-forwarder-{os.getpid()}"
+    work.mkdir(parents=True, exist_ok=True)
+    source_path = work / "forwarder.cs"
+    output = work / "opencode.exe"
+    source = _FORWARDER_SOURCE.replace("{{PYTHON}}", _cs_string_literal(interpreter)).replace("{{SCRIPT}}", _cs_string_literal(target_script))
+    source_path.write_text(source, encoding="utf-8")
+    command = (
+        f"Add-Type -TypeDefinition (Get-Content -Raw '{source_path}') "
+        f"-OutputAssembly '{output}' -OutputType ConsoleApplication"
+    )
+    completed = subprocess.run(
+        [powershell, "-NoProfile", "-NonInteractive", "-Command", command],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        errors="replace", timeout=180, check=False,
+    )
+    if completed.returncode != 0 or not output.is_file():
+        raise RuntimeError(
+            f"fake native executable build failed (rc {completed.returncode}): "
+            f"{_bounded(completed.stderr) or _bounded(completed.stdout)}"
+        )
+    _FORWARDER_CACHE[key] = output
+    return output
+
+
+def _bounded(value: str, limit: int = 512) -> str:
+    value = (value or "").strip()
+    return value if len(value) <= limit else value[:limit] + " <truncated>"
+
+
+def build_fake_native_executable(fake_bin: str | Path, *, target_script: str | Path) -> Path:
+    """Create a deterministic fake native ``opencode.exe`` in ``fake_bin``.
+
+    The compiled forwarder invokes ``<sys.executable> <target_script> <args...>``
+    with no shell and propagates stdout/stderr and the exit code, so it serves
+    the exact synthetic CLI surface (``--version``, ``models ...``,
+    ``debug config --pure``, ``run <message> ...``).  Test-only.
+    """
+    target = Path(fake_bin)
+    target.mkdir(parents=True, exist_ok=True)
+    compiled = _compile_forwarder(sys.executable, str(Path(target_script).resolve()))
+    native = target / "opencode.exe"
+    if not native.is_file() or native.read_bytes() != compiled.read_bytes():
+        shutil.copy2(compiled, native)
+    return native
 
 
 if __name__ == "__main__":

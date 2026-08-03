@@ -124,6 +124,66 @@ handling; the request reaches the wrapper through stdin and the wrapper
 constructs the bounded `opencode run ...` command with the exact model and
 variant.
 
+The sanitized public request is supplied inline inside the single OpenCode
+user message (canonical compact JSON between the exact
+`=== BEGIN PUBLIC REQUEST ===` / `=== END PUBLIC REQUEST ===` delimiters),
+never through a model-readable `--file`: the real `opencode run` command has
+no `--file` argument, and every read/bash/edit/write permission stays denied
+so the model cannot read files or call tools. The message also carries a
+brief protocol instruction, compact exact output-shape examples (action,
+transition, add_hypothesis, revise_hypothesis), and explicit prohibitions
+against code fences, explanations, tool calls, protocol/version wrappers, and
+alternate envelopes; the allowed actions and their argument contracts inside
+the embedded request are authoritative. The canonical request is never
+reduced, truncated, omitted, summarized, split, or otherwise mutated, and
+must fit inside the frozen public-evidence byte budget
+(`MAX_PUBLIC_EVIDENCE_BYTES = 20000`, matching the campaign
+`max_public_evidence_bytes`); exceeding it fails closed before any model
+process may run, never silently truncating the request the model sees.
+
+Model execution invokes the native `opencode.exe` directly through the
+trusted npm-installation resolution contract. The wrapper begins only from
+the independently verified `opencode.cmd` launcher path, defines the trusted
+npm package root as `<launcher-directory>\node_modules\opencode-ai`, and
+resolves the native executable exclusively from an explicit allowlist of
+package-managed relative locations under that root — including the
+established Windows x64 platform-package path
+`node_modules\opencode-windows-x64\bin\opencode.exe`, the baseline x64
+platform package, and the direct package `bin` (the npm shim's own target).
+The genuine npm layout hard-links the single platform binary into those
+locations, so candidates sharing one file identity count as one; exactly one
+unique native binary must remain. Every candidate must resolve to an
+absolute path inside the trusted root (no symlink/reparse escape) and exist
+as a regular executable file; zero candidates, multiple distinct candidates,
+and path-escape candidates fail closed. The resolved native must report the
+exact same OpenCode version as the batch launcher (and, in OpenCode Go mode,
+the exact authorization-bound version), and is used as argv[0] for
+`opencode run` with `shell=False` — never a silent fallback to the batch
+shim, PATH lookup, environment-supplied executable paths, PowerShell, shell
+interpolation, parsing an unrestricted command from the batch file, or
+another executable. The cmd.exe batch-shim line limit (~8191 characters)
+therefore no longer applies to the inline message; the fully constructed
+command is checked against a conservative native Windows command-line bound
+(`MAX_NATIVE_COMMAND_LINE_CHARS = 30000` via `subprocess.list2cmdline`, below
+the Windows CreateProcess maximum of 32767) and fails closed before process
+creation when exceeded. Short non-model inspection commands
+(`--version`, `models ...`, `debug config --pure`) may continue through the
+established launcher, and the native executable and batch launcher are proven
+to represent the same expected OpenCode installation/version. Only bounded
+resolution evidence is recorded (resolution strategy `npm-package-layout`,
+the package-relative native path, and the regular-file/root-containment/
+version-match flags) — never executable bytes or unrestricted environment
+data. Evidence records the request as a SHA-256 hash plus byte count, never
+as unrestricted request contents.
+
+The 20,000-byte public-evidence limit applies to the canonical public
+request serialization, not to the complete user message: a canonical request
+up to and including 20000 bytes is accepted and its complete inline message
+is constructed unchanged (the canonical request is never truncated,
+reduced, summarized, split, or mutated), and the fully constructed native
+command is independently bounded by `MAX_NATIVE_COMMAND_LINE_CHARS` and
+fails closed before process creation when exceeded.
+
 ## Protocol wrapper route modes
 
 `scripts/opencode_protocol_transport.py` supports two explicit route modes:
@@ -354,7 +414,24 @@ verified on disk. Every `request()`:
   zero; absent cost data stays absent; non-finite metadata is rejected), and
   aggregates the actual per-call reported cost into the case outcome;
 * records independently observed identity values in bounded, credential-
-  redacted evidence.
+  redacted evidence;
+* converts a wrapper `directive_error` rejection (zero valid or ambiguous
+  protocol directives) into the accepted bounded directive rejection carrying
+  the wrapper's compact machine-generated correction message; it is never a
+  transport/process failure, never contains the previous model response, and
+  is carried to the model by the existing bounded directive-feedback cycle.
+
+The protocol wrapper performs schema-aware directive extraction: every JSON
+object candidate in the model text is validated through the strict
+protocol-1.3 directive parser against the directive schema, action contracts,
+and controller context embedded in the request; the result is accepted only
+when exactly one candidate is a fully valid directive (copied request/config
+objects are ignored only because they fail directive validation, never
+through heuristic key stripping), zero valid candidates are rejected, and
+multiple valid candidates are rejected as ambiguous. Wrong envelopes
+(`{"action": ...}`, `params`/`payload`, protocol/version wrappers), unknown
+fields, and malformed arguments are never silently normalized; correction
+flows through the bounded directive-feedback cycle.
 
 Separation of accounting: one `request()` is one provider process attempt; one
 `LiveModelAdapter.next_directive()` cycle is one logical model call; retries
@@ -462,17 +539,24 @@ network-incapable fake OpenCode CLI that runs *behind the real protocol
 wrapper* (via a local `opencode.cmd` shim on the bounded environment PATH).
 The real wrapper still performs protocol conversion, isolation, directive
 extraction, usage parsing, redaction, and evidence handling, and the request
-reaches the wrapper through stdin. Scenarios cover: valid protocol response;
-malformed response followed by valid recovery (driven by the request's
-`directive_feedback`); malformed exhaustion; process startup failure; timeout;
-oversized stdout; non-zero exit; protocol identity mismatch; runtime model
-drift; Zen/free-tier/model-substitution route drift; missing usage; finite
-provider-reported token/cost metadata; explicitly reported zero cost; absent
-cost; non-finite metadata; credential-like output requiring sanitization; and
-child-process cleanup. The self-test mode and the test suites prove zero real
-OpenCode/provider/catalog/account calls, no network-enabled command, no
-Zen/free-tier route, no fallback, exact process-attempt and logical-call
-accounting, a fresh process/session boundary per case, and correct cleanup.
+reaches the wrapper through stdin. The synthetic CLI recovers the request
+from the inline message (never from a `--file`), mirroring the real
+model-facing contract. Scenarios cover: valid protocol response; malformed
+response followed by valid recovery (driven by the request's
+`directive_feedback`); malformed exhaustion; state-legal directives for each
+frozen controller state (action in `Reproduce`, add_hypothesis in
+`Understand`, revise_hypothesis in `RuntimeEvidence`); a response that copies
+the entire embedded request JSON and appends one valid directive; DSML
+tool-call text that tries to read the request file; process startup failure;
+timeout; oversized stdout; non-zero exit; protocol identity mismatch; runtime
+model drift; Zen/free-tier/model-substitution route drift; missing usage;
+finite provider-reported token/cost metadata; explicitly reported zero cost;
+absent cost; non-finite metadata; credential-like output requiring
+sanitization; and child-process cleanup. The self-test mode and the test
+suites prove zero real OpenCode/provider/catalog/account calls, no
+network-enabled command, no Zen/free-tier route, no fallback, exact
+process-attempt and logical-call accounting, a fresh process/session boundary
+per case, and correct cleanup.
 
 ## Secrets boundary
 
