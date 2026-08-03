@@ -22,7 +22,7 @@ import quixbugs_live_runner_v2 as runner
 import quixbugs_paired_pilot as pilot
 
 
-MODEL = "opencode/deepseek-v4-flash"
+MODEL = "opencode-go/deepseek-v4-flash"
 VARIANT = "max"
 ATTEMPT = "quixbugs-paired-pilot-v2-attempt-" + "a" * 64
 AUTH_ID = "operator-auth-20260803-001"

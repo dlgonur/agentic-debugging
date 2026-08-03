@@ -989,10 +989,11 @@ was intentionally not run (validation belongs to FirstMate). Two focused
 operator-facing modes were added to scripts/quixbugs_opencode_go_adapter.py:
 
 - route-capture: read-only; runs only local/non-model OpenCode inspection
-  commands (opencode.cmd --version and opencode.cmd models opencode --verbose
-  --pure); never invokes opencode run; requires the exact operator-selected
-  runtime model ID (rejects the historical opencode/deepseek-v4-flash-free
-  Zen identity) and variant; locates exactly one active catalog entry and
+  commands (opencode.cmd --version and opencode.cmd models opencode-go
+  --verbose --pure); never invokes opencode run; requires the exact
+  operator-selected runtime model ID (rejects the historical
+  opencode/deepseek-v4-flash-free Zen identity and every non-opencode-go/
+  provider) and variant; locates exactly one active catalog entry and
   records observed status, variant availability, and finite pricing metadata;
   requires explicit operator-supplied account status, subscription
   entitlement confirmation/reference, and billing-route assertion; records
@@ -1094,3 +1095,43 @@ catalog fixture used by each test. No validation run (FirstMate owns
 validation). Real operator preflight remains pending FirstMate review and
 Onur's manual execution; operator-bundle binds artifacts to the clean current
 HEAD present after Git closeout.
+
+2026-08-03 (OpenCode Go catalog provider selection repair, adapter-only)
+
+Real Windows inspection proved that Go mode queried
+`opencode.cmd models opencode --verbose --pure` and therefore observed the
+historical Zen/free identity `opencode/deepseek-v4-flash-free`. Repair of the
+route-capture and protocol-wrapper paths:
+
+- OpenCode Go mode now queries exactly `models opencode-go --verbose --pure`;
+  `scripts/opencode_protocol_transport.py` resolves the catalog command by
+  route mode (legacy mode keeps `models opencode` unchanged), and the
+  operator `route-capture` (`_resolve_catalog_command`) uses the Go provider
+  exclusively.
+- Go runtime identities must use the `opencode-go/` provider prefix
+  (`GO_RUNTIME_ID_PREFIX` in the adapter; `OPENCODE_GO_RUNTIME_ID_PREFIX` in
+  the wrapper): `opencode/`, the historical
+  `opencode/deepseek-v4-flash-free` identity, and any other provider are
+  rejected before model execution by the wrapper's OpenCode Go preflight
+  (`_require_go_runtime_identity`, before any catalog query or `opencode
+  run`), by the operator `route-capture`, by the `operator-bundle` route-
+  evidence gate, and by the strict adapter-configuration validator
+  (`PROVIDER_MISMATCH`).
+- The selected `opencode-go/<model>` catalog entry remains fingerprinted with
+  the deterministic contract, and the wrapper's OpenCode Go preflight still
+  independently recomputes and verifies that fingerprint against the
+  authorization-bound expected fingerprint before any model process; the
+  wrapper evidence records the queried `catalog_provider`.
+- Route capture still never constructs or runs `opencode run` (command-
+  inventory proof retained). The operator PowerShell example now uses
+  `--runtime-model-id opencode-go/deepseek-v4-flash`; no model variant is
+  invented before the real Go catalog is inspected.
+- Directly affected tests were updated (route-capture, operator-bundle,
+  wrapper-repair, operator route-preflight CLI integration), plus a focused
+  Go-mode provider-rejection wrapper test; the synthetic executable contract
+  now documents `models opencode-go --verbose --pure`.
+
+The existing real-operator-preflight TODO item stays open pending the
+repeated Windows route capture. No validation was run (FirstMate owns
+validation); no real OpenCode command, catalog, provider, or paid endpoint
+was contacted; no commit/stage/push.

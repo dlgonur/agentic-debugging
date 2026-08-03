@@ -23,11 +23,11 @@ import quixbugs_paired_pilot as pilot
 from scripts import opencode_protocol_transport as transport
 
 
-MODEL = "opencode/deepseek-v4-flash"
+MODEL = "opencode-go/deepseek-v4-flash"
 VARIANT = "max"
 ENTRY = {
     "id": "deepseek-v4-flash",
-    "providerID": "opencode",
+    "providerID": "opencode-go",
     "status": "active",
     "cost": {"input": 0.5, "output": 1.5, "cache": {"read": 0.25, "write": 0.25}},
     "variants": {"max": {"reasoningEffort": "max"}},
@@ -55,7 +55,7 @@ def _monkeypatch_capture(monkeypatch: pytest.MonkeyPatch, catalog: str) -> list[
         calls.append(command)
         if command == ["opencode.cmd", "--version"]:
             return _completed(command, stdout=VERSION + "\n")
-        if command[1:3] == ["models", "opencode"]:
+        if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=catalog)
         raise AssertionError(f"unexpected OpenCode command during capture: {command}")
 
@@ -90,7 +90,7 @@ def test_catalog_entry_fingerprint_is_deterministic_and_canonical() -> None:
     assert first == transport.catalog_entry_fingerprint(dict(ENTRY))
     reordered = {
         "variants": {"max": {"reasoningEffort": "max"}},
-        "providerID": "opencode",
+        "providerID": "opencode-go",
         "status": "active",
         "cost": {"cache": {"read": 0.25, "write": 0.25}, "output": 1.5, "input": 0.5},
         "id": "deepseek-v4-flash",
@@ -199,9 +199,16 @@ def test_route_capture_rejects_unqualified_or_other_family_identity(tmp_path, mo
             entitlement_evidence_reference="ref-001", billing_route_assertion="SUBSCRIPTION",
             output=tmp_path / "evidence.json",
         )
-    with pytest.raises(adapter.OpenCodeGoAdapterError, match="not the frozen campaign model family"):
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="opencode-go/ catalog-qualified provider prefix"):
         adapter.run_route_capture(
             "opencode/another-model", VARIANT,
+            account_status="ACTIVE", subscription_entitlement_confirmed=True,
+            entitlement_evidence_reference="ref-001", billing_route_assertion="SUBSCRIPTION",
+            output=tmp_path / "evidence.json",
+        )
+    with pytest.raises(adapter.OpenCodeGoAdapterError, match="not the frozen campaign model family"):
+        adapter.run_route_capture(
+            "opencode-go/another-model", VARIANT,
             account_status="ACTIVE", subscription_entitlement_confirmed=True,
             entitlement_evidence_reference="ref-001", billing_route_assertion="SUBSCRIPTION",
             output=tmp_path / "evidence.json",
@@ -307,7 +314,7 @@ def test_route_capture_never_constructs_or_invokes_opencode_run(tmp_path, monkey
     # The actual command inventory is the proof: the capture runs exactly the
     # two local inspection commands and never constructs an ``opencode run``
     # invocation (no command contains the ``run`` subcommand).
-    assert calls == [["opencode.cmd", "--version"], ["opencode.cmd", "models", "opencode", "--verbose", "--pure"]]
+    assert calls == [["opencode.cmd", "--version"], ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"]]
     assert all(command[0] == "opencode.cmd" for command in calls)
     assert all("run" not in command for command in calls)
     assert captured["result"]["run_invoked"] is False

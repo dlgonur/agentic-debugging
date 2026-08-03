@@ -53,6 +53,16 @@ _ISOLATION_PERMISSION_DENIALS = {
 #: validated by the outer authorization/preflight contract and does not
 #: require zero catalog prices.
 ROUTE_MODES = ("legacy", "opencode-go")
+#: The catalog provider queried by the legacy route mode (unchanged):
+#: ``models opencode --verbose --pure``.
+LEGACY_CATALOG_PROVIDER = "opencode"
+#: The OpenCode Go catalog provider; Go mode queries exactly
+#: ``models opencode-go --verbose --pure``.
+OPENCODE_GO_CATALOG_PROVIDER = "opencode-go"
+#: The required catalog-qualified runtime identity prefix in OpenCode Go
+#: mode; ``opencode/`` (including the historical Zen free-model identity)
+#: and any other provider is rejected before model execution.
+OPENCODE_GO_RUNTIME_ID_PREFIX = "opencode-go/"
 _AGENTS_CONTENT = (
     "This task-owned workspace carries only the bounded public protocol request. "
     "Return one protocol directive; do not use tools, inspect repositories, edit files, or run shell commands."
@@ -706,6 +716,33 @@ def verify_opencode_launcher(environment: dict[str, str] | None = None, *, expec
     return evidence
 
 
+def _catalog_command(route_mode: str) -> list[str]:
+    """The single local/non-model catalog inspection command per route mode.
+
+    Legacy mode keeps the historical query unchanged (``models opencode``);
+    OpenCode Go mode queries exactly ``models opencode-go --verbose --pure``.
+    ``opencode run`` is never constructed or executed here.
+    """
+    if route_mode == "opencode-go":
+        return ["opencode.cmd", "models", OPENCODE_GO_CATALOG_PROVIDER, "--verbose", "--pure"]
+    return ["opencode.cmd", "models", LEGACY_CATALOG_PROVIDER, "--verbose", "--pure"]
+
+
+def _require_go_runtime_identity(model: str, route_mode: str) -> None:
+    """Reject every non-OpenCode-Go catalog-qualified identity in Go mode.
+
+    ``opencode/`` (including the historical
+    ``opencode/deepseek-v4-flash-free`` Zen free-model identity) and any
+    other provider is rejected before any model process may run.
+    """
+    if route_mode != "opencode-go":
+        return
+    if not isinstance(model, str) or not model.startswith(OPENCODE_GO_RUNTIME_ID_PREFIX):
+        raise RuntimeError(
+            f"OpenCode Go mode requires the exact opencode-go/ catalog-qualified runtime model identity; rejected {model!r}"
+        )
+
+
 def verify_opencode_catalog(
     model: str,
     variant: str,
@@ -716,8 +753,11 @@ def verify_opencode_catalog(
     expected_runtime_model_id: str | None = None,
     expected_catalog_fingerprint: str | None = None,
 ) -> dict[str, Any]:
+    if route_mode not in ROUTE_MODES:
+        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
+    _require_go_runtime_identity(model, route_mode)
     completed = subprocess.run(
-        ["opencode.cmd", "models", "opencode", "--verbose", "--pure"],
+        _catalog_command(route_mode),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
         errors="replace", timeout=30, check=False, env=environment,
         cwd=str(cwd) if cwd is not None else None,
@@ -727,8 +767,6 @@ def verify_opencode_catalog(
     entry = select_catalog_entry(completed.stdout, model)
     facts = catalog_entry_facts(entry, variant)
     fingerprint = catalog_entry_fingerprint(entry)
-    if route_mode not in ROUTE_MODES:
-        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
     if route_mode == "legacy":
         costs = entry.get("cost")
         if any(costs.get(name) != 0 for name in ("input", "output")) or any(costs["cache"].get(name) != 0 for name in ("read", "write")):
@@ -750,6 +788,7 @@ def verify_opencode_catalog(
         # hidden fallback, model selection, or Zen/free-tier inference.
     return {
         "model": model,
+        "catalog_provider": LEGACY_CATALOG_PROVIDER if route_mode == "legacy" else OPENCODE_GO_CATALOG_PROVIDER,
         "active": True,
         "zero_cost": facts["input_price"] == 0 and facts["output_price"] == 0,
         "catalog_fingerprint": fingerprint,

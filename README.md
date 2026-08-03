@@ -149,9 +149,10 @@ agent). Two focused operator-facing modes extend
 
 * `route-capture` — a read-only command that runs only local/non-model
   OpenCode inspection commands (`opencode.cmd --version` and
-  `opencode.cmd models opencode --verbose --pure`), never invokes `opencode
+  `opencode.cmd models opencode-go --verbose --pure`), never invokes `opencode
   run`, requires the exact operator-selected runtime model ID (rejecting the
-  historical `opencode/deepseek-v4-flash-free` Zen identity) and variant,
+  historical `opencode/deepseek-v4-flash-free` Zen identity and every
+  non-`opencode-go/` provider) and variant,
   locates exactly one active catalog entry, records its observed status,
   variant availability, and finite pricing metadata, requires explicit
   operator-supplied account status, subscription entitlement
@@ -208,6 +209,32 @@ Onur's manual execution; `TODO.md` keeps this item open. Not started and not
 marked complete: real operator authorization execution, real route preflight,
 real OpenCode Go execution, the six-case live campaign, empirical evaluation,
 model performance, PDB effectiveness, RAG, SFT, and DPO.
+
+## Current status (2026-08-03) — OpenCode Go catalog provider selection
+
+Real Windows inspection proved that Go mode previously queried
+`opencode.cmd models opencode --verbose --pure` and therefore saw the
+historical Zen/free identity `opencode/deepseek-v4-flash-free`. The
+route-capture and protocol-wrapper paths were repaired so that:
+
+* OpenCode Go mode queries exactly `models opencode-go --verbose --pure`
+  (`scripts/opencode_protocol_transport.py` selects the catalog provider by
+  route mode; legacy mode continues querying `models opencode` unchanged);
+* Go runtime identities must use the `opencode-go/` provider prefix —
+  `opencode/`, the historical `opencode/deepseek-v4-flash-free` identity, and
+  any other provider are rejected before model execution (wrapper preflight,
+  operator `route-capture`, `operator-bundle` route evidence, and adapter
+  configuration validation all gate on the prefix);
+* the selected `opencode-go/<model>` catalog entry is fingerprinted and the
+  wrapper's OpenCode Go preflight independently recomputes and verifies that
+  fingerprint against the authorization-bound expected fingerprint;
+* route capture still never constructs or runs `opencode run` (the operator
+  example now uses `--runtime-model-id opencode-go/deepseek-v4-flash`; no
+  model variant is invented before the real Go catalog is inspected);
+* the existing TODO item stays open pending the repeated Windows route
+  capture. No test/build/lint/compile validation was run (FirstMate owns
+  validation); no real OpenCode command, catalog, provider, or paid endpoint
+  was contacted; no commit/stage/push.
 
 The QuixBugs paired-pilot v2 live-runner infrastructure is implemented and
 validated (runner-only, accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`):

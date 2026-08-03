@@ -2533,10 +2533,11 @@ iki odakli operator modu ekledim:
 
 1. **`route-capture`.** Salt-okunur komut: yalnizca yerel/non-model OpenCode
    inspection komutlari calistirir (`opencode.cmd --version` ve
-   `opencode.cmd models opencode --verbose --pure`); `opencode run`'u asla
+   `opencode.cmd models opencode-go --verbose --pure`); `opencode run`'u asla
    insa etmez veya calistirmaz (testler bunu kanitlar). Exact
    operator-secimli runtime model ID (tarihsel `opencode/deepseek-v4-flash-free`
-   Zen kimligi reddedilir) ve variant zorunludur; catalog'da tam olarak bir
+   Zen kimligi ve `opencode-go/` disindaki tum provider'lar reddedilir) ve
+   variant zorunludur; catalog'da tam olarak bir
    aktif entry bulunur; gozlemlenen status, variant availability ve sonlu
    pricing metadata'si kaydedilir. Operator tarafindan acikca saglanan
    account status, subscription entitlement confirmation/reference ve
@@ -2648,3 +2649,29 @@ closeout'undan sonra mevcut temiz HEAD'e bagladigini soyluyor. TODO maddesi
 FirstMate acceptance'i ve Onur'un gercek manual preflight'i bekledigi icin acik
 tutuldu. Hicbir test/build/lint/compile/dogrulama calistirilmadi (FirstMate'e
 ait); gercek OpenCode komutu calistirilmadi; commit/push yapilmadi.
+
+---
+
+## 3 Agustos 2026 (besinci islem) - OpenCode Go catalog provider selection repair
+
+Gercek Windows incelemesi, Go modunun `opencode.cmd models opencode --verbose
+--pure` sorguladigini ve bu yuzle tarihsel Zen/free kimligini
+(`opencode/deepseek-v4-flash-free`) gordugunu kanitladi. Route-capture ve
+protocol-wrapper yollari onarildi: (1) `scripts/opencode_protocol_transport.py`
+catalog komutunu route mode'a gore seciyor; Go modu tam olarak
+`models opencode-go --verbose --pure` sorguluyor, legacy mod
+`models opencode`'u degismeden koruyor. (2) Go runtime kimlikleri
+`opencode-go/` provider prefix'ini zorunlu tutuyor; `opencode/`, tarihsel
+`opencode/deepseek-v4-flash-free` kimligi ve diger tum provider'lar model
+calistirilmadan once reddediliyor (wrapper OpenCode Go preflight, operator
+route-capture, operator-bundle route-evidence kapisi ve adapter-configuration
+validator'u). (3) Secilen catalog entry'si fingerprintleniyor ve wrapper
+preflight'i authorization-bound expected fingerprint ile dogruluyor. (4)
+Route capture `opencode run`'u asla insa etmiyor/calistirmiyor; operator
+ornegi artik `--runtime-model-id opencode-go/deepseek-v4-flash` kullaniyor,
+gercek Go catalog'i incelenmeden hicbir variant uydurulmadi. Dogrudan
+etkilenen testler guncellendi; TODO maddesi (gercek operator preflight,
+tekrarlanan Windows route capture) acik tutuldu. Hicbir
+test/build/lint/compile/dogrulama calistirilmadi (FirstMate'e ait); gercek
+OpenCode komutu, catalog, provider veya paid endpoint calistirilmadi;
+commit/stage/push yapilmadi.

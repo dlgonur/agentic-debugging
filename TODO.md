@@ -344,9 +344,10 @@ hicbir gercek OpenCode inspection komutu calistirilmadi):
 `scripts/quixbugs_opencode_go_adapter.py` uzerinde iki odakli operator modu:
 (1) `route-capture` - salt-okunur komut; yalnizca yerel/non-model OpenCode
 inspection komutlari (`opencode.cmd --version` ve
-`opencode.cmd models opencode --verbose --pure`), asla `opencode run`
+`opencode.cmd models opencode-go --verbose --pure`), asla `opencode run`
 degil; exact operator-secimli runtime model ID (tarihsel
-`opencode/deepseek-v4-flash-free` Zen kimligi reddedilir) ve variant
+`opencode/deepseek-v4-flash-free` Zen kimligi ve `opencode-go/` disindaki
+tum provider'lar reddedilir) ve variant
 gerektirir; tam olarak bir aktif catalog entry'si bulur; gozlemlenen status,
 variant availability ve sonlu pricing metadata'sini kaydeder; operator
 tarafindan acikca saglanan account status, subscription entitlement
@@ -401,3 +402,41 @@ capture'in `opencode run`'u asla insa etmedigi/calistirmadigi kaniti
 (FirstMate'e aittir). Gercek operator preflight FirstMate review'i ve
 Onur'un manuel yurutmesini bekliyor; `operator-bundle` artifact'leri Git
 closeout'undan sonra mevcut temiz HEAD'e baglar.
+
+### OpenCode Go catalog provider selection repair (2026-08-03, adapter-only)
+
+Gercek Windows incelemesi, Go modunun `opencode.cmd models opencode --verbose
+--pure` sorguladigini ve bu yuzden tarihsel Zen/free kimligini
+(`opencode/deepseek-v4-flash-free`) gordugunu kanitladi. Route-capture ve
+protocol-wrapper yollari onarildi:
+
+- OpenCode Go modu artik tam olarak `models opencode-go --verbose --pure`
+  sorguluyor; `scripts/opencode_protocol_transport.py` catalog komutunu route
+  mode'a gore seciyor (legacy mod `models opencode`'u degismeden koruyor) ve
+  operator `route-capture` (`_resolve_catalog_command`) yalnizca Go provider
+  komutunu kullaniyor.
+- Go runtime kimlikleri `opencode-go/` provider prefix'ini kullanmak
+  zorunda (adapter'da `GO_RUNTIME_ID_PREFIX`, wrapper'da
+  `OPENCODE_GO_RUNTIME_ID_PREFIX`): `opencode/`, tarihsel
+  `opencode/deepseek-v4-flash-free` kimligi ve diger tum provider'lar model
+  calistirilmadan once reddediliyor — wrapper OpenCode Go preflight'i
+  (`_require_go_runtime_identity`; catalog sorgusundan ve `opencode run`
+  oncesinde), operator `route-capture`, `operator-bundle` route-evidence
+  kapisi ve strict adapter-configuration validator'u (`PROVIDER_MISMATCH`).
+- Secilen `opencode-go/<model>` catalog entry'si deterministik kontratla
+  fingerprintlenmeye devam ediyor ve wrapper'in OpenCode Go preflight'i
+  fingerprint'i authorization-bound expected fingerprint ile karsilastiriyor;
+  wrapper evidence'i sorgulanan `catalog_provider`'i kaydediyor.
+- Route capture `opencode run`'u asla insa etmiyor/calistirmiyor (komut
+  envanteri kaniti korundu). Operator PowerShell ornegi artik
+  `--runtime-model-id opencode-go/deepseek-v4-flash` kullaniyor; gercek Go
+  catalog'i incelenmeden hicbir model variant uydurulmadi.
+- Dogrudan etkilenen testler guncellendi (route-capture, operator-bundle,
+  wrapper-repair, operator route-preflight CLI integration) ve odakli bir
+  Go-mode provider-reddi wrapper testi eklendi; synthetic executable kontrati
+  artik `models opencode-go --verbose --pure` belgeliyor.
+
+Gercek operator preflight TODO maddesi acik tutuluyor (tekrarlanan Windows
+route capture bekleniyor). Hicbir test/build/lint/compile/dogrulama
+calistirilmadi (FirstMate'e aittir); gercek OpenCode komutu, catalog,
+provider veya paid endpoint calistirilmadi; commit/stage/push yapilmadi.

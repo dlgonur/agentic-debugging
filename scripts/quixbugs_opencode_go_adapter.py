@@ -63,7 +63,7 @@ The operator preparation flow adds two focused operator-facing modes:
 
 * ``route-capture`` — a read-only command that runs only local/non-model
   OpenCode inspection commands (``opencode.cmd --version`` and
-  ``opencode.cmd models opencode --verbose --pure``), never invokes
+  ``opencode.cmd models opencode-go --verbose --pure``), never invokes
   ``opencode run``, requires the exact operator-selected runtime model ID
   and variant, locates exactly one active catalog entry, records its
   observed status, variant availability, and finite pricing metadata,
@@ -175,6 +175,10 @@ TEMPLATE_NOTE = (
 #: The historical OpenCode Zen free-model identifier is never a valid runtime
 #: execution identity for this adapter.
 HISTORICAL_ZEN_MODEL_ID = "opencode/deepseek-v4-flash-free"
+#: The exact catalog-qualified runtime identity prefix required in Go mode:
+#: every Go runtime identity must use the ``opencode-go/`` provider prefix;
+#: ``opencode/`` and any other provider is rejected before model execution.
+GO_RUNTIME_ID_PREFIX = "opencode-go/"
 
 #: Shell metacharacters rejected anywhere in structured argv elements (the
 #: config is executed with shell=False; these characters would be
@@ -674,6 +678,11 @@ def validate_adapter_configuration_structure(value: Mapping[str, Any]) -> dict[s
             _reject("MISSING_FIELDS", f"adapter configuration field {field} must be non-empty")
     if value["runtime_model_id"] == HISTORICAL_ZEN_MODEL_ID:
         _reject("HISTORICAL_ZEN_IDENTITY", "the historical OpenCode Zen free-model identity cannot be an OpenCode Go execution identity")
+    if not value["runtime_model_id"].startswith(GO_RUNTIME_ID_PREFIX):
+        _reject(
+            "PROVIDER_MISMATCH",
+            f"adapter configuration runtime_model_id must use the exact opencode-go/ provider prefix; rejected {value['runtime_model_id']!r}",
+        )
     if _contains_credential(value["runtime_model_id"]) or _contains_credential(value["operator_authorization_id"]):
         _reject("CREDENTIAL_IN_CONFIGURATION", "adapter configuration carries credential-shaped identity content")
 
@@ -2015,6 +2024,16 @@ def _reject_template_value(value: str, label: str) -> None:
         raise OpenCodeGoAdapterError(f"operator-supplied {label} carries a placeholder/template value: {value!r}")
 
 
+def _reject_non_go_provider_identity(value: str, label: str) -> None:
+    """Reject every runtime identity that does not use the ``opencode-go/``
+    provider prefix (``opencode/``, including the historical Zen free-model
+    identity, and any other provider)."""
+    if not value.startswith(GO_RUNTIME_ID_PREFIX):
+        raise OpenCodeGoAdapterError(
+            f"{label} must use the exact opencode-go/ catalog-qualified provider prefix; rejected {value!r}"
+        )
+
+
 def _reject_evidence_template_values(value: Any, path: str = "evidence") -> None:
     if isinstance(value, str):
         _reject_template_value(value, path)
@@ -2027,7 +2046,9 @@ def _reject_evidence_template_values(value: Any, path: str = "evidence") -> None
 
 
 def _resolve_catalog_command() -> list[str]:
-    return ["opencode.cmd", "models", "opencode", "--verbose", "--pure"]
+    """The single OpenCode Go catalog inspection command: exactly
+    ``models opencode-go --verbose --pure`` (never ``models opencode``)."""
+    return ["opencode.cmd", "models", "opencode-go", "--verbose", "--pure"]
 
 
 def _parse_utc_timestamp(value: str) -> datetime | None:
@@ -2091,6 +2112,7 @@ def run_route_capture(
     _reject_template_value(runtime_model_id, "runtime model ID")
     if runtime_model_id == HISTORICAL_ZEN_MODEL_ID:
         raise OpenCodeGoAdapterError("the historical OpenCode Zen free-model identity is rejected as a runtime route identity")
+    _reject_non_go_provider_identity(runtime_model_id, "runtime model ID")
     if not isinstance(variant, str) or not variant.strip():
         raise OpenCodeGoAdapterError("route capture requires the exact operator-selected variant")
     _reject_template_value(variant, "variant")
@@ -2405,6 +2427,7 @@ def run_operator_bundle(
     raw_runtime_model_id = str(raw.get("runtime_model_id") or "")
     if raw_runtime_model_id == HISTORICAL_ZEN_MODEL_ID:
         raise OpenCodeGoAdapterError("route evidence established the historical OpenCode Zen free-model identity")
+    _reject_non_go_provider_identity(raw_runtime_model_id, "route evidence runtime model ID")
     if raw.get("billing_route") != pilot.AUTHORIZED_BILLING_ROUTE:
         raise OpenCodeGoAdapterError("route evidence billing route is not the authorized subscription route")
     if raw.get("subscription_entitlement_confirmed") is not True:
@@ -3076,6 +3099,7 @@ __all__ = [
     "CONFIGURATION_REJECTION_CODES",
     "DENIAL_FIELDS",
     "DRIFT_CATEGORIES",
+    "GO_RUNTIME_ID_PREFIX",
     "HISTORICAL_ZEN_MODEL_ID",
     "OPERATOR_BUNDLES_RELATIVE_DIR",
     "OPERATOR_STORAGE",

@@ -24,7 +24,7 @@ import quixbugs_paired_pilot as pilot
 from scripts import opencode_protocol_transport as transport
 
 
-MODEL = "opencode/deepseek-v4-flash"
+MODEL = "opencode-go/deepseek-v4-flash"
 ATTEMPT = "quixbugs-paired-pilot-v2-attempt-" + "b" * 64
 AUTH_ID = "operator-auth-20260803-001"
 #: The independently observed clean descendant HEAD the bundle binds; it is
@@ -32,7 +32,7 @@ AUTH_ID = "operator-auth-20260803-001"
 OBSERVED_HEAD = "a" * 40
 FAKE_CATALOG_ENTRY = {
     "id": "deepseek-v4-flash",
-    "providerID": "opencode",
+    "providerID": "opencode-go",
     "status": "active",
     "cost": {"input": 0.5, "output": 1.5, "cache": {"read": 0.25, "write": 0.25}},
     "variants": {"max": {"reasoningEffort": "max"}},
@@ -101,7 +101,7 @@ def _fake_opencode_shim(tmp_path: Path) -> Path:
         "args = sys.argv[1:]\n"
         "if args == ['--version']:\n"
         "    print('1.18.10')\n"
-        "elif args[:2] == ['models', 'opencode']:\n"
+        "elif args[:2] == ['models', 'opencode-go']:\n"
         f"    print({entry!r})\n"
         "elif args and args[0] == 'run':\n"
         "    raise SystemExit(91)\n"

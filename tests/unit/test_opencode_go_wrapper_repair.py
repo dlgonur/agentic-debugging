@@ -85,7 +85,7 @@ def _run_wrapper_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, route_
         calls.append(command)
         if command == ["opencode.cmd", "--version"]:
             return _completed(command, stdout=version + "\n")
-        if command[1:3] == ["models", "opencode"]:
+        if command[1:3] in (["models", "opencode"], ["models", "opencode-go"]):
             return _completed(command, stdout=catalog + "\n")
         if command[1:3] == ["debug", "config"]:
             return _completed(command, stdout=EFFECTIVE_CONFIG)
@@ -194,6 +194,44 @@ def test_opencode_go_mode_rejects_model_alias(monkeypatch: pytest.MonkeyPatch, t
     assert rc == 1
 
 
+def test_opencode_go_mode_rejects_other_provider_identities_before_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """``opencode/`` identities — including the historical
+    ``opencode/deepseek-v4-flash-free`` Zen free-model identity — and any
+    other provider are rejected in Go mode before model execution."""
+    for model in ("opencode/deepseek-v4-flash-free", "opencode/deepseek-v4-flash", "other-provider/some-model"):
+        evidence = tmp_path / f"reject-{model.split('/')[0]}.jsonl"
+        auth = tmp_path / f"auth-{model.split('/')[0]}.json"
+        auth.write_text("synthetic auth fixture", encoding="utf-8")
+        monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+        calls: list[list[str]] = []
+
+        def fake_run(command: list[str], **kwargs):
+            calls.append(command)
+            if command == ["opencode.cmd", "--version"]:
+                return _completed(command, stdout="1.0.0\n")
+            raise AssertionError(f"catalog/provider command must not run for rejected identity {model!r}: {command}")
+
+        monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+        monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+        monkeypatch.setattr(wrapper.sys, "stdin", io.StringIO('{"task": "public-only"}\n'))
+        args = [
+            "--model", model,
+            "--variant", "max",
+            "--route-mode", "opencode-go",
+            "--expected-opencode-version", "1.0.0",
+            "--expected-catalog-fingerprint", "e" * 64,
+            "--expected-runtime-model-id", model,
+            "--expected-account-status", "ACTIVE",
+            "--expected-billing-route", "SUBSCRIPTION",
+            "--evidence-file", str(evidence),
+        ]
+        rc = wrapper.main(args)
+        assert rc == 1
+        assert "requires the exact opencode-go/ catalog-qualified runtime model identity" in evidence.read_text(encoding="utf-8")
+        assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+        assert not any(command[1:3] == ["models", "opencode-go"] for command in calls)
+
+
 def test_opencode_go_mode_accepts_zero_catalog_prices_without_requiring_them(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     rc, _, _ = _run_wrapper_main(monkeypatch, tmp_path, route_mode="opencode-go", catalog=ZERO_CATALOG)
     assert rc == 0
@@ -223,7 +261,7 @@ def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkey
         calls.append(command)
         if command == ["opencode.cmd", "--version"]:
             return _completed(command, stdout="1.0.0\n")
-        if command[1:3] == ["models", "opencode"]:
+        if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=GO_CATALOG + "\n")
         if command[1:3] == ["debug", "config"]:
             return _completed(command, stdout=EFFECTIVE_CONFIG)
@@ -252,7 +290,7 @@ def test_opencode_go_preflight_fingerprint_mismatch_blocks_before_run(monkeypatc
         calls.append(command)
         if command == ["opencode.cmd", "--version"]:
             return _completed(command, stdout="1.0.0\n")
-        if command[1:3] == ["models", "opencode"]:
+        if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=GO_CATALOG + "\n")
         if command[1:3] == ["debug", "config"]:
             return _completed(command, stdout=EFFECTIVE_CONFIG)

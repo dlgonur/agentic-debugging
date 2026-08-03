@@ -11,7 +11,7 @@ end-to-end.
 Contract (mirrors the real ``opencode`` CLI surface used by the wrapper):
 
 * ``--version`` — emits the synthetic OpenCode version.
-* ``models opencode --verbose --pure`` — emits catalog entries for the
+* ``models opencode-go --verbose --pure`` — emits catalog entries for the
   synthetic runtime model identities used by the adapter fixtures (nonzero
   catalog prices in OpenCode Go mode).
 * ``debug config --pure`` — echoes the wrapper's isolation configuration

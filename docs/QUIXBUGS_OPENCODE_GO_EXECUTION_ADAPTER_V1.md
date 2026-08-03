@@ -122,7 +122,8 @@ variant.
 
 * `legacy` (default; historical OpenCode Zen behavior preserved unchanged):
   the exact model must be active with zero input/output/cache prices and the
-  requested variant available;
+  requested variant available; the catalog query remains
+  `models opencode --verbose --pure`;
 * `opencode-go`: catalog prices are preserved as observed (never required to
   be zero), the model and variant must be exactly present and active, the
   launcher version must equal `--expected-opencode-version` exactly, and the
@@ -130,7 +131,11 @@ variant.
   (`--expected-runtime-model-id`), catalog fingerprint, account status, and
   billing route already validated by the outer authorization/preflight
   contract — recording them in evidence without hidden fallback, model
-  selection, catalog/account re-queries, or Zen/free-tier inference.
+  selection, catalog/account re-queries, or Zen/free-tier inference.  Go mode
+  queries exactly `models opencode-go --verbose --pure` and requires the
+  catalog-qualified identity to use the `opencode-go/` provider prefix:
+  `opencode/`, the historical `opencode/deepseek-v4-flash-free` identity, and
+  any other provider are rejected before model execution.
 
 In `opencode-go` mode the wrapper **independently recomputes** the exact
 selected catalog entry's deterministic fingerprint and compares it with the
@@ -163,11 +168,12 @@ same independently computed value.
 A read-only operator command that:
 
 * runs only local/non-model OpenCode inspection commands —
-  `opencode.cmd --version` and `opencode.cmd models opencode --verbose --pure`;
+  `opencode.cmd --version` and `opencode.cmd models opencode-go --verbose --pure`;
 * never invokes `opencode run` (an accidental invocation is a hard error);
 * requires the exact operator-selected runtime model ID (catalog-qualified
-  `provider/id`, never the historical `opencode/deepseek-v4-flash-free` Zen
-  identity) and variant;
+  `provider/id` with the `opencode-go/` provider prefix, never the historical
+  `opencode/deepseek-v4-flash-free` Zen identity or any other provider) and
+  variant;
 * locates exactly one active catalog entry and records its observed status,
   variant availability, and finite pricing metadata;
 * requires explicit operator-supplied account status, subscription
@@ -236,7 +242,7 @@ The generated artifacts work with the existing zero-provider-process command
 ```powershell
 # 1. Route capture (local inspection only; zero model/provider contact)
 python scripts/quixbugs_opencode_go_adapter.py route-capture `
-  --runtime-model-id opencode/deepseek-v4-flash `
+  --runtime-model-id opencode-go/deepseek-v4-flash `
   --variant max `
   --account-status ACTIVE `
   --subscription-entitlement-confirmed `
@@ -298,7 +304,9 @@ number, and the per-call reported costs are recorded in bounded evidence.
 
 The adapter never hardcodes the historical OpenCode Zen model identifier
 `opencode/deepseek-v4-flash-free` as an execution identity; that identifier is
-explicitly rejected. The manifest may identify the model family, but the exact
+explicitly rejected, and every Go runtime identity must use the
+`opencode-go/` provider prefix (any other provider is rejected before model
+execution). The manifest may identify the model family, but the exact
 runtime model/catalog identity comes from validated authorization and route
 evidence. Configuration, authorization, route observation, and transport
 invocation must agree exactly; the binding is revalidated before every
