@@ -45,8 +45,14 @@ ZERO_CATALOG = json.dumps({
     "cost": {"input": 0, "output": 0, "cache": {"read": 0, "write": 0}},
     "variants": {"max": {"reasoningEffort": "max"}},
 })
-EFFECTIVE_CONFIG = json.dumps({
-    **wrapper._isolation_config(),
+GO_EFFECTIVE_CONFIG = json.dumps({
+    **wrapper._isolation_config(route_mode="opencode-go"),
+    "agent": {},
+    "mode": {},
+    "command": {},
+})
+LEGACY_EFFECTIVE_CONFIG = json.dumps({
+    **wrapper._isolation_config(route_mode="legacy"),
     "agent": {},
     "mode": {},
     "command": {},
@@ -80,6 +86,14 @@ def _run_wrapper_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, route_
     auth.write_text("synthetic auth fixture", encoding="utf-8")
     monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
     calls: list[list[str]] = []
+    args = GO_ARGS if route_mode == "opencode-go" else ["--model", MODEL, "--variant", "max"]
+    if expected_version is not None:
+        args = [item for item in args if item != "--expected-opencode-version"]
+        args[args.index("--route-mode") + 1] = "opencode-go"
+    if extra_args:
+        args = args + extra_args
+    go_route = "--route-mode" in args and args[args.index("--route-mode") + 1] == "opencode-go"
+    effective_config = GO_EFFECTIVE_CONFIG if go_route else LEGACY_EFFECTIVE_CONFIG
 
     def fake_run(command: list[str], **kwargs):
         calls.append(command)
@@ -88,17 +102,11 @@ def _run_wrapper_main(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *, route_
         if command[1:3] in (["models", "opencode"], ["models", "opencode-go"]):
             return _completed(command, stdout=catalog + "\n")
         if command[1:3] == ["debug", "config"]:
-            return _completed(command, stdout=EFFECTIVE_CONFIG)
+            return _completed(command, stdout=effective_config)
         return _completed(command, stdout='{"type": "text", "part": {"text": "{\\"kind\\": \\"stop\\", \\"reason\\": \\"ok\\"}"}}\n')
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
     monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
-    args = GO_ARGS if route_mode == "opencode-go" else ["--model", MODEL, "--variant", "max"]
-    if expected_version is not None:
-        args = [item for item in args if item != "--expected-opencode-version"]
-        args[args.index("--route-mode") + 1] = "opencode-go"
-    if extra_args:
-        args = args + extra_args
     payload = request or {"task": "public-only"}
     monkeypatch.setattr(wrapper.sys, "stdin", io.StringIO(json.dumps(payload) + "\n"))
     rc = wrapper.main(args + ["--evidence-file", str(evidence)])
@@ -135,7 +143,7 @@ def test_legacy_default_route_mode_preserves_historical_behavior(monkeypatch: py
         if command[1:3] == ["models", "opencode"]:
             return _completed(command, stdout=ZERO_CATALOG + "\n")
         if command[1:3] == ["debug", "config"]:
-            return _completed(command, stdout=EFFECTIVE_CONFIG)
+            return _completed(command, stdout=LEGACY_EFFECTIVE_CONFIG)
         return _completed(command, stdout='{"type": "text", "part": {"text": "{\\"kind\\": \\"stop\\", \\"reason\\": \\"ok\\"}"}}\n')
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
@@ -166,6 +174,94 @@ def test_opencode_go_mode_accepts_nonzero_catalog_prices(monkeypatch: pytest.Mon
     assert preflight["route_binding"]["expected_billing_route"] == "SUBSCRIPTION"
     assert preflight["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
     assert any(len(command) > 2 and command[1] == "run" and "--file" in command for command in captured["calls"])
+
+
+def _write_isolation(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, route_mode: str) -> dict:
+    auth = tmp_path / f"auth-{route_mode}.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    isolation_root = tmp_path / f"iso-{route_mode}"
+    return wrapper._prepare_isolation(isolation_root, route_mode=route_mode)
+
+
+def test_go_isolation_config_writes_exact_opencode_go_allowlist(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    isolation = _write_isolation(monkeypatch, tmp_path, "opencode-go")
+    config = json.loads(isolation["config_path"].read_text(encoding="utf-8"))
+    assert config["enabled_providers"] == ["opencode-go"]
+    assert config["permission"]["*"] == "deny"
+    assert config["mcp"] == {"*": {"enabled": False}}
+    assert config["plugin"] == []
+    assert config["instructions"] == []
+    assert config["share"] == "disabled"
+    assert config["autoupdate"] is False
+    assert isolation["route_mode"] == "opencode-go"
+
+
+def test_legacy_isolation_config_writes_exact_opencode_allowlist(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    isolation = _write_isolation(monkeypatch, tmp_path, "legacy")
+    config = json.loads(isolation["config_path"].read_text(encoding="utf-8"))
+    assert config["enabled_providers"] == ["opencode"]
+    assert isolation["route_mode"] == "legacy"
+
+
+def test_go_effective_config_validation_accepts_only_exact_opencode_go() -> None:
+    accepted = wrapper._validate_effective_config(json.loads(GO_EFFECTIVE_CONFIG), route_mode="opencode-go")
+    assert accepted["enabled_providers"] == ["opencode-go"]
+    assert accepted["permission_default_denied"] is True
+    assert accepted["autoupdate_disabled"] is True
+
+
+def test_go_effective_config_rejects_cross_route_and_mixed_provider_lists() -> None:
+    go_base = {**wrapper._isolation_config(route_mode="opencode-go"), "agent": {}, "mode": {}, "command": {}}
+    for providers in (["opencode"], ["opencode-go", "opencode"], ["opencode", "opencode-go"], [], ["anthropic"]):
+        with pytest.raises(RuntimeError, match="enabled provider allowlist"):
+            wrapper._validate_effective_config({**go_base, "enabled_providers": providers}, route_mode="opencode-go")
+
+
+def test_legacy_effective_config_rejects_go_allowlist() -> None:
+    legacy_base = {**wrapper._isolation_config(route_mode="legacy"), "agent": {}, "mode": {}, "command": {}}
+    with pytest.raises(RuntimeError, match="enabled provider allowlist"):
+        wrapper._validate_effective_config({**legacy_base, "enabled_providers": ["opencode-go"]}, route_mode="legacy")
+
+
+def test_opencode_go_preflight_catalog_failure_evidence_is_typed_bounded_and_sanitized(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A nonzero ``models opencode-go`` inspection is a typed catalog-failure
+    with bounded, sanitized stream detail; no credential, auth content, or
+    unrestricted environment value enters the evidence, and no ``opencode
+    run`` is ever constructed."""
+    evidence = tmp_path / "preflight.jsonl"
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    calls: list[list[str]] = []
+    secret = "catalog api_key=super-secret-catalog-value drift"
+    oversized = "diagnostic " + ("x" * (wrapper._CATALOG_FAILURE_DIAGNOSTIC_LIMIT * 2))
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.0.0\n")
+        if command[1:3] == ["models", "opencode-go"]:
+            return _completed(command, stdout=oversized, stderr=secret, returncode=3)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    rc = wrapper.main(["--preflight"] + GO_ARGS + ["--evidence-file", str(evidence)])
+    assert rc == 1
+    failure = json.loads(evidence.read_text(encoding="utf-8"))
+    assert failure["preflight"] == "blocked"
+    assert failure["provider_inference_started"] is False
+    assert failure["failure_classification"] == "catalog_command_failed"
+    detail = failure["failure_detail"]
+    assert detail["catalog_command"] == "opencode.cmd models opencode-go --verbose --pure"
+    assert detail["catalog_exit_code"] == 3
+    assert "super-secret-catalog-value" not in evidence.read_text(encoding="utf-8")
+    assert "<redacted>" in evidence.read_text(encoding="utf-8")
+    assert "truncated" in detail["catalog_stdout"]
+    assert len(detail["catalog_stderr"]) <= wrapper._CATALOG_FAILURE_DIAGNOSTIC_LIMIT + 64
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+    assert not any(command[1:3] == ["debug", "config"] for command in calls)
 
 
 def test_opencode_go_mode_rejects_version_drift(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -264,7 +360,7 @@ def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkey
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=GO_CATALOG + "\n")
         if command[1:3] == ["debug", "config"]:
-            return _completed(command, stdout=EFFECTIVE_CONFIG)
+            return _completed(command, stdout=GO_EFFECTIVE_CONFIG)
         raise AssertionError(f"unexpected OpenCode command: {command}")
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
@@ -276,6 +372,7 @@ def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkey
     assert result["provider_inference_started"] is False
     assert result["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
     assert result["route_binding"]["expected_catalog_fingerprint"] == GO_FINGERPRINT
+    assert result["effective_config"]["enabled_providers"] == ["opencode-go"]
     assert not any(len(command) > 2 and command[1] == "run" for command in calls)
 
 
@@ -293,7 +390,7 @@ def test_opencode_go_preflight_fingerprint_mismatch_blocks_before_run(monkeypatc
         if command[1:3] == ["models", "opencode-go"]:
             return _completed(command, stdout=GO_CATALOG + "\n")
         if command[1:3] == ["debug", "config"]:
-            return _completed(command, stdout=EFFECTIVE_CONFIG)
+            return _completed(command, stdout=GO_EFFECTIVE_CONFIG)
         raise AssertionError(f"unexpected OpenCode command: {command}")
 
     monkeypatch.setattr(wrapper.subprocess, "run", fake_run)

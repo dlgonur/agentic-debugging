@@ -282,6 +282,88 @@ def test_effective_config_acceptance_is_sanitized() -> None:
     }
 
 
+def test_isolation_config_allowlist_is_route_aware() -> None:
+    go = transport._isolation_config(route_mode="opencode-go")
+    legacy = transport._isolation_config(route_mode="legacy")
+    assert go["enabled_providers"] == ["opencode-go"]
+    assert legacy["enabled_providers"] == ["opencode"]
+    for config in (go, legacy):
+        assert config["permission"]["*"] == "deny"
+        assert config["mcp"] == {"*": {"enabled": False}}
+        assert config["plugin"] == []
+        assert config["instructions"] == []
+        assert config["share"] == "disabled"
+        assert config["autoupdate"] is False
+
+
+def test_go_effective_config_accepts_only_exact_opencode_go() -> None:
+    go_config = json.dumps({
+        **transport._isolation_config(route_mode="opencode-go"),
+        "agent": {}, "mode": {}, "command": {},
+    })
+    assertions = transport._validate_effective_config(json.loads(go_config), route_mode="opencode-go")
+    assert assertions["enabled_providers"] == ["opencode-go"]
+    with pytest.raises(RuntimeError, match="enabled provider allowlist"):
+        transport._validate_effective_config(json.loads(EFFECTIVE_CONFIG), route_mode="opencode-go")
+
+
+def test_effective_config_cross_route_and_mixed_provider_lists_are_rejected() -> None:
+    go_base = {**transport._isolation_config(route_mode="opencode-go")}
+    legacy_base = {**transport._isolation_config(route_mode="legacy")}
+    for providers, route_mode in (
+        (["opencode-go"], "legacy"),
+        (["opencode"], "opencode-go"),
+        (["opencode", "opencode-go"], "opencode-go"),
+        (["opencode-go", "opencode"], "legacy"),
+        ([], "opencode-go"),
+        (["anthropic"], "opencode-go"),
+    ):
+        with pytest.raises(RuntimeError, match="enabled provider allowlist"):
+            transport._validate_effective_config(
+                {**(go_base if route_mode == "opencode-go" else legacy_base), "enabled_providers": providers},
+                route_mode=route_mode,
+            )
+
+
+def test_catalog_command_failure_evidence_is_typed_bounded_and_sanitized(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """A nonzero local catalog inspection is a typed catalog-failure carrying
+    bounded, sanitized stream detail; credentials never enter evidence and
+    no ``opencode run`` is attempted."""
+    evidence = tmp_path / "catalog-failure.jsonl"
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(transport, "_auth_state_path", lambda: auth)
+    calls: list[list[str]] = []
+    secret = "catalog password=hidden-catalog-secret exploded"
+    oversized = "boom " + ("y" * (transport._CATALOG_FAILURE_DIAGNOSTIC_LIMIT * 2))
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.18.10\n")
+        if command[1:3] == ["models", "opencode"]:
+            return _completed(command, stdout=oversized, stderr=secret, returncode=1)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(transport.subprocess, "run", fake_run)
+    monkeypatch.setattr(transport.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    monkeypatch.setattr(transport.sys, "stdin", io.StringIO('{"task": "public-only"}\n'))
+    rc = transport.main(["--model", MODEL, "--variant", "max", "--evidence-file", str(evidence)])
+    assert rc == 1
+    failure = json.loads(evidence.read_text(encoding="utf-8"))
+    assert failure["error"].startswith("CatalogFailureError:")
+    assert failure["failure_classification"] == "catalog_command_failed"
+    detail = failure["failure_detail"]
+    assert detail["catalog_command"] == "opencode.cmd models opencode --verbose --pure"
+    assert detail["catalog_exit_code"] == 1
+    assert "hidden-catalog-secret" not in evidence.read_text(encoding="utf-8")
+    assert "<redacted>" in evidence.read_text(encoding="utf-8")
+    assert "truncated" in detail["catalog_stdout"]
+    assert len(detail["catalog_stdout"]) <= transport._CATALOG_FAILURE_DIAGNOSTIC_LIMIT + 64
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+    assert not any(command[1:3] == ["debug", "config"] for command in calls)
+
+
 def test_profile_api_fallback_is_used_when_all_profile_environment_is_absent(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     profile = tmp_path / "profile"
     auth = profile / ".local" / "share" / "opencode" / "auth.json"
@@ -352,6 +434,77 @@ def test_no_inference_preflight_succeeds_through_stripped_transport_environment(
     assert result["auth_copy_present_during_preflight"] is True
     assert not (fake_dir / "run-called").exists()
     assert not Path(result["command"][result["command"].index("--dir") + 1]).exists()
+    assert "synthetic auth" not in child.stdout + child.stderr + evidence.read_text(encoding="utf-8")
+
+
+def test_go_preflight_reaches_catalog_parsing_under_synthetic_successful_models_opencode_go_response(tmp_path: Path) -> None:
+    """The wrapper Go preflight reaches catalog parsing and effective-config
+    validation under a synthetic successful ``models opencode-go`` response,
+    and never executes ``opencode run``."""
+    auth = transport._auth_state_path()
+    if not auth.is_file():
+        pytest.skip("configured OpenCode auth state is unavailable")
+    go_model = "opencode-go/test-deepseek-v4-flash"
+    go_catalog = json.dumps({
+        "id": "test-deepseek-v4-flash",
+        "providerID": "opencode-go",
+        "status": "active",
+        "cost": {"input": 0.5, "output": 1.5, "cache": {"read": 0.25, "write": 0.25}},
+        "variants": {"max": {"reasoningEffort": "max"}},
+    })
+    go_fingerprint = transport.catalog_entry_fingerprint(json.loads(go_catalog))
+    go_config = json.dumps({
+        **transport._isolation_config(route_mode="opencode-go"),
+        "agent": {}, "mode": {}, "command": {},
+    })
+    fake_dir = tmp_path / "fake-opencode-go"
+    fake_dir.mkdir()
+    fake_launcher = fake_dir / "opencode.cmd"
+    fake_impl = fake_dir / "fake_opencode_go.py"
+    fake_impl.write_text(
+        "import json, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "if args == ['--version']:\n"
+        "    print('1.0.0')\n"
+        "elif args[:2] == ['models', 'opencode-go']:\n"
+        f"    print({go_catalog!r})\n"
+        "elif args[:3] == ['debug', 'config', '--pure']:\n"
+        f"    print({go_config!r})\n"
+        "elif args and args[0] == 'run':\n"
+        "    pathlib.Path(__file__).with_name('run-called').write_text('unexpected')\n"
+        "    raise SystemExit(91)\n"
+        "else:\n"
+        "    raise SystemExit(92)\n",
+        encoding="utf-8",
+    )
+    fake_launcher.write_text(f'@"{sys.executable}" "%~dp0fake_opencode_go.py" %*\n', encoding="utf-8")
+    environment = JsonlCommandTransport.subprocess_environment()
+    environment["PATH"] = str(fake_dir)
+    evidence = tmp_path / "go-preflight.jsonl"
+    child = subprocess.run(
+        [
+            sys.executable, str(Path(transport.__file__)), "--preflight",
+            "--model", go_model, "--variant", "max",
+            "--route-mode", "opencode-go",
+            "--expected-opencode-version", "1.0.0",
+            "--expected-catalog-fingerprint", go_fingerprint,
+            "--expected-runtime-model-id", go_model,
+            "--expected-account-status", "ACTIVE",
+            "--expected-billing-route", "SUBSCRIPTION",
+            "--evidence-file", str(evidence),
+        ],
+        cwd=str(tmp_path), env=environment, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        encoding="utf-8", check=False,
+    )
+    assert child.returncode == 0, child.stderr + child.stdout
+    result = json.loads(child.stdout)
+    assert result["preflight"] == "passed"
+    assert result["provider_inference_started"] is False
+    assert result["route_mode"] == "opencode-go"
+    assert result["catalog"]["catalog_provider"] == "opencode-go"
+    assert result["catalog"]["catalog_fingerprint"] == go_fingerprint
+    assert result["effective_config"]["enabled_providers"] == ["opencode-go"]
+    assert not (fake_dir / "run-called").exists()
     assert "synthetic auth" not in child.stdout + child.stderr + evidence.read_text(encoding="utf-8")
 
 

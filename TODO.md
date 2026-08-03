@@ -504,3 +504,54 @@ ve gercek operator yurutmesi bekledigi icin acik tutuldu: tamamlanmis
 isaretlenmez — operator authorization yurutmesi, gercek route preflight,
 gercek OpenCode Go execution, six-case live campaign, empirical evaluation,
 model performance, PDB effectiveness, RAG, SFT, DPO.
+
+### OpenCode Go isolation provider selection repair (2026-08-03, wrapper-only)
+
+Ilk gercek alti-case denemesi (`quixbugs-paired-pilot-v2-attempt-81f2e5d859cb401681c701f19a25a4f6`)
+tum alti case binding'ine girdi ama her case `PROVIDER_ERROR` /
+`process_error` ile bitti; 18 transport denemesinin tamami `opencode run`
+oncesinde `RuntimeError: OpenCode model catalog failed with exit code 1` ile
+dustu. Kok neden: Go modu catalog'i dogru sekilde
+(`models opencode-go --verbose --pure`) sorguluyordu, ancak izole OpenCode
+konfigurasyonu hala `enabled_providers: ["opencode"]` yaziyordu ve
+effective-config validator'u da `["opencode"]`'u hardcode ediyordu. Yerlesik
+wrapper yolunun yalitim provider secimi route-mode-aware hale getirildi
+(sinirli, wrapper-only repair):
+
+- `_isolation_config(route_mode)` artik route'a gore tam allowlist yaziyor:
+  `opencode-go` modu `enabled_providers: ["opencode-go"]`, `legacy` modu
+  `enabled_providers: ["opencode"]`; provider ambient konfigurasyondan asla
+  infer edilmiyor. Explicit route mode; isolation-config olusturma,
+  isolation hazirligi (`_prepare_isolation(root, route_mode)`), effective-
+  config dogrulamasi (`_validate_effective_config(config, route_mode)` /
+  `verify_opencode_effective_config(..., route_mode)`), wrapper preflight ve
+  gercek wrapper yurutmesi boyunca thread edildi.
+- Effective-config kapisi artik aktif route icin tam beklenen provider'i
+  zorunlu tutuyor: Go icin tam `["opencode-go"]`, legacy icin tam
+  `["opencode"]`; karisik, eksik veya ek provider'lar reddediliyor. Mevcut
+  permission, MCP, plugin, instruction, sharing ve autoupdate denial'lari
+  korundu.
+- Tanisal sertlestirme: yerel catalog inceleme komutu sifir-disi dondugunde
+  wrapper artik typed `CatalogFailureError` (`catalog_command_failed`
+  classification) ile birlikte sinirli (4096 karakter), sanitize edilmis ve
+  ANSI-temizlenmis stdout/stderr orneklerini (catalog komutu ve exit code
+  ile) error/evidence'a ekliyor; credential/auth icerigi ve kisitlanmamis
+  ortam degerleri kayitlanmiyor. Failure kayitlari
+  `failure_classification` / `failure_detail` alanlarini tasiyor.
+- Odakli testler eklendi/guncellendi: Go isolation config tam
+  `["opencode-go"]`, legacy tam `["opencode"]`; Go effective-config yalnizca
+  `opencode-go` kabul eder; legacy yalnizca `opencode` kabul eder; karisik
+  ve cross-route listeler reddedilir; wrapper Go preflight'i sentetik basarili
+  `models opencode-go` yaniti altinda catalog parsing'e ulasir ve `opencode
+  run`'u asla calistirmaz (mocked ve gercek-subprocess preflight kanitlari);
+  catalog-failure evidence'i sinirli sanitize diagnostic detay icerir;
+  legacy wrapper davranisi degismeden korunur.
+
+Gercek operator preflight TODO maddesi ve Authorized Six-Case Live Campaign
+TODO maddesi bu repair'in ardindan taze bir deneme bekledigi icin acik
+tutuluyor. Hicbir test/build/lint/compile/dogrulama calistirilmadi
+(FirstMate'e aittir); gercek OpenCode komutu, catalog, provider veya paid
+endpoint calistirilmadi; commit/stage/push yapilmadi. Basarisiz kampanya
+gecerli bir deney olarak yeniden yorumlanmadi; task-local PDB, facts-
+provider, authorization, manifest, campaign schema ve case-runner tasarimi
+degistirilmedi.

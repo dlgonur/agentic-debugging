@@ -92,6 +92,67 @@ class JsonExtractionError(ValueError):
         self.classification = classification
 
 
+class CatalogFailureError(RuntimeError):
+    """A local catalog inspection command exited nonzero.
+
+    Carries the typed catalog-failure classification and bounded, sanitized
+    diagnostic detail (never credentials, auth contents, or unrestricted
+    environment values).
+    """
+
+    def __init__(self, classification: str, detail: dict[str, Any]) -> None:
+        self.classification = classification
+        self.detail = detail
+        super().__init__(f"OpenCode model catalog failed with {classification}")
+
+
+_CATALOG_FAILURE_DIAGNOSTIC_LIMIT = 4_096
+
+
+def _sanitized_stream_sample(value: str, limit: int = _CATALOG_FAILURE_DIAGNOSTIC_LIMIT) -> str:
+    """A bounded, redacted sample of a provider stream for diagnostics.
+
+    ANSI sequences are stripped, the sample is capped with a truncation
+    note, and credential-shaped values are redacted before the sample may
+    enter any error/evidence record.
+    """
+    text = _strip_ansi(value or "").strip()
+    if not text:
+        return ""
+    if len(text) > limit:
+        text = text[:limit] + f" <truncated {len(text) - limit} characters>"
+    redacted = _redact(text)
+    return redacted if isinstance(redacted, str) else ""
+
+
+def _catalog_failure_detail(returncode: int, stdout: str, stderr: str, command: list[str]) -> dict[str, Any]:
+    """Bounded, sanitized detail for a failed local catalog inspection.
+
+    Records only the exact catalog command, the exit code, and bounded
+    redacted stream samples; never credentials, auth contents, or
+    unrestricted environment values.
+    """
+    return {
+        "catalog_command": " ".join(command),
+        "catalog_exit_code": returncode,
+        "catalog_stdout": _sanitized_stream_sample(stdout),
+        "catalog_stderr": _sanitized_stream_sample(stderr),
+    }
+
+
+def _failure_evidence(exc: Exception) -> dict[str, Any]:
+    """Typed failure evidence: error text plus the typed classification and
+    bounded, sanitized detail when the exception carries them."""
+    evidence: dict[str, Any] = {"error": f"{type(exc).__name__}: {exc}"}
+    classification = getattr(exc, "classification", None)
+    if isinstance(classification, str) and classification:
+        evidence["failure_classification"] = classification
+    detail = getattr(exc, "detail", None)
+    if isinstance(detail, dict) and detail:
+        evidence["failure_detail"] = detail
+    return evidence
+
+
 def _json_from_text(text: str) -> dict[str, Any]:
     """Extract exactly one top-level JSON object without protocol validation."""
     decoder = json.JSONDecoder()
@@ -372,7 +433,18 @@ def _auth_state_path() -> Path:
     return profile / ".local" / "share" / "opencode" / "auth.json"
 
 
-def _isolation_config() -> dict[str, Any]:
+def _route_expected_provider(route_mode: str) -> str:
+    """The exact provider the active route mode may allow, never inferred."""
+    if route_mode not in ROUTE_MODES:
+        raise RuntimeError(f"unsupported route mode: {route_mode!r}")
+    return OPENCODE_GO_CATALOG_PROVIDER if route_mode == "opencode-go" else LEGACY_CATALOG_PROVIDER
+
+
+def _isolation_config(route_mode: str = "legacy") -> dict[str, Any]:
+    """The isolation configuration, with the exact enabled provider for the
+    active route: ``opencode-go`` in OpenCode Go mode and the historical
+    ``opencode`` allowlist in legacy mode.  All permission, MCP, plugin,
+    instruction, sharing, and autoupdate denials are preserved."""
     return {
         "$schema": "https://opencode.ai/config.json",
         "permission": dict(_ISOLATION_PERMISSION_DENIALS),
@@ -380,12 +452,12 @@ def _isolation_config() -> dict[str, Any]:
         "plugin": [],
         "instructions": [],
         "share": "disabled",
-        "enabled_providers": ["opencode"],
+        "enabled_providers": [_route_expected_provider(route_mode)],
         "autoupdate": False,
     }
 
 
-def _prepare_isolation(root: Path) -> dict[str, Any]:
+def _prepare_isolation(root: Path, route_mode: str = "legacy") -> dict[str, Any]:
     isolation_root = root / "opencode-isolation"
     config_home = isolation_root / "config-home"
     data_home = isolation_root / "data-home"
@@ -394,7 +466,7 @@ def _prepare_isolation(root: Path) -> dict[str, Any]:
     for path in (config_home, data_home, state_home, cache_home):
         path.mkdir(parents=True, exist_ok=True)
     config_path = isolation_root / "opencode.json"
-    config = _isolation_config()
+    config = _isolation_config(route_mode=route_mode)
     config_path.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     agents_path = root / "AGENTS.md"
     agents_path.write_text(_AGENTS_CONTENT + "\n", encoding="utf-8")
@@ -430,6 +502,7 @@ def _prepare_isolation(root: Path) -> dict[str, Any]:
     })
     Path(environment["TEMP"]).mkdir(parents=True, exist_ok=True)
     return {
+        "route_mode": route_mode,
         "environment": environment,
         "config_path": config_path,
         "config": config,
@@ -444,7 +517,7 @@ def _strip_ansi(value: str) -> str:
     return re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", value)
 
 
-def _validate_effective_config(config: Any) -> dict[str, Any]:
+def _validate_effective_config(config: Any, *, route_mode: str = "legacy") -> dict[str, Any]:
     if not isinstance(config, dict):
         raise RuntimeError("OpenCode effective configuration was not an object")
     permission = config.get("permission")
@@ -465,8 +538,11 @@ def _validate_effective_config(config: Any) -> dict[str, Any]:
         raise RuntimeError("OpenCode effective configuration includes unrelated instructions")
     if config.get("share") != "disabled":
         raise RuntimeError("OpenCode sharing is not disabled")
-    if config.get("enabled_providers") != ["opencode"]:
-        raise RuntimeError("OpenCode enabled provider allowlist is not exactly opencode")
+    expected_provider = _route_expected_provider(route_mode)
+    if config.get("enabled_providers") != [expected_provider]:
+        raise RuntimeError(
+            f"OpenCode enabled provider allowlist is not exactly [{expected_provider}] for route mode {route_mode!r}"
+        )
     if config.get("autoupdate") is not False:
         raise RuntimeError("OpenCode autoupdate is not disabled")
     return {
@@ -476,7 +552,7 @@ def _validate_effective_config(config: Any) -> dict[str, Any]:
         "plugins_empty": True,
         "instructions_empty": True,
         "sharing_disabled": True,
-        "enabled_providers": ["opencode"],
+        "enabled_providers": [expected_provider],
         "autoupdate_disabled": True,
     }
 
@@ -484,6 +560,8 @@ def _validate_effective_config(config: Any) -> dict[str, Any]:
 def verify_opencode_effective_config(
     environment: dict[str, str],
     cwd: Path,
+    *,
+    route_mode: str = "legacy",
 ) -> dict[str, Any]:
     completed = subprocess.run(
         ["opencode.cmd", "debug", "config", "--pure"],
@@ -497,7 +575,7 @@ def verify_opencode_effective_config(
         config = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise RuntimeError("OpenCode effective config was not valid JSON") from exc
-    return _validate_effective_config(config)
+    return _validate_effective_config(config, route_mode=route_mode)
 
 
 def _preflight(args: argparse.Namespace) -> int:
@@ -506,7 +584,7 @@ def _preflight(args: argparse.Namespace) -> int:
     root.mkdir()
     evidence_path = Path(args.evidence_file) if args.evidence_file else None
     try:
-        isolation = _prepare_isolation(root)
+        isolation = _prepare_isolation(root, route_mode=args.route_mode)
         route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
         launcher = verify_opencode_launcher(
             isolation["environment"],
@@ -518,7 +596,7 @@ def _preflight(args: argparse.Namespace) -> int:
             expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
             expected_catalog_fingerprint=route_binding["expected_catalog_fingerprint"] if route_binding is not None else None,
         )
-        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root)
+        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root, route_mode=args.route_mode)
         request_file = root / "public-request.json"
         request_file.write_text("{}\n", encoding="utf-8")
         command = build_opencode_command(args.model, args.variant, root, request_file)
@@ -549,7 +627,8 @@ def _preflight(args: argparse.Namespace) -> int:
         print(json.dumps(assertions, ensure_ascii=False, sort_keys=True))
         return 0
     except Exception as exc:
-        failure = {"preflight": "blocked", "provider_inference_started": False, "error": f"{type(exc).__name__}: {exc}"}
+        failure = {"preflight": "blocked", "provider_inference_started": False}
+        failure.update(_failure_evidence(exc))
         _record(evidence_path, failure)
         print(json.dumps(failure, ensure_ascii=False, sort_keys=True))
         return 1
@@ -763,7 +842,10 @@ def verify_opencode_catalog(
         cwd=str(cwd) if cwd is not None else None,
     )
     if completed.returncode != 0:
-        raise RuntimeError(f"OpenCode model catalog failed with exit code {completed.returncode}")
+        raise CatalogFailureError(
+            "catalog_command_failed",
+            _catalog_failure_detail(completed.returncode, completed.stdout, completed.stderr, _catalog_command(route_mode)),
+        )
     entry = select_catalog_entry(completed.stdout, model)
     facts = catalog_entry_facts(entry, variant)
     fingerprint = catalog_entry_fingerprint(entry)
@@ -828,7 +910,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         request_file = root / "public-request.json"
         request_file.write_text(json.dumps(request, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-        isolation = _prepare_isolation(root)
+        isolation = _prepare_isolation(root, route_mode=args.route_mode)
         route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
         launcher = verify_opencode_launcher(
             isolation["environment"],
@@ -840,7 +922,7 @@ def main(argv: list[str] | None = None) -> int:
             expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
             expected_catalog_fingerprint=route_binding["expected_catalog_fingerprint"] if route_binding is not None else None,
         )
-        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root)
+        effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root, route_mode=args.route_mode)
         command = build_opencode_command(args.model, args.variant, root, request_file)
         evidence_path = Path(args.evidence_file) if args.evidence_file else None
         _record(evidence_path, {
@@ -934,10 +1016,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"OpenCode transport failed: TimeoutExpired: {exc}", file=sys.stderr)
         return 1
     except Exception as exc:
-        _record(Path(args.evidence_file) if args.evidence_file else None, {
-            "model": args.model, "variant": args.variant, "command": command,
-            "request": request, "error": f"{type(exc).__name__}: {exc}",
-        })
+        record = {"model": args.model, "variant": args.variant, "command": command, "request": request}
+        record.update(_failure_evidence(exc))
+        _record(Path(args.evidence_file) if args.evidence_file else None, record)
         print(f"OpenCode transport failed: {type(exc).__name__}: {exc}", file=sys.stderr)
         return 1
     finally:
