@@ -1906,9 +1906,9 @@ def _outcome_from_live_case(
     completion_tokens = max(0, int(completion_tokens or 0))
 
     terminal_status, terminal_reason, terminal_evidence = _terminal_mapping(
-        status, termination_reason, gate_decisions, inner_transport, model_requests, events_jsonl,
+        status, termination_reason, gate_decisions, inner_transport, model_requests, model_responses, events_jsonl,
     )
-    aggregate = _aggregate_transport_evidence(terminal_status)
+    aggregate = _aggregate_transport_evidence(terminal_status, model_responses)
     infrastructure = _infrastructure_evidence(terminal_status, status, model_requests, reporting, run_id)
     blocked = {
         "block_kind": "none",
@@ -1987,6 +1987,7 @@ def _terminal_mapping(
     gate_decisions: list[Any],
     inner_transport: OpenCodeGoTransport,
     model_requests: int,
+    model_responses: int,
     events_jsonl: str,
 ) -> tuple[str, str, dict[str, Any]]:
     """Map the accepted LiveCaseStatus to the frozen terminal contract."""
@@ -2029,7 +2030,20 @@ def _terminal_mapping(
             "provider_completed_response": False,
             "evidence_reference": reference,
         }
-    # All remaining statuses are infrastructure failures mapped below.
+    # All remaining statuses are infrastructure failures mapped below.  An
+    # infrastructure failure after at least one completed model response
+    # (post-transport infrastructure) is bound to that completed prior
+    # provider response; pre-provider infrastructure never claims a completed
+    # response, a process exit code, or any provider contact.
+    if model_responses >= 1:
+        return "INFRASTRUCTURE_ERROR", "INFRASTRUCTURE_FAILURE", {
+            "final_attempt_classification": "INFRASTRUCTURE_FAILURE",
+            "process_exit_code": 0,
+            "timed_out": False,
+            "provider_error_category": None,
+            "provider_completed_response": True,
+            "evidence_reference": reference,
+        }
     return "INFRASTRUCTURE_ERROR", "INFRASTRUCTURE_FAILURE", {
         "final_attempt_classification": "INFRASTRUCTURE_FAILURE",
         "process_exit_code": None,
@@ -2040,11 +2054,13 @@ def _terminal_mapping(
     }
 
 
-def _aggregate_transport_evidence(terminal_status: str) -> dict[str, bool]:
+def _aggregate_transport_evidence(terminal_status: str, model_responses: int) -> dict[str, bool]:
     if terminal_status in {"RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "INVALID_MODEL_RESPONSE"}:
         return {"completed_response": True, "malformed_response": terminal_status == "INVALID_MODEL_RESPONSE", "provider_error": False, "synthetic": False}
     if terminal_status == "PROVIDER_ERROR":
         return {"completed_response": False, "malformed_response": False, "provider_error": True, "synthetic": False}
+    if model_responses >= 1:
+        return {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False}
     return {"completed_response": False, "malformed_response": False, "provider_error": False, "synthetic": False}
 
 

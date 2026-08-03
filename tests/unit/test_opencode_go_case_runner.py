@@ -579,6 +579,121 @@ def test_harness_error_maps_to_pre_provider_infrastructure(tmp_path, manifest, s
     assert outcome["terminal_status"] == "INFRASTRUCTURE_ERROR"
     assert outcome["infrastructure_evidence"]["stage"] == "pre_provider"
     assert outcome["infrastructure_evidence"]["reason_code"] == "WORKSPACE_FAILURE"
+    assert outcome["infrastructure_evidence"]["prior_lifecycle_completed"] is False
+    assert outcome["transport_evidence"] == {
+        "completed_response": False, "malformed_response": False, "provider_error": False, "synthetic": False,
+    }
+    assert outcome["terminal_transport_evidence"]["provider_completed_response"] is False
+    assert outcome["terminal_transport_evidence"]["process_exit_code"] is None
+    runner.enforce_case_budgets(outcome, manifest, case_policy="static-baseline")
+
+
+def test_controller_stage_infrastructure_failure_records_completed_prior_response(tmp_path, manifest, synthetic_executable):
+    """Post-transport (controller-stage) infrastructure failure after
+    completed provider responses emits aggregate and terminal evidence bound
+    to the completed prior response and validates against the frozen result
+    schema -- the production-shaped outcome of live attempt
+    quixbugs-paired-pilot-v2-attempt-320550a55d0b48d1a08b7ec7f60dc90f that
+    previously aborted the campaign with 'post-transport infrastructure
+    requires one completed prior response'."""
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    case = manifest["case_order"][1]
+    source_hash = next(item["source_sha256"] for item in manifest["inventory"] if item["task_id"] == case["task_id"])
+    mapping = _live_mapping(manifest, case, **{
+        "status": "CONTROLLER_FAILED",
+        "controller": {"completed": False, "final_state": None, "stop_reason": "controller exception", "model_calls": 7, "exception": True},
+        "verifier": {"executed": False, "failure": False, "status": None, "outcome": None, "patch_application": None, "localization": {"outcome": "NO_LOCALIZATION"}},
+        "measurements": {
+            "model_request_count": 8, "model_response_count": 7, "retry_count": 1,
+            "provider_error_count": 0, "provider_error_kinds": [],
+            "token_usage": {"prompt_tokens": 210, "completion_tokens": 180, "total_tokens": 390,
+                            "provider_reported": True, "missing_fields": []},
+            "termination_reason": "controller_failure",
+            "successful_pdb_observation_count": 0, "failed_pdb_observation_count": 0,
+            "tool_call_count": 7, "case_elapsed_duration_ms": 120000,
+            "model_phase_elapsed_duration_ms": 100000, "model_transport_duration_ms": 100000,
+            "elapsed_scope": "case_observed; model_phase=transport_only",
+        },
+        "evidence": {"pdb_gate_decisions": [], "directive_rejections": []},
+    })
+    inner = harness["factory"].prepare(case)
+    inner.reported_costs.append(0.002119)
+    inner.reported_costs.append(0.003097932)
+    outcome = adapter._outcome_from_live_case(
+        case, FakeLiveResult(mapping), harness["observed"], inner,
+        transport_attempts=8, policy_value=case["policy"], run_id="run-320550a55d0b48d1a08b7ec7f60dc90f",
+        source_hash=source_hash,
+    )
+    assert outcome["terminal_status"] == "INFRASTRUCTURE_ERROR"
+    assert outcome["terminal_reason_code"] == "INFRASTRUCTURE_FAILURE"
+    assert outcome["infrastructure_evidence"]["stage"] == "controller"
+    assert outcome["infrastructure_evidence"]["reason_code"] == "CONTROLLER_FAILURE"
+    assert outcome["infrastructure_evidence"]["prior_lifecycle_completed"] is True
+    assert outcome["logical_model_calls"] == 7
+    assert outcome["valid_directives"] == 7
+    assert outcome["provider_reported_cost"] == pytest.approx(0.005217)
+    assert outcome["provider_reported_cost_observed"] is True
+    # The aggregate transport carries exactly one completed-response state and
+    # the controller failure is never reclassified as a provider failure.
+    assert outcome["transport_evidence"] == {
+        "completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False,
+    }
+    assert sum(bool(outcome["transport_evidence"][key]) for key in ("completed_response", "malformed_response", "provider_error")) == 1
+    assert outcome["transport_evidence"]["provider_error"] is False
+    # Terminal infrastructure evidence binds the completed prior response.
+    terminal = outcome["terminal_transport_evidence"]
+    assert terminal["final_attempt_classification"] == "INFRASTRUCTURE_FAILURE"
+    assert terminal["provider_completed_response"] is True
+    assert terminal["process_exit_code"] == 0
+    assert terminal["timed_out"] is False
+    assert terminal["provider_error_category"] is None
+    runner.validate_case_outcome(outcome)
+    runner.enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
+    # The frozen result schema accepts the repaired mapping: the exact gate
+    # that aborted the live campaign must no longer raise
+    # 'post-transport infrastructure requires one completed prior response'.
+    record = runner.materialize_case_record(
+        manifest, case, harness["authorization"], harness["observed"], outcome,
+        attempt_identity=harness["authorization"]["campaign_attempt_identity"],
+        execution_commit=runner.ACCEPTED_BASELINE,
+    )
+    pilot.validate_case_result(record, manifest, harness["authorization"])
+
+
+def test_provider_error_mapping_remains_unchanged(tmp_path, manifest, synthetic_executable):
+    harness = _harness(tmp_path, manifest, synthetic_executable)
+    case = manifest["case_order"][1]
+    mapping = _live_mapping(manifest, case, **{
+        "status": "PROVIDER_ERROR",
+        "measurements": {
+            "model_request_count": 1, "model_response_count": 0, "retry_count": 0,
+            "provider_error_count": 1, "provider_error_kinds": ["provider_or_transport_error"],
+            "token_usage": {"prompt_tokens": None, "completion_tokens": None, "total_tokens": None,
+                            "provider_reported": False, "missing_fields": []},
+            "termination_reason": "provider_or_transport_error",
+            "successful_pdb_observation_count": 0, "failed_pdb_observation_count": 0,
+            "tool_call_count": 0, "case_elapsed_duration_ms": 1000,
+            "model_phase_elapsed_duration_ms": 800, "model_transport_duration_ms": 800,
+            "elapsed_scope": "case_observed; model_phase=transport_only",
+        },
+        "evidence": {"pdb_gate_decisions": [], "directive_rejections": []},
+    })
+    inner = harness["factory"].prepare(case)
+    inner.last_provider_error_category = "PROVIDER_ERROR"
+    outcome = adapter._outcome_from_live_case(
+        case, FakeLiveResult(mapping), harness["observed"], inner,
+        transport_attempts=1, policy_value="static-baseline", run_id="run-1",
+        source_hash="0" * 64,
+    )
+    assert outcome["terminal_status"] == "PROVIDER_ERROR"
+    assert outcome["transport_evidence"] == {
+        "completed_response": False, "malformed_response": False, "provider_error": True, "synthetic": False,
+    }
+    terminal = outcome["terminal_transport_evidence"]
+    assert terminal["final_attempt_classification"] == "PROVIDER_ERROR"
+    assert terminal["provider_completed_response"] is False
+    assert terminal["timed_out"] is False
+    assert terminal["provider_error_category"] == "PROVIDER_ERROR"
     runner.enforce_case_budgets(outcome, manifest, case_policy="static-baseline")
 
 
@@ -674,6 +789,62 @@ def test_campaign_accounting_reconciles_with_transport_counter(tmp_path, manifes
     for entry in record["cases"]:
         assert entry["provider_process_attempts"] == 1
         assert entry["logical_model_calls"] == 1
+    runner.validate_campaign_record(record, manifest)
+    package = runner.verify_attempt_package(harness["output_root"], manifest)
+    assert package["consistent"] is True
+
+
+def test_campaign_accepts_production_shaped_controller_infrastructure_failure(tmp_path, manifest, synthetic_executable):
+    """The exact production-shaped outcome from live attempt
+    quixbugs-paired-pilot-v2-attempt-320550a55d0b48d1a08b7ec7f60dc90f
+    (controller-stage infrastructure failure after multiple completed
+    provider responses) completes the frozen campaign instead of aborting
+    with 'post-transport infrastructure requires one completed prior
+    response'."""
+    def builder(kwargs, case, harness):
+        if case["order_index"] == 1:
+            for _ in range(8):
+                kwargs["transport"].request({"directive_feedback": None}, 30.0)
+            inner = harness["factory"].active_transport
+            assert inner is not None
+            inner.reported_costs.append(0.002119)
+            inner.reported_costs.append(0.003097932)
+            return _live_mapping(manifest, case, **{
+                "status": "CONTROLLER_FAILED",
+                "controller": {"completed": False, "final_state": None, "stop_reason": "controller exception", "model_calls": 7, "exception": True},
+                "verifier": {"executed": False, "failure": False, "status": None, "outcome": None, "patch_application": None, "localization": {"outcome": "NO_LOCALIZATION"}},
+                "measurements": {
+                    "model_request_count": 8, "model_response_count": 7, "retry_count": 1,
+                    "provider_error_count": 0, "provider_error_kinds": [],
+                    "token_usage": {"prompt_tokens": 210, "completion_tokens": 180, "total_tokens": 390,
+                                    "provider_reported": True, "missing_fields": []},
+                    "termination_reason": "controller_failure",
+                    "successful_pdb_observation_count": 0, "failed_pdb_observation_count": 0,
+                    "tool_call_count": 7, "case_elapsed_duration_ms": 120000,
+                    "model_phase_elapsed_duration_ms": 100000, "model_transport_duration_ms": 100000,
+                    "elapsed_scope": "case_observed; model_phase=transport_only",
+                },
+                "evidence": {"pdb_gate_decisions": [], "directive_rejections": []},
+            })
+        return _live_mapping(manifest, case)
+
+    record, _, harness = _run_campaign_with(tmp_path, manifest, synthetic_executable, builder)
+    assert record["status"] == "COMPLETED"
+    assert record["counts"]["completed_case_count"] == 6
+    assert record["counts"]["aborted_case_count"] == 0
+    first = record["cases"][0]
+    assert first["terminal_status"] == "INFRASTRUCTURE_ERROR"
+    assert first["terminal_reason_code"] == "INFRASTRUCTURE_FAILURE"
+    assert first["infrastructure_evidence"]["stage"] == "controller"
+    assert first["infrastructure_evidence"]["reason_code"] == "CONTROLLER_FAILURE"
+    assert first["infrastructure_evidence"]["prior_lifecycle_completed"] is True
+    assert first["transport_evidence"] == {
+        "completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False,
+    }
+    assert first["terminal_transport_evidence"]["final_attempt_classification"] == "INFRASTRUCTURE_FAILURE"
+    assert first["terminal_transport_evidence"]["provider_completed_response"] is True
+    assert first["terminal_transport_evidence"]["process_exit_code"] == 0
+    assert first["provider_reported_cost"] == pytest.approx(0.005217)
     runner.validate_campaign_record(record, manifest)
     package = runner.verify_attempt_package(harness["output_root"], manifest)
     assert package["consistent"] is True
