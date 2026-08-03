@@ -21,9 +21,13 @@ import quixbugs_paired_pilot as pilot
 
 from opencode_go_test_support import (
     prepare_wrapper_environment,
+    synthetic_catalog_fingerprint,
     wrapper_command,
     wrapper_environment_allowlist,
 )
+
+RUNTIME_MODEL_ID = "opencode-go/test-deepseek-v4-flash"
+FINGERPRINT = synthetic_catalog_fingerprint(RUNTIME_MODEL_ID)
 
 
 @pytest.fixture
@@ -58,7 +62,7 @@ def _authorization(manifest, tmp_path, **overrides) -> dict:
         "variant": "max",
         "protocol": "1.3",
         "expected_opencode_version": "1.0.0",
-        "expected_catalog_fingerprint": "c" * 64,
+        "expected_catalog_fingerprint": FINGERPRINT,
         "expected_runtime_model_id": "opencode-go/test-deepseek-v4-flash",
         "subscription_route_required": True,
         "expected_billing_route": "SUBSCRIPTION",
@@ -93,7 +97,7 @@ def _observed(manifest, **overrides) -> dict:
         "variant": "max",
         "protocol": "1.3",
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "c" * 64,
+        "catalog_fingerprint": FINGERPRINT,
         "runtime_model_id": "opencode-go/test-deepseek-v4-flash",
         "billing_route": "SUBSCRIPTION",
         "subscription_entitlement_confirmed": True,
@@ -143,7 +147,7 @@ def _configuration(manifest, tmp_path, synthetic_executable, **overrides) -> dic
         "variant": "max",
         "runtime_model_id": runtime_model_id,
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "c" * 64,
+        "catalog_fingerprint": FINGERPRINT,
         "route_class": "SUBSCRIPTION",
         "expected_account_status": "ACTIVE",
         "per_call_timeout_seconds": 20.0,
@@ -200,7 +204,7 @@ def harness(tmp_path, manifest, synthetic_executable):
         "route_binding": {
             "provider": "OpenCode Go", "model": "deepseek-v4-flash",
             "variant": "max", "protocol": "1.3",
-            "opencode_version": "1.0.0", "catalog_fingerprint": "c" * 64,
+            "opencode_version": "1.0.0", "catalog_fingerprint": FINGERPRINT,
             "runtime_model_id": "opencode-go/test-deepseek-v4-flash",
             "billing_route": "SUBSCRIPTION", "execution_commit": runner.ACCEPTED_BASELINE,
         },

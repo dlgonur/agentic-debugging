@@ -2521,3 +2521,130 @@ catalog veya paid endpoint calistirilmadi; gercek OpenCode binary'si
 calistirilmadi; commit/push yapilmadi. Gercek kampanya oncesi gerekenler ve
 tamamlanmamis isaretlenen maddeler degismedi; tarihsel OpenCode Zen kayitlari
 historical kaldi.
+
+---
+
+## 3 Agustos 2026 (ucuncu islem) - Operator Authorization and Real Route Preflight v1
+
+Operator hazirlik akisini implemente edip paketledim; gercek hicbir OpenCode
+inspection komutunu calistirmadim ve dogrulamayi bilincli olarak calistirmadim
+(dogrulama FirstMate'e ait). `scripts/quixbugs_opencode_go_adapter.py` uzerine
+iki odakli operator modu ekledim:
+
+1. **`route-capture`.** Salt-okunur komut: yalnizca yerel/non-model OpenCode
+   inspection komutlari calistirir (`opencode.cmd --version` ve
+   `opencode.cmd models opencode --verbose --pure`); `opencode run`'u asla
+   insa etmez veya calistirmaz (testler bunu kanitlar). Exact
+   operator-secimli runtime model ID (tarihsel `opencode/deepseek-v4-flash-free`
+   Zen kimligi reddedilir) ve variant zorunludur; catalog'da tam olarak bir
+   aktif entry bulunur; gozlemlenen status, variant availability ve sonlu
+   pricing metadata'si kaydedilir. Operator tarafindan acikca saglanan
+   account status, subscription entitlement confirmation/reference ve
+   billing-route assertion'i zorunludur (tahmin yok); tum denial/fallback
+   gozlemleri acikca kaydedilir. Cikti, mevcut live-runner validator'unun
+   kabul ettigi strict `quixbugs-route-evidence-v1` JSON'dur; create-once
+   semantigiyle ignored `operator/` storage'a yazilir; credential/token/
+   cookie/raw private account verisi icermez.
+
+2. **`operator-bundle`.** Accepted route-evidence dosyasini tuketir ve gercek
+   `quixbugs-paired-pilot-authorization-v1` artifact'i ile gercek
+   `quixbugs-opencode-go-execution-adapter-v1` config'ini uretir. Her ikisi de
+   temiz Git HEAD'e, frozen manifest hash
+   `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`'e,
+   exact alti frozen case ID ve sirasina, protocol `1.3`'e, exact gozlemlenen
+   OpenCode version/runtime model ID/variant/catalog fingerprint'e, account
+   status ve subscription billing route'a, bir operator authorization ID'ye,
+   bir fresh attempt identity + output root'a, acik sinirli gecerlilik
+   suresine ve operator-cozumlu Python executable/repository wrapper
+   path/working directory/operator boundary root'a baglanir. Dirty/staged
+   source, mismatched HEAD, occupied target, template value, route drift,
+   unknown field, malformed path ve celiskili subscription/fallback
+   assertion'lari hicbir sey yazilmadan once reddedilir; aktif operator
+   artifact'lari commit edilmez.
+
+3. **Deterministik catalog-entry fingerprint kontrati.**
+   `scripts/opencode_protocol_transport.py` icinde bir kez uygulandi: exact
+   selected entry parse edilir, projenin canonical JSON kurallariyla
+   (sorted keys, compact separators, ASCII, strict finite JSON) seri hale
+   getirilir, SHA-256 alinir. Ayni fingerprint route evidence,
+   authorization, adapter configuration ve wrapper verification'da
+   kullanilir; wrapper'in OpenCode Go preflight'i secili entry
+   fingerprint'ini bagimsizca yeniden hesaplar ve authorization-bound
+   expected fingerprint ile herhangi bir model process calismadan once
+   karsilastirir (mismatch = blocked, sifir `opencode run`).
+
+4. **Preflight handoff.** Uretilen artifact'ler mevcut sifir-provider-process
+   `route-preflight-only` komutuyla calisir; dokumana dort adimli kisaca bir
+   PowerShell ornegi ekledim (route capture, operator bundle, adapter
+   validation, route-preflight-only). Bu gercek komutlari uygulama agent'i
+   calistirmamalidir; gercek operator preflight FirstMate review'i ve Onur'un
+   manuel yurutmesini bekliyor.
+
+Test tarafinda: deterministik fingerprinting, exact selected-entry matching,
+malformed/duplicate/inactive/missing-variant/historical-free-route reddi,
+route evidence schema uretimi, authorization/config cross-binding, dirty-Git
+ve occupied-target reddi, wrapper fingerprint mismatch reddi ve capture'in
+`opencode run`'u asla insa etmedigi/calistirmadigi kaniti icin yeni unit ve
+CLI integration testleri yazdim. Mevcut adapter/wrapper/transport fixture'larini
+guncelledim: wrapper'in OpenCode Go preflight'i artik exact synthetic
+catalog-entry fingerprint'ini yeniden hesaplayip bekledigi icin tum fixture
+fingerprint degerleri synthetic catalog entry'sinden hesaplanan degerle
+tutarli hale getirildi (test support'ta `synthetic_catalog_fingerprint`
+helper'i). README, TODO, PROJECT_TRACKER, diary ve uc dokuman (adapter,
+authorization, live-runner) guncellendi; TODO maddesi acik tutuldu ve gercek
+operator preflight'in FirstMate review'i ve Onur'un manuel yurutmesini
+bekledigi acikca yazildi. Hicbir live campaign, benchmark, model, provider,
+catalog veya paid endpoint calistirilmadi; gercek OpenCode binary'si
+calistirilmadi; commit/push yapilmadi; dogrulama (test/build/lint/compile)
+bilincli olarak calistirilmadi. Tamamlanmis isaretlenmedi: operator
+authorization yurutmesi, gercek route preflight, gercek OpenCode Go
+execution, six-case live campaign, empirical evaluation, model performance,
+PDB effectiveness, RAG, SFT, DPO.
+
+---
+
+## 3 Agustos 2026 (dorduncu islem) - Operator route preflight v1 execution-commit repair
+
+FirstMate review'inin dogruladigi blocker'i onardim: `CAMPAIGN_EXECUTION_COMMIT`
+task baseline'ina (618c33ff...) hardcode edilmisti; bu yuzden `operator-bundle`
+hem commit oncesi kirli agacta hem de commit sonrasi degisen HEAD'de reddediyordu.
+Task baseline bir lineage onkosuludur, kampanyayi calistiracak commit degildir.
+
+Repair: (1) `CAMPAIGN_EXECUTION_COMMIT` -> `TASK_BASELINE` olarak yeniden
+adlandirildi ve yalnizca minimum accepted lineage/task baseline olarak tutuldu;
+uretilen authorization'in `accepted_campaign_commit`'i olarak ASLA
+kullanilmiyor. (2) `observe_bundle_execution_head` eklendi: bundle
+materialization aninda salt-okunur Git incelemesiyle (rev-parse HEAD,
+cat-file -e, merge-base --is-ancestor - accepted project baseline ve task
+baseline icin, status --porcelain, check-ignore) gercek HEAD'i cozer; HEAD
+gecerli mevcut bir commit olmali, accepted project baseline'dan ve task
+lineage baseline'indan turemeli, tracked working tree, gercek index ve
+non-ignored untracked dosya envanteri temiz olmali. Caller-supplied execution
+commit kabul edilmez; route capture Git commit binding'inden bagimsiz kalir.
+(3) Ayni bagimsizca gozlemlenen HEAD; authorization `accepted_campaign_commit`,
+adapter configuration `execution_commit`, route-preflight execution binding,
+runtime identity binding ve dondurulen record'da tutarli sekilde kullanilir.
+(4) Authorization ve configuration dosyalari yazilmadan hemen once HEAD ve
+repository temizligi yeniden kontrol edilir; gozlem ile materialization
+arasinda herhangi bir drift fail-closed olur ve hicbir aktif artifact
+uretilmez.
+
+Test-source repair: temiz descendant HEAD (618c33f...'den farkli) kabul edilir
+ve exact generated execution commit olur; mismatched (drifting), nonexistent,
+non-descendant, dirty, staged ve non-ignored untracked HEAD'ler reddedilir;
+authorization, adapter configuration, route preflight ve dondurulen record
+ayni bagimsizca gozlemlenen HEAD'i tasir; task baseline yalnizca lineage
+gereksinimi olarak kalir (project baseline'dan tureyip task baseline'dan
+turemeyen HEAD reddedilir). FirstMate'in isaret ettigi odakli test kusurlarini
+da duzelttim: route-capture assertion testinde `account_status` iki kez
+gecilmiyor (TypeError riski); `opencode run` yoklugu artik `runtime_model_id`
+veya `run_invoked` gibi alanlarda substring aramasiyla degil, gercek komut
+envanteri uzerinden kanitlaniyor; beklenen catalog fingerprint'leri her testin
+kullandigi exact catalog fixture'inden turetiliyor. Dokumantasyon (README,
+TODO, tracker, diary, authorization, live-runner, adapter dokumanlari)
+guncellendi: `618c33f...` artik gelecekteki campaign execution commit'i olarak
+tanimlanmiyor; manual sekans, `operator-bundle`'in artifact'leri Git
+closeout'undan sonra mevcut temiz HEAD'e bagladigini soyluyor. TODO maddesi
+FirstMate acceptance'i ve Onur'un gercek manual preflight'i bekledigi icin acik
+tutuldu. Hicbir test/build/lint/compile/dogrulama calistirilmadi (FirstMate'e
+ait); gercek OpenCode komutu calistirilmadi; commit/push yapilmadi.

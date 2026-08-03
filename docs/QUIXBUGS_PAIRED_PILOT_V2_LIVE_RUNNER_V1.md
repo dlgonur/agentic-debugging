@@ -61,6 +61,43 @@ route observation, the failure category, and the frozen
 `preflight_failure_evidence` object. Preflight-only mode stops after this
 gate.
 
+## Operator preparation flow (route preflight v1)
+
+The operator-facing preparation flow in
+`scripts/quixbugs_opencode_go_adapter.py` produces the three external
+artifacts the pre-provider gate consumes:
+
+1. `route-capture` — read-only local OpenCode inspection (launcher version +
+   model catalog) producing a strict `quixbugs-route-evidence-v1` file with
+   the deterministic catalog-entry fingerprint
+   (`scripts/opencode_protocol_transport.py`), the observed status, variant
+   availability, and finite pricing metadata, the operator-supplied account
+   status / subscription entitlement / billing-route assertion, and explicit
+   denial/fallback observations; zero `opencode run` invocations;
+2. `operator-bundle` — materializes the real
+   `quixbugs-paired-pilot-authorization-v1` artifact and the real
+   `quixbugs-opencode-go-execution-adapter-v1` configuration bound to the
+   **actual clean Git HEAD observed (read-only) when the operator runs the
+   command after the task has been accepted and merged** — never to a
+   caller-supplied commit and never to the task baseline `618c33ff…`
+   (retained only as a lineage prerequisite). The observed HEAD must exist,
+   descend from the accepted project baseline and from the task baseline, and
+   have a clean tracked working tree, a clean real index, and no non-ignored
+   untracked files; HEAD and repository cleanliness are re-checked
+   immediately before the artifacts are created and any drift fails closed.
+   The artifacts are also bound to the frozen manifest hash, the six frozen
+   case IDs, protocol `1.3`, and the exact route-observed identities; the
+   artifact must pass the strict authorization validator;
+3. `adapter-validate` + `route-preflight-only` — the existing
+   zero-provider-process handoff that runs every pre-provider gate.
+
+In `opencode-go` route mode the protocol wrapper independently recomputes the
+selected catalog entry fingerprint and compares it with the
+authorization-bound expected fingerprint before any model process may run.
+The flow is implemented and packaged but not executed by any implementation
+agent; real operator preflight remains pending FirstMate review and Onur's
+manual execution.
+
 ## Preflight-only versus live execution
 
 * `preflight` (or `live --preflight-only`): completes authorization, baseline,

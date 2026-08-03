@@ -24,6 +24,7 @@ import quixbugs_paired_pilot as pilot
 
 from opencode_go_test_support import (
     prepare_wrapper_environment,
+    synthetic_catalog_fingerprint,
     wrapper_command,
     wrapper_environment_allowlist,
 )
@@ -51,12 +52,18 @@ EFFECTIVE_CONFIG = json.dumps({
     "command": {},
 })
 
+#: The deterministic catalog-entry fingerprint of the GO_CATALOG fixture
+#: entry; the wrapper independently recomputes it during its OpenCode Go
+#: preflight and must agree exactly.
+GO_FINGERPRINT = wrapper.catalog_entry_fingerprint(json.loads(GO_CATALOG))
+SYNTHETIC_FINGERPRINT = synthetic_catalog_fingerprint(MODEL)
+
 GO_ARGS = [
     "--model", MODEL,
     "--variant", "max",
     "--route-mode", "opencode-go",
     "--expected-opencode-version", "1.0.0",
-    "--expected-catalog-fingerprint", "c" * 64,
+    "--expected-catalog-fingerprint", GO_FINGERPRINT,
     "--expected-runtime-model-id", MODEL,
     "--expected-account-status", "ACTIVE",
     "--expected-billing-route", "SUBSCRIPTION",
@@ -154,9 +161,10 @@ def test_opencode_go_mode_accepts_nonzero_catalog_prices(monkeypatch: pytest.Mon
     assert preflight["catalog"]["zero_cost"] is False
     assert preflight["route_binding"]["expected_runtime_model_id"] == MODEL
     assert preflight["route_binding"]["expected_opencode_version"] == "1.0.0"
-    assert preflight["route_binding"]["expected_catalog_fingerprint"] == "c" * 64
+    assert preflight["route_binding"]["expected_catalog_fingerprint"] == GO_FINGERPRINT
     assert preflight["route_binding"]["expected_account_status"] == "ACTIVE"
     assert preflight["route_binding"]["expected_billing_route"] == "SUBSCRIPTION"
+    assert preflight["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
     assert any(len(command) > 2 and command[1] == "run" and "--file" in command for command in captured["calls"])
 
 
@@ -191,6 +199,73 @@ def test_opencode_go_mode_accepts_zero_catalog_prices_without_requiring_them(mon
     assert rc == 0
 
 
+def test_opencode_go_mode_rejects_catalog_fingerprint_drift(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """The OpenCode Go preflight independently recomputes the exact selected
+    catalog entry's fingerprint and blocks before any model process when it
+    differs from the authorization-bound expected fingerprint."""
+    rc, evidence, captured = _run_wrapper_main(
+        monkeypatch, tmp_path, route_mode="opencode-go", catalog=GO_CATALOG,
+        extra_args=["--expected-catalog-fingerprint", "e" * 64],
+    )
+    assert rc == 1
+    assert "catalog fingerprint drift" in evidence
+    assert not any(len(command) > 2 and command[1] == "run" for command in captured["calls"])
+
+
+def test_opencode_go_preflight_recomputes_and_records_catalog_fingerprint(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    evidence = tmp_path / "preflight.jsonl"
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.0.0\n")
+        if command[1:3] == ["models", "opencode"]:
+            return _completed(command, stdout=GO_CATALOG + "\n")
+        if command[1:3] == ["debug", "config"]:
+            return _completed(command, stdout=EFFECTIVE_CONFIG)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    rc = wrapper.main(["--preflight"] + GO_ARGS + ["--evidence-file", str(evidence)])
+    assert rc == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["preflight"] == "passed"
+    assert result["provider_inference_started"] is False
+    assert result["catalog"]["catalog_fingerprint"] == GO_FINGERPRINT
+    assert result["route_binding"]["expected_catalog_fingerprint"] == GO_FINGERPRINT
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+
+
+def test_opencode_go_preflight_fingerprint_mismatch_blocks_before_run(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    evidence = tmp_path / "preflight.jsonl"
+    auth = tmp_path / "auth.json"
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
+    monkeypatch.setattr(wrapper, "_auth_state_path", lambda: auth)
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        calls.append(command)
+        if command == ["opencode.cmd", "--version"]:
+            return _completed(command, stdout="1.0.0\n")
+        if command[1:3] == ["models", "opencode"]:
+            return _completed(command, stdout=GO_CATALOG + "\n")
+        if command[1:3] == ["debug", "config"]:
+            return _completed(command, stdout=EFFECTIVE_CONFIG)
+        raise AssertionError(f"unexpected OpenCode command: {command}")
+
+    monkeypatch.setattr(wrapper.subprocess, "run", fake_run)
+    monkeypatch.setattr(wrapper.shutil, "which", lambda name: r"C:\fake\opencode.cmd")
+    rc = wrapper.main(["--preflight"] + GO_ARGS + ["--expected-catalog-fingerprint", "e" * 64, "--evidence-file", str(evidence)])
+    assert rc == 1
+    assert "catalog fingerprint drift" in evidence.read_text(encoding="utf-8")
+    assert not any(len(command) > 2 and command[1] == "run" for command in calls)
+
+
 # ---- real wrapper + fake OpenCode CLI chain through the adapter transport ---
 
 
@@ -222,7 +297,7 @@ def _authorization(manifest, tmp_path: Path) -> dict:
         "variant": "max",
         "protocol": "1.3",
         "expected_opencode_version": "1.0.0",
-        "expected_catalog_fingerprint": "c" * 64,
+        "expected_catalog_fingerprint": SYNTHETIC_FINGERPRINT,
         "expected_runtime_model_id": MODEL,
         "subscription_route_required": True,
         "expected_billing_route": "SUBSCRIPTION",
@@ -257,7 +332,7 @@ def _observed(manifest) -> dict:
         "variant": "max",
         "protocol": "1.3",
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "c" * 64,
+        "catalog_fingerprint": SYNTHETIC_FINGERPRINT,
         "runtime_model_id": MODEL,
         "billing_route": "SUBSCRIPTION",
         "subscription_entitlement_confirmed": True,
@@ -304,7 +379,7 @@ def _configuration(manifest, tmp_path: Path, synthetic_executable: Path) -> dict
         "variant": "max",
         "runtime_model_id": MODEL,
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "c" * 64,
+        "catalog_fingerprint": SYNTHETIC_FINGERPRINT,
         "route_class": "SUBSCRIPTION",
         "expected_account_status": "ACTIVE",
         "per_call_timeout_seconds": 20.0,

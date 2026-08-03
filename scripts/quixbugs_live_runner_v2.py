@@ -894,6 +894,31 @@ def _validate_raw_route_evidence(
     return validated
 
 
+def validate_raw_route_evidence(
+    raw: Mapping[str, Any],
+    authorization: Mapping[str, Any],
+    *,
+    now: datetime | None = None,
+    staleness_window_seconds: int = MAX_ROUTE_EVIDENCE_AGE_SECONDS,
+    clock_skew_seconds: int = CLOCK_SKEW_ALLOWANCE_SECONDS,
+) -> dict[str, Any]:
+    """Public strict validation of the raw route-evidence contract.
+
+    Thin public wrapper over the strict raw route-evidence validator used by
+    the pre-provider route gate; the operator route capture and the operator
+    bundle materialization call it so the produced
+    ``quixbugs-route-evidence-v1`` artifact is accepted by the existing
+    live-runner validator before it is persisted or bound.  Raises
+    :class:`RouteEvidenceInvalid` on any contract violation.
+    """
+    return _validate_raw_route_evidence(
+        raw, authorization,
+        now=now if now is not None else _utc_now(),
+        staleness_window_seconds=staleness_window_seconds,
+        clock_skew_seconds=clock_skew_seconds,
+    )
+
+
 def _build_route_observation(validated: Mapping[str, Any], execution_commit: str | None) -> dict[str, Any]:
     """Shape strict raw evidence into the frozen v2 route observation.
 

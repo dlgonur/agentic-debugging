@@ -58,6 +58,54 @@ service, account, or paid endpoint, and the CLI never defaults into live
 execution.  Tests and the self-test mode use only the synthetic executable
 (:mod:`opencode_go_synthetic_executable`), temporary fixtures, and
 deterministic transport doubles.
+
+The operator preparation flow adds two focused operator-facing modes:
+
+* ``route-capture`` — a read-only command that runs only local/non-model
+  OpenCode inspection commands (``opencode.cmd --version`` and
+  ``opencode.cmd models opencode --verbose --pure``), never invokes
+  ``opencode run``, requires the exact operator-selected runtime model ID
+  and variant, locates exactly one active catalog entry, records its
+  observed status, variant availability, and finite pricing metadata,
+  rejects the historical Zen/free-tier identity, requires explicit
+  operator-supplied account status, subscription entitlement
+  confirmation/reference, and a billing-route assertion, records every
+  denial/fallback observation explicitly, and writes a strict
+  ``quixbugs-route-evidence-v1`` artifact (accepted by the existing
+  live-runner validator) with create-once semantics into the ignored
+  ``operator/`` storage;
+* ``operator-bundle`` — consumes the accepted route-evidence file and
+  materializes the real ``quixbugs-paired-pilot-authorization-v1`` artifact
+  and the real ``quixbugs-opencode-go-execution-adapter-v1`` configuration,
+  both bound to the actual clean Git HEAD observed (read-only) when the
+  operator runs the command after the task has been accepted and merged —
+  never to a caller-supplied commit and never to the task baseline
+  (:data:`TASK_BASELINE`, retained only as the minimum lineage prerequisite).
+  The observed HEAD must exist, must descend from the accepted project
+  baseline and from the task baseline, and must have a clean tracked working
+  tree, a clean real index, and no non-ignored untracked files; HEAD and
+  repository cleanliness are re-checked immediately before the artifacts are
+  created and any drift fails closed with no active artifact written.  The
+  artifacts are also bound to the frozen manifest hash, the exact six frozen
+  case IDs in order, protocol ``1.3``, the exact observed OpenCode version,
+  runtime model ID, variant, and catalog fingerprint, the account status and
+  subscription billing route, one operator authorization ID, one fresh
+  attempt identity and output root, an explicit bounded validity period, and
+  the operator-resolved Python executable, repository wrapper path, working
+  directory, and operator boundary root; dirty/staged source, drift, occupied
+  targets, template values, route drift, unknown fields, malformed paths, and
+  contradictory subscription/fallback assertions are rejected, and active
+  operator artifacts are never committed.  Route capture stays independent of
+  Git commit binding; the bundle performs the commit binding.
+
+The deterministic catalog-entry fingerprint contract is implemented by
+:func:`opencode_protocol_transport.catalog_entry_fingerprint`: the exact
+selected catalog entry is serialized with the project's canonical JSON
+rules and SHA-256 of that canonical representation is the fingerprint used
+identically in route evidence, authorization, adapter configuration, and
+wrapper verification.  The wrapper's OpenCode Go preflight independently
+recomputes the selected entry fingerprint and compares it with the
+authorization-bound expected fingerprint before any model process may run.
 """
 from __future__ import annotations
 
@@ -84,6 +132,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import quixbugs_live_runner_v2 as runner  # noqa: E402
 import quixbugs_paired_pilot as pilot  # noqa: E402
+from scripts import opencode_protocol_transport as transport  # noqa: E402
 
 ADAPTER_SCHEMA_VERSION = "quixbugs-opencode-go-execution-adapter-v1"
 ADAPTER_IDENTITY = "quixbugs-opencode-go-execution-adapter-v1"
@@ -93,6 +142,27 @@ PROTOCOL_WRAPPER_RELATIVE_PATH = "scripts/opencode_protocol_transport.py"
 PROTOCOL_WRAPPER_PATH = REPO_ROOT / PROTOCOL_WRAPPER_RELATIVE_PATH
 #: The explicit subscription-route mode the wrapper must be launched with.
 ADAPTER_ROUTE_MODE = "opencode-go"
+#: The strict raw route-evidence schema version the operator route capture
+#: produces and the accepted live-runner validator consumes.
+ROUTE_EVIDENCE_SCHEMA_VERSION = "quixbugs-route-evidence-v1"
+#: Version of the non-authoritative operator capture companion record.
+CAPTURE_RECORD_SCHEMA_VERSION = "quixbugs-route-capture-record-v1"
+#: The ignored operator storage root; route evidence, operator bundles, and
+#: all active operator artifacts live here and are never committed.
+OPERATOR_STORAGE = REPO_ROOT / "operator"
+#: Relative operator-bundle storage directory under :data:`OPERATOR_STORAGE`.
+OPERATOR_BUNDLES_RELATIVE_DIR = "quixbugs-operator-bundles-v1"
+#: The minimum accepted lineage/task baseline of this task: the commit the
+#: accepted task work descends from.  It is a lineage prerequisite only and
+#: is NEVER used as the campaign execution commit: the operator bundle binds
+#: authorization and adapter configuration to the actual clean Git HEAD
+#: observed (read-only) when the operator runs the command after this task
+#: has been accepted and merged.
+TASK_BASELINE = "618c33ff186493892665ca1233c3edd8b2eec13f"
+#: Bounded capture of OpenCode inspection command output.
+MAX_CAPTURE_COMMAND_OUTPUT_BYTES = 1_000_000
+#: Placeholder/template markers rejected in operator-supplied values.
+_TEMPLATE_VALUE = re.compile(r"[<>]|placeholder", re.I)
 TEMPLATE_NOTE = (
     "NON-EXECUTABLE TEMPLATE. This document is a schema reference only; it is not an active "
     "adapter configuration and must fail validation as one (template=true). An active "
@@ -1937,6 +2007,579 @@ def run_route_preflight_only(
     }
 
 
+# ---- operator route capture ---------------------------------------------------
+
+
+def _reject_template_value(value: str, label: str) -> None:
+    if _TEMPLATE_VALUE.search(value):
+        raise OpenCodeGoAdapterError(f"operator-supplied {label} carries a placeholder/template value: {value!r}")
+
+
+def _reject_evidence_template_values(value: Any, path: str = "evidence") -> None:
+    if isinstance(value, str):
+        _reject_template_value(value, path)
+    elif isinstance(value, Mapping):
+        for key, item in value.items():
+            _reject_evidence_template_values(item, f"{path}.{key}")
+    elif isinstance(value, list):
+        for index, item in enumerate(value):
+            _reject_evidence_template_values(item, f"{path}[{index}]")
+
+
+def _resolve_catalog_command() -> list[str]:
+    return ["opencode.cmd", "models", "opencode", "--verbose", "--pure"]
+
+
+def _parse_utc_timestamp(value: str) -> datetime | None:
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _run_catalog_inspection() -> str:
+    """Run the single local/non-model catalog inspection command.
+
+    This is the only OpenCode catalog command the operator route capture
+    ever invokes; ``opencode run`` is never constructed or executed here.
+    """
+    completed = subprocess.run(
+        _resolve_catalog_command(),
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding="utf-8",
+        errors="replace", timeout=30, check=False,
+    )
+    if completed.returncode != 0:
+        raise OpenCodeGoAdapterError(f"OpenCode model catalog inspection failed with exit code {completed.returncode}")
+    if len(completed.stdout) > MAX_CAPTURE_COMMAND_OUTPUT_BYTES:
+        raise OpenCodeGoAdapterError("OpenCode model catalog inspection output exceeded the bounded capture")
+    return completed.stdout
+
+
+def run_route_capture(
+    runtime_model_id: str,
+    variant: str,
+    *,
+    account_status: str,
+    subscription_entitlement_confirmed: bool,
+    entitlement_evidence_reference: str,
+    billing_route_assertion: str,
+    output: str | Path,
+    manifest_path: str | Path | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Read-only operator route capture.
+
+    Runs only local/non-model OpenCode inspection commands (launcher version
+    and model catalog inspection); never invokes ``opencode run``.  Requires
+    the exact operator-selected runtime model ID and variant, locates exactly
+    one active catalog entry, records its observed status, variant
+    availability, and finite pricing metadata, rejects the historical
+    Zen/free-tier identity, requires explicit operator-supplied account
+    status, subscription entitlement confirmation/reference, and a
+    billing-route assertion, records every denial/fallback observation
+    explicitly, and writes a strict ``quixbugs-route-evidence-v1`` artifact
+    (accepted by the existing live-runner validator) with create-once
+    semantics into the ignored ``operator/`` storage.  No credentials, auth
+    tokens, cookies, or raw private account data are ever written.
+    """
+    observed_at = (now if now is not None else datetime.now(timezone.utc)).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+    if not isinstance(runtime_model_id, str) or "/" not in runtime_model_id or not runtime_model_id.strip():
+        raise OpenCodeGoAdapterError("route capture requires the exact catalog-qualified runtime model ID (provider/id)")
+    _reject_template_value(runtime_model_id, "runtime model ID")
+    if runtime_model_id == HISTORICAL_ZEN_MODEL_ID:
+        raise OpenCodeGoAdapterError("the historical OpenCode Zen free-model identity is rejected as a runtime route identity")
+    if not isinstance(variant, str) or not variant.strip():
+        raise OpenCodeGoAdapterError("route capture requires the exact operator-selected variant")
+    _reject_template_value(variant, "variant")
+    if not isinstance(account_status, str) or not account_status.strip():
+        raise OpenCodeGoAdapterError("route capture requires an explicit operator-supplied account status")
+    _reject_template_value(account_status, "account status")
+    if subscription_entitlement_confirmed is not True:
+        raise OpenCodeGoAdapterError("route capture requires explicit operator confirmation of subscription entitlement")
+    if not isinstance(entitlement_evidence_reference, str) or not entitlement_evidence_reference.strip():
+        raise OpenCodeGoAdapterError("route capture requires an explicit operator-supplied subscription entitlement evidence reference")
+    _reject_template_value(entitlement_evidence_reference, "entitlement evidence reference")
+    if billing_route_assertion != pilot.AUTHORIZED_BILLING_ROUTE:
+        raise OpenCodeGoAdapterError("route capture requires the explicit billing-route assertion SUBSCRIPTION")
+
+    manifest = _resolve_manifest(manifest_path)
+    _, model_family = runtime_model_id.split("/", 1)
+    if model_family != pilot.SUBSCRIPTION_ROUTE_MODEL:
+        raise OpenCodeGoAdapterError(
+            f"runtime model identity {runtime_model_id!r} is not the frozen campaign model family {pilot.SUBSCRIPTION_ROUTE_MODEL!r}"
+        )
+
+    target = Path(output).resolve()
+    storage_root = OPERATOR_STORAGE.resolve()
+    try:
+        target.relative_to(storage_root)
+    except ValueError:
+        raise OpenCodeGoAdapterError(f"route capture output must be inside the ignored operator storage {storage_root}")
+    if target.exists():
+        raise OpenCodeGoAdapterError(f"route capture target already exists (create-once): {target}")
+
+    try:
+        launcher = transport.verify_opencode_launcher()
+        opencode_version = str(launcher["version"]).strip()
+        catalog_stdout = _run_catalog_inspection()
+        entry = transport.select_catalog_entry(catalog_stdout, runtime_model_id)
+        facts = transport.catalog_entry_facts(entry, variant)
+        fingerprint = transport.catalog_entry_fingerprint(entry)
+    except RuntimeError as exc:
+        raise OpenCodeGoAdapterError(f"route capture rejected: {exc}") from exc
+
+    evidence: dict[str, Any] = {
+        "schema_version": ROUTE_EVIDENCE_SCHEMA_VERSION,
+        "provider": pilot.SUBSCRIPTION_ROUTE_PROVIDER,
+        "model": model_family,
+        "variant": variant,
+        "protocol": runner.LIVE_PROTOCOL_VERSION,
+        "opencode_version": opencode_version,
+        "catalog_fingerprint": fingerprint,
+        "runtime_model_id": runtime_model_id,
+        "billing_route": billing_route_assertion,
+        "subscription_entitlement_confirmed": True,
+        "account_status": account_status,
+        "active_model_status": facts["active_model_status"],
+        "variant_available": facts["variant_available"],
+        "input_price": facts["input_price"],
+        "output_price": facts["output_price"],
+        # No provider call is made during capture, so no cost was reported;
+        # zero is the strict schema's explicit absence representation and is
+        # recorded as such in the capture record.
+        "provider_reported_cost": 0.0,
+        "paid_fallback_used": False,
+        "alternate_provider_used": False,
+        "ollama_used": False,
+        "zen_used": False,
+        "free_tier_used": False,
+        "metered_fallback_used": False,
+        "paid_overage_used": False,
+        "per_call_billing_used": False,
+        "model_substitution_observed": False,
+        "observed_at": observed_at,
+    }
+    runner.validate_raw_route_evidence(evidence, {"expected_account_status": account_status}, now=(now if now is not None else datetime.now(timezone.utc)))
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    runner.atomic_create_json(target, evidence)
+    capture_record = _redact({
+        "schema_version": CAPTURE_RECORD_SCHEMA_VERSION,
+        "record_kind": "route-capture",
+        "captured_at": observed_at,
+        "runtime_model_id": runtime_model_id,
+        "variant": variant,
+        "model_family": model_family,
+        "launcher": {"version": opencode_version, "resolved_path": launcher.get("resolved_path")},
+        "catalog_entry": entry,
+        "catalog_fingerprint": fingerprint,
+        "observed_facts": facts,
+        "operator_assertions": {
+            "account_status": account_status,
+            "subscription_entitlement_confirmed": True,
+            "entitlement_evidence_reference": entitlement_evidence_reference,
+            "billing_route_assertion": billing_route_assertion,
+        },
+        "denial_observations": {
+            "zen_used": False, "free_tier_used": False, "ollama_used": False,
+            "paid_fallback_used": False, "alternate_provider_used": False,
+            "metered_fallback_used": False, "paid_overage_used": False,
+            "per_call_billing_used": False, "model_substitution_observed": False,
+            "note": "zero model/provider contact during capture; every denial/fallback observation is recorded explicitly as not used",
+        },
+        "provider_reported_cost_note": "no provider call occurred during capture; 0.0 is the strict schema's explicit absence representation",
+        "provider_contact_proof": {
+            "run_invoked": False,
+            "model_requests": 0,
+            "inspection_commands": [["opencode.cmd", "--version"], _resolve_catalog_command()],
+        },
+        "evidence_file": str(target),
+        "evidence_sha256": hashlib.sha256(json.dumps(evidence, sort_keys=True, separators=(",", ":"), ensure_ascii=True).encode("utf-8")).hexdigest(),
+    })
+    capture_record_path = target.with_suffix(target.suffix + ".capture-record.json")
+    try:
+        runner.atomic_create_json(capture_record_path, capture_record)
+    except runner.OutputIntegrityError:
+        pass
+    return {
+        "schema_version": ROUTE_EVIDENCE_SCHEMA_VERSION,
+        "mode": "route-capture",
+        "captured": True,
+        "evidence_path": str(target),
+        "runtime_model_id": runtime_model_id,
+        "variant": variant,
+        "opencode_version": opencode_version,
+        "catalog_fingerprint": fingerprint,
+        "catalog_entry_id": str(entry.get("id")),
+        "active_model_status": facts["active_model_status"],
+        "variant_available": facts["variant_available"],
+        "input_price": facts["input_price"],
+        "output_price": facts["output_price"],
+        "account_status": account_status,
+        "billing_route": billing_route_assertion,
+        "run_invoked": False,
+        "model_requests": 0,
+    }
+
+
+# ---- operator bundle materialization ------------------------------------------
+
+
+def _operator_bundle_paths(
+    attempt_identity: str,
+    output_root: str | Path,
+    bundle_root: str | Path | None,
+) -> tuple[Path, Path, Path, Path]:
+    root = Path(output_root).resolve()
+    bundle = Path(bundle_root).resolve() if bundle_root is not None else (OPERATOR_STORAGE / OPERATOR_BUNDLES_RELATIVE_DIR / attempt_identity).resolve()
+    return root, bundle, bundle / "authorization.json", bundle / "adapter-config.json"
+
+
+def _reject_occupied_target(path: Path, label: str) -> None:
+    if not path.exists():
+        return
+    try:
+        entries = sorted(path.iterdir())
+    except OSError as exc:
+        raise OpenCodeGoAdapterError(f"{label} could not be inspected: {exc}") from exc
+    if entries:
+        raise OpenCodeGoAdapterError(
+            f"{label} is occupied (not absent or structurally empty): {', '.join(entry.name for entry in entries)}"
+        )
+
+
+def _git(command: list[str]) -> subprocess.CompletedProcess[str]:
+    """Run one read-only Git inspection command against the repository root.
+
+    Never mutates the index, the working tree, or the repository state.
+    """
+    return subprocess.run(
+        command, cwd=str(REPO_ROOT), stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True, encoding="utf-8", errors="replace", timeout=30, check=False,
+    )
+
+
+def observe_bundle_execution_head(
+    git_runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
+) -> str:
+    """Resolve the actual clean Git HEAD via read-only inspection.
+
+    The execution commit for the operator bundle is never caller-supplied and
+    is never the task baseline: it is the actual repository HEAD observed at
+    bundle-materialization time.  The observed HEAD must be a valid existing
+    commit, must descend from the accepted project baseline
+    (:data:`runner.ACCEPTED_BASELINE`) and from the minimum task lineage
+    baseline (:data:`TASK_BASELINE`), and the tracked working tree, the real
+    Git index, and the untracked-file inventory (no non-ignored untracked
+    files) must be clean.  Raises :class:`runner.RepositoryStateError` with a
+    typed category on any violation.  ``git_runner`` is an injectable
+    read-only Git command runner for deterministic tests.
+    """
+    run = git_runner if git_runner is not None else _git
+    head_result = run(["git", "rev-parse", "HEAD"])
+    head = (head_result.stdout or "").strip()
+    if head_result.returncode != 0 or not _HEX40_PATTERN.fullmatch(head):
+        raise runner.RepositoryStateError("REPOSITORY_STATE_UNVERIFIABLE", "Git HEAD could not be resolved")
+    if run(["git", "cat-file", "-e", f"{head}^{{commit}}"]).returncode != 0:
+        raise runner.RepositoryStateError("EXECUTION_COMMIT_NOT_FOUND", f"resolved Git HEAD {head} does not exist as a commit")
+    if run(["git", "merge-base", "--is-ancestor", runner.ACCEPTED_BASELINE, head]).returncode != 0:
+        raise runner.RepositoryStateError(
+            "EXECUTION_COMMIT_ANCESTRY_FAILED",
+            f"resolved Git HEAD {head} does not descend from the accepted project baseline {runner.ACCEPTED_BASELINE}",
+        )
+    if run(["git", "merge-base", "--is-ancestor", TASK_BASELINE, head]).returncode != 0:
+        raise runner.RepositoryStateError(
+            "EXECUTION_COMMIT_ANCESTRY_FAILED",
+            f"resolved Git HEAD {head} does not descend from the minimum task lineage baseline {TASK_BASELINE}",
+        )
+    status_result = run(["git", "status", "--porcelain"])
+    lines = status_result.stdout.splitlines() if status_result.returncode == 0 else []
+    tracked_clean = True
+    index_clean = True
+    untracked_non_ignored: list[str] = []
+    for line in lines:
+        if not line or len(line) < 3:
+            continue
+        x, y = line[0], line[1]
+        path = line[3:]
+        if x == "?" and y == "?":
+            if run(["git", "check-ignore", "-q", "--", path]).returncode != 0:
+                untracked_non_ignored.append(path)
+            continue
+        tracked_clean = False
+        if x != " ":
+            index_clean = False
+    if not tracked_clean or not index_clean or untracked_non_ignored:
+        raise runner.RepositoryStateError(
+            "TRACKED_STATE_DIRTY",
+            f"tracked working tree, Git index, or untracked-file inventory is not clean; "
+            f"untracked non-ignored: {sorted(untracked_non_ignored)}",
+        )
+    return head
+
+
+def run_operator_bundle(
+    manifest_path: str | Path | None,
+    route_evidence_json: str | Path,
+    *,
+    operator_authorization_id: str,
+    attempt_identity: str,
+    output_root: str | Path,
+    valid_until: str,
+    entitlement_evidence_reference: str,
+    python_executable: str | Path,
+    working_directory: str | Path,
+    operator_boundary_root: str | Path,
+    bundle_root: str | Path | None = None,
+    git_runner: Callable[[list[str]], subprocess.CompletedProcess[str]] | None = None,
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Materialize the real operator bundle from the accepted route evidence.
+
+    Consumes the strict ``quixbugs-route-evidence-v1`` file and creates the
+    real ``quixbugs-paired-pilot-authorization-v1`` artifact and the real
+    ``quixbugs-opencode-go-execution-adapter-v1`` configuration, both bound
+    to the actual clean Git HEAD observed (read-only) when the operator runs
+    this command after the task has been accepted and merged — never to a
+    caller-supplied commit and never to the task baseline.  The observed HEAD
+    must exist, must descend from the accepted project baseline and from the
+    minimum task lineage baseline (:data:`TASK_BASELINE`), and must have a
+    clean tracked working tree, a clean real index, and no non-ignored
+    untracked files; HEAD and repository cleanliness are re-checked
+    immediately before the artifacts are created, and any drift between
+    observation and materialization fails closed with no active artifact
+    written.  The same independently observed HEAD is used in the
+    authorization's ``accepted_campaign_commit``, the adapter configuration's
+    ``execution_commit``, the route-preflight execution binding, the runtime
+    identity binding, and the returned record.
+
+    The artifacts are also bound to the frozen manifest hash, the exact six
+    frozen case IDs in order, protocol ``1.3``, the exact observed OpenCode
+    version, runtime model ID, variant, and catalog fingerprint, the account
+    status and subscription billing route, one operator authorization ID, one
+    fresh attempt identity and output root, an explicit bounded validity
+    period, and the operator-resolved Python executable, repository wrapper
+    path, working directory, and operator boundary root.  Rejects dirty or
+    staged source, drift, occupied targets, template values, route drift,
+    unknown fields, malformed paths, and contradictory subscription/fallback
+    assertions.  Active operator artifacts are never committed.
+    """
+    reference_time = now if now is not None else datetime.now(timezone.utc)
+    created_at = reference_time.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    manifest = _resolve_manifest(manifest_path)
+    if len(manifest["case_order"]) != 6:
+        raise OpenCodeGoAdapterError("the operator bundle is bound to the frozen six-case v2 campaign only")
+
+    for label, value in (
+        ("operator authorization ID", operator_authorization_id),
+        ("attempt identity", attempt_identity),
+        ("entitlement evidence reference", entitlement_evidence_reference),
+    ):
+        if not isinstance(value, str) or not value.strip():
+            raise OpenCodeGoAdapterError(f"operator bundle requires an explicit {label}")
+        _reject_template_value(value, label)
+    if not runner.ATTEMPT_IDENTITY_PATTERN.fullmatch(attempt_identity):
+        raise OpenCodeGoAdapterError("operator bundle attempt identity is invalid")
+    if not isinstance(valid_until, str) or not valid_until.strip():
+        raise OpenCodeGoAdapterError("operator bundle requires an explicit bounded validity period")
+    _reject_template_value(valid_until, "validity period")
+    valid_until_dt = _parse_utc_timestamp(valid_until)
+    if valid_until_dt is None:
+        raise OpenCodeGoAdapterError("operator bundle validity period is not a parseable ISO-8601 UTC timestamp")
+    if valid_until_dt <= reference_time:
+        raise OpenCodeGoAdapterError("operator bundle validity period must be later than materialization time")
+
+    evidence_path = Path(route_evidence_json)
+    _cli_require(evidence_path.is_file(), f"route-evidence file is missing: {evidence_path}")
+    try:
+        raw = json.loads(evidence_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise OpenCodeGoAdapterError(f"route-evidence file is invalid: {exc}") from exc
+    _cli_require(isinstance(raw, Mapping), "route-evidence file must contain a JSON object")
+    _reject_evidence_template_values(raw)
+
+    raw_runtime_model_id = str(raw.get("runtime_model_id") or "")
+    if raw_runtime_model_id == HISTORICAL_ZEN_MODEL_ID:
+        raise OpenCodeGoAdapterError("route evidence established the historical OpenCode Zen free-model identity")
+    if raw.get("billing_route") != pilot.AUTHORIZED_BILLING_ROUTE:
+        raise OpenCodeGoAdapterError("route evidence billing route is not the authorized subscription route")
+    if raw.get("subscription_entitlement_confirmed") is not True:
+        raise OpenCodeGoAdapterError("route evidence does not confirm subscription entitlement; the bundle would be contradictory")
+    if raw.get("model") != pilot.SUBSCRIPTION_ROUTE_MODEL or raw.get("provider") != pilot.SUBSCRIPTION_ROUTE_PROVIDER:
+        raise OpenCodeGoAdapterError("route evidence model/provider drift from the frozen campaign route")
+
+    runner.validate_raw_route_evidence(raw, {"expected_account_status": raw.get("account_status") or ""}, now=reference_time)
+
+    execution_commit = observe_bundle_execution_head(git_runner)
+
+    root, bundle, authorization_path, configuration_path = _operator_bundle_paths(attempt_identity, output_root, bundle_root)
+    _reject_occupied_target(root, "output/attempt root")
+    _reject_occupied_target(bundle, "operator bundle root")
+
+    interpreter = Path(python_executable).resolve()
+    if not interpreter.is_absolute() or not interpreter.is_file():
+        raise OpenCodeGoAdapterError("operator bundle requires an absolute operator-resolved Python executable that exists")
+    working = Path(working_directory).resolve()
+    if not working.is_absolute() or not working.is_dir():
+        raise OpenCodeGoAdapterError("operator bundle requires an absolute operator-resolved working directory that exists")
+    boundary = Path(operator_boundary_root).resolve()
+    if not boundary.is_absolute():
+        raise OpenCodeGoAdapterError("operator bundle requires an absolute operator boundary root")
+    for label, path_value in (("executable", interpreter), ("working directory", working)):
+        try:
+            path_value.relative_to(boundary)
+        except ValueError:
+            raise OpenCodeGoAdapterError(f"operator {label} is outside the operator boundary {boundary}")
+
+    authorization = {
+        "schema_version": runner.AUTHORIZATION_SCHEMA_VERSION,
+        "template": False,
+        "authorize_live": True,
+        "campaign_id": pilot.CAMPAIGN_ID_V2,
+        "campaign_version": 2,
+        "campaign_manifest_hash": pilot.manifest_hash(manifest),
+        "accepted_baseline": runner.ACCEPTED_BASELINE,
+        "planning_baseline_commit": manifest["planning_baseline_commit"],
+        "qualification_contract_hash": manifest["qualification_contract_hash"],
+        "accepted_campaign_commit": execution_commit,
+        "permitted_case_ids": [case["case_id"] for case in manifest["case_order"]],
+        "provider": pilot.SUBSCRIPTION_ROUTE_PROVIDER,
+        "model": pilot.SUBSCRIPTION_ROUTE_MODEL,
+        "variant": str(raw["variant"]),
+        "protocol": runner.LIVE_PROTOCOL_VERSION,
+        "expected_opencode_version": str(raw["opencode_version"]),
+        "expected_catalog_fingerprint": str(raw["catalog_fingerprint"]),
+        "expected_runtime_model_id": raw_runtime_model_id,
+        "subscription_route_required": True,
+        "expected_billing_route": pilot.AUTHORIZED_BILLING_ROUTE,
+        "subscription_entitlement_confirmed": True,
+        "subscription_account_observation": {
+            "entitlement_confirmed": True,
+            "evidence_reference": entitlement_evidence_reference,
+        },
+        "expected_account_status": str(raw["account_status"]),
+        "billing_route_classification": pilot.AUTHORIZED_BILLING_ROUTE,
+        **{flag: True for flag in DENIAL_FIELDS},
+        "no_fallback_required": True,
+        "operator_authorization_id": operator_authorization_id,
+        "authorization_created_at": created_at,
+        "authorization_valid_until": valid_until,
+        "output_root": str(root),
+        "campaign_attempt_identity": attempt_identity,
+        "single_frozen_six_case_campaign_confirmation": True,
+    }
+    runner.validate_authorization_artifact(authorization, manifest, expected_output_root=root, now=reference_time)
+
+    verdict = runner.run_route_preflight(
+        manifest, authorization, lambda: raw,
+        now=reference_time, attempt_identity=attempt_identity,
+        execution_commit=execution_commit,
+    )
+    if verdict.passed is not True:
+        raise OpenCodeGoAdapterError(
+            f"route evidence did not pass the pre-provider gate (route drift or contradiction): {verdict.failure_category}"
+        )
+    observation = verdict.route_observation
+
+    command = [
+        str(interpreter),
+        str(PROTOCOL_WRAPPER_PATH.resolve()),
+        "--model", raw_runtime_model_id,
+        "--variant", str(raw["variant"]),
+        "--route-mode", ADAPTER_ROUTE_MODE,
+        "--expected-opencode-version", str(raw["opencode_version"]),
+        "--expected-catalog-fingerprint", str(raw["catalog_fingerprint"]),
+        "--expected-runtime-model-id", raw_runtime_model_id,
+        "--expected-account-status", str(raw["account_status"]),
+        "--expected-billing-route", pilot.AUTHORIZED_BILLING_ROUTE,
+    ]
+    configuration = {
+        "schema_version": ADAPTER_SCHEMA_VERSION,
+        "template": False,
+        "adapter_identity": ADAPTER_IDENTITY,
+        "campaign_id": pilot.CAMPAIGN_ID_V2,
+        "campaign_manifest_hash": pilot.manifest_hash(manifest),
+        "operator_authorization_id": operator_authorization_id,
+        "authorization_hash": runner.authorization_hash(authorization),
+        "execution_commit": execution_commit,
+        "executable": str(interpreter),
+        "command": command,
+        "working_directory": str(working),
+        "operator_boundary_root": str(boundary),
+        "protocol_version": runner.LIVE_PROTOCOL_VERSION,
+        "provider": pilot.SUBSCRIPTION_ROUTE_PROVIDER,
+        "model_family": pilot.SUBSCRIPTION_ROUTE_MODEL,
+        "variant": str(raw["variant"]),
+        "runtime_model_id": raw_runtime_model_id,
+        "opencode_version": str(raw["opencode_version"]),
+        "catalog_fingerprint": str(raw["catalog_fingerprint"]),
+        "route_class": pilot.AUTHORIZED_BILLING_ROUTE,
+        "expected_account_status": str(raw["account_status"]),
+        "per_call_timeout_seconds": float(manifest["budgets"]["per_call_timeout_seconds"]),
+        "total_case_timeout_seconds": float(manifest["budgets"]["total_case_timeout_seconds"]),
+        "environment_allowlist": ["PATH", "SystemRoot"],
+        "max_stdout_bytes": 1048576,
+        "max_stderr_bytes": 1048576,
+        "max_diagnostic_bytes": 16384,
+        "transport_retry_limit": int(manifest["budgets"]["max_transport_retries_per_logical_call"]),
+        "max_transport_attempts_per_logical_call": int(manifest["budgets"]["max_transport_attempts_per_logical_call"]),
+        "no_automatic_route_discovery": True,
+        "no_global_model_selection": True,
+        "requires_active_authorization_binding": True,
+        **{flag: True for flag in DENIAL_FIELDS},
+        "no_fallback_required": True,
+    }
+    validated = validate_adapter_configuration_structure(configuration)
+    bind_adapter_configuration(validated, manifest, authorization, observation)
+    binding = build_runtime_identity_binding(authorization, observation, validated)
+
+    # Recheck HEAD and repository cleanliness immediately before the active
+    # artifacts are created: any drift between the first observation and this
+    # materialization gate fails closed and creates neither artifact.
+    rechecked_head = observe_bundle_execution_head(git_runner)
+    if rechecked_head != execution_commit:
+        raise OpenCodeGoAdapterError(
+            f"execution-commit drift: Git HEAD changed between observation ({execution_commit}) "
+            f"and materialization ({rechecked_head}); no active artifact was created"
+        )
+
+    try:
+        runner.atomic_create_json(authorization_path, authorization)
+        runner.atomic_create_json(configuration_path, validated)
+    except runner.OutputIntegrityError as exc:
+        raise OpenCodeGoAdapterError(f"operator bundle target was already occupied (create-once): {exc}") from exc
+
+    return {
+        "schema_version": ADAPTER_SCHEMA_VERSION,
+        "mode": "operator-bundle",
+        "materialized": True,
+        "operator_authorization_id": operator_authorization_id,
+        "campaign_attempt_identity": attempt_identity,
+        "execution_commit": execution_commit,
+        "independently_observed_head": execution_commit,
+        "task_baseline": TASK_BASELINE,
+        "authorization_path": str(authorization_path),
+        "configuration_path": str(configuration_path),
+        "bundle_root": str(bundle),
+        "output_root": str(root),
+        "authorization_hash": runner.authorization_hash(authorization),
+        "runtime_model_id": raw_runtime_model_id,
+        "variant": str(raw["variant"]),
+        "opencode_version": str(raw["opencode_version"]),
+        "catalog_fingerprint": str(raw["catalog_fingerprint"]),
+        "route_class": pilot.AUTHORIZED_BILLING_ROUTE,
+        "account_status": str(raw["account_status"]),
+        "valid_until": valid_until,
+        "frozen_case_ids": [case["case_id"] for case in manifest["case_order"]],
+        "runtime_identity_binding_fingerprint": binding.fingerprint(),
+        "provider_processes_created": 0,
+    }
+
+
 def run_synthetic_selftest(
     output_root: str | Path,
     scenario: str | None = None,
@@ -1957,6 +2600,17 @@ def run_synthetic_selftest(
 
     interpreter = sys.executable
     runtime_model_id = "opencode-go/synthetic-deepseek-v4-flash"
+    from opencode_go_synthetic_executable import SYNTHETIC_CATALOG_ENTRIES
+
+    synthetic_entry = next(
+        (entry for entry in SYNTHETIC_CATALOG_ENTRIES if entry.get("id") == "synthetic-deepseek-v4-flash"),
+        None,
+    )
+    _cli_require(synthetic_entry is not None, "synthetic catalog entry is missing")
+    # The exact deterministic catalog fingerprint the fake OpenCode CLI
+    # catalog produces; the real wrapper independently recomputes it during
+    # its OpenCode Go preflight and must agree exactly.
+    synthetic_fingerprint = transport.catalog_entry_fingerprint(synthetic_entry)
     # The active command launches the ACCEPTED protocol wrapper; the wrapper
     # itself invokes the fake ``opencode.cmd`` shim (which runs the synthetic
     # executable) from the bounded environment PATH.
@@ -1967,7 +2621,7 @@ def run_synthetic_selftest(
         "--variant", "max",
         "--route-mode", ADAPTER_ROUTE_MODE,
         "--expected-opencode-version", "1.0.0",
-        "--expected-catalog-fingerprint", "f" * 64,
+        "--expected-catalog-fingerprint", synthetic_fingerprint,
         "--expected-runtime-model-id", runtime_model_id,
         "--expected-account-status", "ACTIVE",
         "--expected-billing-route", "SUBSCRIPTION",
@@ -2006,7 +2660,7 @@ def run_synthetic_selftest(
         "variant": "max",
         "runtime_model_id": runtime_model_id,
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "f" * 64,
+        "catalog_fingerprint": synthetic_fingerprint,
         "route_class": "SUBSCRIPTION",
         "expected_account_status": "ACTIVE",
         "per_call_timeout_seconds": 20.0,
@@ -2048,7 +2702,7 @@ def run_synthetic_selftest(
         "variant": "max",
         "protocol": "1.3",
         "expected_opencode_version": "1.0.0",
-        "expected_catalog_fingerprint": "f" * 64,
+        "expected_catalog_fingerprint": synthetic_fingerprint,
         "expected_runtime_model_id": runtime_model_id,
         "subscription_route_required": True,
         "expected_billing_route": "SUBSCRIPTION",
@@ -2084,7 +2738,7 @@ def run_synthetic_selftest(
         "variant": "max",
         "protocol": "1.3",
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "f" * 64,
+        "catalog_fingerprint": synthetic_fingerprint,
         "runtime_model_id": runtime_model_id,
         "billing_route": "SUBSCRIPTION",
         "subscription_entitlement_confirmed": True,
@@ -2307,7 +2961,7 @@ def run_live_wire(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2 live runner (adapter wiring only; no provider contact)")
-    parser.add_argument("mode", choices=("adapter-template", "adapter-validate", "route-preflight-only", "selftest", "live-wire"))
+    parser.add_argument("mode", choices=("adapter-template", "adapter-validate", "route-preflight-only", "route-capture", "operator-bundle", "selftest", "live-wire"))
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--adapter-config", type=Path)
     parser.add_argument("--authorization", type=Path)
@@ -2317,6 +2971,19 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--quixbugs-environment-json", type=Path)
     parser.add_argument("--facts-provider", type=str)
     parser.add_argument("--confirm-opencode-go-adapter", action="store_true")
+    parser.add_argument("--runtime-model-id", type=str)
+    parser.add_argument("--variant", type=str)
+    parser.add_argument("--account-status", type=str)
+    parser.add_argument("--subscription-entitlement-confirmed", action="store_true")
+    parser.add_argument("--entitlement-evidence-reference", type=str)
+    parser.add_argument("--billing-route-assertion", type=str)
+    parser.add_argument("--operator-authorization-id", type=str)
+    parser.add_argument("--attempt-identity", type=str)
+    parser.add_argument("--valid-until", type=str)
+    parser.add_argument("--python-executable", type=Path)
+    parser.add_argument("--working-directory", type=Path)
+    parser.add_argument("--operator-boundary-root", type=Path)
+    parser.add_argument("--bundle-root", type=Path)
     args = parser.parse_args(argv)
     try:
         if args.mode == "adapter-template":
@@ -2338,6 +3005,43 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps(result, indent=2, sort_keys=True))
             return 0 if result.get("preflight", {}).get("passed") is True else 1
+        if args.mode == "route-capture":
+            _cli_require(args.output is not None, "route-capture mode requires --output (the route-evidence target inside operator/ storage)")
+            result = run_route_capture(
+                args.runtime_model_id, args.variant,
+                account_status=args.account_status,
+                subscription_entitlement_confirmed=args.subscription_entitlement_confirmed,
+                entitlement_evidence_reference=args.entitlement_evidence_reference,
+                billing_route_assertion=args.billing_route_assertion,
+                output=args.output,
+                manifest_path=args.manifest,
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
+        if args.mode == "operator-bundle":
+            _cli_require(args.route_evidence_json is not None, "operator-bundle mode requires --route-evidence-json")
+            _cli_require(args.output is not None, "operator-bundle mode requires --output (the fresh output/attempt root)")
+            _cli_require(args.operator_authorization_id is not None, "operator-bundle mode requires --operator-authorization-id")
+            _cli_require(args.attempt_identity is not None, "operator-bundle mode requires --attempt-identity")
+            _cli_require(args.valid_until is not None, "operator-bundle mode requires --valid-until")
+            _cli_require(args.entitlement_evidence_reference is not None, "operator-bundle mode requires --entitlement-evidence-reference")
+            _cli_require(args.python_executable is not None, "operator-bundle mode requires --python-executable")
+            _cli_require(args.working_directory is not None, "operator-bundle mode requires --working-directory")
+            _cli_require(args.operator_boundary_root is not None, "operator-bundle mode requires --operator-boundary-root")
+            result = run_operator_bundle(
+                args.manifest, args.route_evidence_json,
+                operator_authorization_id=args.operator_authorization_id,
+                attempt_identity=args.attempt_identity,
+                output_root=args.output,
+                valid_until=args.valid_until,
+                entitlement_evidence_reference=args.entitlement_evidence_reference,
+                python_executable=args.python_executable,
+                working_directory=args.working_directory,
+                operator_boundary_root=args.operator_boundary_root,
+                bundle_root=args.bundle_root,
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0
         if args.mode == "selftest":
             _cli_require(args.output is not None, "selftest mode requires --output")
             result = run_synthetic_selftest(args.output, scenario=args.scenario)
@@ -2367,10 +3071,15 @@ __all__ = [
     "ADAPTER_CONFIGURATION_FIELDS",
     "ADAPTER_IDENTITY",
     "ADAPTER_SCHEMA_VERSION",
+    "TASK_BASELINE",
+    "CAPTURE_RECORD_SCHEMA_VERSION",
     "CONFIGURATION_REJECTION_CODES",
     "DENIAL_FIELDS",
     "DRIFT_CATEGORIES",
     "HISTORICAL_ZEN_MODEL_ID",
+    "OPERATOR_BUNDLES_RELATIVE_DIR",
+    "OPERATOR_STORAGE",
+    "ROUTE_EVIDENCE_SCHEMA_VERSION",
     "AdapterConfigurationError",
     "OpenCodeGoAdapterError",
     "OpenCodeGoCaseRunner",
@@ -2384,8 +3093,11 @@ __all__ = [
     "common_operator_boundary",
     "load_adapter_configuration",
     "main",
+    "observe_bundle_execution_head",
     "run_adapter_validate",
     "run_live_wire",
+    "run_operator_bundle",
+    "run_route_capture",
     "run_route_preflight_only",
     "run_synthetic_selftest",
     "validate_adapter_configuration_structure",

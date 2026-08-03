@@ -4,6 +4,9 @@ This is a command for the existing JsonlCommandTransport contract, not a
 controller or model adapter. OpenCode runs in a fresh empty directory and
 receives the request only as a public attached file. The wrapper returns the
 model's one JSON directive and records bounded, credential-redacted evidence.
+In OpenCode Go route mode the wrapper independently recomputes the exact
+selected catalog entry's deterministic fingerprint and compares it with the
+authorization-bound expected fingerprint before any model process may run.
 """
 from __future__ import annotations
 
@@ -494,14 +497,16 @@ def _preflight(args: argparse.Namespace) -> int:
     evidence_path = Path(args.evidence_file) if args.evidence_file else None
     try:
         isolation = _prepare_isolation(root)
+        route_binding = _route_binding_evidence(args) if args.route_mode == "opencode-go" else None
         launcher = verify_opencode_launcher(
             isolation["environment"],
-            expected_version=_expected_opencode_version(args),
+            expected_version=route_binding["expected_opencode_version"] if route_binding is not None else None,
         )
         catalog = verify_opencode_catalog(
             args.model, args.variant, isolation["environment"], cwd=root,
             route_mode=args.route_mode,
-            expected_runtime_model_id=_expected_runtime_model_id(args),
+            expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
+            expected_catalog_fingerprint=route_binding["expected_catalog_fingerprint"] if route_binding is not None else None,
         )
         effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root)
         request_file = root / "public-request.json"
@@ -528,8 +533,8 @@ def _preflight(args: argparse.Namespace) -> int:
             "agents_sha256": isolation["agents_sha256"],
             "command": command,
         }
-        if args.route_mode == "opencode-go":
-            assertions["route_binding"] = _route_binding_evidence(args)
+        if route_binding is not None:
+            assertions["route_binding"] = route_binding
         _record(evidence_path, assertions)
         print(json.dumps(assertions, ensure_ascii=False, sort_keys=True))
         return 0
@@ -608,6 +613,74 @@ def _json_objects(value: str) -> list[dict[str, Any]]:
     return objects
 
 
+def catalog_entry_fingerprint(entry: Mapping[str, Any]) -> str:
+    """The deterministic catalog-entry fingerprint contract.
+
+    The exact selected catalog entry is serialized with the project's
+    canonical JSON rules (sorted keys, compact separators, ASCII-escaped,
+    strict finite JSON — the same canonical rules used by the paired-pilot
+    validators) and SHA-256 of that canonical representation is returned.
+    The same independently recomputed fingerprint is used in route evidence,
+    the operator authorization, the adapter configuration, and the wrapper's
+    OpenCode Go preflight comparison.
+    """
+    return hashlib.sha256(
+        json.dumps(
+            entry, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False,
+        ).encode("utf-8")
+    ).hexdigest()
+
+
+def select_catalog_entry(catalog_stdout: str, model: str) -> dict[str, Any]:
+    """Locate exactly one active catalog entry for the exact model identity.
+
+    ``model`` must be a catalog-qualified identity (``provider/id``).  Zero
+    matches, multiple matches, or a non-object catalog shape fail closed.
+    """
+    provider, model_id = model.split("/", 1) if "/" in model else ("", model)
+    entries = [
+        item for item in _json_objects(catalog_stdout)
+        if item.get("providerID") == provider and item.get("id") == model_id
+    ]
+    if len(entries) != 1:
+        raise RuntimeError("exact OpenCode model was not uniquely present in the local catalog")
+    return entries[0]
+
+
+def catalog_entry_facts(entry: Mapping[str, Any], variant: str) -> dict[str, Any]:
+    """Observed status, variant availability, and finite pricing metadata for
+    the exact selected catalog entry.
+
+    Shared by the wrapper's OpenCode Go preflight and the operator route
+    capture so the observed facts and the fingerprint always come from one
+    coherent parsing path.  Rejects inactive status, malformed or non-finite
+    pricing metadata, and a missing requested variant.
+    """
+    costs = entry.get("cost")
+    cache = costs.get("cache") if isinstance(costs, dict) else None
+    if entry.get("status") != "active" or not isinstance(costs, dict) or not isinstance(cache, dict):
+        raise RuntimeError("exact OpenCode model is not active or has incomplete pricing metadata")
+    for name in ("input", "output"):
+        value = costs.get(name)
+        if type(value) not in (int, float) or isinstance(value, bool) or value < 0:
+            raise RuntimeError("exact OpenCode model has malformed pricing metadata")
+    for name in ("read", "write"):
+        value = cache.get(name)
+        if type(value) not in (int, float) or isinstance(value, bool) or value < 0:
+            raise RuntimeError("exact OpenCode model has malformed cache pricing metadata")
+    variants = entry.get("variants")
+    if not isinstance(variants, dict) or variant not in variants:
+        raise RuntimeError("requested OpenCode model variant is unavailable")
+    return {
+        "active_model_status": "ACTIVE",
+        "variant_available": True,
+        "input_price": costs["input"],
+        "output_price": costs["output"],
+        "cache_read_price": cache["read"],
+        "cache_write_price": cache["write"],
+    }
+
+
 def verify_opencode_launcher(environment: dict[str, str] | None = None, *, expected_version: str | None = None) -> dict[str, Any]:
     """Verify the installed Windows launcher without contacting a model.
 
@@ -641,6 +714,7 @@ def verify_opencode_catalog(
     *,
     route_mode: str = "legacy",
     expected_runtime_model_id: str | None = None,
+    expected_catalog_fingerprint: str | None = None,
 ) -> dict[str, Any]:
     completed = subprocess.run(
         ["opencode.cmd", "models", "opencode", "--verbose", "--pure"],
@@ -650,45 +724,35 @@ def verify_opencode_catalog(
     )
     if completed.returncode != 0:
         raise RuntimeError(f"OpenCode model catalog failed with exit code {completed.returncode}")
-    provider, model_id = model.split("/", 1) if "/" in model else ("", model)
-    entries = [
-        item for item in _json_objects(completed.stdout)
-        if item.get("providerID") == provider and item.get("id") == model_id
-    ]
-    if len(entries) != 1:
-        raise RuntimeError("exact OpenCode model was not uniquely present in the local catalog")
-    entry = entries[0]
-    costs = entry.get("cost")
-    cache = costs.get("cache") if isinstance(costs, dict) else None
-    if entry.get("status") != "active" or not isinstance(costs, dict) or not isinstance(cache, dict):
-        raise RuntimeError("exact OpenCode model is not active or has incomplete pricing metadata")
-    for name in ("input", "output"):
-        value = costs.get(name)
-        if type(value) not in (int, float) or isinstance(value, bool) or value < 0:
-            raise RuntimeError("exact OpenCode model has malformed pricing metadata")
-    for name in ("read", "write"):
-        value = cache.get(name)
-        if type(value) not in (int, float) or isinstance(value, bool) or value < 0:
-            raise RuntimeError("exact OpenCode model has malformed cache pricing metadata")
+    entry = select_catalog_entry(completed.stdout, model)
+    facts = catalog_entry_facts(entry, variant)
+    fingerprint = catalog_entry_fingerprint(entry)
     if route_mode not in ROUTE_MODES:
         raise RuntimeError(f"unsupported route mode: {route_mode!r}")
     if route_mode == "legacy":
-        if any(costs.get(name) != 0 for name in ("input", "output")) or any(cache.get(name) != 0 for name in ("read", "write")):
+        costs = entry.get("cost")
+        if any(costs.get(name) != 0 for name in ("input", "output")) or any(costs["cache"].get(name) != 0 for name in ("read", "write")):
             raise RuntimeError("exact OpenCode model is not zero-cost")
     elif route_mode == "opencode-go":
         if expected_runtime_model_id is not None and model != expected_runtime_model_id:
             raise RuntimeError(
                 f"model identity {model!r} does not match the expected runtime model identity {expected_runtime_model_id!r}"
             )
+        if expected_catalog_fingerprint is None:
+            raise RuntimeError("OpenCode Go mode requires --expected-catalog-fingerprint")
+        recomputed = fingerprint
+        if recomputed != expected_catalog_fingerprint:
+            raise RuntimeError(
+                f"catalog fingerprint drift: independently recomputed fingerprint {recomputed} "
+                f"does not equal the authorization-bound expected fingerprint {expected_catalog_fingerprint}"
+            )
         # OpenCode Go mode: catalog prices are preserved as observed; no
         # hidden fallback, model selection, or Zen/free-tier inference.
-    variants = entry.get("variants")
-    if not isinstance(variants, dict) or variant not in variants:
-        raise RuntimeError("requested OpenCode model variant is unavailable")
     return {
         "model": model,
         "active": True,
-        "zero_cost": costs.get("input") == 0 and costs.get("output") == 0,
+        "zero_cost": facts["input_price"] == 0 and facts["output_price"] == 0,
+        "catalog_fingerprint": fingerprint,
         "variant": variant,
         "variant_available": True,
         "route_mode": route_mode,
@@ -735,6 +799,7 @@ def main(argv: list[str] | None = None) -> int:
             args.model, args.variant, isolation["environment"], cwd=root,
             route_mode=args.route_mode,
             expected_runtime_model_id=route_binding["expected_runtime_model_id"] if route_binding is not None else None,
+            expected_catalog_fingerprint=route_binding["expected_catalog_fingerprint"] if route_binding is not None else None,
         )
         effective_config = verify_opencode_effective_config(isolation["environment"], cwd=root)
         command = build_opencode_command(args.model, args.variant, root, request_file)

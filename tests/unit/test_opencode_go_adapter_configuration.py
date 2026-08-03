@@ -17,7 +17,14 @@ import quixbugs_opencode_go_adapter as adapter
 import quixbugs_live_runner_v2 as runner
 import quixbugs_paired_pilot as pilot
 
-from opencode_go_test_support import wrapper_command, wrapper_environment_allowlist
+from opencode_go_test_support import (
+    synthetic_catalog_fingerprint,
+    wrapper_command,
+    wrapper_environment_allowlist,
+)
+
+RUNTIME_MODEL_ID = "opencode-go/test-deepseek-v4-flash"
+FINGERPRINT = synthetic_catalog_fingerprint(RUNTIME_MODEL_ID)
 
 
 @pytest.fixture
@@ -37,7 +44,7 @@ def boundary(tmp_path: Path) -> Path:
 
 def _valid_configuration(manifest, tmp_path, synthetic_executable, **overrides) -> dict:
     interpreter = sys.executable
-    runtime_model_id = "opencode-go/test-deepseek-v4-flash"
+    runtime_model_id = RUNTIME_MODEL_ID
     boundary = adapter.common_operator_boundary([interpreter, synthetic_executable, tmp_path])
     value = {
         "schema_version": adapter.ADAPTER_SCHEMA_VERSION,
@@ -58,7 +65,7 @@ def _valid_configuration(manifest, tmp_path, synthetic_executable, **overrides) 
         "variant": "max",
         "runtime_model_id": runtime_model_id,
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "c" * 64,
+        "catalog_fingerprint": FINGERPRINT,
         "route_class": "SUBSCRIPTION",
         "expected_account_status": "ACTIVE",
         "per_call_timeout_seconds": 30.0,
@@ -108,8 +115,8 @@ def _valid_authorization(manifest, tmp_path, **overrides) -> dict:
         "variant": "max",
         "protocol": "1.3",
         "expected_opencode_version": "1.0.0",
-        "expected_catalog_fingerprint": "c" * 64,
-        "expected_runtime_model_id": "opencode-go/test-deepseek-v4-flash",
+        "expected_catalog_fingerprint": FINGERPRINT,
+        "expected_runtime_model_id": RUNTIME_MODEL_ID,
         "subscription_route_required": True,
         "expected_billing_route": "SUBSCRIPTION",
         "subscription_entitlement_confirmed": True,
@@ -143,8 +150,8 @@ def _route_evidence(manifest, **overrides) -> dict:
         "variant": "max",
         "protocol": "1.3",
         "opencode_version": "1.0.0",
-        "catalog_fingerprint": "c" * 64,
-        "runtime_model_id": "opencode-go/test-deepseek-v4-flash",
+        "catalog_fingerprint": FINGERPRINT,
+        "runtime_model_id": RUNTIME_MODEL_ID,
         "billing_route": "SUBSCRIPTION",
         "subscription_entitlement_confirmed": True,
         "account_status": "ACTIVE",
@@ -299,12 +306,12 @@ def test_command_binds_exact_wrapper_and_identity(manifest, tmp_path, synthetic_
     command = validated["command"]
     assert Path(command[1]).resolve() == (REPO_ROOT / "scripts" / "opencode_protocol_transport.py").resolve()
     pairs = {(command[i], command[i + 1]) for i in range(len(command) - 1)}
-    assert ("--model", "opencode-go/test-deepseek-v4-flash") in pairs
+    assert ("--model", RUNTIME_MODEL_ID) in pairs
     assert ("--variant", "max") in pairs
     assert ("--route-mode", "opencode-go") in pairs
     assert ("--expected-opencode-version", "1.0.0") in pairs
-    assert ("--expected-catalog-fingerprint", "c" * 64) in pairs
-    assert ("--expected-runtime-model-id", "opencode-go/test-deepseek-v4-flash") in pairs
+    assert ("--expected-catalog-fingerprint", FINGERPRINT) in pairs
+    assert ("--expected-runtime-model-id", RUNTIME_MODEL_ID) in pairs
     assert ("--expected-account-status", "ACTIVE") in pairs
     assert ("--expected-billing-route", "SUBSCRIPTION") in pairs
 

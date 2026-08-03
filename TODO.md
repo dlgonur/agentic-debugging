@@ -327,3 +327,77 @@ gercek route preflight, gercek OpenCode Go execution, six-case live campaign,
 empirical evaluation, model performance, PDB effectiveness, RAG, SFT ve DPO
 tamamlanmis isaretlenmedi; tarihsel OpenCode Zen kayitlari degismeden
 historical kaldi.
+
+### Operator Authorization and Real Route Preflight v1 (2026-08-03, operator preparation; OPEN)
+
+- [ ] **Gerçek operator preflight (ACIK / OPEN).** Gerçek `route-capture` ve
+  `operator-bundle` komutlarinin operator tarafindan calistirilmasi hala
+  bekliyor: FirstMate review'i ve Onur'un manuel yurutmesi gerekiyor. Bu
+  maddede uygulama agent'i hicbir gercek OpenCode inspection komutunu
+  calistirmadi; yalnizca operator-akisi implementasyonu ve paketi hazir.
+  Tamamlanmis isaretlenmez: operator authorization yurutmesi, gercek route
+  preflight, gercek OpenCode Go execution, six-case live campaign, empirical
+  evaluation, model performance, PDB effectiveness, RAG, SFT, DPO.
+
+Operator hazirlik akisi implemente edildi ve paketlendi (yalnizca operator;
+hicbir gercek OpenCode inspection komutu calistirilmadi):
+`scripts/quixbugs_opencode_go_adapter.py` uzerinde iki odakli operator modu:
+(1) `route-capture` - salt-okunur komut; yalnizca yerel/non-model OpenCode
+inspection komutlari (`opencode.cmd --version` ve
+`opencode.cmd models opencode --verbose --pure`), asla `opencode run`
+degil; exact operator-secimli runtime model ID (tarihsel
+`opencode/deepseek-v4-flash-free` Zen kimligi reddedilir) ve variant
+gerektirir; tam olarak bir aktif catalog entry'si bulur; gozlemlenen status,
+variant availability ve sonlu pricing metadata'sini kaydeder; operator
+tarafindan acikca saglanan account status, subscription entitlement
+confirmation/reference ve billing-route assertion'i zorunlu tutar (tahmin
+etmez); tum denial/fallback gozlemlerini acikca kaydeder; create-once
+semantigiyle ignored `operator/` storage'a strict `quixbugs-route-evidence-v1`
+JSON yazar (mevcut live-runner validator'u tarafindan kabul edilir);
+credential/token/cookie/raw private account verisi icermez. (2)
+`operator-bundle` - accepted route-evidence dosyasini tuketir ve gercek
+`quixbugs-paired-pilot-authorization-v1` artifact'i ile gercek
+`quixbugs-opencode-go-execution-adapter-v1` config'ini uretir; ikisi de
+**operator komutu calistirdigi anda salt-okunur Git incelemesiyle gozlemlenen
+gercek temiz Git HEAD'ine** baglanir (task kabul edilip merge edildikten sonra;
+asla caller-supplied bir commit'e ve asla task baseline'a degil - task
+baseline `618c33ff186493892665ca1233c3edd8b2eec13f` yalnizca minimum lineage
+onkosulu olarak tutulur). Gozlemlenen HEAD gecerli mevcut bir commit olmali,
+accepted project baseline'dan ve task baseline'dan turemeli, temiz tracked
+working tree, temiz gercek index ve non-ignored untracked dosyasiz olmali;
+artifact'ler yazilmadan hemen once HEAD ve repository temizligi yeniden
+kontrol edilir ve gozlem ile materialization arasinda herhangi bir drift
+hicbir aktif artifact uretilmeden fail-closed olur. Ayni bagimsizca gozlemlenen
+HEAD authorization `accepted_campaign_commit`'inde, adapter configuration
+`execution_commit`'inde, route-preflight execution binding'inde, runtime
+identity binding'inde ve dondurulen record'da tutarli sekilde kullanilir.
+Ayrica frozen manifest hash `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`'e,
+exact alti frozen case ID ve sirasina, protocol `1.3`'e, exact gozlemlenen
+OpenCode version/runtime model ID/variant/catalog fingerprint'e, account
+status ve subscription billing route'a, bir operator authorization ID'ye, bir
+fresh attempt identity ve output root'a, acik sinirli gecerlilik suresine ve
+operator-cozumlu Python executable/repository wrapper path/working
+directory/operator boundary root'a baglanir. Dirty/staged source, drift,
+occupied target, template value, route drift, unknown field, malformed
+path ve celiskili subscription/fallback assertion'lari reddedilir; aktif
+operator artifact'lari commit edilmez. Deterministik catalog-entry fingerprint
+kontrati `scripts/opencode_protocol_transport.py` icinde bir kez uygulanir
+(exact selected entry parse et, projenin canonical JSON kurallariyla seri hale
+getir, SHA-256) ve route evidence, authorization, adapter configuration ve
+wrapper verification'da aynen kullanilir; wrapper'in OpenCode Go preflight'i
+secili entry fingerprint'ini bagimsizca yeniden hesaplar ve herhangi bir model
+process calismadan once authorization-bound expected fingerprint ile
+karsilastirir. Uretilen artifact'ler mevcut sifir-provider-process
+`route-preflight-only` komutuyla calisir (PowerShell ornegi:
+`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`). Testler eklendi:
+deterministik fingerprinting, exact selected-entry matching, malformed/
+duplicate/inactive/missing-variant/historical-free-route reddi, route evidence
+schema uretimi, authorization/config cross-binding, dirty-Git ve
+occupied-target reddi, task baseline'dan farkli temiz descendant HEAD'in kabul
+edilip exact generated execution commit olmasi, nonexistent/non-descendant/
+dirty/staged/drifting HEAD reddi, wrapper fingerprint mismatch reddi ve
+capture'in `opencode run`'u asla insa etmedigi/calistirmadigi kaniti
+(komut envanteri uzerinden). Dogrulama bilincli olarak calistirilmadi
+(FirstMate'e aittir). Gercek operator preflight FirstMate review'i ve
+Onur'un manuel yurutmesini bekliyor; `operator-bundle` artifact'leri Git
+closeout'undan sonra mevcut temiz HEAD'e baglar.

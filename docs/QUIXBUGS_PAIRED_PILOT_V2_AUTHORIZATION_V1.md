@@ -72,6 +72,40 @@ ignored operator-artifact location (`operator/`, ignored via `.gitignore`).
 No real authorization is committed by this task; the tracked template cannot
 be mistaken for one and is rejected by the validator.
 
+## Operator bundle materialization
+
+The `operator-bundle` mode of `scripts/quixbugs_opencode_go_adapter.py`
+materializes the real authorization artifact from an accepted
+`quixbugs-route-evidence-v1` file (produced by the `route-capture` mode):
+`operator/quixbugs-operator-bundles-v1/<attempt identity>/authorization.json`
+(plus the matching `adapter-config.json`). The artifact's
+`accepted_campaign_commit` is the **actual clean Git HEAD observed (read-only)
+when the operator runs the command after the task has been accepted and
+merged** — never a caller-supplied commit and never the task baseline. The
+observed HEAD must exist, must descend from the accepted project baseline
+`28ec7754336fc53f21ebbae8a851b33e26714932` and from the minimum task lineage
+baseline `618c33ff186493892665ca1233c3edd8b2eec13f` (lineage prerequisite
+only), and must have a clean tracked working tree, a clean real index, and no
+non-ignored untracked files; HEAD and repository cleanliness are re-checked
+immediately before the artifacts are created and any drift fails closed with
+no active artifact written. The artifact is also bound to the frozen manifest
+hash `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`, the
+exact six frozen case IDs in order, protocol `1.3`, the exact observed
+OpenCode version, runtime model ID, variant, and catalog fingerprint (the
+deterministic catalog-entry fingerprint contract in
+`scripts/opencode_protocol_transport.py`), the account status and
+subscription billing route from the route evidence, one operator
+authorization ID, one fresh attempt identity and output root, an explicit
+bounded validity period, and the operator-resolved Python executable, working
+directory, and operator boundary root. Dirty/staged source, drift, occupied
+targets, template values, route drift, unknown fields, malformed paths, and
+contradictory subscription/fallback assertions are rejected before any
+artifact is written, and the materialized authorization passes the strict
+`authorization_failure` / `validate_authorization_artifact` validator. The
+`operator-bundle` flow is implemented and packaged but not executed by any
+implementation agent; real operator preflight remains pending FirstMate
+review and Onur's manual execution.
+
 ## Interaction with the runner
 
 1. `python scripts/quixbugs_paired_pilot.py preflight --authorization <path> --output <dir> [--route-evidence-json <file>]`

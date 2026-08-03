@@ -16,9 +16,10 @@ route observations.
 Implementation:
 
 * `scripts/quixbugs_opencode_go_adapter.py` — adapter configuration contract,
-  runtime identity binding, transport factory, case-runner binding, CLI
-  (`adapter-template`, `adapter-validate`, `route-preflight-only`, `selftest`,
-  `live-wire`);
+  runtime identity binding, transport factory, case-runner binding, operator
+  route capture, operator bundle materialization, CLI
+  (`adapter-template`, `adapter-validate`, `route-preflight-only`,
+  `route-capture`, `operator-bundle`, `selftest`, `live-wire`);
 * `scripts/opencode_go_synthetic_executable.py` — deterministic test-only
   synthetic OpenCode-compatible executable (network-incapable by construction);
 * `research/quixbugs/OPENCODE_GO_EXECUTION_ADAPTER_TEMPLATE.json` — the
@@ -131,6 +132,154 @@ variant.
   contract — recording them in evidence without hidden fallback, model
   selection, catalog/account re-queries, or Zen/free-tier inference.
 
+In `opencode-go` mode the wrapper **independently recomputes** the exact
+selected catalog entry's deterministic fingerprint and compares it with the
+authorization-bound expected fingerprint (`--expected-catalog-fingerprint`)
+before any model process may run; a mismatch blocks with a catalog-fingerprint
+drift error and zero `opencode run` invocations.
+
+## Deterministic catalog-entry fingerprint contract
+
+One deterministic fingerprint is used identically in route evidence, the
+operator authorization, the adapter configuration, and wrapper verification:
+
+1. parse the exact selected catalog entry (`providerID`/`id` match, exactly
+   one entry);
+2. serialize it with the project's canonical JSON rules (sorted keys, compact
+   separators, ASCII-escaped, strict finite JSON — the same rules used by the
+   paired-pilot validators);
+3. SHA-256 of that canonical representation.
+
+Implemented once in `scripts/opencode_protocol_transport.py`
+(`catalog_entry_fingerprint`, with shared `select_catalog_entry` and
+`catalog_entry_facts` parsing) and reused by the operator route capture and
+the operator bundle; the wrapper recomputes the fingerprint from the live
+catalog during its OpenCode Go preflight, so route evidence, authorization,
+adapter configuration, and the wrapper's preflight comparison all bind the
+same independently computed value.
+
+## Operator route capture (`route-capture`)
+
+A read-only operator command that:
+
+* runs only local/non-model OpenCode inspection commands —
+  `opencode.cmd --version` and `opencode.cmd models opencode --verbose --pure`;
+* never invokes `opencode run` (an accidental invocation is a hard error);
+* requires the exact operator-selected runtime model ID (catalog-qualified
+  `provider/id`, never the historical `opencode/deepseek-v4-flash-free` Zen
+  identity) and variant;
+* locates exactly one active catalog entry and records its observed status,
+  variant availability, and finite pricing metadata;
+* requires explicit operator-supplied account status, subscription
+  entitlement confirmation and evidence reference, and a billing-route
+  assertion (`SUBSCRIPTION`) — nothing is guessed;
+* records every denial/fallback observation explicitly (Zen, free-tier,
+  Ollama, alternate provider, model substitution, metered fallback, paid
+  overage, per-call billing — all explicitly not used);
+* writes a strict `quixbugs-route-evidence-v1` JSON artifact (schema
+  `schema_version: quixbugs-route-evidence-v1`) accepted by the existing
+  live-runner validator, with create-once semantics, into the ignored
+  `operator/` storage;
+* contains no credentials, auth tokens, cookies, or raw private account data
+  (a non-authoritative `<target>.capture-record.json` companion records the
+  launcher/catalog observation, the operator assertions, and the
+  zero-model-contact proof).
+
+## Operator bundle materialization (`operator-bundle`)
+
+Consumes the accepted route-evidence file and creates the real
+`quixbugs-paired-pilot-authorization-v1` artifact (`authorization.json`) and
+the real `quixbugs-opencode-go-execution-adapter-v1` configuration
+(`adapter-config.json`), both bound to:
+
+* the **actual clean Git HEAD observed (read-only) when the operator runs the
+  command after this task has been accepted and merged** — never to a
+  caller-supplied commit and never to the task baseline. The observed HEAD
+  must be a valid existing commit, must descend from the accepted project
+  baseline `28ec7754336fc53f21ebbae8a851b33e26714932` and from the minimum
+  task lineage baseline `618c33ff186493892665ca1233c3edd8b2eec13f` (retained
+  only as a lineage prerequisite), and must have a clean tracked working
+  tree, a clean real index, and no non-ignored untracked files. HEAD and
+  repository cleanliness are re-checked immediately before the artifacts are
+  created; any drift between observation and materialization fails closed and
+  creates neither active artifact;
+* the frozen manifest hash
+  `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`;
+* the exact six frozen case IDs in order;
+* protocol `1.3`;
+* the exact observed OpenCode version, runtime model ID, variant, and catalog
+  fingerprint (all from the route evidence);
+* the account status and subscription billing route;
+* one operator authorization ID and one fresh attempt identity + output root
+  (occupied targets are rejected);
+* an explicit bounded validity period;
+* the operator-resolved Python executable, repository wrapper path, working
+  directory, and operator boundary root.
+
+The same independently observed HEAD is used consistently in the
+authorization's `accepted_campaign_commit`, the adapter configuration's
+`execution_commit`, the route-preflight execution binding, the runtime
+identity binding, and the returned operator-bundle record.
+
+Template values, route drift, unknown fields, malformed paths, and
+contradictory subscription/fallback assertions are rejected; the artifacts are
+written create-once into the ignored `operator/` storage and are never
+committed. The materialized authorization and configuration pass the strict
+authorization validator and the strict adapter validator with the full
+authorization/route binding.
+
+## Operator preflight handoff (PowerShell)
+
+The generated artifacts work with the existing zero-provider-process command
+`route-preflight-only`:
+
+```powershell
+# 1. Route capture (local inspection only; zero model/provider contact)
+python scripts/quixbugs_opencode_go_adapter.py route-capture `
+  --runtime-model-id opencode/deepseek-v4-flash `
+  --variant max `
+  --account-status ACTIVE `
+  --subscription-entitlement-confirmed `
+  --entitlement-evidence-reference operator/account-observation-20260803-001 `
+  --billing-route-assertion SUBSCRIPTION `
+  --output operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json
+
+# 2. Operator bundle materialization (authorization + adapter configuration)
+#    Binds both artifacts to the clean current Git HEAD present after Git
+#    closeout (observed read-only at bundle time; the task baseline is only a
+#    lineage prerequisite).
+python scripts/quixbugs_opencode_go_adapter.py operator-bundle `
+  --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json `
+  --operator-authorization-id op-auth-20260803-001 `
+  --attempt-identity quixbugs-paired-pilot-v2-attempt-<64-hex> `
+  --output operator/attempts/quixbugs-paired-pilot-v2-attempt-<64-hex> `
+  --valid-until 2026-08-10T00:00:00Z `
+  --entitlement-evidence-reference operator/account-observation-20260803-001 `
+  --python-executable <absolute path to python.exe> `
+  --working-directory <absolute working directory> `
+  --operator-boundary-root <absolute operator boundary> `
+  --bundle-root operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>
+
+# 3. Adapter validation (authorization + route binding)
+python scripts/quixbugs_opencode_go_adapter.py adapter-validate `
+  --adapter-config operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/adapter-config.json `
+  --authorization operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/authorization.json `
+  --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json
+
+# 4. Route-preflight-only execution (zero provider processes)
+python scripts/quixbugs_opencode_go_adapter.py route-preflight-only `
+  --authorization operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/authorization.json `
+  --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json `
+  --adapter-config operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/adapter-config.json `
+  --output operator/attempts/quixbugs-paired-pilot-v2-attempt-<64-hex>
+```
+
+The implementation agent must not execute these real commands; real operator
+preflight remains pending FirstMate review and Onur's manual execution.
+`operator-bundle` binds the authorization and adapter configuration to the
+clean current HEAD present after Git closeout, so the manual sequence runs
+after the candidate is accepted and merged.
+
 ## Cost propagation
 
 The case execution cost is the aggregate of the finite monetary costs
@@ -227,6 +376,8 @@ contracts.
 python scripts/quixbugs_opencode_go_adapter.py adapter-template --output <path>
 python scripts/quixbugs_opencode_go_adapter.py adapter-validate --adapter-config <path> [--authorization <path> --route-evidence-json <path>]
 python scripts/quixbugs_opencode_go_adapter.py route-preflight-only --authorization <path> --route-evidence-json <path> --adapter-config <path> --output <root>
+python scripts/quixbugs_opencode_go_adapter.py route-capture --runtime-model-id <id> --variant <v> --account-status <status> --subscription-entitlement-confirmed --entitlement-evidence-reference <ref> --billing-route-assertion SUBSCRIPTION --output <operator/route-evidence target>
+python scripts/quixbugs_opencode_go_adapter.py operator-bundle --route-evidence-json <path> --operator-authorization-id <id> --attempt-identity <id> --output <root> --valid-until <ISO> --entitlement-evidence-reference <ref> --python-executable <path> --working-directory <path> --operator-boundary-root <path> [--bundle-root <path>]
 python scripts/quixbugs_opencode_go_adapter.py selftest --output <root> [--scenario <name>]
 python scripts/quixbugs_opencode_go_adapter.py live-wire --authorization <path> --route-evidence-json <path> --adapter-config <path> --output <root> --quixbugs-environment-json <path> --facts-provider <module:callable> --confirm-opencode-go-adapter
 ```
@@ -284,16 +435,27 @@ measure model performance or PDB effectiveness; or advance RAG, SFT, or DPO.
 
 ## What remains required before a real campaign
 
-1. A real operator authorization artifact (created outside tracked source)
-   whose `accepted_campaign_commit` binds this adapter's accepted commit and
-   whose identity fields match validated route evidence.
+1. A real operator authorization artifact (created by the operator
+   `operator-bundle` flow outside tracked source) whose
+   `accepted_campaign_commit` is the actual clean Git HEAD observed at bundle
+   time (after this task is accepted and merged; the task baseline
+   `618c33ff186493892665ca1233c3edd8b2eec13f` is retained only as a lineage
+   prerequisite) and whose identity fields match the validated route
+   evidence.
 2. Exact runtime route evidence passing the pre-provider gate (real
-   observation, not synthetic).
+   `route-capture` observation, not synthetic).
 3. An actively validated adapter configuration (real operator-resolved
-   executable inside the operator boundary, no placeholders).
+   executable inside the operator boundary, no placeholders; created by the
+   same `operator-bundle` flow).
 4. The operator-supplied QuixBugs execution environment (repository root,
    per-case task manifests, sources parent, verified execution context /
    facts provider) for the case-runner binding.
 5. The operator explicitly authorizing the real campaign.
+
+The operator preparation flow (`route-capture` → `operator-bundle` →
+`adapter-validate` → `route-preflight-only`) is implemented and packaged, but
+no real OpenCode inspection command has been executed by an implementation
+agent. Real operator preflight remains pending FirstMate review and Onur's
+manual execution.
 
 Until all five exist, `live-wire` remains blocked before any provider process.

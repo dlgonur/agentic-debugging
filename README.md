@@ -140,6 +140,75 @@ stdin, bounded `opencode run` command construction, response reaching the
 model adapter boundary), covering absent/zero/positive cost propagation, and
 proves zero real provider calls.
 
+## Current status (2026-08-03) — Operator Authorization and Real Route Preflight v1
+
+The operator preparation flow is implemented and packaged (operator-only;
+no real OpenCode inspection command was executed by any implementation
+agent). Two focused operator-facing modes extend
+`scripts/quixbugs_opencode_go_adapter.py`:
+
+* `route-capture` — a read-only command that runs only local/non-model
+  OpenCode inspection commands (`opencode.cmd --version` and
+  `opencode.cmd models opencode --verbose --pure`), never invokes `opencode
+  run`, requires the exact operator-selected runtime model ID (rejecting the
+  historical `opencode/deepseek-v4-flash-free` Zen identity) and variant,
+  locates exactly one active catalog entry, records its observed status,
+  variant availability, and finite pricing metadata, requires explicit
+  operator-supplied account status, subscription entitlement
+  confirmation/reference, and a billing-route assertion, records every
+  denial/fallback observation explicitly, and writes a strict
+  `quixbugs-route-evidence-v1` artifact (accepted by the existing live-runner
+  validator) with create-once semantics into the ignored `operator/` storage,
+  containing no credentials or raw private account data.
+* `operator-bundle` — consumes the accepted route-evidence file and
+  materializes the real `quixbugs-paired-pilot-authorization-v1` artifact and
+  the real `quixbugs-opencode-go-execution-adapter-v1` configuration, bound
+  to the actual clean Git HEAD observed (read-only) when the operator runs the
+  command after this task has been accepted and merged — never to a
+  caller-supplied commit and never to the task baseline (the task baseline
+  `618c33ff186493892665ca1233c3edd8b2eec13f` is retained only as a minimum
+  lineage prerequisite). The observed HEAD must exist, descend from the
+  accepted project baseline and from the task baseline, and have a clean
+  tracked working tree, a clean real index, and no non-ignored untracked
+  files; HEAD and repository cleanliness are re-checked immediately before
+  the artifacts are created and any drift fails closed with no active
+  artifact written. The artifacts are also bound to the frozen manifest hash
+  `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`, the
+  exact six frozen case IDs in order, protocol `1.3`, the exact observed
+  OpenCode version, runtime model ID, variant, and catalog fingerprint, the
+  account status and subscription billing route, one operator authorization
+  ID, one fresh attempt identity and output root, an explicit bounded
+  validity period, and the operator-resolved Python executable, repository
+  wrapper path, working directory, and operator boundary root. Dirty/staged
+  source, drift, occupied targets, template values, route drift, unknown
+  fields, malformed paths, and contradictory subscription/fallback
+  assertions are rejected; active operator artifacts are never committed.
+
+A deterministic catalog-entry fingerprint contract is implemented once in
+`scripts/opencode_protocol_transport.py` (parse the exact selected entry,
+serialize with the project's canonical JSON rules, SHA-256) and is used
+identically in route evidence, authorization, adapter configuration, and
+wrapper verification; the wrapper's OpenCode Go preflight independently
+recomputes the selected entry fingerprint and compares it with the
+authorization-bound expected fingerprint before any model process may run.
+The materialized artifacts work with the existing zero-provider-process
+`route-preflight-only` command (PowerShell example in
+`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`). Tests were added for
+deterministic fingerprinting, exact selected-entry matching, malformed/
+duplicate/inactive/missing-variant/historical-free-route rejection, route
+evidence schema production, authorization/config cross-binding, dirty-Git and
+occupied-target rejection, execution-commit binding to a clean descendant
+HEAD different from the task baseline, rejection of nonexistent,
+non-descendant, dirty, staged, and drifting HEADs, wrapper fingerprint
+mismatch rejection, and the proof that capture never constructs or invokes
+`opencode run`. Validation was
+intentionally not run by the implementation agent; validation belongs to
+FirstMate. Real operator preflight remains pending FirstMate review and
+Onur's manual execution; `TODO.md` keeps this item open. Not started and not
+marked complete: real operator authorization execution, real route preflight,
+real OpenCode Go execution, the six-case live campaign, empirical evaluation,
+model performance, PDB effectiveness, RAG, SFT, and DPO.
+
 The QuixBugs paired-pilot v2 live-runner infrastructure is implemented and
 validated (runner-only, accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`):
 a strict versioned authorization contract

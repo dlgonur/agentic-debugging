@@ -79,28 +79,32 @@ from typing import Any
 
 #: Catalog entries for the synthetic runtime model identities used by the
 #: adapter fixtures.  Catalog prices are NONZERO in OpenCode Go mode.
+#: Exposed as a module constant so the adapter self-test and the test
+#: fixtures can compute the exact deterministic catalog-entry fingerprint
+#: the real wrapper independently recomputes during its OpenCode Go
+#: preflight.
 SYNTHETIC_MODEL_IDS = (
     "test-deepseek-v4-flash",
     "synthetic-deepseek-v4-flash",
 )
 SYNTHETIC_VERSION = "1.0.0"
 SYNTHETIC_PROVIDER = "opencode-go"
+SYNTHETIC_CATALOG_ENTRIES = [
+    {
+        "id": model_id,
+        "providerID": SYNTHETIC_PROVIDER,
+        "status": "active",
+        "cost": {"input": 0.5, "output": 1.5, "cache": {"read": 0.25, "write": 0.25}},
+        "variants": {"max": {"reasoningEffort": "max"}},
+    }
+    for model_id in SYNTHETIC_MODEL_IDS
+]
 
 DIRECTIVE_STOP = {"kind": "stop", "reason": "synthetic-success"}
 
 
 def _catalog() -> str:
-    entries = [
-        {
-            "id": model_id,
-            "providerID": SYNTHETIC_PROVIDER,
-            "status": "active",
-            "cost": {"input": 0.5, "output": 1.5, "cache": {"read": 0.25, "write": 0.25}},
-            "variants": {"max": {"reasoningEffort": "max"}},
-        }
-        for model_id in SYNTHETIC_MODEL_IDS
-    ]
-    return "\n".join(json.dumps(entry, ensure_ascii=False) for entry in entries) + "\n"
+    return "\n".join(json.dumps(entry, ensure_ascii=False) for entry in SYNTHETIC_CATALOG_ENTRIES) + "\n"
 
 
 def _effective_config() -> str:
