@@ -571,7 +571,7 @@ def test_route_capture_never_constructs_or_invokes_opencode_run(tmp_path, monkey
     # and native-executable version proofs plus the local inspection commands
     # under the isolated environment and never constructs an ``opencode run``
     # invocation (no command contains the ``run`` subcommand).
-    native = tmp_path / "fake-launcher" / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin" / "opencode.exe"
+    native = tmp_path / "fake-launcher" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
     assert calls == [
         ["opencode.cmd", "--version"],
         [str(native), "--version"],

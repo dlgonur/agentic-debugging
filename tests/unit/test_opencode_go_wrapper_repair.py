@@ -629,6 +629,11 @@ def test_request_reaches_wrapper_through_stdin_and_fake_opencode_chain(tmp_path,
                 preflight = record
     assert preflight is not None
     assert preflight["route_mode"] == "opencode-go"
+    # Real execution argv[0] is the trusted active npm-shim target
+    # ``bin\opencode.exe`` under the ``opencode-ai`` package root — never the
+    # launcher, a platform/baseline package binary, or a shell.
+    active_native = (tmp_path / "fake-bin" / "node_modules" / "opencode-ai" / "bin" / "opencode.exe").resolve()
+    assert Path(preflight["command"][0]).resolve() == active_native
     assert preflight["command"][0].endswith("opencode.exe")
     assert "opencode.cmd" not in preflight["command"]
     assert preflight["command"][1] == "run"

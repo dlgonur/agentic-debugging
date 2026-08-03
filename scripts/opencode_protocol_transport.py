@@ -68,21 +68,16 @@ MAX_NATIVE_COMMAND_LINE_CHARS = 30_000
 #: The trusted npm package root relative to the verified ``opencode.cmd``
 #: launcher directory; the native executable must belong to this root.
 NPM_PACKAGE_ROOT_RELATIVE = "node_modules/opencode-ai"
-#: The explicit allowlist of package-managed native executable locations
-#: relative to the trusted npm package root (ordered).  Only these explicit
-#: relative locations are ever considered; arbitrary recursive searches, PATH
-#: lookup, environment-supplied executable paths, shell interpolation,
-#: PowerShell execution, parsing an unrestricted command from the batch file,
-#: and fallback to ``opencode.cmd`` are rejected by construction.  The
-#: established Windows x64 platform-package path is required; the baseline
-#: x64 platform package and the direct package ``bin`` (the npm shim's own
-#: invocation target) are allowed because the installed package layout
-#: genuinely ships them.
-NATIVE_EXECUTABLE_CANDIDATES = (
-    "node_modules/opencode-windows-x64/bin/opencode.exe",
-    "node_modules/opencode-windows-x64-baseline/bin/opencode.exe",
-    "bin/opencode.exe",
-)
+#: The exact package-relative native executable path selected by the
+#: established npm shim: the ``opencode.cmd`` launcher invokes
+#: ``node_modules\opencode-ai\bin\opencode.exe``.  Only this deterministic
+#: target under the trusted ``opencode-ai`` package root is ever resolved;
+#: platform and baseline package binaries are never enumerated or compared,
+#: and there is no recursive search.  PATH lookup, environment-supplied
+#: executable paths, shell interpolation, PowerShell execution, parsing an
+#: unrestricted command from the batch file, and fallback to ``opencode.cmd``
+#: are rejected by construction.
+NATIVE_EXECUTABLE_RELATIVE = "bin/opencode.exe"
 #: Mirrors of the accepted protocol-1.3 directive field bounds
 #: (``agentic_debugger.agent.model_adapter`` / ``controller_policy``).
 MAX_DIRECTIVE_ARGUMENT_BYTES = 32_768
@@ -1260,13 +1255,6 @@ def verify_opencode_launcher(environment: dict[str, str] | None = None, *, expec
     return evidence
 
 
-def _native_file_identity(path: Path) -> tuple[int, int]:
-    """The file identity (device, file index) used to detect that the npm
-    layout hard-links ONE platform binary into multiple package locations."""
-    stat = path.stat()
-    return (stat.st_dev, stat.st_ino)
-
-
 def _npm_package_root(launcher_path: str) -> Path:
     """The trusted npm package root derived ONLY from the verified launcher.
 
@@ -1285,48 +1273,37 @@ def _npm_package_root(launcher_path: str) -> Path:
 
 
 def _resolve_native_executable(launcher_path: str) -> Path:
-    """Resolve the native ``opencode.exe`` of the trusted npm installation.
+    """Resolve the native ``opencode.exe`` selected by the npm shim.
 
     Begins only from the independently verified absolute ``opencode.cmd``
-    launcher path and resolves the native executable exclusively from the
-    explicit allowlist of package-managed relative locations under the
-    trusted ``opencode-ai`` npm package root
-    (:data:`NATIVE_EXECUTABLE_CANDIDATES`).  Every candidate must resolve to
-    an absolute path that remains inside the trusted root (no symlink/reparse
-    escape) and must exist as a regular executable file.  The genuine npm
-    layout hard-links the single platform binary into the package ``bin`` and
-    the platform-package ``bin`` locations, so candidates sharing one file
-    identity count as one; exactly one unique native binary must remain.
-    Zero candidates, multiple distinct candidates, and path-escape candidates
-    fail closed.  Never PATH lookup, environment-supplied executable paths,
-    shell interpolation, PowerShell execution, parsing an unrestricted
-    command from the batch file, or a fallback to ``opencode.cmd``.
+    launcher path, derives the trusted npm package root
+    ``<launcher-directory>\\node_modules\\opencode-ai``
+    (:func:`_npm_package_root`), and resolves the single deterministic
+    npm-shim target ``<package-root>\\bin\\opencode.exe``
+    (:data:`NATIVE_EXECUTABLE_RELATIVE`).  The resolved absolute path must
+    remain inside the trusted package root (no symlink/reparse/path escape)
+    and must exist as a regular file; otherwise resolution fails closed.
+    Platform and baseline package binaries are never enumerated or compared,
+    and there is no recursive search.  Never PATH lookup,
+    environment-supplied executable paths, shell interpolation, PowerShell
+    execution, parsing an unrestricted command from the batch file, or a
+    fallback to ``opencode.cmd``.
     """
     package_root = _npm_package_root(launcher_path)
-    candidates: list[tuple[Path, tuple[int, int]]] = []
-    for relative in NATIVE_EXECUTABLE_CANDIDATES:
-        candidate = (package_root / relative).resolve()
-        if not candidate.is_absolute():
-            continue
-        try:
-            candidate.relative_to(package_root)
-        except ValueError:
-            continue  # symlink/reparse escape from the trusted root
-        if not candidate.is_file():
-            continue
-        candidates.append((candidate, _native_file_identity(candidate)))
-    if not candidates:
+    native = (package_root / NATIVE_EXECUTABLE_RELATIVE).resolve()
+    if not native.is_absolute():
+        raise RuntimeError("native OpenCode executable path is not an absolute path")
+    try:
+        native.relative_to(package_root)
+    except ValueError:
         raise RuntimeError(
-            f"native OpenCode executable was not found under the trusted npm package root: {package_root}"
-        )
-    unique: dict[tuple[int, int], Path] = {}
-    for candidate, identity in candidates:
-        unique.setdefault(identity, candidate)
-    if len(unique) > 1:
+            "native OpenCode executable path escapes the trusted npm package root"
+        ) from None
+    if not native.is_file():
         raise RuntimeError(
-            "multiple distinct native OpenCode executable candidates under the trusted npm package root"
+            f"native OpenCode executable was not found under the trusted npm package root: {native}"
         )
-    return next(iter(unique.values()))
+    return native
 
 
 def verify_opencode_native_executable(
@@ -1544,9 +1521,11 @@ def observe_isolated_catalog(
     commands run (``opencode.cmd --version``, the native
     ``opencode.exe --version`` proof, and the route-mode ``models``
     inspection); ``opencode run`` is never constructed or executed here.
-    The native ``opencode.exe`` sibling of the batch launcher is resolved
-    and version-proven against the launcher (same installation) and, in
-    OpenCode Go mode, against the authorization-bound expected version.
+    The native ``opencode.exe`` selected by the npm shim (the
+    ``bin\opencode.exe`` target under the trusted ``opencode-ai`` package
+    root) is resolved and version-proven against the launcher (same
+    installation) and, in OpenCode Go mode, against the authorization-bound
+    expected version.
 
     When ``isolation_root`` is None the helper owns a temporary isolation
     root and always removes it (success or failure) before returning.  When a

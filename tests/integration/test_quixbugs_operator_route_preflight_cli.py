@@ -120,7 +120,7 @@ def _fake_opencode_shim(tmp_path: Path) -> Path:
     fake_launcher.write_text(f'@"{sys.executable}" "%~dp0fake_opencode.py" %*\n', encoding="utf-8")
     from opencode_go_synthetic_executable import build_fake_native_executable
 
-    native_bin = fake_dir / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin"
+    native_bin = fake_dir / "node_modules" / "opencode-ai" / "bin"
     native_bin.mkdir(parents=True, exist_ok=True)
     build_fake_native_executable(native_bin, target_script=fake_impl)
     return fake_dir

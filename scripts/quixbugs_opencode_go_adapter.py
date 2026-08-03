@@ -2915,12 +2915,13 @@ def run_synthetic_selftest(
             encoding="utf-8",
         )
     # The real wrapper resolves and version-proves the native ``opencode.exe``
-    # through the trusted npm package layout before model execution; the
-    # self-test provides a deterministic compiled fake native executable at
-    # the nested platform-package location.
+    # selected by the npm shim (``bin\opencode.exe`` under the trusted
+    # ``opencode-ai`` package root) before model execution; the self-test
+    # provides a deterministic compiled fake native executable at that exact
+    # package ``bin`` location.
     from opencode_go_synthetic_executable import build_fake_native_executable
 
-    native_bin = shim_dir / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin"
+    native_bin = shim_dir / "node_modules" / "opencode-ai" / "bin"
     native_bin.mkdir(parents=True, exist_ok=True)
     if not (native_bin / "opencode.exe").is_file():
         build_fake_native_executable(native_bin, target_script=synthetic_executable)

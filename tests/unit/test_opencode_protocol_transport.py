@@ -1307,7 +1307,10 @@ def test_native_executable_resolves_npm_package_layout_and_fails_closed(monkeypa
     assert str(native) == launcher["native"]
     assert native.is_file()
     assert native.is_absolute()
-    assert "opencode-windows-x64" in native.parts
+    # The npm shim selects the package ``bin`` target, never a platform or
+    # baseline package binary.
+    assert native.parts[-2:] == ("bin", "opencode.exe")
+    assert "opencode-ai" in native.parts
     # The resolved native remains under the trusted opencode-ai package root.
     package_root = Path(launcher["launcher"]).resolve().parent / "node_modules" / "opencode-ai"
     native.relative_to(package_root)
@@ -1338,28 +1341,36 @@ def test_sibling_opencode_exe_is_not_implicitly_trusted(monkeypatch: pytest.Monk
     assert str(native) != str(sibling)
 
 
-def test_multiple_distinct_native_candidates_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """Multiple DISTINCT native binaries under the trusted root fail closed;
-    the genuine npm layout's hard-links of one binary count as one."""
+def test_baseline_binary_does_not_affect_active_native_resolution(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Distinct platform/baseline binaries under the trusted root never cause
+    rejection: the resolver selects ONLY the deterministic npm-shim target
+    ``node_modules\\opencode-ai\\bin\\opencode.exe`` and never enumerates or
+    compares the platform or baseline package binaries."""
     fake_bin = tmp_path / "fake-launcher"
     fake_bin.mkdir()
     (fake_bin / "opencode.cmd").write_text("@echo off\r\n", encoding="utf-8")
+    active = fake_bin / "node_modules" / "opencode-ai" / "bin" / "opencode.exe"
     x64 = fake_bin / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin" / "opencode.exe"
     baseline = fake_bin / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64-baseline" / "bin" / "opencode.exe"
+    active.parent.mkdir(parents=True, exist_ok=True)
     x64.parent.mkdir(parents=True, exist_ok=True)
     baseline.parent.mkdir(parents=True, exist_ok=True)
-    x64.write_bytes(b"distinct-binary-one")
-    baseline.write_bytes(b"distinct-binary-two")
-    with pytest.raises(RuntimeError, match="multiple distinct native OpenCode executable candidates"):
-        transport._resolve_native_executable(str(fake_bin / "opencode.cmd"))
-    # Hard-links of the same binary are one candidate (the genuine npm layout).
-    baseline.unlink()
-    os.link(x64, baseline)
+    active.write_bytes(b"active-shim-target-binary")
+    x64.write_bytes(b"distinct-platform-binary")
+    baseline.write_bytes(b"distinct-baseline-binary")
     native = transport._resolve_native_executable(str(fake_bin / "opencode.cmd"))
-    assert str(native) == str(x64)
+    assert str(native) == str(active)
+    # The baseline/platform binaries are never selected and never compared.
+    assert str(native) != str(baseline)
+    assert str(native) != str(x64)
+    # Removing only the active shim target still fails closed even though the
+    # distinct platform and baseline binaries remain in place.
+    active.unlink()
+    with pytest.raises(RuntimeError, match="not found under the trusted npm package root"):
+        transport._resolve_native_executable(str(fake_bin / "opencode.cmd"))
 
 
-def test_native_candidate_path_escape_fails_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_native_path_escape_and_reparse_escape_fail_closed(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     """A symlink/reparse candidate escaping the trusted root is never used
     and the resolution fails closed."""
     fake_bin = tmp_path / "fake-launcher"
@@ -1368,15 +1379,29 @@ def test_native_candidate_path_escape_fails_closed(monkeypatch: pytest.MonkeyPat
     outside = tmp_path / "outside"
     outside.mkdir()
     (outside / "opencode.exe").write_bytes(b"escaped-binary")
-    junction = fake_bin / "node_modules" / "opencode-ai" / "node_modules" / "opencode-windows-x64" / "bin"
-    junction.mkdir(parents=True, exist_ok=True)
-    escaped = junction / "opencode.exe"
+    package_bin = fake_bin / "node_modules" / "opencode-ai" / "bin"
+    package_bin.mkdir(parents=True, exist_ok=True)
+    # File-level reparse escape: the npm-shim target itself is a junction to
+    # an outside directory, so the resolved path leaves the trusted root.
+    escaped = package_bin / "opencode.exe"
     result = subprocess.run(
         ["cmd", "/c", "mklink", "/J", str(escaped), str(outside)],
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stderr
-    with pytest.raises(RuntimeError, match="not found under the trusted npm package root"):
+    with pytest.raises(RuntimeError, match="escapes the trusted npm package root"):
+        transport._resolve_native_executable(str(fake_bin / "opencode.cmd"))
+    # Directory-level reparse escape: the whole ``bin`` directory is a
+    # junction to an outside directory containing ``opencode.exe``; the
+    # resolved target leaves the trusted root the same way.
+    os.unlink(escaped)
+    os.rmdir(package_bin)
+    result = subprocess.run(
+        ["cmd", "/c", "mklink", "/J", str(package_bin), str(outside)],
+        capture_output=True, text=True, check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    with pytest.raises(RuntimeError, match="escapes the trusted npm package root"):
         transport._resolve_native_executable(str(fake_bin / "opencode.cmd"))
 
 
