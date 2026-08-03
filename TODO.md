@@ -36,6 +36,30 @@ repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/
 - Bu routing güncellemesi, aşağıdaki faz listesindeki hiçbir literatür, SFT,
   RAG, DPO veya empirical-evaluation maddesini tamamlanmış işaretlemez.
 
+### Live-runner altyapısı (2026-08-02, runner-only)
+
+Paired-pilot v2 live-runner altyapısı (yalnızca runner görevi) tamamlandı ve
+doğrulandı: `scripts/quixbugs_live_runner_v2.py` üzerinden katı versioned
+authorization kontratı, pre-provider route gate'i, frozen altı-case sıralı
+orchestration, fail-closed stop/abort davranışı, deterministik versioned
+çıktı paketi ve no-rerun enforced durable attempt ledger; mevcut paired-pilot
+entry point'ine `preflight`, `template` ve `live` (--preflight-only) olarak
+bağlandı. Gerçek live yürütme; ayrı operatör authorization artifact'i, kabul
+edilen baseline, başarılı route gate'i ve açıkça yapılandırılmış provider
+transport + case runner gerektirir; bu görevde hiçbiri yoktur, bu yüzden
+yalnızca synthetic transport'lar, geçici fixture'lar ve deterministik test
+double'ları kullanıldı, provider çağrı sayacı sıfır kanıtlandı. Dokümanlar:
+`docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md` ve
+`docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md`; non-authorizing şema
+referansı `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`
+(validator tarafından reddedilir; gerçek authorization'lar tracked dışı
+`operator/` dizininde yaşar). Ayrı ve gelecekteki görev: gerçek operator
+authorization'ı + gerçek route evidence + açıkça yapılandırılmış
+transport/case runner ile six-case live campaign yürütülmesi. Bu altyapı
+görevi hiçbir live campaign, empirical evaluation, model-performance sonucu,
+PDB etkinliği, RAG, SFT veya DPO çalıştırmadı ve bunları tamamlanmış
+işaretlemez. Tarihsel OpenCode Zen kayıtları değişmeden historical kaldı.
+
 Private operator runner üzerinden tek fixture, iki policy ve policy başına iki
 repetition içeren dört-case descriptive matrix tamamlandı. Static policy 2/2
 case'i çözdü; PDB-on-uncertainty 0/2 case çözdü ve iki case de PDB açılmadan
@@ -130,3 +154,82 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 - [ ] Sonuçları başarı oranı, localization accuracy, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Metrikler tanımlı; ancak henüz hiçbir external dataset üzerinde gerçek bir model çalıştırılmadığı için bu metriklere karşı raporlanacak bir model sonucu yok.)
 - [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı 2026-07-31 — Final Technical Report v1 ve Demo Guide v1; bu bir altyapı/evaluation-platform demosu ve raporudur, model debugging performance demosu değildir. Bkz. `docs/FINAL_TECHNICAL_REPORT_V1.md`, `docs/DEMO_GUIDE_V1.md`, `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`.)
+
+### Live-runner material repair (2026-08-02, runner-only)
+
+Live-runner siniri bounded material repair ile sertlestirildi: (1)
+execution-commit baglama - `accepted_campaign_commit` artik kampanyayi
+calistiracak tam commit'tir; gercek Git HEAD bununla esit olmali, commit
+mevcut olmali ve accepted baseline'dan turemeli, tracked working tree ve
+Git index temiz olmali; ledger claim/preflight/transport oncesinde ve her
+case oncesinde dogrulanir; post-preflight drift `TRACKED_SOURCE_CHANGED`
+authority kaniti ile kampanyayi durdurur; dogrulanmis commit campaign, case,
+authority, route-binding ve ledger kanitlarina islenir. (2) Strict raw route
+evidence - her acceptance-critical alan acikca tiplenmis olmali; eksik
+alanlar manifest/authorization'dan doldurulmaz, eksik denial/fiyat kaniti
+False/zero olarak uretilmez; account status authorization ile birebir
+eslesmeli; timestamp parse edilebilir, gelecekte ve stale olmamali. (3)
+Immutable output - bir output root yalnizca bir attempt identity'ye aittir
+(atomik `.attempt-owner`); authoritative artifact'lar create-once
+semantigiyle asla uzerine yazilmaz; rejection'lar non-authoritative
+`rejections/` dizinine yazilir; yeni authorization yeni root ister. (4)
+Atomic ledger lifecycle - cross-process exclusive claim (es zamanli iki
+claim'den yalnizca biri kazanir); eksik transport/runner authorization
+tuketmeden reddeder; terminal ledger state campaign.json'dan once
+finalize edilir (campaign.json en son yazilir); ledger-finalization hatasi
+tamamlanmis gorunumlu artifact birakmaz; lifecycle sayilari frozen alti
+case ile birebir dengelenir. Authorization strictness: account observation
+tam alan seti, gelecek creation timestamp yok, validity creation ve
+execution sonrasi. Tum senaryolar icin adversarial testler eklendi
+(iki-process concurrent claim, forged-commit reddi ve onceki kanitin
+degismemesi dahil). Repair sonrasi: live-runner suite 222 passed;
+paired-pilot suite'leri 267 passed. Bu gorevde hicbir live campaign,
+benchmark, model veya paid endpoint calistirilmadi.
+
+### Live-runner material repair 2 (2026-08-02, runner-only)
+
+Ikinci bounded material repair: (1) single-winner attempt claim - exclusive
+`.attempt-owner` (O_EXCL) kapisi hicbir ikinci process'in gecmesine izin
+vermez (identity/authorization hash eslesmesi bile); ayni-identity duplicate
+(`DUPLICATE_ATTEMPT`) ve farkli-owner conflict (`OUTPUT_ROOT_OWNED`) typed
+error'lar ile ayristirilir; deterministik barrier'li iki-process testi tam
+bir kazanan oldugunu kanitlar. (2) Occupied output root - claim oncesinde
+authoritative root yok veya yapisal olarak bos olmali; onceden var olan
+campaign/ledger/case/private/temp/unknown dosyalar, dizinler, symlink'ler
+veya celiskili owner verisi `OUTPUT_ROOT_OCCUPIED` ile reddedilir (sifir case
+execution, sifir provider aktivitesi); rejection ve preflight kayitlari
+parent-level non-authoritative konuma tasindi. (3) Post-case ve pre-terminal
+authority dogrulamasi - her case sonrasi ve terminal ledger finalization'den
+hemen once repository state ve tracked authority'ler yeniden dogrulanir;
+drift typed `TRACKED_SOURCE_CHANGED` authority kanitiyla kampanyayi durdurur
+ve kampanya asla `COMPLETED` donebilir/persist edemez. (4) Non-finite numeric
+evidance ve strict JSON - `NaN`/`±Infinity` her yerde `math.isfinite()` ile
+reddedilir; tum persisted JSON `allow_nan=False`; serialization hatasi
+kismi dosya birakmadan fail-closed. Terminalization iki fazli oldu
+(campaign.json once, ledger sonra): `COMPLETED` ledger her zaman eslesen
+dogrulanmis terminal campaign.json'a sahiptir; artifact olusturma hatasi
+`ABORTED`/`OUTPUT_INTEGRITY_FAILURE` terminali uretir. Repair sonrasi:
+live-runner suite 251 passed; paired-pilot suite'leri 267 passed. Hicbir
+live campaign, benchmark, model veya paid endpoint calistirilmadi.
+
+### Live-runner final material repair (2026-08-02, runner-only)
+
+Son bounded material repair: (1) crash-safe terminal package commitment -
+terminalization artik uc asamali durable protokol: campaign.json (PREPARED
+isaretli, non-authoritative), ledger terminalization, en sonda create-once
+`terminal-commit.json` (attempt identity, authorization hash, execution
+commit, status, campaign.json SHA-256, terminal ledger entry SHA-256, manifest
+hash ve case inventory baglar). Standalone campaign.json yalnizca commitment
+varken kabul edilir; verify_attempt_package ve tum loader'lar
+uncommitted/interrupted paketleri `TERMINAL_COMMIT_MISSING` ile reddeder; her
+terminalization adiminda fault injection (BaseException process-death dahil)
+test edilir; kesintiye ugrayan attempt asla sessizce resume edilmez. (2)
+Authority-invalidated cases - post-case drift tespit edilen case artik
+completed sayilmaz: lifecycle `authority-invalidated`, completed_case_count
+haric, invalidated_case_count icinde, yalnizca quarantined evidence olarak
+korunur (authority record hash ve provider-contact flag ile); dengeleme
+completed + blocked + aborted + invalidated + unstarted == 6; final-case
+drift PARTIAL + completed 5 / invalidated 1 / unstarted 0 uretir; pre-terminal
+drift ayri campaign-level failure'dir (affected case ID null). Repair sonrasi:
+live-runner suite 266 passed; paired-pilot suite'leri 267 passed. Hicbir live
+campaign, benchmark, model veya paid endpoint calistirilmadi.

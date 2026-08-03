@@ -223,6 +223,120 @@ Rules:
 
 ## Current Focus
 
+### QuixBugs paired-pilot v2 live runner (2026-08-02)
+
+- The fail-closed live-runner infrastructure for the frozen v2 campaign is
+  implemented and validated (runner-only task): strict versioned authorization
+  contract, pre-provider route gate, frozen six-case sequential orchestration,
+  campaign stop/abort behavior, deterministic versioned result packaging,
+  durable attempt ledger with no-rerun enforcement, and the CLI wiring through
+  the accepted paired-pilot entry point (`preflight`, `template`, `live` with
+  `--preflight-only`). Implementation:
+  `scripts/quixbugs_live_runner_v2.py`; operator docs:
+  `docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md` and
+  `docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`; non-authorizing schema
+  reference: `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`
+  (rejected by the validator; real authorizations belong outside tracked
+  source in the ignored `operator/` location).
+- The runner reuses the accepted validator path
+  (`scripts/quixbugs_paired_pilot.py`) and produces only frozen
+  `quixbugs-paired-pilot-result-v2` case records; every case record must pass
+  the strict in-order result validation before it is written. The runner never
+  defaults into live execution and has no hidden provider selection or
+  fallback: live execution requires the strict authorization artifact, the
+  accepted repository baseline, a successful pre-provider route gate, an
+  explicitly configured provider transport, and an explicitly configured case
+  runner. None of those exist in this task, so every path used here used only
+  synthetic transports, temporary fixtures, and deterministic test doubles,
+  and the live CLI fails closed with zero provider activity.
+- Validation performed: paired-pilot v1 and v2 validators (both valid);
+  complete paired-pilot unit suites (v1 + v2 = 267 passed); new live-runner
+  unit suite (`tests/unit/test_quixbugs_live_runner_v2.py`, 151 passed)
+  covering the authorization contract (unknown/missing/wrong-type fields,
+  duplicate/reordered cases, wrong hashes/baseline/protocol, v1
+  contradictions, expiry, output-root and attempt-identity bindings, template
+  rejection), every prohibited route and fallback, unobservable/stale/
+  contradictory evidence, zero provider calls for every failed preflight,
+  exact six-case order with fresh per-case boundaries and no parallelism,
+  static-policy PDB prohibition, PDB gate/budget semantics, every frozen
+  budget (model calls, attempts, retries, directives, hypotheses, patches,
+  verifier runs, PDB openings/observations, case timeout, public evidence
+  bytes), first/middle/final case failures, route drift and model substitution
+  after preflight, malformed-response exhaustion, transport timeout, cleanup
+  and source-restoration failure, verifier integrity failure, sanitization
+  boundary violations, atomic partial-result behavior, duplicate-attempt and
+  forbidden resume/rerun, and truthful token/cost semantics; directly
+  affected controller/live/transport/verifier/QuixBugs suites are unaffected;
+  broader unit suite run once; `python -m py_compile` on changed Python files;
+  `git diff --check` clean.
+- No live campaign, empirical evaluation, model-performance result, PDB
+  effectiveness, RAG, SFT, or DPO work was run or marked complete. The
+  historical OpenCode Zen records remain historical. The separate future task
+  (real operator authorization + real route evidence + explicitly configured
+  transport/case runner) is documented and not started.
+
+### QuixBugs paired-pilot v2 live runner (2026-08-02)
+
+A bounded material repair then hardened the runner boundary
+(runner-only, same baseline `28ec7754…`): (1) execution-commit binding —
+`accepted_campaign_commit` is the exact commit whose code will execute the
+campaign; the actual Git HEAD must equal it, the commit must exist and
+descend from the accepted baseline, and the tracked working tree plus the
+real Git index must be clean (only ignored operator/output artifacts
+allowed), verified before ledger claim/preflight/transport creation and
+re-verified before every case; post-preflight drift stops the campaign with
+typed `TRACKED_SOURCE_CHANGED` authority evidence; the verified commit is
+recorded in campaign, case, authority, route-binding, and ledger evidence.
+(2) Strict raw route evidence — every acceptance-critical field must be
+explicitly typed (identity, version, catalog fingerprint, runtime model ID,
+billing route, entitlement, account status, active status, variant
+availability, all fallback observations, prices, cost, `observed_at`);
+missing fields are never defaulted from the manifest/authorization; missing
+denial/price evidence is never fabricated as False/zero; account status must
+match the authorization; timestamps must parse and be fresh (not future, not
+stale). (3) Immutable output — one output root belongs to exactly one attempt
+identity (atomic `.attempt-owner` claim); authoritative artifacts use
+create-once semantics and are never replaced; rejections go to a
+non-authoritative `rejections/` directory; fresh authorizations require fresh
+roots. (4) Atomic ledger lifecycle — cross-process exclusive claim (exactly
+one of two concurrent claims succeeds); missing transport/runner rejects
+before consuming the authorization; terminal ledger state finalizes before
+`campaign.json` (written last); ledger-finalization failures leave no
+completed artifact; lifecycle counts reconcile exactly with the frozen six
+cases; `validate_campaign_record` and `verify_attempt_package` automate
+campaign/package consistency. Authorization strictness: exact
+`subscription_account_observation` field set, no future creation timestamps,
+validity after creation and execution. Adversarial tests cover all of the
+above, including a two-process concurrent-claim test and forged-commit
+rejection with prior-evidence immutability. Post-repair counts: live-runner
+suite 222 passed; paired-pilot suites 267 passed.
+
+### QuixBugs paired-pilot v2 live runner (2026-08-02)
+
+A second bounded material repair hardened the runner boundary further
+(runner-only, same baseline `28ec7754…`): (1) single-winner attempt claim —
+the exclusive `.attempt-owner` gate never lets a second process pass, even
+with matching identity/authorization hash; typed errors distinguish
+same-identity duplicates (`DUPLICATE_ATTEMPT`) from owner conflicts
+(`OUTPUT_ROOT_OWNED`); a deterministic barrier two-process test proves exactly
+one winner. (2) Occupied output roots — the authoritative root must be absent
+or structurally empty before claim; pre-existing campaign/ledger/case/private/
+temp/unknown files, directories, symlinks, or contradictory owner data are
+rejected (`OUTPUT_ROOT_OCCUPIED`) with zero case execution and zero provider
+activity; rejection evidence and preflight records moved to a parent-level
+non-authoritative location. (3) Post-case and pre-terminal authority
+verification — repository state and tracked authorities are re-verified after
+every case and immediately before terminal ledger finalization; drift stops
+the campaign with typed `TRACKED_SOURCE_CHANGED` authority evidence and the
+campaign can never return or persist `COMPLETED`. (4) Non-finite numeric
+evidence and strict JSON — `NaN`/`±Infinity` rejected via `math.isfinite()`
+everywhere; all persisted JSON uses `allow_nan=False`; serialization failures
+fail closed without partial files. Terminalization is now two-phase
+(campaign.json first, ledger second) so a `COMPLETED` ledger always has a
+matching validated terminal campaign.json; artifact creation failures
+terminalize `ABORTED`/`OUTPUT_INTEGRITY_FAILURE`. Post-repair counts:
+live-runner suite 251 passed; paired-pilot suites 267 passed.
+
 ### BugsInPy licensing and metadata preflight
 
 - [x] Licensing gate completed at `da39c55`.
@@ -734,4 +848,24 @@ made.
 
 ## Last Updated
 
-2026-08-02
+2026-08-02 (QuixBugs paired-pilot v2 live-runner infrastructure task)
+- Final (third) material repair round: (1) crash-safe terminal package
+  commitment — terminalization is a three-step durable protocol
+  (campaign.json PREPARED payload, ledger terminalization, create-once
+  terminal-commit.json written last binding attempt identity, authorization
+  hash, execution commit, status, campaign SHA-256, exact terminal ledger
+  entry SHA-256, manifest hash, and case inventory); a standalone
+  campaign.json is never accepted without the commitment; verify_attempt_package
+  and all loaders reject uncommitted/interrupted packages
+  (TERMINAL_COMMIT_MISSING); fault injection covers every step including a
+  BaseException simulated process death; interrupted attempts are never
+  silently resumed. (2) Authority-invalidated cases — post-case drift
+  invalidates the affected case (lifecycle authority-invalidated, excluded
+  from completed_case_count, counted in invalidated_case_count, preserved
+  only as quarantined evidence with the authority record hash and
+  provider-contact flag); reconciliation is now
+  completed + blocked + aborted + invalidated + unstarted == 6; final-case
+  drift yields PARTIAL with completed 5 / invalidated 1 / unstarted 0 and the
+  affected final case ID; pre-terminal drift is a separate campaign-level
+  failure with affected case ID null. Post-repair counts: live-runner suite
+  266 passed; paired-pilot suites 267 passed.

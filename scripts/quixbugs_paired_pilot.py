@@ -2272,23 +2272,52 @@ def plan(manifest: Mapping[str, Any]) -> dict[str, Any]:
     return {"campaign_id": CAMPAIGN_ID, "manifest_hash": manifest_hash(manifest), "cases": manifest["case_order"], "provider_contacted": False}
 
 
-def live(manifest: Mapping[str, Any], authorization: Path | None = None) -> None:
+def live(
+    manifest: Mapping[str, Any],
+    authorization: Path | None = None,
+    output: Path | None = None,
+    *,
+    preflight_only: bool = False,
+    route_evidence_json: Path | None = None,
+) -> dict[str, Any]:
+    """Fail-closed live-runner entry through the accepted paired-pilot path.
+
+    Delegates to the accepted live-runner infrastructure
+    (:mod:`scripts.quixbugs_live_runner_v2`), which reuses this module's
+    manifest/authorization/result-validation contract.  Live execution is
+    impossible unless a strict authorization artifact, an explicit output
+    location, a successful pre-provider route gate, and an explicitly
+    configured provider transport are all present; every rejection happens
+    before any provider process, transport request, or model call.
+    """
     if authorization is None or not authorization.is_file():
         raise PilotError("live mode requires a separate explicit authorization artifact")
+    if output is None:
+        raise PilotError("live mode requires an explicit output/attempt location")
     validate_manifest(manifest)
+    scripts_dir = str(Path(__file__).resolve().parent)
+    if scripts_dir not in sys.path:
+        sys.path.insert(0, scripts_dir)
+    from quixbugs_live_runner_v2 import LiveRunnerError, run_live_entry
+
     try:
-        artifact = json.loads(authorization.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
-        raise PilotError(f"invalid live authorization artifact: {exc}") from exc
-    _validate_live_authorization(manifest, artifact)
-    raise PilotError("live execution is intentionally unavailable in this preregistration task")
+        return run_live_entry(
+            manifest, authorization, output,
+            preflight_only=preflight_only,
+            route_evidence_json=route_evidence_json,
+        )
+    except LiveRunnerError as exc:
+        raise PilotError(f"live execution rejected: {exc}") from exc
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("mode", nargs="?", choices=("validate", "screen", "qualify", "plan", "dry-run", "live"), default="validate")
+    parser.add_argument("mode", nargs="?", choices=("validate", "screen", "qualify", "plan", "dry-run", "preflight", "template", "live"), default="validate")
     parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--authorization", type=Path)
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--route-evidence-json", type=Path)
+    parser.add_argument("--preflight-only", action="store_true")
     args = parser.parse_args(argv)
     try:
         manifest = load_manifest(args.manifest)
@@ -2306,8 +2335,19 @@ def main(argv: list[str] | None = None) -> int:
             qualification = run_qualification(manifest)
             print(json.dumps(qualification, indent=2, sort_keys=True))
             return 0 if qualification["all_passed"] else 1
+        elif args.mode == "template":
+            if args.output is None:
+                raise PilotError("template mode requires an explicit --output path")
+            scripts_dir = str(Path(__file__).resolve().parent)
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            from quixbugs_live_runner_v2 import write_authorization_template
+            target = write_authorization_template(args.output)
+            print(json.dumps({"template_written": str(target), "authorizing": False}, indent=2, sort_keys=True))
+        elif args.mode == "preflight" or args.preflight_only:
+            print(json.dumps(live(manifest, args.authorization, args.output, preflight_only=True, route_evidence_json=args.route_evidence_json), indent=2, sort_keys=True))
         else:
-            live(manifest, args.authorization)
+            print(json.dumps(live(manifest, args.authorization, args.output, route_evidence_json=args.route_evidence_json), indent=2, sort_keys=True))
         return 0
     except PilotError as exc:
         print(f"BLOCKED: {exc}", file=sys.stderr)

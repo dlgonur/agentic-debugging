@@ -2114,3 +2114,264 @@ descriptive kayıtlardır; v2 kontratı hiçbir live sonuç üretmedi. Bir sonra
 adım, ayrı ve açık bir yetkilendirme artifact'ı ile ayrı bir implementation
 task'ta live entry point'in fail-closed kalmaya devam etmesi koşuluyla v2
 route'unun hayata geçirilmesidir.
+
+---
+
+## 2 Agustos 2026 (gece) - QuixBugs paired-pilot v2 live runner (runner-only)
+
+Bugun kabul edilen baseline `28ec7754336fc53f21ebbae8a851b33e26714932` uzerinde
+QuixBugs paired-pilot v2 live-runner altyapisini (yalnizca runner gorevi)
+tamamladim. Amaç: frozen alti-case v2 kampanyasini daha sonra yurutebilecek,
+fakat her kabul-kritik gate basarili olmadan provider temasina gecmeye
+yeteneksiz, fail-closed tek bir live-runner entry point'i saglamak. Gercek
+provider, model katalogu, entitlement servisi veya paid endpoint'e hicbir
+temas olmadi; yalnizca synthetic transport'lar, gecici fixture'lar ve
+deterministik test double'lari kullanildi; provider cagri sayaci her
+senaryoda sifir olarak kanitlandi.
+
+Ekledigim bilesenler:
+
+- `scripts/quixbugs_live_runner_v2.py`: (1) katı versioned authorization
+  kontrati - v2 kampanya kimligi, manifest hash'i
+  (`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`),
+  accepted baseline, alti frozen case ID'si ve sirasi, protocol 1.3, OpenCode
+  Go + DeepSeek V4 Flash route'u, expected runtime model/catalog identity,
+  OpenCode version + catalog fingerprint, subscription account/entitlement
+  observation, billing-route classification, tum yasakli fallback/
+  substitution deny flag'lari, operator kimligi, olusturma/gecerlilik
+  zamani, output root, attempt identity ve tek-frozen-kampanya onayini
+  baglar; bilinmeyen/eksik/yanlis tip alanlari, duplicate veya siralanmıs
+  case'leri, yanlis hash/baseline/protocol degerlerini ve v1 zero-price
+  celiskisini reddeder. (2) Pre-provider route gate: eksik, gozlemlenemez,
+  stale, celiskili, substitute veya desteklenmeyen kanit, ilk provider
+  process'i yaratilmadan once bloklanir; her yasakli route/fallback frozen
+  kategoriye eslenir. (3) Altı-case sıralı orchestrator: no-reorder, no-
+  parallel, case basina fresh session/workspace, deterministik ID'ler,
+  manifest budget'lari, static policy PDB yasagi, PDB gate/budget
+  semantigi, mevcut validator uzerinden strict in-order case-result
+  dogrulamasi. (4) Stop/abort davranisi: temizlenemeyen altyapi hatalari
+  (cleanup failure, source mutation, transport evidence loss, verifier
+  integrity failure, containment, schema) campaign-stop BLOCKED record'lari
+  uretir; budget/asl schema/sanitization/runner-hatalari ABORTED ile dürüst
+  kismi kayit bırakır; provider teması olmadan hicbir case "attempted"
+  raporlanmaz. (5) Deterministik versioned cikti paketi: `campaign.json`
+  en son atomik yazilir, case record'lari ayri dosyalarda, private evidence
+  ayri siniflandirilir, public/private siniri ihlali kampanyayi durdurur.
+  (6) Durable attempt ledger: duplicate attempt, crash sonrasi STARTED
+  resume, ayni authorization ile rerun ve degismis manifest/baseline/route/
+  case-order karsisinda ayni authorization kullanimi reddedilir. (7) CLI:
+  `preflight`, `template`, `live` (--preflight-only) modlari mevcut
+  paired-pilot entry point'ine baglandi; live hicbir zaman varsayilan degil,
+  transport yapilandirilmadan reddedilir.
+
+Ayrica ekledim: `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`
+(non-authorizing schema referansi; validator tarafindan
+`TEMPLATE_IS_NOT_AUTHORIZATION` ile reddedilir), `docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`,
+`docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md`, `.gitignore`'a `operator/`
+(gercek authorization'larin tracked disi yeri) ve
+`tests/unit/test_quixbugs_live_runner_v2.py` (151 test). `PROJECT_TRACKER.md`,
+`TODO.md` ve `README.md` guncellendi; tarihsel OpenCode Zen kayitlari
+degistirilmedi ve historical kaldi.
+
+Validasyon: paired-pilot v1 ve v2 validator'leri gecti; v1+v2 paired-pilot
+unit suite'leri 267 passed; yeni live-runner suite 151 passed; dogrudan
+etkilenen controller/live/transport/verifier/QuixBugs suite'leri etkilenmedi;
+genis unit suite bir kez calistirildi; degisen Python dosyalarinda
+`python -m py_compile` gecti; `git diff --check` temiz. Live campaign,
+empirical evaluation, PDB etkinligi, RAG, SFT veya DPO calistirilmadi ve
+tamamlanmis isaretlenmedi. Bir sonraki adim (ayri gorev): gercek operator
+authorization artifact'i + gercek route evidence + acikca yapilandirilmis
+transport/case runner ile alti-case live campaign yurutulmesi; bu gorev
+kapsaminda degil.
+
+---
+
+## 2 Agustos 2026 (gece, devam) - Live-runner material repair
+
+Kabul edilen baseline `28ec7754336fc53f21ebbae8a851b33e26714932` uzerinde
+QuixBugs paired-pilot v2 live-runner'da bounded bir material repair
+tamamladim. Dort blok cozuldu:
+
+1. **Execution-commit baglama.** `accepted_campaign_commit` artik kampanyayi
+   calistiracak tam commit'tir. Ledger claim, preflight, transport veya
+   provider temasindan once: gercek Git HEAD'in bu commit ile esit oldugu,
+   commit'in repoda mevcut oldugu, accepted baseline'dan turedigi ve tracked
+   working tree + Git index'in temiz oldugu (yalnizca ignored operator/output
+   artifact'lari serbest) bagimsiz olarak dogrulanir. Dogrulanmis execution
+   commit campaign, case, authority, route-binding ve ledger kanitlarina
+   islenir; case oncesinde yeniden dogrulanir; post-preflight commit/tracked
+   drift `TRACKED_SOURCE_CHANGED` typed authority/campaign-stop kaniti ile
+   kampanyayi durdurur. Eski basit `verify_repo_baseline` (yalnizca
+   hard-coded baseline karsilastirmasi) kaldirildi; sonuc commit alanlari
+   artik caller-supplied veriden kopyalanarak doldurulmuyor.
+
+2. **Strict raw route evidence.** Her acceptance-critical alan (identity,
+   version, catalog fingerprint, runtime model ID, billing route, entitlement,
+   account status, active status, variant availability, tum fallback
+   gozlemleri, fiyatlar, cost, `observed_at`) acikca ve dogru tiple mevcut
+   olmali; eksik alanlar manifest/authorization'dan doldurulmaz, eksik
+   denial/fiyat kaniti False/zero'ya cevrilmez; account status authorization
+   ile birebir eslesmeli; timestamp parse edilebilir, gelecekte (120 sn clock
+   skew payi disinda) ve stale olmamali. Ihlaller
+   `ROUTE_EVIDENCE_INVALID:<reason>` ile sifir provider aktivitesiyle
+   reddedilir.
+
+3. **Immutable output.** Bir output/attempt root yalnizca bir campaign-attempt
+   identity'ye aittir: `.attempt-owner` atomik exclusive create ile claim
+   edilir; farkli identity sahibi bir root `OUTPUT_ROOT_OWNED` ile reddedilir.
+   `campaign.json` ve case record'lari create-once semantigiyle yazilir
+   (temp + atomik no-overwrite link), asla uzerine yazilmaz; rejection
+   kayitlari non-authoritative `rejections/` dizinine yazilir ve accepted
+   attempt kanitini degistiremez. Duplicate/fresh-authorization denemelerinde
+   onceki `campaign.json`, case dosyalari ve ledger hash'leri degismeden
+   korunur.
+
+4. **Atomic ledger lifecycle.** Output-root claim + ledger, ayni
+   authorization/output root icin cross-process exclusive claim saglar (iki
+   es zamanli claim'den yalnizca biri kazanir; iki-process subprocess testi
+   bunu dogrular). Eksik transport/case runner, ledger claim'inden once
+   reddedilir ve authorization tuketilmez. Terminal ledger state,
+   `campaign.json`'dan once finalize edilir; `campaign.json` en son create-
+   once yazilir; campaign record'i ledger dosyasindaki terminal snapshot ile
+   birebir ayni snapshot'i gomer; ledger-finalization hatasi tamamlanmis
+   gorunumlu artifact birakmaz (`LEDGER_FINALIZATION_FAILED`). Lifecycle
+   durumlari frozen alti case ile birebir dengelenir (completed + blocked +
+   aborted + unstarted == 6); `validate_campaign_record` ve
+   `verify_attempt_package` campaign/package tutarliligini otomatik dogrular.
+
+Authorization strictness olarak: `subscription_account_observation` tam alan
+seti + strict tipler, gelecek creation timestamp reddi, validity'nin
+creation ve execution zamanindan sonra olmasi. Ayrica pilot entry point'in
+runner importu tek modul objesine indirildi (CLI testleri icin).
+
+Testler: yeni live-runner suite 222 passed (execution-commit red senaryolari,
+strict route-evidence adversarial testleri, immutable-output ve
+concurrency testleri dahil); paired-pilot v1+v2 suite'leri 267 passed;
+etkilenen diger suite'ler ve genis unit suite calistirildi; `py_compile` ve
+`git diff --check` temiz; `changes.diff` temiz baseline export'una karsi
+`git apply --check` (whitespace hatasiz) ve final-files byte-identity ile
+dogrulandi. Synthetic demo yeniden uretildi; duplicate-attempt gosterimi
+yeni bir dizinde yapildi ve package-consistency kontrolu
+(`verify_attempt_package`) tum attempt dizinlerinde gecti. Hicbir live
+campaign, benchmark, model veya paid endpoint calistirilmadi; commit/push
+yapilmadi.
+
+---
+
+## 2 Agustos 2026 (gece, ikinci material repair) - Single-winner claim, occupied roots, post-case authority, strict JSON
+
+Bir onceki repair'in ustune ikinci bir bounded material repair tamamladim.
+
+1. **Single-winner attempt claim.** `.attempt-owner` (O_EXCL) artik TEK gecis
+   kapisi: identity ve authorization hash eslesmesi bile olsa mevcut owner
+   hicbir ikinci process'in claim'den basariyla donmesine izin vermez. Ayni-
+   identity duplicate `SameAttemptClaimError` (stop `DUPLICATE_ATTEMPT`),
+   farkli-owner conflict `OutputRootOwnedError` (`OUTPUT_ROOT_OWNED`) olarak
+   typed hata verir; ikisi de ledger mutasyonundan once durur. Single-winner
+   primitive, output-root ediniminden ilk durable `STARTED` ledger girisinin
+   yazilmasina kadar olan gecisi kapsar; crashed/abandoned claim asla
+   sessizce yeniden sahiplenilmez. Deterministik iki-process testi, her iki
+   process'in pre-claim durumu es zamanli gozlemlemesini zorlayan acik bir
+   barrier kullanir; tam olarak biri CLAIMED alir, digeri typed rejection.
+
+2. **Occupied output roots.** Claim oncesinde authoritative attempt root yok
+   veya yapisal olarak bos olmali. Onceden var olan campaign.json, ledger.json,
+   case dosyalari, private evidence, temp/unknown dosyalar, dizinler,
+   symlink'ler veya celiskili owner verisi `OutputRootOccupiedError`
+   (`OUTPUT_ROOT_OCCUPIED`) ile reddedilir; sifir case execution ve sifir
+   provider aktivitesi kanitlanir. Rejection evidence ve preflight kayitlari
+   artik attempt root'un DISINA, parent-level non-authoritative
+   `rejections-<root>/` konumuna yazilir. Terminalization iki fazli oldu:
+   terminal campaign.json ONCE create-once ile yazilir, ardindan ledger ayni
+   terminal duruma finalize edilir. Boylece `COMPLETED` ledger her zaman
+   eslesen, dogrulanmis terminal campaign.json'a sahiptir; campaign.json
+   olusturma hatasi ledger'i `ABORTED`/`OUTPUT_INTEGRITY_FAILURE` olarak
+   terminalize eder ve runner campaign.json basariyla yazilmadan asla
+   `COMPLETED` dondurmez; ledger finalization hatasi durumunda yeni yazilan
+   campaign.json kaldirilir (best effort) ve terminal artifact kalmaz.
+
+3. **Post-case ve pre-terminal authority dogrulamasi.** Her case runner
+   dondukten ve cleanup/restoration fazindan sonra; ayrica terminal ledger
+   finalization'den hemen once: gercek Git HEAD, authorization-bound execution
+   commit, baseline ancestry, index/tracked temizligi, non-ignored untracked
+   dosyalar ve tracked manifest + source-integrity authority'leri bagimsiz
+   olarak yeniden dogrulanir. Drift tespit edilirse etkilenen case gercek
+   kaydini korur, kampanya typed `TRACKED_SOURCE_CHANGED`
+   authority/campaign-stop kaniti ile durur ve kampanya terminal
+   `COMPLETED` donduremez/persist edemez (terminal `PARTIAL` +
+   `authority_stop`). Kirli durum yok edici cleanup denenmeden korunur.
+
+4. **Non-finite numeric evidence ve strict JSON.** Authorization, route
+   evidence, case outcome, cost summary, timing ve persiste edilen tum
+   numeric degerler `math.isfinite()` ile dogrulanir; `NaN`, `+Infinity`,
+   `-Infinity` reddedilir; boolean sayi olarak kabul edilmez. Tum persisted
+   JSON (`canonical_json`, authorization hash, atomic_create_json, ledger,
+   rejection/case/campaign kayitlari, private evidence) `allow_nan=False` ile
+   yazilir; non-finite degerler hashing/yazim oncesinde recursive olarak
+   reddedilir; serialization hatasi kismi authoritative dosya birakmaz.
+   Acikca gozlemlenen gecerli finite sifir degerler korunur (eksik kanitin
+   yerine sifir kullanilmaz).
+
+Testler: 251 live-runner + 267 paired-pilot passed (barrier concurrency,
+occupied-root senaryolari, drift-in-first/middle/final-case + pre-terminal,
+NaN/Inf/-Inf adversarial, campaign.json-yazim-hatasi ve ledger-asla-
+COMPLETED-olmadan-campaign.json testleri dahil). Validator'ler, py_compile,
+git diff --check, patch apply + whitespace ve final-files byte-identity
+dogrulamalari yapildi. Synthetic demo yeniden uretildi (concurrency proof,
+occupied-root proof, final-case drift proof, non-finite proof, immutable
+completed campaign, on-disk consistency). Hicbir live campaign, benchmark,
+model veya paid endpoint calistirilmadi; commit/push yapilmadi.
+
+---
+
+## 2 Agustos 2026 (gece, son material repair) - Crash-safe terminal commitment ve authority-invalidated cases
+
+Ucuncu ve son bounded material repair'i tamamladim.
+
+1. **Crash-safe terminal package commitment.** Eski terminalization
+   (campaign.json yaz, ledger finalize) surecinde process olumu campaign.json=
+   COMPLETED + ledger=STARTED durumu birakiyordu; best-effort deletion yeterli
+   degil. Yeni protokol uc durable adimdir: (T1) campaign.json create-once,
+   `commit_state: PREPARED`, `terminal_commit: null` (acikca non-authoritative);
+   (T2) ledger ayni terminal status'e finalize; (T3) en SONDA create-once
+   `terminal-commit.json` - attempt identity, authorization hash, execution
+   commit, intended status, gercek campaign.json dosyasinin SHA-256'si, tam
+   terminal ledger entry'nin SHA-256'si, frozen manifest hash ve case-record
+   inventory (case_id, order_index, record_sha256) baglar. Her geciste process
+   olumu ya tamamen committed+verifiable ya da acikca uncommitted paket
+   birakir; verify_attempt_package ve tum loader'lar commitment'siz
+   campaign.json'u `TERMINAL_COMMIT_MISSING` ile reddeder; hatali hash/status/
+   identity ve kesintide kalan PREPARED state de reddedilir. Her terminalization
+   adiminda deterministik fault injection (BaseException simulate process
+   death dahil) test edildi; kesintiye ugrayan attempt tuketilmis kalir ve
+   asla sessizce resume edilmez (owner gate typed DUPLICATE_ATTEMPT verir).
+
+2. **Authority-invalidated cases.** Post-case authority kontrolunde drift
+   (tracked-source, commit, manifest, qualification, source-integrity) tespit
+   edilen case artik completed sayilmaz ve oyle siniflandirilmaz. Ham execution
+   outcome yalnizca quarantined `authority_invalidated_cases` evidence'i olarak
+   korunur: case_id, original raw terminal outcome, authority failure reason,
+   authority record hash, provider contact olup olmadigi ve
+   `excluded_from_evaluation: true` kaydedilir. Lifecycle
+   `authority-invalidated`; completed_case_count haric; invalidated_case_count
+   icinde; alti-case dengelemesi completed + blocked + aborted + invalidated +
+   unstarted == 6. Cost/token/provider-attempt muhasebesi tuketilen kaynaklari
+   dogru tutar; basari/degerlendirme sayilari invalidated case'i haric tutar.
+   Sonraki caseler frozen campaign-stop kontrati uyarinca bloklanir. Final-case
+   drift: PARTIAL + TRACKED_SOURCE_CHANGED, affected_case_id = son case,
+   completed 5 / invalidated 1 / unstarted 0. Pre-terminal drift ayri:
+   tum post-case kontrolleri gectiyse affected_case_id null, campaign-level
+   authority failure, PARTIAL.
+
+Testler: 266 live-runner + 267 paired-pilot passed (terminalization fault
+injection x6 + BaseException x6, adversarial state rejection, commitment
+tampering, interrupted-attempt no-resume, invalidated-count reconciliation,
+final-case vs pre-terminal drift senaryolari dahil). Validator'ler, py_compile,
+git diff --check, patch apply + whitespace ve final-files byte-identity
+dogrulamalari yapildi. Synthetic demo yeniden uretildi:
+campaign-final-case-drift (completed 5/invalidated 1),
+campaign-preterminal-drift (completed 6, affected null), terminal-crash
+interruption proof (TERMINAL_COMMIT_MISSING), adversarial state proof,
+immutable completed campaign, verify_attempt_package consistency. Hicbir live
+campaign, benchmark, model veya paid endpoint calistirilmadi; commit/push
+yapilmadi.

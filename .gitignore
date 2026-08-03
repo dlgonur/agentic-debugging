@@ -37,3 +37,6 @@ task-10b-live-protocol-repair-v1.zip
 # Secrets
 .env
 *.env
+
+# Operator authorization artifacts (must never be tracked)
+operator/

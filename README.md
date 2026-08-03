@@ -76,6 +76,52 @@ invented; the exact runtime model/catalog identity remains authorization-bound,
 and live execution remains unavailable until a separate implementation task
 supplies an explicit authorization artifact.
 
+The QuixBugs paired-pilot v2 live-runner infrastructure is implemented and
+validated (runner-only, accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`):
+a strict versioned authorization contract
+(`docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`; non-authorizing schema
+reference `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`,
+rejected by the validator; real authorizations live outside tracked source in
+the ignored `operator/` location), a mandatory pre-provider route gate that
+blocks before any provider process on missing/unobservable/stale/
+contradictory/substituted evidence, frozen six-case sequential orchestration
+with fresh per-case boundaries, fail-closed stop/abort behavior with honest
+partial campaign records, deterministic versioned output packages, and a
+durable attempt ledger with no-rerun enforcement. A bounded material repair
+hardened the boundary: `accepted_campaign_commit` is now the exact commit
+whose code will execute the campaign (actual HEAD equality, commit existence,
+baseline descent, and clean tracked working tree + Git index verified before
+ledger claim/preflight/transport creation and re-verified before every case;
+post-preflight drift stops the campaign with typed authority evidence);
+raw route evidence is strict (every acceptance-critical field explicitly
+typed, no defaulting, no fabricated zeros/false flags, account-status and
+timestamp freshness enforced); one output root belongs to exactly one attempt
+identity with create-once, never-overwritten artifacts and a non-authoritative
+`rejections/` directory; the ledger claim is cross-process exclusive, the
+terminal ledger state finalizes in lockstep with `campaign.json` (created
+first, ledger second, so a `COMPLETED` ledger always has a matching validated
+terminal campaign.json), and lifecycle counts reconcile exactly with the
+frozen six cases. A second bounded repair hardened the boundary further: the
+`.attempt-owner` claim is the single-winner gate (a second process never
+passes, even with matching identity/hash; typed errors distinguish duplicate
+attempts from owner conflicts); occupied output roots (any pre-existing file,
+directory, symlink, or contradictory owner data) are rejected before claim
+with zero provider activity; repository state and tracked authorities are
+re-verified after every case and immediately before terminal ledger
+finalization, so source drift can never produce a `COMPLETED` campaign; and
+all numeric evidence must be finite with strict `allow_nan=False` JSON
+everywhere. The runner
+reuses the accepted validator path and is wired into the paired-pilot entry
+point (`python scripts/quixbugs_paired_pilot.py preflight|live|template`);
+live execution is impossible without the strict authorization artifact, the
+verified execution commit, a successful route gate, and an explicitly
+configured provider transport and case runner. This task used only synthetic
+transports, temporary fixtures, and deterministic test doubles, with zero
+provider calls proven by counter. Operator guide:
+`docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md`. The separate future task
+(real authorization + route evidence + transport/case runner) is not started;
+no live campaign or accepted benchmark was run.
+
 BugsInPy execution remains blocked by its license gate. A resource-limited
 QuixBugs (Python `gcd`) real no-model smoke completed successfully through
 the accepted WSL2/Bubblewrap infrastructure, extended with a
@@ -125,3 +171,17 @@ framework and states plainly that it validates evaluation infrastructure, not
 model debugging performance. No model, RAG, training, PDB, or paid API ran to
 produce any of this, and the accepted QuixBugs benchmark campaigns were not
 rerun.
+
+A final bounded repair added the crash-safe terminal package commitment and
+authority-invalidated case accounting: terminalization is a three-step
+durable protocol (`campaign.json` PREPARED payload, ledger terminalization,
+create-once `terminal-commit.json` written last and binding the attempt
+identity, authorization hash, execution commit, status, campaign SHA-256,
+terminal ledger entry SHA-256, manifest hash, and case inventory); no
+standalone `campaign.json` is accepted as a terminal campaign without the
+commitment, and `verify_attempt_package` plus every loader reject
+uncommitted/interrupted packages (`TERMINAL_COMMIT_MISSING`). Cases whose
+post-case authority check fails are authority-invalidated: excluded from
+`completed_case_count`, counted in `invalidated_case_count`, preserved only
+as quarantined evidence, with reconciliation
+completed + blocked + aborted + invalidated + unstarted == 6.
