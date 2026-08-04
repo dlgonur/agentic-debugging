@@ -26,9 +26,15 @@ PLANNING_BASELINE_COMMIT = "fe91deb273f485c75ad50f58d0623b947f22631a"
 POLICIES = ("static-baseline", "pdb-on-uncertainty")
 EXECUTION_KINDS = ("DRY_RUN", "LIVE_CASE")
 TERMINAL_STATUSES = (
+    "RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "VALIDATION_NOT_REACHED",
+    "INVALID_MODEL_RESPONSE", "PROVIDER_ERROR", "INFRASTRUCTURE_ERROR", "BLOCKED",
+)
+TERMINAL_STATUSES_V2 = (
     "RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "INVALID_MODEL_RESPONSE",
     "PROVIDER_ERROR", "INFRASTRUCTURE_ERROR", "BLOCKED",
 )
+VALIDATION_NOT_REACHED_REASON_CODES = {"VALIDATION_NOT_REACHED_PRE_VALIDATE"}
+CANDIDATE_PROVENANCE_VALUES = ("verifier_record", "applied_patch_event", None)
 DRY_RUN_BLOCK_REASON_CODES = {"DRY_RUN_ONLY", "SYNTHETIC_MALFORMED_RESPONSE", "INJECTED_INFRASTRUCTURE_FAILURE"}
 LIVE_PRE_PROVIDER_REASON_CODES = {
     "PROVIDER_MISMATCH", "MODEL_MISMATCH", "VARIANT_MISMATCH", "PROTOCOL_MISMATCH",
@@ -201,6 +207,12 @@ MANIFEST_PATH_V2 = REPO_ROOT / "research" / "quixbugs" / "PAIRED_PILOT_V2.json"
 V1_MANIFEST_RELATIVE_PATH = "research/quixbugs/PAIRED_PILOT_V1.json"
 V1_MANIFEST_SHA256 = "5d84ea22820ca38ce80dd90a5d36e6f80160220178496950f9b45be41fae19ce"
 V1_DERIVED_FROM_FIELDS = ("manifest_path", "manifest_sha256", "note")
+V2_MANIFEST_RELATIVE_PATH = "research/quixbugs/PAIRED_PILOT_V2.json"
+V2_MANIFEST_SHA256 = "bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171"
+V2_DERIVED_FROM_FIELDS = V1_DERIVED_FROM_FIELDS
+CAMPAIGN_ID_V3 = "quixbugs-paired-pilot-v3"
+CAMPAIGN_VERSION_V3 = 3
+MANIFEST_PATH_V3 = REPO_ROOT / "research" / "quixbugs" / "PAIRED_PILOT_V3.json"
 SUBSCRIPTION_ROUTE_PROVIDER = "OpenCode Go"
 SUBSCRIPTION_ROUTE_MODEL = "deepseek-v4-flash"
 AUTHORIZED_BILLING_ROUTE = "SUBSCRIPTION"
@@ -533,7 +545,7 @@ def case_order_v2(selected: list[str], *, campaign_id: str = CAMPAIGN_ID_V2) -> 
 
 
 def _planning_baseline_for(manifest: Mapping[str, Any]) -> str:
-    if manifest.get("campaign_id") == CAMPAIGN_ID_V2:
+    if manifest.get("campaign_id") in (CAMPAIGN_ID_V2, CAMPAIGN_ID_V3):
         return PLANNING_BASELINE_COMMIT_V2
     return PLANNING_BASELINE_COMMIT
 
@@ -852,6 +864,17 @@ class CampaignResultValidator:
             value = result[key]
             _require(value is None or (isinstance(value, str) and len(value) == 64 and all(c in "0123456789abcdef" for c in value)), f"invalid SHA-256 field: {key}")
         _require(result["patch_submissions"] == 0 and result["candidate_hash"] is None or result["patch_submissions"] > 0 and result["candidate_hash"] is not None, "candidate hash must be null without a candidate and present for a submitted patch")
+        provenance = result.get("candidate_provenance")
+        _require(provenance is None or provenance in CANDIDATE_PROVENANCE_VALUES, "invalid candidate provenance")
+        if manifest.get("campaign_version") == 3:
+            if result["patch_submissions"] == 0:
+                _require(provenance is None, "v3 zero-patch result must have null candidate provenance")
+            elif result["verifier_runs"] >= 1:
+                _require(provenance == "verifier_record", "v3 verifier-backed submitted candidate requires verifier_record provenance")
+            elif result["terminal_status"] == "VALIDATION_NOT_REACHED":
+                _require(provenance == "applied_patch_event", "v3 VALIDATION_NOT_REACHED requires applied_patch_event provenance")
+            else:
+                _require(provenance in ("verifier_record", "applied_patch_event"), "v3 submitted candidate requires a non-null provenance")
         counts = result["pdb_counts"]
         for key in ("total_gate_decisions", "allowed_gate_openings", "rejected_gate_decisions", "sessions_started", "successful_observations", "failed_observations"):
             _require(type(counts.get(key)) is int and counts[key] >= 0, f"invalid PDB accounting field: {key}")
@@ -978,6 +1001,12 @@ def validate_manifest(
     subscription with DeepSeek V4 Flash and fail-closed subscription billing.
     """
     campaign_id = manifest.get("campaign_id")
+    if campaign_id == CAMPAIGN_ID_V3:
+        return _validate_manifest_v3(
+            manifest,
+            require_screening=require_screening,
+            require_qualification_binding=require_qualification_binding,
+        )
     if campaign_id == CAMPAIGN_ID_V2:
         return _validate_manifest_v2(
             manifest,
@@ -1158,7 +1187,7 @@ def _validate_manifest_v1(
     _require(len(order) == 6 and len({item["case_id"] for item in order}) == 6, "case IDs must be six unique immutable records")
     _require({(item["task_id"], item["policy"]) for item in order} == {(task, policy) for task in EXPECTED_SELECTED for policy in POLICIES}, "case pairing mismatch")
     schema = manifest["outcome_schema"]
-    _require(set(schema.get("terminal_statuses", ())) == set(TERMINAL_STATUSES), "terminal status set mismatch")
+    _require(set(schema.get("terminal_statuses", ())) == set(TERMINAL_STATUSES_V2), "terminal status set mismatch")
     _require(schema.get("schema_version") == "quixbugs-paired-pilot-result-v1", "result schema version mismatch")
     _require("repair_outcome" in schema.get("required_fields", ()), "repair outcome is not frozen in the result schema")
     _require(set(schema.get("route_failure_reason_codes", ())) == LIVE_PRE_PROVIDER_REASON_CODES, "preflight failure vocabulary mismatch")
@@ -1220,7 +1249,7 @@ def _validate_manifest_v2(
     _require({(item["task_id"], item["policy"]) for item in order} == {(task, policy) for task in EXPECTED_SELECTED for policy in POLICIES}, "case pairing mismatch")
     _require([(item["task_id"], item["policy"]) for item in order] == list(V1_FROZEN_CASE_ORDER), "six-case order deviates from the frozen v1 order")
     schema = manifest["outcome_schema"]
-    _require(set(schema.get("terminal_statuses", ())) == set(TERMINAL_STATUSES), "terminal status set mismatch")
+    _require(set(schema.get("terminal_statuses", ())) == set(TERMINAL_STATUSES_V2), "terminal status set mismatch")
     _require(schema.get("schema_version") == "quixbugs-paired-pilot-result-v2", "result schema version mismatch")
     _require("repair_outcome" in schema.get("required_fields", ()), "repair outcome is not frozen in the result schema")
     _require(set(schema.get("route_failure_reason_codes", ())) == ALL_PRE_PROVIDER_REASON_CODES, "preflight failure vocabulary mismatch")
@@ -1233,6 +1262,115 @@ def _validate_manifest_v2(
     _require(isinstance(subscription_contract, Mapping) and subscription_contract.get("authorized_billing_route") == AUTHORIZED_BILLING_ROUTE, "subscription route contract is missing the authorized billing route")
     _require(all(subscription_contract.get(key) is True for key in ("entitlement_evidence_required_before_contact", "billing_route_evidence_required_before_contact", "exact_runtime_model_id_required_before_contact", "provider_reported_cost_preserved", "zen_route_excluded", "free_tier_substitution_excluded", "ollama_route_excluded", "alternate_provider_excluded", "model_substitution_excluded", "metered_fallback_excluded", "paid_overage_route_excluded", "per_call_billing_fallback_excluded")), "subscription route contract is incomplete")
     _require(set(schema.get("route_observation_fields", ())) == set(("provider", "model", "variant", "protocol", "opencode_version", "catalog_fingerprint", "runtime_model_id", "billing_route", "subscription_entitlement_confirmed", "active_model_status", "variant_available", "input_price", "output_price", "provider_reported_cost", "paid_fallback_used", "alternate_provider_used", "ollama_used", "zen_used", "free_tier_used", "metered_fallback_used", "paid_overage_used", "per_call_billing_used", "model_substitution_observed", "preflight_success")), "route observation schema mismatch")
+    binding = manifest["campaign_commit_binding"]
+    _require(binding.get("planning_baseline_commit") == PLANNING_BASELINE_COMMIT_V2, "campaign binding planning baseline mismatch")
+    _require(binding.get("live_authorization_required") is True, "live authorization requirement missing")
+    _require(binding.get("accepted_campaign_commit") is None or (isinstance(binding.get("accepted_campaign_commit"), str) and len(binding["accepted_campaign_commit"]) == 40), "invalid accepted campaign commit binding")
+    _require(set(binding.get("authorization_fields", ())) >= {"accepted_campaign_commit", "campaign_manifest_hash", "qualification_contract_hash", "permitted_case_ids", "provider", "model", "variant", "protocol", "expected_opencode_version", "expected_catalog_fingerprint", "subscription_route_required", "expected_billing_route", "expected_runtime_model_id", "subscription_entitlement_confirmed", "no_fallback_required"}, "live authorization binding is incomplete")
+    return manifest_hash(manifest)
+
+
+def _validate_v2_derivation_authority(manifest: Mapping[str, Any]) -> None:
+    """Fail-closed v3-to-v2 derivation binding.
+
+    The v3 manifest must declare that it derives from the accepted tracked v2
+    manifest, and every v2-retained contract area must stay consistent with the
+    accepted v2 authority except for the explicitly documented v3 changes (the
+    new VALIDATION_NOT_REACHED terminal, candidate_provenance field,
+    candidate_hash_semantics, case-ID restamping, and the updated
+    terminal_status_rules prose).  The v2 hash is never trusted from the v3
+    document: it is compared against the frozen accepted constant and
+    re-derived from the tracked v2 file by full v2 validation.
+    """
+    derived = manifest.get("derived_from")
+    _require(isinstance(derived, Mapping), "v3 manifest is missing the derived_from authority")
+    _require(set(derived) == set(V2_DERIVED_FROM_FIELDS), "derived_from must contain exactly the accepted contract fields")
+    _require(derived["manifest_path"] == V2_MANIFEST_RELATIVE_PATH, "derived_from v2 manifest path mismatch")
+    _require(derived["manifest_sha256"] == V2_MANIFEST_SHA256, "derived_from v2 manifest hash mismatch")
+    _require(isinstance(derived["note"], str) and derived["note"], "derived_from note must be a non-empty string")
+    v2_path = REPO_ROOT / V2_MANIFEST_RELATIVE_PATH
+    _require(v2_path.is_file(), "referenced v2 manifest is missing")
+    v2_manifest = load_manifest(v2_path)
+    _require(validate_manifest(v2_manifest) == V2_MANIFEST_SHA256, "tracked v2 manifest does not produce the accepted canonical hash")
+    _require(v2_manifest["campaign_id"] == CAMPAIGN_ID_V2 and v2_manifest["campaign_version"] == 2, "tracked v2 campaign identity/version is not frozen")
+    for v3_key, v2_key in (
+        ("qualification_contract", "qualification_contract"),
+        ("qualification_evidence_path", "qualification_evidence_path"),
+        ("qualification_evidence_sha256", "qualification_evidence_sha256"),
+        ("source_integrity_authority", "source_integrity_authority"),
+        ("public_private_boundary", "public_private_boundary"),
+        ("budgets", "budgets"),
+    ):
+        _require(manifest[v3_key] == v2_manifest[v2_key], f"v2-retained contract area drifted: {v3_key}")
+    _require(manifest["selection"]["selected_task_ids"] == v2_manifest["selection"]["selected_task_ids"], "selected tasks drifted from the v2 authority")
+    _require(manifest["selection"]["ranking"] == v2_manifest["selection"]["ranking"], "frozen v2 selection ranking drifted")
+    _require([(case["task_id"], case["policy"]) for case in manifest["case_order"]] == [(case["task_id"], case["policy"]) for case in v2_manifest["case_order"]], "six-case task/policy order drifted from the v2 authority")
+    _require(manifest["qualification_contract"]["containment_runtime_limits"] == v2_manifest["qualification_contract"]["containment_runtime_limits"], "containment contract drifted from the v2 authority")
+    _require(v2_manifest["stop_rules"][1] in manifest["stop_rules"], "no-rerun rule drifted from the v2 authority")
+
+
+def _validate_manifest_v3(
+    manifest: Mapping[str, Any],
+    *,
+    require_screening: bool = True,
+    require_qualification_binding: bool = True,
+) -> str:
+    required = (
+        "campaign_id", "campaign_version", "freeze_status", "accepted_baseline",
+        "planning_baseline_commit", "authority", "inventory", "selection", "route",
+        "budgets", "case_order", "outcome_schema", "stop_rules",
+        "public_private_boundary", "campaign_commit_binding", "qualification_contract",
+        "qualification_contract_hash", "qualification_evidence_path", "qualification_evidence_sha256",
+        "source_integrity_authority", "derived_from",
+    )
+    for key in required:
+        _require(key in manifest, f"manifest missing {key}")
+    _require(manifest["campaign_id"] == CAMPAIGN_ID_V3, "campaign ID mismatch")
+    _require(manifest["campaign_version"] == CAMPAIGN_VERSION_V3, "campaign version mismatch")
+    _require(manifest["freeze_status"] == "FROZEN_BEFORE_LIVE", "manifest is not frozen")
+    _require(manifest["accepted_baseline"] == PLANNING_BASELINE_COMMIT_V2, "planning baseline mismatch")
+    _require(manifest["planning_baseline_commit"] == PLANNING_BASELINE_COMMIT_V2, "planning baseline commit mismatch")
+    _validate_v2_derivation_authority(manifest)
+    _validate_manifest_common(
+        manifest,
+        require_screening=require_screening,
+        require_qualification_binding=require_qualification_binding,
+        selection_campaign_id=CAMPAIGN_ID,
+    )
+    route = manifest["route"]
+    _require(route.get("subscription_route") is True, "v3 route is not the subscription route")
+    _require(route.get("provider") == SUBSCRIPTION_ROUTE_PROVIDER, "provider route mismatch")
+    _require(route.get("model") == SUBSCRIPTION_ROUTE_MODEL, "model route mismatch")
+    _require(route.get("variant") == "max" and route.get("protocol") == "1.3", "variant/protocol mismatch")
+    _require(route.get("require_zero_input_price") is False and route.get("require_zero_output_price") is False, "v3 route must not require zero pricing")
+    _require(route.get("subscription_entitlement_required") is True and route.get("billing_route_evidence_required") is True, "subscription entitlement/billing-route requirement missing")
+    _require(route.get("runtime_model_id_required") is True, "exact runtime model identity requirement missing")
+    _require(route.get("provider_reported_cost_preserved") is True, "provider-reported cost preservation missing")
+    _require(not route.get("zen_route") and not route.get("free_tier_substitution") and not route.get("ollama_fallback") and not route.get("alternate_provider") and not route.get("model_substitution") and not route.get("metered_fallback") and not route.get("paid_overage_route") and not route.get("per_call_billing_fallback"), "fallback or substitution is enabled")
+    order = manifest["case_order"]
+    expected_order = case_order_v2(list(EXPECTED_SELECTED), campaign_id=CAMPAIGN_ID_V3)
+    _require(order == expected_order, "frozen v2 case order mismatch")
+    _require(len(order) == 6 and len({item["case_id"] for item in order}) == 6, "case IDs must be six unique immutable records")
+    _require({(item["task_id"], item["policy"]) for item in order} == {(task, policy) for task in EXPECTED_SELECTED for policy in POLICIES}, "case pairing mismatch")
+    _require([(item["task_id"], item["policy"]) for item in order] == list(V1_FROZEN_CASE_ORDER), "six-case order deviates from the frozen v1 order")
+    schema = manifest["outcome_schema"]
+    _require(set(schema.get("terminal_statuses", ())) == set(TERMINAL_STATUSES), "terminal status set mismatch")
+    _require(schema.get("schema_version") == "quixbugs-paired-pilot-result-v3", "result schema version mismatch")
+    _require("repair_outcome" in schema.get("required_fields", ()), "repair outcome is not frozen in the result schema")
+    _require("candidate_provenance" in schema.get("required_fields", ()), "candidate provenance is not frozen in the v3 result schema")
+    _require(set(schema.get("route_failure_reason_codes", ())) == ALL_PRE_PROVIDER_REASON_CODES, "preflight failure vocabulary mismatch")
+    _require(set(schema.get("campaign_stop_reason_codes", ())) == CAMPAIGN_STOP_REASON_CODES, "campaign-stop vocabulary mismatch")
+    _require(set(schema.get("preflight_failure_evidence_fields", ())) == set(ALL_PREFLIGHT_FAILURE_FIELDS), "preflight evidence schema mismatch")
+    _require(set(schema.get("campaign_stop_evidence_fields", ())) == set(CAMPAIGN_STOP_EVIDENCE_FIELDS), "campaign-stop evidence schema mismatch")
+    _require(schema.get("infrastructure_stage_matrix") == {stage: {"allowed_reason_codes": sorted(reasons), "classification": INFRASTRUCTURE_CLASSIFICATIONS[stage]} for stage, reasons in INFRASTRUCTURE_STAGE_MATRIX.items()}, "infrastructure stage matrix mismatch")
+    _require(tuple(schema.get("preflight_failure_contract", {}).get("controlling_failure_precedence", ())) == V2_PREFLIGHT_FAILURE_PRECEDENCE, "preflight precedence mismatch")
+    subscription_contract = schema.get("preflight_failure_contract", {}).get("subscription_route_contract")
+    _require(isinstance(subscription_contract, Mapping) and subscription_contract.get("authorized_billing_route") == AUTHORIZED_BILLING_ROUTE, "subscription route contract is missing the authorized billing route")
+    _require(all(subscription_contract.get(key) is True for key in ("entitlement_evidence_required_before_contact", "billing_route_evidence_required_before_contact", "exact_runtime_model_id_required_before_contact", "provider_reported_cost_preserved", "zen_route_excluded", "free_tier_substitution_excluded", "ollama_route_excluded", "alternate_provider_excluded", "model_substitution_excluded", "metered_fallback_excluded", "paid_overage_route_excluded", "per_call_billing_fallback_excluded")), "subscription route contract is incomplete")
+    _require(set(schema.get("route_observation_fields", ())) == set(("provider", "model", "variant", "protocol", "opencode_version", "catalog_fingerprint", "runtime_model_id", "billing_route", "subscription_entitlement_confirmed", "active_model_status", "variant_available", "input_price", "output_price", "provider_reported_cost", "paid_fallback_used", "alternate_provider_used", "ollama_used", "zen_used", "free_tier_used", "metered_fallback_used", "paid_overage_used", "per_call_billing_used", "model_substitution_observed", "preflight_success")), "route observation schema mismatch")
+    candidate_hash_semantics = schema.get("candidate_hash_semantics")
+    _require(isinstance(candidate_hash_semantics, Mapping) and set(candidate_hash_semantics) == {"verifier_record", "applied_patch_event"}, "candidate_hash_semantics must contain exactly the two provenance formulas")
+    _require(all(isinstance(candidate_hash_semantics.get(key), str) and candidate_hash_semantics[key] for key in ("verifier_record", "applied_patch_event")), "candidate_hash_semantics values must be non-empty strings")
     binding = manifest["campaign_commit_binding"]
     _require(binding.get("planning_baseline_commit") == PLANNING_BASELINE_COMMIT_V2, "campaign binding planning baseline mismatch")
     _require(binding.get("live_authorization_required") is True, "live authorization requirement missing")
@@ -1795,6 +1933,18 @@ def _validate_terminal_matrix(result: Mapping[str, Any], manifest: Mapping[str, 
             _require(result["terminal_reason_code"] == "PDB_NOT_REACHED_NO_GATE", "PDB_NOT_REACHED reason claims a rejected gate without a decision")
         else:
             _require(result["terminal_reason_code"] == "PDB_NOT_REACHED_GATE_REJECTED" and counts["rejected_gate_decisions"] == counts["total_gate_decisions"], "PDB_NOT_REACHED gate evidence is inconsistent")
+    elif status == "VALIDATION_NOT_REACHED":
+        _require(manifest.get("campaign_version") == 3, "VALIDATION_NOT_REACHED requires v3 campaign")
+        _require(result["policy"] == "static-baseline", "VALIDATION_NOT_REACHED requires static-baseline policy")
+        _require(result["terminal_reason_code"] in VALIDATION_NOT_REACHED_REASON_CODES, "VALIDATION_NOT_REACHED reason does not match its evidence")
+        _require(counts["allowed_gate_openings"] == 0 and counts["sessions_started"] == 0 and counts["successful_observations"] == 0 and counts["failed_observations"] == 0, "VALIDATION_NOT_REACHED has PDB activity")
+        _require(result["baseline_reproduction"] is True and result["logical_model_calls"] >= 1 and result["valid_directives"] >= 1 and result["route_observation"]["preflight_success"] is True and transport["synthetic"] is False and transport["completed_response"] is True and transport["malformed_response"] is False and transport["provider_error"] is False and verifier.get("outcome") != "RESOLVED", "VALIDATION_NOT_REACHED lacks valid completed pre-validate execution")
+        _require(terminal_transport.get("final_attempt_classification") == "COMPLETED_RESPONSE" and terminal_transport.get("provider_completed_response") is True and terminal_transport.get("process_exit_code") == 0 and terminal_transport.get("timed_out") is False and terminal_transport.get("provider_error_category") is None and isinstance(terminal_transport.get("evidence_reference"), str) and terminal_transport.get("evidence_reference"), "VALIDATION_NOT_REACHED terminal evidence is invalid")
+        _require(result["patch_submissions"] == 1 and isinstance(result["candidate_hash"], str) and len(result["candidate_hash"]) == 64, "VALIDATION_NOT_REACHED requires an applied candidate")
+        _require(result["candidate_provenance"] == "applied_patch_event", "VALIDATION_NOT_REACHED candidate provenance must be applied_patch_event")
+        _require(result["verifier_runs"] == 0 and verifier.get("status") == "NOT_RUN" and result["repair_outcome"] == "NO_CANDIDATE", "VALIDATION_NOT_REACHED must not have run the verifier")
+        _require(isinstance(result["controller_states_visited"], list) and "Patch" in result["controller_states_visited"] and "Validate" not in result["controller_states_visited"], "VALIDATION_NOT_REACHED must stop in Patch before validation")
+        _require(result["pdb_gate_decisions"] == [] and result["pdb_sessions_started"] == 0 and result["successful_pdb_observations"] == 0 and result["failed_pdb_observations"] == 0, "VALIDATION_NOT_REACHED has PDB gate or session activity")
     elif status == "BLOCKED":
         if execution_kind == "DRY_RUN":
             _require(blocked.get("confirmed") is True and blocked.get("block_kind") == "dry-run", "DRY_RUN blocked result has invalid block kind")
@@ -1930,7 +2080,7 @@ def public_case_record(manifest: Mapping[str, Any], case: Mapping[str, Any], *, 
     preflight_failure_evidence = {field: None for field in ALL_PREFLIGHT_FAILURE_FIELDS}
     campaign_stop_evidence = {field: None for field in CAMPAIGN_STOP_EVIDENCE_FIELDS}
     campaign_stop_evidence.update({"confirmed": False})
-    return {
+    record = {
         "qualification_contract_hash": manifest["qualification_contract_hash"],
         "execution_kind": "DRY_RUN",
         "campaign_manifest_hash": manifest_hash(manifest),
@@ -1958,6 +2108,9 @@ def public_case_record(manifest: Mapping[str, Any], case: Mapping[str, Any], *, 
         "wall_clock_duration_seconds": 0, "canonical_source_restoration": True,
         "owned_workspace_cleanup": True, "evidence_consistency": True, "resource_ids": {},
     }
+    if manifest.get("campaign_id") == CAMPAIGN_ID_V3:
+        record["candidate_provenance"] = None
+    return record
 
 
 class _FakeResource:

@@ -3105,7 +3105,7 @@ def test_runner_rejects_v1_manifest(manifest, auth, tmp_path):
 
 def test_validator_entrypoint_validates_both_versions():
     from scripts.validate_quixbugs_paired_pilot import TRACKED_MANIFESTS
-    assert len(TRACKED_MANIFESTS) == 2
+    assert len(TRACKED_MANIFESTS) == 3
     for path in TRACKED_MANIFESTS:
         pilot.validate_manifest(pilot.load_manifest(path))
 

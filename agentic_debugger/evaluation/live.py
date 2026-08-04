@@ -99,7 +99,7 @@ LIVE_DIRECTIVE_SCHEMA={
     "set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"],"constraints":{"status":{"type":"string","enum":[item.value for item in HypothesisStatus if item is not HypothesisStatus.ACTIVE]}}},
 }
 class LiveCaseStatus(str, Enum):
-    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
+    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; VALIDATION_NOT_REACHED="VALIDATION_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
 
 _SECRET_KEY=re.compile(r"(?:api[_-]?key|access[_-]?key|auth(?:orization)?|credential|password|secret|token|private[_-]?key)",re.I)
 _SECRET_VALUE=re.compile(r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+")
@@ -922,9 +922,16 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         # stopped before another provider process was launched; the pre-PDB
         # completed-response shape is terminalized as PDB_NOT_REACHED with the
         # completed-response terminal transport evidence bound to the last
-        # completed provider response.  Zero-contact budget stops keep the
-        # existing fail-closed infrastructure classification below.
-        status=LiveCaseStatus.PDB_NOT_REACHED
+        # completed provider response.  When the controller reached Patch and
+        # applied a candidate but the next public request would have exceeded
+        # the budget before the transition to Validate, the case is
+        # terminalized as VALIDATION_NOT_REACHED (the verifier never ran).
+        # Zero-contact budget stops keep the existing fail-closed
+        # infrastructure classification below.
+        if context is not None and context.patch_applied and context.candidate_patch and result is not None and result.final_state is not ControllerState.DONE:
+            status=LiveCaseStatus.VALIDATION_NOT_REACHED
+        else:
+            status=LiveCaseStatus.PDB_NOT_REACHED
     elif metrics.termination_reason in {"request_timeout","elapsed_time_limit"}: status=LiveCaseStatus.TIMED_OUT
     elif metrics.termination_reason in {"provider_or_transport_error","invalid_model_response"}: status=LiveCaseStatus.PROVIDER_ERROR
     elif controller_failed: status=LiveCaseStatus.CONTROLLER_FAILED

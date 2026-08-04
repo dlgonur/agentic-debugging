@@ -84,12 +84,17 @@ sys.path.insert(0, str(REPO_ROOT))
 import quixbugs_paired_pilot as pilot  # noqa: E402
 from scripts import opencode_protocol_transport as transport  # noqa: E402  (accepted validator path)
 
-RUNNER_SCHEMA_VERSION = "quixbugs-live-runner-v2"
+RUNNER_SCHEMA_VERSION_V2 = "quixbugs-live-runner-v2"
+RUNNER_SCHEMA_VERSION_V3 = "quixbugs-live-runner-v3"
+RUNNER_SCHEMA_VERSION = RUNNER_SCHEMA_VERSION_V2  # default for v2 (preserved frozen output)
+ACCEPTED_RUNNER_SCHEMA_VERSIONS = frozenset({RUNNER_SCHEMA_VERSION_V2, RUNNER_SCHEMA_VERSION_V3})
 AUTHORIZATION_SCHEMA_VERSION = "quixbugs-paired-pilot-authorization-v1"
 ACCEPTED_BASELINE = "28ec7754336fc53f21ebbae8a851b33e26714932"
 LIVE_PROTOCOL_VERSION = "1.3"
 CAMPAIGN_ID_V2 = pilot.CAMPAIGN_ID_V2
+CAMPAIGN_ID_V3 = pilot.CAMPAIGN_ID_V3
 MANIFEST_PATH_V2 = pilot.MANIFEST_PATH_V2
+MANIFEST_PATH_V3 = pilot.MANIFEST_PATH_V3
 AUTHORIZED_BILLING_ROUTE = pilot.AUTHORIZED_BILLING_ROUTE
 PLANNING_BASELINE_COMMIT_V2 = pilot.PLANNING_BASELINE_COMMIT_V2
 SOURCE_INTEGRITY_RELATIVE_PATH = pilot.SOURCE_INTEGRITY_RELATIVE_PATH
@@ -97,8 +102,20 @@ SOURCE_INTEGRITY_SHA256 = pilot.SOURCE_INTEGRITY_SHA256
 MAX_ROUTE_EVIDENCE_AGE_SECONDS = 600
 CLOCK_SKEW_ALLOWANCE_SECONDS = 120
 MAX_PRIVATE_EVIDENCE_BYTES = 1_000_000
-ATTEMPT_IDENTITY_PATTERN = re.compile(r"^quixbugs-paired-pilot-v2-attempt-[0-9a-f]{12,64}$")
+ATTEMPT_IDENTITY_PATTERN = re.compile(r"^quixbugs-paired-pilot-v(?:2|3)-attempt-[0-9a-f]{12,64}$")
 ISO_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
+
+
+def _runner_schema_version(manifest: Mapping[str, Any]) -> str:
+    """Resolve the runner record schema version from the campaign manifest.
+
+    v2 campaigns keep the frozen ``quixbugs-live-runner-v2`` schema and never
+    emit ``candidate_provenance``; v3 campaigns use
+    ``quixbugs-live-runner-v3`` and emit ``candidate_provenance``.
+    """
+    if manifest.get("campaign_id") == CAMPAIGN_ID_V3:
+        return RUNNER_SCHEMA_VERSION_V3
+    return RUNNER_SCHEMA_VERSION_V2
 
 AUTHORIZATION_FIELDS = frozenset({
     "schema_version",
@@ -274,8 +291,8 @@ ZERO_PDB_COUNTS = {
 }
 
 COMPLETED_TERMINAL_STATUSES = {
-    "RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "INVALID_MODEL_RESPONSE",
-    "PROVIDER_ERROR", "INFRASTRUCTURE_ERROR",
+    "RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "VALIDATION_NOT_REACHED",
+    "INVALID_MODEL_RESPONSE", "PROVIDER_ERROR", "INFRASTRUCTURE_ERROR",
 }
 
 
@@ -665,7 +682,9 @@ def authorization_failure(
         return "WRONG_TYPE"
     if authorization["authorize_live"] is not True:
         return "AUTHORIZATION_FLAG_INVALID"
-    if authorization["campaign_id"] != CAMPAIGN_ID_V2 or authorization["campaign_version"] != 2:
+    if authorization["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3}:
+        return "CAMPAIGN_IDENTITY_MISMATCH"
+    if authorization["campaign_id"] != manifest.get("campaign_id") or authorization["campaign_version"] != manifest.get("campaign_version"):
         return "CAMPAIGN_IDENTITY_MISMATCH"
     expected_manifest_hash = pilot.manifest_hash(manifest)
     if authorization["campaign_manifest_hash"] != expected_manifest_hash:
@@ -1789,6 +1808,8 @@ def materialize_case_record(
     for field in OUTCOME_FIELDS:
         if field in outcome:
             record[field] = outcome[field]
+    if manifest.get("campaign_id") == CAMPAIGN_ID_V3 and "candidate_provenance" in outcome:
+        record["candidate_provenance"] = outcome["candidate_provenance"]
     return record
 
 
@@ -1879,6 +1900,7 @@ def _budget_exhausted_outcome(
     exhaustion: PublicEvidenceBudgetExhausted,
     *,
     run_id: str,
+    manifest: Mapping[str, Any] | None = None,
 ) -> dict[str, Any] | None:
     """Rewrite a public-evidence-budget-exhausted outcome into the frozen
     case-result terminal representation, or return ``None`` when the frozen
@@ -2204,6 +2226,60 @@ def _budget_exhausted_outcome(
         })
         return rewritten
 
+    # --- static-baseline pre-validate budget exhaustion (live-proven shape
+    # from attempt e974af4...): the controller reached Patch and applied a
+    # candidate, but the next public request (the transition to Validate)
+    # would have exceeded the frozen public-evidence budget, so the verifier
+    # never ran.  The raw outcome is terminalized as VALIDATION_NOT_REACHED /
+    # VALIDATION_NOT_REACHED_PRE_VALIDATE with the applied candidate's
+    # provenance preserved and public_evidence_bytes clamped to the frozen
+    # limit.  This shape requires campaign version 3 (the v2 frozen terminal
+    # contract does not admit it) and is mutually exclusive with pre_pdb
+    # (which requires a pdb-on-uncertainty policy and patch_submissions == 0)
+    # and with the completed RESOLVED/UNRESOLVED shapes (which require a
+    # completed verifier run).
+    try:
+        validation_not_reached = (
+            manifest is not None
+            and manifest.get("campaign_version") == 3
+            and str(case["policy"]) == "static-baseline"
+            and outcome["terminal_status"] == "VALIDATION_NOT_REACHED"
+            and outcome["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
+            and type(outcome["logical_model_calls"]) is int and outcome["logical_model_calls"] >= 1
+            and type(outcome["valid_directives"]) is int and outcome["valid_directives"] >= 1
+            and outcome["baseline_reproduction"] is True
+            and type(outcome["patch_submissions"]) is int and outcome["patch_submissions"] == 1
+            and isinstance(outcome["candidate_hash"], str) and len(outcome["candidate_hash"]) == 64
+            and outcome.get("candidate_provenance") == "applied_patch_event"
+            and type(outcome["verifier_runs"]) is int and outcome["verifier_runs"] == 0
+            and isinstance(outcome["independent_verifier_result"], Mapping)
+            and outcome["independent_verifier_result"].get("status") == "NOT_RUN"
+            and outcome["independent_verifier_result"].get("outcome") is None
+            and outcome["independent_verifier_result"].get("lifecycle_succeeded") is False
+            and outcome["repair_outcome"] == "NO_CANDIDATE"
+            and outcome["transport_evidence"].get("completed_response") is True
+            and outcome["transport_evidence"].get("malformed_response") is False
+            and outcome["transport_evidence"].get("provider_error") is False
+            and not any(
+                int(outcome["pdb_counts"].get(key, 0)) > 0
+                for key in ("total_gate_decisions", "allowed_gate_openings", "rejected_gate_decisions",
+                            "sessions_started", "successful_observations", "failed_observations")
+            )
+            and isinstance(outcome["controller_states_visited"], list)
+            and "Patch" in outcome["controller_states_visited"]
+            and "Validate" not in outcome["controller_states_visited"]
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if validation_not_reached:
+        rewritten = dict(outcome)
+        rewritten.update({
+            "termination_reason": f"{detail}; terminal representation VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE (static-baseline, candidate applied pre-validate, verifier never ran)",
+            "public_evidence_bytes": limit,
+        })
+        return rewritten
+
     try:
         pre_pdb = (
             str(case["policy"]) == "pdb-on-uncertainty"
@@ -2328,7 +2404,9 @@ def _verify_authority_state(
     reported through the accepted ``TRACKED_SOURCE_CHANGED`` authority stop;
     the observed value is the runner's tracked-source state fingerprint.
     """
-    current_manifest = manifest_loader() if manifest_loader is not None else pilot.load_manifest(pilot.MANIFEST_PATH_V2)
+    current_manifest = manifest_loader() if manifest_loader is not None else pilot.load_manifest(
+        pilot.MANIFEST_PATH_V3 if manifest.get("campaign_id") == pilot.CAMPAIGN_ID_V3 else pilot.MANIFEST_PATH_V2
+    )
     if pilot.manifest_hash(current_manifest) != pilot.manifest_hash(manifest):
         record = {
             "identity": "AUTHORITY_CHECK:MANIFEST", "reason_code": "MANIFEST_HASH_CHANGED",
@@ -2455,7 +2533,7 @@ def build_plan(manifest: Mapping[str, Any], authorization: Mapping[str, Any], ou
     """The clear pre-provider plan displayed before execution."""
     validate_authorization_artifact(authorization, manifest, expected_output_root=output_root)
     return {
-        "schema_version": RUNNER_SCHEMA_VERSION,
+        "schema_version": _runner_schema_version(manifest),
         "plan_kind": "pre-provider-plan",
         "campaign_id": manifest["campaign_id"],
         "campaign_version": manifest["campaign_version"],
@@ -2520,7 +2598,7 @@ def _campaign_rejection_record(
     """A pre-execution rejection record (non-authoritative; never written as
     campaign.json and never allowed to replace attempt evidence)."""
     return {
-        "schema_version": RUNNER_SCHEMA_VERSION,
+        "schema_version": _runner_schema_version(manifest),
         "record_kind": "campaign",
         "campaign_id": manifest["campaign_id"],
         "campaign_version": manifest["campaign_version"],
@@ -2573,9 +2651,9 @@ def _blocked_pre_provider_record(
     identity: str,
     execution_evidence: Mapping[str, Any],
     block_record: Mapping[str, Any],
-) -> dict[str, Any]:
+    ) -> dict[str, Any]:
     return {
-        "schema_version": RUNNER_SCHEMA_VERSION,
+        "schema_version": _runner_schema_version(manifest),
         "record_kind": "campaign",
         "campaign_id": manifest["campaign_id"],
         "campaign_version": manifest["campaign_version"],
@@ -2702,8 +2780,8 @@ def run_campaign(
     gate rejection, which is recorded as a REJECTED/BLOCKED campaign).
     """
     pilot.validate_manifest(manifest)
-    if manifest["campaign_id"] != CAMPAIGN_ID_V2:
-        raise LiveRunnerError("the live runner is bound to the frozen v2 campaign only")
+    if manifest["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3}:
+        raise LiveRunnerError("the live runner is bound to the frozen v2/v3 campaigns only")
     output = Path(output_root)
     counter = ProviderCallCounter()
 
@@ -2874,7 +2952,7 @@ def run_campaign(
         counts["aborted_case_count"] = aborted
         counts["invalidated_case_count"] = invalidated
         campaign = {
-            "schema_version": RUNNER_SCHEMA_VERSION,
+            "schema_version": _runner_schema_version(manifest),
             "record_kind": "campaign",
             "campaign_id": manifest["campaign_id"],
             "campaign_version": manifest["campaign_version"],
@@ -3209,6 +3287,7 @@ def run_campaign(
             rewritten = _budget_exhausted_outcome(
                 case, outcome, exc,
                 run_id=run_id,
+                manifest=manifest,
             )
             if rewritten is None:
                 abort_info = ("BUDGET_EXCEEDED", f"case public-evidence budget exhausted but the frozen case-result schema has no valid terminal representation for this shape: {exc}")
@@ -3551,7 +3630,7 @@ def validate_campaign_record(record: Mapping[str, Any], manifest: Mapping[str, A
         _assert_finite_json(record)
     except NonFiniteValueError as exc:
         raise LiveRunnerError(f"campaign record carries non-finite numeric evidence: {exc}") from exc
-    if record.get("schema_version") != RUNNER_SCHEMA_VERSION or record.get("record_kind") != "campaign":
+    if record.get("schema_version") != _runner_schema_version(manifest) or record.get("record_kind") != "campaign":
         raise LiveRunnerError("campaign record schema identity is invalid")
     if record.get("campaign_id") != manifest["campaign_id"] or record.get("campaign_manifest_hash") != pilot.manifest_hash(manifest):
         raise LiveRunnerError("campaign record identity does not match the frozen manifest")
@@ -3945,8 +4024,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         manifest = pilot.load_manifest(args.manifest)
         pilot.validate_manifest(manifest)
-        if manifest["campaign_id"] != CAMPAIGN_ID_V2:
-            print("BLOCKED: the live runner is bound to the frozen v2 campaign only", file=sys.stderr)
+        if manifest["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3}:
+            print("BLOCKED: the live runner is bound to the frozen v2/v3 campaigns only", file=sys.stderr)
             return 2
         if args.mode == "preflight" or args.preflight_only:
             record = run_live_entry(
@@ -3978,6 +4057,8 @@ __all__ = [
     "LIVE_PROTOCOL_VERSION",
     "RAW_ROUTE_EVIDENCE_SCHEMA",
     "RUNNER_SCHEMA_VERSION",
+    "RUNNER_SCHEMA_VERSION_V2",
+    "RUNNER_SCHEMA_VERSION_V3",
     "AttemptLedger",
     "AttemptClaimError",
     "BudgetViolationError",

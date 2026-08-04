@@ -1,9 +1,11 @@
 """Fail-closed validator entry point for the frozen QuixBugs paired pilot.
 
 Validates every tracked supported campaign manifest version: the frozen v1
-manifest (OpenCode Zen zero-price route) and the derived v2 manifest (OpenCode
+manifest (OpenCode Zen zero-price route), the derived v2 manifest (OpenCode
 Go subscription route with DeepSeek V4 Flash and fail-closed subscription
-billing).  Exits 0 only when every manifest validates.
+billing), and the derived v3 manifest (same route, plus the
+VALIDATION_NOT_REACHED terminal and candidate_provenance).  Exits 0 only
+when every manifest validates.
 """
 from __future__ import annotations
 
@@ -17,12 +19,13 @@ sys.path.insert(0, str(REPO_ROOT))
 from quixbugs_paired_pilot import (  # noqa: E402
     MANIFEST_PATH,
     MANIFEST_PATH_V2,
+    MANIFEST_PATH_V3,
     PilotError,
     load_manifest,
     validate_manifest,
 )
 
-TRACKED_MANIFESTS = (MANIFEST_PATH, MANIFEST_PATH_V2)
+TRACKED_MANIFESTS = (MANIFEST_PATH, MANIFEST_PATH_V2, MANIFEST_PATH_V3)
 
 
 def _validate(path: Path) -> int:

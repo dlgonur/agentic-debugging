@@ -18,6 +18,7 @@ the frozen 20,000-byte limit, and continues the campaign.
 from __future__ import annotations
 
 import copy
+import hashlib
 import json
 import sys
 import time
@@ -1235,3 +1236,681 @@ def test_full_pdb_on_uncertainty_case_records_one_gate_opening(tmp_path):
     assert len(live_adapter.pdb_gate_decisions) == 1
     assert allowed == 1
     assert rejected == 0
+
+# ---- v3 static-baseline pre-validate budget exhaustion (attempt e974af4...) ----
+#
+# Regressions for the v3 campaign: the live-proven shape of attempt
+# ``quixbugs-paired-pilot-v2-attempt-e974af41545d4a1f8fbee527d880d9636cc2af2ddcc2439182b95e152bb14b39``
+# case 5 (``quixbugs-is-valid-parenthesization-smoke-v1 / static-baseline``):
+# ten completed provider responses, the controller reached Patch and applied a
+# candidate (``return True`` -> ``return depth == 0``), the next public request
+# would have exceeded the frozen 20000-byte public-evidence budget before the
+# transition to Validate, the verifier never ran, and 34704 cumulative public
+# evidence bytes were observed.  The exact v2 attempt measurements are used as
+# provenance; all synthetic fixture identities and evidence references are
+# restamped for the v3 campaign.
+
+_IS_VALID_PARENTHESIZATION_PATCH = (
+    "--- a/python_programs/is_valid_parenthesization.py\n"
+    "+++ b/python_programs/is_valid_parenthesization.py\n"
+    "@@ -9,5 +9,5 @@\n"
+    "             if depth < 0:\n"
+    "                 return False\n"
+    " \n"
+    "-    return True\n"
+    "+    return depth == 0\n"
+)
+
+
+@pytest.fixture
+def manifest_v3():
+    return pilot.load_manifest(pilot.MANIFEST_PATH_V3)
+
+
+@pytest.fixture
+def auth_v3(manifest_v3, tmp_path):
+    return _valid_authorization(
+        manifest_v3, tmp_path / "attempt-out",
+        campaign_id=manifest_v3["campaign_id"],
+        campaign_version=manifest_v3["campaign_version"],
+        campaign_attempt_identity="quixbugs-paired-pilot-v3-attempt-" + "d" * 64,
+    )
+
+
+def _v3_candidate_hash():
+    return hashlib.sha256(
+        pilot.canonical_json({"patch": _IS_VALID_PARENTHESIZATION_PATCH}).encode("utf-8")
+    ).hexdigest()
+
+
+def _static_baseline_pre_validate_events_jsonl(*, total_bytes: int) -> str:
+    """The case-5 events log padded to exactly ``total_bytes`` bytes.
+
+    Contains the baseline reproduction, two expressed hypotheses (h-1, h-2),
+    the Patch transition, the ``apply_patch`` action carrying the exact
+    candidate diff, the ``apply_patch_result`` observation with
+    ``applied: true``, and the final event stopping in Patch with a model
+    error (the budget-exhaustion stop).
+    """
+    patch_sha = hashlib.sha256(_IS_VALID_PARENTHESIZATION_PATCH.encode("utf-8")).hexdigest()
+    lines = [
+        {"event_type": "decision", "name": "decision", "state": "Reproduce", "payload": {"directive_kind": "action", "model_call_index": 0}},
+        {"event_type": "action", "name": "run_reproduction", "state": "Reproduce", "payload": {"action": {"name": "run_reproduction"}}},
+        {"event_type": "observation", "name": "run_reproduction", "state": "Reproduce", "payload": {"observation": {"name": "run_reproduction", "status": "ok", "payload": {"phase": "baseline", "failure_reproduced": True}}}},
+        {"event_type": "decision", "name": "decision", "state": "Understand", "payload": {"directive_kind": "add_hypothesis", "model_call_index": 1}},
+        {"event_type": "action", "name": "express_root_cause_hypothesis", "state": "Understand", "payload": {"action": {"name": "express_root_cause_hypothesis", "arguments": {"hypothesis_id": "h-1"}}}},
+        {"event_type": "observation", "name": "express_root_cause_hypothesis", "state": "Understand", "payload": {"observation": {"name": "express_root_cause_hypothesis", "status": "ok", "payload": {"hypothesis_id": "h-1"}}}},
+        {"event_type": "action", "name": "express_root_cause_hypothesis", "state": "Understand", "payload": {"action": {"name": "express_root_cause_hypothesis", "arguments": {"hypothesis_id": "h-2"}}}},
+        {"event_type": "observation", "name": "express_root_cause_hypothesis", "state": "Understand", "payload": {"observation": {"name": "express_root_cause_hypothesis", "status": "ok", "payload": {"hypothesis_id": "h-2"}}}},
+        {"event_type": "transition", "name": "transition", "state": "Patch", "payload": {"source_state": "Understand", "target_state": "Patch", "reason": "hypotheses recorded"}},
+        {"event_type": "action", "name": "apply_patch", "state": "Patch", "payload": {"action": {"action_id": "action-000000009", "name": "apply_patch", "arguments": {"patch": _IS_VALID_PARENTHESIZATION_PATCH}}}},
+        {"event_type": "observation", "name": "apply_patch", "state": "Patch", "payload": {"observation": {"action_id": "action-000000009", "name": "apply_patch", "status": "ok", "payload": {"applied": True, "changed_files": ["python_programs/is_valid_parenthesization.py"], "hunk_count": 1, "patch_sha256": patch_sha}}}},
+        {"event_type": "final", "name": "final", "state": "Patch", "payload": {"final_state": "Patch", "stop_reason": "model_error", "model_calls": 10}},
+    ]
+    base = "\n".join(json.dumps(line, ensure_ascii=False) for line in lines) + "\n"
+    base_bytes = len(base.encode("utf-8"))
+    assert total_bytes > base_bytes
+    padding = json.dumps(
+        {"event_type": "padding", "name": "padding", "state": "Patch",
+         "payload": {"filler": "x" * (total_bytes - base_bytes - 1 - len(json.dumps(
+             {"event_type": "padding", "name": "padding", "state": "Patch",
+              "payload": {"filler": "x"}}, ensure_ascii=False)) + 1)}},
+        ensure_ascii=False,
+    )
+    value = base + padding + "\n"
+    assert len(value.encode("utf-8")) == total_bytes
+    return value
+
+
+def _static_baseline_pre_validate_exhausted_outcome(manifest, case, route, **overrides):
+    """The exact e974af4... case-5 raw outcome restamped for the v3 campaign.
+
+    Ten completed provider responses, 34704 cumulative public evidence bytes,
+    the controller stopped in Patch with an applied candidate, the verifier
+    never ran.  The adapter maps the live VALIDATION_NOT_REACHED status to
+    VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE with
+    candidate_provenance = applied_patch_event.
+    """
+    source_hash = next(item["source_sha256"] for item in manifest["inventory"] if item["task_id"] == case["task_id"])
+    outcome = {
+        "terminal_status": "VALIDATION_NOT_REACHED",
+        "terminal_reason_code": "VALIDATION_NOT_REACHED_PRE_VALIDATE",
+        "termination_reason": "opencode-go adapter: VALIDATION_NOT_REACHED: public_evidence_budget_exceeded",
+        "logical_model_calls": 10,
+        "provider_process_attempts": 10,
+        "retries": 0,
+        "valid_directives": 10,
+        "malformed_directive_rejections": 0,
+        "bounded_directive_feedback_events": 0,
+        "baseline_reproduction": True,
+        "controller_states_visited": ["Reproduce", "Understand", "Patch"],
+        "hypotheses_created": 2,
+        "pdb_gate_decisions": [],
+        "pdb_counts": dict(runner.ZERO_PDB_COUNTS),
+        "pdb_sessions_started": 0,
+        "successful_pdb_observations": 0,
+        "failed_pdb_observations": 0,
+        "verifier_runs": 0,
+        "patch_submissions": 1,
+        "candidate_provenance": "applied_patch_event",
+        "independent_verifier_result": {"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+        "transport_evidence": {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": True,
+            "evidence_reference": f"opencode-go:{case['case_id']}:10",
+        },
+        "blocked_evidence": {"block_kind": "none", "reason_code": "NONE", "confirmed": False, "evidence_reference": "v3-synthetic:none"},
+        "infrastructure_evidence": {
+            "stage": "none", "reason_code": "NONE", "confirmed_failure": False, "classification": "NONE",
+            "terminal_classification": "NOT_APPLICABLE", "provider_attempt_index": None,
+            "prior_lifecycle_completed": False, "source_mutation_observed": False,
+            "expected_source_hash": None, "evidence_reference": "v3-synthetic:none",
+        },
+        "preflight_failure_evidence": {field: None for field in pilot.ALL_PREFLIGHT_FAILURE_FIELDS},
+        "campaign_stop_evidence": dict({field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS}, confirmed=False),
+        "prompt_tokens": 45784,
+        "completion_tokens": 705,
+        "reasoning_tokens": 0,
+        "provider_reported_cost": 0.0090328,
+        "wall_clock_duration_seconds": 169.701511,
+        "public_evidence_bytes": 34704,
+        "canonical_source_restoration": True,
+        "owned_workspace_cleanup": True,
+        "evidence_consistency": True,
+        "public_request_hash": hashlib.sha256(b"v3-synthetic-events").hexdigest(),
+        "source_hash": source_hash,
+        "candidate_hash": _v3_candidate_hash(),
+        "repair_outcome": "NO_CANDIDATE",
+        "resource_ids": {},
+    }
+    outcome.update(overrides)
+    return outcome
+
+
+def _run_campaign_v3(manifest, auth, tmp_path, *, case_runner, runner_entries, git_state_provider=None):
+    return _run_campaign_custom(
+        manifest, auth, tmp_path,
+        case_runner=case_runner,
+        runner_entries=runner_entries,
+        git_state_provider=git_state_provider,
+    )
+
+
+def test_v3_manifest_and_authorization_validate(manifest_v3, auth_v3):
+    """The v3 manifest validates with the result-v3 schema and its hash is
+    frozen; the v3 authorization binds to the v3 manifest."""
+    assert manifest_v3["campaign_id"] == "quixbugs-paired-pilot-v3"
+    assert manifest_v3["campaign_version"] == 3
+    assert manifest_v3["outcome_schema"]["schema_version"] == "quixbugs-paired-pilot-result-v3"
+    assert "VALIDATION_NOT_REACHED" in manifest_v3["outcome_schema"]["terminal_statuses"]
+    assert "candidate_provenance" in manifest_v3["outcome_schema"]["required_fields"]
+    assert pilot.validate_manifest(manifest_v3) == "f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf"
+    assert manifest_v3["qualification_contract_hash"] == "7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d"
+    assert auth_v3["campaign_id"] == manifest_v3["campaign_id"]
+    assert auth_v3["campaign_version"] == manifest_v3["campaign_version"]
+
+
+def test_validation_not_reached_budget_exhaustion_terminalizes_v3(manifest_v3):
+    """The exact e974af4... case-5 shape raises PublicEvidenceBudgetExhausted
+    and rewrites to VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE
+    with public_evidence_bytes clamped to the frozen limit and every completed
+    accounting field preserved."""
+    case = manifest_v3["case_order"][4]
+    route = _route_evidence(manifest_v3)
+    outcome = _static_baseline_pre_validate_exhausted_outcome(manifest_v3, case, route)
+
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v3, case_policy=case["policy"])
+    assert info.value.observed == 34704
+    assert info.value.limit == 20000
+
+    rewritten = runner._budget_exhausted_outcome(
+        case, outcome, info.value, run_id="run-e974af4-v3", manifest=manifest_v3,
+    )
+    assert rewritten is not None
+    assert rewritten["terminal_status"] == "VALIDATION_NOT_REACHED"
+    assert rewritten["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
+    assert rewritten["public_evidence_bytes"] == 20000
+    assert "34704" in rewritten["termination_reason"] and "20000" in rewritten["termination_reason"]
+    assert "VALIDATION_NOT_REACHED" in rewritten["termination_reason"]
+    assert rewritten["logical_model_calls"] == 10
+    assert rewritten["provider_process_attempts"] == 10
+    assert rewritten["valid_directives"] == 10
+    assert rewritten["retries"] == 0
+    assert rewritten["patch_submissions"] == 1
+    assert rewritten["candidate_provenance"] == "applied_patch_event"
+    assert rewritten["candidate_hash"] == _v3_candidate_hash()
+    assert rewritten["verifier_runs"] == 0
+    assert rewritten["repair_outcome"] == "NO_CANDIDATE"
+    assert rewritten["controller_states_visited"] == ["Reproduce", "Understand", "Patch"]
+    assert rewritten["prompt_tokens"] == 45784
+    assert rewritten["completion_tokens"] == 705
+    assert rewritten["reasoning_tokens"] == 0
+    assert rewritten["provider_reported_cost"] == pytest.approx(0.0090328)
+    assert rewritten["wall_clock_duration_seconds"] == pytest.approx(169.701511)
+    assert rewritten["hypotheses_created"] == 2
+    assert rewritten["pdb_counts"] == dict(runner.ZERO_PDB_COUNTS)
+    assert rewritten["transport_evidence"]["completed_response"] is True
+    assert rewritten["terminal_transport_evidence"]["evidence_reference"] == f"opencode-go:{case['case_id']}:10"
+
+    runner.enforce_case_budgets(rewritten, manifest_v3, case_policy=case["policy"])
+
+
+def _completed_entries_v3(manifest):
+    """v2-shaped completed entries plus the v3 candidate_provenance required
+    field (None for no-candidate outcomes, verifier_record for the completed
+    RESOLVED outcomes with a submitted patch)."""
+    route = _route_evidence(manifest)
+    entries = []
+    for case in manifest["case_order"]:
+        outcome = _completed_outcome(manifest, case, route)
+        outcome["candidate_provenance"] = "verifier_record" if outcome.get("patch_submissions", 0) > 0 else None
+        entries.append({"provider_process_attempts": 1, "outcome": outcome})
+    return entries
+
+
+def test_validation_not_reached_budget_exhaustion_campaign_proceeds_v3(manifest_v3, auth_v3, tmp_path, git_state_provider):
+    """End-to-end v3: case 5 produces the static-baseline pre-validate
+    exhausted shape; the case materializes as VALIDATION_NOT_REACHED and the
+    campaign proceeds to case 6."""
+    route = _route_evidence(manifest_v3)
+    entries = _completed_entries_v3(manifest_v3)
+    entries[4] = {
+        "provider_process_attempts": 10,
+        "outcome": _static_baseline_pre_validate_exhausted_outcome(manifest_v3, manifest_v3["case_order"][4], route),
+    }
+
+    record, factory, case_runner, output = _run_campaign_v3(
+        manifest_v3, auth_v3, tmp_path,
+        case_runner=ScriptedCaseRunner(entries),
+        runner_entries=entries,
+        git_state_provider=git_state_provider,
+    )
+
+    assert record["status"] == "COMPLETED"
+    assert record["stop_reason"] is None
+    assert record["case_lifecycle_states"][manifest_v3["case_order"][4]["case_id"]] == "completed"
+    assert record["counts"]["completed_case_count"] == 6
+    assert record["counts"]["unstarted_case_count"] == 0
+    assert record["counts"]["aborted_case_count"] == 0
+    assert record["counts"]["logical_model_calls"] == 10 + 5
+    assert record["counts"]["provider_process_attempts"] == 10 + 5
+
+    fifth = record["cases"][4]
+    assert fifth["terminal_status"] == "VALIDATION_NOT_REACHED"
+    assert fifth["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
+    assert fifth["public_evidence_bytes"] == 20000
+    assert fifth["patch_submissions"] == 1
+    assert fifth["candidate_provenance"] == "applied_patch_event"
+    assert fifth["candidate_hash"] == _v3_candidate_hash()
+    assert fifth["verifier_runs"] == 0
+    assert fifth["repair_outcome"] == "NO_CANDIDATE"
+    assert fifth["logical_model_calls"] == 10
+    assert fifth["provider_reported_cost"] == pytest.approx(0.0090328)
+
+    assert record["cases"][5]["case_id"] == manifest_v3["case_order"][5]["case_id"]
+    assert record["cases"][5]["terminal_status"] == "UNRESOLVED"
+    assert (output / "cases" / f"case-05-quixbugs-paired-pilot-v3__quixbugs-is-valid-parenthesization-smoke-v1__static-baseline.json").is_file()
+
+
+def test_validation_not_reached_budget_exhaustion_attempt_package_verifies_v3(manifest_v3, auth_v3, tmp_path, git_state_provider):
+    """After the v3 campaign from the progression test, verify_attempt_package
+    returns consistent with all six case files on disk."""
+    route = _route_evidence(manifest_v3)
+    entries = _completed_entries_v3(manifest_v3)
+    entries[4] = {
+        "provider_process_attempts": 10,
+        "outcome": _static_baseline_pre_validate_exhausted_outcome(manifest_v3, manifest_v3["case_order"][4], route),
+    }
+
+    record, factory, case_runner, output = _run_campaign_v3(
+        manifest_v3, auth_v3, tmp_path,
+        case_runner=ScriptedCaseRunner(entries),
+        runner_entries=entries,
+        git_state_provider=git_state_provider,
+    )
+
+    verification = runner.verify_attempt_package(output, manifest_v3)
+    assert verification["consistent"] is True
+    assert verification["errors"] == []
+    assert verification["case_files_on_disk"] == 6
+    assert verification["case_records_referenced"] == 6
+    assert verification["terminal_commit"] == "PRESENT"
+    assert verification["campaign_status"] == "COMPLETED"
+
+
+def test_validation_not_reached_with_validate_state_still_aborts(manifest_v3):
+    """A shape that reached Validate has no VALIDATION_NOT_REACHED
+    representation and returns None (honest abort)."""
+    case = manifest_v3["case_order"][4]
+    route = _route_evidence(manifest_v3)
+    outcome = _static_baseline_pre_validate_exhausted_outcome(
+        manifest_v3, case, route,
+        controller_states_visited=["Reproduce", "Understand", "Patch", "Validate"],
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v3, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-validate", manifest=manifest_v3) is None
+
+
+def test_validation_not_reached_with_verifier_completed_still_aborts(manifest_v3):
+    """A shape with a completed verifier has no VALIDATION_NOT_REACHED
+    representation; the completed UNRESOLVED/RESOLVED paths own it."""
+    case = manifest_v3["case_order"][4]
+    route = _route_evidence(manifest_v3)
+    outcome = _static_baseline_pre_validate_exhausted_outcome(
+        manifest_v3, case, route,
+        verifier_runs=1,
+        independent_verifier_result={"status": "COMPLETED", "outcome": "NO_OP", "lifecycle_succeeded": True},
+        candidate_provenance="verifier_record",
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v3, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-verifier", manifest=manifest_v3) is None
+
+
+def test_validation_not_reached_requires_v3_campaign():
+    """The VALIDATION_NOT_REACHED rewrite is v3-only: the same shape under a
+    v2 manifest returns None (the frozen v2 contract does not admit it)."""
+    manifest = pilot.load_manifest(pilot.MANIFEST_PATH_V2)
+    case = manifest["case_order"][4]
+    route = _route_evidence(manifest)
+    outcome = _static_baseline_pre_validate_exhausted_outcome(manifest, case, route)
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-v2", manifest=manifest) is None
+
+
+def test_v2_static_baseline_pdb_not_reached_still_rejected():
+    """The frozen v2 validator still rejects a static-baseline PDB_NOT_REACHED
+    record (the v2 terminal contract is unchanged)."""
+    manifest = pilot.load_manifest(pilot.MANIFEST_PATH_V2)
+    case = manifest["case_order"][1]
+    record = _static_baseline_pre_validate_exhausted_outcome(manifest, case, _route_evidence(manifest))
+    record.update({
+        "terminal_status": "PDB_NOT_REACHED",
+        "terminal_reason_code": "PDB_NOT_REACHED_NO_GATE",
+        "candidate_provenance": None,
+        "patch_submissions": 0,
+        "candidate_hash": None,
+        "verifier_runs": 0,
+        "repair_outcome": "NO_CANDIDATE",
+        "case_id": case["case_id"],
+        "order_index": case["order_index"],
+        "task_id": case["task_id"],
+        "policy": case["policy"],
+        "campaign_manifest_hash": pilot.manifest_hash(manifest),
+        "campaign_commit": "a" * 40,
+        "accepted_code_commit": "a" * 40,
+        "execution_kind": "LIVE_CASE",
+        "qualification_contract_hash": manifest["qualification_contract_hash"],
+        "planning_baseline_commit": manifest["planning_baseline_commit"],
+        "source_revision": manifest["authority"]["revision"],
+        "provider": manifest["route"]["provider"],
+        "model": manifest["route"]["model"],
+        "variant": manifest["route"]["variant"],
+        "route_observation": _route_evidence(manifest),
+    })
+    record["route_observation"].update({"opencode_version": "1.0.0", "active_model_status": "ACTIVE", "variant_available": True, "catalog_fingerprint": "c" * 64, "preflight_success": True})
+    with pytest.raises(pilot.PilotError):
+        pilot.validate_case_result(record, manifest)
+# ---- adapter: events-log candidate derivation (action_id correlation) ---------
+
+
+def _events_line(event_type, name, state, payload):
+    return json.dumps({"event_type": event_type, "name": name, "state": state, "payload": payload}, ensure_ascii=False)
+
+
+def _apply_patch_events_jsonl(*, applied=True, with_observation=True, revert=None):
+    """Build an events log with an apply_patch action/observation pair and an
+    optional revert action/observation.  ``revert`` is None (no revert),
+    ``"ok"`` (matching observation with reverted=true), ``"no-observation"``
+    (revert action without a matching observation), or ``"reverted-false"``
+    (matching observation with reverted=false)."""
+    patch_sha = hashlib.sha256(_IS_VALID_PARENTHESIZATION_PATCH.encode("utf-8")).hexdigest()
+    lines = [
+        _events_line("action", "apply_patch", "Patch", {"action": {"action_id": "action-000000009", "name": "apply_patch", "arguments": {"patch": _IS_VALID_PARENTHESIZATION_PATCH}}}),
+    ]
+    if with_observation:
+        lines.append(_events_line("observation", "apply_patch", "Patch", {"observation": {"action_id": "action-000000009", "name": "apply_patch", "status": "ok", "payload": {"applied": applied, "changed_files": ["python_programs/is_valid_parenthesization.py"], "hunk_count": 1, "patch_sha256": patch_sha}}}))
+    if revert == "ok":
+        lines.append(_events_line("action", "revert_patch", "Patch", {"action": {"action_id": "action-000000010", "name": "revert_patch", "arguments": {}}}))
+        lines.append(_events_line("observation", "revert_patch", "Patch", {"observation": {"action_id": "action-000000010", "name": "revert_patch", "status": "ok", "payload": {"reverted": True}}}))
+    elif revert == "no-observation":
+        lines.append(_events_line("action", "revert_patch", "Patch", {"action": {"action_id": "action-000000010", "name": "revert_patch", "arguments": {}}}))
+    elif revert == "reverted-false":
+        lines.append(_events_line("action", "revert_patch", "Patch", {"action": {"action_id": "action-000000010", "name": "revert_patch", "arguments": {}}}))
+        lines.append(_events_line("observation", "revert_patch", "Patch", {"observation": {"action_id": "action-000000010", "name": "revert_patch", "status": "ok", "payload": {"reverted": False}}}))
+    return "\n".join(lines) + "\n"
+
+
+def test_applied_patch_from_events_derives_candidate():
+    """The action_id-correlated apply_patch pair yields the candidate diff and
+    sha256."""
+    result = adapter._applied_patch_from_events(_apply_patch_events_jsonl())
+    assert result is not None
+    diff, patch_sha = result
+    assert diff == _IS_VALID_PARENTHESIZATION_PATCH
+    assert patch_sha == hashlib.sha256(_IS_VALID_PARENTHESIZATION_PATCH.encode("utf-8")).hexdigest()
+
+
+def test_applied_patch_from_events_apply_without_observation_yields_none():
+    assert adapter._applied_patch_from_events(_apply_patch_events_jsonl(with_observation=False)) is None
+
+
+def test_applied_patch_from_events_apply_applied_false_yields_none():
+    assert adapter._applied_patch_from_events(_apply_patch_events_jsonl(applied=False)) is None
+
+
+def test_applied_patch_from_events_no_apply_action_yields_none():
+    assert adapter._applied_patch_from_events(_events_line("final", "final", "Patch", {"final_state": "Patch"}) + "\n") is None
+
+
+def test_applied_patch_from_events_revert_with_matching_observation_invalidates():
+    """A revert_patch whose matching observation confirms reverted=true
+    invalidates the candidate."""
+    assert adapter._applied_patch_from_events(_apply_patch_events_jsonl(revert="ok")) is None
+
+
+def test_applied_patch_from_events_revert_without_matching_observation_keeps_candidate():
+    """A revert action without a matching observation does not invalidate the
+    candidate (the revert did not complete)."""
+    result = adapter._applied_patch_from_events(_apply_patch_events_jsonl(revert="no-observation"))
+    assert result is not None
+    assert result[0] == _IS_VALID_PARENTHESIZATION_PATCH
+
+
+def test_applied_patch_from_events_revert_reverted_false_keeps_candidate():
+    """A revert observation with reverted=false does not invalidate the
+    candidate."""
+    result = adapter._applied_patch_from_events(_apply_patch_events_jsonl(revert="reverted-false"))
+    assert result is not None
+    assert result[0] == _IS_VALID_PARENTHESIZATION_PATCH
+
+
+def test_outcome_derives_candidate_from_events_when_verifier_never_ran(tmp_path, manifest_v3, synthetic_executable):
+    """The adapter outcome derives patch_submissions/candidate_hash/
+    candidate_provenance from the events log when the verifier never ran."""
+    harness = _harness(tmp_path, manifest_v3, synthetic_executable)
+    case = manifest_v3["case_order"][4]
+    source_hash = next(item["source_sha256"] for item in manifest_v3["inventory"] if item["task_id"] == case["task_id"])
+    mapping = _live_mapping(manifest_v3, case, **{
+        "status": "VALIDATION_NOT_REACHED",
+        "controller": {"completed": False, "final_state": "Patch", "stop_reason": "model_error", "model_calls": 10, "exception": False},
+        "verifier": {"executed": False, "failure": False, "status": None, "outcome": None, "patch_application": None, "localization": {"outcome": "NO_LOCALIZATION"}},
+        "measurements": {
+            "model_request_count": 10, "model_response_count": 10, "retry_count": 0,
+            "provider_error_count": 0, "provider_error_kinds": [],
+            "token_usage": {"prompt_tokens": 45784, "completion_tokens": 705, "total_tokens": 46489,
+                            "provider_reported": True, "missing_fields": []},
+            "termination_reason": "public_evidence_budget_exceeded",
+            "successful_pdb_observation_count": 0, "failed_pdb_observation_count": 0,
+            "tool_call_count": 10, "case_elapsed_duration_ms": 169702,
+            "model_phase_elapsed_duration_ms": 169000, "model_transport_duration_ms": 169000,
+            "elapsed_scope": "case_observed; model_phase=transport_only",
+        },
+        "events_jsonl": _static_baseline_pre_validate_events_jsonl(total_bytes=34704),
+        "evidence": {"pdb_gate_decisions": [], "directive_rejections": []},
+    })
+    inner = harness["factory"].prepare(case)
+    inner.process_attempts = 10
+    outcome = adapter._outcome_from_live_case(
+        case, FakeLiveResult(mapping), harness["observed"], inner,
+        transport_attempts=inner.process_attempts, policy_value=case["policy"], run_id="run-e974af4-v3",
+        source_hash=source_hash,
+    )
+    assert outcome["terminal_status"] == "VALIDATION_NOT_REACHED"
+    assert outcome["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
+    assert outcome["patch_submissions"] == 1
+    assert outcome["candidate_provenance"] == "applied_patch_event"
+    assert outcome["candidate_hash"] == _v3_candidate_hash()
+    assert outcome["verifier_runs"] == 0
+    assert outcome["repair_outcome"] == "NO_CANDIDATE"
+    assert outcome["logical_model_calls"] == 10
+    assert outcome["public_evidence_bytes"] == 34704
+
+
+def test_outcome_events_revert_invalidates_candidate_when_verifier_never_ran(tmp_path, manifest_v3, synthetic_executable):
+    """When the events log shows a completed revert, the adapter reports no
+    candidate (patch_submissions == 0, candidate_hash is None)."""
+    harness = _harness(tmp_path, manifest_v3, synthetic_executable)
+    case = manifest_v3["case_order"][4]
+    source_hash = next(item["source_sha256"] for item in manifest_v3["inventory"] if item["task_id"] == case["task_id"])
+    events = _apply_patch_events_jsonl(revert="ok")
+    mapping = _live_mapping(manifest_v3, case, **{
+        "status": "VALIDATION_NOT_REACHED",
+        "controller": {"completed": False, "final_state": "Patch", "stop_reason": "model_error", "model_calls": 10, "exception": False},
+        "verifier": {"executed": False, "failure": False, "status": None, "outcome": None, "patch_application": None, "localization": {"outcome": "NO_LOCALIZATION"}},
+        "measurements": {
+            "model_request_count": 10, "model_response_count": 10, "retry_count": 0,
+            "provider_error_count": 0, "provider_error_kinds": [],
+            "token_usage": {"prompt_tokens": 45784, "completion_tokens": 705, "total_tokens": 46489,
+                            "provider_reported": True, "missing_fields": []},
+            "termination_reason": "public_evidence_budget_exceeded",
+            "successful_pdb_observation_count": 0, "failed_pdb_observation_count": 0,
+            "tool_call_count": 10, "case_elapsed_duration_ms": 169702,
+            "model_phase_elapsed_duration_ms": 169000, "model_transport_duration_ms": 169000,
+            "elapsed_scope": "case_observed; model_phase=transport_only",
+        },
+        "events_jsonl": events,
+        "evidence": {"pdb_gate_decisions": [], "directive_rejections": []},
+    })
+    inner = harness["factory"].prepare(case)
+    inner.process_attempts = 10
+    outcome = adapter._outcome_from_live_case(
+        case, FakeLiveResult(mapping), harness["observed"], inner,
+        transport_attempts=inner.process_attempts, policy_value=case["policy"], run_id="run-e974af4-v3",
+        source_hash=source_hash,
+    )
+    assert outcome["patch_submissions"] == 0
+    assert outcome["candidate_hash"] is None
+    assert outcome["candidate_provenance"] is None
+
+# ---- v3 candidate-provenance lifecycle enforcement (negative regressions) ------
+
+
+def _v3_result_record(manifest, case, outcome_overrides):
+    """Build a minimal v3 LIVE_CASE record from an outcome for direct
+    validate_case_result testing."""
+    route = _route_evidence(manifest)
+    outcome = _completed_outcome(manifest, case, route)
+    outcome.update(outcome_overrides)
+    record = pilot.public_case_record(manifest, case)
+    record.update({
+        "execution_kind": "LIVE_CASE",
+        "campaign_commit": "a" * 40,
+        "accepted_code_commit": "a" * 40,
+        "execution_commit": "a" * 40,
+        "provider": route["provider"],
+        "model": route["model"],
+        "variant": route["variant"],
+        "route_observation": route,
+        "resource_ids": {},
+    })
+    for field in runner.OUTCOME_FIELDS:
+        if field in outcome:
+            record[field] = outcome[field]
+    if "candidate_provenance" in outcome:
+        record["candidate_provenance"] = outcome["candidate_provenance"]
+    return record
+
+
+def test_v3_verifier_backed_candidate_with_applied_patch_event_rejected(manifest_v3):
+    """A v3 verifier-backed submitted candidate (verifier_runs >= 1) with
+    candidate_provenance = applied_patch_event is rejected."""
+    case = manifest_v3["case_order"][1]
+    record = _v3_result_record(manifest_v3, case, {
+        "terminal_status": "RESOLVED",
+        "terminal_reason_code": "RESOLVED_COMPLETED",
+        "patch_submissions": 1,
+        "verifier_runs": 1,
+        "candidate_hash": "e" * 64,
+        "candidate_provenance": "applied_patch_event",
+        "repair_outcome": "RESOLVED",
+        "independent_verifier_result": {"status": "COMPLETED", "outcome": "RESOLVED", "lifecycle_succeeded": True},
+        "logical_model_calls": 1,
+        "provider_process_attempts": 1,
+        "valid_directives": 1,
+        "baseline_reproduction": True,
+    })
+    record["route_observation"].update({"opencode_version": "1.0.0", "active_model_status": "ACTIVE", "variant_available": True, "catalog_fingerprint": "c" * 64, "preflight_success": True})
+    with pytest.raises(pilot.PilotError, match="verifier_record"):
+        pilot.validate_case_result(record, manifest_v3)
+
+
+def test_v3_validation_not_reached_with_verifier_record_rejected(manifest_v3):
+    """A v3 VALIDATION_NOT_REACHED result with candidate_provenance =
+    verifier_record is rejected."""
+    case = manifest_v3["case_order"][4]
+    outcome = _static_baseline_pre_validate_exhausted_outcome(manifest_v3, case, _route_evidence(manifest_v3))
+    outcome["candidate_provenance"] = "verifier_record"
+    record = _v3_result_record(manifest_v3, case, outcome)
+    record.update({
+        "terminal_status": "VALIDATION_NOT_REACHED",
+        "terminal_reason_code": "VALIDATION_NOT_REACHED_PRE_VALIDATE",
+    })
+    record["route_observation"].update({"opencode_version": "1.0.0", "active_model_status": "ACTIVE", "variant_available": True, "catalog_fingerprint": "c" * 64, "preflight_success": True})
+    with pytest.raises(pilot.PilotError, match="applied_patch_event"):
+        pilot.validate_case_result(record, manifest_v3)
+
+
+def test_v3_zero_patch_with_non_null_provenance_rejected(manifest_v3):
+    """A v3 zero-patch result with candidate_provenance = verifier_record is
+    rejected (zero submissions require null provenance)."""
+    case = manifest_v3["case_order"][0]
+    record = _v3_result_record(manifest_v3, case, {
+        "patch_submissions": 0,
+        "verifier_runs": 0,
+        "candidate_hash": None,
+        "candidate_provenance": "verifier_record",
+        "repair_outcome": "NO_CANDIDATE",
+    })
+    record["route_observation"].update({"opencode_version": "1.0.0", "active_model_status": "ACTIVE", "variant_available": True, "catalog_fingerprint": "c" * 64, "preflight_success": True})
+    with pytest.raises(pilot.PilotError, match="null candidate provenance"):
+        pilot.validate_case_result(record, manifest_v3)
+
+def test_applied_patch_from_events_mismatched_patch_sha256_yields_none():
+    """When the observation's patch_sha256 does not equal the SHA-256 of the
+    action's exact patch string, the derivation fails closed (returns None)."""
+    wrong_sha = "0" * 64
+    events = (
+        _events_line("action", "apply_patch", "Patch", {"action": {"action_id": "action-000000009", "name": "apply_patch", "arguments": {"patch": _IS_VALID_PARENTHESIZATION_PATCH}}})
+        + "\n"
+        + _events_line("observation", "apply_patch", "Patch", {"observation": {"action_id": "action-000000009", "name": "apply_patch", "status": "ok", "payload": {"applied": True, "changed_files": ["python_programs/is_valid_parenthesization.py"], "hunk_count": 1, "patch_sha256": wrong_sha}}})
+        + "\n"
+    )
+    assert adapter._applied_patch_from_events(events) is None
+
+# ---- version-aware public_case_record and validate_campaign_record regressions --
+
+
+def test_v2_public_case_record_omits_candidate_provenance():
+    """v1/v2 public_case_record must not contain candidate_provenance."""
+    manifest = pilot.load_manifest(pilot.MANIFEST_PATH_V2)
+    case = manifest["case_order"][0]
+    record = pilot.public_case_record(manifest, case)
+    assert "candidate_provenance" not in record
+
+
+def test_v3_public_case_record_includes_candidate_provenance():
+    """v3 public_case_record must contain candidate_provenance (default None)."""
+    manifest = pilot.load_manifest(pilot.MANIFEST_PATH_V3)
+    case = manifest["case_order"][0]
+    record = pilot.public_case_record(manifest, case)
+    assert "candidate_provenance" in record
+    assert record["candidate_provenance"] is None
+
+
+def test_v2_manifest_rejects_v3_runner_schema():
+    """validate_campaign_record with a v2 manifest rejects a record carrying
+    the v3 runner schema version."""
+    manifest = pilot.load_manifest(pilot.MANIFEST_PATH_V2)
+    record = {
+        "schema_version": runner.RUNNER_SCHEMA_VERSION_V3,
+        "record_kind": "campaign",
+        "campaign_id": manifest["campaign_id"],
+        "campaign_version": manifest["campaign_version"],
+        "campaign_manifest_hash": pilot.manifest_hash(manifest),
+        "status": "COMPLETED",
+        "frozen_case_order": [case["case_id"] for case in manifest["case_order"]],
+    }
+    with pytest.raises(runner.LiveRunnerError, match="schema identity is invalid"):
+        runner.validate_campaign_record(record, manifest)
+
+
+def test_v3_manifest_rejects_v2_runner_schema():
+    """validate_campaign_record with a v3 manifest rejects a record carrying
+    the v2 runner schema version."""
+    manifest = pilot.load_manifest(pilot.MANIFEST_PATH_V3)
+    record = {
+        "schema_version": runner.RUNNER_SCHEMA_VERSION_V2,
+        "record_kind": "campaign",
+        "campaign_id": manifest["campaign_id"],
+        "campaign_version": manifest["campaign_version"],
+        "campaign_manifest_hash": pilot.manifest_hash(manifest),
+        "status": "COMPLETED",
+        "frozen_case_order": [case["case_id"] for case in manifest["case_order"]],
+    }
+    with pytest.raises(runner.LiveRunnerError, match="schema identity is invalid"):
+        runner.validate_campaign_record(record, manifest)
