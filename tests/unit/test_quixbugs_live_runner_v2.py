@@ -1282,7 +1282,6 @@ def test_campaign_budget_exceeded_aborts(manifest, auth, tmp_path, git_state_pro
     ("hypotheses_created", 4),
     ("patch_submissions", 2),
     ("verifier_runs", 21),
-    ("public_evidence_bytes", 20001),
 ])
 def test_campaign_each_frozen_budget_is_enforced(manifest, auth, tmp_path, git_state_provider, field, value):
     route = _route_evidence(manifest)
@@ -1291,6 +1290,169 @@ def test_campaign_each_frozen_budget_is_enforced(manifest, auth, tmp_path, git_s
     record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
     assert record["status"] == "ABORTED"
     assert record["stop_reason"] == "BUDGET_EXCEEDED"
+
+
+def test_enforce_case_budgets_distinguishes_expected_public_evidence_exhaustion(manifest):
+    route = _route_evidence(manifest)
+    case = manifest["case_order"][0]
+    exhausted = _completed_outcome(manifest, case, route, public_evidence_bytes=20001)
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(exhausted, manifest, case_policy=case["policy"])
+    assert info.value.limit == 20000
+    assert info.value.observed == 20001
+    corrupt = _completed_outcome(manifest, case, route, public_evidence_bytes=-1)
+    with pytest.raises(runner.BudgetViolationError):
+        runner.enforce_case_budgets(corrupt, manifest, case_policy=case["policy"])
+
+
+def test_campaign_public_evidence_budget_exhaustion_is_case_level_terminal(manifest, auth, tmp_path, git_state_provider):
+    """Production-shaped regression: nine completed provider responses, nine
+    structurally accepted directives, one hypothesis, controller reached
+    Patch, next public_evidence_bytes 21949 > frozen 20000 limit, provider
+    cost 0.0066370976.  The case is terminalized at case level with all
+    completed accounting and cost preserved; the campaign proceeds to the
+    second case and is never ABORTED."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    raw = _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "terminal_status": "INFRASTRUCTURE_ERROR",
+        "terminal_reason_code": "INFRASTRUCTURE_FAILURE",
+        "termination_reason": "controller stopped before DONE",
+        "logical_model_calls": 9,
+        "provider_process_attempts": 9,
+        "valid_directives": 9,
+        "baseline_reproduction": True,
+        "controller_states_visited": ["REPRODUCE", "UNDERSTAND", "PATCH"],
+        "hypotheses_created": 1,
+        "pdb_gate_decisions": [],
+        "pdb_counts": dict(runner.ZERO_PDB_COUNTS),
+        "verifier_runs": 0,
+        "patch_submissions": 0,
+        "independent_verifier_result": {"status": None, "outcome": None, "lifecycle_succeeded": False},
+        "transport_evidence": {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "INFRASTRUCTURE_FAILURE", "process_exit_code": 0, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": True, "evidence_reference": "synthetic-controller-stop",
+        },
+        "infrastructure_evidence": {
+            "stage": "controller", "reason_code": "CONTROLLER_FAILURE", "confirmed_failure": True,
+            "classification": "CONTROLLER", "terminal_classification": "INFRASTRUCTURE_FAILURE",
+            "provider_attempt_index": None, "prior_lifecycle_completed": True,
+            "source_mutation_observed": False, "expected_source_hash": None,
+            "evidence_reference": "synthetic-controller-stop",
+        },
+        "prompt_tokens": 42000,
+        "completion_tokens": 1200,
+        "reasoning_tokens": 800,
+        "provider_reported_cost": 0.0066370976,
+        "wall_clock_duration_seconds": 190.0,
+        "public_evidence_bytes": 21949,
+    })
+    entries[0] = {"provider_process_attempts": 9, "outcome": raw}
+    record, factory, _, output = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+
+    assert record["status"] == "COMPLETED"
+    assert record["stop_reason"] is None
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "completed"
+    assert record["counts"]["completed_case_count"] == 6
+    assert record["counts"]["unstarted_case_count"] == 0
+    assert record["counts"]["aborted_case_count"] == 0
+    assert record["counts"]["logical_model_calls"] == 14
+    assert record["counts"]["provider_process_attempts"] == 14
+    assert record["counts"]["accepted_directives"] == 14
+    assert record["provider_call_proof"]["logical_requests"] == 14
+    first = record["cases"][0]
+    assert first["terminal_status"] == "PDB_NOT_REACHED"
+    assert first["terminal_reason_code"] == "PDB_NOT_REACHED_NO_GATE"
+    assert "21949" in first["termination_reason"] and "20000" in first["termination_reason"]
+    assert "public-evidence budget exhausted" in first["termination_reason"]
+    assert first["public_evidence_bytes"] == 20000
+    assert first["logical_model_calls"] == 9
+    assert first["provider_process_attempts"] == 9
+    assert first["valid_directives"] == 9
+    assert first["hypotheses_created"] == 1
+    assert first["controller_states_visited"] == ["REPRODUCE", "UNDERSTAND", "PATCH"]
+    assert first["prompt_tokens"] == 42000
+    assert first["completion_tokens"] == 1200
+    assert first["reasoning_tokens"] == 800
+    assert first["provider_reported_cost"] == pytest.approx(0.0066370976)
+    assert first["transport_evidence"]["provider_error"] is False
+    assert first["terminal_transport_evidence"]["final_attempt_classification"] == "COMPLETED_RESPONSE"
+    assert first["terminal_transport_evidence"]["timed_out"] is False
+    assert first["terminal_transport_evidence"]["process_exit_code"] == 0
+    assert first["repair_outcome"] == "NO_CANDIDATE"
+    # The campaign proceeds to the second frozen case.
+    assert record["cases"][1]["case_id"] == manifest["case_order"][1]["case_id"]
+    assert record["cases"][1]["terminal_status"] == "UNRESOLVED"
+    assert record["cost_summary"]["classification"] == "REPORTED"
+    assert record["cost_summary"]["total_provider_reported_cost"] == pytest.approx(0.027637)
+    assert (output / "cases" / "case-01-quixbugs-paired-pilot-v2__quixbugs-find-in-sorted-smoke-v1__pdb-on-uncertainty.json").is_file()
+    assert runner.verify_attempt_package(output, manifest)["consistent"] is True
+
+
+def test_campaign_public_evidence_exhaustion_before_any_provider_call_is_no_contact_terminal(manifest, auth, tmp_path, git_state_provider):
+    """Public-evidence exhaustion before any provider call materializes a
+    schema-valid no-contact case terminal result and the campaign continues."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    raw = _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "logical_model_calls": 0,
+        "provider_process_attempts": 0,
+        "valid_directives": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "provider_reported_cost": 0,
+        "public_evidence_bytes": 20001,
+    })
+    entries[0] = {"provider_process_attempts": 0, "outcome": raw}
+    record, factory, _, output = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+
+    assert record["status"] == "COMPLETED"
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "completed"
+    assert record["counts"]["completed_case_count"] == 6
+    first = record["cases"][0]
+    assert first["terminal_status"] == "INFRASTRUCTURE_ERROR"
+    assert first["terminal_reason_code"] == "WORKSPACE_FAILURE"
+    assert first["infrastructure_evidence"]["stage"] == "pre_provider"
+    assert first["infrastructure_evidence"]["prior_lifecycle_completed"] is False
+    assert "20001" in first["termination_reason"] and "20000" in first["termination_reason"]
+    assert first["public_evidence_bytes"] == 20000
+    assert first["logical_model_calls"] == 0
+    assert first["provider_process_attempts"] == 0
+    assert first["retries"] == 0
+    assert first["valid_directives"] == 0
+    assert first["prompt_tokens"] == 0
+    assert first["provider_reported_cost"] == 0
+    assert first["public_request_hash"] is None
+    assert first["source_hash"] is None
+    assert first["candidate_hash"] is None
+    assert runner.verify_attempt_package(output, manifest)["consistent"] is True
+
+
+def test_campaign_public_evidence_negative_counter_is_accounting_violation_and_aborts(manifest, auth, tmp_path, git_state_provider):
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 1, "outcome": _completed_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 public_evidence_bytes=-1)}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_on_unsupported_shape_still_aborts(manifest, auth, tmp_path, git_state_provider):
+    """A static-baseline case after provider contact has no valid frozen
+    terminal representation for budget exhaustion; the campaign aborts
+    honestly instead of fabricating one."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[1] = {"provider_process_attempts": 1, "outcome": _completed_outcome(manifest, manifest["case_order"][1], route,
+                                                                                 public_evidence_bytes=20001)}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
 
 
 def test_campaign_pdb_budgets_are_enforced(manifest, auth, tmp_path, git_state_provider):
@@ -1344,7 +1506,7 @@ def test_campaign_public_private_boundary_violation_aborts(manifest, auth, tmp_p
                                           private_markers=("PRIVATE-GOLD-PATCH-LEAKED",))
     assert record["status"] == "ABORTED"
     assert record["stop_reason"] == "PUBLIC_PRIVATE_BOUNDARY_VIOLATION"
-    assert not (tmp_path / "attempt-out" / "cases" / "case-01-quixbugs__paired__pilot__v2__quixbugs-find-in-sorted-smoke-v1__pdb-on-uncertainty.json").exists()
+    assert not (tmp_path / "attempt-out" / "cases" / "case-01-quixbugs-paired-pilot-v2__quixbugs-find-in-sorted-smoke-v1__pdb-on-uncertainty.json").exists()
 
 
 def test_campaign_private_evidence_is_classified_separately(manifest, auth, tmp_path, git_state_provider):

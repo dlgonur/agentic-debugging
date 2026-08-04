@@ -29,6 +29,17 @@ The runner is fail-closed by construction:
   fresh session/workspace boundary per case, and every produced case record
   must pass the frozen ``quixbugs-paired-pilot-result-v2`` validator before
   it is written;
+* an anticipated case-level public-evidence budget exhaustion (the next
+  public request would exceed the frozen ``max_public_evidence_bytes`` case
+  limit) is a case-level terminal, never a campaign abort: the case is
+  stopped before another provider process is launched, materialized with the
+  existing frozen terminal representation (``PDB_NOT_REACHED`` for the
+  pre-PDB completed-response shape, pre-provider ``INFRASTRUCTURE_ERROR``
+  for the no-contact shape), keeps all completed accounting and provider-
+  reported cost, and the campaign continues with the remaining frozen cases;
+  a corrupt public-evidence counter (negative, non-integer, missing) and
+  every other frozen budget violation remain genuine accounting violations
+  that abort the campaign;
 * the campaign stops (or aborts) according to the frozen v2 stop contract and
   never silently skips a case; a campaign stop blocks the remaining unstarted
   cases as ``campaign-stop`` records with typed trigger or authority evidence;
@@ -312,6 +323,26 @@ class BudgetViolationError(LiveRunnerError):
 
     def __init__(self, field: str, limit: int, observed: int) -> None:
         super().__init__(f"budget exceeded: {field} = {observed} > {limit}")
+        self.field = field
+        self.limit = limit
+        self.observed = observed
+
+
+class PublicEvidenceBudgetExhausted(LiveRunnerError):
+    """The expected, bounded case-level public-evidence budget exhaustion.
+
+    Raised only when the case's ``public_evidence_bytes`` counter is a valid
+    non-negative integer that exceeds the frozen ``max_public_evidence_bytes``
+    limit: the next public request could not have been constructed within the
+    frozen case budget, so the case is stopped before another provider process
+    is launched and is terminalized at case level.  This is never an
+    accounting inconsistency: a negative, missing, non-integer, or otherwise
+    corrupt counter keeps raising :class:`BudgetViolationError` and aborts the
+    campaign.
+    """
+
+    def __init__(self, field: str, limit: int, observed: int) -> None:
+        super().__init__(f"public-evidence budget exhausted: {field} = {observed} > {limit}")
         self.field = field
         self.limit = limit
         self.observed = observed
@@ -1793,6 +1824,16 @@ def enforce_case_budgets(outcome: Mapping[str, Any], manifest: Mapping[str, Any]
         if type(value) is not int or value < 0:
             raise BudgetViolationError(actual_field, budgets[limit_field], -1)
         if value > budgets[limit_field]:
+            if actual_field == "public_evidence_bytes":
+                # The frozen public-evidence budget is the one anticipated,
+                # bounded case-level exhaustion: a valid non-negative counter
+                # overflowing the frozen case limit means the next public
+                # request could not be constructed within the budget, so the
+                # case is terminalized at case level (never a campaign abort)
+                # by the campaign loop.  Every other frozen budget field, and
+                # every corrupt counter (negative/non-integer/missing), stays
+                # a genuine accounting violation that aborts the campaign.
+                raise PublicEvidenceBudgetExhausted(actual_field, budgets[limit_field], value)
             raise BudgetViolationError(actual_field, budgets[limit_field], value)
     if outcome["provider_process_attempts"] > outcome["logical_model_calls"] * budgets["max_transport_attempts_per_logical_call"]:
         raise BudgetViolationError("provider_process_attempts", outcome["logical_model_calls"] * budgets["max_transport_attempts_per_logical_call"], outcome["provider_process_attempts"])
@@ -1825,6 +1866,154 @@ def enforce_case_budgets(outcome: Mapping[str, Any], manifest: Mapping[str, Any]
     pdb_activity = pdb["allowed_gate_openings"] or pdb["sessions_started"] or pdb["successful_observations"] + pdb["failed_observations"]
     if case_policy == "static-baseline" and pdb_activity:
         raise StaticPolicyPdbViolation("static-baseline case opened or observed PDB; the frozen policy forbids it")
+
+
+def _budget_exhausted_outcome(
+    case: Mapping[str, Any],
+    outcome: Mapping[str, Any],
+    exhaustion: PublicEvidenceBudgetExhausted,
+    *,
+    run_id: str,
+) -> dict[str, Any] | None:
+    """Rewrite a public-evidence-budget-exhausted outcome into the frozen
+    case-result terminal representation, or return ``None`` when the frozen
+    schema has no valid representation for the observed shape.
+
+    The raw outcome is fully valid except for its ``public_evidence_bytes``
+    counter (a valid non-negative integer above the frozen case limit).  The
+    rewritten outcome keeps every completed-case accounting field (logical
+    model calls, provider process attempts, accepted directives, malformed-
+    directive rejections, token usage, provider-reported cost, controller
+    states visited, hypotheses, patch attempts/submissions, PDB actions,
+    observations and timing) and reports ``public_evidence_bytes`` at the
+    frozen limit; the precise observed byte count is preserved in the
+    termination detail.  Two existing frozen terminal representations are
+    used:
+
+    * ``PDB_NOT_REACHED`` / ``PDB_NOT_REACHED_NO_GATE`` for the pre-PDB
+      completed-response shape (``pdb-on-uncertainty``, baseline reproduced,
+      at least one logical call and accepted directive, zero PDB activity, no
+      candidate) -- the case terminated before reaching PDB while progressing
+      through the frozen pre-PDB lifecycle, never as a provider failure,
+      timeout, malformed response, or pre-provider infrastructure failure;
+    * ``INFRASTRUCTURE_ERROR`` (pre-provider ``WORKSPACE_FAILURE``) for the
+      no-contact shape (zero logical calls and provider process attempts) --
+      the frozen schema's only zero-activity LIVE_CASE terminal, mirroring
+      the accepted harness-error representation.
+
+    Any other exhausted shape (for example a static-baseline case after
+    provider contact, PDB activity, or a submitted candidate) has no valid
+    frozen terminal representation and returns ``None``: the campaign must
+    abort honestly rather than fabricate one.
+    """
+    limit = exhaustion.limit
+    observed = exhaustion.observed
+    reference = f"{run_id}:public-evidence-budget-exhausted"
+    detail = (
+        f"case public-evidence budget exhausted: the next public request would have exceeded the frozen "
+        f"case limit ({observed} > {limit} bytes); no further provider process was launched"
+    )
+
+    try:
+        no_contact = (
+            int(outcome["logical_model_calls"]) == 0
+            and int(outcome["provider_process_attempts"]) == 0
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if no_contact:
+        return {
+            "terminal_status": "INFRASTRUCTURE_ERROR",
+            "terminal_reason_code": "WORKSPACE_FAILURE",
+            "termination_reason": f"{detail}; no provider process was launched; terminal representation INFRASTRUCTURE_ERROR/WORKSPACE_FAILURE",
+            "logical_model_calls": 0,
+            "provider_process_attempts": 0,
+            "retries": 0,
+            "valid_directives": 0,
+            "malformed_directive_rejections": 0,
+            "bounded_directive_feedback_events": 0,
+            "baseline_reproduction": False,
+            "controller_states_visited": [],
+            "hypotheses_created": 0,
+            "pdb_gate_decisions": [],
+            "pdb_counts": dict(ZERO_PDB_COUNTS),
+            "pdb_sessions_started": 0,
+            "successful_pdb_observations": 0,
+            "failed_pdb_observations": 0,
+            "verifier_runs": 0,
+            "patch_submissions": 0,
+            "independent_verifier_result": {"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+            "transport_evidence": {"completed_response": False, "malformed_response": False, "provider_error": False, "synthetic": False},
+            "terminal_transport_evidence": {
+                "final_attempt_classification": "INFRASTRUCTURE_FAILURE", "process_exit_code": None,
+                "timed_out": False, "provider_error_category": None,
+                "provider_completed_response": False, "evidence_reference": reference,
+            },
+            "blocked_evidence": {"block_kind": "none", "reason_code": "NONE", "confirmed": False, "evidence_reference": reference},
+            "infrastructure_evidence": {
+                "stage": "pre_provider", "reason_code": "WORKSPACE_FAILURE", "confirmed_failure": True,
+                "classification": "PRE_PROVIDER", "terminal_classification": "INFRASTRUCTURE_FAILURE",
+                "provider_attempt_index": None, "prior_lifecycle_completed": False,
+                "source_mutation_observed": False, "expected_source_hash": None,
+                "evidence_reference": reference,
+            },
+            "preflight_failure_evidence": _default_preflight_failure_evidence(),
+            "campaign_stop_evidence": _default_campaign_stop_evidence(),
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "reasoning_tokens": 0,
+            "provider_reported_cost": 0.0,
+            "wall_clock_duration_seconds": 0.0,
+            "public_evidence_bytes": limit,
+            "canonical_source_restoration": True,
+            "owned_workspace_cleanup": True,
+            "evidence_consistency": True,
+            "public_request_hash": None,
+            "source_hash": None,
+            "candidate_hash": None,
+            "repair_outcome": "NO_CANDIDATE",
+            "resource_ids": {},
+        }
+
+    try:
+        pre_pdb = (
+            str(case["policy"]) == "pdb-on-uncertainty"
+            and int(outcome["logical_model_calls"]) >= 1
+            and int(outcome["valid_directives"]) >= 1
+            and outcome["baseline_reproduction"] is True
+            and int(outcome["patch_submissions"]) == 0
+            and outcome["transport_evidence"].get("completed_response") is True
+            and outcome["transport_evidence"].get("malformed_response") is False
+            and outcome["transport_evidence"].get("provider_error") is False
+            and not any(
+                int(outcome["pdb_counts"].get(key, 0)) > 0
+                for key in ("total_gate_decisions", "allowed_gate_openings", "rejected_gate_decisions",
+                            "sessions_started", "successful_observations", "failed_observations")
+            )
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if not pre_pdb:
+        return None
+    rewritten = dict(outcome)
+    rewritten.update({
+        "terminal_status": "PDB_NOT_REACHED",
+        "terminal_reason_code": "PDB_NOT_REACHED_NO_GATE",
+        "termination_reason": f"{detail}; terminal representation PDB_NOT_REACHED/PDB_NOT_REACHED_NO_GATE",
+        "public_evidence_bytes": limit,
+        "transport_evidence": {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0,
+            "timed_out": False, "provider_error_category": None,
+            "provider_completed_response": True, "evidence_reference": reference,
+        },
+        "blocked_evidence": {"block_kind": "none", "reason_code": "NONE", "confirmed": False, "evidence_reference": reference},
+        "infrastructure_evidence": _default_infrastructure_evidence(reference),
+        "preflight_failure_evidence": _default_preflight_failure_evidence(),
+        "campaign_stop_evidence": _default_campaign_stop_evidence(),
+        "repair_outcome": "NO_CANDIDATE",
+    })
+    return rewritten
 
 
 def _stop_reason_for_infrastructure(outcome: Mapping[str, Any]) -> str | None:
@@ -2743,6 +2932,42 @@ def run_campaign(
             break
         try:
             enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
+        except PublicEvidenceBudgetExhausted as exc:
+            # Anticipated case-level public-evidence budget exhaustion: the
+            # next public request could not be constructed within the frozen
+            # case limit.  The case is stopped here (no further provider
+            # process is launched), materialized as a frozen-schema-valid
+            # terminal case result with all completed accounting preserved,
+            # and the campaign continues with the remaining frozen cases.
+            rewritten = _budget_exhausted_outcome(
+                case, outcome, exc,
+                run_id=run_id,
+            )
+            if rewritten is None:
+                abort_info = ("BUDGET_EXCEEDED", f"case public-evidence budget exhausted but the frozen case-result schema has no valid terminal representation for this shape: {exc}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            outcome = rewritten
+            # The rewritten outcome must still satisfy every other frozen
+            # budget; a residual violation (for example the case wall-clock
+            # timeout or a PDB budget) is a genuine accounting violation and
+            # still aborts the campaign.
+            try:
+                enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
+            except StaticPolicyPdbViolation as residual:
+                abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {residual}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            except (LiveRunnerError, KeyError, TypeError, ValueError) as residual:
+                abort_info = ("BUDGET_EXCEEDED", f"case budget or accounting violation: {residual}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
         except StaticPolicyPdbViolation as exc:
             abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {exc}")
             lifecycle[case_id] = "aborted"
@@ -3497,6 +3722,7 @@ __all__ = [
     "OutputRootOwnedError",
     "PreflightVerdict",
     "ProviderCallCounter",
+    "PublicEvidenceBudgetExhausted",
     "RepositoryStateError",
     "RouteDriftError",
     "RouteEvidenceInvalid",
