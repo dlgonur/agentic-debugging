@@ -6,10 +6,10 @@
 - Deterministic CommitPackFT JSONL filtering and unified-diff conversion.
 - Exact deduplication, SimHash near-deduplication, held-out exact/near checks, repository-unique selection, and repository-disjoint train/validation split.
 - Preferred/minimum corpus gates with no filter relaxation.
-- Deterministic 50-accepted and 25-rejected manual audit packets and a fail-closed audit validator.
+- Deterministic 50-accepted and 25-rejected audit packets and a fail-closed audit validator with explicit audit_mode support (selected mode: owner-delegated independent FirstMate AI audit; not human review).
 - Strict unified-diff-only parser and one-shot generation record that refuses regeneration.
 - Saved-generation verifier path that reuses the existing `EvaluationVerifier`.
-- Colab notebook for pinned data download, corpus construction, manual audit gate, one-step 7B QLoRA weight update, adapter save/reload, non-held-out inference, parser smoke, verifier smoke, and external checksums.
+- Colab notebook for pinned data download, corpus construction, independent-audit gate, one-step 7B QLoRA weight update, adapter save/reload, non-held-out inference, parser smoke, verifier smoke, and external checksums.
 - Hard notebook stop before final training and held-out generation.
 
 ## Executed local evidence
@@ -48,7 +48,7 @@
 This execution environment has no NVIDIA GPU and does not contain the frozen Transformers/PEFT/bitsandbytes stack. It also cannot materialize the pinned CommitPackFT Python file from the Hub. Therefore the following mandatory pre-final checks are implemented but not executed here:
 
 - actual CommitPackFT preferred/minimum corpus construction;
-- manual review of 50 real accepted and 25 real rejected records;
+- independent AI review of 50 real accepted and 25 real rejected records (owner-delegated; not human review);
 - pinned 7B 4-bit model load;
 - one-example QLoRA weight update;
 - adapter save and reload;

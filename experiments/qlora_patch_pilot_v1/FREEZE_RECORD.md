@@ -26,4 +26,4 @@ Only hashes are recorded. Corrected source and gold patches are not serialized i
 
 - Final full training: **not authorized**.
 - Held-out generation: **not authorized**.
-- Permitted before review: deterministic transformation, manual audit, one-step non-held-out QLoRA smoke, adapter save/reload, non-held-out inference, strict diff parsing, and existing-verifier smoke.
+- Permitted before review: deterministic transformation, audit preparation/completion (owner-delegated independent FirstMate AI audit; not human review), one-step non-held-out QLoRA smoke, adapter save/reload, non-held-out inference, strict diff parsing, and existing-verifier smoke.

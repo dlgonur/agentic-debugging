@@ -185,6 +185,239 @@ def test_audit_gate_rejects_rejected_row_without_exact_rejected_verdict(tmp_path
         validate_completed_audits(output, config)
 
 
+def _independent_config(tmp_path: Path) -> Path:
+    config = _minimum_config(tmp_path)
+    data = json.loads(config.read_text(encoding="utf-8"))
+    data["audit"]["audit_mode"] = "independent_ai"
+    path = tmp_path / "transform-independent.json"
+    path.write_text(json.dumps(data), encoding="utf-8")
+    return path
+
+
+def _write_completed_independent_audit(
+    output: Path,
+    *,
+    reviewer: str = "FirstMate / GPT-5.6 Thinking",
+    reviewer_type: str = "independent_ai_reviewer",
+    audit_method: str = "owner-delegated independent FirstMate audit",
+    verdict_overrides: dict[str, str] | None = None,
+    missing_field: str | None = None,
+    populate_human: str | None = None,
+    reverse_order: bool = False,
+    tamper: object | None = None,
+) -> Path:
+    accepted = [json.loads(line) for line in (output / "accepted_audit_sample.jsonl").open(encoding="utf-8")]
+    rejected = [json.loads(line) for line in (output / "rejected_audit_sample.jsonl").open(encoding="utf-8")]
+    rows: list[dict[str, str]] = []
+    for index, sample in enumerate(accepted, 1):
+        rows.append({
+            "global_index": str(index),
+            "packet": "accepted",
+            "audit_index": str(index),
+            "example_id": sample["example_id"],
+            "repository": sample["repository"],
+            "commit": sample["commit"],
+            "file_path": sample["file_path"],
+            "license": sample["license"],
+            "subject": sample["subject"],
+            "frozen_reason": "",
+            "audit_method": audit_method,
+            "audit_verdict": "ACCEPT",
+            "audit_reason": "coherent defect-repair example",
+            "audit_reviewer": reviewer,
+            "audit_reviewer_type": reviewer_type,
+            "audit_reviewed_at": "2026-08-05T00:00:00+03:00",
+        })
+    for index, sample in enumerate(rejected, 1):
+        rows.append({
+            "global_index": str(len(accepted) + index),
+            "packet": "rejected",
+            "audit_index": str(index),
+            "example_id": sample.get("example_id", ""),
+            "repository": "",
+            "commit": sample["commit"],
+            "file_path": sample["file_path"],
+            "license": sample["license"],
+            "subject": sample["subject"],
+            "frozen_reason": sample["reason"],
+            "audit_method": audit_method,
+            "audit_verdict": "REJECT",
+            "audit_reason": "frozen reason verified against row fields",
+            "audit_reviewer": reviewer,
+            "audit_reviewer_type": reviewer_type,
+            "audit_reviewed_at": "2026-08-05T00:00:00+03:00",
+        })
+    for row in rows:
+        row.setdefault("human_verdict", "")
+        row.setdefault("human_reason", "")
+        row.setdefault("human_reviewer", "")
+        row.setdefault("human_reviewed_at", "")
+        if verdict_overrides and row["example_id"] in verdict_overrides:
+            row["audit_verdict"] = verdict_overrides[row["example_id"]]
+        if missing_field is not None:
+            row[missing_field] = ""
+        if populate_human is not None:
+            row[populate_human] = "FirstMate / GPT-5.6 Thinking"
+        if tamper is not None:
+            tamper(row)
+    if reverse_order:
+        rows.reverse()
+    path = output / "completed_independent_audit.csv"
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=list(rows[0].keys()))
+        writer.writeheader()
+        writer.writerows(rows)
+    return path
+
+
+def test_independent_audit_gate_accepts_reject_in_accepted_packet(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    accepted = [json.loads(line) for line in (output / "accepted_audit_sample.jsonl").open(encoding="utf-8")]
+    completed = _write_completed_independent_audit(
+        output, verdict_overrides={accepted[0]["example_id"]: "REJECT"}
+    )
+    result = validate_completed_audits(output, config, completed_audit_path=completed)
+    assert result["status"] == "COMPLETE"
+    assert result["audit_mode"] == "independent_ai"
+    assert result["accepted_packet_accept"] == 1
+    assert result["accepted_packet_reject"] == 1
+    assert result["rejected_packet_reject"] == 1
+
+
+def test_independent_audit_gate_requires_completed_csv(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    with pytest.raises(CorpusBuildError, match="requires the completed independent audit CSV"):
+        validate_completed_audits(output, config)
+
+
+def test_independent_audit_gate_rejects_missing_audit_field(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    completed = _write_completed_independent_audit(output, missing_field="audit_reviewer")
+    with pytest.raises(CorpusBuildError, match="missing independent audit field"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_gate_rejects_coding_agent_as_reviewer(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    completed = _write_completed_independent_audit(output, reviewer="agentic-coding-agent")
+    with pytest.raises(CorpusBuildError, match="not an independent reviewer"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_gate_rejects_non_independent_reviewer_type(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    completed = _write_completed_independent_audit(output, reviewer_type="human_reviewer")
+    with pytest.raises(CorpusBuildError, match="does not equal"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_gate_rejects_populated_human_field(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    completed = _write_completed_independent_audit(output, populate_human="human_reviewer")
+    with pytest.raises(CorpusBuildError, match="human field human_reviewer is populated"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_gate_rejects_reordered_rows(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    completed = _write_completed_independent_audit(output, reverse_order=True)
+    with pytest.raises(CorpusBuildError, match="drift"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_gate_rejects_unknown_verdict(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    accepted = [json.loads(line) for line in (output / "accepted_audit_sample.jsonl").open(encoding="utf-8")]
+    completed = _write_completed_independent_audit(
+        output, verdict_overrides={accepted[0]["example_id"]: "UNCLEAR"}
+    )
+    with pytest.raises(CorpusBuildError, match="not ACCEPT or REJECT"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_mode_pending_status_in_build(tmp_path: Path) -> None:
+    config = _independent_config(tmp_path)
+    output = tmp_path / "output"
+    build_corpus(
+        [_row(index) for index in range(7)] + [_row(100, accepted=False)],
+        repository_root=ROOT,
+        output_dir=output,
+        freeze_record_path=EXPERIMENT / "freeze_record.json",
+        transformation_config_path=config,
+        prompt_contract_path=EXPERIMENT / "prompt_contract.json",
+    )
+    summary = json.loads((output / "audit_summary.json").read_text(encoding="utf-8"))
+    assert summary["status"] == "PENDING_INDEPENDENT_AUDIT"
+    assert summary["audit_mode"] == "independent_ai"
+
+
+def _independent_validated(tmp_path: Path) -> tuple[Path, Path]:
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    completed = _write_completed_independent_audit(output)
+    assert validate_completed_audits(output, config, completed_audit_path=completed)["status"] == "COMPLETE"
+    return config, output
+
+
+def test_independent_audit_rejects_wrong_packet_label(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(output, tamper=lambda row: row.update(packet="reviewed"))
+    with pytest.raises(CorpusBuildError, match="packet label is not 'accepted'"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_rejects_wrong_global_index(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(output, tamper=lambda row: row.update(global_index="99"))
+    with pytest.raises(CorpusBuildError, match="index fields drift"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_rejects_wrong_audit_index(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(output, tamper=lambda row: row.update(audit_index="7"))
+    with pytest.raises(CorpusBuildError, match="index fields drift"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_rejects_missing_audit_method(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(output, audit_method="")
+    with pytest.raises(CorpusBuildError, match="not canonical"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_rejects_wrong_audit_method(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(output, audit_method="human manual audit")
+    with pytest.raises(CorpusBuildError, match="audit_method"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_rejects_whitespace_padded_verdict(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(output, tamper=lambda row: row.update(audit_verdict=" ACCEPT"))
+    with pytest.raises(CorpusBuildError, match="not canonical"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
+def test_independent_audit_rejects_whitespace_padded_reviewer_type(tmp_path: Path) -> None:
+    config, output = _independent_validated(tmp_path)
+    completed = _write_completed_independent_audit(
+        output, tamper=lambda row: row.update(audit_reviewer_type=" independent_ai_reviewer")
+    )
+    with pytest.raises(CorpusBuildError, match="not canonical"):
+        validate_completed_audits(output, config, completed_audit_path=completed)
+
+
 def test_existing_verifier_non_held_out_smoke(tmp_path: Path) -> None:
     result = create_non_held_out_verifier_smoke(ROOT, tmp_path / "smoke.json")
     assert result["held_out_task_used"] is False
@@ -200,9 +433,15 @@ def test_freeze_record_recomputes_without_drift() -> None:
     assert result["status"] == "LOCKED"
     assert result["checks"] == 25
     assert result["failed"] == []
-    assert result["runtime"]["execution_head"] == "66fb5d5"
-    assert result["runtime"]["detached"] is False
-    assert result["runtime"]["dirty"] is True
+    actual_head = subprocess.run(
+        ["git", "rev-parse", "--short", "HEAD"], cwd=ROOT, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert result["runtime"]["execution_head"] == actual_head
+    detached = (
+        subprocess.run(["git", "symbolic-ref", "-q", "HEAD"], cwd=ROOT, capture_output=True).returncode != 0
+    )
+    assert result["runtime"]["detached"] is detached
+    assert isinstance(result["runtime"]["dirty"], bool)
 
 
 def _freeze_snapshot(tmp_path: Path) -> Path:

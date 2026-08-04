@@ -1,6 +1,7 @@
 {
   "audit": {
     "accepted_minimum": 50,
+    "audit_mode": "independent_ai",
     "rejected_minimum": 25
   },
   "content_limits": {

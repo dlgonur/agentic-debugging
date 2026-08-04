@@ -34,6 +34,11 @@ def build_parser() -> argparse.ArgumentParser:
     audit = sub.add_parser("validate-audits")
     audit.add_argument("--output-dir", required=True)
     audit.add_argument("--transformation-config", required=True)
+    audit.add_argument(
+        "--completed-audit",
+        default=None,
+        help="path to the completed independent-audit CSV (required when audit_mode=independent_ai)",
+    )
     parse = sub.add_parser("parse-patch")
     parse.add_argument("--patch", required=True)
     parse.add_argument("--allowed-path", action="append", required=True)
@@ -56,7 +61,9 @@ def main() -> int:
             prompt_contract_path=args.prompt_contract,
         )
     elif args.command == "validate-audits":
-        result = validate_completed_audits(args.output_dir, args.transformation_config)
+        result = validate_completed_audits(
+            args.output_dir, args.transformation_config, completed_audit_path=args.completed_audit
+        )
     elif args.command == "parse-patch":
         patch = Path(args.patch).read_text(encoding="utf-8")
         result = {"valid": True, "normalized_patch": parse_unified_diff_strict(patch, args.allowed_path)}

@@ -36,16 +36,45 @@ python scripts/qlora_patch_pilot.py build-corpus \
 
 python scripts/qlora_patch_pilot.py validate-audits \
   --output-dir /content/drive/MyDrive/agentic-debugging/qlora_patch_pilot_v1/corpus \
-  --transformation-config experiments/qlora_patch_pilot_v1/transformation_config.json
+  --transformation-config experiments/qlora_patch_pilot_v1/transformation_config.json \
+  --completed-audit /path/to/firstmate_independent_audit_completed.csv
 
 python scripts/qlora_patch_pilot.py verifier-smoke \
   --repository-root . \
   --output outputs/qlora_patch_pilot_v1/smoke/verifier_smoke.json
 ```
 
+`--completed-audit` is required when `audit.audit_mode` is `independent_ai`; the
+corpus packet CSVs are not authoritative in that mode.
+
 ## Corpus gate
 
-Preferred: 1,500 train and 200 validation examples. Accepted minimum: 1,000 train and 150 validation. Filters are never weakened to reach a count. The generated audit forms must contain at least 50 completed accepted-example reviews and 25 completed rejected-example reviews before training.
+Preferred: 1,500 train and 200 validation examples. Accepted minimum: 1,000 train and 150 validation. Filters are never weakened to reach a count. The generated audit packets must contain 50 accepted-example and 25 rejected-example rows, and the completed audit must be validated fail-closed before training (at least 50 accepted-packet and 25 rejected-packet reviewed rows under the selected audit mode).
+
+## Audit methodology
+
+Owner-delegated independent FirstMate AI audit; not human review. The selected
+`audit.audit_mode` is `independent_ai`: an independent AI reviewer
+(`independent_ai_reviewer`, independent of the coding agent and of the training
+model) decides `ACCEPT`/`REJECT` per frozen sample on the evidence, including
+rejecting accepted-packet false positives. `human_*` fields stay blank and audit
+decisions are never translated into `human_*` fields. The legacy
+`human_manual` mode remains supported by the validator but is not the selected
+mode for this experiment.
+
+## Corpus acceptance (FirstMate decision)
+
+- The unchanged 1,000-train / 150-validation corpus is accepted for one
+  bounded, descriptive QLoRA pilot.
+- The accepted-packet audit sample uphold rate is 39/50 (78%); this is a
+  quality signal, not a pass-rate gate. The corpus is not claimed to be clean
+  or high precision.
+- The 11 sampled false positives are not removed under the current frozen
+  contract (the 50-row packet is a deterministic quality sample; no row-level
+  exclusion rule exists).
+- No top-up is performed and no 80% threshold is adopted. A top-up would
+  increase quantity without addressing the observed precision problem; the
+  earlier optional top-up proposal is not an accepted plan.
 
 ## Final evaluation gate
 

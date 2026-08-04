@@ -41,9 +41,35 @@ REQUIRED_FIELDS = {
 }
 WORD_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*|\d+|[^\s]", re.UNICODE)
 DIFF_HEADER_RE = re.compile(r"^(---|\+\+\+) (?:[ab]/)?(.+)$")
+AUDIT_MODE_KEY = "audit_mode"
+AUDIT_MODE_HUMAN_MANUAL = "human_manual"
+AUDIT_MODE_INDEPENDENT_AI = "independent_ai"
+AUDIT_MODES = (AUDIT_MODE_HUMAN_MANUAL, AUDIT_MODE_INDEPENDENT_AI)
 MANUAL_AUDIT_FIELDS = ("manual_verdict", "manual_reason", "reviewer", "reviewed_at")
 MANUAL_VERDICT_ACCEPTED = "ACCEPT"
 MANUAL_VERDICT_REJECTED = "REJECT"
+INDEPENDENT_AUDIT_FIELDS = (
+    "audit_verdict",
+    "audit_reason",
+    "audit_reviewer",
+    "audit_reviewer_type",
+    "audit_reviewed_at",
+)
+INDEPENDENT_REVIEWER_TYPE = "independent_ai_reviewer"
+INDEPENDENT_AUDIT_METHOD = "owner-delegated independent FirstMate audit"
+FORBIDDEN_INDEPENDENT_REVIEWERS = ("agentic-coding-agent",)
+HUMAN_FIELDS = ("human_verdict", "human_reason", "human_reviewer", "human_reviewed_at")
+CANONICAL_AUDIT_FIELDS = (
+    "global_index",
+    "packet",
+    "audit_index",
+    "audit_method",
+    "audit_verdict",
+    "audit_reviewer",
+    "audit_reviewer_type",
+    "audit_reviewed_at",
+)
+INDEPENDENT_AUDIT_METHODOLOGY = "Owner-delegated independent FirstMate AI audit; not human review."
 
 
 class CorpusBuildError(ValueError):
@@ -563,14 +589,18 @@ def build_corpus(
     _write_jsonl(output / "rejected_audit_sample.jsonl", rejected_audit)
     _write_audit_csv(output / "accepted_audit.csv", accepted_audit, accepted=True)
     _write_audit_csv(output / "rejected_audit.csv", rejected_audit, accepted=False)
+    pending_status = (
+        "PENDING_INDEPENDENT_AUDIT" if _audit_mode(config) == AUDIT_MODE_INDEPENDENT_AI else "PENDING_MANUAL_REVIEW"
+    )
     _write_json(output / "audit_summary.json", {
+        "audit_mode": _audit_mode(config),
         "accepted_required": config["audit"]["accepted_minimum"],
         "accepted_sampled": len(accepted_audit),
         "accepted_completed": 0,
         "rejected_required": config["audit"]["rejected_minimum"],
         "rejected_sampled": len(rejected_audit),
         "rejected_completed": 0,
-        "status": "PENDING_MANUAL_REVIEW",
+        "status": pending_status,
     })
     summary = {
         "schema_version": "corpus-build-summary-v1",
@@ -583,16 +613,168 @@ def build_corpus(
         "validation_repositories": len({item.repository for item in validation}),
         "rejection_summary_path": "rejection_summary.json",
         "dedup_report_path": "dedup_report.json",
-        "audit_status": "PENDING_MANUAL_REVIEW",
+        "audit_status": pending_status,
     }
     _write_json(output / "corpus_summary.json", summary)
     write_external_manifest(output, configuration_identity=freeze["transformation"]["sha256"], provenance_identity=f"bigcode/commitpackft@{dataset_revision}", artifact_kind_prefix="corpus")
     return summary
 
 
-def validate_completed_audits(output_dir: str | Path, transformation_config_path: str | Path) -> dict[str, Any]:
+def _audit_mode(config: Mapping[str, Any]) -> str:
+    mode = config.get("audit", {}).get(AUDIT_MODE_KEY, AUDIT_MODE_HUMAN_MANUAL)
+    if mode not in AUDIT_MODES:
+        raise CorpusBuildError(f"unknown audit_mode {mode!r}; supported: {AUDIT_MODES}")
+    return mode
+
+
+def _load_audit_csv(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        raise CorpusBuildError(f"audit file missing: {path}")
+    with path.open("r", encoding="utf-8-sig", newline="") as handle:
+        return list(csv.DictReader(handle))
+
+
+def _verify_audit_identities(output: Path, rows: Sequence[Mapping[str, Any]], config: Mapping[str, Any]) -> None:
+    """Bind the completed independent audit rows to the frozen packet samples."""
+    accepted_minimum = int(config["audit"]["accepted_minimum"])
+    rejected_minimum = int(config["audit"]["rejected_minimum"])
+    if len(rows) != accepted_minimum + rejected_minimum:
+        raise CorpusBuildError(
+            f"independent audit has {len(rows)} rows; required {accepted_minimum + rejected_minimum}"
+        )
+    accepted_samples = _load_jsonl_rows(output / "accepted_audit_sample.jsonl")
+    rejected_samples = _load_jsonl_rows(output / "rejected_audit_sample.jsonl")
+    if len(accepted_samples) != accepted_minimum or len(rejected_samples) != rejected_minimum:
+        raise CorpusBuildError("frozen audit sample packets do not match the configured minimum counts")
+    for index, (row, sample) in enumerate(zip(rows[:accepted_minimum], accepted_samples), 1):
+        if _exact_index(row, "global_index", index) or _exact_index(row, "audit_index", index):
+            raise CorpusBuildError(
+                f"independent audit accepted row {index}: packet index fields drift from frozen order"
+            )
+        if str(row.get("packet", "")).strip() != "accepted":
+            raise CorpusBuildError(f"independent audit accepted row {index}: packet label is not 'accepted'")
+        for key in ("example_id", "repository", "commit", "file_path", "license", "subject"):
+            if str(row.get(key, "")) != str(sample.get(key, "")):
+                raise CorpusBuildError(
+                    f"independent audit accepted row {index}: {key} identity drift from frozen packet"
+                )
+    for index, (row, sample) in enumerate(zip(rows[accepted_minimum:], rejected_samples), 1):
+        global_index = accepted_minimum + index
+        if _exact_index(row, "global_index", global_index) or _exact_index(row, "audit_index", index):
+            raise CorpusBuildError(
+                f"independent audit rejected row {index}: packet index fields drift from frozen order"
+            )
+        if str(row.get("packet", "")).strip() != "rejected":
+            raise CorpusBuildError(f"independent audit rejected row {index}: packet label is not 'rejected'")
+        for key in ("commit", "file_path", "license", "subject"):
+            if str(row.get(key, "")) != str(sample.get(key, "")):
+                raise CorpusBuildError(
+                    f"independent audit rejected row {index}: {key} identity drift from frozen packet"
+                )
+        if str(row.get("frozen_reason", "")) != str(sample.get("reason", "")):
+            raise CorpusBuildError(
+                f"independent audit rejected row {index}: frozen reason drift from packet"
+            )
+
+
+def _exact_index(row: Mapping[str, Any], field: str, expected: int) -> bool:
+    value = str(row.get(field, "")).strip()
+    try:
+        return int(value) != expected
+    except ValueError:
+        return True
+
+
+def _load_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    if not path.is_file():
+        raise CorpusBuildError(f"audit sample file missing: {path}")
+    return [value for value in iter_jsonl(path)]
+
+
+def _validate_independent_audit(
+    output: Path, config: Mapping[str, Any], completed_audit_path: str | Path | None
+) -> dict[str, Any]:
+    if completed_audit_path is None:
+        raise CorpusBuildError(
+            "independent_ai audit mode requires the completed independent audit CSV "
+            "(--completed-audit); the corpus packet CSVs are not authoritative in this mode"
+        )
+    rows = _load_audit_csv(Path(completed_audit_path))
+    _verify_audit_identities(output, rows, config)
+    problems: list[str] = []
+    for index, row in enumerate(rows, 1):
+        for field in CANONICAL_AUDIT_FIELDS:
+            value = str(row.get(field, ""))
+            if value != value.strip() or not value.strip():
+                problems.append(
+                    f"row {index}: field {field} is missing or not canonical (leading/trailing "
+                    "whitespace is rejected)"
+                )
+        missing = [field for field in INDEPENDENT_AUDIT_FIELDS if not str(row.get(field, "")).strip()]
+        if missing:
+            problems.append(f"row {index}: missing independent audit field(s) {missing}")
+            continue
+        if row["audit_method"].strip() != INDEPENDENT_AUDIT_METHOD:
+            problems.append(
+                f"row {index}: audit_method {row['audit_method'].strip()!r} "
+                f"does not equal {INDEPENDENT_AUDIT_METHOD!r}"
+            )
+        if row["audit_verdict"].strip() not in (MANUAL_VERDICT_ACCEPTED, MANUAL_VERDICT_REJECTED):
+            problems.append(f"row {index}: audit_verdict {row['audit_verdict'].strip()!r} is not ACCEPT or REJECT")
+        if row["audit_reviewer_type"].strip() != INDEPENDENT_REVIEWER_TYPE:
+            problems.append(
+                f"row {index}: audit_reviewer_type {row['audit_reviewer_type'].strip()!r} "
+                f"does not equal {INDEPENDENT_REVIEWER_TYPE!r}"
+            )
+        if any(
+            token in row["audit_reviewer"].strip().lower()
+            for token in FORBIDDEN_INDEPENDENT_REVIEWERS
+        ):
+            problems.append(f"row {index}: audit_reviewer is not an independent reviewer")
+        for field in HUMAN_FIELDS:
+            if str(row.get(field, "")).strip():
+                problems.append(
+                    f"row {index}: human field {field} is populated; audit_* fields are never "
+                    "translated into human_* fields"
+                )
+    if problems:
+        raise CorpusBuildError("independent audit validation failed: " + "; ".join(problems))
+    accepted_rows = rows[: int(config["audit"]["accepted_minimum"])]
+    rejected_rows = rows[int(config["audit"]["accepted_minimum"]):]
+    counts = {
+        "audit_mode": AUDIT_MODE_INDEPENDENT_AI,
+        "methodology": INDEPENDENT_AUDIT_METHODOLOGY,
+        "accepted_packet_total": len(accepted_rows),
+        "accepted_packet_accept": sum(r["audit_verdict"] == MANUAL_VERDICT_ACCEPTED for r in accepted_rows),
+        "accepted_packet_reject": sum(r["audit_verdict"] == MANUAL_VERDICT_REJECTED for r in accepted_rows),
+        "rejected_packet_total": len(rejected_rows),
+        "rejected_packet_accept": sum(r["audit_verdict"] == MANUAL_VERDICT_ACCEPTED for r in rejected_rows),
+        "rejected_packet_reject": sum(r["audit_verdict"] == MANUAL_VERDICT_REJECTED for r in rejected_rows),
+        "reviewer_identities": sorted({r["audit_reviewer"] for r in rows}),
+        "reviewer_types": sorted({r["audit_reviewer_type"] for r in rows}),
+        "completed_audit_path": str(completed_audit_path),
+        "status": "COMPLETE",
+    }
+    _write_json(output / "audit_summary.json", counts)
+    write_external_manifest(
+        output,
+        configuration_identity=sha256_bytes(canonical_json_bytes(config)),
+        provenance_identity="bigcode/commitpackft@frozen-revision",
+        artifact_kind_prefix="corpus-audit",
+    )
+    return counts
+
+
+def validate_completed_audits(
+    output_dir: str | Path,
+    transformation_config_path: str | Path,
+    completed_audit_path: str | Path | None = None,
+) -> dict[str, Any]:
     output = Path(output_dir)
     config = load_json(transformation_config_path)
+    mode = _audit_mode(config)
+    if mode == AUDIT_MODE_INDEPENDENT_AI:
+        return _validate_independent_audit(output, config, completed_audit_path)
     counts: dict[str, int] = {}
     problems: list[str] = []
     for label, filename in (("accepted", "accepted_audit.csv"), ("rejected", "rejected_audit.csv")):

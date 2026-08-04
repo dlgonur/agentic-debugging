@@ -151,7 +151,7 @@
   },
   "transformation": {
     "path": "experiments/qlora_patch_pilot_v1/transformation_config.json",
-    "sha256": "a793311d6201e8b2b91ed3c8749472cfc868fdee9955ef2b61bf8e7ffe780cfd",
+    "sha256": "8e6457d3cb9c735ade4ea66a8a5f0e3a591e915c01629b057626f202b43ff2a5",
     "version": "commitpackft-python-patch-v1"
   }
 }
