@@ -1,0 +1,103 @@
+{
+  "audit": {
+    "accepted_minimum": 50,
+    "rejected_minimum": 25
+  },
+  "content_limits": {
+    "max_changed_lines": 80,
+    "max_diff_chars": 3500,
+    "max_hunks": 4,
+    "max_new_chars": 6000,
+    "max_old_chars": 6000,
+    "max_prompt_plus_completion_chars": 12000,
+    "min_chars": 20
+  },
+  "dataset": {
+    "config": "python",
+    "repository": "bigcode/commitpackft",
+    "revision": "fc56fe33c030c6daa414c2b112c932b8eed085e6",
+    "split": "train"
+  },
+  "fix_intent_terms": [
+    "bug",
+    "fix",
+    "error",
+    "fail",
+    "failure",
+    "incorrect",
+    "issue",
+    "regression",
+    "exception",
+    "crash",
+    "boundary",
+    "validate",
+    "validation",
+    "handle",
+    "prevent",
+    "restore",
+    "correct"
+  ],
+  "minimum_counts": {
+    "train": 1000,
+    "validation": 150
+  },
+  "near_duplicate": {
+    "held_out_jaccard_threshold": 0.85,
+    "max_hamming_distance": 3,
+    "simhash_bits": 64,
+    "token_ngram": 5
+  },
+  "one_example_per_repository": true,
+  "path_rules": {
+    "excluded_segments": [
+      ".git",
+      "build",
+      "dist",
+      "docs",
+      "doc",
+      "examples",
+      "generated",
+      "migrations",
+      "site-packages",
+      "tests",
+      "test",
+      "third_party",
+      "vendor"
+    ],
+    "require_same_path": true,
+    "suffix": ".py"
+  },
+  "preferred_counts": {
+    "train": 1500,
+    "validation": 200
+  },
+  "reject_subject_terms": [
+    "docs",
+    "documentation",
+    "readme",
+    "format",
+    "formatting",
+    "lint",
+    "style",
+    "refactor",
+    "rename",
+    "cleanup",
+    "chore",
+    "dependency",
+    "dependencies",
+    "bump version",
+    "merge branch"
+  ],
+  "schema_version": "commitpackft-patch-transform-v1",
+  "seed": 20260804,
+  "source_license_allowlist": [
+    "apache-2.0",
+    "bsd-2-clause",
+    "bsd-3-clause",
+    "cc0-1.0",
+    "isc",
+    "mit",
+    "unlicense"
+  ],
+  "version": "commitpackft-python-patch-v1"
+}

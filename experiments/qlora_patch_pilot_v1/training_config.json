@@ -1,0 +1,43 @@
+{
+  "final_training_authorized": false,
+  "lora": {
+    "alpha": 32,
+    "bias": "none",
+    "dropout": 0.05,
+    "r": 16,
+    "target_modules": "all-linear",
+    "task_type": "CAUSAL_LM"
+  },
+  "model_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+  "model_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+  "package_versions": {
+    "accelerate": "1.14.0",
+    "bitsandbytes": "0.49.2",
+    "datasets": "5.0.0",
+    "peft": "0.20.0",
+    "transformers": "5.14.1",
+    "trl": "1.8.0"
+  },
+  "quantization": {
+    "compute_dtype": "bf16_if_supported_else_fp16",
+    "double_quant": true,
+    "load_in_4bit": true,
+    "quant_type": "nf4"
+  },
+  "schema_version": "qlora-training-v1",
+  "sft": {
+    "completion_only_loss": true,
+    "data_seed": 20260804,
+    "gradient_accumulation_steps": 16,
+    "gradient_checkpointing": true,
+    "learning_rate": 0.0002,
+    "lr_scheduler_type": "cosine",
+    "max_length": 1024,
+    "num_train_epochs": 1,
+    "optim": "paged_adamw_8bit",
+    "packing": false,
+    "per_device_train_batch_size": 1,
+    "seed": 20260804,
+    "warmup_ratio": 0.03
+  }
+}

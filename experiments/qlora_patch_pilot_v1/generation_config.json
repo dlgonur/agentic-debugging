@@ -1,0 +1,16 @@
+{
+  "do_sample": false,
+  "held_out_generation_authorized": false,
+  "max_new_tokens": 512,
+  "num_beams": 1,
+  "num_return_sequences": 1,
+  "one_candidate_per_task": true,
+  "regeneration_after_outcome_observation_prohibited": true,
+  "repetition_penalty": 1.0,
+  "schema_version": "generation-v1",
+  "seed": 20260804,
+  "temperature": null,
+  "top_k": null,
+  "top_p": null,
+  "use_cache": true
+}

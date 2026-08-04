@@ -1,0 +1,28 @@
+{
+  "completion_contract": {
+    "allowed_paths_enforced": true,
+    "exactly_one_candidate": true,
+    "format": "unified-diff-only",
+    "markdown_fences_allowed": false,
+    "prose_allowed": false
+  },
+  "failure_output_max_chars": 4000,
+  "forbidden_prompt_inputs": [
+    "oracle",
+    "fixed revision",
+    "corrected source",
+    "gold patch",
+    "hidden test answers"
+  ],
+  "held_out_prompt_inputs": [
+    "agent-visible task title",
+    "agent-visible task description",
+    "allowed write paths",
+    "reproduction argv",
+    "bounded baseline failure output",
+    "buggy source"
+  ],
+  "schema_version": "patch-prompt-v1",
+  "system_prompt": "You repair Python defects. Return exactly one valid unified diff and no other text. Modify only the allowed paths. Do not modify tests, task metadata, or any other file.",
+  "user_template": "Task title: {title}\nTask description: {description}\nLanguage: Python\nAllowed write paths:\n{allowed_write_paths}\n\nObserved failing command:\n$ {reproduction_command}\n\nObserved failure:\n{bounded_failure}\n\nBuggy file: {file_path}\n<file>\n{buggy_source}\n</file>\n\nReturn one unified diff only."
+}
