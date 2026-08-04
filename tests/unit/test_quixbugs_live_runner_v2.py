@@ -194,6 +194,54 @@ def _completed_outcome(manifest, case, route_observation, **overrides):
     return outcome
 
 
+def _no_contact_outcome(manifest, case, route_observation, **overrides):
+    """A raw outcome that is already the frozen no-contact representation on
+    every accounting and terminal/evidence field, except for the overflowing
+    ``public_evidence_bytes`` counter and the termination detail/evidence
+    references that are attached during terminalization.  Single-field
+    contradictions are applied via ``overrides`` to prove they abort."""
+    outcome = _base_outcome(manifest, case, route_observation)
+    outcome.update({
+        "terminal_status": "INFRASTRUCTURE_ERROR",
+        "terminal_reason_code": "WORKSPACE_FAILURE",
+        "termination_reason": "synthetic no-contact harness failure",
+        "logical_model_calls": 0,
+        "provider_process_attempts": 0,
+        "valid_directives": 0,
+        "baseline_reproduction": False,
+        "controller_states_visited": [],
+        "independent_verifier_result": {"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+        "transport_evidence": {"completed_response": False, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "INFRASTRUCTURE_FAILURE", "process_exit_code": None, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": False, "evidence_reference": "synthetic-no-contact",
+        },
+        "blocked_evidence": {"block_kind": "none", "reason_code": "NONE", "confirmed": False, "evidence_reference": "synthetic-no-contact"},
+        "infrastructure_evidence": {
+            "stage": "pre_provider", "reason_code": "WORKSPACE_FAILURE", "confirmed_failure": True,
+            "classification": "PRE_PROVIDER", "terminal_classification": "INFRASTRUCTURE_FAILURE",
+            "provider_attempt_index": None, "prior_lifecycle_completed": False,
+            "source_mutation_observed": False, "expected_source_hash": None,
+            "evidence_reference": "synthetic-no-contact",
+        },
+        "preflight_failure_evidence": {field: None for field in pilot.ALL_PREFLIGHT_FAILURE_FIELDS},
+        "campaign_stop_evidence": dict(
+            {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS}, confirmed=False
+        ),
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "reasoning_tokens": 0,
+        "provider_reported_cost": 0,
+        "wall_clock_duration_seconds": 0.0,
+        "public_request_hash": None,
+        "source_hash": None,
+        "candidate_hash": None,
+        "public_evidence_bytes": 20001,
+    })
+    outcome.update(overrides)
+    return outcome
+
+
 def _resolved_outcome(manifest, case, route_observation, **overrides):
     outcome = _completed_outcome(manifest, case, route_observation)
     outcome.update({
@@ -1392,16 +1440,49 @@ def test_campaign_public_evidence_budget_exhaustion_is_case_level_terminal(manif
 
 def test_campaign_public_evidence_exhaustion_before_any_provider_call_is_no_contact_terminal(manifest, auth, tmp_path, git_state_provider):
     """Public-evidence exhaustion before any provider call materializes a
-    schema-valid no-contact case terminal result and the campaign continues."""
+    schema-valid no-contact case terminal result and the campaign continues.
+
+    The raw outcome is an internally consistent zero-contact shape: every
+    activity counter is zero, lifecycle and transport evidence are empty,
+    tokens/cost/hashes carry no activity, and the terminal fields already
+    match the frozen pre-provider harness-error representation.  It does not
+    rely on normalization of the completed-outcome defaults."""
     route = _route_evidence(manifest)
     entries = _completed_entries(manifest)
     raw = _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "terminal_status": "INFRASTRUCTURE_ERROR",
+        "terminal_reason_code": "WORKSPACE_FAILURE",
+        "termination_reason": "synthetic no-contact harness failure",
         "logical_model_calls": 0,
         "provider_process_attempts": 0,
         "valid_directives": 0,
+        "baseline_reproduction": False,
+        "controller_states_visited": [],
+        "independent_verifier_result": {"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+        "transport_evidence": {"completed_response": False, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "INFRASTRUCTURE_FAILURE", "process_exit_code": None, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": False, "evidence_reference": "synthetic-no-contact",
+        },
+        "infrastructure_evidence": {
+            "stage": "pre_provider", "reason_code": "WORKSPACE_FAILURE", "confirmed_failure": True,
+            "classification": "PRE_PROVIDER", "terminal_classification": "INFRASTRUCTURE_FAILURE",
+            "provider_attempt_index": None, "prior_lifecycle_completed": False,
+            "source_mutation_observed": False, "expected_source_hash": None,
+            "evidence_reference": "synthetic-no-contact",
+        },
+        "preflight_failure_evidence": {field: None for field in pilot.ALL_PREFLIGHT_FAILURE_FIELDS},
+        "campaign_stop_evidence": dict(
+            {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS}, confirmed=False
+        ),
         "prompt_tokens": 0,
         "completion_tokens": 0,
+        "reasoning_tokens": 0,
         "provider_reported_cost": 0,
+        "wall_clock_duration_seconds": 0.0,
+        "public_request_hash": None,
+        "source_hash": None,
+        "candidate_hash": None,
         "public_evidence_bytes": 20001,
     })
     entries[0] = {"provider_process_attempts": 0, "outcome": raw}
@@ -1427,6 +1508,201 @@ def test_campaign_public_evidence_exhaustion_before_any_provider_call_is_no_cont
     assert first["source_hash"] is None
     assert first["candidate_hash"] is None
     assert runner.verify_attempt_package(output, manifest)["consistent"] is True
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_resolved_terminal_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Contradictory terminal semantics: a zero-contact raw outcome that
+    claims a RESOLVED terminal status is not normalized into the frozen
+    INFRASTRUCTURE_ERROR/WORKSPACE_FAILURE no-contact representation.  It has
+    no valid frozen terminal representation and the campaign aborts."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _no_contact_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 terminal_status="RESOLVED")}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_completed_terminal_transport_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Contradictory terminal transport evidence: a zero-contact raw outcome
+    whose terminal transport claims a completed provider response is not
+    normalized into the frozen pre-provider infrastructure representation.  It
+    has no valid frozen terminal representation and the campaign aborts."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    terminal = {
+        "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0, "timed_out": False,
+        "provider_error_category": None, "provider_completed_response": True, "evidence_reference": "synthetic-contradiction",
+    }
+    entries[0] = {"provider_process_attempts": 0, "outcome": _no_contact_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 terminal_transport_evidence=terminal)}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_confirmed_block_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Contradictory blocked evidence: a zero-contact raw outcome carrying a
+    confirmed block is not normalized into the frozen no-block no-contact
+    representation.  The block evidence must never be erased, so the campaign
+    aborts."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _no_contact_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 blocked_evidence={
+                                                                                     "block_kind": "live-pre-provider",
+                                                                                     "reason_code": "ROUTE_PREFLIGHT_FAILURE",
+                                                                                     "confirmed": True,
+                                                                                     "evidence_reference": "synthetic-contradiction",
+                                                                                 })}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_unconfirmed_infrastructure_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Contradictory infrastructure evidence: a zero-contact raw outcome whose
+    infrastructure evidence does not confirm a pre-provider WORKSPACE_FAILURE
+    is not normalized into the frozen no-contact representation.  It has no
+    valid frozen terminal representation and the campaign aborts."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _no_contact_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 infrastructure_evidence={
+                                                                                     "stage": "controller", "reason_code": "CONTROLLER_FAILURE",
+                                                                                     "confirmed_failure": True, "classification": "CONTROLLER",
+                                                                                     "terminal_classification": "INFRASTRUCTURE_FAILURE",
+                                                                                     "provider_attempt_index": None, "prior_lifecycle_completed": True,
+                                                                                     "source_mutation_observed": False, "expected_source_hash": None,
+                                                                                     "evidence_reference": "synthetic-contradiction",
+                                                                                 })}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_boolean_token_accounting_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Type-correctness: a zero-contact raw outcome carrying a Boolean token
+    counter (``prompt_tokens = False``) is not accepted as the frozen integer
+    zero.  It has no valid frozen terminal representation and the campaign
+    aborts instead of rewriting the Boolean into a schema-valid terminal."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _no_contact_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 prompt_tokens=False)}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_zero_calls_with_accepted_directive_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Corrupt accounting: zero logical calls but an accepted directive.  The
+    relational invariant must be evaluated before public-evidence exhaustion
+    can be terminalized, so the campaign aborts instead of silently
+    normalizing the directive away."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "logical_model_calls": 0,
+        "provider_process_attempts": 0,
+        "valid_directives": 1,
+        "public_evidence_bytes": 20001,
+    })}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_zero_attempts_with_retry_aborts(manifest, auth, tmp_path, git_state_provider):
+    """Corrupt accounting: zero provider attempts but a recorded transport
+    retry.  The retry relational invariant aborts the campaign instead of the
+    exhaustion being terminalized."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "logical_model_calls": 0,
+        "provider_process_attempts": 0,
+        "retries": 1,
+        "public_evidence_bytes": 20001,
+    })}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_pdb_activity_aborts(manifest, auth, tmp_path, git_state_provider):
+    """A zero-contact raw outcome carrying unsupported PDB gate activity is
+    not silently normalized into the frozen no-contact terminal: it has no
+    valid frozen representation and the campaign aborts."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "logical_model_calls": 0,
+        "provider_process_attempts": 0,
+        "valid_directives": 0,
+        "pdb_counts": dict(runner.ZERO_PDB_COUNTS, total_gate_decisions=1, rejected_gate_decisions=1),
+        "pdb_gate_decisions": [{"allowed": False, "reason": "rejected"}],
+        "public_evidence_bytes": 20001,
+    })}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_exhaustion_no_contact_with_candidate_activity_aborts(manifest, auth, tmp_path, git_state_provider):
+    """A zero-contact raw outcome carrying a submitted candidate is not
+    silently normalized into the frozen no-contact terminal: it has no valid
+    frozen representation and the campaign aborts."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 0, "outcome": _completed_outcome(manifest, manifest["case_order"][0], route, **{
+        "logical_model_calls": 0,
+        "provider_process_attempts": 0,
+        "valid_directives": 0,
+        "patch_submissions": 1,
+        "public_evidence_bytes": 20001,
+    })}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert "no valid terminal representation" in record["stop_detail"]
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
+
+
+def test_campaign_public_evidence_non_integer_counter_is_accounting_violation_and_aborts(manifest, auth, tmp_path, git_state_provider):
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {"provider_process_attempts": 1, "outcome": _completed_outcome(manifest, manifest["case_order"][0], route,
+                                                                                 public_evidence_bytes=20001.5)}
+    record, _, _, _ = _run_campaign(manifest, auth, tmp_path, runner_entries=entries, git_state_provider=git_state_provider)
+    assert record["status"] == "ABORTED"
+    assert record["stop_reason"] == "BUDGET_EXCEEDED"
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "aborted"
+    assert record["counts"]["unstarted_case_count"] == 5
 
 
 def test_campaign_public_evidence_negative_counter_is_accounting_violation_and_aborts(manifest, auth, tmp_path, git_state_provider):

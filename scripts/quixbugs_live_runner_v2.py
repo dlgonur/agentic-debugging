@@ -1817,23 +1817,12 @@ def enforce_case_budgets(outcome: Mapping[str, Any], manifest: Mapping[str, Any]
         ("hypotheses_created", "max_hypotheses"),
         ("patch_submissions", "max_patch_submissions"),
         ("verifier_runs", "max_verifier_runs"),
-        ("public_evidence_bytes", "max_public_evidence_bytes"),
     )
     for actual_field, limit_field in pairs:
         value = outcome[actual_field]
         if type(value) is not int or value < 0:
             raise BudgetViolationError(actual_field, budgets[limit_field], -1)
         if value > budgets[limit_field]:
-            if actual_field == "public_evidence_bytes":
-                # The frozen public-evidence budget is the one anticipated,
-                # bounded case-level exhaustion: a valid non-negative counter
-                # overflowing the frozen case limit means the next public
-                # request could not be constructed within the budget, so the
-                # case is terminalized at case level (never a campaign abort)
-                # by the campaign loop.  Every other frozen budget field, and
-                # every corrupt counter (negative/non-integer/missing), stays
-                # a genuine accounting violation that aborts the campaign.
-                raise PublicEvidenceBudgetExhausted(actual_field, budgets[limit_field], value)
             raise BudgetViolationError(actual_field, budgets[limit_field], value)
     if outcome["provider_process_attempts"] > outcome["logical_model_calls"] * budgets["max_transport_attempts_per_logical_call"]:
         raise BudgetViolationError("provider_process_attempts", outcome["logical_model_calls"] * budgets["max_transport_attempts_per_logical_call"], outcome["provider_process_attempts"])
@@ -1866,6 +1855,21 @@ def enforce_case_budgets(outcome: Mapping[str, Any], manifest: Mapping[str, Any]
     pdb_activity = pdb["allowed_gate_openings"] or pdb["sessions_started"] or pdb["successful_observations"] + pdb["failed_observations"]
     if case_policy == "static-baseline" and pdb_activity:
         raise StaticPolicyPdbViolation("static-baseline case opened or observed PDB; the frozen policy forbids it")
+    public_evidence_bytes = outcome["public_evidence_bytes"]
+    if type(public_evidence_bytes) is not int or public_evidence_bytes < 0:
+        raise BudgetViolationError("public_evidence_bytes", budgets["max_public_evidence_bytes"], -1)
+    if public_evidence_bytes > budgets["max_public_evidence_bytes"]:
+        # The frozen public-evidence budget is the one anticipated, bounded
+        # case-level exhaustion.  It is evaluated last, after every other
+        # frozen budget check and every relational/accounting invariant has
+        # already passed: a valid non-negative counter overflowing the frozen
+        # case limit therefore can only be the expected case-level terminal
+        # (the next public request could not be constructed within the
+        # budget), never a disguise for corrupt accounting elsewhere in the
+        # outcome.  Every corrupt counter (negative/non-integer/missing) and
+        # every other frozen budget field stays a genuine accounting
+        # violation that aborts the campaign.
+        raise PublicEvidenceBudgetExhausted("public_evidence_bytes", budgets["max_public_evidence_bytes"], public_evidence_bytes)
 
 
 def _budget_exhausted_outcome(
@@ -1897,14 +1901,30 @@ def _budget_exhausted_outcome(
       through the frozen pre-PDB lifecycle, never as a provider failure,
       timeout, malformed response, or pre-provider infrastructure failure;
     * ``INFRASTRUCTURE_ERROR`` (pre-provider ``WORKSPACE_FAILURE``) for the
-      no-contact shape (zero logical calls and provider process attempts) --
-      the frozen schema's only zero-activity LIVE_CASE terminal, mirroring
-      the accepted harness-error representation.
+      no-contact shape -- the frozen schema's only zero-activity LIVE_CASE
+      terminal, mirroring the accepted harness-error representation.  The raw
+      outcome is accepted only when it is already internally consistent with
+      genuine zero provider contact and the frozen no-contact representation
+      on every accounting and terminal/evidence field: the terminal status and
+      reason already identify the no-contact infrastructure shape; the
+      terminal transport evidence already reports the pre-provider
+      infrastructure classification with no completed response, process exit,
+      or timeout; blocked evidence reports no block; infrastructure evidence
+      already confirms the pre-provider ``WORKSPACE_FAILURE`` with no prior
+      lifecycle completion and no source mutation; preflight-failure and
+      campaign-stop evidence are empty/default; every zero-valued token,
+      accounting, PDB, verifier, candidate and timing field already carries
+      its frozen schema-compatible zero type (booleans are not accepted as
+      integer zero); and the hashes/resource identifiers are in the permitted
+      no-contact state.  A no-contact shape carrying any residual or
+      contradictory terminal, block, infrastructure or accounting evidence has
+      no valid frozen terminal representation and returns ``None``.
 
     Any other exhausted shape (for example a static-baseline case after
     provider contact, PDB activity, or a submitted candidate) has no valid
     frozen terminal representation and returns ``None``: the campaign must
-    abort honestly rather than fabricate one.
+    abort honestly rather than fabricate one.  Nothing is erased or zeroed to
+    make the result schema-valid.
     """
     limit = exhaustion.limit
     observed = exhaustion.observed
@@ -1915,11 +1935,98 @@ def _budget_exhausted_outcome(
     )
 
     try:
+        transport = outcome["transport_evidence"]
+        terminal = outcome["terminal_transport_evidence"]
+        blocked = outcome["blocked_evidence"]
+        infrastructure = outcome["infrastructure_evidence"]
+        verifier = outcome["independent_verifier_result"]
         no_contact = (
-            int(outcome["logical_model_calls"]) == 0
-            and int(outcome["provider_process_attempts"]) == 0
+            # The terminal already identifies the frozen no-contact
+            # infrastructure shape; a contradictory status/reason (for example
+            # RESOLVED, PROVIDER_ERROR or PDB_NOT_REACHED) has no valid
+            # no-contact representation and must not be rewritten.
+            outcome["terminal_status"] == "INFRASTRUCTURE_ERROR"
+            and outcome["terminal_reason_code"] == "WORKSPACE_FAILURE"
+            # Zero-value accounting counters must already be the frozen
+            # schema-compatible integer zero (booleans are rejected).
+            and type(outcome["logical_model_calls"]) is int and outcome["logical_model_calls"] == 0
+            and type(outcome["provider_process_attempts"]) is int and outcome["provider_process_attempts"] == 0
+            and type(outcome["retries"]) is int and outcome["retries"] == 0
+            and type(outcome["valid_directives"]) is int and outcome["valid_directives"] == 0
+            and type(outcome["malformed_directive_rejections"]) is int and outcome["malformed_directive_rejections"] == 0
+            and type(outcome["bounded_directive_feedback_events"]) is int and outcome["bounded_directive_feedback_events"] == 0
+            and outcome["baseline_reproduction"] is False
+            and outcome["controller_states_visited"] == []
+            and type(outcome["hypotheses_created"]) is int and outcome["hypotheses_created"] == 0
+            and outcome["pdb_gate_decisions"] == []
+            and type(outcome["pdb_counts"]) is dict and outcome["pdb_counts"] == dict(ZERO_PDB_COUNTS)
+            and type(outcome["pdb_sessions_started"]) is int and outcome["pdb_sessions_started"] == 0
+            and type(outcome["successful_pdb_observations"]) is int and outcome["successful_pdb_observations"] == 0
+            and type(outcome["failed_pdb_observations"]) is int and outcome["failed_pdb_observations"] == 0
+            and type(outcome["verifier_runs"]) is int and outcome["verifier_runs"] == 0
+            and type(outcome["patch_submissions"]) is int and outcome["patch_submissions"] == 0
+            # The verifier was never run and the aggregate transport evidence
+            # records no completed, malformed or provider-error response.
+            and type(verifier) is dict
+            and verifier.get("status") == "NOT_RUN"
+            and verifier.get("outcome") is None
+            and verifier.get("lifecycle_succeeded") is False
+            and type(transport) is dict
+            and transport.get("completed_response") is False
+            and transport.get("malformed_response") is False
+            and transport.get("provider_error") is False
+            and transport.get("synthetic") is False
+            # The terminal transport evidence already reports the frozen
+            # pre-provider infrastructure shape: no completed provider
+            # response, no process exit, no timeout, no provider error, and an
+            # INFRASTRUCTURE_FAILURE classification.
+            and type(terminal) is dict
+            and terminal.get("final_attempt_classification") == "INFRASTRUCTURE_FAILURE"
+            and terminal.get("process_exit_code") is None
+            and terminal.get("timed_out") is False
+            and terminal.get("provider_error_category") is None
+            and terminal.get("provider_completed_response") is False
+            # The blocked evidence already reports no block.
+            and type(blocked) is dict
+            and blocked.get("block_kind") == "none"
+            and blocked.get("reason_code") == "NONE"
+            and blocked.get("confirmed") is False
+            # The infrastructure evidence already identifies the confirmed
+            # pre-provider WORKSPACE_FAILURE with no prior lifecycle
+            # completion and no source mutation.
+            and type(infrastructure) is dict
+            and infrastructure.get("stage") == "pre_provider"
+            and infrastructure.get("reason_code") == "WORKSPACE_FAILURE"
+            and infrastructure.get("confirmed_failure") is True
+            and infrastructure.get("classification") == "PRE_PROVIDER"
+            and infrastructure.get("terminal_classification") == "INFRASTRUCTURE_FAILURE"
+            and infrastructure.get("provider_attempt_index") is None
+            and infrastructure.get("prior_lifecycle_completed") is False
+            and infrastructure.get("source_mutation_observed") is False
+            and infrastructure.get("expected_source_hash") is None
+            # Preflight-failure and campaign-stop evidence are empty/default:
+            # a populated block or stop record must never be erased.
+            and outcome["preflight_failure_evidence"] == _default_preflight_failure_evidence()
+            and outcome["campaign_stop_evidence"] == _default_campaign_stop_evidence()
+            # Zero-valued token, cost and timing fields must carry their frozen
+            # schema-compatible zero types (booleans are rejected).
+            and type(outcome["prompt_tokens"]) is int and outcome["prompt_tokens"] == 0
+            and type(outcome["completion_tokens"]) is int and outcome["completion_tokens"] == 0
+            and type(outcome["reasoning_tokens"]) is int and outcome["reasoning_tokens"] == 0
+            and type(outcome["provider_reported_cost"]) in (int, float) and outcome["provider_reported_cost"] == 0
+            and type(outcome["wall_clock_duration_seconds"]) in (int, float) and outcome["wall_clock_duration_seconds"] == 0
+            # Restoration/cleanup/consistency flags and the no-contact
+            # identity state are already the frozen representation.
+            and outcome["canonical_source_restoration"] is True
+            and outcome["owned_workspace_cleanup"] is True
+            and outcome["evidence_consistency"] is True
+            and outcome["public_request_hash"] is None
+            and outcome["source_hash"] is None
+            and outcome["candidate_hash"] is None
+            and outcome["repair_outcome"] == "NO_CANDIDATE"
+            and outcome["resource_ids"] == {}
         )
-    except (KeyError, TypeError, ValueError):
+    except (KeyError, TypeError, ValueError, AttributeError):
         return None
     if no_contact:
         return {
