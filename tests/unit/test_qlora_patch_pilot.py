@@ -19,6 +19,7 @@ from agentic_debugger.training.patch_pilot import (
     parse_unified_diff_strict,
     snapshot_trainable_lora_parameters,
     validate_completed_audits,
+    validate_final_training_authorization,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -718,3 +719,107 @@ def test_lora_delta_aggregate_fails_closed_on_zero_or_missing_tensors() -> None:
     assert empty["trainable_tensors_checked"] == 0
     assert empty["aggregate_delta_l2"] is None
     assert empty["delta_finite"] is False
+
+def _auth_fixture(tmp_path: Path) -> Path:
+    source = json.loads((EXPERIMENT / "final_training_authorization.json").read_text(encoding="utf-8"))
+    path = tmp_path / "final_training_authorization.json"
+    path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _auth_corpus_fixture(tmp_path: Path) -> Path:
+    corpus = tmp_path / "corpus"
+    corpus.mkdir(exist_ok=True)
+    (corpus / "corpus_summary.json").write_text(json.dumps({
+        "corpus_tier": "minimum", "train_examples": 1000, "validation_examples": 150,
+    }, indent=2) + "\n", encoding="utf-8")
+    (corpus / "dedup_report.json").write_text(json.dumps({
+        "repository_overlap": [], "held_out_exact_matches_accepted": 0, "held_out_near_matches_accepted": 0,
+    }, indent=2) + "\n", encoding="utf-8")
+    return corpus
+
+
+def _mutate_auth(tmp_path: Path, **changes: object) -> Path:
+    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
+    for key, value in changes.items():
+        data[key] = value
+    path = tmp_path / "mutated_authorization.json"
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+def _validate_auth(tmp_path: Path, path: Path) -> dict:
+    return validate_final_training_authorization(path, repository_root=ROOT, corpus_dir=_auth_corpus_fixture(tmp_path))
+
+
+def test_final_training_authorization_valid(tmp_path: Path) -> None:
+    result = _validate_auth(tmp_path, _auth_fixture(tmp_path))
+    assert result["status"] == "COMPLETE"
+    assert result["authorization_scope"] == "final_training_only"
+    assert result["authorized"] is True
+    assert result["held_out_generation_authorized"] is False
+
+
+def test_final_training_authorization_missing_record(tmp_path: Path) -> None:
+    with pytest.raises(CorpusBuildError, match="authorization record missing"):
+        _validate_auth(tmp_path, tmp_path / "does-not-exist.json")
+
+
+def test_final_training_authorization_rejects_unauthorized(tmp_path: Path) -> None:
+    path = _mutate_auth(tmp_path, authorized=False)
+    with pytest.raises(CorpusBuildError, match="authorized is not true"):
+        _validate_auth(tmp_path, path)
+
+
+def test_final_training_authorization_rejects_held_out_true(tmp_path: Path) -> None:
+    path = _mutate_auth(tmp_path, held_out_generation_authorized=True)
+    with pytest.raises(CorpusBuildError, match="held_out_generation_authorized is not false"):
+        _validate_auth(tmp_path, path)
+
+
+def test_final_training_authorization_rejects_wrong_experiment(tmp_path: Path) -> None:
+    path = _mutate_auth(tmp_path, experiment_id="some-other-experiment")
+    with pytest.raises(CorpusBuildError, match="experiment_id"):
+        _validate_auth(tmp_path, path)
+
+
+def test_final_training_authorization_rejects_wrong_approver(tmp_path: Path) -> None:
+    path = _mutate_auth(tmp_path, authorized_by="agentic-coding-agent")
+    with pytest.raises(CorpusBuildError, match="authorized_by"):
+        _validate_auth(tmp_path, path)
+
+
+def test_final_training_authorization_rejects_config_hash_drift(tmp_path: Path) -> None:
+    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
+    data["configuration_identities"]["training"] = "0" * 64
+    path = tmp_path / "drifted.json"
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="configuration_identity.training"):
+        _validate_auth(tmp_path, path)
+
+
+def test_final_training_authorization_rejects_audit_result_drift(tmp_path: Path) -> None:
+    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
+    data["audit_result"]["accepted_packet_accept"] = 50
+    path = tmp_path / "audit-drift.json"
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="audit_result.accepted_packet_accept"):
+        _validate_auth(tmp_path, path)
+
+
+def test_final_training_authorization_rejects_corpus_count_drift(tmp_path: Path) -> None:
+    corpus = _auth_corpus_fixture(tmp_path)
+    (corpus / "corpus_summary.json").write_text(json.dumps({
+        "corpus_tier": "minimum", "train_examples": 1500, "validation_examples": 200,
+    }) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="corpus counts"):
+        validate_final_training_authorization(_auth_fixture(tmp_path), repository_root=ROOT, corpus_dir=corpus)
+
+
+def test_final_training_authorization_rejects_top_up_claim(tmp_path: Path) -> None:
+    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
+    data["corpus"] = {**data["corpus"], "top_up": True}
+    path = tmp_path / "topup.json"
+    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="top_up"):
+        _validate_auth(tmp_path, path)

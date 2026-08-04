@@ -17,7 +17,10 @@ This directory contains only repository-trackable reproducibility assets for the
 - `training_config.json` — QLoRA configuration.
 - `generation_config.json` — deterministic one-candidate decoding.
 - `external_artifact_manifest.template.json` — metadata contract for ignored artifacts.
+- `final_training_authorization.json` — separate post-review gate authorizing final training only (FirstMate; not held-out access).
+- `FINAL_TRAINING_RUNBOOK.md` — exact owner execution steps for the authorized final run.
 - `colab/agentic_debugging_qlora_pilot.ipynb` — preparation and smoke notebook; final cells are gated.
+- `colab/agentic_debugging_qlora_final_training.ipynb` — authorized final-training notebook (prepared; not executed; stops before any held-out generation).
 
 ## Commands
 

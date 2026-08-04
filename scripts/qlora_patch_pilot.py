@@ -17,6 +17,7 @@ from agentic_debugger.training.patch_pilot import (
     iter_jsonl,
     parse_unified_diff_strict,
     validate_completed_audits,
+    validate_final_training_authorization,
     verify_freeze_record,
 )
 
@@ -48,6 +49,10 @@ def build_parser() -> argparse.ArgumentParser:
     freeze = sub.add_parser("verify-freeze")
     freeze.add_argument("--repository-root", required=True)
     freeze.add_argument("--freeze-record", required=True)
+    auth = sub.add_parser("validate-final-training-auth")
+    auth.add_argument("--authorization", required=True)
+    auth.add_argument("--repository-root", required=True)
+    auth.add_argument("--corpus-dir", required=True)
     return parser
 
 
@@ -69,6 +74,10 @@ def main() -> int:
         result = {"valid": True, "normalized_patch": parse_unified_diff_strict(patch, args.allowed_path)}
     elif args.command == "verifier-smoke":
         result = create_non_held_out_verifier_smoke(args.repository_root, args.output)
+    elif args.command == "validate-final-training-auth":
+        result = validate_final_training_authorization(
+            args.authorization, repository_root=args.repository_root, corpus_dir=args.corpus_dir
+        )
     else:
         result = verify_freeze_record(args.repository_root, args.freeze_record)
     print(json.dumps(result, indent=2, sort_keys=True))

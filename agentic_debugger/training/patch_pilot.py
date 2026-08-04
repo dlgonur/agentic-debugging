@@ -1135,3 +1135,115 @@ def verify_saved_raw_output(
     }
     _write_json(Path(output_path), record)
     return record
+
+FINAL_TRAINING_AUTH_SCHEMA = "final-training-authorization-v1"
+FINAL_TRAINING_SCOPE = "final_training_only"
+FINAL_TRAINING_APPROVER = "FirstMate / GPT-5.6 Thinking"
+FINAL_TRAINING_AUTH_TYPE = "owner-delegated FirstMate gate"
+
+
+def validate_final_training_authorization(
+    authorization_path: str | Path,
+    *,
+    repository_root: str | Path,
+    corpus_dir: str | Path,
+) -> dict[str, Any]:
+    """Fail-closed validation of the separate final-training authorization record."""
+    root = Path(repository_root)
+    authorization_path = Path(authorization_path)
+    if not authorization_path.is_file():
+        raise CorpusBuildError(f"final-training authorization record missing: {authorization_path}")
+    authorization = load_json(authorization_path)
+    freeze_path = root / "experiments/qlora_patch_pilot_v1/freeze_record.json"
+    freeze = load_json(freeze_path)
+
+    problems: list[str] = []
+    if authorization.get("schema_version") != FINAL_TRAINING_AUTH_SCHEMA:
+        problems.append(f"schema_version {authorization.get('schema_version')!r} is not {FINAL_TRAINING_AUTH_SCHEMA!r}")
+    if authorization.get("experiment_id") != freeze["experiment_id"]:
+        problems.append(f"experiment_id {authorization.get('experiment_id')!r} does not match the freeze record")
+    if authorization.get("authorization_scope") != FINAL_TRAINING_SCOPE:
+        problems.append(f"authorization_scope {authorization.get('authorization_scope')!r} is not {FINAL_TRAINING_SCOPE!r}")
+    if authorization.get("authorized") is not True:
+        problems.append("authorized is not true")
+    if authorization.get("held_out_generation_authorized") is not False:
+        problems.append("held_out_generation_authorized is not false")
+    if authorization.get("base_versus_tuned_evaluation_authorized") is not False:
+        problems.append("base_versus_tuned_evaluation_authorized is not false")
+    if authorization.get("authorized_by") != FINAL_TRAINING_APPROVER:
+        problems.append(f"authorized_by {authorization.get('authorized_by')!r} is not {FINAL_TRAINING_APPROVER!r}")
+    if authorization.get("authorization_type") != FINAL_TRAINING_AUTH_TYPE:
+        problems.append(f"authorization_type {authorization.get('authorization_type')!r} is not {FINAL_TRAINING_AUTH_TYPE!r}")
+    if not str(authorization.get("methodology", "")).startswith(INDEPENDENT_AUDIT_METHODOLOGY):
+        problems.append("methodology disclosure missing or incorrect")
+    if authorization.get("audit_mode") != AUDIT_MODE_INDEPENDENT_AI:
+        problems.append(f"audit_mode {authorization.get('audit_mode')!r} is not independent_ai")
+    expected_audit = {
+        "accepted_packet_accept": 39,
+        "accepted_packet_reject": 11,
+        "rejected_packet_accept": 0,
+        "rejected_packet_reject": 25,
+    }
+    audit_result = authorization.get("audit_result", {})
+    for key, value in expected_audit.items():
+        if audit_result.get(key) != value:
+            problems.append(f"audit_result.{key} {audit_result.get(key)!r} does not equal {value}")
+    corpus = authorization.get("corpus", {})
+    if corpus.get("tier") != "minimum" or corpus.get("train") != 1000 or corpus.get("validation") != 150:
+        problems.append(f"corpus declaration {corpus!r} does not match the accepted 1000/150 minimum corpus")
+    if authorization.get("top_up") not in (False, None):
+        problems.append("top_up must not be declared")
+    if corpus.get("top_up") not in (False, None):
+        problems.append("corpus.top_up must not be declared")
+    model = authorization.get("model", {})
+    training = load_json(root / freeze["training"]["path"])
+    if model.get("repository") != training["model_repository"] or model.get("revision") != training["model_revision"]:
+        problems.append("model repository/revision does not match the frozen training config")
+    dataset = authorization.get("dataset", {})
+    if dataset.get("repository") != freeze["dataset"]["repository"] or dataset.get("revision") != freeze["dataset"]["revision"]:
+        problems.append("dataset repository/revision does not match the freeze record")
+    if authorization.get("required_repository_ancestor") != freeze["repository_baseline"]["base_commit"]:
+        problems.append("required_repository_ancestor does not match the freeze baseline")
+    declared = authorization.get("configuration_identities", {})
+    for key, section in (("prompt_contract", "prompt_contract"), ("transformation", "transformation"), ("training", "training"), ("generation", "generation")):
+        configured = Path(freeze[section]["path"])
+        path = configured if configured.is_absolute() else root / configured
+        actual = sha256_bytes(canonical_json_bytes(load_json(path)))
+        if declared.get(key) != actual:
+            problems.append(f"configuration_identity.{key} {declared.get(key)!r} does not match the recomputed {actual}")
+        if freeze[section]["sha256"] != actual:
+            problems.append(f"freeze configuration identity {key} drifted from the recomputed value")
+    if not str(authorization.get("issued_at", "")).strip():
+        problems.append("issued_at is missing")
+    if not authorization.get("authorizes_training_only_statement"):
+        problems.append("training-only statement missing")
+
+    corpus_summary_path = Path(corpus_dir) / "corpus_summary.json"
+    dedup_path = Path(corpus_dir) / "dedup_report.json"
+    if not corpus_summary_path.is_file():
+        problems.append(f"corpus summary missing: {corpus_summary_path}")
+    else:
+        summary = load_json(corpus_summary_path)
+        if summary.get("train_examples") != 1000 or summary.get("validation_examples") != 150:
+            problems.append(f"corpus counts {summary.get('train_examples')}/{summary.get('validation_examples')} do not match 1000/150")
+    if not dedup_path.is_file():
+        problems.append(f"dedup report missing: {dedup_path}")
+    else:
+        dedup = load_json(dedup_path)
+        if dedup.get("repository_overlap") not in ([], None):
+            problems.append("repository overlap is not empty")
+
+    if problems:
+        raise CorpusBuildError("final-training authorization validation failed: " + "; ".join(problems))
+    return {
+        "schema_version": FINAL_TRAINING_AUTH_SCHEMA,
+        "experiment_id": freeze["experiment_id"],
+        "authorization_scope": FINAL_TRAINING_SCOPE,
+        "authorized": True,
+        "held_out_generation_authorized": False,
+        "base_versus_tuned_evaluation_authorized": False,
+        "authorized_by": FINAL_TRAINING_APPROVER,
+        "audit_result": expected_audit,
+        "corpus": {"tier": "minimum", "train": 1000, "validation": 150},
+        "status": "COMPLETE",
+    }

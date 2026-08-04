@@ -1,0 +1,50 @@
+{
+  "schema_version": "final-training-authorization-v1",
+  "experiment_id": "qlora-patch-pilot-v1",
+  "authorization_scope": "final_training_only",
+  "authorized": true,
+  "held_out_generation_authorized": false,
+  "base_versus_tuned_evaluation_authorized": false,
+  "authorized_by": "FirstMate / GPT-5.6 Thinking",
+  "authorization_type": "owner-delegated FirstMate gate",
+  "methodology": "Owner-delegated independent FirstMate AI audit; not human review.",
+  "audit_mode": "independent_ai",
+  "audit_result": {
+    "accepted_packet_accept": 39,
+    "accepted_packet_reject": 11,
+    "rejected_packet_accept": 0,
+    "rejected_packet_reject": 25
+  },
+  "corpus": {
+    "tier": "minimum",
+    "train": 1000,
+    "validation": 150,
+    "top_up": false,
+    "note": "Accepted unchanged for one bounded, descriptive QLoRA pilot. The 39/50 accepted-sample uphold rate is a disclosed quality signal; the corpus is not claimed clean or high precision. No top-up is authorized; a top-up would increase quantity without addressing the observed precision problem."
+  },
+  "model": {
+    "repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242"
+  },
+  "dataset": {
+    "repository": "bigcode/commitpackft",
+    "revision": "fc56fe33c030c6daa414c2b112c932b8eed085e6"
+  },
+  "configuration_identities": {
+    "prompt_contract": "02a4c47b497c995b7a84420ee20a066b5c71b7199f26c4302ba7ebf0ff5169aa",
+    "transformation": "8e6457d3cb9c735ade4ea66a8a5f0e3a591e915c01629b057626f202b43ff2a5",
+    "training": "2cb39a764828358eb7d7e91c6f5ef05fa9e4204afc397c6ab8c7cd510ef7fcad",
+    "generation": "c7409ac44c99d64c9f2c36fa2edb19ff1919051ef0e12d61008182c171be518e"
+  },
+  "required_repository_ancestor": "66fb5d5",
+  "issued_at": "2026-08-05T02:15:00+03:00",
+  "fail_closed_conditions": [
+    "final-training authorization record must validate before any model load",
+    "held-out generation authorization remains false and is never implied by this record",
+    "corpus counts must remain 1000 train / 150 validation with empty repository overlap",
+    "no top-up, no corpus rebuild, no filter weakening",
+    "no prompt or hyperparameter change based on future held-out results",
+    "no held-out task content is accessed, loaded, or generated"
+  ],
+  "authorizes_training_only_statement": "This record authorizes exactly one bounded final QLoRA training run on the frozen 1000-train/150-validation corpus. It does NOT authorize held-out access, held-out generation, base-versus-tuned evaluation, dataset acquisition, or any corpus modification."
+}
