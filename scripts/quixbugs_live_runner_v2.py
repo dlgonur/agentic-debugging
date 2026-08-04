@@ -2083,6 +2083,70 @@ def _budget_exhausted_outcome(
             "resource_ids": {},
         }
 
+    # --- completed RESOLVED lifecycle (live-proven shape from attempt
+    # 238f25ed...): the controller ran a full Reproduce -> Understand ->
+    # Patch -> Validate -> Done lifecycle, the patch was applied, the
+    # post-patch reproduction passed, the regression tests passed, the
+    # verifier executed with the submitted patch and confirmed RESOLVED,
+    # every individual canonical request was within the frozen per-request
+    # budget, but the cumulative events log exceeded the frozen 20,000-byte
+    # public-evidence limit.  The raw outcome is a valid frozen RESOLVED
+    # terminal on every field except the overflowing ``public_evidence_bytes``
+    # counter; the rewrite clamps that counter to the frozen limit (preserving
+    # the precise observed byte count in the termination detail) and leaves
+    # every other accounting, evidence, and terminal field verbatim.  The
+    # frozen default ``campaign_stop_evidence`` and ``preflight_failure_evidence``
+    # must already be present in the raw outcome and are preserved unchanged
+    # (this terminal completed normally; no campaign-stop or preflight-failure
+    # record is introduced).  This shape is mutually exclusive with ``pre_pdb``
+    # (which requires ``patch_submissions == 0``) and with
+    # ``completed_unresolved`` (which requires a non-resolved verifier
+    # outcome), so it is checked first.
+    try:
+        completed_resolved = (
+            outcome["terminal_status"] == "RESOLVED"
+            and outcome["terminal_reason_code"] == "RESOLVED_COMPLETED"
+            and type(outcome["logical_model_calls"]) is int and outcome["logical_model_calls"] >= 1
+            and type(outcome["valid_directives"]) is int and outcome["valid_directives"] >= 1
+            and outcome["baseline_reproduction"] is True
+            and type(outcome["patch_submissions"]) is int and outcome["patch_submissions"] == 1
+            and type(outcome["verifier_runs"]) is int and outcome["verifier_runs"] >= 1
+            and isinstance(outcome["candidate_hash"], str) and outcome["candidate_hash"]
+            and type(outcome["pdb_counts"]) is dict
+            and outcome["pdb_counts"] == dict(ZERO_PDB_COUNTS)
+            and type(outcome["pdb_sessions_started"]) is int and outcome["pdb_sessions_started"] == 0
+            and type(outcome["successful_pdb_observations"]) is int and outcome["successful_pdb_observations"] == 0
+            and type(outcome["failed_pdb_observations"]) is int and outcome["failed_pdb_observations"] == 0
+            and isinstance(outcome["transport_evidence"], Mapping)
+            and outcome["transport_evidence"].get("completed_response") is True
+            and outcome["transport_evidence"].get("malformed_response") is False
+            and outcome["transport_evidence"].get("provider_error") is False
+            and isinstance(outcome["independent_verifier_result"], Mapping)
+            and outcome["independent_verifier_result"].get("status") == "COMPLETED"
+            and outcome["independent_verifier_result"].get("outcome") == "RESOLVED"
+            and outcome["independent_verifier_result"].get("lifecycle_succeeded") is True
+            and outcome["repair_outcome"] == "RESOLVED"
+            and isinstance(outcome["terminal_transport_evidence"], Mapping)
+            and outcome["terminal_transport_evidence"].get("final_attempt_classification") == "COMPLETED_RESPONSE"
+            and outcome["terminal_transport_evidence"].get("provider_completed_response") is True
+            and outcome["terminal_transport_evidence"].get("process_exit_code") == 0
+            and outcome["terminal_transport_evidence"].get("timed_out") is False
+            and outcome["terminal_transport_evidence"].get("provider_error_category") is None
+            and isinstance(outcome["terminal_transport_evidence"].get("evidence_reference"), str)
+            and outcome["terminal_transport_evidence"]["evidence_reference"]
+            and outcome["preflight_failure_evidence"] == _default_preflight_failure_evidence()
+            and outcome["campaign_stop_evidence"] == {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS}
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+    if completed_resolved:
+        rewritten = dict(outcome)
+        rewritten.update({
+            "termination_reason": f"{detail}; terminal representation RESOLVED/RESOLVED_COMPLETED",
+            "public_evidence_bytes": limit,
+        })
+        return rewritten
+
     # --- completed UNRESOLVED lifecycle (live-proven shape from attempt
     # ddc26502...): the controller ran a full Reproduce -> Understand ->
     # Patch -> Validate -> Failed lifecycle, the verifier executed with a

@@ -728,6 +728,164 @@ def test_completed_unresolved_budget_exhaustion_attempt_package_verifies(manifes
     assert verification["campaign_status"] == "COMPLETED"
 
 
+# ---- completed RESOLVED lifecycle budget exhaustion (attempt 238f25ed...) -------
+
+
+def _completed_resolved_exhausted_outcome(manifest, case, route, **overrides):
+    """The exact live-proven shape from attempt 238f25ed...: a completed
+    RESOLVED / RESOLVED_COMPLETED lifecycle with the patch applied, the
+    post-patch reproduction passed, the regression tests passed, the
+    verifier confirming RESOLVED, and cumulative public evidence bytes above
+    the frozen 20,000-byte limit."""
+    outcome = _completed_outcome(manifest, case, route, **{
+        "terminal_status": "RESOLVED",
+        "terminal_reason_code": "RESOLVED_COMPLETED",
+        "termination_reason": "controller transitioned to Done after verifier-confirmed repair",
+        "logical_model_calls": 16,
+        "provider_process_attempts": 16,
+        "valid_directives": 16,
+        "retries": 0,
+        "malformed_directive_rejections": 0,
+        "bounded_directive_feedback_events": 0,
+        "baseline_reproduction": True,
+        "controller_states_visited": ["REPRODUCE", "UNDERSTAND", "PATCH", "VALIDATE"],
+        "hypotheses_created": 1,
+        "pdb_gate_decisions": [],
+        "pdb_counts": dict(runner.ZERO_PDB_COUNTS),
+        "pdb_sessions_started": 0,
+        "successful_pdb_observations": 0,
+        "failed_pdb_observations": 0,
+        "verifier_runs": 1,
+        "patch_submissions": 1,
+        "independent_verifier_result": {"status": "COMPLETED", "outcome": "RESOLVED", "lifecycle_succeeded": True},
+        "transport_evidence": {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": True,
+            "evidence_reference": f"opencode-go:{case['case_id']}:16",
+        },
+        "campaign_stop_evidence": {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS},
+        "prompt_tokens": 89712,
+        "completion_tokens": 247,
+        "reasoning_tokens": 4315,
+        "provider_reported_cost": 0.014511232,
+        "wall_clock_duration_seconds": 205.0,
+        "public_evidence_bytes": 36189,
+        "candidate_hash": "c" * 64,
+        "repair_outcome": "RESOLVED",
+    })
+    outcome.update(overrides)
+    return outcome
+
+
+def test_completed_resolved_budget_exhaustion_terminalizes(manifest):
+    """The exact 238f25ed... shape (16 completed responses, 1 patch
+    submission, verifier COMPLETED with RESOLVED, 36189 cumulative public
+    evidence bytes) is terminalized as RESOLVED/RESOLVED_COMPLETED with all
+    completed accounting preserved and public_evidence_bytes capped at the
+    frozen 20,000-byte limit."""
+    case = manifest["case_order"][0]
+    route = _route_evidence(manifest)
+    outcome = _completed_resolved_exhausted_outcome(manifest, case, route)
+
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
+    assert info.value.observed == 36189
+    assert info.value.limit == 20000
+
+    rewritten = runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-238f25ed")
+    assert rewritten is not None
+    assert rewritten["terminal_status"] == "RESOLVED"
+    assert rewritten["terminal_reason_code"] == "RESOLVED_COMPLETED"
+    assert rewritten["public_evidence_bytes"] == 20000
+    assert "36189" in rewritten["termination_reason"] and "20000" in rewritten["termination_reason"]
+    assert "public-evidence budget exhausted" in rewritten["termination_reason"]
+    assert "RESOLVED" in rewritten["termination_reason"]
+
+    assert rewritten["logical_model_calls"] == 16
+    assert rewritten["provider_process_attempts"] == 16
+    assert rewritten["valid_directives"] == 16
+    assert rewritten["retries"] == 0
+    assert rewritten["malformed_directive_rejections"] == 0
+    assert rewritten["bounded_directive_feedback_events"] == 0
+    assert rewritten["baseline_reproduction"] is True
+    assert rewritten["controller_states_visited"] == ["REPRODUCE", "UNDERSTAND", "PATCH", "VALIDATE"]
+    assert rewritten["hypotheses_created"] == 1
+    assert rewritten["pdb_counts"] == dict(runner.ZERO_PDB_COUNTS)
+    assert rewritten["pdb_sessions_started"] == 0
+    assert rewritten["successful_pdb_observations"] == 0
+    assert rewritten["failed_pdb_observations"] == 0
+    assert rewritten["verifier_runs"] == 1
+    assert rewritten["patch_submissions"] == 1
+    assert rewritten["independent_verifier_result"] == {"status": "COMPLETED", "outcome": "RESOLVED", "lifecycle_succeeded": True}
+    assert rewritten["transport_evidence"] == {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False}
+    assert rewritten["terminal_transport_evidence"]["final_attempt_classification"] == "COMPLETED_RESPONSE"
+    assert rewritten["terminal_transport_evidence"]["provider_completed_response"] is True
+    assert rewritten["terminal_transport_evidence"]["process_exit_code"] == 0
+    assert rewritten["terminal_transport_evidence"]["evidence_reference"] == f"opencode-go:{case['case_id']}:16"
+    assert rewritten["provider_reported_cost"] == pytest.approx(0.014511232)
+    assert rewritten["prompt_tokens"] == 89712
+    assert rewritten["completion_tokens"] == 247
+    assert rewritten["reasoning_tokens"] == 4315
+    assert rewritten["candidate_hash"] == "c" * 64
+    assert rewritten["repair_outcome"] == "RESOLVED"
+    assert rewritten["campaign_stop_evidence"] == {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS}
+    assert rewritten["preflight_failure_evidence"] == runner._default_preflight_failure_evidence()
+
+    runner.enforce_case_budgets(rewritten, manifest, case_policy=case["policy"])
+
+
+def test_completed_resolved_budget_exhaustion_campaign_proceeds(manifest, auth, tmp_path, git_state_provider):
+    """End-to-end: case 1 produces the 238f25ed... RESOLVED shape with
+    public_evidence_bytes == 36189; the case materializes as
+    RESOLVED/RESOLVED_COMPLETED with completed accounting preserved in the
+    campaign aggregates, and the campaign proceeds to case 2."""
+    route = _route_evidence(manifest)
+    entries = _completed_entries(manifest)
+    entries[0] = {
+        "provider_process_attempts": 16,
+        "outcome": _completed_resolved_exhausted_outcome(manifest, manifest["case_order"][0], route),
+    }
+
+    record, factory, case_runner, output = _run_campaign_custom(
+        manifest, auth, tmp_path, case_runner=ScriptedCaseRunner(entries), runner_entries=entries,
+        git_state_provider=git_state_provider,
+    )
+
+    assert record["status"] == "COMPLETED"
+    assert record["stop_reason"] is None
+    assert record["case_lifecycle_states"][manifest["case_order"][0]["case_id"]] == "completed"
+    assert record["counts"]["completed_case_count"] == 6
+    assert record["counts"]["unstarted_case_count"] == 0
+    assert record["counts"]["aborted_case_count"] == 0
+    assert record["counts"]["logical_model_calls"] == 16 + 5
+    assert record["counts"]["provider_process_attempts"] == 16 + 5
+    assert record["counts"]["accepted_directives"] == 16 + 5
+
+    first = record["cases"][0]
+    assert first["terminal_status"] == "RESOLVED"
+    assert first["terminal_reason_code"] == "RESOLVED_COMPLETED"
+    assert first["public_evidence_bytes"] == 20000
+    assert "36189" in first["termination_reason"] and "20000" in first["termination_reason"]
+    assert "public-evidence budget exhausted" in first["termination_reason"]
+    assert first["logical_model_calls"] == 16
+    assert first["provider_process_attempts"] == 16
+    assert first["valid_directives"] == 16
+    assert first["patch_submissions"] == 1
+    assert first["verifier_runs"] == 1
+    assert first["independent_verifier_result"]["outcome"] == "RESOLVED"
+    assert first["provider_reported_cost"] == pytest.approx(0.014511232)
+    assert first["repair_outcome"] == "RESOLVED"
+
+    assert record["cases"][1]["case_id"] == manifest["case_order"][1]["case_id"]
+    assert record["cases"][1]["terminal_status"] == "UNRESOLVED"
+    assert record["cost_summary"]["classification"] == "REPORTED"
+    assert record["cost_summary"]["total_provider_reported_cost"] == pytest.approx(round(0.014511232, 6) + 5 * 0.0042)
+    assert (output / "cases" / "case-01-quixbugs-paired-pilot-v2__quixbugs-find-in-sorted-smoke-v1__pdb-on-uncertainty.json").is_file()
+    assert (output / "cases" / "case-02-quixbugs-paired-pilot-v2__quixbugs-find-in-sorted-smoke-v1__static-baseline.json").is_file()
+    assert runner.verify_attempt_package(output, manifest)["consistent"] is True
+
+
 # ---- honest abort for unproven / contradictory shapes ---------------------------
 
 
@@ -761,20 +919,18 @@ def test_completed_unresolved_with_contradictory_verifier_still_aborts(manifest)
     assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-bad-verifier") is None
 
 
-def test_resolved_budget_exhaustion_still_aborts(manifest):
-    """A RESOLVED shape with public_evidence_bytes > 20000 has no valid frozen
-    terminal representation in this task and returns None."""
+def test_completed_resolved_with_contradictory_verifier_still_aborts(manifest):
+    """A shape claiming RESOLVED but with a non-resolved verifier outcome has
+    no valid frozen terminal representation and returns None (honest abort)."""
     case = manifest["case_order"][0]
     route = _route_evidence(manifest)
-    outcome = _completed_unresolved_exhausted_outcome(manifest, case, route,
-        terminal_status="RESOLVED",
-        terminal_reason_code="RESOLVEDVED_COMPLETED",
-        independent_verifier_result={"status": "COMPLETED", "outcome": "RESOLVED", "lifecycle_succeeded": True},
-        repair_outcome="RESOLVED",
+    outcome = _completed_resolved_exhausted_outcome(manifest, case, route,
+        independent_verifier_result={"status": "COMPLETED", "outcome": "NO_OP", "lifecycle_succeeded": True},
+        repair_outcome="NO_CANDIDATE",
     )
     with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
         runner.enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
-    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-resolved") is None
+    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-resolved-contradiction") is None
 
 
 def test_invalid_model_response_budget_exhaustion_still_aborts(manifest):
