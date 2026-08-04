@@ -81,7 +81,8 @@ from typing import Any, Callable, Mapping
 REPO_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO_ROOT))
 
-import quixbugs_paired_pilot as pilot  # noqa: E402  (accepted validator path)
+import quixbugs_paired_pilot as pilot  # noqa: E402
+from scripts import opencode_protocol_transport as transport  # noqa: E402  (accepted validator path)
 
 RUNNER_SCHEMA_VERSION = "quixbugs-live-runner-v2"
 AUTHORIZATION_SCHEMA_VERSION = "quixbugs-paired-pilot-authorization-v1"
@@ -2102,6 +2103,25 @@ def _budget_exhausted_outcome(
         return None
     if not pre_pdb:
         return None
+    # The terminal transport evidence stays tied to the last genuinely
+    # completed provider response: when the raw outcome already carries the
+    # completed-response terminal with its own attempt-bound evidence
+    # reference (the adapter maps the production shape to
+    # ``opencode-go:<case_id>:<last process attempt>``), that reference is
+    # preserved; a raw outcome without a completed-response terminal keeps
+    # the budget-exhaustion evidence reference.
+    raw_terminal = outcome.get("terminal_transport_evidence")
+    terminal_reference = reference
+    if (
+        isinstance(raw_terminal, Mapping)
+        and raw_terminal.get("final_attempt_classification") == "COMPLETED_RESPONSE"
+        and raw_terminal.get("provider_completed_response") is True
+        and raw_terminal.get("provider_error_category") is None
+        and raw_terminal.get("timed_out") is False
+        and isinstance(raw_terminal.get("evidence_reference"), str)
+        and raw_terminal["evidence_reference"]
+    ):
+        terminal_reference = raw_terminal["evidence_reference"]
     rewritten = dict(outcome)
     rewritten.update({
         "terminal_status": "PDB_NOT_REACHED",
@@ -2112,7 +2132,7 @@ def _budget_exhausted_outcome(
         "terminal_transport_evidence": {
             "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0,
             "timed_out": False, "provider_error_category": None,
-            "provider_completed_response": True, "evidence_reference": reference,
+            "provider_completed_response": True, "evidence_reference": terminal_reference,
         },
         "blocked_evidence": {"block_kind": "none", "reason_code": "NONE", "confirmed": False, "evidence_reference": reference},
         "infrastructure_evidence": _default_infrastructure_evidence(reference),
@@ -2487,6 +2507,23 @@ class _CountingTransportProxy:
         self._counter = counter
 
     def request(self, payload: Mapping[str, Any], timeout_seconds: float) -> Mapping[str, Any]:
+        # The frozen public-evidence budget gate lives at the outer transport
+        # boundary: an oversized canonical public request is rejected before
+        # any process-launch or logical-request counter is incremented, so the
+        # provider-call proof and the case outcome stay consistent (the
+        # rejected request never launches a wrapper/provider process and is
+        # never counted or retried).
+        if isinstance(payload, Mapping):
+            try:
+                canonical = transport.canonical_public_request(payload)
+            except (TypeError, ValueError, UnicodeError):
+                canonical = None
+            if canonical is not None:
+                canonical_byte_count = len(canonical.encode("utf-8"))
+                if canonical_byte_count > transport.MAX_PUBLIC_EVIDENCE_BYTES:
+                    from agentic_debugger.evaluation.live import ModelRequestBudgetExceeded
+
+                    raise ModelRequestBudgetExceeded(canonical_byte_count, transport.MAX_PUBLIC_EVIDENCE_BYTES)
         self._counter.logical_requests += 1
         self._counter.process_launches += 1
         return self._transport.request(payload, timeout_seconds)

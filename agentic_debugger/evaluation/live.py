@@ -44,6 +44,27 @@ class LiveTransportError(LiveEvaluationError):
         self.kind = kind
         self.timed_out = timed_out
 
+class ModelRequestBudgetExceeded(LiveEvaluationError):
+    """The transport rejected the model request before any provider process.
+
+    Raised only when the canonical public request serialization of the model
+    request is a valid non-negative byte count above the frozen
+    public-evidence budget: the next public request could not have been
+    constructed within the frozen case limit, so the case stops before
+    another wrapper/provider process is launched.  This is a typed,
+    non-retryable case-level signal: it is never a transport/provider
+    failure, never a malformed-directive rejection, and never launches a
+    model/provider process for the rejected request.
+    """
+
+    def __init__(self, request_byte_count: int, limit: int) -> None:
+        super().__init__(
+            f"OpenCode canonical public request exceeds the public-evidence byte budget "
+            f"({request_byte_count} > {limit})"
+        )
+        self.request_byte_count = int(request_byte_count)
+        self.limit = int(limit)
+
 class DirectiveRejectionCategory(str, Enum):
     """Closed vocabulary for why a provider-completed directive was rejected.
 
@@ -636,6 +657,18 @@ class LiveModelAdapter:
                     self._runtime_transition_authorized = True
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
                 return directive
+            except ModelRequestBudgetExceeded as exc:
+                # The canonical public request for this logical call exceeds
+                # the frozen public-evidence budget.  The transport rejected
+                # it before any process launch; it is never retried, never
+                # counted as a provider error, and never fed back as a
+                # malformed directive.  The logical call is unaccounted (the
+                # request was constructed but no provider process was
+                # launched) and the case terminates with the typed
+                # budget-exhausted termination reason.
+                self.metrics.model_requests-=1
+                self.metrics.termination_reason="public_evidence_budget_exceeded"
+                raise
             except LiveTransportError as exc:
                 rejection=None
                 self.metrics.error(exc.kind)
@@ -808,6 +841,15 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     elif cleanup_errors: status=LiveCaseStatus.CLEANUP_FAILED
     elif event_failed: status=LiveCaseStatus.EVENT_REPORTING_FAILED
     elif verifier_failed: status=LiveCaseStatus.VERIFIER_FAILED
+    elif metrics.termination_reason=="public_evidence_budget_exceeded" and metrics.model_responses>=1:
+        # The next public request exceeded the frozen public-evidence budget
+        # after at least one genuinely completed provider response.  The case
+        # stopped before another provider process was launched; the pre-PDB
+        # completed-response shape is terminalized as PDB_NOT_REACHED with the
+        # completed-response terminal transport evidence bound to the last
+        # completed provider response.  Zero-contact budget stops keep the
+        # existing fail-closed infrastructure classification below.
+        status=LiveCaseStatus.PDB_NOT_REACHED
     elif metrics.termination_reason in {"request_timeout","elapsed_time_limit"}: status=LiveCaseStatus.TIMED_OUT
     elif metrics.termination_reason in {"provider_or_transport_error","invalid_model_response"}: status=LiveCaseStatus.PROVIDER_ERROR
     elif controller_failed: status=LiveCaseStatus.CONTROLLER_FAILED

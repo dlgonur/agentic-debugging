@@ -1245,6 +1245,22 @@ class OpenCodeGoTransport:
             request_bytes = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
         except (TypeError, ValueError, UnicodeError):
             raise _transport_error("request_serialization", "provider request could not be serialized") from None
+        # The frozen public-evidence budget applies to the canonical public
+        # request serialization (the exact shared serializer and frozen
+        # 20,000-byte constant the protocol wrapper enforces inside
+        # ``build_user_message``).  An oversized canonical public request is
+        # rejected here, in-process, before the wrapper/provider process is
+        # spawned and before any process-launch counter is incremented; it is
+        # a typed, non-retryable case-level stop, never a provider failure.
+        try:
+            canonical_request = transport.canonical_public_request(payload)
+        except (TypeError, ValueError, UnicodeError):
+            raise _transport_error("request_serialization", "provider request could not be serialized") from None
+        canonical_byte_count = len(canonical_request.encode("utf-8"))
+        if canonical_byte_count > transport.MAX_PUBLIC_EVIDENCE_BYTES:
+            from agentic_debugger.evaluation.live import ModelRequestBudgetExceeded
+
+            raise ModelRequestBudgetExceeded(canonical_byte_count, transport.MAX_PUBLIC_EVIDENCE_BYTES)
         self.process_attempts += 1
         self._factory.spawned_processes += 1
         evidence_dir = self._factory.evidence_dir
