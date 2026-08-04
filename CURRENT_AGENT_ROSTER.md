@@ -10,14 +10,23 @@ execution.
 - **DeepSeek V4 Flash through the operator's OpenCode Go subscription** is the
   default implementation route for coding-agent sessions **when a task
   explicitly authorizes model use**. No other provider route is the default.
-- The paired-pilot v2 contract (`docs/QUIXBUGS_PAIRED_PILOT_V2.md`,
-  `research/quixbugs/PAIRED_PILOT_V2.json`) freezes this route for the
-  QuixBugs paired pilot: OpenCode Go subscription, DeepSeek V4 Flash, protocol
+- The next authorized QuixBugs execution uses the paired-pilot v3 manifest
+  (`research/quixbugs/PAIRED_PILOT_V3.json`, canonical SHA-256
+  `f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`).
+  It derives from the v2 route and experiment contract in
+  `docs/QUIXBUGS_PAIRED_PILOT_V2.md` and preserves the same tasks, order,
+  budgets, qualification authority, and route: OpenCode Go subscription,
+  DeepSeek V4 Flash, protocol
   1.3, no Zen route, no free-tier substitution, no Ollama route, no alternate
   provider, no model substitution, and no metered/paid-overage/per-call
   billing fallback. Subscription entitlement and billing-route evidence must
   be established before the first provider call, or the campaign blocks
-  before that call.
+  before that call. v3 adds the honest `VALIDATION_NOT_REACHED` terminal and
+  candidate provenance required by observed pre-Validate budget exhaustion.
+- The frozen v2 manifest remains a compatibility and derivation authority; it
+  must not be selected for the next live attempt. Every v3 operator command
+  must pass `--manifest research/quixbugs/PAIRED_PILOT_V3.json` explicitly,
+  because the CLI default remains v2.
 - The earlier OpenCode Zen free-model matrix
   (`deepseek-v4-flash-free`, variant `max`) is a historical, descriptive-only
   record and is not the current implementation route.
@@ -49,7 +58,9 @@ execution.
 
 ## Reference
 
-- `docs/QUIXBUGS_PAIRED_PILOT_V2.md` — paired-pilot v2 route contract
+- `research/quixbugs/PAIRED_PILOT_V3.json` — next six-case live manifest
+- `docs/QUIXBUGS_PAIRED_PILOT_V2.md` — retained v2 derivation and route contract
+- `docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md` — v2/v3 operator sequence
 - `docs/QUIXBUGS_PAIRED_PILOT_V1.md` — retained v1 authority (historical
   OpenCode Zen zero-price route)
 - `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` — model-access strategy

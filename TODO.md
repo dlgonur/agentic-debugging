@@ -15,12 +15,16 @@ repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/
 
 - Model kullanımı açıkça yetkilendirilmiş görevlerde varsayılan implementation
   route'u, operator'ün OpenCode Go aboneliği üzerinden DeepSeek V4 Flash'tır.
-  Bu route, paired-pilot v2 kontratında (`docs/QUIXBUGS_PAIRED_PILOT_V2.md`,
-  `research/quixbugs/PAIRED_PILOT_V2.json`) fail-closed abonelik koşullarıyla
-  dondurulmuştur: Zen route, free-tier ikamesi, Ollama, alternatif provider,
+  Bu route'un görev/sıra/bütçe/qualification authority'si paired-pilot v2
+  kontratından gelir; bir sonraki live deneme ise aynı kontratı koruyan
+  `research/quixbugs/PAIRED_PILOT_V3.json` ile yürütülmelidir. v3,
+  `VALIDATION_NOT_REACHED` ve candidate provenance ekler. Zen route,
+  free-tier ikamesi, Ollama, alternatif provider,
   model substitution, metered/paid-overage/per-call billing fallback yoktur;
   ilk provider çağrısından önce abonelik entitlement ve billing-route kanıtı
-  kurulamazsa kampanya o çağrıdan önce bloklanır. Eski OpenCode Zen
+  kurulamazsa kampanya o çağrıdan önce bloklanır. CLI v2 default'unu yalnızca
+  compatibility için korur; v3 operator komutları manifest'i explicit verir.
+  Eski OpenCode Zen
   free-model matrix'i yalnızca historical, descriptive kayıttır.
 - Literatür taraması, deep research, kaynak doğrulama ve geniş karşılaştırmalı
   araştırma; coding-agent oturumları dışında, ayrı bir ChatGPT
@@ -758,3 +762,26 @@ Ilk tam OpenCode Go iletim kanitli deneme (`quixbugs-paired-pilot-v2-attempt-889
 3. **Muhasebe ayrimi.** Yalnizca bir sonraki request'in frozen case limitini asacagi beklenen public-evidence tukenmesi case-level terminal oluyor; negatif/non-integer counter ve gercek campaign invariant ihlalleri (ornegin transport counter uyumsuzlugu, diger budget tasmalari) kampanyayi abort etmeye devam ediyor. Provider errors, timeout, controller infrastructure mapping ve basarili case'ler degismedi.
 
 Odakli testler: production-sekli regression (9 response, 9 directive, hipotez, Patch, 21949 > 20000, cost 0.0066370976) - ilk case `campaign.cases`'e yaziliyor, measurements ve cost korunuyor, aggregate count'lar case'i iceriyor, kampanya ikinci case'e geciyor, terminal commit + package verification basarili, `ABORTED` degil; provider cagrisi oncesi tukenme no-contact schema-valid terminal; negatif counter ve desteklenmeyen sekil hala abort; `enforce_case_budgets` ayrimi. `8890ed...` ve `320550...` denemeleri non-pilot diagnostic attempt olarak korundu; Authorized Six-Case Live Campaign TODO maddesi taze bir gercek kampanya tamamlanana kadar acik tutuldu. Hicbir test/build/lint/compile/dogrulama calistirilmadi (FirstMate'e aittir); gercek OpenCode komutu, catalog, provider veya paid endpoint calistirilmadi; commit/stage/push yapilmadi.
+
+### Paired-pilot v3 ve tamamlanmış case-budget terminalleri (2026-08-04)
+
+Takip eden live-proven şekiller için mevcut case terminal sözleşmesi tamamlandı:
+completed `UNRESOLVED` (`ddc26502...`), completed `RESOLVED` (`238f25ed...`)
+ve static-baseline aday uygulanmış fakat Validate'a geçmeden bütçesi tükenmiş
+`e974af4...`. İlk iki şekil mevcut v2 sonuçlarını korur. Son şekil için v3,
+`VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE` ile
+`candidate_provenance=applied_patch_event` ekler; verifier çalışmadığı için
+başarı üretilmez. Desteklenen terminal sonuçları completed lifecycle, provider
+muhasebesi, token/cost, case artifact'i ve sonraki case'e continuation'ı
+korur. Contradictory veya temsil edilemeyen şekiller honest campaign abort
+olarak kalır. PDB gate kararları gerçek logical gate tüketimi başına tek kayıt
+olacak şekilde deduplicate edilmiştir.
+
+Bir sonraki authorized six-case attempt yalnızca explicit
+`research/quixbugs/PAIRED_PILOT_V3.json` ile yürütülebilir. Nominal denominator
+6 case / policy başına 3 case'tir; budget-terminal completed case'ler
+denominator'dan düşmez, authority-invalidated case'ler evaluation dışı kalıp
+resource accounting'de korunur, blocked/aborted/unstarted case'ler açıkça
+raporlanır. Gerçek route capture, authorization, preflight ve live campaign
+hâlâ açık TODO'dur; fresh v3 operator artifact'leri ve fresh output root
+gerektirir.

@@ -1,11 +1,11 @@
-"""Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2 live runner.
+"""Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2/v3 live runner.
 
 This module implements and validates the execution-adapter wiring that can
 later be supplied to the accepted six-case live runner
-(:mod:`quixbugs_live_runner_v2`, campaign
-``research/quixbugs/PAIRED_PILOT_V2.json``, canonical manifest hash
-``bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171``, live
-protocol ``1.3``) after (1) a real operator authorization artifact exists,
+(:mod:`quixbugs_live_runner_v2`, campaigns
+``research/quixbugs/PAIRED_PILOT_V2.json`` and
+``research/quixbugs/PAIRED_PILOT_V3.json``, live protocol ``1.3``) after
+(1) a real operator authorization artifact exists,
 (2) exact runtime route evidence passes preflight, (3) this adapter's accepted
 commit is bound in that authorization, and (4) the operator explicitly
 authorizes the real campaign.
@@ -2790,7 +2790,7 @@ def run_operator_bundle(
 
     manifest = _resolve_manifest(manifest_path)
     if len(manifest["case_order"]) != 6:
-        raise OpenCodeGoAdapterError("the operator bundle is bound to the frozen six-case v2 campaign only")
+        raise OpenCodeGoAdapterError("the operator bundle is bound to a frozen six-case v2/v3 campaign only")
 
     for label, value in (
         ("operator authorization ID", operator_authorization_id),
@@ -3234,8 +3234,8 @@ def run_synthetic_selftest(
         evidence_dir=out / "selftest-evidence",
     )
     case = manifest["case_order"][0]
-    transport = factory.prepare(case)
-    prepare_gate_verified = transport is not None
+    prepared_transport = factory.prepare(case)
+    prepare_gate_verified = prepared_transport is not None
     scenarios = [scenario] if scenario is not None else ["valid-usage", "valid-no-usage", "cost-zero", "malformed-always", "identity-mismatch", "route-drift", "credential-output", "nonzero-exit"]
     scenario_results: list[dict[str, Any]] = []
     environment_override = {
@@ -3418,7 +3418,7 @@ def run_live_wire(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2 live runner (adapter wiring only; no provider contact)")
+    parser = argparse.ArgumentParser(description="Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2/v3 live runner (adapter wiring only; no provider contact)")
     parser.add_argument("mode", choices=("adapter-template", "adapter-validate", "route-preflight-only", "route-capture", "operator-bundle", "selftest", "live-wire"))
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--adapter-config", type=Path)

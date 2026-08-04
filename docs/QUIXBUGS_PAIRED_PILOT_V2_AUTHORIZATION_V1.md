@@ -1,13 +1,17 @@
-# QuixBugs paired-pilot v2 live authorization contract
+# QuixBugs paired-pilot v2/v3 live authorization contract
 
 This document defines the strict, versioned authorization artifact required to
-run the frozen QuixBugs paired-pilot v2 live campaign
-(`research/quixbugs/PAIRED_PILOT_V2.json`, canonical manifest SHA-256
-`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`, accepted
-baseline `28ec7754336fc53f21ebbae8a851b33e26714932`, live protocol `1.3`).
+run a frozen QuixBugs paired-pilot v2 or v3 live campaign. The next authorized
+execution uses `research/quixbugs/PAIRED_PILOT_V3.json` (canonical manifest
+SHA-256 `f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`);
+v2 remains the compatibility/derivation contract at SHA-256
+`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`.
+Both use accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`
+and live protocol `1.3`.
 
 The machine-readable schema reference is the non-authorizing template
-`research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`, which is
+`research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json` for v2 or
+`research/quixbugs/PAIRED_PILOT_V3_AUTHORIZATION_TEMPLATE.json` for v3, which is
 **rejected** by the runner (`TEMPLATE_IS_NOT_AUTHORIZATION`). The strict
 validator is `authorization_failure` /
 `validate_authorization_artifact` in `scripts/quixbugs_live_runner_v2.py`.
@@ -19,13 +23,13 @@ validator is `authorization_failure` /
 | `schema_version` | exactly `quixbugs-paired-pilot-authorization-v1` |
 | `template` | must be `false` (the tracked template is `true` and is rejected) |
 | `authorize_live` | must be `true` |
-| `campaign_id` / `campaign_version` | exactly `quixbugs-paired-pilot-v2` / `2` |
-| `campaign_manifest_hash` | exactly the canonical v2 manifest hash `bc3df312…f3171` |
+| `campaign_id` / `campaign_version` | exactly the selected manifest: `quixbugs-paired-pilot-v2` / `2` or `quixbugs-paired-pilot-v3` / `3` |
+| `campaign_manifest_hash` | exactly the selected canonical hash: v2 `bc3df312…f3171` or v3 `f5f513a1…e45cf` |
 | `accepted_baseline` | exactly the accepted repository baseline `28ec7754336fc53f21ebbae8a851b33e26714932` |
 | `planning_baseline_commit` | exactly `18e067f24c337e7215139373edc699a347cf2127` |
 | `qualification_contract_hash` | exactly `7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d` |
 | `accepted_campaign_commit` | 40-hex execution commit, distinct from the planning baseline |
-| `permitted_case_ids` | the exact six frozen v2 case IDs in manifest order, no duplicates |
+| `permitted_case_ids` | the exact six selected-manifest case IDs in order, no duplicates |
 | `provider` / `model` / `variant` / `protocol` | `OpenCode Go` / `deepseek-v4-flash` / `max` / `1.3` |
 | `expected_opencode_version` | exact OpenCode runtime version resolved by the operator before contact |
 | `expected_catalog_fingerprint` | exact 64-hex catalog fingerprint observed by the operator |
@@ -41,7 +45,7 @@ validator is `authorization_failure` /
 | `operator_authorization_id` | operator authorization identity / record ID |
 | `authorization_created_at` / `authorization_valid_until` | ISO-8601 UTC; validity may be `null` or bounded; an expired artifact is rejected |
 | `output_root` | the exact output/attempt directory for this campaign |
-| `campaign_attempt_identity` | `quixbugs-paired-pilot-v2-attempt-<64 hex>` |
+| `campaign_attempt_identity` | selected version: `quixbugs-paired-pilot-v2-attempt-<64 hex>` or `quixbugs-paired-pilot-v3-attempt-<64 hex>` |
 | `single_frozen_six_case_campaign_confirmation` | `true` |
 
 ## What is rejected
@@ -60,6 +64,11 @@ observation; missing account status; any denial flag not true;
 expired validity; output-root mismatch; invalid attempt identity; missing
 single-campaign confirmation; and any v1 zero-price contradiction
 (`zero_price_required`).
+
+For the next execution, a v2 authorization or an invocation that omits the
+explicit v3 manifest is a campaign-identity mismatch, not a permitted
+fallback. All route capture, bundle, adapter validation, preflight, and live
+commands must pass `--manifest research/quixbugs/PAIRED_PILOT_V3.json`.
 
 The v1 zero-price authorization fields are **not** part of the v2 contract;
 a v2 authorization that requires zero pricing is a contradiction and fails
@@ -88,9 +97,10 @@ baseline `618c33ff186493892665ca1233c3edd8b2eec13f` (lineage prerequisite
 only), and must have a clean tracked working tree, a clean real index, and no
 non-ignored untracked files; HEAD and repository cleanliness are re-checked
 immediately before the artifacts are created and any drift fails closed with
-no active artifact written. The artifact is also bound to the frozen manifest
-hash `bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`, the
-exact six frozen case IDs in order, protocol `1.3`, the exact observed
+no active artifact written. The artifact is also bound to the explicitly
+selected manifest hash (v3 for the next attempt:
+`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`), the
+exact six selected case IDs in order, protocol `1.3`, the exact observed
 OpenCode version, runtime model ID, variant, and catalog fingerprint (the
 deterministic catalog-entry fingerprint contract in
 `scripts/opencode_protocol_transport.py`), the account status and
@@ -108,16 +118,16 @@ review and Onur's manual execution.
 
 ## Interaction with the runner
 
-1. `python scripts/quixbugs_paired_pilot.py preflight --authorization <path> --output <dir> [--route-evidence-json <file>]`
-   validates the artifact, the repository baseline, and the route gate with
-   zero provider contact.
-2. `python scripts/quixbugs_paired_pilot.py live --authorization <path> --output <dir>`
-   prints the pre-provider plan and then fails closed unless an explicitly
-   configured provider transport and case runner are supplied; in this task
-   no transport exists, so live execution is rejected with zero provider
-   activity.
-3. `python scripts/quixbugs_paired_pilot.py template --output <path>` writes
-   the non-authorizing template.
+1. Use `scripts/quixbugs_opencode_go_adapter.py operator-bundle` with the
+   explicit v3 manifest to create the authorization and matching adapter
+   configuration from accepted route evidence.
+2. Use `route-preflight-only` with the same manifest and artifacts to validate
+   authorization, repository, adapter, and route bindings with zero provider
+   processes.
+3. Use `live-wire` only with those exact artifacts, the explicit v3 manifest,
+   a QuixBugs environment artifact, the task-bound facts provider, and the
+   explicit live confirmation flag. The complete command sequence is in
+   `docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`.
 
 See `docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md` for the full runner
 lifecycle.

@@ -1,10 +1,16 @@
 # QuixBugs OpenCode Go execution adapter v1 (operator guide)
 
 This document describes the fail-closed OpenCode Go execution adapter for the
-frozen QuixBugs paired-pilot v2 live runner
-(`research/quixbugs/PAIRED_PILOT_V2.json`, canonical manifest SHA-256
-`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`, accepted
-baseline `28ec7754336fc53f21ebbae8a851b33e26714932`, live protocol `1.3`).
+frozen QuixBugs paired-pilot v2/v3 live runner. The next authorized execution
+uses `research/quixbugs/PAIRED_PILOT_V3.json` (canonical manifest SHA-256
+`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`);
+v2 remains the derivation/compatibility contract. Both use accepted baseline
+`28ec7754336fc53f21ebbae8a851b33e26714932` and live protocol `1.3`.
+
+The CLI deliberately defaults to v2 for backward compatibility. Every command
+for the next attempt must therefore pass
+`--manifest research/quixbugs/PAIRED_PILOT_V3.json`; omission is not a v3
+fallback and must block operator review.
 
 The adapter implements and validates the execution wiring only. It never
 contacts OpenCode Go, DeepSeek V4 Flash, OpenCode Zen, a model catalog, an
@@ -310,6 +316,7 @@ The generated artifacts work with the existing zero-provider-process command
 ```powershell
 # 1. Route capture (local inspection only; zero model/provider contact)
 python scripts/quixbugs_opencode_go_adapter.py route-capture `
+  --manifest research/quixbugs/PAIRED_PILOT_V3.json `
   --runtime-model-id opencode-go/deepseek-v4-flash `
   --variant max `
   --account-status ACTIVE `
@@ -323,29 +330,32 @@ python scripts/quixbugs_opencode_go_adapter.py route-capture `
 #    closeout (observed read-only at bundle time; the task baseline is only a
 #    lineage prerequisite).
 python scripts/quixbugs_opencode_go_adapter.py operator-bundle `
+  --manifest research/quixbugs/PAIRED_PILOT_V3.json `
   --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json `
   --operator-authorization-id op-auth-20260803-001 `
-  --attempt-identity quixbugs-paired-pilot-v2-attempt-<64-hex> `
-  --output operator/attempts/quixbugs-paired-pilot-v2-attempt-<64-hex> `
+  --attempt-identity quixbugs-paired-pilot-v3-attempt-<64-hex> `
+  --output operator/attempts/quixbugs-paired-pilot-v3-attempt-<64-hex> `
   --valid-until 2026-08-10T00:00:00Z `
   --entitlement-evidence-reference operator/account-observation-20260803-001 `
   --python-executable <absolute path to python.exe> `
   --working-directory <absolute working directory> `
   --operator-boundary-root <absolute operator boundary> `
-  --bundle-root operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>
+  --bundle-root operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>
 
 # 3. Adapter validation (authorization + route binding)
 python scripts/quixbugs_opencode_go_adapter.py adapter-validate `
-  --adapter-config operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/adapter-config.json `
-  --authorization operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/authorization.json `
+  --manifest research/quixbugs/PAIRED_PILOT_V3.json `
+  --adapter-config operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>/adapter-config.json `
+  --authorization operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>/authorization.json `
   --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json
 
 # 4. Route-preflight-only execution (zero provider processes)
 python scripts/quixbugs_opencode_go_adapter.py route-preflight-only `
-  --authorization operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/authorization.json `
+  --manifest research/quixbugs/PAIRED_PILOT_V3.json `
+  --authorization operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>/authorization.json `
   --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json `
-  --adapter-config operator/bundles/quixbugs-paired-pilot-v2-attempt-<64-hex>/adapter-config.json `
-  --output operator/attempts/quixbugs-paired-pilot-v2-attempt-<64-hex>
+  --adapter-config operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>/adapter-config.json `
+  --output operator/attempts/quixbugs-paired-pilot-v3-attempt-<64-hex>
 ```
 
 The implementation agent must not execute these real commands; real operator
@@ -353,6 +363,30 @@ preflight remains pending FirstMate review and Onur's manual execution.
 `operator-bundle` binds the authorization and adapter configuration to the
 clean current HEAD present after Git closeout, so the manual sequence runs
 after the candidate is accepted and merged.
+
+After preflight passes, materialize `quixbugs-environment.json` from
+`scripts.quixbugs_live_wire_environment.describe_environment()` in ignored
+operator storage. A separately authorized live invocation uses the same
+explicit v3 manifest and artifacts:
+
+```powershell
+python scripts/quixbugs_opencode_go_adapter.py live-wire `
+  --manifest research/quixbugs/PAIRED_PILOT_V3.json `
+  --authorization operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>/authorization.json `
+  --route-evidence-json operator/route-evidence/quixbugs-route-evidence-v1-20260803-001.json `
+  --adapter-config operator/bundles/quixbugs-paired-pilot-v3-attempt-<64-hex>/adapter-config.json `
+  --output operator/attempts/quixbugs-paired-pilot-v3-attempt-<64-hex> `
+  --quixbugs-environment-json operator/quixbugs-environment.json `
+  --facts-provider scripts.quixbugs_live_wire_environment:provide `
+  --confirm-opencode-go-adapter
+```
+
+The nominal descriptive denominator is six cases (three per policy).
+Budget-terminal cases remain completed cases and are never dropped from that
+denominator. Authority-invalidated cases are excluded from evaluation while
+their resource use remains accounted; blocked, aborted, and unstarted cases
+remain explicit and prevent interpreting the attempt as a complete paired
+comparison.
 
 ## Cost propagation
 
@@ -503,12 +537,12 @@ contracts.
 
 ```
 python scripts/quixbugs_opencode_go_adapter.py adapter-template --output <path>
-python scripts/quixbugs_opencode_go_adapter.py adapter-validate --adapter-config <path> [--authorization <path> --route-evidence-json <path>]
-python scripts/quixbugs_opencode_go_adapter.py route-preflight-only --authorization <path> --route-evidence-json <path> --adapter-config <path> --output <root>
-python scripts/quixbugs_opencode_go_adapter.py route-capture --runtime-model-id <id> --variant <v> --account-status <status> --subscription-entitlement-confirmed --entitlement-evidence-reference <ref> --billing-route-assertion SUBSCRIPTION --output <operator/route-evidence target>
-python scripts/quixbugs_opencode_go_adapter.py operator-bundle --route-evidence-json <path> --operator-authorization-id <id> --attempt-identity <id> --output <root> --valid-until <ISO> --entitlement-evidence-reference <ref> --python-executable <path> --working-directory <path> --operator-boundary-root <path> [--bundle-root <path>]
+python scripts/quixbugs_opencode_go_adapter.py adapter-validate --manifest research/quixbugs/PAIRED_PILOT_V3.json --adapter-config <path> [--authorization <path> --route-evidence-json <path>]
+python scripts/quixbugs_opencode_go_adapter.py route-preflight-only --manifest research/quixbugs/PAIRED_PILOT_V3.json --authorization <path> --route-evidence-json <path> --adapter-config <path> --output <root>
+python scripts/quixbugs_opencode_go_adapter.py route-capture --manifest research/quixbugs/PAIRED_PILOT_V3.json --runtime-model-id <id> --variant <v> --account-status <status> --subscription-entitlement-confirmed --entitlement-evidence-reference <ref> --billing-route-assertion SUBSCRIPTION --output <operator/route-evidence target>
+python scripts/quixbugs_opencode_go_adapter.py operator-bundle --manifest research/quixbugs/PAIRED_PILOT_V3.json --route-evidence-json <path> --operator-authorization-id <id> --attempt-identity <id> --output <root> --valid-until <ISO> --entitlement-evidence-reference <ref> --python-executable <path> --working-directory <path> --operator-boundary-root <path> [--bundle-root <path>]
 python scripts/quixbugs_opencode_go_adapter.py selftest --output <root> [--scenario <name>]
-python scripts/quixbugs_opencode_go_adapter.py live-wire --authorization <path> --route-evidence-json <path> --adapter-config <path> --output <root> --quixbugs-environment-json <path> --facts-provider <module:callable> --confirm-opencode-go-adapter
+python scripts/quixbugs_opencode_go_adapter.py live-wire --manifest research/quixbugs/PAIRED_PILOT_V3.json --authorization <path> --route-evidence-json <path> --adapter-config <path> --output <root> --quixbugs-environment-json <path> --facts-provider scripts.quixbugs_live_wire_environment:provide --confirm-opencode-go-adapter
 ```
 
 The operator path requires, for live wiring, all of: explicit `live-wire`

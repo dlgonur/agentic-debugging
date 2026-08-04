@@ -1,10 +1,12 @@
-# QuixBugs paired-pilot v2 live runner (operator guide)
+# QuixBugs paired-pilot v2/v3 live runner (operator guide)
 
 This document describes the fail-closed live-runner infrastructure for the
-frozen QuixBugs paired-pilot v2 campaign
-(`research/quixbugs/PAIRED_PILOT_V2.json`, canonical manifest SHA-256
-`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`, accepted
-baseline `28ec7754336fc53f21ebbae8a851b33e26714932`, live protocol `1.3`).
+frozen QuixBugs paired-pilot v2 and v3 campaigns. The next authorized
+execution is v3 (`research/quixbugs/PAIRED_PILOT_V3.json`, canonical SHA-256
+`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`);
+v2 remains supported as the frozen derivation/compatibility contract. Both
+use accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932` and live
+protocol `1.3`.
 
 Implementation: `scripts/quixbugs_live_runner_v2.py`, wired into the accepted
 paired-pilot entry point `scripts/quixbugs_paired_pilot.py` (modes `preflight`,
@@ -16,7 +18,7 @@ does not create a parallel evaluation framework.
 ## Runner lifecycle
 
 1. **Authorization boundary** — the artifact is validated strictly against the
-   v2 contract (see `docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`).
+   selected v2/v3 manifest (see `docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`).
    Rejection produces a `REJECTED` campaign record with zero provider activity.
 2. **Repository baseline check** — the current Git HEAD must equal the accepted
    baseline `28ec7754336fc53f21ebbae8a851b33e26714932`; otherwise `REJECTED`.
@@ -35,7 +37,10 @@ does not create a parallel evaluation framework.
 5. **Six-case execution** — the six frozen cases run strictly in order, never
    in parallel, with one fresh transport/session/workspace boundary per case
    and deterministic per-attempt IDs. Every produced case record must pass the
-   frozen `quixbugs-paired-pilot-result-v2` validator before it is written.
+   selected frozen result validator (`quixbugs-paired-pilot-result-v2` or
+   `quixbugs-paired-pilot-result-v3`) before it is written. v3 admits the
+   `VALIDATION_NOT_REACHED` pre-Validate budget terminal and records
+   `candidate_provenance`; v2 does not.
 6. **Terminal campaign record** — `campaign.json` is written atomically only
    after the campaign ends (`COMPLETED`, `PARTIAL`, `ABORTED`, `BLOCKED`, or
    `REJECTED`); case records are written per case; the ledger is updated
