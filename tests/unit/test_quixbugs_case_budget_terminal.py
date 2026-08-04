@@ -42,15 +42,22 @@ from agentic_debugger.agent.controller_policy import (
     ActionName,
     ControllerBudgetLimits,
     ControllerBudgetState,
+    HypothesisConfidence,
+    HypothesisStatus,
     HypothesisLedger,
+    PdbPolicy,
+    RootCauseHypothesis,
 )
 from agentic_debugger.agent.model_adapter import ControllerSnapshot
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolRegistry, ToolResult, ToolSpec
-from agentic_debugger.demo.policies import DemoPolicy
+from agentic_debugger.demo.catalog import build_reference_patch, scenario_for
+from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
+from agentic_debugger.demo.tools import DemoToolContext, build_registry, prepare_pdb_probe
 from agentic_debugger.evaluation.live import (
     LiveCaseStatus,
     LiveModelAdapter,
+    LiveModelAdapterError,
     LiveModelConfig,
     LiveRunLimits,
     LiveTransportError,
@@ -59,6 +66,7 @@ from agentic_debugger.evaluation.live import (
 )
 from agentic_debugger.evaluation.task_schema import DebugTask
 from agentic_debugger.events.schema import ObservationStatus
+from agentic_debugger.runtime.workspace import TaskWorkspace
 
 from test_quixbugs_live_runner_v2 import (
     RecordingTransportFactory,
@@ -975,3 +983,255 @@ def test_real_provider_error_remains_retryable_transport_error(tmp_path, manifes
     assert inner.process_attempts == 1
     assert harness["factory"].spawned_processes == 1
     assert inner.last_provider_error_category == "process_error"
+
+
+# ---- PDB gate recording: one decision per real gate lifecycle ------------------
+#
+# Regressions for attempt ``quixbugs-paired-pilot-v2-attempt-
+# 5b4080ddb6ec44ba8af49762af0a54eeb7440c12a9fc4c7ab71738886d322fe4``: one PDB
+# session lifecycle was reported as nine ``allowed_gate_openings`` because the
+# live adapter recorded a gate decision on every reread of the pure
+# ``decide_pdb_access`` gate.  The repair records exactly one decision per
+# real ``UNDERSTAND -> RUNTIME_EVIDENCE`` gate consumption, bounded per
+# logical call, while allowing a later distinct controller lifecycle to
+# record a new decision.
+
+
+def _pdb_registry(context: DemoToolContext) -> ToolRegistry:
+    return build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY)
+
+
+def _understand_snapshot_with_qualifying_hypothesis(task, model_call_index: int = 4):
+    """A controller snapshot in UNDERSTAND with a low-confidence, runtime-evidence
+    hypothesis that passes the ``pdb-on-uncertainty`` gate."""
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    hypothesis = RootCauseHypothesis(
+        "h-1", "root cause", HypothesisConfidence.LOW, HypothesisStatus.ACTIVE, (), True, 1,
+    )
+    return ControllerSnapshot(
+        "run", task.task_id, ControllerState.UNDERSTAND, model_call_index, limits,
+        ControllerBudgetState(), HypothesisLedger((hypothesis,)),
+    )
+
+
+class _RuntimeTransitionTransport:
+    """Returns a single ``transition -> RuntimeEvidence`` directive."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def request(self, payload, timeout_seconds):
+        self.calls += 1
+        return {
+            "directive": {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "qualifying hypothesis"},
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+
+class _MalformedThenRuntimeTransitionTransport:
+    """Returns a malformed directive on the first attempt, then a valid
+    ``transition -> RuntimeEvidence`` directive on the second attempt of the
+    same logical call (exercising the transport retry loop)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def request(self, payload, timeout_seconds):
+        self.calls += 1
+        if self.calls == 1:
+            return {"directive": {"kind": "action", "name": "bogus", "arguments": {}}, "usage": {}}
+        return {
+            "directive": {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "qualifying hypothesis"},
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+
+class _AlwaysRuntimeTransitionTransport:
+    """Always returns ``transition -> RuntimeEvidence`` (used to test denied
+    retries: the gate denies, so ``_parse`` rejects every attempt)."""
+
+    def __init__(self):
+        self.calls = 0
+
+    def request(self, payload, timeout_seconds):
+        self.calls += 1
+        return {
+            "directive": {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "request runtime"},
+            "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        }
+
+
+def test_pdb_gate_records_exactly_one_decision_per_real_transition():
+    """Primary inflation regression: one ``UNDERSTAND -> RUNTIME_EVIDENCE``
+    transition records exactly one allowed gate decision, not one per reread
+    (was 9+ in attempt 5b4080dd...)."""
+    task = _curated_task()
+    transport = _RuntimeTransitionTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=3, max_retries=0),
+        registry=_live_registry(),
+    )
+    live_adapter._failure_reproduced = True
+    snapshot = _understand_snapshot_with_qualifying_hypothesis(task)
+    live_adapter.next_directive(snapshot)
+    assert len(live_adapter.pdb_gate_decisions) == 1
+    assert live_adapter.pdb_gate_decisions[0]["allowed"] is True
+
+
+def test_pdb_gate_records_one_decision_across_transport_retries():
+    """The per-logical-call dedup bound: a malformed-then-valid sequence in
+    the retry loop records at most one gate decision for the logical call."""
+    task = _curated_task()
+    transport = _MalformedThenRuntimeTransitionTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_live_registry(),
+    )
+    live_adapter._failure_reproduced = True
+    snapshot = _understand_snapshot_with_qualifying_hypothesis(task)
+    live_adapter.next_directive(snapshot)
+    assert len(live_adapter.pdb_gate_decisions) == 1
+    assert live_adapter.pdb_gate_decisions[0]["allowed"] is True
+
+
+def test_pdb_gate_records_one_denied_decision_across_denied_retries():
+    """Denied-retry dedup: when the gate denies (no active hypothesis), the
+    model's repeated ``RuntimeEvidence`` requests are rejected by ``_parse``
+    each retry, but exactly one denied decision is recorded for the call."""
+    task = _curated_task()
+    transport = _AlwaysRuntimeTransitionTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_live_registry(),
+    )
+    live_adapter._failure_reproduced = True
+    # UNDERSTAND with no active hypothesis -> gate denies.
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    snapshot = ControllerSnapshot(
+        "run", task.task_id, ControllerState.UNDERSTAND, 0, limits,
+        ControllerBudgetState(), HypothesisLedger(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        live_adapter.next_directive(snapshot)
+    assert len(live_adapter.pdb_gate_decisions) == 1
+    assert live_adapter.pdb_gate_decisions[0]["allowed"] is False
+    assert live_adapter.directive_rejections  # the transition was rejected each retry
+
+
+def test_pdb_gate_records_one_decision_per_distinct_lifecycle():
+    """Multi-lifecycle regression: two distinct ``UNDERSTAND ->
+    RUNTIME_EVIDENCE`` controller steps (different ``model_call_index``
+    values) each record their own decision; the per-lifecycle flag reset
+    enables the second recording."""
+    task = _curated_task()
+    transport = _RuntimeTransitionTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=6, max_retries=0),
+        registry=_live_registry(),
+    )
+    live_adapter._failure_reproduced = True
+    # First lifecycle: model_call_index 4 (UNDERSTAND, qualifying hypothesis).
+    snapshot_1 = _understand_snapshot_with_qualifying_hypothesis(task, model_call_index=4)
+    live_adapter.next_directive(snapshot_1)
+    # Second lifecycle: model_call_index 5 (also UNDERSTAND, same hypothesis).
+    snapshot_2 = _understand_snapshot_with_qualifying_hypothesis(task, model_call_index=5)
+    live_adapter.next_directive(snapshot_2)
+    assert len(live_adapter.pdb_gate_decisions) == 2
+    assert all(d["allowed"] is True for d in live_adapter.pdb_gate_decisions)
+
+
+def test_static_baseline_never_records_pdb_gate_decision():
+    """Static-baseline regression: the gate policy is DISABLED; even if the
+    model spuriously requests ``RuntimeEvidence``, no gate decision is
+    recorded and ``pdb_gate_decisions`` stays empty."""
+    task = _curated_task()
+    transport = _AlwaysRuntimeTransitionTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=3, max_retries=2),
+        registry=_live_registry(),
+    )
+    live_adapter._failure_reproduced = True
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    snapshot = ControllerSnapshot(
+        "run", task.task_id, ControllerState.UNDERSTAND, 0, limits,
+        ControllerBudgetState(), HypothesisLedger(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        live_adapter.next_directive(snapshot)
+    assert live_adapter.pdb_gate_decisions == []
+
+
+def test_full_pdb_on_uncertainty_case_records_one_gate_opening(tmp_path):
+    """Full-case regression: a complete ``pdb-on-uncertainty`` controller run
+    with one PDB session records exactly one allowed gate opening."""
+    task = _curated_task()
+    fixture = REPO_ROOT / "agentic_debugger" / "datasets" / "curated" / task.task_id
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(tmp_path))
+    probe = prepare_pdb_probe(fixture, scenario_for(task.task_id), tmp_path)
+    context = DemoToolContext(task=task, workspace=workspace, patch="", probe=probe)
+    registry = _pdb_registry(context)
+    patch = build_reference_patch(
+        (fixture / scenario_for(task.task_id).reference_repair.target_path).read_text(encoding="utf-8"),
+        scenario_for(task.task_id).reference_repair,
+    )
+
+    class _PdbCaseTransport:
+        def __init__(self):
+            self.index = 0
+            self.directives = [
+                {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
+                {"kind": "transition", "target_state": "Understand", "reason": "reproduced"},
+                {"kind": "action", "name": "find_function", "arguments": {"name": scenario_for(task.task_id).localization.symbol, "path": scenario_for(task.task_id).localization.file_path}},
+                {"kind": "action", "name": "get_source_window", "arguments": {"path": scenario_for(task.task_id).localization.file_path, "line": 1}},
+                {"kind": "add_hypothesis", "hypothesis_id": scenario_for(task.task_id).hypothesis_id, "statement": scenario_for(task.task_id).root_cause_statement, "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": True},
+                {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "qualifying hypothesis requests runtime evidence"},
+                {"kind": "action", "name": "start_pdb_session", "arguments": {}},
+                {"kind": "action", "name": "get_stack_summary", "arguments": {}},
+                {"kind": "action", "name": "get_frame_locals", "arguments": {"frame_id": 0, "pause_generation": 1}},
+                {"kind": "action", "name": "stop_pdb_session", "arguments": {}},
+                {"kind": "transition", "target_state": "Understand", "reason": "runtime evidence collected"},
+                {"kind": "action", "name": "express_root_cause_hypothesis", "arguments": {"hypothesis_id": scenario_for(task.task_id).hypothesis_id, "statement": scenario_for(task.task_id).root_cause_statement, "target_file": scenario_for(task.task_id).localization.file_path, "target_symbol": scenario_for(task.task_id).localization.symbol, "confidence": "high"}},
+                {"kind": "transition", "target_state": "Patch", "reason": "runtime evidence is sufficient"},
+                {"kind": "action", "name": "apply_patch", "arguments": {"patch": patch}},
+                {"kind": "action", "name": "syntax_check", "arguments": {}},
+                {"kind": "transition", "target_state": "Validate", "reason": "syntax checked"},
+                {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "post_patch"}},
+                {"kind": "action", "name": "run_regression_tests", "arguments": {}},
+                {"kind": "action", "name": "classify_outcome", "arguments": {}},
+                {"kind": "transition", "target_state": "Done", "reason": "finished"},
+            ]
+
+        def request(self, payload, timeout_seconds):
+            directive = self.directives[min(self.index, len(self.directives) - 1)]
+            self.index += 1
+            return {"directive": directive, "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+    transport = _PdbCaseTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32),
+        registry=registry, evaluation_id="e", case_id="c", run_id="r", trajectory_id="r",
+    )
+    controller = DeterministicController(registry, live_adapter, ControllerRunConfig(max_model_calls=32))
+    result = controller.run(ControllerSnapshot(
+        "r", task.task_id, ControllerState.REPRODUCE, 0,
+        ControllerBudgetLimits.from_task_constraints(task.constraints),
+        ControllerBudgetState(), HypothesisLedger(),
+    ))
+    assert result.final_state is ControllerState.DONE
+    allowed = sum(1 for d in live_adapter.pdb_gate_decisions if d["allowed"] is True)
+    rejected = sum(1 for d in live_adapter.pdb_gate_decisions if d["allowed"] is False)
+    assert len(live_adapter.pdb_gate_decisions) == 1
+    assert allowed == 1
+    assert rejected == 0
