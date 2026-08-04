@@ -86,15 +86,18 @@ from scripts import opencode_protocol_transport as transport  # noqa: E402  (acc
 
 RUNNER_SCHEMA_VERSION_V2 = "quixbugs-live-runner-v2"
 RUNNER_SCHEMA_VERSION_V3 = "quixbugs-live-runner-v3"
+RUNNER_SCHEMA_VERSION_V4 = "quixbugs-live-runner-v4"
 RUNNER_SCHEMA_VERSION = RUNNER_SCHEMA_VERSION_V2  # default for v2 (preserved frozen output)
-ACCEPTED_RUNNER_SCHEMA_VERSIONS = frozenset({RUNNER_SCHEMA_VERSION_V2, RUNNER_SCHEMA_VERSION_V3})
+ACCEPTED_RUNNER_SCHEMA_VERSIONS = frozenset({RUNNER_SCHEMA_VERSION_V2, RUNNER_SCHEMA_VERSION_V3, RUNNER_SCHEMA_VERSION_V4})
 AUTHORIZATION_SCHEMA_VERSION = "quixbugs-paired-pilot-authorization-v1"
 ACCEPTED_BASELINE = "28ec7754336fc53f21ebbae8a851b33e26714932"
 LIVE_PROTOCOL_VERSION = "1.3"
 CAMPAIGN_ID_V2 = pilot.CAMPAIGN_ID_V2
 CAMPAIGN_ID_V3 = pilot.CAMPAIGN_ID_V3
+CAMPAIGN_ID_V4 = pilot.CAMPAIGN_ID_V4
 MANIFEST_PATH_V2 = pilot.MANIFEST_PATH_V2
 MANIFEST_PATH_V3 = pilot.MANIFEST_PATH_V3
+MANIFEST_PATH_V4 = pilot.MANIFEST_PATH_V4
 AUTHORIZED_BILLING_ROUTE = pilot.AUTHORIZED_BILLING_ROUTE
 PLANNING_BASELINE_COMMIT_V2 = pilot.PLANNING_BASELINE_COMMIT_V2
 SOURCE_INTEGRITY_RELATIVE_PATH = pilot.SOURCE_INTEGRITY_RELATIVE_PATH
@@ -102,7 +105,7 @@ SOURCE_INTEGRITY_SHA256 = pilot.SOURCE_INTEGRITY_SHA256
 MAX_ROUTE_EVIDENCE_AGE_SECONDS = 600
 CLOCK_SKEW_ALLOWANCE_SECONDS = 120
 MAX_PRIVATE_EVIDENCE_BYTES = 1_000_000
-ATTEMPT_IDENTITY_PATTERN = re.compile(r"^quixbugs-paired-pilot-v(?:2|3)-attempt-[0-9a-f]{12,64}$")
+ATTEMPT_IDENTITY_PATTERN = re.compile(r"^quixbugs-paired-pilot-v(?:2|3|4)-attempt-[0-9a-f]{12,64}$")
 ISO_TIMESTAMP_PATTERN = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$")
 
 
@@ -111,8 +114,12 @@ def _runner_schema_version(manifest: Mapping[str, Any]) -> str:
 
     v2 campaigns keep the frozen ``quixbugs-live-runner-v2`` schema and never
     emit ``candidate_provenance``; v3 campaigns use
-    ``quixbugs-live-runner-v3`` and emit ``candidate_provenance``.
+    ``quixbugs-live-runner-v3`` and emit ``candidate_provenance``; v4
+    campaigns use ``quixbugs-live-runner-v4`` with the v3 provenance fields
+    plus the v4 verifier-authoritative terminal contract.
     """
+    if manifest.get("campaign_id") == CAMPAIGN_ID_V4:
+        return RUNNER_SCHEMA_VERSION_V4
     if manifest.get("campaign_id") == CAMPAIGN_ID_V3:
         return RUNNER_SCHEMA_VERSION_V3
     return RUNNER_SCHEMA_VERSION_V2
@@ -682,7 +689,7 @@ def authorization_failure(
         return "WRONG_TYPE"
     if authorization["authorize_live"] is not True:
         return "AUTHORIZATION_FLAG_INVALID"
-    if authorization["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3}:
+    if authorization["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3, CAMPAIGN_ID_V4}:
         return "CAMPAIGN_IDENTITY_MISMATCH"
     if authorization["campaign_id"] != manifest.get("campaign_id") or authorization["campaign_version"] != manifest.get("campaign_version"):
         return "CAMPAIGN_IDENTITY_MISMATCH"
@@ -1808,7 +1815,7 @@ def materialize_case_record(
     for field in OUTCOME_FIELDS:
         if field in outcome:
             record[field] = outcome[field]
-    if manifest.get("campaign_id") == CAMPAIGN_ID_V3 and "candidate_provenance" in outcome:
+    if manifest.get("campaign_id") in (CAMPAIGN_ID_V3, CAMPAIGN_ID_V4) and "candidate_provenance" in outcome:
         record["candidate_provenance"] = outcome["candidate_provenance"]
     return record
 
@@ -1941,7 +1948,18 @@ def _budget_exhausted_outcome(
       integer zero); and the hashes/resource identifiers are in the permitted
       no-contact state.  A no-contact shape carrying any residual or
       contradictory terminal, block, infrastructure or accounting evidence has
-      no valid frozen terminal representation and returns ``None``.
+      no valid frozen terminal representation and returns ``None``;
+    * ``VALIDATION_NOT_REACHED`` / ``VALIDATION_NOT_REACHED_PRE_VALIDATE``
+      for the pre-verifier applied-candidate shape (``patch_submissions == 1``,
+      ``candidate_provenance == applied_patch_event``, verifier never ran) --
+      under v3 restricted to ``static-baseline`` with a stop in Patch before
+      Validate; under v4 extended to ``pdb-on-uncertainty`` and to
+      Validate-visited stops;
+    * v4-only post-contact ``INFRASTRUCTURE_ERROR`` (controller, cleanup, or
+      evidence-packaging stage after a completed prior lifecycle) with every
+      accounting and terminal field preserved verbatim and the public counter
+      clamped -- the honest representation when public-evidence exhaustion is
+      observed after a lifecycle whose verifier/cleanup/evidence tail failed.
 
     Any other exhausted shape (for example a static-baseline case after
     provider contact, PDB activity, or a submitted candidate) has no valid
@@ -2226,22 +2244,25 @@ def _budget_exhausted_outcome(
         })
         return rewritten
 
-    # --- static-baseline pre-validate budget exhaustion (live-proven shape
-    # from attempt e974af4...): the controller reached Patch and applied a
-    # candidate, but the next public request (the transition to Validate)
-    # would have exceeded the frozen public-evidence budget, so the verifier
-    # never ran.  The raw outcome is terminalized as VALIDATION_NOT_REACHED /
+    # --- pre-validate budget exhaustion with an applied candidate (live-proven
+    # shape from attempt e974af4... under v3; v4 extends it).  The controller
+    # reached Patch and applied a candidate, but the next public request (the
+    # transition to Validate, or a further in-Validate step) would have
+    # exceeded the frozen public-evidence budget, so the verifier never ran.
+    # The raw outcome is terminalized as VALIDATION_NOT_REACHED /
     # VALIDATION_NOT_REACHED_PRE_VALIDATE with the applied candidate's
     # provenance preserved and public_evidence_bytes clamped to the frozen
-    # limit.  This shape requires campaign version 3 (the v2 frozen terminal
-    # contract does not admit it) and is mutually exclusive with pre_pdb
-    # (which requires a pdb-on-uncertainty policy and patch_submissions == 0)
-    # and with the completed RESOLVED/UNRESOLVED shapes (which require a
-    # completed verifier run).
+    # limit.  Under v3 the shape requires campaign version 3, static-baseline,
+    # and a stop in Patch before Validate (the frozen v2 terminal contract
+    # does not admit it); under v4 the shape additionally admits
+    # pdb-on-uncertainty and Validate-visited stops (an in-Validate per-request
+    # budget stop before the verifier), and is mutually exclusive with the
+    # completed RESOLVED/UNRESOLVED shapes (which require a completed verifier
+    # run).
     try:
-        validation_not_reached = (
-            manifest is not None
-            and manifest.get("campaign_version") == 3
+        version = manifest.get("campaign_version") if manifest is not None else None
+        v3_validation_not_reached = (
+            version == 3
             and str(case["policy"]) == "static-baseline"
             and outcome["terminal_status"] == "VALIDATION_NOT_REACHED"
             and outcome["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
@@ -2269,13 +2290,84 @@ def _budget_exhausted_outcome(
             and "Patch" in outcome["controller_states_visited"]
             and "Validate" not in outcome["controller_states_visited"]
         )
+        v4_validation_not_reached = (
+            version == 4
+            and str(case["policy"]) in ("static-baseline", "pdb-on-uncertainty")
+            and outcome["terminal_status"] == "VALIDATION_NOT_REACHED"
+            and outcome["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
+            and type(outcome["logical_model_calls"]) is int and outcome["logical_model_calls"] >= 1
+            and type(outcome["valid_directives"]) is int and outcome["valid_directives"] >= 1
+            and outcome["baseline_reproduction"] is True
+            and type(outcome["patch_submissions"]) is int and outcome["patch_submissions"] == 1
+            and isinstance(outcome["candidate_hash"], str) and len(outcome["candidate_hash"]) == 64
+            and outcome.get("candidate_provenance") == "applied_patch_event"
+            and type(outcome["verifier_runs"]) is int and outcome["verifier_runs"] == 0
+            and isinstance(outcome["independent_verifier_result"], Mapping)
+            and outcome["independent_verifier_result"].get("status") == "NOT_RUN"
+            and outcome["independent_verifier_result"].get("outcome") is None
+            and outcome["independent_verifier_result"].get("lifecycle_succeeded") is False
+            and outcome["repair_outcome"] == "NO_CANDIDATE"
+            and outcome["transport_evidence"].get("completed_response") is True
+            and outcome["transport_evidence"].get("malformed_response") is False
+            and outcome["transport_evidence"].get("provider_error") is False
+            and not any(
+                int(outcome["pdb_counts"].get(key, 0)) > 0
+                for key in ("total_gate_decisions", "allowed_gate_openings", "rejected_gate_decisions",
+                            "sessions_started", "successful_observations", "failed_observations")
+            )
+            and isinstance(outcome["controller_states_visited"], list)
+            and "Patch" in outcome["controller_states_visited"]
+        )
+        validation_not_reached = v3_validation_not_reached or v4_validation_not_reached
     except (KeyError, TypeError, ValueError):
         return None
 
     if validation_not_reached:
         rewritten = dict(outcome)
         rewritten.update({
-            "termination_reason": f"{detail}; terminal representation VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE (static-baseline, candidate applied pre-validate, verifier never ran)",
+            "termination_reason": f"{detail}; terminal representation VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE (candidate applied pre-verifier, verifier never ran)",
+            "public_evidence_bytes": limit,
+        })
+        return rewritten
+
+    try:
+        post_contact_infrastructure = (
+            manifest is not None
+            and manifest.get("campaign_version") == 4
+            and outcome["terminal_status"] == "INFRASTRUCTURE_ERROR"
+            and outcome["terminal_reason_code"] == "INFRASTRUCTURE_FAILURE"
+            and isinstance(outcome["infrastructure_evidence"], Mapping)
+            and outcome["infrastructure_evidence"].get("confirmed_failure") is True
+            and outcome["infrastructure_evidence"].get("stage") in {"controller", "cleanup", "evidence_packaging"}
+            and outcome["infrastructure_evidence"].get("prior_lifecycle_completed") is True
+            and outcome["infrastructure_evidence"].get("terminal_classification") == "INFRASTRUCTURE_FAILURE"
+            and type(outcome["logical_model_calls"]) is int and outcome["logical_model_calls"] >= 1
+            and type(outcome["provider_process_attempts"]) is int and outcome["provider_process_attempts"] >= 1
+            and outcome["transport_evidence"].get("completed_response") is True
+            and outcome["transport_evidence"].get("malformed_response") is False
+            and outcome["transport_evidence"].get("provider_error") is False
+            and isinstance(outcome["terminal_transport_evidence"], Mapping)
+            and outcome["terminal_transport_evidence"].get("final_attempt_classification") == "INFRASTRUCTURE_FAILURE"
+            and outcome["terminal_transport_evidence"].get("provider_completed_response") is True
+            and outcome["preflight_failure_evidence"] == _default_preflight_failure_evidence()
+            and outcome["campaign_stop_evidence"] == {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS}
+        )
+    except (KeyError, TypeError, ValueError):
+        return None
+
+    if post_contact_infrastructure:
+        # v4-only: an anticipated public-evidence exhaustion observed after a
+        # completed lifecycle whose verifier/cleanup/evidence tail failed is
+        # terminalized as the raw post-contact INFRASTRUCTURE_ERROR with every
+        # accounting, terminal, and evidence field preserved verbatim and the
+        # public counter clamped to the frozen limit (the exact observed byte
+        # count stays in the termination detail).  A verifier-stage
+        # infrastructure outcome (verifier integrity/run failure with verifier
+        # activity) has no frozen representation when the verifier raised
+        # before returning a record and therefore still aborts fail-closed.
+        rewritten = dict(outcome)
+        rewritten.update({
+            "termination_reason": f"{detail}; terminal representation INFRASTRUCTURE_ERROR/INFRASTRUCTURE_FAILURE (post-contact lifecycle, accounting preserved)",
             "public_evidence_bytes": limit,
         })
         return rewritten
@@ -2405,7 +2497,10 @@ def _verify_authority_state(
     the observed value is the runner's tracked-source state fingerprint.
     """
     current_manifest = manifest_loader() if manifest_loader is not None else pilot.load_manifest(
-        pilot.MANIFEST_PATH_V3 if manifest.get("campaign_id") == pilot.CAMPAIGN_ID_V3 else pilot.MANIFEST_PATH_V2
+        {
+            pilot.CAMPAIGN_ID_V4: pilot.MANIFEST_PATH_V4,
+            pilot.CAMPAIGN_ID_V3: pilot.MANIFEST_PATH_V3,
+        }.get(manifest.get("campaign_id"), pilot.MANIFEST_PATH_V2)
     )
     if pilot.manifest_hash(current_manifest) != pilot.manifest_hash(manifest):
         record = {
@@ -2780,8 +2875,8 @@ def run_campaign(
     gate rejection, which is recorded as a REJECTED/BLOCKED campaign).
     """
     pilot.validate_manifest(manifest)
-    if manifest["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3}:
-        raise LiveRunnerError("the live runner is bound to the frozen v2/v3 campaigns only")
+    if manifest["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3, CAMPAIGN_ID_V4}:
+        raise LiveRunnerError("the live runner is bound to the frozen v2/v3/v4 campaigns only")
     output = Path(output_root)
     counter = ProviderCallCounter()
 
@@ -4006,7 +4101,7 @@ def run_live_entry(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Fail-closed QuixBugs paired-pilot v2 live runner (runner infrastructure only; no provider contact in this task)")
+    parser = argparse.ArgumentParser(description="Fail-closed QuixBugs paired-pilot live runner (runner infrastructure only; no provider contact in this task)")
     parser.add_argument("mode", nargs="?", choices=("preflight", "live", "template"), default="preflight")
     parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH_V2)
     parser.add_argument("--authorization", type=Path)
@@ -4024,8 +4119,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         manifest = pilot.load_manifest(args.manifest)
         pilot.validate_manifest(manifest)
-        if manifest["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3}:
-            print("BLOCKED: the live runner is bound to the frozen v2/v3 campaigns only", file=sys.stderr)
+        if manifest["campaign_id"] not in {CAMPAIGN_ID_V2, CAMPAIGN_ID_V3, CAMPAIGN_ID_V4}:
+            print("BLOCKED: the live runner is bound to the frozen v2/v3/v4 campaigns only", file=sys.stderr)
             return 2
         if args.mode == "preflight" or args.preflight_only:
             record = run_live_entry(
@@ -4059,6 +4154,7 @@ __all__ = [
     "RUNNER_SCHEMA_VERSION",
     "RUNNER_SCHEMA_VERSION_V2",
     "RUNNER_SCHEMA_VERSION_V3",
+    "RUNNER_SCHEMA_VERSION_V4",
     "AttemptLedger",
     "AttemptClaimError",
     "BudgetViolationError",

@@ -1,10 +1,10 @@
-# QuixBugs paired-pilot v2/v3 live runner (operator guide)
+# QuixBugs paired-pilot v2/v3/v4 live runner (operator guide)
 
 This document describes the fail-closed live-runner infrastructure for the
-frozen QuixBugs paired-pilot v2 and v3 campaigns. The next authorized
-execution is v3 (`research/quixbugs/PAIRED_PILOT_V3.json`, canonical SHA-256
-`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`);
-v2 remains supported as the frozen derivation/compatibility contract. Both
+frozen QuixBugs paired-pilot v2, v3, and v4 campaigns. The next authorized
+execution is v4 (`research/quixbugs/PAIRED_PILOT_V4.json`, canonical SHA-256
+`020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`);
+v2/v3 remain supported as the frozen derivation/compatibility contracts. All
 use accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932` and live
 protocol `1.3`.
 
@@ -37,10 +37,20 @@ does not create a parallel evaluation framework.
 5. **Six-case execution** — the six frozen cases run strictly in order, never
    in parallel, with one fresh transport/session/workspace boundary per case
    and deterministic per-attempt IDs. Every produced case record must pass the
-   selected frozen result validator (`quixbugs-paired-pilot-result-v2` or
-   `quixbugs-paired-pilot-result-v3`) before it is written. v3 admits the
+   selected frozen result validator (`quixbugs-paired-pilot-result-v2`,
+   `quixbugs-paired-pilot-result-v3`, or `quixbugs-paired-pilot-result-v4`)
+   before it is written. v3 admits the
    `VALIDATION_NOT_REACHED` pre-Validate budget terminal and records
-   `candidate_provenance`; v2 does not.
+   `candidate_provenance`; v2 does not. v4 adds the verifier-authoritative
+   classification (a case whose verifier executed is classified by the
+   verifier semantic outcome before the `PDB_NOT_REACHED` rule) and the
+   budget-terminal matrix for the completed post-apply public-evidence
+   exhaustion shape (RESOLVED/UNRESOLVED with accounting preserved, the
+   exact observed byte count in the termination detail, and the counter
+   clamped to the frozen 20,000 limit), plus `VALIDATION_NOT_REACHED` for
+   pdb-on-uncertainty / Validate-visited stops and post-contact
+   controller/cleanup/evidence-packaging `INFRASTRUCTURE_ERROR`
+   terminalization.
 6. **Terminal campaign record** — `campaign.json` is written atomically only
    after the campaign ends (`COMPLETED`, `PARTIAL`, `ABORTED`, `BLOCKED`, or
    `REJECTED`); case records are written per case; the ledger is updated

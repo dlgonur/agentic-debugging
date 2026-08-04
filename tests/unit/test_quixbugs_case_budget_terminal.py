@@ -1615,6 +1615,572 @@ def test_v2_static_baseline_pdb_not_reached_still_rejected():
     record["route_observation"].update({"opencode_version": "1.0.0", "active_model_status": "ACTIVE", "variant_available": True, "catalog_fingerprint": "c" * 64, "preflight_success": True})
     with pytest.raises(pilot.PilotError):
         pilot.validate_case_result(record, manifest)
+
+# ---- v4 verifier-authoritative terminal matrix (attempt fddf1e39...) ---------
+#
+# Regressions for the v4 campaign: the live-proven shape of attempt
+# ``quixbugs-paired-pilot-v3-attempt-fddf1e39b73cda5f430d8e69c6e442b558143a63d013229e54efd9cbb585fbac``
+# case 1 (``quixbugs-find-in-sorted-smoke-v1 / pdb-on-uncertainty``): twelve
+# logical model calls, thirteen provider process attempts, one bounded retry
+# (attempt 10 produced a no_text_event stream and was retried), twelve valid
+# directives, baseline reproduction, one applied candidate, Validate visited,
+# the independent verifier executed, zero PDB observations, and 33,685
+# cumulative public evidence bytes observed after the completed lifecycle.
+# Under the frozen v3 contract this shape has no terminal representation and
+# the campaign aborted honestly; v4 preregisters the verifier-authoritative
+# classification and the budget-terminal matrix that materializes it.
+
+
+@pytest.fixture
+def manifest_v4():
+    return pilot.load_manifest(pilot.MANIFEST_PATH_V4)
+
+
+@pytest.fixture
+def auth_v4(manifest_v4, tmp_path):
+    return _valid_authorization(
+        manifest_v4, tmp_path / "attempt-out",
+        campaign_id=manifest_v4["campaign_id"],
+        campaign_version=manifest_v4["campaign_version"],
+        campaign_attempt_identity="quixbugs-paired-pilot-v4-attempt-" + "d" * 64,
+    )
+
+
+def _v4_candidate_hash():
+    return hashlib.sha256(
+        pilot.canonical_json({"patch": _IS_VALID_PARENTHESIZATION_PATCH}).encode("utf-8")
+    ).hexdigest()
+
+
+def _completed_post_apply_exhausted_outcome(manifest, case, route, *, verifier_outcome="RESOLVED", **overrides):
+    """The exact fddf1e39... case-1 shape restamped for the campaign version.
+
+    Twelve logical calls, thirteen provider process attempts, one bounded
+    retry, twelve valid directives, an applied candidate (verifier_record
+    provenance because the verifier executed), Validate visited, zero PDB
+    activity, and 33,685 cumulative public evidence bytes.  The terminal is
+    the verifier-authoritative RESOLVED (or UNRESOLVED) outcome the adapter
+    produces under the v4 classification.
+    """
+    source_hash = next(item["source_sha256"] for item in manifest["inventory"] if item["task_id"] == case["task_id"])
+    resolved = verifier_outcome == "RESOLVED"
+    outcome = {
+        "terminal_status": "RESOLVED" if resolved else "UNRESOLVED",
+        "terminal_reason_code": "RESOLVED_COMPLETED" if resolved else "UNRESOLVED_COMPLETED",
+        "termination_reason": "opencode-go adapter: RESOLVED: completed" if resolved else "opencode-go adapter: UNRESOLVED: completed",
+        "logical_model_calls": 12,
+        "provider_process_attempts": 13,
+        "retries": 1,
+        "valid_directives": 12,
+        "malformed_directive_rejections": 0,
+        "bounded_directive_feedback_events": 0,
+        "baseline_reproduction": True,
+        "controller_states_visited": ["Reproduce", "Understand", "Patch", "Validate", "Done"],
+        "hypotheses_created": 1,
+        "pdb_gate_decisions": [],
+        "pdb_counts": dict(runner.ZERO_PDB_COUNTS),
+        "pdb_sessions_started": 0,
+        "successful_pdb_observations": 0,
+        "failed_pdb_observations": 0,
+        "verifier_runs": 1,
+        "patch_submissions": 1,
+        "candidate_provenance": "verifier_record",
+        "independent_verifier_result": {
+            "status": "COMPLETED", "outcome": verifier_outcome, "lifecycle_succeeded": True,
+        },
+        "transport_evidence": {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False},
+        "terminal_transport_evidence": {
+            "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": True,
+            "evidence_reference": f"opencode-go:{case['case_id']}:13",
+        },
+        "blocked_evidence": {"block_kind": "none", "reason_code": "NONE", "confirmed": False, "evidence_reference": "v4-synthetic:none"},
+        "infrastructure_evidence": {
+            "stage": "none", "reason_code": "NONE", "confirmed_failure": False, "classification": "NONE",
+            "terminal_classification": "NOT_APPLICABLE", "provider_attempt_index": None,
+            "prior_lifecycle_completed": False, "source_mutation_observed": False,
+            "expected_source_hash": None, "evidence_reference": "v4-synthetic:none",
+        },
+        "preflight_failure_evidence": {field: None for field in pilot.ALL_PREFLIGHT_FAILURE_FIELDS},
+        "campaign_stop_evidence": {field: None for field in pilot.CAMPAIGN_STOP_EVIDENCE_FIELDS},
+        "prompt_tokens": 79990,
+        "completion_tokens": 613,
+        "reasoning_tokens": 0,
+        "provider_reported_cost": 0.010565556,
+        "wall_clock_duration_seconds": 226.613,
+        "public_evidence_bytes": 33685,
+        "canonical_source_restoration": True,
+        "owned_workspace_cleanup": True,
+        "evidence_consistency": True,
+        "public_request_hash": hashlib.sha256(b"v4-synthetic-events").hexdigest(),
+        "source_hash": source_hash,
+        "candidate_hash": _v4_candidate_hash(),
+        "repair_outcome": "RESOLVED" if resolved else "NO_CANDIDATE",
+        "resource_ids": {},
+    }
+    outcome.update(overrides)
+    return outcome
+
+
+def test_v4_manifest_and_authorization_validate(manifest_v4, auth_v4):
+    """The v4 manifest validates with the result-v4 schema and its hash is
+    frozen; the v4 authorization binds to the v4 manifest."""
+    assert manifest_v4["campaign_id"] == "quixbugs-paired-pilot-v4"
+    assert manifest_v4["campaign_version"] == 4
+    assert manifest_v4["outcome_schema"]["schema_version"] == "quixbugs-paired-pilot-result-v4"
+    assert "VALIDATION_NOT_REACHED" in manifest_v4["outcome_schema"]["terminal_statuses"]
+    assert "verifier_authoritative_classification" in manifest_v4["outcome_schema"]["terminal_status_rules"]
+    assert pilot.validate_manifest(manifest_v4) == "020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d"
+    assert manifest_v4["qualification_contract_hash"] == "7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d"
+    assert manifest_v4["budgets"]["max_public_evidence_bytes"] == 20000
+    assert auth_v4["campaign_id"] == manifest_v4["campaign_id"]
+    assert auth_v4["campaign_version"] == manifest_v4["campaign_version"]
+
+
+def test_v4_completed_post_apply_budget_exhaustion_terminalizes_resolved(manifest_v4):
+    """The exact observed shape raises PublicEvidenceBudgetExhausted and
+    rewrites to the verifier-authoritative RESOLVED terminal with every
+    completed accounting field preserved and the exact 33,685 byte count in
+    the termination detail."""
+    case = manifest_v4["case_order"][0]
+    route = _route_evidence(manifest_v4)
+    outcome = _completed_post_apply_exhausted_outcome(manifest_v4, case, route)
+
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v4, case_policy=case["policy"])
+    assert info.value.observed == 33685
+    assert info.value.limit == 20000
+
+    rewritten = runner._budget_exhausted_outcome(
+        case, outcome, info.value, run_id="run-fddf1e39", manifest=manifest_v4,
+    )
+    assert rewritten is not None
+    assert rewritten["terminal_status"] == "RESOLVED"
+    assert rewritten["terminal_reason_code"] == "RESOLVED_COMPLETED"
+    assert rewritten["public_evidence_bytes"] == 20000
+    assert "33685" in rewritten["termination_reason"] and "20000" in rewritten["termination_reason"]
+    assert rewritten["logical_model_calls"] == 12
+    assert rewritten["provider_process_attempts"] == 13
+    assert rewritten["retries"] == 1
+    assert rewritten["valid_directives"] == 12
+    assert rewritten["patch_submissions"] == 1
+    assert rewritten["candidate_provenance"] == "verifier_record"
+    assert rewritten["verifier_runs"] == 1
+    assert rewritten["independent_verifier_result"]["outcome"] == "RESOLVED"
+    assert rewritten["controller_states_visited"] == ["Reproduce", "Understand", "Patch", "Validate", "Done"]
+    assert rewritten["prompt_tokens"] == 79990
+    assert rewritten["completion_tokens"] == 613
+    assert rewritten["provider_reported_cost"] == pytest.approx(0.010565556)
+    assert rewritten["wall_clock_duration_seconds"] == pytest.approx(226.613)
+    assert rewritten["pdb_counts"] == dict(runner.ZERO_PDB_COUNTS)
+    assert rewritten["repair_outcome"] == "RESOLVED"
+
+    runner.enforce_case_budgets(rewritten, manifest_v4, case_policy=case["policy"])
+
+
+def test_v4_completed_post_apply_budget_exhaustion_terminalizes_unresolved(manifest_v4):
+    """The same completed post-apply shape with a non-resolved verifier
+    rewrites to the verifier-authoritative UNRESOLVED terminal with the
+    accounting and provenance preserved."""
+    case = manifest_v4["case_order"][0]
+    route = _route_evidence(manifest_v4)
+    outcome = _completed_post_apply_exhausted_outcome(
+        manifest_v4, case, route, verifier_outcome="NO_OP",
+    )
+
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v4, case_policy=case["policy"])
+
+    rewritten = runner._budget_exhausted_outcome(
+        case, outcome, info.value, run_id="run-fddf1e39-unresolved", manifest=manifest_v4,
+    )
+    assert rewritten is not None
+    assert rewritten["terminal_status"] == "UNRESOLVED"
+    assert rewritten["terminal_reason_code"] == "UNRESOLVED_COMPLETED"
+    assert rewritten["public_evidence_bytes"] == 20000
+    assert "33685" in rewritten["termination_reason"]
+    assert rewritten["logical_model_calls"] == 12
+    assert rewritten["provider_process_attempts"] == 13
+    assert rewritten["retries"] == 1
+    assert rewritten["valid_directives"] == 12
+    assert rewritten["patch_submissions"] == 1
+    assert rewritten["candidate_provenance"] == "verifier_record"
+    assert rewritten["independent_verifier_result"]["outcome"] == "NO_OP"
+    assert rewritten["repair_outcome"] == "NO_CANDIDATE"
+
+
+def test_v4_validation_not_reached_pdb_policy_with_validate_visited_terminalizes(manifest_v4):
+    """v4 admits a pdb-on-uncertainty VALIDATION_NOT_REACHED applied-candidate
+    shape that stopped in Validate before the verifier (an in-Validate
+    per-request budget stop)."""
+    case = manifest_v4["case_order"][0]
+    route = _route_evidence(manifest_v4)
+    outcome = _completed_post_apply_exhausted_outcome(
+        manifest_v4, case, route,
+        terminal_status="VALIDATION_NOT_REACHED",
+        terminal_reason_code="VALIDATION_NOT_REACHED_PRE_VALIDATE",
+        termination_reason="opencode-go adapter: VALIDATION_NOT_REACHED: public_evidence_budget_exceeded",
+        verifier_runs=0,
+        candidate_provenance="applied_patch_event",
+        independent_verifier_result={"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+        controller_states_visited=["Reproduce", "Understand", "Patch", "Validate"],
+        repair_outcome="NO_CANDIDATE",
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v4, case_policy=case["policy"])
+
+    rewritten = runner._budget_exhausted_outcome(
+        case, outcome, info.value, run_id="run-v4-in-validate", manifest=manifest_v4,
+    )
+    assert rewritten is not None
+    assert rewritten["terminal_status"] == "VALIDATION_NOT_REACHED"
+    assert rewritten["terminal_reason_code"] == "VALIDATION_NOT_REACHED_PRE_VALIDATE"
+    assert rewritten["public_evidence_bytes"] == 20000
+    assert rewritten["patch_submissions"] == 1
+    assert rewritten["candidate_provenance"] == "applied_patch_event"
+    assert rewritten["verifier_runs"] == 0
+    assert rewritten["controller_states_visited"] == ["Reproduce", "Understand", "Patch", "Validate"]
+
+    runner.enforce_case_budgets(rewritten, manifest_v4, case_policy=case["policy"])
+
+
+def test_v3_in_validate_pdb_policy_shape_still_aborts(manifest_v3):
+    """The v3 frozen contract keeps rejecting the pdb-on-uncertainty
+    Validate-visited applied-candidate shape: the same raw outcome under the
+    v3 manifest returns None (honest abort)."""
+    case = manifest_v3["case_order"][0]
+    route = _route_evidence(manifest_v3)
+    outcome = _completed_post_apply_exhausted_outcome(
+        manifest_v3, case, route,
+        terminal_status="VALIDATION_NOT_REACHED",
+        terminal_reason_code="VALIDATION_NOT_REACHED_PRE_VALIDATE",
+        termination_reason="opencode-go adapter: VALIDATION_NOT_REACHED: public_evidence_budget_exceeded",
+        verifier_runs=0,
+        candidate_provenance="applied_patch_event",
+        independent_verifier_result={"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+        controller_states_visited=["Reproduce", "Understand", "Patch", "Validate"],
+        repair_outcome="NO_CANDIDATE",
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v3, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-v3-in-validate", manifest=manifest_v3) is None
+
+
+def test_v3_pdb_not_reached_with_patch_and_verifier_still_aborts(manifest_v3):
+    """The exact v3-classified raw shape (PDB_NOT_REACHED terminal masking an
+    executed verifier on a patched pdb-on-uncertainty case) has no frozen v3
+    terminal representation and returns None."""
+    case = manifest_v3["case_order"][0]
+    route = _route_evidence(manifest_v3)
+    outcome = _completed_post_apply_exhausted_outcome(
+        manifest_v3, case, route,
+        terminal_status="PDB_NOT_REACHED",
+        terminal_reason_code="PDB_NOT_REACHED_NO_GATE",
+        termination_reason="opencode-go adapter: PDB_NOT_REACHED: completed",
+        repair_outcome="NO_CANDIDATE",
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v3, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, outcome, info.value, run_id="run-v3-fddf", manifest=manifest_v3) is None
+
+
+def test_v4_post_contact_infrastructure_budget_exhaustion_terminalizes(manifest_v4):
+    """v4 terminalizes a post-contact controller-stage infrastructure outcome
+    with the raw terminal preserved and the public counter clamped."""
+    case = manifest_v4["case_order"][0]
+    route = _route_evidence(manifest_v4)
+    outcome = _completed_post_apply_exhausted_outcome(
+        manifest_v4, case, route,
+        terminal_status="INFRASTRUCTURE_ERROR",
+        terminal_reason_code="INFRASTRUCTURE_FAILURE",
+        termination_reason="opencode-go adapter: CONTROLLER_FAILED: controller stopped",
+        verifier_runs=0,
+        candidate_provenance="applied_patch_event",
+        independent_verifier_result={"status": "NOT_RUN", "outcome": None, "lifecycle_succeeded": False},
+        controller_states_visited=["Reproduce", "Understand", "Patch", "Validate"],
+        repair_outcome="NO_CANDIDATE",
+        infrastructure_evidence={
+            "stage": "controller", "reason_code": "CONTROLLER_FAILURE", "confirmed_failure": True,
+            "classification": "CONTROLLER", "terminal_classification": "INFRASTRUCTURE_FAILURE",
+            "provider_attempt_index": None, "prior_lifecycle_completed": True,
+            "source_mutation_observed": False, "expected_source_hash": None,
+            "evidence_reference": "opencode-go-controller-stop",
+        },
+        terminal_transport_evidence={
+            "final_attempt_classification": "INFRASTRUCTURE_FAILURE", "process_exit_code": 0, "timed_out": False,
+            "provider_error_category": None, "provider_completed_response": True,
+            "evidence_reference": f"opencode-go:{case['case_id']}:13",
+        },
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(outcome, manifest_v4, case_policy=case["policy"])
+
+    rewritten = runner._budget_exhausted_outcome(
+        case, outcome, info.value, run_id="run-v4-infra", manifest=manifest_v4,
+    )
+    assert rewritten is not None
+    assert rewritten["terminal_status"] == "INFRASTRUCTURE_ERROR"
+    assert rewritten["terminal_reason_code"] == "INFRASTRUCTURE_FAILURE"
+    assert rewritten["public_evidence_bytes"] == 20000
+    assert "33685" in rewritten["termination_reason"]
+    assert rewritten["infrastructure_evidence"]["stage"] == "controller"
+    assert rewritten["infrastructure_evidence"]["prior_lifecycle_completed"] is True
+    assert rewritten["logical_model_calls"] == 12
+    assert rewritten["provider_process_attempts"] == 13
+    assert rewritten["retries"] == 1
+
+    runner.enforce_case_budgets(rewritten, manifest_v4, case_policy=case["policy"])
+
+
+def test_v4_unsupported_shapes_still_abort(manifest_v4):
+    """Contradictory or unsupported v4 shapes stay fail-closed: a completed
+    RESOLVED shape with PDB activity, a verifier-stage infrastructure shape,
+    and a VALIDATION_NOT_REACHED shape with a verifier record all return
+    None."""
+    case = manifest_v4["case_order"][0]
+    route = _route_evidence(manifest_v4)
+
+    with_pdb = _completed_post_apply_exhausted_outcome(
+        manifest_v4, case, route,
+        pdb_counts={"total_gate_decisions": 1, "allowed_gate_openings": 1, "rejected_gate_decisions": 0,
+                    "sessions_started": 1, "successful_observations": 1, "failed_observations": 0},
+        pdb_gate_decisions=[{"source_state": "Understand", "failure_reproduced": True, "remaining_pdb_observations": 2,
+                             "failed_patch_attempts": 0, "active_hypothesis_id": "h-1", "allowed": True, "reason": "ok"}],
+        pdb_sessions_started=1,
+        successful_pdb_observations=1,
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(with_pdb, manifest_v4, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, with_pdb, info.value, run_id="run-v4-pdb", manifest=manifest_v4) is None
+
+    verifier_infra = _completed_post_apply_exhausted_outcome(
+        manifest_v4, case, route,
+        terminal_status="INFRASTRUCTURE_ERROR",
+        terminal_reason_code="INFRASTRUCTURE_FAILURE",
+        termination_reason="opencode-go adapter: VERIFIER_FAILED: verifier raised",
+        independent_verifier_result={"status": None, "outcome": None, "lifecycle_succeeded": False},
+        infrastructure_evidence={
+            "stage": "verifier", "reason_code": "VERIFIER_FAILURE", "confirmed_failure": True,
+            "classification": "VERIFIER", "terminal_classification": "INFRASTRUCTURE_FAILURE",
+            "provider_attempt_index": None, "prior_lifecycle_completed": True,
+            "source_mutation_observed": False, "expected_source_hash": None,
+            "evidence_reference": "opencode-go-verifier-stop",
+        },
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(verifier_infra, manifest_v4, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, verifier_infra, info.value, run_id="run-v4-vinfra", manifest=manifest_v4) is None
+
+    with_verifier = _completed_post_apply_exhausted_outcome(
+        manifest_v4, case, route,
+        terminal_status="VALIDATION_NOT_REACHED",
+        terminal_reason_code="VALIDATION_NOT_REACHED_PRE_VALIDATE",
+        termination_reason="opencode-go adapter: VALIDATION_NOT_REACHED: public_evidence_budget_exceeded",
+        candidate_provenance="verifier_record",
+        repair_outcome="NO_CANDIDATE",
+    )
+    with pytest.raises(runner.PublicEvidenceBudgetExhausted) as info:
+        runner.enforce_case_budgets(with_verifier, manifest_v4, case_policy=case["policy"])
+    assert runner._budget_exhausted_outcome(case, with_verifier, info.value, run_id="run-v4-vnr", manifest=manifest_v4) is None
+
+
+def _completed_entries_v4(manifest):
+    route = _route_evidence(manifest)
+    entries = []
+    for case in manifest["case_order"]:
+        outcome = _completed_outcome(manifest, case, route)
+        outcome["candidate_provenance"] = "verifier_record" if outcome.get("patch_submissions", 0) > 0 else None
+        entries.append({"provider_process_attempts": 1, "outcome": outcome})
+    return entries
+
+
+def test_v4_budget_exhaustion_campaign_proceeds(manifest_v4, auth_v4, tmp_path, git_state_provider):
+    """End-to-end v4: case 1 produces the observed completed post-apply
+    exhausted shape; the case materializes as RESOLVED with all accounting
+    preserved and the campaign proceeds to the remaining five cases."""
+    route = _route_evidence(manifest_v4)
+    entries = _completed_entries_v4(manifest_v4)
+    entries[0] = {
+        "provider_process_attempts": 13,
+        "outcome": _completed_post_apply_exhausted_outcome(manifest_v4, manifest_v4["case_order"][0], route),
+    }
+
+    record, factory, case_runner, output = _run_campaign_custom(
+        manifest_v4, auth_v4, tmp_path,
+        case_runner=ScriptedCaseRunner(entries),
+        runner_entries=entries,
+        git_state_provider=git_state_provider,
+    )
+
+    assert record["status"] == "COMPLETED"
+    assert record["stop_reason"] is None
+    assert record["case_lifecycle_states"][manifest_v4["case_order"][0]["case_id"]] == "completed"
+    assert record["counts"]["completed_case_count"] == 6
+    assert record["counts"]["unstarted_case_count"] == 0
+    assert record["counts"]["aborted_case_count"] == 0
+    assert record["counts"]["logical_model_calls"] == 12 + 5
+    assert record["counts"]["provider_process_attempts"] == 13 + 5
+    assert record["counts"]["transport_retries"] == 1
+    assert record["counts"]["accepted_directives"] == 12 + 5
+
+    first = record["cases"][0]
+    assert first["terminal_status"] == "RESOLVED"
+    assert first["terminal_reason_code"] == "RESOLVED_COMPLETED"
+    assert first["public_evidence_bytes"] == 20000
+    assert "33685" in first["termination_reason"]
+    assert first["logical_model_calls"] == 12
+    assert first["provider_process_attempts"] == 13
+    assert first["retries"] == 1
+    assert first["valid_directives"] == 12
+    assert first["patch_submissions"] == 1
+    assert first["candidate_provenance"] == "verifier_record"
+    assert first["verifier_runs"] == 1
+    assert first["independent_verifier_result"]["outcome"] == "RESOLVED"
+    assert first["repair_outcome"] == "RESOLVED"
+
+    verification = runner.verify_attempt_package(output, manifest_v4)
+    assert verification["consistent"] is True
+    assert verification["errors"] == []
+
+
+def test_v4_verifier_authoritative_classification(manifest_v4, tmp_path):
+    """The v4 classifier maps a completed pdb-on-uncertainty case with an
+    executed verifier to the verifier semantic outcome, while the same case
+    under campaign version 3 keeps the frozen PDB_NOT_REACHED classification."""
+    from types import SimpleNamespace
+
+    task = _curated_task()
+    registry = ToolRegistry((
+        ToolSpec(
+            ActionName.RUN_REPRODUCTION,
+            lambda arguments: dict(arguments),
+            lambda _action, _arguments: ToolResult(ObservationStatus.OK, {}, "ok"),
+            argument_contract={
+                "required": ["phase"],
+                "properties": {"phase": {"type": "string", "min_length": 1}},
+                "additional_properties": False,
+            },
+        ),
+        ToolSpec(
+            ActionName.APPLY_PATCH,
+            lambda arguments: dict(arguments),
+            lambda _action, _arguments: ToolResult(ObservationStatus.OK, {"applied": True, "patch_sha256": "c" * 64}, "ok"),
+            argument_contract={
+                "required": ["patch"],
+                "properties": {"patch": {"type": "string", "min_length": 1}},
+                "additional_properties": False,
+            },
+        ),
+    ))
+    patch = "--- a/x.py\n+++ b/x.py\n@@ -1 +1 @@\n-bug\n+fix\n"
+
+    class _CompletedTransport:
+        def __init__(self):
+            self.calls = 0
+            self.directives = [
+                {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
+                {"kind": "transition", "target_state": "Understand", "reason": "reproduced"},
+                {"kind": "transition", "target_state": "Patch", "reason": "hypothesis ready"},
+                {"kind": "action", "name": "apply_patch", "arguments": {"patch": patch}},
+                {"kind": "transition", "target_state": "Validate", "reason": "patched"},
+                {"kind": "transition", "target_state": "Done", "reason": "verified"},
+            ]
+
+        def request(self, payload, timeout_seconds):
+            directive = self.directives[min(self.calls, len(self.directives) - 1)]
+            self.calls += 1
+            return {"directive": directive, "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}}
+
+    transport = _CompletedTransport()
+    live_adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=LiveModelConfig("test-model", ("test-command",)),
+        transport=transport, limits=LiveRunLimits(max_model_requests=12, max_controller_steps=12),
+        registry=registry, evaluation_id="e", case_id="c", run_id="r", trajectory_id="r",
+    )
+    controller = DeterministicController(registry, live_adapter, ControllerRunConfig(max_model_calls=12))
+    result = controller.run(ControllerSnapshot(
+        "r", task.task_id, ControllerState.REPRODUCE, 0,
+        ControllerBudgetLimits.from_task_constraints(task.constraints),
+        ControllerBudgetState(), HypothesisLedger(),
+    ))
+    assert result.final_state is ControllerState.DONE
+    context = SimpleNamespace(
+        patch_applied=True, candidate_patch=patch,
+        declared_localization=None, patch_changed_files=[], tool_calls=[], release_pdb=lambda: [],
+    )
+    verifier = SimpleNamespace(
+        status=SimpleNamespace(value="COMPLETED"),
+        outcome=SimpleNamespace(value="RESOLVED"),
+        baseline=SimpleNamespace(valid=True),
+        patch_application=SimpleNamespace(to_mapping=lambda: {"patch_sha256": "c" * 64}),
+        f2p_passed=1, f2p_total=1, p2p_passed=1, p2p_total=1,
+        workspace=SimpleNamespace(cleaned=True, canonical_fixture_unchanged=True),
+    )
+    common = dict(
+        task_id=task.task_id, policy=DemoPolicy.PDB_ON_UNCERTAINTY, repetition=1,
+        case_id="c", run_id="r", config=LiveModelConfig("test-model", ("test-command",)),
+        task=task, context=context, workspace=None, result=result, metrics=live_adapter.metrics,
+        live_adapter=live_adapter, started=time.monotonic() - 1.0,
+        interrupted=False, controller_failed=False, diagnostics=[],
+        extra_cleanup=lambda: (True, None), extra_cleanup_owned=False,
+        evidence={"pdb_gate_decisions": [], "directive_rejections": []},
+    )
+    v3_finalized = _finalize_live_case(**common, verify=lambda: verifier)
+    assert v3_finalized.status is LiveCaseStatus.PDB_NOT_REACHED
+    v4_finalized = _finalize_live_case(**common, campaign_version=4, verify=lambda: verifier)
+    assert v4_finalized.status is LiveCaseStatus.RESOLVED
+    v4_unresolved = _finalize_live_case(**common, campaign_version=4, verify=lambda: SimpleNamespace(
+        status=SimpleNamespace(value="COMPLETED"),
+        outcome=SimpleNamespace(value="NO_OP"),
+        baseline=SimpleNamespace(valid=True),
+        patch_application=SimpleNamespace(to_mapping=lambda: {"patch_sha256": "c" * 64}),
+        f2p_passed=0, f2p_total=1, p2p_passed=1, p2p_total=1,
+        workspace=SimpleNamespace(cleaned=True, canonical_fixture_unchanged=True),
+    ))
+    assert v4_unresolved.status is LiveCaseStatus.UNRESOLVED
+
+
+def test_public_evidence_bytes_are_events_jsonl_only(tmp_path, manifest_v4, synthetic_executable):
+    """public_evidence_bytes counts only the projected events log; provider
+    usage, cost, and request material never enter the public counter."""
+    harness = _harness(tmp_path, manifest_v4, synthetic_executable)
+    case = manifest_v4["case_order"][0]
+    events_jsonl = _events_jsonl_of_bytes(33685)
+    mapping = _live_mapping(manifest_v4, case, **{
+        "status": "RESOLVED",
+        "measurements": {
+            "model_request_count": 13, "model_response_count": 12, "retry_count": 1,
+            "provider_error_count": 1, "provider_error_kinds": ["process_error"],
+            "token_usage": {"prompt_tokens": 79990, "completion_tokens": 613, "total_tokens": 80603,
+                            "provider_reported": True, "missing_fields": []},
+            "termination_reason": "completed",
+            "successful_pdb_observation_count": 0, "failed_pdb_observation_count": 0,
+            "tool_call_count": 12, "case_elapsed_duration_ms": 226613,
+            "model_phase_elapsed_duration_ms": 220000, "model_transport_duration_ms": 220000,
+            "elapsed_scope": "case_observed; model_phase=transport_only",
+        },
+        "events_jsonl": events_jsonl,
+        "evidence": {"pdb_gate_decisions": [], "directive_rejections": []},
+    })
+    inner = harness["factory"].prepare(case)
+    inner.process_attempts = 13
+    inner.last_process_exit_code = 0
+    inner.reported_costs.extend([0.0008] * 12)
+    outcome = adapter._outcome_from_live_case(
+        case, FakeLiveResult(mapping), harness["observed"], inner,
+        transport_attempts=inner.process_attempts, policy_value=case["policy"], run_id="run-replay",
+        source_hash="0" * 64,
+    )
+    assert outcome["public_evidence_bytes"] == 33685
+    assert outcome["logical_model_calls"] == 12
+    assert outcome["provider_process_attempts"] == 13
+    assert outcome["retries"] == 1
+    assert outcome["valid_directives"] == 12
+    assert outcome["provider_cost_report_count"] == 12
+    assert outcome["prompt_tokens"] == 79990
+
+
 # ---- adapter: events-log candidate derivation (action_id correlation) ---------
 
 

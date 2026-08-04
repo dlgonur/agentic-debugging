@@ -228,6 +228,7 @@ def run_live_quixbugs_case(
     policy: DemoPolicy = QUIXBUGS_LIVE_POLICY,
     runtime_probe: Optional[RuntimeProbe] = None,
     pdb_identity_binding: Optional[tuple[str, str, str]] = None,
+    campaign_version: int = 2,
 ) -> LiveCaseResult:
     """Run exactly one QuixBugs live case through the accepted live pipeline.
 
@@ -245,7 +246,14 @@ def run_live_quixbugs_case(
     model id, variant) runtime identity for a PDB-on-uncertainty case,
     supplied by the OpenCode Go execution adapter. When absent the accepted
     historical OpenCode Zen identity applies unchanged.
+
+    ``campaign_version`` selects the versioned terminal-classification
+    contract of :func:`agentic_debugger.evaluation.live._finalize_live_case`:
+    campaigns below v4 keep the frozen classification unchanged; v4 uses the
+    verifier-authoritative classification.
     """
+    if type(campaign_version) is not int or campaign_version < 1:
+        raise QuixBugsLiveConfigurationError("campaign version must be a positive integer")
     if type(facts) is not QuixBugsPreflightFacts:
         raise QuixBugsLiveConfigurationError("QuixBugs preflight facts are required")
     if facts.execution_context is None:
@@ -454,6 +462,7 @@ def run_live_quixbugs_case(
         extra_cleanup=cleanup_external,
         extra_cleanup_owned=external is not None,
         evidence=case_evidence,
+        campaign_version=campaign_version,
     )
 
 
@@ -470,6 +479,7 @@ def run_live_quixbugs_evaluation(
     evaluation_id: Optional[str] = None,
     transport_factory=None,
     policy: DemoPolicy = QUIXBUGS_LIVE_POLICY,
+    campaign_version: int = 2,
 ) -> dict[str, Any]:
     """Run the complete one-task, one-policy, one-repetition QuixBugs live report.
 
@@ -503,6 +513,7 @@ def run_live_quixbugs_evaluation(
         facts=facts, config=config, limits=limits, transport=transport, evaluation_id=evaluation_id, repetition=1,
         policy=policy,
         runtime_probe=(QUIXBUGS_GCD_RUNTIME_PROBE if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None),
+        campaign_version=campaign_version,
     )
     case_mapping = case.to_mapping()
     completed = bool(case_mapping["reporting"]["completed"])

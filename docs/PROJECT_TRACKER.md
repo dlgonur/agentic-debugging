@@ -1592,3 +1592,53 @@ model performance, PDB effectiveness, RAG, SFT, DPO.
   but retained in resource accounting, and blocked/aborted/unstarted cases
   remain visible. No real campaign or empirical/PDB-effectiveness result is
   marked complete.
+
+2026-08-04 (Paired-pilot v3 live attempt fddf1e39... and v4 preregistration)
+
+- The v3 live attempt `fddf1e39...` (case 1, find-in-sorted / pdb-on-uncertainty)
+  progressed through the full pre-verifier lifecycle and beyond: baseline
+  reproduction (attempt 1 accepted and dispatched), transition to Understand,
+  three source reads, an add_hypothesis, transition to Patch, apply_patch,
+  transition to Validate, a post-patch reproduction and a regression-test run,
+  and a transition to Done (attempt 13) with the independent verifier executed.
+  Accounting observed: 12 logical model calls, 13 provider process attempts
+  (12 completed responses + 1 bounded retry after an attempt-10 no_text_event
+  stream), 12 valid directives, 1 retry, 1 applied candidate, 0 PDB
+  observations, 33,685 cumulative public evidence bytes, provider-reported
+  cost 0.010565556 (aggregate of 12 reported costs).
+- The campaign aborted honestly as ABORTED / BUDGET_EXCEEDED: the frozen v3
+  terminal matrix has no representation for provider contact + applied
+  candidate + Validate visited + verifier executed + public-evidence
+  exhaustion after the completed lifecycle (`_budget_exhausted_outcome`
+  returned None). This is the preregistered v3 contract working as designed;
+  it is not an extraction, validation, or acceptance failure. The case-level
+  truth is preserved in the private transport evidence under
+  `operator/attempts/quixbugs-paired-pilot-v3-attempt-fddf1e39.../private/`;
+  campaign-level `counts` are zero except provider_process_attempts because
+  aborted cases materialize no case record.
+- Preregistered `research/quixbugs/PAIRED_PILOT_V4.json` (canonical SHA-256
+  `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`),
+  derived from the frozen v3 manifest, adds: (a) v4-only verifier-authoritative
+  classification (`_finalize_live_case(campaign_version=4)`: a case whose
+  verifier executed is classified by the verifier semantic outcome before the
+  PDB_NOT_REACHED rule; v2/v3 behavior unchanged); (b) the budget-terminal
+  matrix for the observed completed post-apply shape (RESOLVED / UNRESOLVED
+  with all accounting preserved and the exact observed byte count in the
+  termination detail, counter clamped to the frozen 20,000 limit);
+  (c) VALIDATION_NOT_REACHED extended to pdb-on-uncertainty and
+  Validate-visited stops (verifier still NOT_RUN); (d) post-contact
+  controller/cleanup/evidence-packaging INFRASTRUCTURE_ERROR budget
+  terminalization. Unsupported or contradictory shapes still abort; the
+  20,000-byte budget is unchanged.
+- Sanitized deterministic replay coverage
+  (`tests/fixtures/quixbugs_v4_replay_fixture.json` +
+  `tests/unit/test_quixbugs_v4_live_attempt_replay.py`) replays the preserved
+  evidence through extraction, parse, controller acceptance, no_text_event
+  classification, bounded retry accounting, and the observed-shape v4
+  terminalization without contacting any provider.
+- Ledger timestamp follow-up (nonblocking): campaign `created_at`/`updated_at`
+  use the campaign-start `reference_time`, so ledger timestamps do not reflect
+  campaign end; fix in a separate task.
+- No route capture, authorization, preflight, or live campaign executed in
+  this task; v4 requires fresh operator artifacts against the clean accepted
+  execution HEAD.
