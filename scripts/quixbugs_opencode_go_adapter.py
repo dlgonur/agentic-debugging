@@ -820,8 +820,8 @@ def bind_adapter_configuration(
         _reject("ROUTE_OBSERVATION_NOT_ESTABLISHED", "binding requires a preflight-passed route observation")
 
     manifest_hash = pilot.manifest_hash(manifest)
-    if validated["campaign_id"] not in {pilot.CAMPAIGN_ID_V2, pilot.CAMPAIGN_ID_V3} or validated["campaign_id"] != authorization.get("campaign_id"):
-        _reject("CAMPAIGN_IDENTITY_MISMATCH", "adapter configuration campaign identity does not match the frozen v2/v3 campaign")
+    if validated["campaign_id"] not in {pilot.CAMPAIGN_ID_V2, pilot.CAMPAIGN_ID_V3, pilot.CAMPAIGN_ID_V4} or validated["campaign_id"] != authorization.get("campaign_id"):
+        _reject("CAMPAIGN_IDENTITY_MISMATCH", "adapter configuration campaign identity does not match the frozen v2/v3/v4 campaign")
     if validated["campaign_manifest_hash"] != manifest_hash or validated["campaign_manifest_hash"] != authorization.get("campaign_manifest_hash"):
         _reject("MANIFEST_HASH_MISMATCH", "adapter configuration manifest hash does not match the validated manifest/authorization")
     if validated["operator_authorization_id"] != authorization.get("operator_authorization_id"):
@@ -1791,6 +1791,7 @@ class OpenCodeGoCaseRunner:
             repetition=1,
             policy=policy,
             pdb_identity_binding=pdb_binding,
+            campaign_version=int(self.manifest["campaign_version"]),
         )
         if policy_value == "pdb-on-uncertainty":
             executor_kwargs["runtime_probe"] = runtime_probe
@@ -2297,8 +2298,8 @@ def _resolve_manifest(manifest_path: str | Path | None) -> dict[str, Any]:
     path = Path(manifest_path) if manifest_path is not None else pilot.MANIFEST_PATH_V2
     manifest = pilot.load_manifest(path)
     pilot.validate_manifest(manifest)
-    if manifest["campaign_id"] not in {pilot.CAMPAIGN_ID_V2, pilot.CAMPAIGN_ID_V3}:
-        raise OpenCodeGoAdapterError("the OpenCode Go adapter is bound to the frozen v2/v3 campaigns only")
+    if manifest["campaign_id"] not in {pilot.CAMPAIGN_ID_V2, pilot.CAMPAIGN_ID_V3, pilot.CAMPAIGN_ID_V4}:
+        raise OpenCodeGoAdapterError("the OpenCode Go adapter is bound to the frozen v2/v3/v4 campaigns only")
     return manifest
 
 

@@ -1,12 +1,13 @@
-# QuixBugs paired-pilot v2/v3 live authorization contract
+# QuixBugs paired-pilot v2/v3/v4 live authorization contract
 
 This document defines the strict, versioned authorization artifact required to
-run a frozen QuixBugs paired-pilot v2 or v3 live campaign. The next authorized
-execution uses `research/quixbugs/PAIRED_PILOT_V3.json` (canonical manifest
-SHA-256 `f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`);
+run a frozen QuixBugs paired-pilot v2, v3, or v4 live campaign. The next
+authorized execution uses `research/quixbugs/PAIRED_PILOT_V4.json` (canonical
+manifest SHA-256 `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`);
 v2 remains the compatibility/derivation contract at SHA-256
-`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171`.
-Both use accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`
+`bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171` and v3 at
+`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`.
+All use accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`
 and live protocol `1.3`.
 
 The machine-readable schema reference is the non-authorizing template
@@ -23,8 +24,8 @@ validator is `authorization_failure` /
 | `schema_version` | exactly `quixbugs-paired-pilot-authorization-v1` |
 | `template` | must be `false` (the tracked template is `true` and is rejected) |
 | `authorize_live` | must be `true` |
-| `campaign_id` / `campaign_version` | exactly the selected manifest: `quixbugs-paired-pilot-v2` / `2` or `quixbugs-paired-pilot-v3` / `3` |
-| `campaign_manifest_hash` | exactly the selected canonical hash: v2 `bc3df312…f3171` or v3 `f5f513a1…e45cf` |
+| `campaign_id` / `campaign_version` | exactly the selected manifest: `quixbugs-paired-pilot-v2` / `2`, `quixbugs-paired-pilot-v3` / `3`, or `quixbugs-paired-pilot-v4` / `4` |
+| `campaign_manifest_hash` | exactly the selected canonical hash: v2 `bc3df312…f3171`, v3 `f5f513a1…e45cf`, or v4 `020dfc1f…b90354d` |
 | `accepted_baseline` | exactly the accepted repository baseline `28ec7754336fc53f21ebbae8a851b33e26714932` |
 | `planning_baseline_commit` | exactly `18e067f24c337e7215139373edc699a347cf2127` |
 | `qualification_contract_hash` | exactly `7246d289fcc689e93d93385751cbae5fa75a3c52e3c04e001f2c977a1990c52d` |
@@ -45,7 +46,7 @@ validator is `authorization_failure` /
 | `operator_authorization_id` | operator authorization identity / record ID |
 | `authorization_created_at` / `authorization_valid_until` | ISO-8601 UTC; validity may be `null` or bounded; an expired artifact is rejected |
 | `output_root` | the exact output/attempt directory for this campaign |
-| `campaign_attempt_identity` | selected version: `quixbugs-paired-pilot-v2-attempt-<64 hex>` or `quixbugs-paired-pilot-v3-attempt-<64 hex>` |
+| `campaign_attempt_identity` | selected version: `quixbugs-paired-pilot-v2-attempt-<64 hex>`, `quixbugs-paired-pilot-v3-attempt-<64 hex>`, or `quixbugs-paired-pilot-v4-attempt-<64 hex>` |
 | `single_frozen_six_case_campaign_confirmation` | `true` |
 
 ## What is rejected
@@ -65,10 +66,10 @@ expired validity; output-root mismatch; invalid attempt identity; missing
 single-campaign confirmation; and any v1 zero-price contradiction
 (`zero_price_required`).
 
-For the next execution, a v2 authorization or an invocation that omits the
-explicit v3 manifest is a campaign-identity mismatch, not a permitted
+For the next execution, a v2/v3 authorization or an invocation that omits the
+explicit v4 manifest is a campaign-identity mismatch, not a permitted
 fallback. All route capture, bundle, adapter validation, preflight, and live
-commands must pass `--manifest research/quixbugs/PAIRED_PILOT_V3.json`.
+commands must pass `--manifest research/quixbugs/PAIRED_PILOT_V4.json`.
 
 The v1 zero-price authorization fields are **not** part of the v2 contract;
 a v2 authorization that requires zero pricing is a contradiction and fails

@@ -881,6 +881,6 @@ def test_v1_route_observation_validation_is_unchanged(v1_manifest):
 
 def test_validator_entrypoint_validates_both_versions():
     from scripts.validate_quixbugs_paired_pilot import TRACKED_MANIFESTS
-    assert len(TRACKED_MANIFESTS) == 3
+    assert len(TRACKED_MANIFESTS) == 4
     for path in TRACKED_MANIFESTS:
         pilot.validate_manifest(pilot.load_manifest(path))

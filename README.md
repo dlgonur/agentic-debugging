@@ -80,8 +80,13 @@ supplies an explicit authorization artifact. v3
 preserves the v2 tasks, ordering, budgets, qualification authority, and route,
 and adds the `VALIDATION_NOT_REACHED` terminal plus candidate provenance for
 an observed static-baseline case that applied a patch but exhausted public
-evidence before entering Validate. The next authorized live attempt must use
-v3 explicitly; the operator CLI retains a v2 default only for compatibility.
+evidence before entering Validate. v4
+(`research/quixbugs/PAIRED_PILOT_V4.json`, canonical SHA-256
+`020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`)
+adds the v4-only verifier-authoritative classification and the budget-terminal
+matrix for the observed v3 completed post-apply public-evidence exhaustion
+shape (attempt `fddf1e39...`). The next authorized live attempt must use
+v4 explicitly; the operator CLI retains a v2 default only for compatibility.
 
 ## Current status (2026-08-03) — OpenCode Go execution adapter v1
 

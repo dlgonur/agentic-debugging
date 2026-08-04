@@ -1,15 +1,15 @@
 # QuixBugs OpenCode Go execution adapter v1 (operator guide)
 
 This document describes the fail-closed OpenCode Go execution adapter for the
-frozen QuixBugs paired-pilot v2/v3 live runner. The next authorized execution
-uses `research/quixbugs/PAIRED_PILOT_V3.json` (canonical manifest SHA-256
-`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`);
-v2 remains the derivation/compatibility contract. Both use accepted baseline
+frozen QuixBugs paired-pilot v2/v3/v4 live runner. The next authorized
+execution uses `research/quixbugs/PAIRED_PILOT_V4.json` (canonical manifest
+SHA-256 `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`);
+v2/v3 remain the derivation/compatibility contracts. All use accepted baseline
 `28ec7754336fc53f21ebbae8a851b33e26714932` and live protocol `1.3`.
 
 The CLI deliberately defaults to v2 for backward compatibility. Every command
 for the next attempt must therefore pass
-`--manifest research/quixbugs/PAIRED_PILOT_V3.json`; omission is not a v3
+`--manifest research/quixbugs/PAIRED_PILOT_V4.json`; omission is not a v4
 fallback and must block operator review.
 
 The adapter implements and validates the execution wiring only. It never

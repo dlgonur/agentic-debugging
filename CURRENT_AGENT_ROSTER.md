@@ -10,23 +10,24 @@ execution.
 - **DeepSeek V4 Flash through the operator's OpenCode Go subscription** is the
   default implementation route for coding-agent sessions **when a task
   explicitly authorizes model use**. No other provider route is the default.
-- The next authorized QuixBugs execution uses the paired-pilot v3 manifest
-  (`research/quixbugs/PAIRED_PILOT_V3.json`, canonical SHA-256
-  `f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`).
-  It derives from the v2 route and experiment contract in
-  `docs/QUIXBUGS_PAIRED_PILOT_V2.md` and preserves the same tasks, order,
-  budgets, qualification authority, and route: OpenCode Go subscription,
-  DeepSeek V4 Flash, protocol
+- The next authorized QuixBugs execution uses the paired-pilot v4 manifest
+  (`research/quixbugs/PAIRED_PILOT_V4.json`, canonical SHA-256
+  `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`).
+  It derives from the v3 route and experiment contract and preserves the same
+  tasks, order, budgets, qualification authority, and route: OpenCode Go
+  subscription, DeepSeek V4 Flash, protocol
   1.3, no Zen route, no free-tier substitution, no Ollama route, no alternate
   provider, no model substitution, and no metered/paid-overage/per-call
   billing fallback. Subscription entitlement and billing-route evidence must
   be established before the first provider call, or the campaign blocks
-  before that call. v3 adds the honest `VALIDATION_NOT_REACHED` terminal and
-  candidate provenance required by observed pre-Validate budget exhaustion.
-- The frozen v2 manifest remains a compatibility and derivation authority; it
-  must not be selected for the next live attempt. Every v3 operator command
-  must pass `--manifest research/quixbugs/PAIRED_PILOT_V3.json` explicitly,
-  because the CLI default remains v2.
+  before that call. v4 adds the verifier-authoritative classification and
+  the budget-terminal matrix required by the observed v3 completed post-apply
+  public-evidence exhaustion shape (attempt `fddf1e39...` aborted honestly
+  under the frozen v3 contract).
+- The frozen v2/v3 manifests remain compatibility and derivation authorities;
+  they must not be selected for the next live attempt. Every v4 operator
+  command must pass `--manifest research/quixbugs/PAIRED_PILOT_V4.json`
+  explicitly, because the CLI default remains v2.
 - The earlier OpenCode Zen free-model matrix
   (`deepseek-v4-flash-free`, variant `max`) is a historical, descriptive-only
   record and is not the current implementation route.
@@ -58,9 +59,9 @@ execution.
 
 ## Reference
 
-- `research/quixbugs/PAIRED_PILOT_V3.json` — next six-case live manifest
+- `research/quixbugs/PAIRED_PILOT_V4.json` — next six-case live manifest
 - `docs/QUIXBUGS_PAIRED_PILOT_V2.md` — retained v2 derivation and route contract
-- `docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md` — v2/v3 operator sequence
+- `docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md` — v2/v3/v4 operator sequence
 - `docs/QUIXBUGS_PAIRED_PILOT_V1.md` — retained v1 authority (historical
   OpenCode Zen zero-price route)
 - `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` — model-access strategy

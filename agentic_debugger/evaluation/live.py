@@ -856,7 +856,7 @@ def _interrupted_case_result(task_id:str,policy:DemoPolicy,repetition:int,evalua
         trajectory_id=f"live-{case_id}",
     )
 
-def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,context,workspace,result,metrics,live_adapter,started,interrupted,controller_failed,diagnostics,verify,extra_cleanup,extra_cleanup_owned,evidence=None):
+def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,context,workspace,result,metrics,live_adapter,started,interrupted,controller_failed,diagnostics,verify,extra_cleanup,extra_cleanup_owned,evidence=None,campaign_version=2):
     """Shared verifier/event/cleanup/status/report tail for one live case.
 
     Both the curated (:func:`_acceptance_live_case`) and QuixBugs
@@ -869,6 +869,16 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     ``extra_cleanup`` performs the caller-owned case-directory cleanup (a
     local temp directory for curated cases, an owned external WSL workspace
     for QuixBugs cases) and returns ``(removed, error)``.
+
+    ``campaign_version`` selects the versioned terminal-classification
+    contract.  Campaigns below v4 keep the frozen classification unchanged
+    (a ``pdb-on-uncertainty`` case that completed without PDB stack
+    observations classifies as ``PDB_NOT_REACHED`` even when the verifier
+    executed).  v4 campaigns classify a case whose verifier executed by the
+    verifier semantic outcome (``RESOLVED`` / ``UNRESOLVED``, or
+    ``VERIFIER_FAILED`` when the verifier did not complete) before any
+    ``PDB_NOT_REACHED`` rule; ``PDB_NOT_REACHED`` then applies only when no
+    authoritative verifier result exists.
     """
     verifier=None; verifier_started=False; verifier_failed=False; event_failed=False; events=""
     if result is not None and context is not None and result.final_state is ControllerState.DONE and context.patch_applied and context.candidate_patch:
@@ -938,6 +948,14 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     elif result is None: status=LiveCaseStatus.HARNESS_ERROR
     elif result.stop_reason is ControllerStopReason.DIRECTIVE_REJECTED: status=LiveCaseStatus.CONTROLLER_REJECTED
     elif result.final_state is not ControllerState.DONE: status=LiveCaseStatus.CONTROLLER_FAILED
+    elif campaign_version >= 4 and verifier is not None:
+        # v4 verifier-authoritative classification: a case whose independent
+        # verifier executed is classified by the verifier semantic outcome
+        # before any PDB_NOT_REACHED rule.  A verifier that ran but did not
+        # complete stays an honest VERIFIER_FAILED infrastructure outcome.
+        if verifier.status.value != "COMPLETED": status=LiveCaseStatus.VERIFIER_FAILED
+        elif verifier.outcome is not None and verifier.outcome.value=="RESOLVED": status=LiveCaseStatus.RESOLVED
+        else: status=LiveCaseStatus.UNRESOLVED
     elif policy is DemoPolicy.PDB_ON_UNCERTAINTY and not any(
         step.action and step.action.name in {ActionName.GET_STACK_SUMMARY.value, ActionName.GET_FRAME_LOCALS.value, ActionName.SAFE_EVAL_EXPRESSION.value}
         and step.observation and step.observation.status.value == "ok"

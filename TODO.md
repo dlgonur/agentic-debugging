@@ -11,21 +11,36 @@ repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/
 `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`, live wire protocol sürümü
 `1.3`'tür.
 
-### Routing ve iş sahipliği (2026-08-02 itibarıyla)
+### Routing ve iş sahipliği (2026-08-04 itibarıyla)
 
 - Model kullanımı açıkça yetkilendirilmiş görevlerde varsayılan implementation
   route'u, operator'ün OpenCode Go aboneliği üzerinden DeepSeek V4 Flash'tır.
   Bu route'un görev/sıra/bütçe/qualification authority'si paired-pilot v2
   kontratından gelir; bir sonraki live deneme ise aynı kontratı koruyan
-  `research/quixbugs/PAIRED_PILOT_V3.json` ile yürütülmelidir. v3,
+  `research/quixbugs/PAIRED_PILOT_V4.json` (canonical SHA-256
+  `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`) ile
+  yürütülmelidir. v4, verifier-authoritative classification ve v3'ün
+  terminalize edemediği post-apply/Validate-visited/verifier-executed
+  public-evidence budget-exhaustion şekillerini ekler. v3,
   `VALIDATION_NOT_REACHED` ve candidate provenance ekler. Zen route,
   free-tier ikamesi, Ollama, alternatif provider,
   model substitution, metered/paid-overage/per-call billing fallback yoktur;
   ilk provider çağrısından önce abonelik entitlement ve billing-route kanıtı
   kurulamazsa kampanya o çağrıdan önce bloklanır. CLI v2 default'unu yalnızca
-  compatibility için korur; v3 operator komutları manifest'i explicit verir.
+  compatibility için korur; v4 operator komutları manifest'i explicit verir.
   Eski OpenCode Zen
   free-model matrix'i yalnızca historical, descriptive kayıttır.
+- 2026-08-04 v3 live attempt `fddf1e39...` BUDGET_EXCEEDED ile dürüstçe
+  abort oldu: case, baseline reproduction'dan Validate'e ve verifier
+  execution'a kadar ilerledi (12 logical call, 13 process attempt, 1 bounded
+  retry, patch applied), ancak frozen v3 terminal matrix'i completed
+  post-apply public-evidence exhaustion şeklini temsil edemedi. Bu sonuç
+  v3'ün preregistered kontratının beklenen davranışıdır; v4 bu şekli
+  preregister eder.
+- Non-blocking follow-up TODO: campaign ledger `created_at`/`updated_at`
+  alanları campaign-start `reference_time`'ını kullanır (runner
+  `_utc_now(clock)`), bu yüzden ledger zaman damgaları gerçek campaign sonunu
+  yansıtmaz; ayrı bir görevde düzeltilmelidir.
 - Literatür taraması, deep research, kaynak doğrulama ve geniş karşılaştırmalı
   araştırma; coding-agent oturumları dışında, ayrı bir ChatGPT
   konuşmasındaki GPT-5.6 High tarafından yürütülür. Coding agent'lar yalnızca
@@ -778,10 +793,59 @@ olarak kalır. PDB gate kararları gerçek logical gate tüketimi başına tek k
 olacak şekilde deduplicate edilmiştir.
 
 Bir sonraki authorized six-case attempt yalnızca explicit
-`research/quixbugs/PAIRED_PILOT_V3.json` ile yürütülebilir. Nominal denominator
+`research/quixbugs/PAIRED_PILOT_V4.json` ile yürütülebilir. Nominal denominator
 6 case / policy başına 3 case'tir; budget-terminal completed case'ler
 denominator'dan düşmez, authority-invalidated case'ler evaluation dışı kalıp
 resource accounting'de korunur, blocked/aborted/unstarted case'ler açıkça
 raporlanır. Gerçek route capture, authorization, preflight ve live campaign
-hâlâ açık TODO'dur; fresh v3 operator artifact'leri ve fresh output root
+hâlâ açık TODO'dur; fresh v4 operator artifact'leri ve fresh output root
 gerektirir.
+
+### Paired-pilot v4 verifier-authoritative terminal sözleşmesi (2026-08-04)
+
+v3 live attempt `fddf1e39...` (case 1, find-in-sorted / pdb-on-uncertainty)
+12 logical call, 13 provider process attempt (12 tamamlanmış response + 1
+bounded retry), baseline reproduction, source inspection, hipotez, patch
+uygulaması, Validate ve Done transition'ı tamamladı; verifier çalıştı; ancak
+frozen v3 terminal matrix'i completed post-apply public-evidence exhaustion
+(33,685 > 20,000) şeklini temsil edemediği için campaign `BUDGET_EXCEEDED`
+ile dürüstçe abort etti. v4 bu şekli preregister eder:
+
+1. **Verifier-authoritative classification (yalnızca v4).** Verifier'ı
+   çalışmış bir case, PDB_NOT_REACHED kuralından önce verifier semantic
+   outcome'una göre sınıflandırılır (`RESOLVED` / `UNRESOLVED`; verifier
+   tamamlanmadıysa `VERIFIER_FAILED`). PDB_NOT_REACHED yalnızca authoritative
+   verifier sonucu yokken uygulanır. v2/v3 classification davranışı
+   aynen korunur (`_finalize_live_case(campaign_version=...)`; varsayılan 2).
+2. **v4 budget-terminal matrix.** Completed lifecycle sonrası
+   public-evidence exhaustion (candidate applied, provenance
+   `verifier_record`, Validate visited, verifier executed, zero PDB)
+   `RESOLVED`/`UNRESOLVED` olarak materialize edilir; tüm muhasebe (12/13/1/12/1,
+   token, cost, timing) korunur, `public_evidence_bytes` frozen 20,000'e
+   clamp edilir ve exact 33,685 termination detail'inde korunur.
+   `VALIDATION_NOT_REACHED` v4'te pdb-on-uncertainty ve Validate-visited
+   stop'ları da kapsar (verifier hâlâ NOT_RUN). Post-contact
+   controller/cleanup/evidence-packaging `INFRASTRUCTURE_ERROR` şekli de
+   v4'te terminalize edilir. Contradictory/temsil edilemeyen şekiller
+   (örneğin PDB aktivitesi ile RESOLVED, verifier record ile
+   VALIDATION_NOT_REACHED) honest abort olarak kalır; 20,000-bayt bütçe
+   artırılmadı.
+3. **Kampanya sayacı okuması.** Abort eden bir case'de campaign-level
+   `counts` yalnızca `provider_process_attempts`'i içerir; "accepted
+   directives: 0" gibi değerler case-level gerçeği değil, materialize
+   edilmemiş case kaydının agregasyon artefaktıdır. Case-level gerçek,
+   private transport evidence'dan okunur.
+
+Odaklı testler: v4 manifest/authorization validate (hash
+`020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`),
+observed-shape RESOLVED/UNRESOLVED rewrite (13/12/1/12/1, 33685 detail),
+v4 VALIDATION_NOT_REACHED pdb+Validate-visited, post-contact infra
+terminalization, v3 aynı şekillerde hâlâ `None`/abort, v2 davranışı
+değişmedi, verifier-authoritative classifier (v3 → PDB_NOT_REACHED,
+v4 → RESOLVED), budget 20,000'de sabit, private transport evidence public
+byte sayacına girmez. Sanitized replay fixture
+(`tests/fixtures/quixbugs_v4_replay_fixture.json`) preserved attempt
+evidence'ından yalnızca public protocol material + aggregate sayıları içerir
+ve attempt-1 extraction/parse/acceptance, attempt-10 no_text_event, retry
+accounting ve observed-shape terminalization'ı deterministik olarak tekrar
+oynatır.
