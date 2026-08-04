@@ -15,12 +15,16 @@ repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/
 
 - Model kullanımı açıkça yetkilendirilmiş görevlerde varsayılan implementation
   route'u, operator'ün OpenCode Go aboneliği üzerinden DeepSeek V4 Flash'tır.
-  Bu route, paired-pilot v2 kontratında (`docs/QUIXBUGS_PAIRED_PILOT_V2.md`,
-  `research/quixbugs/PAIRED_PILOT_V2.json`) fail-closed abonelik koşullarıyla
-  dondurulmuştur: Zen route, free-tier ikamesi, Ollama, alternatif provider,
+  Bu route'un görev/sıra/bütçe/qualification authority'si paired-pilot v2
+  kontratından gelir; bir sonraki live deneme ise aynı kontratı koruyan
+  `research/quixbugs/PAIRED_PILOT_V3.json` ile yürütülmelidir. v3,
+  `VALIDATION_NOT_REACHED` ve candidate provenance ekler. Zen route,
+  free-tier ikamesi, Ollama, alternatif provider,
   model substitution, metered/paid-overage/per-call billing fallback yoktur;
   ilk provider çağrısından önce abonelik entitlement ve billing-route kanıtı
-  kurulamazsa kampanya o çağrıdan önce bloklanır. Eski OpenCode Zen
+  kurulamazsa kampanya o çağrıdan önce bloklanır. CLI v2 default'unu yalnızca
+  compatibility için korur; v3 operator komutları manifest'i explicit verir.
+  Eski OpenCode Zen
   free-model matrix'i yalnızca historical, descriptive kayıttır.
 - Literatür taraması, deep research, kaynak doğrulama ve geniş karşılaştırmalı
   araştırma; coding-agent oturumları dışında, ayrı bir ChatGPT
@@ -746,3 +750,38 @@ Live Campaign TODO maddesi FirstMate review'i ve taze bir gercek deneme
 bekledigi icin acik tutuldu. Hicbir test/build/lint/compile/dogrulama
 calistirilmadi (FirstMate'e aittir); gercek OpenCode komutu, catalog,
 provider veya paid endpoint calistirilmadi; commit/stage/push yapilmadi.
+
+### Case-level public-evidence budget terminal v1 (2026-08-04, runner-only)
+
+Ilk tam OpenCode Go iletim kanitli deneme (`quixbugs-paired-pilot-v2-attempt-8890ed932cca43ba9f9afaf77971d6c6`) 9 provider process'i exit 0 ile tamamladi, baseline reproduction calisti, controller Understand'a girdi, function/source window'lari alindi, bir dogru high-confidence kok-neden hipotezi kaydedildi, controller Patch'e girdi ve iki patch directive uretti; provider-reported cost yaklasik 0.0066370976 USD idi. Deneme yalnizca bir sonraki bounded public request'in frozen case limitini asacagi icin durdu: `public_evidence_bytes = 21949 > 20000`. Kampanya bunu campaign-level `BUDGET_EXCEEDED` abort olarak siniflandirdi: hicbir case result materialize edilmedi, tamamlanmis provider muhasebesi campaign aggregatelerinden dusuruldu ve bes case baslatilmadan kaldi. Sinirli runner-only repair (manifest, campaign identity, transport, inline request, native executable resolution, prompt, directive extraction, controller action kontratlari, patch/PDB/test/retry budget'lari, authorization, route identity ve verifier degismedi; frozen 20000-bayt public-evidence limiti degistirilmedi):
+
+1. **Beklenen case-budget tukenmesi case-level terminaldir, campaign abort degildir.** `enforce_case_budgets`, gecerli non-negative bir `public_evidence_bytes` sayacinin frozen `max_public_evidence_bytes` limitini asmasini yeni typed `PublicEvidenceBudgetExhausted` ile raporluyor (negatif, non-integer veya eksik sayac ile diger tum frozen budget ihlalleri `BudgetViolationError` olarak campaign abort etmeye devam ediyor). Kampanya dongusu bu istisnayi yakaliyor, case'i yeni bir provider process baslatmadan durduruyor ve outcome'i mevcut frozen terminal temsiline ceviriyor; case `completed` lifecycle ile `campaign.cases`'e yaziliyor, tum tamamlanmis muhasebe (logical model calls, provider process attempts, accepted directives, malformed-directive rejections, token usage, provider-reported cost, controller states, hypotheses, patch attempts/submissions, PDB actions, observations, timing) korunuyor ve kampanya kalan frozen case'lerle devam ediyor. `public_evidence_bytes` frozen limitte raporlaniyor; precise gozlenen deger (21949) termination detail'inde korunuyor.
+
+2. **Mevcut frozen terminal temsilleri.** (a) Pre-PDB completed-response sekli (pdb-on-uncertainty, baseline reproduced, >=1 logical call ve accepted directive, sifir PDB aktivitesi, candidate yok) `PDB_NOT_REACHED` / `PDB_NOT_REACHED_NO_GATE` ile materialize ediliyor (repair outcome `NO_CANDIDATE`): case PDB'ye ulasmadan terminal - provider failure, timeout, malformed response veya pre-provider infrastructure failure olarak siniflandirilmiyor; terminal transport evidence son tamamlanmis provider response'a (exit 0) baglaniyor. (b) Herhangi bir provider cagrisi oncesi tukenme (sifir logical call ve provider attempt) frozen semanin tek zero-activity LIVE_CASE terminali olan pre-provider `INFRASTRUCTURE_ERROR` (`WORKSPACE_FAILURE`, prior lifecycle false) ile no-contact schema-valid case terminali uretiyor. (c) Frozen semada gecerli temsili olmayan sekiller (ornegin provider temas sonrasi static-baseline case, PDB aktivitesi veya submitted candidate) `None` dondurup kampanyayi `BUDGET_EXCEEDED` ile durust sekilde abort ediyor - schema genisletilmedi/zayiflatilmadi.
+
+3. **Muhasebe ayrimi.** Yalnizca bir sonraki request'in frozen case limitini asacagi beklenen public-evidence tukenmesi case-level terminal oluyor; negatif/non-integer counter ve gercek campaign invariant ihlalleri (ornegin transport counter uyumsuzlugu, diger budget tasmalari) kampanyayi abort etmeye devam ediyor. Provider errors, timeout, controller infrastructure mapping ve basarili case'ler degismedi.
+
+Odakli testler: production-sekli regression (9 response, 9 directive, hipotez, Patch, 21949 > 20000, cost 0.0066370976) - ilk case `campaign.cases`'e yaziliyor, measurements ve cost korunuyor, aggregate count'lar case'i iceriyor, kampanya ikinci case'e geciyor, terminal commit + package verification basarili, `ABORTED` degil; provider cagrisi oncesi tukenme no-contact schema-valid terminal; negatif counter ve desteklenmeyen sekil hala abort; `enforce_case_budgets` ayrimi. `8890ed...` ve `320550...` denemeleri non-pilot diagnostic attempt olarak korundu; Authorized Six-Case Live Campaign TODO maddesi taze bir gercek kampanya tamamlanana kadar acik tutuldu. Hicbir test/build/lint/compile/dogrulama calistirilmadi (FirstMate'e aittir); gercek OpenCode komutu, catalog, provider veya paid endpoint calistirilmadi; commit/stage/push yapilmadi.
+
+### Paired-pilot v3 ve tamamlanmış case-budget terminalleri (2026-08-04)
+
+Takip eden live-proven şekiller için mevcut case terminal sözleşmesi tamamlandı:
+completed `UNRESOLVED` (`ddc26502...`), completed `RESOLVED` (`238f25ed...`)
+ve static-baseline aday uygulanmış fakat Validate'a geçmeden bütçesi tükenmiş
+`e974af4...`. İlk iki şekil mevcut v2 sonuçlarını korur. Son şekil için v3,
+`VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE` ile
+`candidate_provenance=applied_patch_event` ekler; verifier çalışmadığı için
+başarı üretilmez. Desteklenen terminal sonuçları completed lifecycle, provider
+muhasebesi, token/cost, case artifact'i ve sonraki case'e continuation'ı
+korur. Contradictory veya temsil edilemeyen şekiller honest campaign abort
+olarak kalır. PDB gate kararları gerçek logical gate tüketimi başına tek kayıt
+olacak şekilde deduplicate edilmiştir.
+
+Bir sonraki authorized six-case attempt yalnızca explicit
+`research/quixbugs/PAIRED_PILOT_V3.json` ile yürütülebilir. Nominal denominator
+6 case / policy başına 3 case'tir; budget-terminal completed case'ler
+denominator'dan düşmez, authority-invalidated case'ler evaluation dışı kalıp
+resource accounting'de korunur, blocked/aborted/unstarted case'ler açıkça
+raporlanır. Gerçek route capture, authorization, preflight ve live campaign
+hâlâ açık TODO'dur; fresh v3 operator artifact'leri ve fresh output root
+gerektirir.

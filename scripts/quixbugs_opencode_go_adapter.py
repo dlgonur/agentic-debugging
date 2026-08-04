@@ -1,11 +1,11 @@
-"""Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2 live runner.
+"""Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2/v3 live runner.
 
 This module implements and validates the execution-adapter wiring that can
 later be supplied to the accepted six-case live runner
-(:mod:`quixbugs_live_runner_v2`, campaign
-``research/quixbugs/PAIRED_PILOT_V2.json``, canonical manifest hash
-``bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171``, live
-protocol ``1.3``) after (1) a real operator authorization artifact exists,
+(:mod:`quixbugs_live_runner_v2`, campaigns
+``research/quixbugs/PAIRED_PILOT_V2.json`` and
+``research/quixbugs/PAIRED_PILOT_V3.json``, live protocol ``1.3``) after
+(1) a real operator authorization artifact exists,
 (2) exact runtime route evidence passes preflight, (3) this adapter's accepted
 commit is bound in that authorization, and (4) the operator explicitly
 authorizes the real campaign.
@@ -504,19 +504,21 @@ def _reject(reason: str, detail: str) -> None:
 # ---- adapter configuration contract -----------------------------------------
 
 
-def adapter_configuration_template() -> dict[str, Any]:
+def adapter_configuration_template(*, campaign_id: str | None = None, campaign_manifest_hash: str | None = None) -> dict[str, Any]:
     """The non-executable adapter configuration template.
 
     Structurally complete, but carries ``template: true``, placeholder
     identities, and an explicit non-executable note; the strict validator
-    rejects it as an active configuration.
+    rejects it as an active configuration.  Defaults to the frozen v2
+    campaign identity; a v3 template can be produced by passing the v3
+    campaign id and manifest hash.
     """
     return {
         "schema_version": ADAPTER_SCHEMA_VERSION,
         "template": True,
         "adapter_identity": ADAPTER_IDENTITY,
-        "campaign_id": pilot.CAMPAIGN_ID_V2,
-        "campaign_manifest_hash": "bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171",
+        "campaign_id": campaign_id if campaign_id is not None else pilot.CAMPAIGN_ID_V2,
+        "campaign_manifest_hash": campaign_manifest_hash if campaign_manifest_hash is not None else "bc3df3129f1e7d184f26de5b7b8c4953a497d463b30934aaae21865b809f3171",
         "operator_authorization_id": "<operator authorization record ID bound by the authorization artifact>",
         "authorization_hash": "<64-hex SHA-256 of the exact authorization artifact JSON>",
         "execution_commit": "<40-hex commit whose code will execute the campaign; must equal the authorization-bound accepted_campaign_commit and the actual Git HEAD>",
@@ -818,8 +820,8 @@ def bind_adapter_configuration(
         _reject("ROUTE_OBSERVATION_NOT_ESTABLISHED", "binding requires a preflight-passed route observation")
 
     manifest_hash = pilot.manifest_hash(manifest)
-    if validated["campaign_id"] != pilot.CAMPAIGN_ID_V2 or validated["campaign_id"] != authorization.get("campaign_id"):
-        _reject("CAMPAIGN_IDENTITY_MISMATCH", "adapter configuration campaign identity does not match the frozen v2 campaign")
+    if validated["campaign_id"] not in {pilot.CAMPAIGN_ID_V2, pilot.CAMPAIGN_ID_V3} or validated["campaign_id"] != authorization.get("campaign_id"):
+        _reject("CAMPAIGN_IDENTITY_MISMATCH", "adapter configuration campaign identity does not match the frozen v2/v3 campaign")
     if validated["campaign_manifest_hash"] != manifest_hash or validated["campaign_manifest_hash"] != authorization.get("campaign_manifest_hash"):
         _reject("MANIFEST_HASH_MISMATCH", "adapter configuration manifest hash does not match the validated manifest/authorization")
     if validated["operator_authorization_id"] != authorization.get("operator_authorization_id"):
@@ -1245,6 +1247,22 @@ class OpenCodeGoTransport:
             request_bytes = (json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n").encode("utf-8")
         except (TypeError, ValueError, UnicodeError):
             raise _transport_error("request_serialization", "provider request could not be serialized") from None
+        # The frozen public-evidence budget applies to the canonical public
+        # request serialization (the exact shared serializer and frozen
+        # 20,000-byte constant the protocol wrapper enforces inside
+        # ``build_user_message``).  An oversized canonical public request is
+        # rejected here, in-process, before the wrapper/provider process is
+        # spawned and before any process-launch counter is incremented; it is
+        # a typed, non-retryable case-level stop, never a provider failure.
+        try:
+            canonical_request = transport.canonical_public_request(payload)
+        except (TypeError, ValueError, UnicodeError):
+            raise _transport_error("request_serialization", "provider request could not be serialized") from None
+        canonical_byte_count = len(canonical_request.encode("utf-8"))
+        if canonical_byte_count > transport.MAX_PUBLIC_EVIDENCE_BYTES:
+            from agentic_debugger.evaluation.live import ModelRequestBudgetExceeded
+
+            raise ModelRequestBudgetExceeded(canonical_byte_count, transport.MAX_PUBLIC_EVIDENCE_BYTES)
         self.process_attempts += 1
         self._factory.spawned_processes += 1
         evidence_dir = self._factory.evidence_dir
@@ -1817,6 +1835,98 @@ def _events_iter(events_jsonl: str):
             yield event
 
 
+def _applied_patch_from_events(events_jsonl: str) -> tuple[str, str] | None:
+    """Return ``(patch_diff, patch_sha256)`` for the last successfully applied,
+    non-reverted ``apply_patch`` action in the events log, or ``None``.
+
+    Correlation is authoritative via ``action_id``: an ``apply_patch`` ACTION
+    event carries ``payload.action.action_id`` and ``arguments.patch``; the
+    matching OBSERVATION event is the one whose ``payload.observation.action_id``
+    equals that action id and whose ``name`` equals ``"apply_patch"`` (the
+    observation name is the action name).  A candidate is authoritative only
+    when the matching observation reports ``applied is True``.
+
+    Fail-closed rules:
+    * no ``apply_patch`` action event -> ``None``;
+    * action without a matching observation -> ``None`` (dispatch incomplete);
+    * matching observation with ``applied is not True`` -> ``None``;
+    * a later ``revert_patch`` action whose matching observation reports
+      ``reverted is True`` -> ``None`` (the candidate was reverted); a revert
+      without a matching observation, or with ``reverted is not True``, does
+      not invalidate the candidate;
+    * a later re-apply after a completed revert is handled by the "last
+      apply_patch" rule.
+    """
+    events = list(_events_iter(events_jsonl))
+    apply_actions = [
+        event for event in events
+        if event.get("event_type") == "action"
+        and event.get("name") == "apply_patch"
+        and isinstance(event.get("payload"), Mapping)
+        and isinstance(event.get("payload", {}).get("action"), Mapping)
+        and isinstance(event.get("payload", {}).get("action", {}).get("arguments"), Mapping)
+        and isinstance(event.get("payload", {}).get("action", {}).get("arguments", {}).get("patch"), str)
+        and event["payload"]["action"]["arguments"]["patch"]
+    ]
+    if not apply_actions:
+        return None
+    last_apply = apply_actions[-1]
+    apply_action = last_apply["payload"]["action"]
+    apply_action_id = apply_action.get("action_id")
+    patch_diff = apply_action["arguments"]["patch"]
+    if not isinstance(apply_action_id, str) or not apply_action_id:
+        return None
+
+    apply_index = events.index(last_apply)
+    apply_observation = None
+    for event in events[apply_index + 1:]:
+        if event.get("event_type") != "observation":
+            continue
+        observation = event.get("payload", {}).get("observation")
+        if not isinstance(observation, Mapping):
+            continue
+        if observation.get("action_id") == apply_action_id and observation.get("name") == "apply_patch":
+            apply_observation = observation
+            break
+    if apply_observation is None:
+        return None
+    if apply_observation.get("payload", {}).get("applied") is not True:
+        return None
+    patch_sha256 = apply_observation.get("payload", {}).get("patch_sha256")
+    if not isinstance(patch_sha256, str) or not patch_sha256:
+        return None
+    # Fail closed unless the observation's patch_sha256 equals the SHA-256 of
+    # the correlated action's exact patch string.  A mismatch means the
+    # observation does not authoritatively confirm the candidate that was
+    # dispatched.
+    if patch_sha256 != hashlib.sha256(patch_diff.encode("utf-8")).hexdigest():
+        return None
+
+    # Any later revert_patch whose matching observation confirms reverted=true
+    # invalidates the candidate.
+    for event in events[apply_index + 1:]:
+        if event.get("event_type") != "action" or event.get("name") != "revert_patch":
+            continue
+        revert_action = event.get("payload", {}).get("action")
+        if not isinstance(revert_action, Mapping):
+            continue
+        revert_action_id = revert_action.get("action_id")
+        if not isinstance(revert_action_id, str) or not revert_action_id:
+            continue
+        revert_index = events.index(event)
+        for rev_event in events[revert_index + 1:]:
+            if rev_event.get("event_type") != "observation":
+                continue
+            rev_observation = rev_event.get("payload", {}).get("observation")
+            if not isinstance(rev_observation, Mapping):
+                continue
+            if rev_observation.get("action_id") == revert_action_id and rev_observation.get("name") == "revert_patch":
+                if rev_observation.get("payload", {}).get("reverted") is True:
+                    return None
+                break
+    return patch_diff, patch_sha256
+
+
 def _outcome_from_live_case(
     case: Mapping[str, Any],
     live_result: Any,
@@ -1917,9 +2027,20 @@ def _outcome_from_live_case(
         "evidence_reference": f"{run_id}:none",
     }
     candidate_hash = None
+    candidate_provenance = None
     patch_application = verifier.get("patch_application")
     if patch_submissions and patch_application is not None:
         candidate_hash = hashlib.sha256(pilot.canonical_json(patch_application).encode("utf-8")).hexdigest()
+        candidate_provenance = "verifier_record"
+    elif patch_submissions == 0:
+        applied = _applied_patch_from_events(events_jsonl)
+        if applied is not None:
+            patch_diff, _ = applied
+            candidate_hash = hashlib.sha256(
+                pilot.canonical_json({"patch": patch_diff}).encode("utf-8")
+            ).hexdigest()
+            candidate_provenance = "applied_patch_event"
+            patch_submissions = 1
     public_request_hash = hashlib.sha256(
         pilot.canonical_json({"run_id": run_id, "events": events_jsonl}).encode("utf-8")
     ).hexdigest()
@@ -1951,6 +2072,7 @@ def _outcome_from_live_case(
         "failed_pdb_observations": failed_observations,
         "verifier_runs": verifier_runs,
         "patch_submissions": patch_submissions,
+        "candidate_provenance": candidate_provenance,
         "independent_verifier_result": {
             "status": verifier.get("status"),
             "outcome": verifier.get("outcome"),
@@ -2010,6 +2132,8 @@ def _terminal_mapping(
         else:
             reason = "PDB_NOT_REACHED_GATE_REJECTED"
         return "PDB_NOT_REACHED", reason, completed_response
+    if status == "VALIDATION_NOT_REACHED":
+        return "VALIDATION_NOT_REACHED", "VALIDATION_NOT_REACHED_PRE_VALIDATE", completed_response
     if status == "INVALID_MODEL_RESPONSE" or termination_reason == "invalid_model_response":
         return "INVALID_MODEL_RESPONSE", "MALFORMED_RESPONSE", {
             "final_attempt_classification": "MALFORMED_RESPONSE",
@@ -2055,7 +2179,7 @@ def _terminal_mapping(
 
 
 def _aggregate_transport_evidence(terminal_status: str, model_responses: int) -> dict[str, bool]:
-    if terminal_status in {"RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "INVALID_MODEL_RESPONSE"}:
+    if terminal_status in {"RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "VALIDATION_NOT_REACHED", "INVALID_MODEL_RESPONSE"}:
         return {"completed_response": True, "malformed_response": terminal_status == "INVALID_MODEL_RESPONSE", "provider_error": False, "synthetic": False}
     if terminal_status == "PROVIDER_ERROR":
         return {"completed_response": False, "malformed_response": False, "provider_error": True, "synthetic": False}
@@ -2173,8 +2297,8 @@ def _resolve_manifest(manifest_path: str | Path | None) -> dict[str, Any]:
     path = Path(manifest_path) if manifest_path is not None else pilot.MANIFEST_PATH_V2
     manifest = pilot.load_manifest(path)
     pilot.validate_manifest(manifest)
-    if manifest["campaign_id"] != pilot.CAMPAIGN_ID_V2:
-        raise OpenCodeGoAdapterError("the OpenCode Go adapter is bound to the frozen v2 campaign only")
+    if manifest["campaign_id"] not in {pilot.CAMPAIGN_ID_V2, pilot.CAMPAIGN_ID_V3}:
+        raise OpenCodeGoAdapterError("the OpenCode Go adapter is bound to the frozen v2/v3 campaigns only")
     return manifest
 
 
@@ -2666,7 +2790,7 @@ def run_operator_bundle(
 
     manifest = _resolve_manifest(manifest_path)
     if len(manifest["case_order"]) != 6:
-        raise OpenCodeGoAdapterError("the operator bundle is bound to the frozen six-case v2 campaign only")
+        raise OpenCodeGoAdapterError("the operator bundle is bound to a frozen six-case v2/v3 campaign only")
 
     for label, value in (
         ("operator authorization ID", operator_authorization_id),
@@ -2734,8 +2858,8 @@ def run_operator_bundle(
         "schema_version": runner.AUTHORIZATION_SCHEMA_VERSION,
         "template": False,
         "authorize_live": True,
-        "campaign_id": pilot.CAMPAIGN_ID_V2,
-        "campaign_version": 2,
+        "campaign_id": manifest["campaign_id"],
+        "campaign_version": manifest["campaign_version"],
         "campaign_manifest_hash": pilot.manifest_hash(manifest),
         "accepted_baseline": runner.ACCEPTED_BASELINE,
         "planning_baseline_commit": manifest["planning_baseline_commit"],
@@ -2796,7 +2920,7 @@ def run_operator_bundle(
         "schema_version": ADAPTER_SCHEMA_VERSION,
         "template": False,
         "adapter_identity": ADAPTER_IDENTITY,
-        "campaign_id": pilot.CAMPAIGN_ID_V2,
+        "campaign_id": manifest["campaign_id"],
         "campaign_manifest_hash": pilot.manifest_hash(manifest),
         "operator_authorization_id": operator_authorization_id,
         "authorization_hash": runner.authorization_hash(authorization),
@@ -2951,7 +3075,7 @@ def run_synthetic_selftest(
         "schema_version": ADAPTER_SCHEMA_VERSION,
         "template": False,
         "adapter_identity": ADAPTER_IDENTITY,
-        "campaign_id": pilot.CAMPAIGN_ID_V2,
+        "campaign_id": manifest["campaign_id"],
         "campaign_manifest_hash": pilot.manifest_hash(manifest),
         "operator_authorization_id": "synthetic-selftest-operator-001",
         "authorization_hash": "a" * 64,
@@ -2995,8 +3119,8 @@ def run_synthetic_selftest(
         "schema_version": runner.AUTHORIZATION_SCHEMA_VERSION,
         "template": False,
         "authorize_live": True,
-        "campaign_id": pilot.CAMPAIGN_ID_V2,
-        "campaign_version": 2,
+        "campaign_id": manifest["campaign_id"],
+        "campaign_version": manifest["campaign_version"],
         "campaign_manifest_hash": pilot.manifest_hash(manifest),
         "accepted_baseline": runner.ACCEPTED_BASELINE,
         "planning_baseline_commit": manifest["planning_baseline_commit"],
@@ -3110,8 +3234,8 @@ def run_synthetic_selftest(
         evidence_dir=out / "selftest-evidence",
     )
     case = manifest["case_order"][0]
-    transport = factory.prepare(case)
-    prepare_gate_verified = transport is not None
+    prepared_transport = factory.prepare(case)
+    prepare_gate_verified = prepared_transport is not None
     scenarios = [scenario] if scenario is not None else ["valid-usage", "valid-no-usage", "cost-zero", "malformed-always", "identity-mismatch", "route-drift", "credential-output", "nonzero-exit"]
     scenario_results: list[dict[str, Any]] = []
     environment_override = {
@@ -3294,7 +3418,7 @@ def run_live_wire(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2 live runner (adapter wiring only; no provider contact)")
+    parser = argparse.ArgumentParser(description="Fail-closed OpenCode Go execution adapter for the QuixBugs paired-pilot v2/v3 live runner (adapter wiring only; no provider contact)")
     parser.add_argument("mode", choices=("adapter-template", "adapter-validate", "route-preflight-only", "route-capture", "operator-bundle", "selftest", "live-wire"))
     parser.add_argument("--manifest", type=Path)
     parser.add_argument("--adapter-config", type=Path)

@@ -807,6 +807,11 @@ def test_campaign_accepts_production_shaped_controller_infrastructure_failure(tm
                 kwargs["transport"].request({"directive_feedback": None}, 30.0)
             inner = harness["factory"].active_transport
             assert inner is not None
+            # The synthetic transport reports a deterministic default cost on
+            # every response.  This regression models the exact historical
+            # attempt evidence instead, so replace those fixture costs with
+            # the two provider-reported values from that attempt.
+            inner.reported_costs.clear()
             inner.reported_costs.append(0.002119)
             inner.reported_costs.append(0.003097932)
             return _live_mapping(manifest, case, **{

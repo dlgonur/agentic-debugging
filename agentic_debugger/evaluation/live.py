@@ -44,6 +44,27 @@ class LiveTransportError(LiveEvaluationError):
         self.kind = kind
         self.timed_out = timed_out
 
+class ModelRequestBudgetExceeded(LiveEvaluationError):
+    """The transport rejected the model request before any provider process.
+
+    Raised only when the canonical public request serialization of the model
+    request is a valid non-negative byte count above the frozen
+    public-evidence budget: the next public request could not have been
+    constructed within the frozen case limit, so the case stops before
+    another wrapper/provider process is launched.  This is a typed,
+    non-retryable case-level signal: it is never a transport/provider
+    failure, never a malformed-directive rejection, and never launches a
+    model/provider process for the rejected request.
+    """
+
+    def __init__(self, request_byte_count: int, limit: int) -> None:
+        super().__init__(
+            f"OpenCode canonical public request exceeds the public-evidence byte budget "
+            f"({request_byte_count} > {limit})"
+        )
+        self.request_byte_count = int(request_byte_count)
+        self.limit = int(limit)
+
 class DirectiveRejectionCategory(str, Enum):
     """Closed vocabulary for why a provider-completed directive was rejected.
 
@@ -78,7 +99,7 @@ LIVE_DIRECTIVE_SCHEMA={
     "set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"],"constraints":{"status":{"type":"string","enum":[item.value for item in HypothesisStatus if item is not HypothesisStatus.ACTIVE]}}},
 }
 class LiveCaseStatus(str, Enum):
-    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
+    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; VALIDATION_NOT_REACHED="VALIDATION_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
 
 _SECRET_KEY=re.compile(r"(?:api[_-]?key|access[_-]?key|auth(?:orization)?|credential|password|secret|token|private[_-]?key)",re.I)
 _SECRET_VALUE=re.compile(r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+")
@@ -514,6 +535,17 @@ class LiveModelAdapter:
         self._failure_reproduced = False
         self._pdb_session_active = False
         self._runtime_transition_authorized = False
+        # Per-logical-call PDB gate cache: ``(model_call_index, decision)``.
+        # ``model_call_index`` is constant across the transport retry loop and
+        # increments only on the next controller step, so it is the natural
+        # per-:func:`next_directive` scope.  The cache is reused by every reread
+        # (``_runtime_transition_allowed``, ``_effective_contract``,
+        # ``_request_context`` and ``legal_transition_targets``) so the gate is
+        # evaluated at most once per logical call and every consumer sees the
+        # identical decision.  ``_pdb_gate_recorded_for_index`` bounds recording
+        # to at most one append per logical call regardless of retry count.
+        self._pdb_gate_decision_cache: tuple[int, Any] | None = None
+        self._pdb_gate_recorded_for_index: int | None = None
     @staticmethod
     def _hypotheses(snapshot):
         return [{"hypothesis_id":item.hypothesis_id,"statement":item.statement,"confidence":item.confidence.value,"status":item.status.value,"evidence_refs":list(item.evidence_refs),"requires_runtime_evidence":item.requires_runtime_evidence,"revision":item.revision} for item in snapshot.hypotheses.hypotheses]
@@ -532,7 +564,14 @@ class LiveModelAdapter:
             if self._pdb_session_active:
                 self._pdb_session_active = False
 
-    def _pdb_gate(self, snapshot: ControllerSnapshot) -> object:
+    def _evaluate_pdb_gate(self, snapshot: ControllerSnapshot) -> object:
+        """Pure PDB gate evaluation; never appends to ``pdb_gate_decisions``.
+
+        Mirrors :func:`decide_pdb_access` consumed by the contained
+        reachability driver (``contained_pdb.py``): the decision is a function
+        of policy, source state, failure reproduction, remaining observations,
+        failed patch attempts and the active hypothesis only.
+        """
         active = snapshot.hypotheses.active_hypotheses()
         source_state = snapshot.state
         if source_state is ControllerState.RUNTIME_EVIDENCE:
@@ -556,6 +595,20 @@ class LiveModelAdapter:
                 active_hypothesis=active[0] if active else None,
             ),
         )
+        return decision
+
+    def _record_pdb_gate_decision(self, snapshot: ControllerSnapshot, decision: object) -> None:
+        """Append one PDB gate decision to the public record.
+
+        Called exactly once per real ``UNDERSTAND -> RUNTIME_EVIDENCE`` gate
+        consumption, bounded by ``_pdb_gate_recorded_for_index`` so repeated
+        malformed or denied transport attempts within the same logical call
+        never re-append an identical decision.
+        """
+        active = snapshot.hypotheses.active_hypotheses()
+        source_state = snapshot.state
+        if source_state is ControllerState.RUNTIME_EVIDENCE:
+            source_state = ControllerState.UNDERSTAND
         self.pdb_gate_decisions.append({
             "source_state": source_state.value,
             "failure_reproduced": self._failure_reproduced,
@@ -567,12 +620,26 @@ class LiveModelAdapter:
             "allowed": decision.allowed,
             "reason": decision.reason.value,
         })
+
+    def _cached_pdb_gate_decision(self, snapshot: ControllerSnapshot) -> object:
+        """Return the gate decision for this logical call, computing it once.
+
+        ``model_call_index`` is constant across the transport retry loop and
+        increments only on the next controller step, so caching by it scopes
+        the decision to a single :func:`next_directive` call and guarantees
+        every reread within that call sees the same decision.
+        """
+        cached = self._pdb_gate_decision_cache
+        if cached is not None and cached[0] == snapshot.model_call_index:
+            return cached[1]
+        decision = self._evaluate_pdb_gate(snapshot)
+        self._pdb_gate_decision_cache = (snapshot.model_call_index, decision)
         return decision
 
     def _runtime_transition_allowed(self, snapshot: ControllerSnapshot) -> bool:
         if self.policy is DemoPolicy.STATIC_BASELINE:
             return False
-        return bool(self._pdb_gate(snapshot).allowed)
+        return bool(self._cached_pdb_gate_decision(snapshot).allowed)
 
     def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
         pdb_observations_remaining = max(
@@ -604,6 +671,14 @@ class LiveModelAdapter:
         return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
     def next_directive(self,snapshot):
         self._observe_snapshot(snapshot)
+        # The gate is consumed from ``UNDERSTAND``.  ``_runtime_transition_authorized``
+        # marks that the controller is already inside an authorized RUNTIME_EVIDENCE
+        # visit; it is reset to ``False`` whenever the controller has left that
+        # state, so a fresh ``UNDERSTAND -> RUNTIME_EVIDENCE`` lifecycle (a later
+        # controller step with a different ``model_call_index``) is a distinct
+        # gate consumption rather than a reread of the prior visit.
+        if snapshot.state is not ControllerState.RUNTIME_EVIDENCE and self._runtime_transition_authorized:
+            self._runtime_transition_authorized = False
         if snapshot.state is ControllerState.RUNTIME_EVIDENCE and not self._runtime_transition_authorized:
             self._runtime_transition_authorized = self._runtime_transition_allowed(snapshot)
         effective_contract = self._effective_contract(snapshot)
@@ -630,12 +705,45 @@ class LiveModelAdapter:
                 self.metrics.model_responses+=1
                 self.metrics.usage(response.get("usage"))
                 raw_directive=_resolve_raw_directive(response)
+                # Canonical PDB gate recording point.  The model's real
+                # ``UNDERSTAND -> RUNTIME_EVIDENCE`` transition *attempt* is
+                # visible in ``raw_directive`` before :func:`_parse` can reject
+                # a denied transition as ``ILLEGAL_TRANSITION`` (a denied gate
+                # removes RUNTIME_EVIDENCE from ``legal_transition_targets``).
+                # Recording here captures both allowed and denied real attempts
+                # exactly once, bounded per logical call by
+                # ``_pdb_gate_recorded_for_index`` so repeated malformed or
+                # denied transport attempts in the same call never re-append.
+                if (
+                    isinstance(raw_directive, Mapping)
+                    and raw_directive.get("kind") == "transition"
+                    and raw_directive.get("target_state") == ControllerState.RUNTIME_EVIDENCE.value
+                    and snapshot.state is ControllerState.UNDERSTAND
+                    and not self._runtime_transition_authorized
+                    and self.policy is not DemoPolicy.STATIC_BASELINE
+                    and self._pdb_gate_recorded_for_index != snapshot.model_call_index
+                ):
+                    gate_decision = self._cached_pdb_gate_decision(snapshot)
+                    self._record_pdb_gate_decision(snapshot, gate_decision)
+                    self._pdb_gate_recorded_for_index = snapshot.model_call_index
                 contracts = effective_contract
-                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._runtime_transition_allowed(snapshot))))
+                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed)))
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
                 return directive
+            except ModelRequestBudgetExceeded as exc:
+                # The canonical public request for this logical call exceeds
+                # the frozen public-evidence budget.  The transport rejected
+                # it before any process launch; it is never retried, never
+                # counted as a provider error, and never fed back as a
+                # malformed directive.  The logical call is unaccounted (the
+                # request was constructed but no provider process was
+                # launched) and the case terminates with the typed
+                # budget-exhausted termination reason.
+                self.metrics.model_requests-=1
+                self.metrics.termination_reason="public_evidence_budget_exceeded"
+                raise
             except LiveTransportError as exc:
                 rejection=None
                 self.metrics.error(exc.kind)
@@ -808,6 +916,22 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     elif cleanup_errors: status=LiveCaseStatus.CLEANUP_FAILED
     elif event_failed: status=LiveCaseStatus.EVENT_REPORTING_FAILED
     elif verifier_failed: status=LiveCaseStatus.VERIFIER_FAILED
+    elif metrics.termination_reason=="public_evidence_budget_exceeded" and metrics.model_responses>=1:
+        # The next public request exceeded the frozen public-evidence budget
+        # after at least one genuinely completed provider response.  The case
+        # stopped before another provider process was launched; the pre-PDB
+        # completed-response shape is terminalized as PDB_NOT_REACHED with the
+        # completed-response terminal transport evidence bound to the last
+        # completed provider response.  When the controller reached Patch and
+        # applied a candidate but the next public request would have exceeded
+        # the budget before the transition to Validate, the case is
+        # terminalized as VALIDATION_NOT_REACHED (the verifier never ran).
+        # Zero-contact budget stops keep the existing fail-closed
+        # infrastructure classification below.
+        if context is not None and context.patch_applied and context.candidate_patch and result is not None and result.final_state is not ControllerState.DONE:
+            status=LiveCaseStatus.VALIDATION_NOT_REACHED
+        else:
+            status=LiveCaseStatus.PDB_NOT_REACHED
     elif metrics.termination_reason in {"request_timeout","elapsed_time_limit"}: status=LiveCaseStatus.TIMED_OUT
     elif metrics.termination_reason in {"provider_or_transport_error","invalid_model_response"}: status=LiveCaseStatus.PROVIDER_ERROR
     elif controller_failed: status=LiveCaseStatus.CONTROLLER_FAILED

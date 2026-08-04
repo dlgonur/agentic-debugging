@@ -1560,3 +1560,35 @@ previous attempts remain classified as infrastructure-failed attempts, not valid
 experiments. Not marked complete: real operator authorization execution, real route
 preflight, real OpenCode Go execution, the six-case live campaign, empirical evaluation,
 model performance, PDB effectiveness, RAG, SFT, DPO.
+
+2026-08-04 (Case-level public-evidence terminal completion and paired-pilot v3)
+
+- The original `8890ed...` provider-connected case exceeded the frozen public
+  evidence budget (`21949 > 20000`) after useful controller progress; the old
+  runner aborted before materializing the case and omitted its completed
+  resource accounting from campaign aggregates. Expected, internally
+  consistent public-evidence exhaustion is now a typed case-level terminal
+  evaluated only after every other budget and relational invariant.
+- Supported shapes preserve calls, attempts, directives, tokens, provider-
+  reported cost, hypotheses, controller states, PDB/patch/verifier activity,
+  timing, transport evidence, cleanup/restoration evidence, and the exact
+  observed byte count in the termination detail. The public counter is clamped
+  to the frozen 20,000-byte report limit, the validated case is written, and
+  the campaign continues. Corrupt or unsupported shapes still abort.
+- Existing v2 terminals cover no-contact, pre-PDB, completed unresolved, and
+  completed resolved shapes. Paired-pilot v3 (manifest SHA-256
+  `f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`)
+  preserves the v2 route, tasks, order, budgets, qualification contract, and
+  source authority while adding `VALIDATION_NOT_REACHED` and candidate
+  provenance for the observed static pre-Validate candidate-applied shape.
+- The next live attempt is v3. Every operator command must pass
+  `--manifest research/quixbugs/PAIRED_PILOT_V3.json`; the v2 CLI default is
+  retained only for compatibility. Fresh v3 route evidence, authorization,
+  adapter configuration, attempt identity, bundle, and output root must be
+  created against the clean accepted execution HEAD.
+- Campaign reconciliation remains six lifecycle slots. The descriptive
+  denominator is six total cases and three per policy; budget-terminal cases
+  remain completed, authority-invalidated cases are excluded from evaluation
+  but retained in resource accounting, and blocked/aborted/unstarted cases
+  remain visible. No real campaign or empirical/PDB-effectiveness result is
+  marked complete.

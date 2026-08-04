@@ -57,7 +57,7 @@ authorization for provider/model execution; coding agents must not launch
 additional models, research agents, MCP, benchmarks, or paid services unless
 the current task explicitly authorizes them.
 
-The QuixBugs paired pilot is planned in two versions. v1
+The QuixBugs paired pilot has three versioned manifests. v1
 (`docs/QUIXBUGS_PAIRED_PILOT_V1.md`,
 `research/quixbugs/PAIRED_PILOT_V1.json`) froze the three-task, six-case
 static-versus-PDB feasibility design on the historical OpenCode Zen
@@ -74,7 +74,14 @@ and cost metadata preserved). No exact catalog identifier, OpenCode version,
 catalog fingerprint, account status, entitlement, or pricing observation is
 invented; the exact runtime model/catalog identity remains authorization-bound,
 and live execution remains unavailable until a separate implementation task
-supplies an explicit authorization artifact.
+supplies an explicit authorization artifact. v3
+(`research/quixbugs/PAIRED_PILOT_V3.json`, canonical SHA-256
+`f5f513a16008ce807b4ed248e0310958940aefd348199e77dc0bbabc9a9e45cf`)
+preserves the v2 tasks, ordering, budgets, qualification authority, and route,
+and adds the `VALIDATION_NOT_REACHED` terminal plus candidate provenance for
+an observed static-baseline case that applied a patch but exhausted public
+evidence before entering Validate. The next authorized live attempt must use
+v3 explicitly; the operator CLI retains a v2 default only for compatibility.
 
 ## Current status (2026-08-03) — OpenCode Go execution adapter v1
 
@@ -455,3 +462,53 @@ post-case authority check fails are authority-invalidated: excluded from
 `completed_case_count`, counted in `invalidated_case_count`, preserved only
 as quarantined evidence, with reconciliation
 completed + blocked + aborted + invalidated + unstarted == 6.
+
+## Current status (2026-08-04) — case-budget terminal and paired-pilot v3
+
+Live attempts proved that valid public-evidence exhaustion could occur before
+PDB, after a completed unresolved or resolved verifier lifecycle, or after a
+static case applied a candidate but before Validate. The runner now treats
+only schema-supported, internally consistent exhaustion shapes as honest
+case-level terminals, preserves all completed provider/controller/verifier
+accounting, writes the case record, and continues to the next frozen case.
+Corrupt counters, contradictory evidence, and unsupported shapes still abort.
+Paired-pilot v3 adds the last required terminal representation without
+weakening the 20,000-byte limit or the verifier authority.
+
+The next live campaign remains open and unauthorized. Before it can run, the
+focused adapter/self-test validation must pass, the repository must be clean
+at the accepted execution commit, and the operator must create fresh v3 route
+evidence, authorization, adapter configuration, attempt identity, and output
+root. Every v3 operator command must pass the v3 manifest explicitly. No
+campaign result or PDB-effectiveness claim exists yet.
+
+### Reusing the curated-task correctness authority
+
+The smallest existing entry point for a saved unified diff is the Python API;
+no additional verifier CLI or correctness path is needed:
+
+```python
+from pathlib import Path
+
+from agentic_debugger.evaluation.verifier import EvaluationVerifier
+
+root = Path.cwd()
+task_path = root / "agentic_debugger/datasets/curated/curated-off-by-one-002/task.json"
+patch_path = Path("candidate.patch")
+result_path = Path("verification-result.json")
+
+result = EvaluationVerifier(str(root)).evaluate(
+    str(task_path),
+    patch_path.read_text(encoding="utf-8"),
+)
+result_path.write_text(result.to_json() + "\n", encoding="utf-8")
+```
+
+Select exactly one of the five curated `task.json` files and provide a unified
+diff whose paths are relative to that fixture. `EvaluationResult.to_json()` is
+the durable record: it includes lifecycle status, semantic outcome, baseline,
+patch and syntax records, fail-to-pass and pass-to-pass checks, full-suite
+evidence, bounded counters, diagnostics, workspace cleanup, and canonical
+fixture immutability. The verifier copies the fixture to a disposable workspace
+and cleans it after success or failure; only the caller-selected JSON output is
+persistent.
