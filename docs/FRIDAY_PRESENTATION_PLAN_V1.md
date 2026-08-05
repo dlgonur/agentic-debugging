@@ -2,9 +2,9 @@
 
 **Document version:** 1.1
 **Snapshot date:** 2026-08-05
-**Branch:** `prep/friday-demo-readiness-v1` (plan document accepted on `main`; this revision is an uncommitted 2026-08-05 readiness refresh)
-**Base commit:** `0abb588df46605a9a754c051e71ebe17692c09db` (campaign infrastructure accepted on `main` through this commit)
-**Presentation duration target:** 25–30 minutes (20–25 min talk + demo, plus Q&A)
+**Source baseline:** `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (accepted on `main`); campaign infrastructure accepted through `0abb588df46605a9a754c051e71ebe17692c09db`; V4 sanitized-fixture/replay identity mapping corrected and accepted through `fc7c85b`. This presentation delivery was prepared from that accepted baseline; it does not require or depend on any task branch.
+**Base commit:** campaign infrastructure accepted on `main` through `0abb588df46605a9a754c051e71ebe17692c09db`; `main` accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (V4 sanitized-fixture/replay identity mapping corrected and accepted through `fc7c85b`)
+**Presentation duration target:** 20–25 minutes talk plus demo and Q&A (primary), with a 10–12-minute shortened track
 **Scope boundary:** This is a professor-facing presentation and demo runbook only. It is not a slide deck, not the final technical report, not a claim that the project is a finished automated repair system, not an authorization to run another provider campaign, and not an authorization for final QLoRA training or held-out generation. It changes no code and authorizes no execution.
 
 **Instructor status snapshot** (from `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md`, snapshot base `4087aa0`, 2026-08-05):
@@ -104,7 +104,7 @@ For each segment: objective, concise speaking points, evidence to show, one sent
 
 - Objective: present the QuixBugs v4 attempt as a recorded experiment with precise facts.
 - Speaking points (all tracked evidence; see Sections 4 and 6):
-  - The campaign infrastructure that can now persist and verify these terminals is accepted on `main` through `0abb588` (terminal, exact-identity validation, and budget-exhaustion provenance, fail-closed through run persistence, campaign-record validation, and attempt-package verification). The sanitized attempt fixture accepted at `0abb588` associated the two recorded shapes with the wrong frozen cases; the 2026-08-05 readiness candidate corrects that fixture/replay identity mapping from the preserved campaign record and private transport. Accepted campaign validation: focused suite 389 passed, bounded full suite 3394 passed / 3 skipped with the same six known OpenCode wrapper/transport failures.
+  - The campaign infrastructure that can now persist and verify these terminals is accepted on `main` through `0abb588` (terminal, exact-identity validation, and budget-exhaustion provenance, fail-closed through run persistence, campaign-record validation, and attempt-package verification). The sanitized attempt fixture accepted at `0abb588` associated the two recorded shapes with the wrong frozen cases; the accepted 2026-08-05 readiness integration at `fc7c85b` corrects that fixture/replay identity mapping from the preserved campaign record and private transport. Accepted campaign validation: focused suite 389 passed, bounded full suite 3394 passed / 3 skipped with the same six known OpenCode wrapper/transport failures.
   - Real OpenCode Go / DeepSeek V4 Flash interaction occurred (protocol 1.3, subscription route, no fallback).
   - Recorded V4 Case 1 (`find_in_sorted`, PDB policy, order 1): the model correctly diagnosed the semantic defect and proposed the correct one-line semantic change as a unified diff; the patch was rejected by strict hunk-header validation (hunk declared `old_count=7` with a 6-line body) — an honest protocol/format failure, not a semantic one. 10 provider processes, 9 logical calls, 26,139 public-evidence bytes, no candidate applied, zero verifier runs, cost `$0.007378`.
   - Recorded V4 Case 2 (`find_in_sorted`, static-baseline policy, order 2): a patch was applied and Validate was visited, but the campaign exhausted its frozen public-evidence budget (38,534 observed bytes, clamped to 20,000) before verifier execution and the run was interrupted; 15 provider processes, 14 logical calls, cost `$0.012323`. The original campaign aborted `ABORTED / BUDGET_EXCEEDED`; the accepted repair materializes both shapes as schema-valid terminals.
@@ -176,7 +176,7 @@ Every material claim in the presentation must trace to tracked repository eviden
 | SWE-bench DEFER, Defects4J NO-GO | `docs/DATASET_EVALUATION_DECISION_V1.md` Section 2 |
 | Route: OpenCode Go subscription, DeepSeek V4 Flash, protocol 1.3, v4 manifest | `CURRENT_AGENT_ROSTER.md`; `research/quixbugs/PAIRED_PILOT_V4.json` (canonical SHA-256 `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`) |
 | Real live interaction occurred; v4 facts (diagnosis, hunk-header rejection, budget exhaustion, costs, zero PDB, zero verifier runs) | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` (items 18/24/26 and Section 5 boundaries); `research/quixbugs/PAIRED_PILOT_V4.json`; `TODO.md` 2026-08-03/04/05 entries; `docs/PROJECT_TRACKER.md` (v3 attempt and 2026-08-05 entry); preserved attempt `3b5d7488…` campaign record and private transport (ignored `operator/`, not the durable basis alone) |
-| V4 recorded case identities and failure boundaries bound to exact frozen cases; budget-exhaustion provenance fail-closed | `tests/fixtures/quixbugs_v4_budget_verifier_attempt_fixture.json`, `tests/unit/test_quixbugs_v4_budget_verifier_path.py` (attempt `3b5d7488…`; Case 1 = `find_in_sorted`/`pdb-on-uncertainty` order 1, Case 2 = `find_in_sorted`/`static-baseline` order 2 — identity mapping corrected by the 2026-08-05 readiness candidate); campaign infrastructure accepted on `main` through `0abb588` |
+| V4 recorded case identities and failure boundaries bound to exact frozen cases; budget-exhaustion provenance fail-closed | `tests/fixtures/quixbugs_v4_budget_verifier_attempt_fixture.json`, `tests/unit/test_quixbugs_v4_budget_verifier_path.py` (attempt `3b5d7488…`; Case 1 = `find_in_sorted`/`pdb-on-uncertainty` order 1, Case 2 = `find_in_sorted`/`static-baseline` order 2 — identity mapping corrected and accepted at `fc7c85b`); campaign infrastructure accepted on `main` through `0abb588` |
 | Earlier attempts are not valid experiments | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` Section 5 (attempts `705aa047…`, `81f2e5d8…`, `4c7fc444…`, `fddf1e39…`) |
 | Historical Zen matrix is descriptive-only | `docs/PROJECT_TRACKER.md`; README "[Historical]" note; `CURRENT_AGENT_ROSTER.md` |
 | Model selection frozen | `experiments/qlora_patch_pilot_v1/freeze_record.json` on branch `experiment/qlora-patch-pilot-v1` commit `3f0d3e7` (Qwen/Qwen2.5-Coder-7B-Instruct, revision `c03e6d358207e414f1eca0bb1891e29f1db0e242`, Apache-2.0) |
@@ -247,7 +247,7 @@ Show the QuixBugs v4 result as a recorded experiment (status map items 18/26 and
 - zero live PDB observations occurred;
 - no valid static-versus-PDB paired comparison was completed;
 - the campaign terminated honestly as `ABORTED` / `BUDGET_EXCEEDED` with cases 3–6 unstarted; provider-reported costs preserved (Case 1 $0.007378, Case 2 $0.012323).
-- The campaign infrastructure that persists and verifies these terminals is accepted on `main` through `0abb588` (terminal and budget-exhaustion provenance, fail-closed); the sanitized fixture's case-identity mapping was corrected by the 2026-08-05 readiness candidate.
+- The campaign infrastructure that persists and verifies these terminals is accepted on `main` through `0abb588` (terminal and budget-exhaustion provenance, fail-closed); the sanitized fixture's case-identity mapping was corrected and accepted at `fc7c85b`.
 
 The local preserved review package (`_ai-review/quixbugs-v4-live-campaign/`) is an optional artifact to keep available during the presentation; it is not required for any durable claim.
 
@@ -368,8 +368,8 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 
 ## 11. Final pre-presentation checklist
 
-- [ ] Repository baseline `0abb588df46605a9a754c051e71ebe17692c09db` (campaign infrastructure accepted on `main` through this commit) noted; Friday-demo readiness refreshed 2026-08-05 on branch `prep/friday-demo-readiness-v1`.
-- [ ] Clean Git state: `git status` shows no uncommitted tracked changes beyond the accepted plan document and the 2026-08-05 readiness refresh (uncommitted, per project rules).
+- [ ] Repository baseline noted: campaign infrastructure accepted on `main` through `0abb588df46605a9a754c051e71ebe17692c09db`; `main` accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (V4 sanitized-fixture/replay identity mapping corrected and accepted).
+- [ ] Git check: current branch is `main`; local `main` matches `origin/main`; tracked working tree is clean. No requirement that ignored `.opencode/` or `_ai-review/` files be absent.
 - [ ] Python environment ready: `python -m pip install -e .[test]` succeeds; `python --version` is 3.11+.
 - [ ] Deterministic demo verified once beforehand: `python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002` (single-case rehearsal) and, if desired, the full `--output-dir demo-out` run; expected counters recorded (`docs/DEMO_GUIDE_V1.md` Section 2).
 - [ ] Preserved demo outputs available offline: `results.json`, `technical-evaluation-summary.md`, per-case `trajectories/*.events.jsonl` and `.semantic.json`.
