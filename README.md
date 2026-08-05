@@ -517,3 +517,81 @@ evidence, bounded counters, diagnostics, workspace cleanup, and canonical
 fixture immutability. The verifier copies the fixture to a disposable workspace
 and cleans it after success or failure; only the caller-selected JSON output is
 persistent.
+
+## Current status (2026-08-05) — campaign infrastructure on main, V4 attempt record, QLoRA implementation
+
+The campaign infrastructure and the paired-pilot v4 terminal contract are now
+accepted on `main` through commit `0abb588` (`eb63c76` hardened the campaign
+budget and verifier path; `9f53df7` added the actual V4 interrupted budget
+terminal; `0abb588` added the terminal, exact-identity validation, and
+fail-closed budget-exhaustion provenance infrastructure — run persistence,
+campaign-record validation, and attempt-package verification). Accepted
+campaign validation: the focused campaign integration suite passed 389 tests;
+the bounded full suite produced 3394 passed, 3 skipped, and the same six
+pre-existing OpenCode wrapper/transport failures — no new failure was
+introduced.
+
+Note on recorded-case identity: the sanitized attempt fixture and replay
+assertions accepted at `0abb588` associated the two observed shapes with the
+wrong frozen cases (the malformed shape with `is-valid-parenthesization` /
+`pdb-on-uncertainty` and the applied-patch interrupted shape with
+`find-in-sorted` / `pdb-on-uncertainty`). The 2026-08-05 Friday-readiness
+candidate in this branch corrects that fixture/test identity mapping using
+the preserved campaign record, private transport evidence, provider-reported
+cost sums, and the frozen v4 case order. Production budgets, the frozen
+manifest, route, provider, authorization, and controller behavior are
+unchanged.
+
+The recorded V4 attempt (`quixbugs-paired-pilot-v4-attempt-3b5d7488...`,
+2026-08-04, preserved under ignored `operator/`) has these exact case
+boundaries:
+
+- **V4 Case 1** — `quixbugs-find-in-sorted-smoke-v1` under
+  `pdb-on-uncertainty` (order 1): 10 provider process attempts, 9 logical
+  model calls, 1 bounded retry, 26,139 cumulative public-evidence bytes, every
+  patch attempt rejected as a malformed unified diff (hunk header declared
+  `old_count=7` while the body carries 6 lines), no candidate applied, zero
+  verifier runs, provider-reported cost `$0.007378`. Terminal:
+  `INFRASTRUCTURE_ERROR` / controller stage.
+- **V4 Case 2** — `quixbugs-find-in-sorted-smoke-v1` under
+  `static-baseline` (order 2): 15 provider process attempts, 14 logical model
+  calls, 1 bounded retry, 38,534 cumulative public-evidence bytes, a candidate
+  applied with Validate visited, zero verifier runs, run interrupted,
+  provider-reported cost `$0.012323`. The original campaign aborted
+  `ABORTED / BUDGET_EXCEEDED` because the shape was unrepresentable; the
+  accepted repair now materializes both shapes as schema-valid terminals
+  (`INFRASTRUCTURE_ERROR`, `ABORTED / INTERRUPTED`) with the exact observed
+  byte counts preserved in machine-readable `budget_exhaustion` provenance and
+  counters clamped to the frozen 20,000-byte limit.
+
+This repair does not establish a verifier-confirmed live repair, does not
+demonstrate any live PDB benefit, and is not a post-repair provider campaign.
+The Authorized Six-Case Live Campaign remains open and unauthorized; the next
+authorized attempt must use `research/quixbugs/PAIRED_PILOT_V4.json`
+explicitly with fresh operator artifacts.
+
+The QLoRA experiment implementation is accepted at commit `3f0d3e7` on the
+unmerged branch `experiment/qlora-patch-pilot-v1` (FirstMate implementation
+review passed), including the tracked `independent_ai` audit contract and
+run-provenance implementation. Its owner suite review: 3457 passed, 3 skipped,
+36 unrelated pre-existing OpenCode transport/wrapper failures, no
+QLoRA-focused failure.
+
+QLoRA status (2026-08-05):
+
+- The owner-delegated independent FirstMate AI audit of the 75 frozen corpus
+  rows is complete externally: 39 ACCEPT / 36 REJECT with a disclosed AI
+  reviewer identity. This is an AI audit, not a human audit, and must never be
+  described as human review; final corpus acceptance and the remaining
+  fail-closed audit/corpus-quality decisions remain pending.
+- Final QLoRA training was externally authorized by FirstMate on 2026-08-05.
+  No accepted final-training artifact or result exists yet; final-training
+  results remain pending FirstMate artifact review.
+- Held-out generation and the base-versus-tuned comparison remain
+  unauthorized. No predicted training values or completion claims are
+  implied.
+- The tracked freeze record at branch head `3f0d3e7` still contains
+  `final_training_authorized: false` and `held_out_generation_authorized:
+  false`; that is the historical branch-bound freeze record, not evidence
+  about the current external operational authorization of final training
+  (which was granted on 2026-08-05).

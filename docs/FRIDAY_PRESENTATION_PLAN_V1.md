@@ -1,9 +1,9 @@
 # Friday Presentation Plan v1
 
-**Document version:** 1
+**Document version:** 1.1
 **Snapshot date:** 2026-08-05
-**Branch:** `docs/friday-presentation-plan-v1`
-**Base commit:** `37403330f4f4e1691ba7817cd8a96efd349ef0d6`
+**Branch:** `prep/friday-demo-readiness-v1` (plan document accepted on `main`; this revision is an uncommitted 2026-08-05 readiness refresh)
+**Base commit:** `0abb588df46605a9a754c051e71ebe17692c09db` (campaign infrastructure accepted on `main` through this commit)
 **Presentation duration target:** 25–30 minutes (20–25 min talk + demo, plus Q&A)
 **Scope boundary:** This is a professor-facing presentation and demo runbook only. It is not a slide deck, not the final technical report, not a claim that the project is a finished automated repair system, not an authorization to run another provider campaign, and not an authorization for final QLoRA training or held-out generation. It changes no code and authorizes no execution.
 
@@ -104,11 +104,12 @@ For each segment: objective, concise speaking points, evidence to show, one sent
 
 - Objective: present the QuixBugs v4 attempt as a recorded experiment with precise facts.
 - Speaking points (all tracked evidence; see Sections 4 and 6):
+  - The campaign infrastructure that can now persist and verify these terminals is accepted on `main` through `0abb588` (terminal, exact-identity validation, and budget-exhaustion provenance, fail-closed through run persistence, campaign-record validation, and attempt-package verification). The sanitized attempt fixture accepted at `0abb588` associated the two recorded shapes with the wrong frozen cases; the 2026-08-05 readiness candidate corrects that fixture/replay identity mapping from the preserved campaign record and private transport. Accepted campaign validation: focused suite 389 passed, bounded full suite 3394 passed / 3 skipped with the same six known OpenCode wrapper/transport failures.
   - Real OpenCode Go / DeepSeek V4 Flash interaction occurred (protocol 1.3, subscription route, no fallback).
-  - On case 1 (`find_in_sorted`, PDB policy) the model correctly diagnosed the semantic defect and proposed the correct one-line semantic change as a unified diff; the patch was rejected by strict hunk-header validation — an honest protocol/format failure, not a semantic one.
-  - A second case applied a correct patch but the campaign exhausted its frozen public-evidence budget (20,000 bytes) before verifier execution.
+  - Recorded V4 Case 1 (`find_in_sorted`, PDB policy, order 1): the model correctly diagnosed the semantic defect and proposed the correct one-line semantic change as a unified diff; the patch was rejected by strict hunk-header validation (hunk declared `old_count=7` with a 6-line body) — an honest protocol/format failure, not a semantic one. 10 provider processes, 9 logical calls, 26,139 public-evidence bytes, no candidate applied, zero verifier runs, cost `$0.007378`.
+  - Recorded V4 Case 2 (`find_in_sorted`, static-baseline policy, order 2): a patch was applied and Validate was visited, but the campaign exhausted its frozen public-evidence budget (38,534 observed bytes, clamped to 20,000) before verifier execution and the run was interrupted; 15 provider processes, 14 logical calls, cost `$0.012323`. The original campaign aborted `ABORTED / BUDGET_EXCEEDED`; the accepted repair materializes both shapes as schema-valid terminals.
   - Zero live-model repairs reached verifier-confirmed RESOLVED; zero live PDB observations occurred; no valid static-versus-PDB paired comparison was completed.
-  - The campaign ended honestly: `ABORTED` / `BUDGET_EXCEEDED`, cases 3–6 unstarted; provider-reported costs preserved (case 1 $0.007378, case 2 $0.012323).
+  - The campaign ended honestly: `ABORTED` / `BUDGET_EXCEEDED`, cases 3–6 unstarted; provider-reported costs preserved (Case 1 `$0.007378`, Case 2 `$0.012323`).
   - Earlier attempts (`705aa047…` protocol-invalid, `81f2e5d8…`/`4c7fc444…` infrastructure-failed, `fddf1e39…` v3 budget-exhausted) are not valid experiments and must not be described as model results.
 - Evidence to show: `research/quixbugs/PAIRED_PILOT_V4.json` (frozen contract); the status map's live-campaign boundary section; recorded attempt summary (Section 6). The local preserved review package may be kept available as an optional artifact only.
 - May be said: "A real model drove our controller, diagnosed the defect correctly, and proposed the right fix — but no live repair has been verified yet, and PDB has not opened in a live case."
@@ -133,11 +134,15 @@ For each segment: objective, concise speaking points, evidence to show, one sent
 - Objective: present verified state vs. pending results, strictly separated (Section 8).
 - Speaking points:
   - Frozen: Qwen2.5-Coder-7B-Instruct, exact revision; CommitPackFT Python methodology; train/validation split with zero held-out exact/near leakage and zero repository overlap; minimum-tier real corpus 1,000 train / 150 validation materialized.
+  - Implemented and accepted: the QLoRA patch-pilot implementation at commit `3f0d3e7` on branch `experiment/qlora-patch-pilot-v1` (unmerged) passed FirstMate implementation review; this includes the tracked `independent_ai` audit contract integration and complete run-provenance enforcement.
   - Executed: one-step real CUDA QLoRA weight update succeeded; adapter save and reload succeeded (FirstMate-reviewed external evidence, not yet merged or durably tracked on main).
   - External audit: the owner-delegated independent FirstMate AI audit of the 75 frozen corpus rows is complete (39 ACCEPT / 36 REJECT) with a disclosed AI reviewer identity — external evidence, not yet merged or durably tracked on main; final corpus acceptance is still pending.
-  - Pending: tracked `independent_ai` audit contract and validator update, fail-closed audit validation, corpus acceptance decision, final training, held-out base-versus-tuned generation, verifier results.
-- Evidence to show: experiment branch `experiment/qlora-patch-pilot-v1` commit `461e1ca…`: `freeze_record.json`, `training_config.json`, `transformation_config.json`, `SMOKE_EVIDENCE.md`, `colab/agentic_debugging_qlora_pilot.ipynb`.
-- May be said: "The methodology is frozen, the corpus is real and leakage-checked, the owner-delegated independent FirstMate AI audit is complete externally (39 ACCEPT / 36 REJECT), and a real CUDA weight update and adapter reload succeeded — corpus acceptance, final training, and final results are still pending."
+  - Owner full-suite validation: reviewed at 3457 passed, 3 skipped, 36 unrelated pre-existing OpenCode transport/wrapper failures, no QLoRA-focused failure.
+  - Authorized externally by FirstMate on 2026-08-05: final QLoRA training.
+  - Pending: final-training results (no accepted final-training artifact exists yet; pending FirstMate artifact review); fail-closed audit validation; corpus acceptance decision; held-out base-versus-tuned generation and comparison (remain unauthorized).
+  - Freeze-flag distinction: the tracked freeze record at `3f0d3e7` still carries `final_training_authorized: false`; that is the historical branch-bound freeze record, not evidence about the current external authorization.
+- Evidence to show: experiment branch `experiment/qlora-patch-pilot-v1` commit `3f0d3e7`: `freeze_record.json`, `training_config.json`, `transformation_config.json`, `SMOKE_EVIDENCE.md`, `colab/agentic_debugging_qlora_pilot.ipynb`.
+- May be said: "The methodology is frozen, the corpus is real and leakage-checked, the implementation passed FirstMate review, the owner-delegated independent FirstMate AI audit is complete externally (39 ACCEPT / 36 REJECT), final training is authorized and its results are pending, and held-out comparison remains unauthorized."
 - Must not be said: "Fine-tuning improved the model" (no comparison exists).
 - Transition: "Let me show you the deterministic demo, then the roadmap."
 
@@ -147,7 +152,7 @@ For each segment: objective, concise speaking points, evidence to show, one sent
 - Speaking points:
   - Run the demo live per the runbook; narrate task input, controller states, typed tools, PDB-capable path, patch apply, verifier, structured results, cleanup.
   - If the recorded v4 evidence is shown, show it as experimental evidence, not a live demo.
-  - Close with the post-Friday roadmap and the three next measurable steps: audit + final training, held-out comparison, authorized six-case campaign.
+  - Close with the post-Friday roadmap and the three next measurable steps: final-training artifact review and corpus acceptance, held-out comparison, authorized six-case campaign.
 - May be said: "Here is the deterministic pipeline running end to end; the live-model findings from earlier remain recorded experiments."
 - Must not be said: "Let me show you the model fixing a real bug live."
 - Transition: none — end with thanks and questions.
@@ -170,13 +175,14 @@ Every material claim in the presentation must trace to tracked repository eviden
 | BugsInPy primary but license-blocked | `docs/DATASET_EVALUATION_DECISION_V1.md`; `docs/BUGSINPY_LICENSE_GATE_V1.md`, `docs/BUGSINPY_PILOT_READINESS_V1.md` |
 | SWE-bench DEFER, Defects4J NO-GO | `docs/DATASET_EVALUATION_DECISION_V1.md` Section 2 |
 | Route: OpenCode Go subscription, DeepSeek V4 Flash, protocol 1.3, v4 manifest | `CURRENT_AGENT_ROSTER.md`; `research/quixbugs/PAIRED_PILOT_V4.json` (canonical SHA-256 `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`) |
-| Real live interaction occurred; v4 facts (diagnosis, hunk-header rejection, budget exhaustion, costs, zero PDB, zero verifier runs) | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` (items 18/24/26 and Section 5 boundaries); `research/quixbugs/PAIRED_PILOT_V4.json`; `TODO.md` 2026-08-03/04 entries; `docs/PROJECT_TRACKER.md` (e.g., v3 attempt at lines 1596–1621) |
+| Real live interaction occurred; v4 facts (diagnosis, hunk-header rejection, budget exhaustion, costs, zero PDB, zero verifier runs) | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` (items 18/24/26 and Section 5 boundaries); `research/quixbugs/PAIRED_PILOT_V4.json`; `TODO.md` 2026-08-03/04/05 entries; `docs/PROJECT_TRACKER.md` (v3 attempt and 2026-08-05 entry); preserved attempt `3b5d7488…` campaign record and private transport (ignored `operator/`, not the durable basis alone) |
+| V4 recorded case identities and failure boundaries bound to exact frozen cases; budget-exhaustion provenance fail-closed | `tests/fixtures/quixbugs_v4_budget_verifier_attempt_fixture.json`, `tests/unit/test_quixbugs_v4_budget_verifier_path.py` (attempt `3b5d7488…`; Case 1 = `find_in_sorted`/`pdb-on-uncertainty` order 1, Case 2 = `find_in_sorted`/`static-baseline` order 2 — identity mapping corrected by the 2026-08-05 readiness candidate); campaign infrastructure accepted on `main` through `0abb588` |
 | Earlier attempts are not valid experiments | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` Section 5 (attempts `705aa047…`, `81f2e5d8…`, `4c7fc444…`, `fddf1e39…`) |
 | Historical Zen matrix is descriptive-only | `docs/PROJECT_TRACKER.md`; README "[Historical]" note; `CURRENT_AGENT_ROSTER.md` |
-| Model selection frozen | `experiments/qlora_patch_pilot_v1/freeze_record.json` on branch `experiment/qlora-patch-pilot-v1` commit `461e1ca5ec129db326f6e56169e15a9f16f6e58c` (Qwen/Qwen2.5-Coder-7B-Instruct, revision `c03e6d358207e414f1eca0bb1891e29f1db0e242`, Apache-2.0) |
-| QLoRA methodology frozen; gates block final training and held-out generation | Same freeze record (`final_training_authorized: false`, `held_out_generation_authorized: false`); `training_config.json`; `transformation_config.json`; `SMOKE_EVIDENCE.md` |
+| Model selection frozen | `experiments/qlora_patch_pilot_v1/freeze_record.json` on branch `experiment/qlora-patch-pilot-v1` commit `3f0d3e7` (Qwen/Qwen2.5-Coder-7B-Instruct, revision `c03e6d358207e414f1eca0bb1891e29f1db0e242`, Apache-2.0) |
+| QLoRA methodology frozen; implementation (incl. tracked `independent_ai` audit contract and run-provenance) accepted at `3f0d3e7` (FirstMate implementation review); held-out generation still unauthorized | Historical branch-bound freeze record at `3f0d3e7` (`held_out_generation_authorized: false`; the same record also carries `final_training_authorized: false`, which is historical and not evidence about the 2026-08-05 external authorization); `training_config.json`; `transformation_config.json`; `SMOKE_EVIDENCE.md`; owner suite review 3457 passed / 3 skipped / 36 unrelated pre-existing OpenCode failures |
 | Real minimum-tier corpus 1,000/150, zero leakage, zero repository overlap; one-step CUDA update + adapter reload succeeded | FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main (labeled Layer 2 in the status map, items 9/12); status map item 9 and Section 5 QLoRA boundary |
-| Owner-delegated independent FirstMate AI audit of the 75 frozen corpus rows complete: 39 ACCEPT / 36 REJECT, reviewer identity disclosed; corpus not modified | Owner-supplied result; FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main. The tracked `independent_ai` audit contract and validator update, fail-closed validation, and the corpus acceptance decision remain pending (Section 8) |
+| Owner-delegated independent FirstMate AI audit of the 75 frozen corpus rows complete: 39 ACCEPT / 36 REJECT, reviewer identity disclosed; corpus not modified | Owner-supplied result; FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main. This is an AI audit, not human review. Final QLoRA training was externally authorized by FirstMate on 2026-08-05; no accepted final-training artifact exists yet and results are pending FirstMate artifact review; fail-closed audit validation and the corpus acceptance decision remain pending (Section 8) |
 | RAG NO-GO-FOR-NOW, SFT DEFER, DPO NO-GO-FOR-NOW | `docs/DATASET_EVALUATION_DECISION_V1.md` Section 10; `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` |
 
 ## 5. Friday demo runbook
@@ -230,17 +236,18 @@ python -m agentic_debugger.demo --output-dir demo-out --strict
 
 ### 5.3 Secondary experimental evidence (recorded, not live)
 
-Show the QuixBugs v4 result as a recorded experiment (status map items 18/26 and Section 5 boundary; contract in `research/quixbugs/PAIRED_PILOT_V4.json`). Precise statements:
+Show the QuixBugs v4 result as a recorded experiment (status map items 18/26 and Section 5 boundary; contract in `research/quixbugs/PAIRED_PILOT_V4.json`). The recorded case identities are bound to the preserved campaign record and private transport for attempt `3b5d7488...`. Precise statements:
 
 - Real OpenCode Go / DeepSeek V4 Flash interaction occurred (subscription route, protocol 1.3, variant `max`, no fallback);
-- the model correctly diagnosed the semantic defect in `find_in_sorted`;
+- Case 1 (`find_in_sorted`, PDB policy, order 1): the model correctly diagnosed the semantic defect in `find_in_sorted`;
 - it proposed the correct one-line semantic change as a unified diff;
-- one generated patch was rejected because of an invalid unified-diff hunk header (strict hunk-header validation);
-- another correct patch was applied, but the campaign exhausted its public-evidence budget (frozen 20,000-byte limit) before verifier execution;
+- the Case 1 patch was rejected because of an invalid unified-diff hunk header (strict hunk-header validation: hunk declared `old_count=7` with a 6-line body);
+- Case 2 (`find_in_sorted`, static-baseline policy, order 2): a patch was applied and Validate was visited, but the campaign exhausted its public-evidence budget (38,534 observed bytes) before verifier execution and the run was interrupted;
 - zero live-model repairs reached verifier-confirmed RESOLVED;
 - zero live PDB observations occurred;
 - no valid static-versus-PDB paired comparison was completed;
-- the campaign terminated honestly as `ABORTED` / `BUDGET_EXCEEDED` with cases 3–6 unstarted; provider-reported costs preserved (case 1 $0.007378, case 2 $0.012323).
+- the campaign terminated honestly as `ABORTED` / `BUDGET_EXCEEDED` with cases 3–6 unstarted; provider-reported costs preserved (Case 1 $0.007378, Case 2 $0.012323).
+- The campaign infrastructure that persists and verifies these terminals is accepted on `main` through `0abb588` (terminal and budget-exhaustion provenance, fail-closed); the sanitized fixture's case-identity mapping was corrected by the 2026-08-05 readiness candidate.
 
 The local preserved review package (`_ai-review/quixbugs-v4-live-campaign/`) is an optional artifact to keep available during the presentation; it is not required for any durable claim.
 
@@ -278,7 +285,7 @@ All claims below are supported by tracked evidence (Section 4) or by explicitly 
 ### A. CURRENT VERIFIED STATE
 
 - Qwen/Qwen2.5-Coder-7B-Instruct selected and frozen.
-- Exact model revision: `c03e6d358207e414f1eca0bb1891e29f1db0e242` (Apache-2.0) — `experiments/qlora_patch_pilot_v1/freeze_record.json` on branch `experiment/qlora-patch-pilot-v1` commit `461e1ca5ec129db326f6e56169e15a9f16f6e58c`.
+- Exact model revision: `c03e6d358207e414f1eca0bb1891e29f1db0e242` (Apache-2.0) — `experiments/qlora_patch_pilot_v1/freeze_record.json` on branch `experiment/qlora-patch-pilot-v1` commit `3f0d3e7` (branch head; implementation accepted at FirstMate implementation review on 2026-08-05).
 - CommitPackFT Python corpus methodology frozen (config `python`, revision `fc56fe33c030c6daa414c2b112c932b8eed085e6`, source-license allowlist) — same freeze record + `transformation_config.json`.
 - Real minimum-tier corpus materialized: 1,000 train / 150 validation (from 56,025 input candidates).
 - Zero held-out exact/near leakage; zero repository overlap (deterministic dedup + SimHash near-dedup + held-out checks, `transformation_config.json`).
@@ -295,16 +302,15 @@ All claims below are supported by tracked evidence (Section 4) or by explicitly 
   - Reviewer: FirstMate / GPT-5.6 Thinking; reviewer type `independent_ai_reviewer`; independent from the DeepSeek coding agent and from the Qwen training model.
   - Research-integrity wording: never call this a human audit; never call it human-reviewed, human-validated, or human sign-off; it is FirstMate-reviewed external evidence not yet merged or durably tracked on main.
 
-The CUDA, corpus, and audit items are labeled: **FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main** (status map Layer 2; supports IN PROGRESS claims only). The QLoRA agent is currently implementing and validating the explicit `independent_ai` audit contract.
+The CUDA, corpus, and audit items are labeled: **FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main** (status map Layer 2; supports IN PROGRESS claims only). The QLoRA implementation (including the tracked `independent_ai` audit contract integration and complete run-provenance enforcement) is accepted at commit `3f0d3e7` on the unmerged branch `experiment/qlora-patch-pilot-v1` after FirstMate implementation review; the owner full-suite validation was reviewed at 3457 passed, 3 skipped, 36 unrelated pre-existing OpenCode transport/wrapper failures, with no QLoRA-focused failure.
 
 **STILL PENDING:**
-- tracked `independent_ai` contract and validator update;
+- final QLoRA training results (final training was externally authorized by FirstMate on 2026-08-05; no accepted final-training artifact exists yet and the results are pending FirstMate artifact review — no training value may be predicted);
 - fail-closed validation of the completed audit;
 - exact interpretation of the 39/50 accepted-packet pass result;
 - corpus-quality gate decision;
 - final corpus acceptance;
-- final training;
-- held-out base-versus-tuned evaluation.
+- held-out base-versus-tuned generation and evaluation (still unauthorized; `held_out_generation_authorized` remains `false` at branch head `3f0d3e7`).
 
 These pending items do not change the observed audit result above, and the observed audit result does not constitute corpus acceptance.
 
@@ -326,11 +332,11 @@ Every field below defaults to `PENDING — DO NOT INFER` and must stay that way 
 | Base-versus-tuned interpretation | `PENDING — DO NOT INFER` | Comparison analysis over the same five tasks and contracts |
 | FirstMate approval and experiment-branch merge status | `PENDING — DO NOT INFER` | Acceptance record; merge status of `experiment/qlora-patch-pilot-v1` |
 
-Replacement instructions: when the QLoRA checkpoint is accepted, replace each `PENDING — DO NOT INFER` cell with the exact observed value and the artifact path/SHA-256 where required, keeping the frozen contract identities (freeze record, prompt contract, generation config) cited in the same row. No field may be filled before FirstMate review of the final training and held-out records; the freeze gates (`final_training_authorized`, `held_out_generation_authorized`) remain `false` until then.
+Replacement instructions: when the QLoRA checkpoint is accepted, replace each `PENDING — DO NOT INFER` cell with the exact observed value and the artifact path/SHA-256 where required, keeping the frozen contract identities (freeze record, prompt contract, generation config) cited in the same row. No field may be filled before FirstMate review of the final training and held-out records. Note: the tracked freeze record at `3f0d3e7` still carries `final_training_authorized: false` and `held_out_generation_authorized: false`; that historical branch-bound record is not evidence about the external authorization of final training granted on 2026-08-05, and it is not evidence that held-out generation is currently authorized (it is not).
 
 Prescribed statement if final training or held-out comparison is incomplete at presentation time:
 
-> "The owner-delegated independent FirstMate AI audit of the frozen corpus is complete externally (39 ACCEPT / 36 REJECT with a disclosed AI reviewer identity), but its contract validation and the corpus acceptance decision are still pending, and final training and the frozen base-versus-tuned comparison are still pending. The current evidence demonstrates a frozen methodology, a leakage-checked real corpus, and a technically successful CUDA QLoRA update and adapter reload."
+> "The owner-delegated independent FirstMate AI audit of the frozen corpus is complete externally (39 ACCEPT / 36 REJECT with a disclosed AI reviewer identity), and the QLoRA implementation passed FirstMate implementation review. Final training was externally authorized by FirstMate on 2026-08-05; no accepted final-training artifact exists yet and its results are pending FirstMate artifact review. Contract validation, the corpus acceptance decision, and the frozen base-versus-tuned comparison are still pending, and held-out generation remains unauthorized. The current evidence demonstrates a frozen methodology, a leakage-checked real corpus, and a technically successful CUDA QLoRA update and adapter reload."
 
 ## 9. Failure and contingency plan
 
@@ -338,7 +344,7 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 
 | Contingency | Concrete fallback procedure |
 |---|---|
-| Colab unavailable | Present Section 8A as readiness evidence only: frozen methodology, frozen configs, leakage-checked real corpus, one-step CUDA update and adapter reload (labeled external evidence). State the prescribed pending-results sentence; roadmap keeps final training as the immediate post-Friday step (instructor items 12/13). Do not substitute prompt changes or smoke runs for a training result. |
+| Colab unavailable | Present Section 8A as readiness evidence only: frozen methodology, frozen configs, leakage-checked real corpus, one-step CUDA update and adapter reload (labeled external evidence). State the prescribed pending-results sentence; the post-Friday near term is final-training artifact review and corpus acceptance (instructor items 12/13). Do not substitute prompt changes or smoke runs for a training result. |
 | Final QLoRA training incomplete | Same as Colab-unavailable branch: all Section 8B fields remain `PENDING — DO NOT INFER`; the segment becomes "methodology and readiness, results pending". |
 | Deterministic demo command fails | Re-check `python -m pip install -e .[test]`; then retry the single-task form `python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002`. If `--strict` fails, it is a regression signal per `docs/DEMO_GUIDE_V1.md` Section 6 — do not force it. Last resort: present preserved demo outputs (`results.json`, `technical-evaluation-summary.md`, trajectories) as recorded evidence instead of a live run. |
 | Internet unavailable | The primary demo needs no network and no WSL. Do not attempt any provider interaction. The recorded v4 evidence is local; if its files are not available, rely on the tracked facts in `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` and `research/quixbugs/PAIRED_PILOT_V4.json` (Section 6). |
@@ -362,8 +368,8 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 
 ## 11. Final pre-presentation checklist
 
-- [ ] Repository branch `docs/friday-presentation-plan-v1` and base commit `37403330f4f4e1691ba7817cd8a96efd349ef0d6` noted; presentation evidence matches this snapshot.
-- [ ] Clean Git state: `git status` shows no uncommitted tracked changes beyond the accepted plan document (uncommitted, per project rules).
+- [ ] Repository baseline `0abb588df46605a9a754c051e71ebe17692c09db` (campaign infrastructure accepted on `main` through this commit) noted; Friday-demo readiness refreshed 2026-08-05 on branch `prep/friday-demo-readiness-v1`.
+- [ ] Clean Git state: `git status` shows no uncommitted tracked changes beyond the accepted plan document and the 2026-08-05 readiness refresh (uncommitted, per project rules).
 - [ ] Python environment ready: `python -m pip install -e .[test]` succeeds; `python --version` is 3.11+.
 - [ ] Deterministic demo verified once beforehand: `python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002` (single-case rehearsal) and, if desired, the full `--output-dir demo-out` run; expected counters recorded (`docs/DEMO_GUIDE_V1.md` Section 2).
 - [ ] Preserved demo outputs available offline: `results.json`, `technical-evaluation-summary.md`, per-case `trajectories/*.events.jsonl` and `.semantic.json`.
@@ -380,9 +386,9 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 
 | Step | Instructor items | Evidence/notes |
 |---|---|---|
-| Validate the `independent_ai` audit contract and issue the corpus acceptance decision | 9, 11 | Owner-delegated independent FirstMate AI audit already complete externally (75 rows; 39 ACCEPT / 36 REJECT); tracked contract/validator update and fail-closed validation pending; then corpus acceptance |
-| Final QLoRA training on the frozen corpus/config | 12 | Gate `final_training_authorized` must be opened after FirstMate review; Colab notebook; saved adapter + training record + external artifact manifest |
-| Frozen held-out base-versus-tuned comparison with the independent verifier | 13 | Same prompt/generation contracts; five held-out curated tasks; verifier on all generated patches |
+| Validate the `independent_ai` audit contract and issue the corpus acceptance decision | 9, 11 | Owner-delegated independent FirstMate AI audit already complete externally (75 rows; 39 ACCEPT / 36 REJECT; AI audit, not human review); tracked `independent_ai` contract/provenance implementation accepted at `3f0d3e7`; fail-closed validation and the corpus-quality/corpus-acceptance decisions pending |
+| Final QLoRA training on the frozen corpus/config | 12 | Externally authorized by FirstMate on 2026-08-05 (the tracked freeze record's historical `final_training_authorized: false` is not evidence about this authorization); final-training results pending FirstMate artifact review; saved adapter + training record + external artifact manifest |
+| Frozen held-out base-versus-tuned comparison with the independent verifier | 13 | Same prompt/generation contracts; five held-out curated tasks; verifier on all generated patches; held-out generation remains unauthorized until a separate authorization exists |
 | Fine-tuned model debugger-command generation and interpretation | 23 | Depends on item 12; uses the typed PDB directive contracts |
 | Authorized six-case QuixBugs campaign with verifier-authoritative results | 26, 18 | Must use `research/quixbugs/PAIRED_PILOT_V4.json` explicitly, fresh authorization artifacts, real route preflight |
 | BugsInPy execution if the license gate clears | 6, 7, 8, 26 | License review + containment upgrade before any execution |

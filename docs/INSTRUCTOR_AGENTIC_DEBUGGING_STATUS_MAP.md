@@ -278,12 +278,14 @@ wording of the item, which names RAG explicitly.
 - `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` (RAG NO-GO, SFT DEFER)
 - `experiments/qlora_patch_pilot_v1/freeze_record.json` (CommitPackFT
   config `python`, pinned revision; five curated held-out tasks) on branch
-  `experiment/qlora-patch-pilot-v1` commit `461e1ca`
+  `experiment/qlora-patch-pilot-v1` branch-head commit `3f0d3e7`
 
 **Missing work:** Explicit selection and acceptance of a RAG corpus (or an
 accepted documented decision that names the RAG corpus requirement and its
 trigger), and an explicit acceptance record for the fine-tuning corpus once
-the human audit completes.
+the fail-closed audit validation and corpus acceptance decision complete
+(owner-delegated independent FirstMate AI audit of the 75 frozen rows is
+complete externally; this is an AI audit, not a human audit).
 
 **Acceptance criteria for COMPLETED:** A tracked selection covers a
 fine-tuning corpus, a RAG corpus (or an accepted equivalent decision with
@@ -297,8 +299,11 @@ trigger), and an evaluation dataset, each with acceptance evidence.
 split design are complete, and the real CommitPackFT minimum-tier corpus has
 been materialized externally: 56,025 input candidates → 1,000 training rows /
 150 validation rows, zero held-out exact/near matches, zero repository
-overlap. The required human manual audit is still in progress; the corpus is
-not "not yet built."
+overlap. The owner-delegated independent FirstMate AI audit of the 75 frozen
+corpus rows is complete externally (39 ACCEPT / 36 REJECT, disclosed AI
+reviewer identity; this is an AI audit, not a human audit). Fail-closed
+validation of that audit and the final corpus acceptance decision remain
+pending; the corpus is not "not yet built."
 
 **Evidence:**
 - Layer 1: `experiments/qlora_patch_pilot_v1/transformation_config.json`
@@ -306,20 +311,22 @@ not "not yet built."
   repository-disjoint split; preferred 1500/200, minimum 1000/150);
   `experiments/qlora_patch_pilot_v1/freeze_record.json`; unit tests
   `tests/unit/test_qlora_patch_pilot.py` (branch `experiment/qlora-patch-pilot-v1`,
-  commit `461e1ca`).
+  branch-head commit `3f0d3e7`).
 - Layer 2 (FirstMate-reviewed external, not yet merged): real CommitPackFT
   materialization executed — 56,025 input candidates, 1,000 train rows,
   150 validation rows, zero held-out matches, zero repository overlap;
-  automated 50 accepted + 25 rejected audit packets completed; human audit
-  in progress.
+  automated 50 accepted + 25 rejected audit packets prepared; owner-delegated
+  independent FirstMate AI audit of the 75 frozen rows complete externally
+  (39 ACCEPT / 36 REJECT; not human review).
 
-**Missing work:** Completion of the human manual audit (≥50 accepted and
-≥25 rejected reviewed rows with the fail-closed audit validator); final
-corpus acceptance; full analysis write-up.
+**Missing work:** Fail-closed validation of the completed independent AI
+audit; the corpus-quality gate decision; final corpus acceptance; full
+analysis write-up.
 
 **Acceptance criteria for COMPLETED:** The minimum-tier real corpus is built
-from the frozen revision with verified counts and disjointness, the human
-audit is complete and validated, and the corpus is accepted for training.
+from the frozen revision with verified counts and disjointness, the
+independent audit is validated fail-closed, and the corpus is accepted for
+training.
 
 ### Item 10 — COMPLETED (branch-bound qualifier) — FRIDAY PRESENTATION
 
@@ -330,13 +337,13 @@ audit is complete and validated, and the corpus is accepted for training.
 `c03e6d358207e414f1eca0bb1891e29f1db0e242` (Apache-2.0). The durable
 implementation currently exists on the unmerged experiment branch
 `experiment/qlora-patch-pilot-v1` at commit
-`461e1ca5ec129db326f6e56169e15a9f16f6e58c`. The branch is not yet merged
+`3f0d3e75060188f189517b0568a1efce52f54bd6`. The branch is not yet merged
 into `main`; this does not invalidate the model-selection decision itself.
 
 **Evidence (Layer 1):**
 - `experiments/qlora_patch_pilot_v1/freeze_record.json` (`model.repository`,
   `model.revision`, `model.license`) on branch
-  `experiment/qlora-patch-pilot-v1` commit `461e1ca`
+  `experiment/qlora-patch-pilot-v1` branch-head commit `3f0d3e7`
 - `experiments/qlora_patch_pilot_v1/README.md` (frozen model condition)
 
 **Missing work:** Merging the experiment branch into `main` (delivery
@@ -352,17 +359,22 @@ license is pinned and recorded; satisfied (branch-bound).
 **Current state:** The instruction-response transformation (buggy source +
 task text + failure output → unified-diff completion) is implemented,
 frozen, and executed on the real CommitPackFT materialization. Its
-research-quality acceptance remains dependent on the incomplete human audit.
+research-quality acceptance remains pending the fail-closed validation of
+the completed owner-delegated independent FirstMate AI audit and the final
+corpus acceptance decision.
 
 **Evidence:**
 - Layer 1: `experiments/qlora_patch_pilot_v1/prompt_contract.json` and
   `transformation_config.json`; `agentic_debugger/training/patch_pilot.py`;
   `scripts/qlora_patch_pilot.py` (branch `experiment/qlora-patch-pilot-v1`
-  commit `461e1ca`).
+  branch-head commit `3f0d3e7`).
 - Layer 2 (FirstMate-reviewed external, not yet merged): transformation
-  executed on the real CommitPackFT materialization (item 9 counts).
+  executed on the real CommitPackFT materialization (item 9 counts);
+  owner-delegated independent FirstMate AI audit of the 75 frozen rows
+  complete externally (39 ACCEPT / 36 REJECT; AI audit, not human review).
 
-**Missing work:** Human audit completion; final transformation acceptance.
+**Missing work:** Fail-closed validation of the independent AI audit; final
+transformation/corpus acceptance.
 
 **Acceptance criteria for COMPLETED:** The accepted corpus in
 instruction-response form is audited and validated against the frozen prompt
@@ -374,24 +386,31 @@ and transformation contracts.
 
 **Current state:** QLoRA supervised fine-tuning is implemented and frozen,
 and a real one-step CUDA QLoRA weight update succeeded, with adapter
-save/reload succeeding. Final training has not been run; the freeze gate
-(`final_training_authorized: false`) still blocks it; the experiment branch
-is not merged into `main`. This is NOT a completed fine-tuning item.
+save/reload succeeding. Final QLoRA training was externally authorized by
+FirstMate on 2026-08-05, but no accepted final-training artifact or result
+exists yet, so final training is not complete; the experiment branch is not
+merged into `main`. The tracked freeze record at branch head `3f0d3e7`
+(still carrying `final_training_authorized: false`) is the historical
+branch-bound freeze record and is not evidence about the current external
+authorization. This is NOT a completed fine-tuning item.
 
 **Evidence:**
 - Layer 1: `experiments/qlora_patch_pilot_v1/training_config.json`
   (LoRA r=16, alpha=32, 4-bit nf4 double-quant, completion-only loss,
-  one epoch); `freeze_record.json` (`scientific_gate`); `SMOKE_EVIDENCE.md`
+  one epoch); `freeze_record.json` (`scientific_gate`; historical
+  branch-bound flags at `3f0d3e7`); `SMOKE_EVIDENCE.md`
   (final training NOT RUN); `colab/agentic_debugging_qlora_pilot.ipynb`
   (one-step weight-update smoke cells; hard gate before final training);
   `agentic_debugger/training/patch_pilot.py` (branch
-  `experiment/qlora-patch-pilot-v1` commit `461e1ca`).
+  `experiment/qlora-patch-pilot-v1` branch-head commit `3f0d3e7`).
 - Layer 2 (FirstMate-reviewed external, not yet merged): real one-step CUDA
-  QLoRA update succeeded; adapter save/reload succeeded; final training not
-  run; held-out generation not run; base-versus-tuned comparison not run.
+  QLoRA update succeeded; adapter save/reload succeeded; final training
+  authorized externally 2026-08-05 with no accepted artifact yet; held-out
+  generation not run; base-versus-tuned comparison not run.
 
-**Missing work:** Final training run on the frozen corpus/config; saved
-adapter artifacts with training logs; FirstMate gate approval; branch merge.
+**Missing work:** Accepted final-training run on the frozen corpus/config
+(results pending FirstMate artifact review); saved adapter artifacts with
+training logs; branch merge.
 
 **Acceptance criteria for COMPLETED:** Full QLoRA SFT run on the frozen
 corpus with the frozen configuration, saved adapter, training record, and
@@ -401,9 +420,11 @@ validation against the accepted gate — not a one-step smoke.
 
 **Exact wording:** "Fine-tuning öncesi ve sonrası modeli karşılaştır."
 
-**Current state:** No base-versus-tuned comparison exists. The freeze gate
-blocks held-out generation (`held_out_generation_authorized: false`), final
-training has not run, and no base or tuned outputs exist for comparison.
+**Current state:** No base-versus-tuned comparison exists. Held-out
+generation remains unauthorized (`held_out_generation_authorized: false` in
+the historical branch-bound freeze record at `3f0d3e7`), no accepted
+final-training artifact/checkpoint exists yet, and no base or tuned outputs
+exist for comparison.
 
 **Evidence (Layer 1):**
 - `experiments/qlora_patch_pilot_v1/freeze_record.json` (`scientific_gate`)
@@ -412,8 +433,9 @@ training has not run, and no base or tuned outputs exist for comparison.
 - `experiments/qlora_patch_pilot_v1/SMOKE_EVIDENCE.md` (held-out generation
   NOT RUN)
 
-**Missing work:** Final training (item 12); frozen held-out generation for
-base and tuned models with the same prompt contract; verifier runs on
+**Missing work:** Accepted final-training artifact (item 12, pending
+FirstMate artifact review); frozen held-out generation for base and tuned
+models with the same prompt contract (still unauthorized); verifier runs on
 generated patches; metrics and analysis.
 
 **Acceptance criteria for COMPLETED:** Base and tuned models are run on the
@@ -508,20 +530,22 @@ demonstrates the controller path; satisfied.
 implemented as controller outputs (tracker 4.5.1–4.5.3) and the deterministic
 Task 9 demo achieves `CORRECT_TARGET_SYMBOL` localization 10/10 with the
 scripted model. Live-model evidence shows correct diagnosis and patch intent
-on one v4 case (`find_in_sorted`: correct root-cause hypothesis and correct
-one-line fix submitted as a unified diff) but the patch was rejected by
-strict hunk-header validation and zero verifier-confirmed repairs exist. A
-correct diagnosis or patch proposal without verifier confirmation is not a
-successful repair.
+on one v4 case (V4 Case 1, `find_in_sorted` / `pdb-on-uncertainty`, order 1:
+correct root-cause hypothesis and correct one-line fix submitted as a unified
+diff) but the patch was rejected by strict hunk-header validation and zero
+verifier-confirmed repairs exist. A correct diagnosis or patch proposal
+without verifier confirmation is not a successful repair.
 
 **Evidence (Layer 1):**
-- `docs/PROJECT_TRACKER.md` Phase 4.5 subtasks (mechanism) and Task 9 records
+- `docs/PROJECT_TRACKER.md` Phase 4.5 subtasks (mechanism), Task 9 records, and the 2026-08-05 campaign-infrastructure entry
 - `agentic_debugger/evaluation/outcome_taxonomy.py`, `evaluation/verifier.py`
-- v4 live-campaign evidence: attempt `3b5d7488…`, case 1 diagnosis/patch
-  intent and hunk-header rejection (Layer 1 manifest:
-  `research/quixbugs/PAIRED_PILOT_V4.json`; campaign record in ignored
-  `_ai-review/quixbugs-v4-live-campaign/` — used for context only, not as
-  sole evidence)
+- v4 live-campaign evidence: attempt `3b5d7488…`, Case 1 (`find-in-sorted` /
+  `pdb-on-uncertainty`, order 1) diagnosis/patch intent and hunk-header
+  rejection; exact recorded case identities bound in
+  `tests/fixtures/quixbugs_v4_budget_verifier_attempt_fixture.json` and
+  `tests/unit/test_quixbugs_v4_budget_verifier_path.py` (Layer 1 manifest:
+  `research/quixbugs/PAIRED_PILOT_V4.json`; preserved campaign record in
+  ignored `operator/` — used for context only, not as sole evidence)
 
 **Missing work:** A live-model verifier-confirmed repair; localization /
 root-cause metrics over an external dataset.
@@ -693,15 +717,20 @@ contracts (localization outcome, patch correctness via verifier F2P/P2P,
 provider-reported token/cost and timing, debugger-action counts), and live
 attempts produced accounting evidence (e.g., v3 `fddf1e39…`: 12 logical
 calls, 13 attempts, provider-reported cost 0.010565556, 33,685 public
-evidence bytes; v4 `3b5d7488…`: case 1 $0.007378, case 2 $0.012323, zero
-verifier runs). No completed external-dataset model evaluation exists to
-report against these metrics; no cross-dataset model result.
+evidence bytes; v4 `3b5d7488…`: Case 1 (find-in-sorted /
+`pdb-on-uncertainty`, order 1) `$0.007378`, Case 2 (find-in-sorted /
+`static-baseline`, order 2) `$0.012323`, zero verifier runs). No completed
+external-dataset model evaluation exists to report against these metrics; no
+cross-dataset model result.
 
 **Evidence (Layer 1):**
-- `docs/PROJECT_TRACKER.md` Phase 7.1 (7.1.1–7.1.5 checked)
+- `docs/PROJECT_TRACKER.md` Phase 7.1 (7.1.1–7.1.5 checked) and the 2026-08-05 campaign-infrastructure entry
 - `agentic_debugger/evaluation/live.py`, `outcome_taxonomy.py`, `verifier.py`
-- Live attempt accounting: `TODO.md` §2026-08-04 entries; v4 campaign record
-  (ignored `_ai-review/` — context only)
+- Live attempt accounting: `TODO.md` 2026-08-03/04/05 entries; recorded V4
+  case identities in
+  `tests/fixtures/quixbugs_v4_budget_verifier_attempt_fixture.json` and
+  `tests/unit/test_quixbugs_v4_budget_verifier_path.py`; preserved campaign
+  record (ignored `operator/` — context only)
 - `docs/FINAL_TECHNICAL_REPORT_V1.md` (metrics and limitations)
 
 **Missing work:** A completed accepted campaign with verifier-authoritative
@@ -741,23 +770,64 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 
 ## 5. Known project boundaries
 
-- **QLoRA experiment boundary.** The QLoRA implementation and freeze live on
-  the unmerged branch `experiment/qlora-patch-pilot-v1` (commit
-  `461e1ca5ec129db326f6e56169e15a9f16f6e58c`). The human manual audit is
-  still in progress; final training is not complete; held-out
-  base-versus-tuned evaluation is not complete; the branch is not merged
-  into `main`. The real CUDA checkpoint currently supports only IN PROGRESS
-  claims: real CommitPackFT minimum-tier corpus produced; automated 50+25
-  audit completed but human audit not complete; real one-step CUDA QLoRA
-  update succeeded; adapter save/reload succeeded; final training not run;
-  held-out generation not run; base-versus-tuned comparison not run.
+- **QLoRA experiment boundary.** The QLoRA implementation (including the
+  tracked `independent_ai` audit contract and run-provenance) and freeze live
+  on the unmerged branch `experiment/qlora-patch-pilot-v1` (head commit
+  `3f0d3e7`, accepted at FirstMate implementation review on 2026-08-05; the
+  branch is not merged into `main`). The owner-delegated independent FirstMate
+  AI audit of the 75 frozen corpus rows is complete externally (39 ACCEPT /
+  36 REJECT, disclosed AI reviewer identity; an AI audit, not a human audit);
+  its fail-closed validation and final corpus acceptance are pending. Final
+  QLoRA training was externally authorized by FirstMate on 2026-08-05; no
+  accepted final-training artifact exists yet and results are pending
+  FirstMate artifact review. Held-out base-versus-tuned evaluation is not
+  complete and remains unauthorized; the tracked freeze record at `3f0d3e7`
+  (still carrying `final_training_authorized: false` and
+  `held_out_generation_authorized: false`) is the historical branch-bound
+  freeze record, not evidence about the current external authorization. The
+  real CUDA checkpoint currently supports only IN PROGRESS claims: real
+  CommitPackFT minimum-tier corpus produced; automated 50+25 audit packets
+  prepared; owner-delegated independent AI audit complete externally; real
+  one-step CUDA QLoRA update succeeded; adapter save/reload succeeded; final
+  training not complete (no accepted artifact); held-out generation not run;
+  base-versus-tuned comparison not run.
+- **Campaign-infrastructure boundary (2026-08-05).** The campaign
+  infrastructure and paired-pilot v4 terminal contract are accepted on
+  `main` through commit `0abb588` (`eb63c76`/`9f53df7`/`0abb588`), which
+  added the terminal, exact-identity validation, and fail-closed
+  budget-exhaustion provenance infrastructure (run persistence,
+  campaign-record validation, attempt-package verification). The sanitized
+  attempt fixture and replay assertions accepted at `0abb588` associated the
+  two recorded shapes with the wrong frozen cases; the 2026-08-05
+  Friday-readiness candidate corrects that fixture/test identity mapping
+  from the preserved campaign record, private transport, cost sums, and the
+  frozen v4 case order (production budgets, manifest, route, provider,
+  authorization, and controller behavior unchanged). The recorded V4
+  attempt `3b5d7488…` case boundaries are: Case 1 = `find-in-sorted` /
+  `pdb-on-uncertainty` (order 1, 26,139 public-evidence bytes, malformed
+  hunk-header patch rejection, no candidate, zero verifier runs,
+  `$0.007378`); Case 2 = `find-in-sorted` / `static-baseline` (order 2,
+  38,534 bytes, patch applied with Validate visited, interrupted, zero
+  verifier runs, `$0.012323`); the original campaign aborted
+  `ABORTED/BUDGET_EXCEEDED`. This establishes no verifier-confirmed live
+  repair and no live PDB benefit, and is not a post-repair provider
+  campaign. Accepted campaign validation: focused suite 389 passed; bounded
+  full suite 3394 passed, 3 skipped, same six known OpenCode
+  wrapper/transport failures.
 - **QuixBugs live-campaign boundary.** The v4 live campaign
   (attempt `3b5d7488…`, 2026-08-04) demonstrated real provider interaction
-  and correct model-level diagnosis/patch intent on case 1
-  (`find_in_sorted`), but produced zero verifier-confirmed repairs, zero PDB
-  observations, and no valid paired policy comparison (campaign
-  `ABORTED/BUDGET_EXCEEDED`; case 2 applied a correct patch but exhausted
-  public evidence before a verifier run; cases 3–6 unstarted). Earlier
+  and correct model-level diagnosis/patch intent on Case 1
+  (`find-in-sorted` / `pdb-on-uncertainty`, order 1: malformed hunk-header
+  patch rejection, 26,139 public-evidence bytes, no candidate, `$0.007378`),
+  but produced zero verifier-confirmed repairs, zero PDB observations, and
+  no valid paired policy comparison (campaign `ABORTED/BUDGET_EXCEEDED`;
+  Case 2 — `find-in-sorted` / `static-baseline`, order 2 — applied a patch
+  with Validate visited but exhausted public evidence (38,534 bytes) before
+  a verifier run and was interrupted, `$0.012323`; cases 3–6 unstarted).
+  The recorded case identities are bound to the preserved campaign record
+  and private transport (`tests/fixtures/quixbugs_v4_budget_verifier_attempt_fixture.json`,
+  `tests/unit/test_quixbugs_v4_budget_verifier_path.py`; campaign
+  infrastructure accepted on `main` through `0abb588`). Earlier
   attempts (`705aa047…` protocol-invalid, `81f2e5d8…` and `4c7fc444…`
   infrastructure-failed, `8890ed9…`/`320550…` non-pilot diagnostics,
   `fddf1e39…` v3 `BUDGET_EXCEEDED`) are not valid experiments. The
@@ -780,12 +850,16 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 - Items 1–4: reviewed literature and honest gaps.
 - Items 5–7: completed dataset/system research.
 - Item 8: selections reported with the explicit RAG selection gap.
-- Item 9: real corpus produced; human audit in progress.
+- Item 9: real corpus produced; owner-delegated independent FirstMate AI
+  audit complete externally; fail-closed validation and corpus acceptance
+  pending.
 - Item 10: frozen model selection (branch-bound).
-- Item 11: transformation executed; acceptance pending audit.
-- Item 12: real QLoRA training as the active Friday target.
+- Item 11: transformation executed; acceptance pending fail-closed audit
+  validation.
+- Item 12: final QLoRA training externally authorized (2026-08-05) as the
+  active Friday target; results pending FirstMate artifact review.
 - Item 13: frozen held-out base-versus-tuned comparison as the active
-  Friday target.
+  Friday target (still unauthorized).
 - Items 16–17: working prototype and demonstrable architecture.
 - Item 18: honest live findings (diagnosis/patch intent, zero
   verifier-confirmed repairs).
@@ -797,9 +871,10 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 
 ### POST-FRIDAY NEAR TERM
 
-- Item 9: human audit completion and corpus acceptance.
+- Item 9: fail-closed audit validation and corpus acceptance.
 - Item 11: audit-gated transformation acceptance.
-- Item 12: final training completion, gate approval, branch merge.
+- Item 12: final-training artifact review and completion (externally
+  authorized by FirstMate 2026-08-05), branch merge.
 - Item 13: comparison completion and analysis.
 - Item 23: fine-tuned model debugger-command generation and interpretation.
 - Item 26: completion via a full authorized six-case campaign with
@@ -827,7 +902,7 @@ exist and are accepted; satisfied with the explicit scope boundary above.
   `research/quixbugs/*_MANIFEST_V1.json`,
   `research/quixbugs/EIGHT_TASK_PILOT_MANIFEST_V1.json`
 - **QLoRA (unmerged branch `experiment/qlora-patch-pilot-v1`, commit
-  `461e1ca`):** `experiments/qlora_patch_pilot_v1/` (freeze_record,
+  `3f0d3e7`):** `experiments/qlora_patch_pilot_v1/` (freeze_record,
   training/generation/prompt/transformation configs, SMOKE_EVIDENCE,
   notebook), `agentic_debugger/training/patch_pilot.py`,
   `scripts/qlora_patch_pilot.py`, `tests/unit/test_qlora_patch_pilot.py`
@@ -847,7 +922,7 @@ exist and are accepted; satisfied with the explicit scope boundary above.
   `2996f16`; 10B-R3 `1bb1d52`; 10B-R5 `63fa27c`; QuixBugs smoke `96526fc`;
   eight-task baseline `2236775`; paired-pilot v2 `28ec775`/`cda3d0a`;
   OpenCode Go adapter `618c33f`; v3 `603b391`; v4 `39abb2a`; QLoRA branch
-  `461e1ca`.
+  `3f0d3e7`.
 
 ## 8. Method and limitations note
 

@@ -444,6 +444,62 @@ In priority order, consistent with the Decision Gate:
    SWE-Doctor) and the root-cause/statement-level localization metrics named
    as gaps in Dataset and Evaluation Decision v1.
 
+## 14. Revision note (2026-08-05) — state through accepted campaign infrastructure
+
+The body of this report is a point-in-time snapshot through the eight-task
+QuixBugs gold baseline (`2236775`, 2026-07-31). The following 2026-08-05
+revision records the accepted state since then; it does not alter the
+historical body above.
+
+- **Campaign infrastructure accepted on `main` through `0abb588`.**
+  `eb63c76` hardened the campaign budget and verifier path, `9f53df7` added
+  the actual V4 interrupted budget terminal, and `0abb588` added the
+  terminal, exact-identity validation, and fail-closed budget-exhaustion
+  provenance infrastructure (run persistence, campaign-record validation,
+  attempt-package verification). Accepted campaign validation: focused
+  campaign integration suite 389 passed; bounded full suite 3394 passed, 3
+  skipped, same six known OpenCode wrapper/transport failures.
+- **Recorded-case identity correction (2026-08-05 candidate).** The
+  sanitized attempt fixture and replay assertions accepted at `0abb588`
+  associated the two observed shapes with the wrong frozen cases; the
+  Friday-readiness candidate in this branch corrects that fixture/test
+  identity mapping using the preserved campaign record, private transport
+  evidence, cost sums, and the frozen v4 case order. Production budgets,
+  the frozen manifest, route, provider, authorization, and controller
+  behavior are unchanged.
+- **Recorded V4 attempt (`3b5d7488…`).** V4 Case 1 (`find_in_sorted` /
+  `pdb-on-uncertainty`, order 1): 10 provider processes, 9 logical calls, 1
+  retry, 26,139 public-evidence bytes, malformed hunk-header patch
+  rejection, no candidate, zero verifier runs, `$0.007378`,
+  `INFRASTRUCTURE_ERROR`. V4 Case 2 (`find_in_sorted` / `static-baseline`,
+  order 2): 15 provider processes, 14 logical calls, 1 retry, 38,534 bytes,
+  patch applied with Validate visited, interrupted, zero verifier runs,
+  `$0.012323`; the original campaign aborted `ABORTED / BUDGET_EXCEEDED`.
+  No verifier-confirmed external live repair exists; no live PDB benefit is
+  demonstrated; no post-repair provider campaign was run. The next
+  authorized attempt must use `research/quixbugs/PAIRED_PILOT_V4.json`
+  explicitly.
+- **QLoRA experiment.** The implementation (including the tracked
+  `independent_ai` audit contract and run-provenance) is accepted at commit
+  `3f0d3e7` on the unmerged branch `experiment/qlora-patch-pilot-v1`
+  (FirstMate implementation review passed; owner suite review 3457 passed, 3
+  skipped, 36 unrelated pre-existing OpenCode transport/wrapper failures, no
+  QLoRA-focused failure). The owner-delegated independent FirstMate AI audit
+  of the 75 frozen corpus rows is complete externally (39 ACCEPT / 36
+  REJECT, disclosed AI reviewer identity; not a human audit). Final QLoRA
+  training was externally authorized by FirstMate on 2026-08-05; no accepted
+  final-training artifact or result exists yet, and final-training results
+  are pending FirstMate artifact review. Held-out generation and the
+  base-versus-tuned comparison remain unauthorized; final corpus acceptance
+  and the remaining fail-closed audit/corpus-quality decisions remain
+  pending. The tracked freeze record at `3f0d3e7` (which still carries
+  `final_training_authorized: false`) is the historical branch-bound freeze
+  record, not evidence about the current external authorization. No
+  predicted training values are implied.
+- **Current operating facts** (see `README.md` "Current status
+  (2026-08-05)", `TODO.md`, `docs/PROJECT_TRACKER.md` 2026-08-05 entry, and
+  `docs/FRIDAY_PRESENTATION_PLAN_V1.md` for the full evidence paths).
+
 ## 13. Final contribution
 
 This project delivers a verifier-backed, fail-closed, single-controller

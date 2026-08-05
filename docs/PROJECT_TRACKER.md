@@ -1642,3 +1642,58 @@ model performance, PDB effectiveness, RAG, SFT, DPO.
 - No route capture, authorization, preflight, or live campaign executed in
   this task; v4 requires fresh operator artifacts against the clean accepted
   execution HEAD.
+
+2026-08-05 (Campaign infrastructure accepted on main; V4 attempt record; QLoRA implementation)
+
+- The campaign infrastructure and paired-pilot v4 terminal contract are
+  accepted on main through commit `0abb588`: `eb63c76` hardened the campaign
+  budget and verifier path, `9f53df7` added the actual V4 interrupted budget
+  terminal, and `0abb588` added the terminal, exact-identity validation, and
+  fail-closed budget-exhaustion provenance infrastructure (run persistence,
+  campaign-record validation, and attempt-package verification).
+- Accepted campaign validation: the focused campaign integration suite passed
+  389 tests; the bounded full suite produced 3394 passed, 3 skipped, and the
+  same six pre-existing OpenCode wrapper/transport failures (no new failure).
+- Recorded V4 attempt `quixbugs-paired-pilot-v4-attempt-3b5d7488...`
+  (preserved under ignored `operator/attempts/`): exact case boundaries are
+  Case 1 = `find-in-sorted` / `pdb-on-uncertainty` (order 1): 10 provider
+  processes, 9 logical calls, 1 retry, 26,139 public-evidence bytes, malformed
+  unified-diff (hunk-header) rejection, no candidate, 0 verifier runs,
+  `$0.007378`, `INFRASTRUCTURE_ERROR`; Case 2 = `find-in-sorted` /
+  `static-baseline` (order 2): 15 provider processes, 14 logical calls, 1
+  retry, 38,534 bytes, patch applied with Validate visited, 0 verifier runs,
+  interrupted, `$0.012323`; the original campaign aborted
+  `ABORTED/BUDGET_EXCEEDED`, now representable as schema-valid
+  `INFRASTRUCTURE_ERROR` / `ABORTED/INTERRUPTED` terminals with exact
+  observed byte counts in `budget_exhaustion` provenance and counters clamped
+  to the frozen 20,000-byte limit.
+- The fixture identity correction (2026-08-05, current Friday-readiness
+  candidate): the sanitized attempt fixture and replay assertions accepted at
+  `0abb588` associated the two observed shapes with the wrong frozen cases;
+  the current candidate corrects that fixture/test identity mapping per the
+  preserved campaign record and private transport (the 26,139-byte malformed
+  shape to `find-in-sorted` / `pdb-on-uncertainty` order 1, the 38,534-byte
+  applied-patch interrupted shape to `find-in-sorted` / `static-baseline`
+  order 2). Production budgets, manifest, route, provider, authorization,
+  and controller behavior are unchanged.
+- This repair establishes no verifier-confirmed live repair, demonstrates no
+  live PDB benefit, and is not a post-repair provider campaign. The Authorized
+  Six-Case Live Campaign remains open and unauthorized; the next authorized
+  attempt must use `research/quixbugs/PAIRED_PILOT_V4.json` explicitly with
+  fresh operator artifacts.
+- QLoRA: the experiment implementation (including the tracked `independent_ai`
+  audit contract and run-provenance) is accepted at commit `3f0d3e7` on the
+  unmerged branch `experiment/qlora-patch-pilot-v1` (FirstMate implementation
+  review passed). Owner suite review: 3457 passed, 3 skipped, 36 unrelated
+  pre-existing OpenCode transport/wrapper failures, no QLoRA-focused failure.
+  The owner-delegated independent FirstMate AI audit of the 75 frozen corpus
+  rows is complete externally (39 ACCEPT / 36 REJECT, disclosed AI reviewer
+  identity; an AI audit, not a human audit); fail-closed validation and final
+  corpus acceptance remain pending. Final QLoRA training was externally
+  authorized by FirstMate on 2026-08-05; no accepted final-training artifact
+  exists yet and results are pending FirstMate artifact review. Held-out
+  generation and base-versus-tuned comparison remain unauthorized. The
+  tracked freeze record at `3f0d3e7` (still carrying `final_training_authorized:
+  false` and `held_out_generation_authorized: false`) is the historical
+  branch-bound freeze record, not evidence about the current external
+  authorization. No instructor TODO status is promoted by this entry.

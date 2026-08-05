@@ -6,15 +6,27 @@ model calls.  Attempt identity is versioned truth: the preserved
 provider processes, completed post-apply lifecycle) is V3 evidence replayed
 under the v4 terminal contract; the actual V4 attempt is
 ``quixbugs-paired-pilot-v4-attempt-3b5d7488d61262f97a1c800367ca8e1817e906795dbbf1e04d762c34078e6896``
-whose Case 2 observed 15 provider process attempts, 38,534 cumulative
-public-evidence bytes, an applied patch with Validate visited, zero verifier
-runs, an interrupted controller outcome, no materialized case record, and an
-original campaign abort ``BUDGET_EXCEEDED`` because the shape was not
+whose interrupted Case 2 observed 15 provider process attempts, 38,534
+cumulative public-evidence bytes, an applied patch with Validate visited, zero
+verifier runs, an interrupted controller outcome, no materialized case record,
+and an original campaign abort ``BUDGET_EXCEEDED`` because the shape was not
 representable.
 
-* V4 Case 1 (malformed unified diff, artifact-derived): the controller
-  reached the correct diagnosis but every patch attempt was a malformed
-  unified diff; 10 provider processes and 26,139 observed public-evidence
+The fixture case identities are bound to the exact frozen v4 cases recorded by
+the preserved campaign record (``campaign.json``) and private transport for
+attempt 3b5d7488...: the 26,139-byte malformed/hunk-header-rejection shape
+belongs to ``find-in-sorted`` / ``pdb-on-uncertainty`` (order_index 1, the
+case the old runner materialized with 10 provider processes, 9 logical calls, 1
+retry, and $0.007378 provider-reported cost), and the 38,534-byte
+applied-patch interrupted shape belongs to ``find-in-sorted`` /
+``static-baseline`` (order_index 2, 15 provider processes, $0.012323) — the
+case in flight when the original campaign aborted.
+
+* V4 Case 1 (malformed unified diff, artifact-derived):
+  ``quixbugs-find-in-sorted-smoke-v1`` under ``pdb-on-uncertainty``: the
+  controller reached the correct diagnosis but every patch attempt was a
+  malformed unified diff (hunk header declared old_count=7 while the body
+  carries 6 lines); 10 provider processes and 26,139 observed public-evidence
   bytes later no candidate was ever applied and the verifier never ran.  The
   case must materialize as a schema-valid terminal
   (``INFRASTRUCTURE_ERROR`` / controller stage) with ``patch_submissions ==
@@ -22,8 +34,9 @@ representable.
   disposable-workspace cleanup, the machine-readable budget provenance, and
   the campaign must continue.
 * V4 Case 2 (applied patch, Validate visited, interrupted, public evidence
-  over budget): a candidate was applied and Validate was reached, the run
-  was interrupted, and the frozen public-evidence budget was exceeded
+  over budget): ``quixbugs-find-in-sorted-smoke-v1`` under
+  ``static-baseline``: a candidate was applied and Validate was reached, the
+  run was interrupted, and the frozen public-evidence budget was exceeded
   (38,534 observed bytes).  The terminal result must be schema-valid with
   the exact observed byte count preserved in the machine-readable
   ``budget_exhaustion`` provenance and in the termination detail, the
@@ -867,20 +880,21 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     """The actual V4 Case 2 shape (attempt 3b5d7488...: 15 provider process
     attempts, 38,534 observed public-evidence bytes, patch applied, Validate
     visited, verifier never ran, interrupted controller outcome; the original
-    run materialized no case record and aborted BUDGET_EXCEEDED) now flows
-    end to end: outcome validation, budget rewriting, materialization, frozen
-    result validation, campaign persistence and package verification.  The
-    case is resolved from its exact frozen case_id (order_index 1,
-    find-in-sorted / pdb-on-uncertainty) and the persisted record proves the
+    run materialized no case record for it and aborted BUDGET_EXCEEDED) now
+    flows end to end: outcome validation, budget rewriting, materialization,
+    frozen result validation, campaign persistence and package verification.
+    The case is resolved from its exact frozen case_id (order_index 2,
+    find-in-sorted / static-baseline) and the persisted record proves the
     exact identity, preserves the interruption identity and every accounting
     counter, clamps public evidence to 20,000, and carries the machine-
-    readable budget_exhaustion provenance; the campaign terminalizes as the
-    typed ABORTED / INTERRUPTED package."""
+    readable budget_exhaustion provenance; the campaign, which first
+    completed the recorded find-in-sorted / pdb-on-uncertainty Case 1, then
+    terminalizes as the typed ABORTED / INTERRUPTED package."""
     attempt = _fixture_attempt()
     case2 = attempt["case2_observed"]
     case = _resolve_fixture_case(manifest_v4, case2)
-    assert case2["case_id"] == manifest_v4["case_order"][0]["case_id"]
-    assert case2["policy"] == "pdb-on-uncertainty"
+    assert case2["case_id"] == manifest_v4["case_order"][1]["case_id"]
+    assert case2["policy"] == "static-baseline"
     raw = _fixture_outcome(manifest_v4, case, case2, interrupted=True, patch_applied=True)
 
     runner.validate_case_outcome(raw)
@@ -925,7 +939,15 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     runner.validate_record_budget_exhaustion(record, budgets=manifest_v4["budgets"])
 
     entries = _completed_entries(manifest_v4)
-    entries[0] = {"provider_process_attempts": 15, "outcome": raw}
+    case1 = attempt["case1_observed"]
+    entries[0] = {
+        "provider_process_attempts": 10,
+        "outcome": _fixture_outcome(
+            manifest_v4, _resolve_fixture_case(manifest_v4, case1), case1,
+            interrupted=False, patch_applied=False,
+        ),
+    }
+    entries[1] = {"provider_process_attempts": 15, "outcome": raw}
     campaign_record, factory, case_runner, output = _run_campaign_custom(
         manifest_v4, auth_v4, tmp_path,
         case_runner=ScriptedCaseRunner(entries),
@@ -935,7 +957,8 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     assert campaign_record["status"] == "ABORTED"
     assert campaign_record["stop_reason"] == "INTERRUPTED"
     assert campaign_record["case_lifecycle_states"][case["case_id"]] == "completed"
-    first = campaign_record["cases"][0]
+    assert campaign_record["case_lifecycle_states"][manifest_v4["case_order"][0]["case_id"]] == "completed"
+    first = campaign_record["cases"][1]
     assert first["case_id"] == case2["case_id"]
     assert first["order_index"] == case2["order_index"]
     assert first["task_id"] == case2["task_id"]
@@ -953,8 +976,8 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     runner.validate_campaign_record(campaign_record, manifest_v4)
     verification = runner.verify_attempt_package(output, manifest_v4)
     assert verification["consistent"] is True
-    assert verification["case_files_on_disk"] == 1
-    assert verification["case_records_referenced"] == 1
+    assert verification["case_files_on_disk"] == 2
+    assert verification["case_records_referenced"] == 2
     assert verification["terminal_commit"] == "PRESENT"
 
 
@@ -963,8 +986,8 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
     public-evidence bytes, 10 provider processes, no applied candidate,
     verifier never ran) materializes as a schema-valid terminal with the
     budget clamped and the campaign continuing to the remaining cases.  The
-    case is resolved from its exact frozen case_id (order_index 4,
-    is-valid-parenthesization / pdb-on-uncertainty), distinct from Case 2."""
+    case is resolved from its exact frozen case_id (order_index 1,
+    find-in-sorted / pdb-on-uncertainty), distinct from Case 2."""
     attempt = _fixture_attempt()
     case1 = attempt["case1_observed"]
     case = _resolve_fixture_case(manifest_v4, case1)
@@ -1006,7 +1029,7 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
     assert record["budget_exhaustion"]["observed_bytes"] == 26139
 
     entries = _completed_entries(manifest_v4)
-    entries[3] = {"provider_process_attempts": 10, "outcome": raw}
+    entries[0] = {"provider_process_attempts": 10, "outcome": raw}
     campaign_record, factory, case_runner, output = _run_campaign_custom(
         manifest_v4, auth_v4, tmp_path,
         case_runner=ScriptedCaseRunner(entries),
@@ -1014,7 +1037,7 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
         git_state_provider=git_state_provider,
     )
     assert campaign_record["status"] == "COMPLETED"
-    case1_record = campaign_record["cases"][3]
+    case1_record = campaign_record["cases"][0]
     assert case1_record["case_id"] == case1["case_id"]
     assert case1_record["order_index"] == case1["order_index"]
     assert case1_record["policy"] == case1["policy"]
@@ -1120,14 +1143,15 @@ def test_adapter_maps_reporting_interrupted_to_outcome_interrupted(manifest_v4):
 
 
 def _v4_case2_campaign_record(manifest_v4, auth_v4, tmp_path, git_state_provider):
-    """Build the actual V4 Case 2 campaign (ABORTED / INTERRUPTED with one
-    budget-exhausted case record) and return (record, output_root)."""
+    """Build the actual V4 Case 2 campaign (ABORTED / INTERRUPTED with the
+    interrupted find-in-sorted / static-baseline budget-exhausted case record
+    at frozen order 2) and return (record, output_root)."""
     attempt = _fixture_attempt()
     case2 = attempt["case2_observed"]
     case = _resolve_fixture_case(manifest_v4, case2)
     raw = _fixture_outcome(manifest_v4, case, case2, interrupted=True, patch_applied=True)
     entries = _completed_entries(manifest_v4)
-    entries[0] = {"provider_process_attempts": 15, "outcome": raw}
+    entries[1] = {"provider_process_attempts": 15, "outcome": raw}
     record, factory, case_runner, output = _run_campaign_custom(
         manifest_v4, auth_v4, tmp_path,
         case_runner=ScriptedCaseRunner(entries),
@@ -1135,7 +1159,7 @@ def _v4_case2_campaign_record(manifest_v4, auth_v4, tmp_path, git_state_provider
         git_state_provider=git_state_provider,
     )
     assert record["status"] == "ABORTED"
-    assert record["cases"][0]["budget_exhaustion"]["persisted_bytes"] == 20000
+    assert record["cases"][1]["budget_exhaustion"]["persisted_bytes"] == 20000
     return record, output
 
 
@@ -1153,14 +1177,15 @@ def test_campaign_validation_rejects_bad_budget_provenance(manifest_v4, auth_v4,
     substitute for the semantic check: the embedded record_sha256 is
     recomputed so the provenance check is the rejecting gate."""
     record, output = _v4_case2_campaign_record(manifest_v4, auth_v4, tmp_path, git_state_provider)
-    case_entry = copy.deepcopy(record["cases"][0])
+    case_entry = copy.deepcopy(record["cases"][1])
 
     def expect_reject(mutate, message_part):
         mutated = copy.deepcopy(case_entry)
         mutate(mutated)
         mutated = _recompute_record_sha256(mutated)
+        cases = [copy.deepcopy(record["cases"][0]), mutated]
         with pytest.raises(runner.LiveRunnerError, match=message_part):
-            runner.validate_campaign_record({**record, "cases": [mutated]}, manifest_v4)
+            runner.validate_campaign_record({**record, "cases": cases}, manifest_v4)
 
     expect_reject(
         lambda entry: entry["budget_exhaustion"].update(persisted_bytes=19999),
@@ -1201,7 +1226,7 @@ def test_package_verification_rejects_bad_budget_provenance(manifest_v4, auth_v4
         root = Path(output)
         campaign = json.loads((root / "campaign.json").read_text(encoding="utf-8"))
         commit = json.loads((root / "terminal-commit.json").read_text(encoding="utf-8"))
-        entry = campaign["cases"][0]
+        entry = campaign["cases"][1]
         case_path = root / "cases" / f"case-{int(entry['order_index']):02d}-{entry['case_id'].replace(':', '__')}.json"
         on_disk = json.loads(case_path.read_text(encoding="utf-8"))
         provenance_mutate(on_disk["budget_exhaustion"])
