@@ -1151,14 +1151,97 @@ PAYLOAD_MANIFEST_EXCLUDED_NAMES = {
     "INCOMPLETE",
 }
 TEMP_FILE_SUFFIXES = (".tmp", ".part", "~")
-REQUIRED_SUMMARY_FIELDS = (
-    "run_id",
-    "final_status",
-    "manifest_sha256",
-    "reload_verification",
-    "held_out_generation_authorized",
-    "held_out_accessed",
+FINAL_TRAINING_SUMMARY_SCHEMA_VERSION = "final-training-summary-v1"
+FINAL_TRAINING_EXPERIMENT_ID = "qlora-patch-pilot-v1"
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+GIT_COMMIT_PATTERN = re.compile(r"[0-9a-f]{7,40}")
+GIT_COMMIT_FULL_PATTERN = re.compile(r"[0-9a-f]{40}")
+AUDIT_RESULT_KEYS = (
+    "total_rows",
+    "accepted_packet_rows",
+    "rejected_packet_rows",
+    "accepted_packet_accept",
+    "accepted_packet_reject",
+    "rejected_packet_accept",
+    "rejected_packet_reject",
 )
+CONFIGURATION_IDENTITY_KEYS = ("prompt_contract", "transformation", "training", "generation")
+RUNTIME_IDENTITY_KEYS = (
+    "python",
+    "torch",
+    "cuda_available",
+    "cuda_runtime",
+    "gpu",
+    "gpu_total_memory_bytes",
+    "packages",
+    "repository_verification",
+)
+RELOAD_VERIFICATION_KEYS = ("adapter_reloaded", "adapter_path", "verified_at_utc")
+TRAINER_STATE_KEYS = ("global_step", "epoch", "log_history")
+TOKENIZER_ARTIFACT_NAMES = ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "added_tokens.json")
+
+# Central summary provenance contract shared by production code and tests.
+# The completion helper refuses FINAL status unless every mandated field is
+# present and satisfies its declared kind; exact-value and cross-record checks
+# are applied by write_final_run_status against run_context.json, the bound
+# authorization record, the payload manifest, and reload_verification.json.
+FINAL_TRAINING_SUMMARY_CONTRACT: dict[str, dict[str, Any]] = {
+    "schema_version": {"kind": "exact_string", "value": FINAL_TRAINING_SUMMARY_SCHEMA_VERSION},
+    "experiment_id": {"kind": "exact_string", "value": FINAL_TRAINING_EXPERIMENT_ID},
+    "run_id": {"kind": "run_id"},
+    "final_status": {"kind": "exact_string", "value": FINAL_TRAINING_FINAL_STATUS},
+    "manifest_sha256": {"kind": "sha256"},
+    "started_at_utc": {"kind": "nonempty_string"},
+    "completed_at_utc": {"kind": "nonempty_string"},
+    "repository_commit": {"kind": "git_commit"},
+    "required_ancestor": {"kind": "git_commit"},
+    "authorization_path": {"kind": "nonempty_string"},
+    "authorization_sha256": {"kind": "sha256"},
+    "completed_audit_csv_path": {"kind": "nonempty_string"},
+    "completed_audit_csv_sha256": {"kind": "sha256"},
+    "completed_audit_manifest_path": {"kind": "nonempty_string"},
+    "completed_audit_manifest_sha256": {"kind": "sha256"},
+    "train_jsonl_path": {"kind": "nonempty_string"},
+    "train_jsonl_sha256": {"kind": "sha256"},
+    "train_jsonl_bytes": {"kind": "nonnegative_int"},
+    "train_rows": {"kind": "positive_int"},
+    "validation_jsonl_path": {"kind": "nonempty_string"},
+    "validation_jsonl_sha256": {"kind": "sha256"},
+    "validation_jsonl_bytes": {"kind": "nonnegative_int"},
+    "validation_rows": {"kind": "positive_int"},
+    "corpus_manifest_path": {"kind": "nonempty_string"},
+    "corpus_manifest_sha256": {"kind": "sha256"},
+    "corpus_manifest_bytes": {"kind": "nonnegative_int"},
+    "model_repository": {"kind": "nonempty_string"},
+    "model_revision": {"kind": "git_commit_full"},
+    "configuration_identities": {
+        "kind": "dict",
+        "exact_keys": CONFIGURATION_IDENTITY_KEYS,
+        "values": "sha256",
+    },
+    "audit_mode": {"kind": "exact_string", "value": AUDIT_MODE_INDEPENDENT_AI},
+    "audit_result": {"kind": "dict", "exact_keys": AUDIT_RESULT_KEYS, "values": "nonnegative_int"},
+    "reviewer_identity": {"kind": "nonempty_string"},
+    "reviewer_type": {"kind": "exact_string", "value": INDEPENDENT_REVIEWER_TYPE},
+    "no_top_up": {"kind": "exact_bool", "value": True},
+    "train_loss": {"kind": "finite_number"},
+    "elapsed_seconds": {"kind": "nonnegative_number"},
+    "peak_cuda_memory_allocated_bytes": {"kind": "nonnegative_int"},
+    "peak_cuda_memory_reserved_bytes": {"kind": "nonnegative_int"},
+    "train_examples": {"kind": "positive_int"},
+    "validation_examples": {"kind": "positive_int"},
+    "epochs": {"kind": "positive_number"},
+    "trainer_state": {"kind": "dict", "required_keys": TRAINER_STATE_KEYS},
+    "trainer_state_identity": {"kind": "sha256"},
+    "training_log_identity": {"kind": "sha256"},
+    "tokenizer_identities": {"kind": "identity_map"},
+    "runtime": {"kind": "runtime_identity"},
+    "adapter_identities": {"kind": "identity_map"},
+    "reload_verification": {"kind": "reload_result"},
+    "held_out_generation_authorized": {"kind": "exact_bool", "value": False},
+    "held_out_accessed": {"kind": "exact_bool", "value": False},
+}
+REQUIRED_SUMMARY_FIELDS = tuple(FINAL_TRAINING_SUMMARY_CONTRACT)  # compatibility alias
 EXPECTED_ARTIFACT_LOGICAL_PATHS = {
     "train_jsonl": "corpus/train.jsonl",
     "validation_jsonl": "corpus/validation.jsonl",
@@ -1434,16 +1517,86 @@ def _collect_payload_artifacts(run_dir: Path) -> list[tuple[PurePosixPath, Path]
     return artifacts
 
 
+REQUIRED_PAYLOAD_FILES = (
+    "run_context.json",
+    "trainer_state.json",
+    "training_log_history.json",
+    "runtime_environment.json",
+    "memory_timing.json",
+    "reload_verification.json",
+)
+ADAPTER_WEIGHT_GLOBS = ("adapter-*/adapter_model.safetensors", "adapter-*/adapter_model.bin")
+ADAPTER_METADATA_GLOBS = (
+    "adapter-*/adapter_config.json",
+    "adapter-*/tokenizer.json",
+    "adapter-*/tokenizer_config.json",
+)
+
+
+def _validate_required_payload_set(directory: Path, problems: list[str]) -> None:
+    """Fail closed unless the active run contains the complete required payload set."""
+    for filename in REQUIRED_PAYLOAD_FILES:
+        path = directory / filename
+        if not path.is_file():
+            problems.append(f"missing required payload {filename}")
+        elif path.stat().st_size == 0:
+            problems.append(f"required payload {filename} is zero-byte")
+    weight_matches: list[Path] = []
+    for pattern in ADAPTER_WEIGHT_GLOBS:
+        weight_matches.extend(sorted(directory.glob(pattern)))
+    if not weight_matches:
+        problems.append(
+            "missing required adapter weight artifact "
+            "(adapter-*/adapter_model.safetensors or adapter-*/adapter_model.bin)"
+        )
+    elif len(weight_matches) > 1:
+        problems.append(
+            "ambiguous adapter-weight selection: "
+            + ", ".join(str(path.relative_to(directory)) for path in weight_matches)
+        )
+    else:
+        if weight_matches[0].stat().st_size == 0:
+            problems.append("required adapter weight artifact is zero-byte")
+        adapter_dir = weight_matches[0].parent
+        for pattern in ADAPTER_METADATA_GLOBS:
+            matches = sorted(directory.glob(pattern))
+            if not matches:
+                problems.append(f"missing required adapter metadata artifact {pattern}")
+            elif len(matches) > 1:
+                problems.append(
+                    f"ambiguous adapter metadata artifact {pattern}: "
+                    + ", ".join(str(path.relative_to(directory)) for path in matches)
+                )
+            else:
+                if matches[0].stat().st_size == 0:
+                    problems.append(f"required adapter metadata artifact {pattern} is zero-byte")
+                if matches[0].parent != adapter_dir:
+                    problems.append(
+                        f"adapter metadata artifact {pattern} is not inside the "
+                        f"adapter weight directory {adapter_dir.name}"
+                    )
+
+
 def write_payload_manifest(
     run_dir: str | Path,
     *,
     configuration_identity: str,
     provenance_identity: str,
 ) -> dict[str, Any]:
-    """Write external_artifacts.json covering only immutable run payload artifacts."""
+    """Write external_artifacts.json covering only immutable run payload artifacts.
+
+    Fails closed unless the active run contains the complete required payload
+    set (run context, adapter weights plus reload metadata, tokenizer artifacts,
+    trainer state, log history, runtime environment, memory/timing record, and
+    reload evidence).
+    """
     directory = Path(run_dir)
     if not directory.is_dir():
         raise CorpusBuildError(f"run directory missing: {directory}")
+    problems: list[str] = []
+    _validate_required_payload_set(directory, problems)
+    if problems:
+        raise CorpusBuildError("required payload validation failed: " + "; ".join(problems))
     artifacts: list[dict[str, Any]] = []
     for relative, path in _collect_payload_artifacts(directory):
         artifacts.append({
@@ -1507,8 +1660,10 @@ def write_final_run_status(
 ) -> dict[str, Any]:
     """Authoritative fail-closed completion for a final-training run.
 
-    Validates the full run package (immutable payload manifest, once-finalized
-    summary, reload verification, held-out boundary), then writes
+    Validates the complete run package: run identity (run_context.json bound to
+    the active directory name), the required payload set, the immutable payload
+    manifest, the full summary provenance contract, reload evidence cross-check,
+    authorization cross-check, and the held-out boundary. Only then writes
     run_status.json, writes RUN_COMPLETE last, and only then removes INCOMPLETE.
     """
     directory = Path(run_dir)
@@ -1527,16 +1682,17 @@ def write_final_run_status(
         problems.append("RUN_COMPLETE already exists; a second completion attempt is prohibited")
     if not manifest_path.is_file():
         problems.append(f"payload manifest missing: {manifest_path}")
-    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+    if not SHA256_PATTERN.fullmatch(manifest_sha256):
         problems.append("supplied manifest sha256 is not canonical lowercase SHA-256")
     if not summary_path.is_file():
         problems.append(f"final summary missing: {summary_path}")
-    if not re.fullmatch(r"[0-9a-f]{64}", summary_sha256):
+    if not SHA256_PATTERN.fullmatch(summary_sha256):
         problems.append("supplied summary sha256 is not canonical lowercase SHA-256")
 
-    run_context = load_json(directory / "run_context.json") if (directory / "run_context.json").is_file() else {}
-    active_run_id = run_context.get("run_id")
+    active_run_id = _validate_run_identity(directory, problems)
+    _validate_required_payload_set(directory, problems)
 
+    manifest: dict[str, Any] = {}
     if manifest_path.is_file():
         actual_manifest_sha = sha256_bytes(manifest_path.read_bytes())
         if actual_manifest_sha != manifest_sha256:
@@ -1585,24 +1741,15 @@ def write_final_run_status(
         except CorpusBuildError as exc:
             problems.append(f"summary is not valid JSON: {exc}")
             summary = {}
-        for field in REQUIRED_SUMMARY_FIELDS:
-            if field not in summary:
-                problems.append(f"summary is missing required field {field}")
+        validate_final_training_summary_contract(summary, problems)
         if summary.get("run_id") != active_run_id:
             problems.append(f"summary run_id does not match the active run {active_run_id!r}")
-        if summary.get("final_status") != FINAL_TRAINING_FINAL_STATUS:
-            problems.append(
-                f"summary final_status {summary.get('final_status')!r} is not {FINAL_TRAINING_FINAL_STATUS!r}"
-            )
         if summary.get("manifest_sha256") != manifest_sha256:
             problems.append("summary does not reference the exact manifest sha256")
-        reload_verification = summary.get("reload_verification")
-        if not isinstance(reload_verification, dict) or reload_verification.get("adapter_reloaded") is not True:
-            problems.append("reload verification is not explicitly successful")
-        if summary.get("held_out_generation_authorized") is not False:
-            problems.append("held_out_generation_authorized is not false")
-        if summary.get("held_out_accessed") is not False:
-            problems.append("held_out_accessed is not false")
+        if active_run_id is not None:
+            _validate_summary_authorization_crosscheck(summary, directory, problems)
+            _validate_reload_crosscheck(summary, active_run_id, directory, problems)
+        _validate_summary_payload_identities(summary, directory, manifest, problems)
 
     if problems:
         raise CorpusBuildError("final run completion validation failed: " + "; ".join(problems))
@@ -1636,9 +1783,387 @@ def write_final_run_status(
             "run_status_sha256": run_status_sha,
         },
     )
+    marker = load_json(run_complete)
+    if marker.get("run_id") != active_run_id or marker.get("run_status_sha256") != run_status_sha:
+        raise CorpusBuildError("RUN_COMPLETE marker verification failed after write")
     if incomplete.is_file():
         incomplete.unlink()
     return run_status
+
+
+_MISSING = object()
+
+
+def _canonical_run_id(value: Any) -> bool:
+    """A run id must be a non-empty canonical string usable as a directory name."""
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value == value.strip()
+        and "/" not in value
+        and "\\" not in value
+    )
+
+
+def validate_final_training_summary_contract(summary: Mapping[str, Any], problems: list[str]) -> None:
+    """Append violations of the complete final-training summary provenance contract."""
+    for field, spec in FINAL_TRAINING_SUMMARY_CONTRACT.items():
+        value = summary.get(field, _MISSING)
+        if value is _MISSING:
+            problems.append(f"summary is missing required field {field}")
+            continue
+        if spec["kind"] == "exact_bool" and value is not spec["value"]:
+            problems.append(f"summary field {field} is not {'true' if spec['value'] else 'false'}")
+            continue
+        detail = _summary_field_error(field, spec, value)
+        if detail is not None:
+            problems.append(f"summary field {field} is invalid: {detail}")
+
+
+def _summary_field_error(field: str, spec: Mapping[str, Any], value: Any) -> str | None:
+    kind = spec["kind"]
+    if kind == "exact_string":
+        return None if value == spec["value"] else f"does not equal {spec['value']!r}"
+    if kind == "exact_bool":
+        return None if value is spec["value"] else f"is not {'true' if spec['value'] else 'false'}"
+    if kind == "nonempty_string":
+        if isinstance(value, str) and value == value.strip() and value:
+            return None
+        return "must be a non-empty canonical string"
+    if kind == "sha256":
+        if isinstance(value, str) and SHA256_PATTERN.fullmatch(value):
+            return None
+        return "must be a canonical lowercase SHA-256"
+    if kind == "git_commit":
+        if isinstance(value, str) and GIT_COMMIT_PATTERN.fullmatch(value):
+            return None
+        return "must be a canonical git commit identity"
+    if kind == "git_commit_full":
+        if isinstance(value, str) and GIT_COMMIT_FULL_PATTERN.fullmatch(value):
+            return None
+        return "must be a canonical full git commit identity"
+    if kind == "run_id":
+        if _canonical_run_id(value):
+            return None
+        return "must be a non-empty canonical run id"
+    if kind == "nonnegative_int":
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            return "must be a non-negative integer"
+        return None
+    if kind == "positive_int":
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            return "must be a positive integer"
+        return None
+    if kind == "finite_number":
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
+            return "must be a finite number"
+        return None
+    if kind == "nonnegative_number":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value < 0
+        ):
+            return "must be a non-negative finite number"
+        return None
+    if kind == "positive_number":
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or value <= 0
+        ):
+            return "must be a positive finite number"
+        return None
+    if kind == "dict":
+        return _mapping_field_error(spec, value)
+    if kind == "identity_map":
+        return _identity_map_field_error(value)
+    if kind == "runtime_identity":
+        return _runtime_identity_field_error(value)
+    if kind == "reload_result":
+        if not isinstance(value, Mapping):
+            return "must be an object"
+        if value.get("adapter_reloaded") is not True:
+            return "reload verification is not explicitly successful"
+        missing = [key for key in RELOAD_VERIFICATION_KEYS if key not in value]
+        if missing:
+            return f"missing required reload verification key(s) {missing}"
+        return None
+    raise AssertionError(f"unknown summary contract kind {kind!r} for field {field}")
+
+
+def _mapping_field_error(spec: Mapping[str, Any], value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return "must be an object"
+    missing = [key for key in spec.get("required_keys", ()) if key not in value]
+    if missing:
+        return f"missing required key(s) {missing}"
+    exact_keys = spec.get("exact_keys")
+    if exact_keys is not None and set(value) != set(exact_keys):
+        return f"keys are not exactly {sorted(exact_keys)}"
+    values_kind = spec.get("values")
+    if values_kind == "sha256":
+        for key, item in value.items():
+            if not isinstance(item, str) or not SHA256_PATTERN.fullmatch(item):
+                return f"value {key!r} is not a canonical lowercase SHA-256"
+    elif values_kind == "nonnegative_int":
+        for key, item in value.items():
+            if isinstance(item, bool) or not isinstance(item, int) or item < 0:
+                return f"value {key!r} is not a non-negative integer"
+    elif values_kind is not None:
+        raise AssertionError(f"unknown dict value kind {values_kind!r}")
+    return None
+
+
+def _identity_map_field_error(value: Any) -> str | None:
+    if not isinstance(value, Mapping) or not value:
+        return "must be a non-empty object of artifact identities"
+    for name, identity in value.items():
+        if not isinstance(name, str) or not _canonical_relative_logical_path(name):
+            return f"artifact name {name!r} is not a canonical relative path"
+        if not isinstance(identity, Mapping):
+            return f"artifact {name!r} identity is not an object"
+        size = identity.get("size_bytes")
+        if isinstance(size, bool) or not isinstance(size, int) or size < 0:
+            return f"artifact {name!r} size_bytes is not a non-negative integer"
+        digest = identity.get("sha256")
+        if not isinstance(digest, str) or not SHA256_PATTERN.fullmatch(digest):
+            return f"artifact {name!r} sha256 is not a canonical lowercase SHA-256"
+    return None
+
+
+def _runtime_identity_field_error(value: Any) -> str | None:
+    if not isinstance(value, Mapping):
+        return "must be an object"
+    missing = [key for key in RUNTIME_IDENTITY_KEYS if key not in value]
+    if missing:
+        return f"missing required runtime identity key(s) {missing}"
+    if not isinstance(value.get("cuda_available"), bool):
+        return "cuda_available must be a boolean"
+    packages = value.get("packages")
+    if not isinstance(packages, Mapping) or not packages:
+        return "packages must be a non-empty object"
+    return None
+
+
+def _validate_run_identity(directory: Path, problems: list[str]) -> str | None:
+    """Run identity must come from run_context.json and match the active directory."""
+    run_context_path = directory / "run_context.json"
+    if not run_context_path.is_file():
+        problems.append("run_context.json is missing; the active run identity is unavailable")
+        return None
+    try:
+        run_context = load_json(run_context_path)
+    except CorpusBuildError as exc:
+        problems.append(f"run_context.json is not valid JSON: {exc}")
+        return None
+    run_id = run_context.get("run_id")
+    if not _canonical_run_id(run_id):
+        problems.append(f"run_context run_id {run_id!r} is missing, empty, or not a canonical run id")
+        return None
+    if run_id != directory.name:
+        problems.append(
+            f"run_context run_id {run_id!r} does not equal the active run directory name {directory.name!r}"
+        )
+    if not isinstance(run_context.get("authorization_path"), str) or not run_context["authorization_path"].strip():
+        problems.append("run_context authorization_path is missing")
+    if (
+        not isinstance(run_context.get("authorization_sha256"), str)
+        or not SHA256_PATTERN.fullmatch(run_context["authorization_sha256"])
+    ):
+        problems.append("run_context authorization_sha256 is missing or malformed")
+    return run_id
+
+
+def _validate_summary_authorization_crosscheck(
+    summary: Mapping[str, Any], directory: Path, problems: list[str]
+) -> None:
+    """Bind the summary provenance claims to the authorization record bound in run_context."""
+    run_context_path = directory / "run_context.json"
+    if not run_context_path.is_file():
+        return
+    try:
+        run_context = load_json(run_context_path)
+    except CorpusBuildError:
+        return
+    auth_path_value = run_context.get("authorization_path")
+    auth_sha256 = run_context.get("authorization_sha256")
+    if (
+        not isinstance(auth_path_value, str)
+        or not auth_path_value.strip()
+        or not isinstance(auth_sha256, str)
+    ):
+        return
+    auth_path = Path(auth_path_value)
+    if not auth_path.is_file():
+        problems.append("run_context authorization record is missing")
+        return
+    if sha256_bytes(auth_path.read_bytes()) != auth_sha256:
+        problems.append("run_context authorization record drifted from its recorded sha256")
+        return
+    try:
+        authorization = load_json(auth_path)
+    except CorpusBuildError as exc:
+        problems.append(f"run_context authorization record is not valid JSON: {exc}")
+        return
+    drift: list[str] = []
+    if summary.get("authorization_path") != auth_path_value:
+        drift.append("authorization_path")
+    if summary.get("authorization_sha256") != auth_sha256:
+        drift.append("authorization_sha256")
+    if summary.get("required_ancestor") != authorization.get("required_repository_ancestor"):
+        drift.append("required_ancestor")
+    model = authorization.get("model", {})
+    if summary.get("model_repository") != model.get("repository") or summary.get("model_revision") != model.get("revision"):
+        drift.append("model repository/revision")
+    if summary.get("configuration_identities") != authorization.get("configuration_identities"):
+        drift.append("configuration_identities")
+    if summary.get("audit_mode") != authorization.get("audit_mode"):
+        drift.append("audit_mode")
+    summary_audit = summary.get("audit_result") or {}
+    authorization_audit = authorization.get("audit_result") or {}
+    for key in AUDIT_RESULT_KEYS:
+        if summary_audit.get(key) != authorization_audit.get(key):
+            drift.append(f"audit_result.{key}")
+            break
+    if summary.get("reviewer_identity") != authorization_audit.get("reviewer"):
+        drift.append("reviewer_identity")
+    if summary.get("reviewer_type") != authorization_audit.get("reviewer_type"):
+        drift.append("reviewer_type")
+    corpus = authorization.get("corpus", {})
+    if authorization.get("top_up") not in (False, None) or corpus.get("top_up") not in (False, None):
+        drift.append("top_up")
+    declared = authorization.get("corpus_artifacts", {})
+    for kind, hash_key, size_key, rows_key in (
+        ("train_jsonl", "train_jsonl_sha256", "train_jsonl_bytes", "train_rows"),
+        ("validation_jsonl", "validation_jsonl_sha256", "validation_jsonl_bytes", "validation_rows"),
+    ):
+        entry = declared.get(kind, {})
+        if summary.get(hash_key) != entry.get("sha256"):
+            drift.append(hash_key)
+        if summary.get(size_key) != entry.get("size_bytes"):
+            drift.append(size_key)
+        if "rows" in entry and summary.get(rows_key) != entry.get("rows"):
+            drift.append(rows_key)
+    manifest_entry = declared.get("corpus_manifest", {})
+    if summary.get("corpus_manifest_sha256") != manifest_entry.get("sha256"):
+        drift.append("corpus_manifest_sha256")
+    if summary.get("corpus_manifest_bytes") != manifest_entry.get("size_bytes"):
+        drift.append("corpus_manifest_bytes")
+    audit_declared = authorization.get("audit_artifacts", {})
+    if summary.get("completed_audit_csv_sha256") != audit_declared.get("completed_audit_csv", {}).get("sha256"):
+        drift.append("completed_audit_csv_sha256")
+    if summary.get("completed_audit_manifest_sha256") != audit_declared.get("completed_audit_manifest", {}).get("sha256"):
+        drift.append("completed_audit_manifest_sha256")
+    if drift:
+        problems.append("summary provenance contradicts the bound authorization record: " + "; ".join(drift))
+
+
+def _adapter_dir_relative(directory: Path, adapter_path: Any) -> str | None:
+    """Canonical posix path of the adapter directory relative to the active run, or None."""
+    if not isinstance(adapter_path, str) or not adapter_path.strip():
+        return None
+    candidate = Path(adapter_path)
+    if not candidate.is_absolute():
+        candidate = directory / candidate
+    try:
+        resolved = candidate.resolve()
+        root = directory.resolve()
+        if not resolved.is_relative_to(root):
+            return None
+    except (OSError, ValueError):
+        return None
+    return candidate.relative_to(directory).as_posix()
+
+
+def _validate_reload_crosscheck(
+    summary: Mapping[str, Any], active_run_id: str, directory: Path, problems: list[str]
+) -> None:
+    """Bind the summary reload claim to the manifested reload_verification.json payload."""
+    reload_path = directory / "reload_verification.json"
+    if not reload_path.is_file() or reload_path.stat().st_size == 0:
+        return
+    try:
+        reload_record = json.loads(reload_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        problems.append(f"reload_verification.json is not valid JSON: {exc}")
+        return
+    if not isinstance(reload_record, dict):
+        problems.append("reload_verification.json must contain a JSON object")
+        return
+    if reload_record.get("run_id") != active_run_id:
+        problems.append(
+            f"reload evidence run_id {reload_record.get('run_id')!r} does not match the active run {active_run_id!r}"
+        )
+    if reload_record.get("adapter_reloaded") is not True:
+        problems.append("reload evidence does not confirm adapter reload success")
+    if _adapter_dir_relative(directory, reload_record.get("adapter_path")) is None:
+        problems.append("reload evidence adapter_path is missing or outside the active run directory")
+    summary_reload = summary.get("reload_verification")
+    if not isinstance(summary_reload, dict) or summary_reload.get("adapter_reloaded") is not True:
+        problems.append("reload verification is not explicitly successful")
+    elif reload_record.get("adapter_reloaded") is not True:
+        problems.append("summary reload claim contradicts the manifested reload evidence")
+    if isinstance(summary_reload, dict) and summary_reload.get("run_id") != active_run_id:
+        problems.append("summary reload verification run_id does not match the active run")
+
+
+def _validate_summary_payload_identities(
+    summary: Mapping[str, Any], directory: Path, manifest: Mapping[str, Any], problems: list[str]
+) -> None:
+    """Reject summary identities that do not match the manifested payload hashes and sizes."""
+    by_path = {str(entry.get("path")): entry for entry in manifest.get("artifacts", [])}
+    drift: list[str] = []
+    summary_reload = summary.get("reload_verification")
+    adapter_rel = (
+        _adapter_dir_relative(directory, summary_reload.get("adapter_path"))
+        if isinstance(summary_reload, dict)
+        else None
+    )
+    if adapter_rel is not None:
+        for name, identity in (summary.get("adapter_identities") or {}).items():
+            _check_manifest_identity(by_path, f"{adapter_rel}/{name}", identity, f"adapter_identities[{name}]", drift)
+        for name, identity in (summary.get("tokenizer_identities") or {}).items():
+            _check_manifest_identity(by_path, f"{adapter_rel}/{name}", identity, f"tokenizer_identities[{name}]", drift)
+    _check_manifest_identity(
+        by_path,
+        "trainer_state.json",
+        {"sha256": summary.get("trainer_state_identity"), "size_bytes": None},
+        "trainer_state_identity",
+        drift,
+    )
+    _check_manifest_identity(
+        by_path,
+        "training_log_history.json",
+        {"sha256": summary.get("training_log_identity"), "size_bytes": None},
+        "training_log_identity",
+        drift,
+    )
+    if drift:
+        problems.append("summary identities do not match the manifested payload hashes and sizes: " + "; ".join(drift))
+
+
+def _check_manifest_identity(
+    by_path: Mapping[str, Mapping[str, Any]],
+    manifest_path: str,
+    identity: Any,
+    label: str,
+    drift: list[str],
+) -> None:
+    if not isinstance(identity, Mapping):
+        drift.append(f"{label} is not an identity object")
+        return
+    entry = by_path.get(manifest_path)
+    if entry is None:
+        drift.append(f"{label} references {manifest_path!r} which is not manifested")
+        return
+    if str(identity.get("sha256", "")) != str(entry.get("sha256", "")):
+        drift.append(f"{label} sha256 does not match the manifested payload")
+    size = identity.get("size_bytes")
+    if size is not None and int(size) != int(entry.get("size_bytes", -1)):
+        drift.append(f"{label} size does not match the manifested payload")
 
 
 def _write_json_atomic(path: Path, value: Any) -> None:

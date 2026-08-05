@@ -728,10 +728,12 @@ import pytest
 
 from agentic_debugger.training.patch_pilot import (
     FINAL_TRAINING_FINAL_STATUS,
+    FINAL_TRAINING_SUMMARY_CONTRACT,
     CorpusBuildError,
     create_final_training_run,
     validate_completed_audits,
     validate_final_training_authorization,
+    validate_final_training_summary_contract,
     write_external_manifest,
     write_final_run_status,
     write_payload_manifest,
@@ -1053,40 +1055,184 @@ def test_manifest_collection_restricted_to_active_run_dir(tmp_path: Path) -> Non
     assert paths == ["a.txt"]
     assert "b.txt" not in paths
 
-def _completion_run(tmp_path: Path) -> dict:
-    """Build a valid run package: immutable payloads, payload manifest, once-finalized summary."""
+def _run_payload(tmp_path: Path, *, run_id: str = "run-t") -> dict:
+    """Build a complete immutable run payload (no manifest, no summary).
+
+    Mirrors the final notebook: fresh run directory, adapter-final weights plus
+    reload metadata and tokenizer artifacts, trainer state, log history, runtime
+    environment, memory/timing record, and reload evidence carrying the run id.
+    """
     fixture = _auth_fixture_full(tmp_path)
+    auth_result = _validate_auth_fixture(tmp_path, fixture)
     runs = tmp_path / "runs"
-    created = create_final_training_run(runs, fixture["auth"], run_id="run-t")
+    created = create_final_training_run(runs, fixture["auth"], run_id=run_id)
     run_dir = Path(created["run_dir"])
-    (run_dir / "adapter-final").mkdir()
-    (run_dir / "adapter-final" / "adapter_model.safetensors").write_bytes(b"adapter-bytes-1")
-    (run_dir / "tokenizer.json").write_text('{"tok": 1}\n', encoding="utf-8")
-    (run_dir / "trainer_state.json").write_text('{"global_step": 1}\n', encoding="utf-8")
+    adapter = run_dir / "adapter-final"
+    adapter.mkdir()
+    (adapter / "adapter_model.safetensors").write_bytes(b"adapter-bytes-1")
+    (adapter / "adapter_config.json").write_text('{"r": 16, "target_modules": "all-linear"}\n', encoding="utf-8")
+    (adapter / "tokenizer.json").write_text('{"tok": 1}\n', encoding="utf-8")
+    (adapter / "tokenizer_config.json").write_text('{"pad_token": "<|endoftext|>"}\n', encoding="utf-8")
+    (run_dir / "trainer_state.json").write_text('{"global_step": 1, "epoch": 1.0, "log_history": []}\n', encoding="utf-8")
     (run_dir / "training_log_history.json").write_text("[]\n", encoding="utf-8")
-    (run_dir / "runtime_environment.json").write_text('{"gpu": "T4"}\n', encoding="utf-8")
+    (run_dir / "runtime_environment.json").write_text(json.dumps({
+        "python": "3.11",
+        "torch": "2.4.0",
+        "cuda_available": True,
+        "cuda_runtime": "12.1",
+        "gpu": "T4",
+        "gpu_total_memory_bytes": 1,
+        "packages": {"transformers": "5.14.1"},
+        "repository_verification": {
+            "execution_head": "285c339",
+            "execution_branch": "experiment/qlora-patch-pilot-v1",
+            "detached": False,
+            "dirty": False,
+        },
+    }) + "\n", encoding="utf-8")
     (run_dir / "memory_timing.json").write_text('{"elapsed_seconds": 1.0}\n', encoding="utf-8")
-    (run_dir / "reload_verification.json").write_text('{"adapter_reloaded": true}\n', encoding="utf-8")
-    write_payload_manifest(run_dir, configuration_identity="0" * 64, provenance_identity="test")
-    manifest_sha256 = _sha256_bytes((run_dir / "external_artifacts.json").read_bytes())
-    summary = {
+    reload_record = {
+        "run_id": run_id,
+        "adapter_reloaded": True,
+        "adapter_path": str(adapter),
+        "verified_at_utc": "2026-08-05T00:00:00Z",
+    }
+    (run_dir / "reload_verification.json").write_text(json.dumps(reload_record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    adapter_identities = {
+        path.relative_to(adapter).as_posix(): _ident(path)
+        for path in sorted(adapter.rglob("*"))
+        if path.is_file()
+    }
+    tokenizer_identities = {
+        name: adapter_identities[name]
+        for name in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "added_tokens.json")
+        if name in adapter_identities
+    }
+    return {
+        "fixture": fixture,
+        "auth_result": auth_result,
+        "run_dir": run_dir,
+        "adapter": adapter,
+        "adapter_identities": adapter_identities,
+        "tokenizer_identities": tokenizer_identities,
+        "trainer_state_identity": _sha256_bytes((run_dir / "trainer_state.json").read_bytes()),
+        "training_log_identity": _sha256_bytes((run_dir / "training_log_history.json").read_bytes()),
+        "reload_record": reload_record,
+    }
+
+
+def _build_summary(payload: dict) -> dict:
+    """Mirror the final notebook's complete provenance summary for the payload."""
+    auth_result = payload["auth_result"]
+    fixture = payload["fixture"]
+    run_dir = payload["run_dir"]
+    authorization = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    run_context = json.loads((run_dir / "run_context.json").read_text(encoding="utf-8"))
+    return {
         "schema_version": "final-training-summary-v1",
         "experiment_id": "qlora-patch-pilot-v1",
-        "run_id": "run-t",
+        "run_id": run_dir.name,
         "final_status": FINAL_TRAINING_FINAL_STATUS,
-        "manifest_sha256": manifest_sha256,
-        "reload_verification": {"adapter_reloaded": True},
+        "manifest_sha256": payload["manifest_sha256"],
+        "started_at_utc": run_context["created_at_utc"],
+        "completed_at_utc": "2026-08-05T00:00:00Z",
+        "repository_commit": "285c339",
+        "required_ancestor": auth_result["repository_identities"]["required_ancestor"],
+        "authorization_path": str(fixture["auth"]),
+        "authorization_sha256": auth_result["authorization_sha256"],
+        "completed_audit_csv_path": str(fixture["audit_csv"]),
+        "completed_audit_csv_sha256": auth_result["audit_artifact_identities"]["completed_audit_csv"]["sha256"],
+        "completed_audit_manifest_path": str(fixture["audit_manifest"]),
+        "completed_audit_manifest_sha256": auth_result["audit_artifact_identities"]["completed_audit_manifest"]["sha256"],
+        "train_jsonl_path": str(fixture["train"]),
+        "train_jsonl_sha256": auth_result["corpus_artifact_identities"]["train_jsonl"]["sha256"],
+        "train_jsonl_bytes": auth_result["corpus_artifact_identities"]["train_jsonl"]["size_bytes"],
+        "train_rows": auth_result["corpus_artifact_identities"]["train_jsonl"]["rows"],
+        "validation_jsonl_path": str(fixture["validation"]),
+        "validation_jsonl_sha256": auth_result["corpus_artifact_identities"]["validation_jsonl"]["sha256"],
+        "validation_jsonl_bytes": auth_result["corpus_artifact_identities"]["validation_jsonl"]["size_bytes"],
+        "validation_rows": auth_result["corpus_artifact_identities"]["validation_jsonl"]["rows"],
+        "corpus_manifest_path": str(fixture["corpus_manifest"]),
+        "corpus_manifest_sha256": auth_result["corpus_artifact_identities"]["corpus_manifest"]["sha256"],
+        "corpus_manifest_bytes": auth_result["corpus_artifact_identities"]["corpus_manifest"]["size_bytes"],
+        "model_repository": authorization["model"]["repository"],
+        "model_revision": authorization["model"]["revision"],
+        "configuration_identities": auth_result["configuration_identities"],
+        "audit_mode": auth_result["audit_mode"],
+        "audit_result": auth_result["audit_counts"],
+        "reviewer_identity": auth_result["reviewer_identity"],
+        "reviewer_type": auth_result["reviewer_type"],
+        "no_top_up": True,
+        "train_loss": 0.5,
+        "elapsed_seconds": 1.0,
+        "peak_cuda_memory_allocated_bytes": 1,
+        "peak_cuda_memory_reserved_bytes": 1,
+        "train_examples": 3,
+        "validation_examples": 2,
+        "epochs": 1,
+        "trainer_state": {"global_step": 1, "epoch": 1.0, "log_history": []},
+        "trainer_state_identity": payload["trainer_state_identity"],
+        "training_log_identity": payload["training_log_identity"],
+        "tokenizer_identities": payload["tokenizer_identities"],
+        "runtime": {
+            "python": "3.11",
+            "torch": "2.4.0",
+            "cuda_available": True,
+            "cuda_runtime": "12.1",
+            "gpu": "T4",
+            "gpu_total_memory_bytes": 1,
+            "packages": {"transformers": "5.14.1"},
+            "repository_verification": {
+                "execution_head": "285c339",
+                "execution_branch": "experiment/qlora-patch-pilot-v1",
+                "detached": False,
+                "dirty": False,
+            },
+        },
+        "adapter_identities": payload["adapter_identities"],
+        "reload_verification": payload["reload_record"],
         "held_out_generation_authorized": False,
         "held_out_accessed": False,
-        "train_loss": 0.5,
     }
-    (run_dir / "final_training_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-    summary_sha256 = _sha256_bytes((run_dir / "final_training_summary.json").read_bytes())
-    return {
-        "run_dir": run_dir,
-        "manifest_sha256": manifest_sha256,
-        "summary_sha256": summary_sha256,
-    }
+
+
+def _completion_run(
+    tmp_path: Path,
+    *,
+    reload_mutator=None,
+    summary_mutator=None,
+    run_id: str = "run-t",
+) -> dict:
+    """Build a valid run package: immutable payloads, payload manifest, once-finalized summary."""
+    payload = _run_payload(tmp_path, run_id=run_id)
+    if reload_mutator is not None:
+        reload_mutator(payload)
+    write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+    payload["manifest_sha256"] = _sha256_bytes((payload["run_dir"] / "external_artifacts.json").read_bytes())
+    summary = _build_summary(payload)
+    if summary_mutator is not None:
+        summary_mutator(summary, payload)
+    (payload["run_dir"] / "final_training_summary.json").write_text(
+        json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
+    payload["summary_sha256"] = _sha256_bytes((payload["run_dir"] / "final_training_summary.json").read_bytes())
+    return payload
+
+
+def _rewrite_run_context(run_dir: Path, **mutations: object) -> None:
+    path = run_dir / "run_context.json"
+    record = json.loads(path.read_text(encoding="utf-8"))
+    record.update(mutations)
+    path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+
+
+def _set_reload_record(payload: dict, **mutations: object) -> None:
+    record = dict(payload["reload_record"])
+    record.update(mutations)
+    payload["reload_record"] = record
+    (payload["run_dir"] / "reload_verification.json").write_text(
+        json.dumps(record, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+    )
 
 
 def _rewrite_summary(run_dir: Path, summary: dict) -> str:
@@ -1230,6 +1376,190 @@ def test_completion_second_attempt_fails(tmp_path: Path) -> None:
         _complete(pkg)
 
 
+def test_summary_contract_is_central_and_complete() -> None:
+    mandated = {
+        "schema_version", "experiment_id", "run_id", "final_status", "manifest_sha256",
+        "started_at_utc", "completed_at_utc", "repository_commit", "required_ancestor",
+        "authorization_path", "authorization_sha256",
+        "completed_audit_csv_path", "completed_audit_csv_sha256",
+        "completed_audit_manifest_path", "completed_audit_manifest_sha256",
+        "train_jsonl_path", "train_jsonl_sha256", "train_jsonl_bytes", "train_rows",
+        "validation_jsonl_path", "validation_jsonl_sha256", "validation_jsonl_bytes", "validation_rows",
+        "corpus_manifest_path", "corpus_manifest_sha256", "corpus_manifest_bytes",
+        "model_repository", "model_revision", "configuration_identities", "audit_mode",
+        "audit_result", "reviewer_identity", "reviewer_type", "no_top_up", "train_loss",
+        "elapsed_seconds", "peak_cuda_memory_allocated_bytes", "peak_cuda_memory_reserved_bytes",
+        "train_examples", "validation_examples", "epochs", "trainer_state",
+        "trainer_state_identity", "training_log_identity", "tokenizer_identities",
+        "runtime", "adapter_identities", "reload_verification",
+        "held_out_generation_authorized", "held_out_accessed",
+    }
+    assert set(FINAL_TRAINING_SUMMARY_CONTRACT) == mandated
+    problems: list[str] = []
+    validate_final_training_summary_contract({}, problems)
+    assert len(problems) == len(mandated)
+    assert "summary is missing required field experiment_id" in problems
+    assert "summary is missing required field audit_result" in problems
+    assert "summary is missing required field reload_verification" in problems
+
+
+def test_summary_contract_accepts_complete_notebook_summary(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    problems: list[str] = []
+    validate_final_training_summary_contract(summary, problems)
+    assert problems == []
+
+
+def test_completion_missing_required_provenance_field_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path, summary_mutator=lambda summary, payload: summary.pop("reviewer_identity"))
+    with pytest.raises(CorpusBuildError, match="missing required field reviewer_identity"):
+        _complete(pkg)
+
+
+@pytest.mark.parametrize("field", ["experiment_id", "audit_mode", "reviewer_type", "no_top_up", "held_out_accessed"])
+def test_completion_wrong_exact_provenance_value_fails(tmp_path: Path, field: str) -> None:
+    pkg = _completion_run(
+        tmp_path, summary_mutator=lambda summary, payload, f=field: summary.update({f: "wrong"})
+    )
+    with pytest.raises(CorpusBuildError, match=f"summary field {field}"):
+        _complete(pkg)
+
+
+def test_completion_missing_run_context_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    (pkg["run_dir"] / "run_context.json").unlink()
+    with pytest.raises(CorpusBuildError, match="run_context.json is missing"):
+        _complete(pkg)
+
+
+def test_completion_empty_run_id_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    _rewrite_run_context(pkg["run_dir"], run_id="")
+    with pytest.raises(CorpusBuildError, match="run_context run_id"):
+        _complete(pkg)
+
+
+def test_completion_run_id_differs_from_directory_name_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    _rewrite_run_context(pkg["run_dir"], run_id="other-run")
+    with pytest.raises(CorpusBuildError, match="active run directory name"):
+        _complete(pkg)
+
+
+def test_completion_summary_run_id_mismatch_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    summary["run_id"] = "run-x"
+    summary_sha256 = _rewrite_summary(pkg["run_dir"], summary)
+    with pytest.raises(CorpusBuildError, match="summary run_id does not match the active run"):
+        _complete(pkg, summary_sha256=summary_sha256)
+
+
+def test_completion_reload_evidence_missing_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    (pkg["run_dir"] / "reload_verification.json").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required payload reload_verification.json"):
+        _complete(pkg)
+
+
+def test_completion_reload_evidence_false_contradicts_summary_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(
+        tmp_path, reload_mutator=lambda payload: _set_reload_record(payload, adapter_reloaded=False)
+    )
+    with pytest.raises(CorpusBuildError, match="reload evidence does not confirm adapter reload success"):
+        _complete(pkg)
+
+
+def test_completion_reload_evidence_run_id_mismatch_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(
+        tmp_path, reload_mutator=lambda payload: _set_reload_record(payload, run_id="run-x")
+    )
+    with pytest.raises(CorpusBuildError, match="reload evidence run_id"):
+        _complete(pkg)
+
+
+def test_payload_manifest_rejects_missing_adapter_weight(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["adapter"] / "adapter_model.safetensors").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required adapter weight"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_ambiguous_adapter_weights(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    other = payload["run_dir"] / "adapter-other"
+    other.mkdir()
+    (other / "adapter_model.safetensors").write_bytes(b"other-adapter")
+    with pytest.raises(CorpusBuildError, match="ambiguous adapter-weight selection"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_missing_tokenizer_artifact(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["adapter"] / "tokenizer.json").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required adapter metadata artifact"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_missing_trainer_state(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["run_dir"] / "trainer_state.json").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required payload trainer_state.json"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_missing_log_history(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["run_dir"] / "training_log_history.json").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required payload training_log_history.json"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_missing_runtime_environment(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["run_dir"] / "runtime_environment.json").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required payload runtime_environment.json"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_missing_memory_timing(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["run_dir"] / "memory_timing.json").unlink()
+    with pytest.raises(CorpusBuildError, match="missing required payload memory_timing.json"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_payload_manifest_rejects_zero_byte_required_payload(tmp_path: Path) -> None:
+    payload = _run_payload(tmp_path)
+    (payload["run_dir"] / "trainer_state.json").write_text("", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="zero-byte"):
+        write_payload_manifest(payload["run_dir"], configuration_identity="0" * 64, provenance_identity="test")
+
+
+def test_completion_rejects_zero_byte_required_payload(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    (pkg["run_dir"] / "runtime_environment.json").write_text("", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="zero-byte"):
+        _complete(pkg)
+
+
+@pytest.mark.parametrize(
+    "mutator",
+    [
+        lambda summary: summary["adapter_identities"]["adapter_config.json"].update(sha256="0" * 64),
+        lambda summary: summary["adapter_identities"]["adapter_model.safetensors"].update(size_bytes=99),
+        lambda summary: summary["tokenizer_identities"]["tokenizer.json"].update(sha256="1" * 64),
+        lambda summary: summary.update(trainer_state_identity="0" * 64),
+        lambda summary: summary.update(training_log_identity="1" * 64),
+    ],
+)
+def test_completion_summary_payload_identity_mismatch_fails(tmp_path: Path, mutator) -> None:
+    pkg = _completion_run(tmp_path, summary_mutator=lambda summary, payload: mutator(summary))
+    with pytest.raises(CorpusBuildError, match="does not match the manifested payload"):
+        _complete(pkg)
+
+
 def test_payload_manifest_excludes_control_files(tmp_path: Path) -> None:
     pkg = _completion_run(tmp_path)
     manifest = json.loads((pkg["run_dir"] / "external_artifacts.json").read_text(encoding="utf-8"))
@@ -1334,3 +1664,29 @@ def test_notebook_no_duplicate_manual_completion_sequence() -> None:
     assert "'RUN_COMPLETE').write_text" not in code
     assert "'INCOMPLETE').unlink" not in code
     assert code.count("'final_training_summary.json').write_text") == 1
+
+
+def test_notebook_produces_every_required_summary_field() -> None:
+    nb = json.loads((EXPERIMENT / "colab/agentic_debugging_qlora_final_training.ipynb").read_text(encoding="utf-8"))
+    code = "\n".join("".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code")
+    for field in FINAL_TRAINING_SUMMARY_CONTRACT:
+        assert f"'{field}'" in code, f"notebook does not produce required summary field {field}"
+
+
+def test_notebook_produces_required_payload_records_and_reload_run_id() -> None:
+    nb = json.loads((EXPERIMENT / "colab/agentic_debugging_qlora_final_training.ipynb").read_text(encoding="utf-8"))
+    code = "\n".join("".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code")
+    for filename in (
+        "trainer_state.json",
+        "training_log_history.json",
+        "runtime_environment.json",
+        "memory_timing.json",
+        "reload_verification.json",
+    ):
+        assert f"'{filename}'" in code
+    assert "create_final_training_run(RUNS_ROOT, AUTHORIZATION)" in code
+    assert "'run_id': run_id" in code
+    assert "tokenizer_identities" in code
+    assert "trainer_state_identity" in code
+    assert "training_log_identity" in code
+    assert "corpus_manifest_bytes" in code
