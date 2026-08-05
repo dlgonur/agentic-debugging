@@ -1617,9 +1617,10 @@ def test_v2_static_baseline_pdb_not_reached_still_rejected():
     with pytest.raises(pilot.PilotError):
         pilot.validate_case_result(record, manifest)
 
-# ---- v4 verifier-authoritative terminal matrix (attempt fddf1e39...) ---------
+# ---- v4 verifier-authoritative terminal matrix (v3 attempt fddf1e39...) ------
 #
-# Regressions for the v4 campaign: the live-proven shape of attempt
+# Regressions for the v4 campaign contract: the live-proven shape of the V3
+# attempt
 # ``quixbugs-paired-pilot-v3-attempt-fddf1e39b73cda5f430d8e69c6e442b558143a63d013229e54efd9cbb585fbac``
 # case 1 (``quixbugs-find-in-sorted-smoke-v1 / pdb-on-uncertainty``): twelve
 # logical model calls, thirteen provider process attempts, one bounded retry
@@ -1654,7 +1655,10 @@ def _v4_candidate_hash():
 
 
 def _completed_post_apply_exhausted_outcome(manifest, case, route, *, verifier_outcome="RESOLVED", **overrides):
-    """The exact fddf1e39... case-1 shape restamped for the campaign version.
+    """The exact V3-attempt fddf1e39... case-1 shape restamped for the given
+    campaign version: under the frozen v3 contract it aborts honestly, under
+    the v4 contract it terminalizes as RESOLVED (or UNRESOLVED) with the
+    verifier-authoritative classification.
 
     Twelve logical calls, thirteen provider process attempts, one bounded
     retry, twelve valid directives, an applied candidate (verifier_record

@@ -1,0 +1,33 @@
+{
+  "attempt_identity": "quixbugs-paired-pilot-v4-attempt-3b5d7488d61262f97a1c800367ca8e1817e906795dbbf1e04d762c34078e6896",
+  "budget": {
+    "max_public_evidence_bytes": 20000
+  },
+  "case1_observed": {
+    "provider_process_attempts": 10,
+    "logical_model_calls": 10,
+    "retries": 0,
+    "valid_directives": 10,
+    "malformed_directive_rejections": 0,
+    "public_evidence_bytes": 26139,
+    "malformed_patch_rejection": true,
+    "patch_applied": false,
+    "candidate_submitted": false,
+    "verifier_runs": 0,
+    "interrupted": false
+  },
+  "case2_observed": {
+    "provider_process_attempts": 15,
+    "logical_model_calls": 14,
+    "retries": 1,
+    "valid_directives": 14,
+    "malformed_directive_rejections": 0,
+    "public_evidence_bytes": 38534,
+    "patch_applied": true,
+    "validate_visited": true,
+    "verifier_runs": 0,
+    "interrupted": true,
+    "materialized_case_record_original": false,
+    "original_campaign_outcome": "ABORTED/BUDGET_EXCEEDED"
+  }
+}

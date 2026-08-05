@@ -297,6 +297,19 @@ ZERO_PDB_COUNTS = {
     "sessions_started": 0, "successful_observations": 0, "failed_observations": 0,
 }
 
+#: Exact field set of the machine-readable budget-exhaustion provenance
+#: attached to every rewritten public-evidence-exhausted terminal outcome.
+#: The provenance is the smallest schema-compatible machine-readable record
+#: of the budget terminal: the configured frozen limit, the observed byte
+#: count, the persisted (clamped) byte count, and the truncated/exhausted
+#: state.  It complements (never replaces) the free-text termination detail
+#: so consumers can enforce the clamp fail-closed without parsing prose.
+BUDGET_EXHAUSTION_FIELDS = frozenset({
+    "configured_limit", "observed_bytes", "persisted_bytes", "state", "truncated",
+})
+#: The only frozen provenance state: the public-evidence budget was exhausted.
+BUDGET_EXHAUSTION_STATE = "exhausted"
+
 COMPLETED_TERMINAL_STATUSES = {
     "RESOLVED", "UNRESOLVED", "PDB_NOT_REACHED", "VALIDATION_NOT_REACHED",
     "INVALID_MODEL_RESPONSE", "PROVIDER_ERROR", "INFRASTRUCTURE_ERROR",
@@ -1815,6 +1828,8 @@ def materialize_case_record(
     for field in OUTCOME_FIELDS:
         if field in outcome:
             record[field] = outcome[field]
+    if "budget_exhaustion" in outcome:
+        record["budget_exhaustion"] = outcome["budget_exhaustion"]
     if manifest.get("campaign_id") in (CAMPAIGN_ID_V3, CAMPAIGN_ID_V4) and "candidate_provenance" in outcome:
         record["candidate_provenance"] = outcome["candidate_provenance"]
     return record
@@ -1831,6 +1846,43 @@ def validate_case_outcome(outcome: Mapping[str, Any]) -> None:
         _assert_finite_json(outcome)
     except NonFiniteValueError as exc:
         raise LiveRunnerError(f"case outcome carries non-finite numeric evidence: {exc}") from exc
+
+
+def validate_budget_exhaustion_provenance(value: Any, *, budgets: Mapping[str, Any] | None = None) -> None:
+    """Fail-closed validation of the machine-readable budget-exhaustion
+    provenance attached to rewritten terminal outcomes.
+
+    Unknown or missing fields, wrong types, contradictory counts, and a
+    persisted byte count above the observed count are rejected.  When
+    ``budgets`` is supplied the configured limit must equal the frozen
+    ``max_public_evidence_bytes`` exactly, the observed bytes must exceed the
+    configured limit, and the persisted bytes must not exceed it.
+    """
+    if not isinstance(value, Mapping):
+        raise LiveRunnerError("budget exhaustion provenance must be an object")
+    if set(value) != BUDGET_EXHAUSTION_FIELDS:
+        raise LiveRunnerError(f"budget exhaustion provenance fields are not exact: {sorted(value)}")
+    for field in ("configured_limit", "observed_bytes", "persisted_bytes"):
+        if type(value[field]) is not int or value[field] < 0:
+            raise LiveRunnerError(f"budget exhaustion provenance {field} must be a non-negative integer")
+    if value["state"] != BUDGET_EXHAUSTION_STATE:
+        raise LiveRunnerError("budget exhaustion provenance state is not frozen")
+    if type(value["truncated"]) is not bool:
+        raise LiveRunnerError("budget exhaustion provenance truncated flag must be boolean")
+    if value["truncated"] != (value["persisted_bytes"] < value["observed_bytes"]):
+        raise LiveRunnerError("budget exhaustion provenance truncated flag is inconsistent")
+    if value["persisted_bytes"] > value["observed_bytes"]:
+        raise LiveRunnerError("budget exhaustion provenance persisted bytes exceed observed bytes")
+    if budgets is not None:
+        configured = budgets["max_public_evidence_bytes"]
+        if type(configured) is not int or configured <= 0:
+            raise LiveRunnerError("frozen public-evidence budget is invalid")
+        if value["configured_limit"] != configured:
+            raise LiveRunnerError("budget exhaustion provenance configured limit does not match the frozen budget")
+        if value["observed_bytes"] <= configured:
+            raise LiveRunnerError("budget exhaustion provenance observed bytes do not exceed the configured limit")
+        if value["persisted_bytes"] > configured:
+            raise LiveRunnerError("budget exhaustion provenance persisted bytes exceed the configured limit")
 
 
 def enforce_case_budgets(outcome: Mapping[str, Any], manifest: Mapping[str, Any], *, case_policy: str) -> None:
@@ -1966,6 +2018,12 @@ def _budget_exhausted_outcome(
     frozen terminal representation and returns ``None``: the campaign must
     abort honestly rather than fabricate one.  Nothing is erased or zeroed to
     make the result schema-valid.
+
+    Every rewritten outcome carries the machine-readable
+    ``budget_exhaustion`` provenance (configured limit, observed bytes,
+    persisted bytes, truncated/exhausted state) in addition to the free-text
+    termination detail, so the clamp is enforceable fail-closed without
+    parsing prose.
     """
     limit = exhaustion.limit
     observed = exhaustion.observed
@@ -1974,6 +2032,13 @@ def _budget_exhausted_outcome(
         f"case public-evidence budget exhausted: the next public request would have exceeded the frozen "
         f"case limit ({observed} > {limit} bytes); no further provider process was launched"
     )
+    provenance = {
+        "configured_limit": limit,
+        "observed_bytes": observed,
+        "persisted_bytes": limit,
+        "state": BUDGET_EXHAUSTION_STATE,
+        "truncated": observed > limit,
+    }
 
     try:
         transport = outcome["transport_evidence"]
@@ -2122,6 +2187,7 @@ def _budget_exhausted_outcome(
             "repair_outcome": "NO_CANDIDATE",
             "resource_ids": {},
             "interrupted": False,
+            "budget_exhaustion": provenance,
         }
 
     # --- completed RESOLVED lifecycle (live-proven shape from attempt
@@ -2185,6 +2251,7 @@ def _budget_exhausted_outcome(
         rewritten.update({
             "termination_reason": f"{detail}; terminal representation RESOLVED/RESOLVED_COMPLETED",
             "public_evidence_bytes": limit,
+            "budget_exhaustion": provenance,
         })
         return rewritten
 
@@ -2242,6 +2309,7 @@ def _budget_exhausted_outcome(
         rewritten.update({
             "termination_reason": f"{detail}; terminal representation UNRESOLVED/UNRESOLVED_COMPLETED",
             "public_evidence_bytes": limit,
+            "budget_exhaustion": provenance,
         })
         return rewritten
 
@@ -2328,6 +2396,7 @@ def _budget_exhausted_outcome(
         rewritten.update({
             "termination_reason": f"{detail}; terminal representation VALIDATION_NOT_REACHED/VALIDATION_NOT_REACHED_PRE_VALIDATE (candidate applied pre-verifier, verifier never ran)",
             "public_evidence_bytes": limit,
+            "budget_exhaustion": provenance,
         })
         return rewritten
 
@@ -2370,6 +2439,7 @@ def _budget_exhausted_outcome(
         rewritten.update({
             "termination_reason": f"{detail}; terminal representation INFRASTRUCTURE_ERROR/INFRASTRUCTURE_FAILURE (post-contact lifecycle, accounting preserved)",
             "public_evidence_bytes": limit,
+            "budget_exhaustion": provenance,
         })
         return rewritten
 
@@ -2420,6 +2490,7 @@ def _budget_exhausted_outcome(
         "terminal_reason_code": "PDB_NOT_REACHED_NO_GATE",
         "termination_reason": f"{detail}; terminal representation PDB_NOT_REACHED/PDB_NOT_REACHED_NO_GATE",
         "public_evidence_bytes": limit,
+        "budget_exhaustion": provenance,
         "transport_evidence": {"completed_response": True, "malformed_response": False, "provider_error": False, "synthetic": False},
         "terminal_transport_evidence": {
             "final_attempt_classification": "COMPLETED_RESPONSE", "process_exit_code": 0,
@@ -3396,10 +3467,14 @@ def run_campaign(
                     break
                 outcome = rewritten
                 # The rewritten outcome must still satisfy every other frozen
-                # budget; a residual violation (for example the case wall-clock
-                # timeout or a PDB budget) is a genuine accounting violation and
-                # still aborts the campaign.
+                # budget, and the machine-readable budget-exhaustion
+                # provenance must be present and internally consistent with
+                # the frozen budget; a residual violation (for example the
+                # case wall-clock timeout or a PDB budget) or a malformed
+                # provenance is a genuine accounting violation and still
+                # aborts the campaign.
                 try:
+                    validate_budget_exhaustion_provenance(outcome["budget_exhaustion"], budgets=manifest["budgets"])
                     enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
                 except StaticPolicyPdbViolation as residual:
                     abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {residual}")
