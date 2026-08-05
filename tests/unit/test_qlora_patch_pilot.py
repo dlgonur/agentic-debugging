@@ -720,106 +720,343 @@ def test_lora_delta_aggregate_fails_closed_on_zero_or_missing_tensors() -> None:
     assert empty["aggregate_delta_l2"] is None
     assert empty["delta_finite"] is False
 
-def _auth_fixture(tmp_path: Path) -> Path:
-    source = json.loads((EXPERIMENT / "final_training_authorization.json").read_text(encoding="utf-8"))
-    path = tmp_path / "final_training_authorization.json"
-    path.write_text(json.dumps(source, indent=2) + "\n", encoding="utf-8")
+import hashlib
+import json
+from pathlib import Path
+
+import pytest
+
+from agentic_debugger.training.patch_pilot import (
+    CorpusBuildError,
+    create_final_training_run,
+    validate_completed_audits,
+    validate_final_training_authorization,
+    write_external_manifest,
+    write_final_run_status,
+)
+
+AUTH_TEST_ANCHOR = "def _auth_fixture(tmp_path: Path) -> Path:"
+
+
+def _sha256_bytes(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _ident(path: Path) -> dict:
+    data = path.read_bytes()
+    return {"size_bytes": len(data), "sha256": _sha256_bytes(data)}
+
+
+def _auth_fixture_full(tmp_path: Path) -> dict:
+    """Build a coherent mini authorization record plus real mini artifact files."""
+    config = _independent_config(tmp_path)
+    output = _built_output(tmp_path)
+    train_path = tmp_path / "train.jsonl"
+    validation_path = tmp_path / "validation.jsonl"
+    train_path.write_text("\n".join(json.dumps({"x": i}) for i in range(3)) + "\n", encoding="utf-8")
+    validation_path.write_text("\n".join(json.dumps({"x": i}) for i in range(2)) + "\n", encoding="utf-8")
+    (output / "corpus_summary.json").write_text(
+        json.dumps({"corpus_tier": "minimum", "train_examples": 3, "validation_examples": 2}) + "\n",
+        encoding="utf-8",
+    )
+    (output / "dedup_report.json").write_text(
+        json.dumps({"repository_overlap": []}) + "\n", encoding="utf-8"
+    )
+    completed = _write_completed_independent_audit(output)
+    audit_validation = validate_completed_audits(output, config, completed_audit_path=completed)
+    audit_manifest = tmp_path / "audit_manifest.json"
+    audit_manifest.write_text(json.dumps({"schema_version": "independent-audit-package-v1"}) + "\n", encoding="utf-8")
+    corpus_manifest = output / "external_artifacts.json"
+    record = json.loads((EXPERIMENT / "final_training_authorization.json").read_text(encoding="utf-8"))
+    record["corpus"] = {"tier": "minimum", "train": 3, "validation": 2, "top_up": False, "note": "test fixture"}
+    record["corpus_artifacts"] = {
+        "train_jsonl": {"logical_path": "corpus/train.jsonl", "rows": 3, **_ident(train_path)},
+        "validation_jsonl": {"logical_path": "corpus/validation.jsonl", "rows": 2, **_ident(validation_path)},
+        "corpus_manifest": {"logical_path": "corpus/external_artifacts.json", **_ident(corpus_manifest)},
+    }
+    record["audit_artifacts"] = {
+        "completed_audit_csv": {"logical_path": "independent-audit/firstmate_independent_audit_completed.csv", **_ident(completed)},
+        "completed_audit_manifest": {"logical_path": "independent-audit/firstmate_independent_audit_manifest.json", **_ident(audit_manifest)},
+    }
+    record["audit_result"] = {
+        "total_rows": audit_validation["accepted_packet_total"] + audit_validation["rejected_packet_total"],
+        "accepted_packet_rows": audit_validation["accepted_packet_total"],
+        "rejected_packet_rows": audit_validation["rejected_packet_total"],
+        "accepted_packet_accept": audit_validation["accepted_packet_accept"],
+        "accepted_packet_reject": audit_validation["accepted_packet_reject"],
+        "rejected_packet_accept": audit_validation["rejected_packet_accept"],
+        "rejected_packet_reject": audit_validation["rejected_packet_reject"],
+        "reviewer": "FirstMate / GPT-5.6 Thinking",
+        "reviewer_type": "independent_ai_reviewer",
+    }
+    auth_path = tmp_path / "authorization.json"
+    auth_path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return {
+        "auth": auth_path,
+        "config": config,
+        "corpus_dir": output,
+        "train": train_path,
+        "validation": validation_path,
+        "corpus_manifest": corpus_manifest,
+        "audit_csv": completed,
+        "audit_manifest": audit_manifest,
+    }
+
+
+def _validate_auth_fixture(tmp_path: Path, fixture: dict) -> dict:
+    return validate_final_training_authorization(
+        fixture["auth"],
+        repository_root=ROOT,
+        corpus_dir=fixture["corpus_dir"],
+        transformation_config_path=fixture["config"],
+        train_jsonl=fixture["train"],
+        validation_jsonl=fixture["validation"],
+        corpus_manifest=fixture["corpus_manifest"],
+        completed_audit_csv=fixture["audit_csv"],
+        completed_audit_manifest=fixture["audit_manifest"],
+    )
+
+
+def _write_auth(tmp_path: Path, fixture: dict, **mutations) -> Path:
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    for key, value in mutations.items():
+        record[key] = value
+    path = tmp_path / "mutated-auth.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     return path
 
 
-def _auth_corpus_fixture(tmp_path: Path) -> Path:
-    corpus = tmp_path / "corpus"
-    corpus.mkdir(exist_ok=True)
-    (corpus / "corpus_summary.json").write_text(json.dumps({
-        "corpus_tier": "minimum", "train_examples": 1000, "validation_examples": 150,
-    }, indent=2) + "\n", encoding="utf-8")
-    (corpus / "dedup_report.json").write_text(json.dumps({
-        "repository_overlap": [], "held_out_exact_matches_accepted": 0, "held_out_near_matches_accepted": 0,
-    }, indent=2) + "\n", encoding="utf-8")
-    return corpus
-
-
-def _mutate_auth(tmp_path: Path, **changes: object) -> Path:
-    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
-    for key, value in changes.items():
-        data[key] = value
-    path = tmp_path / "mutated_authorization.json"
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    return path
-
-
-def _validate_auth(tmp_path: Path, path: Path) -> dict:
-    return validate_final_training_authorization(path, repository_root=ROOT, corpus_dir=_auth_corpus_fixture(tmp_path))
-
-
-def test_final_training_authorization_valid(tmp_path: Path) -> None:
-    result = _validate_auth(tmp_path, _auth_fixture(tmp_path))
+def test_final_training_auth_valid_with_real_file_identities(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    result = _validate_auth_fixture(tmp_path, fixture)
     assert result["status"] == "COMPLETE"
-    assert result["authorization_scope"] == "final_training_only"
-    assert result["authorized"] is True
-    assert result["held_out_generation_authorized"] is False
+    assert result["authorization_sha256"]
+    assert result["row_counts"] == {"train": 3, "validation": 2}
+    assert result["audit_counts"]["total_rows"] == 3
+    assert result["corpus_artifact_identities"]["train_jsonl"]["sha256"] == _sha256_bytes(fixture["train"].read_bytes())
+    assert result["audit_artifact_identities"]["completed_audit_csv"]["sha256"] == _sha256_bytes(fixture["audit_csv"].read_bytes())
 
 
-def test_final_training_authorization_missing_record(tmp_path: Path) -> None:
+def test_final_training_auth_missing_authorization(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    missing = tmp_path / "nope.json"
     with pytest.raises(CorpusBuildError, match="authorization record missing"):
-        _validate_auth(tmp_path, tmp_path / "does-not-exist.json")
+        validate_final_training_authorization(
+            missing, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
 
 
-def test_final_training_authorization_rejects_unauthorized(tmp_path: Path) -> None:
-    path = _mutate_auth(tmp_path, authorized=False)
-    with pytest.raises(CorpusBuildError, match="authorized is not true"):
-        _validate_auth(tmp_path, path)
+def test_final_training_auth_missing_train_artifact(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["train"].unlink()
+    with pytest.raises(CorpusBuildError, match="train_jsonl artifact missing"):
+        _validate_auth_fixture(tmp_path, fixture)
 
 
-def test_final_training_authorization_rejects_held_out_true(tmp_path: Path) -> None:
-    path = _mutate_auth(tmp_path, held_out_generation_authorized=True)
-    with pytest.raises(CorpusBuildError, match="held_out_generation_authorized is not false"):
-        _validate_auth(tmp_path, path)
+def test_final_training_auth_train_sha_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["train"].write_text("\n".join(json.dumps({"x": i}) for i in range(3, 6)) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="train_jsonl sha256 mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
 
 
-def test_final_training_authorization_rejects_wrong_experiment(tmp_path: Path) -> None:
-    path = _mutate_auth(tmp_path, experiment_id="some-other-experiment")
-    with pytest.raises(CorpusBuildError, match="experiment_id"):
-        _validate_auth(tmp_path, path)
+def test_final_training_auth_validation_sha_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["validation"].write_text("\n".join(json.dumps({"x": i}) for i in range(2, 4)) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="validation_jsonl sha256 mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
 
 
-def test_final_training_authorization_rejects_wrong_approver(tmp_path: Path) -> None:
-    path = _mutate_auth(tmp_path, authorized_by="agentic-coding-agent")
-    with pytest.raises(CorpusBuildError, match="authorized_by"):
-        _validate_auth(tmp_path, path)
+def test_final_training_auth_corpus_manifest_sha_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["corpus_manifest"].write_text('{"tampered": true}\n', encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="corpus_manifest sha256 mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
 
 
-def test_final_training_authorization_rejects_config_hash_drift(tmp_path: Path) -> None:
-    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
-    data["configuration_identities"]["training"] = "0" * 64
-    path = tmp_path / "drifted.json"
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-    with pytest.raises(CorpusBuildError, match="configuration_identity.training"):
-        _validate_auth(tmp_path, path)
+def test_final_training_auth_train_row_count_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["train"].write_text("\n".join(json.dumps({"x": i}) for i in range(4)) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="train_jsonl row-count mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
 
 
-def test_final_training_authorization_rejects_audit_result_drift(tmp_path: Path) -> None:
-    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
-    data["audit_result"]["accepted_packet_accept"] = 50
-    path = tmp_path / "audit-drift.json"
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+def test_final_training_auth_validation_row_count_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["validation"].write_text("\n".join(json.dumps({"x": i}) for i in range(3)) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="validation_jsonl row-count mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
+
+
+def test_final_training_auth_train_byte_size_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["corpus_artifacts"]["train_jsonl"]["size_bytes"] = record["corpus_artifacts"]["train_jsonl"]["size_bytes"] + 1
+    path = tmp_path / "size-mut.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="train_jsonl byte-size mismatch"):
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
+
+
+def test_final_training_auth_audit_csv_sha_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    with fixture["audit_csv"].open("a", encoding="utf-8") as handle:
+        handle.write("tampered\n")
+    with pytest.raises(CorpusBuildError, match="completed_audit_csv sha256 mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
+
+
+def test_final_training_auth_audit_manifest_sha_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["audit_manifest"].write_text('{"tampered": true}\n', encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="completed_audit_manifest sha256 mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
+
+
+def test_final_training_auth_audit_reviewer_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["audit_result"]["reviewer"] = "agentic-coding-agent"
+    path = tmp_path / "rev.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="reviewer"):
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
+
+
+def test_final_training_auth_audit_reviewer_type_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["audit_result"]["reviewer_type"] = "human_reviewer"
+    path = tmp_path / "revtype.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="reviewer_type"):
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
+
+
+def test_final_training_auth_audit_result_mismatch(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["audit_result"]["accepted_packet_accept"] = 0
+    path = tmp_path / "auditres.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     with pytest.raises(CorpusBuildError, match="audit_result.accepted_packet_accept"):
-        _validate_auth(tmp_path, path)
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
 
 
-def test_final_training_authorization_rejects_corpus_count_drift(tmp_path: Path) -> None:
-    corpus = _auth_corpus_fixture(tmp_path)
-    (corpus / "corpus_summary.json").write_text(json.dumps({
-        "corpus_tier": "minimum", "train_examples": 1500, "validation_examples": 200,
-    }) + "\n", encoding="utf-8")
-    with pytest.raises(CorpusBuildError, match="corpus counts"):
-        validate_final_training_authorization(_auth_fixture(tmp_path), repository_root=ROOT, corpus_dir=corpus)
+def test_final_training_auth_malformed_hash_rejected(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["corpus_artifacts"]["train_jsonl"]["sha256"] = "not-a-hash"
+    path = tmp_path / "badhash.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="malformed"):
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
 
 
-def test_final_training_authorization_rejects_top_up_claim(tmp_path: Path) -> None:
-    data = json.loads(_auth_fixture(tmp_path).read_text(encoding="utf-8"))
-    data["corpus"] = {**data["corpus"], "top_up": True}
+def test_final_training_auth_changed_corpus_identity_same_counts(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    fixture["train"].write_text("\n".join(json.dumps({"y": i}) for i in range(3)) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="train_jsonl sha256 mismatch"):
+        _validate_auth_fixture(tmp_path, fixture)
+
+
+def test_final_training_auth_top_up_claim_fails(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["corpus"]["top_up"] = True
     path = tmp_path / "topup.json"
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
     with pytest.raises(CorpusBuildError, match="top_up"):
-        _validate_auth(tmp_path, path)
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
+
+
+def test_final_training_auth_held_out_true_fails(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    path = _write_auth(tmp_path, fixture, held_out_generation_authorized=True)
+    fixture["auth"] = path
+    with pytest.raises(CorpusBuildError, match="held_out_generation_authorized is not false"):
+        _validate_auth_fixture(tmp_path, fixture)
+
+
+def test_final_training_run_dir_rejects_existing_nonempty(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    runs = tmp_path / "runs"
+    runs.mkdir()
+    (runs / "run-x").mkdir()
+    (runs / "run-x" / "leftover.txt").write_text("old", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="already exists"):
+        create_final_training_run(runs, fixture["auth"], run_id="run-x")
+
+
+def test_final_training_run_dir_initializes_once(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    runs = tmp_path / "runs"
+    created = create_final_training_run(runs, fixture["auth"], run_id="run-y")
+    assert created["run_id"] == "run-y"
+    assert (runs / "run-y" / "run_context.json").is_file()
+    assert (runs / "run-y" / "INCOMPLETE").is_file()
+    assert json.loads((runs / "run-y" / "run_context.json").read_text(encoding="utf-8"))["status"] == "INCOMPLETE"
+
+
+def test_final_training_run_dir_second_initialization_same_id_fails(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    runs = tmp_path / "runs"
+    create_final_training_run(runs, fixture["auth"], run_id="run-z")
+    with pytest.raises(CorpusBuildError, match="already exists"):
+        create_final_training_run(runs, fixture["auth"], run_id="run-z")
+
+
+def test_final_training_run_status_marks_complete(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    runs = tmp_path / "runs"
+    created = create_final_training_run(runs, fixture["auth"], run_id="run-c")
+    status = write_final_run_status(created["run_dir"], final_status="FINAL_TRAINING_COMPLETE_AWAITING_FIRSTMATE_REVIEW", manifest_sha256="0" * 64)
+    assert status["status"] == "COMPLETE"
+    assert not (runs / "run-c" / "INCOMPLETE").exists()
+    assert (runs / "run-c" / "RUN_COMPLETE").is_file()
+
+
+def test_manifest_collection_restricted_to_active_run_dir(tmp_path: Path) -> None:
+    active = tmp_path / "active"
+    active.mkdir()
+    other = tmp_path / "other"
+    other.mkdir()
+    (active / "a.txt").write_text("a", encoding="utf-8")
+    (other / "b.txt").write_text("b", encoding="utf-8")
+    manifest = write_external_manifest(active, configuration_identity="0" * 64, provenance_identity="test")
+    paths = [artifact["path"] for artifact in manifest["artifacts"]]
+    assert paths == ["a.txt"]
+    assert "b.txt" not in paths

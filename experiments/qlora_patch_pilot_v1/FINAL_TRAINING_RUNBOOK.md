@@ -78,14 +78,28 @@ Final training is **prepared but not executed** by this change set.
   `FirstMate / GPT-5.6 Thinking`, type `independent_ai_reviewer`);
 - corpus summary counts and empty repository overlap.
 
-## Expected artifacts (under `final-training/`)
+## Expected artifacts (under the run directory)
 
+Every attempt writes exclusively under
+`.../qlora_patch_pilot_v1/final-training/runs/<run-id>/`:
+
+- `run_context.json` + `INCOMPLETE` marker (written before model load),
 - `adapter-final/` (adapter + tokenizer files),
 - `trainer-output/` (training run outputs),
 - `trainer_state.json`, `training_log_history.json`,
-- `final_training_summary.json` (loss, elapsed seconds, peak CUDA allocated and
-  reserved bytes, runtime/package/GPU identity, adapter file SHA-256 map),
-- `runtime_environment.json`, `external_artifacts.json`.
+- `reload_verification.json`,
+- `final_training_summary.json` (full provenance chain: run ID, authorization
+  SHA-256, corpus and audit artifact identities, model/config identities,
+  loss, elapsed seconds, peak CUDA allocated and reserved bytes, GPU/package
+  versions, adapter hashes, reload result, held-out state, final status),
+- `runtime_environment.json`, `external_artifacts.json` (generated only from
+  the active run directory),
+- on completion: `run_status.json` (status COMPLETE) + `RUN_COMPLETE` marker
+  (the `INCOMPLETE` marker is removed).
+
+A run directory is **unambiguously incomplete** while `INCOMPLETE` is present
+or `run_status.json` is absent; it is complete only when `run_status.json`
+says COMPLETE and `RUN_COMPLETE` exists.
 
 ## Expected runtime/memory fields
 
@@ -94,13 +108,27 @@ Final training is **prepared but not executed** by this change set.
   (`torch.cuda.max_memory_allocated/reserved`);
 - `gpu`, `cuda_runtime`, `torch`, `python`, pinned package versions.
 
-## How to stop safely
+## How to stop safely and restart policy
 
 - Do not interrupt mid-epoch unless necessary; the adapter is only saved at the
-  end. An interrupted run leaves no partial adapter — re-run the notebook from
-  the top (idempotent gates; the corpus is never rebuilt).
-- If any gate fails, the notebook stops before model load; capture the failing
-  cell output and stop.
+  end. An interrupted run leaves `INCOMPLETE` in its run directory and no
+  adapter — the run is preserved as evidence, never renamed to appear complete
+  and never deleted by the notebook.
+- **Restart policy (required):**
+  1. preserve the incomplete run directory untouched (evidence);
+  2. do not rename it, do not delete it during the notebook;
+  3. start a fresh Colab runtime when appropriate;
+  4. rerun the notebook from the beginning;
+  5. a new run ID is generated (UTC timestamp + authorization-hash component)
+     and a new empty run directory is created; the notebook fails closed if
+     that exact run directory already exists;
+  6. every authorization, corpus and audit gate is re-run from the real files;
+  7. never copy adapter/trainer artifacts from a failed run into a new run;
+  8. never manually fill missing summary fields;
+  9. when diagnosing a failure, return both the successful run directory and
+     any relevant failed-run record to FirstMate.
+- A completed adapter is accepted only after FirstMate reviews the complete
+  provenance package (summary, manifest, run status, reload verification).
 
 ## What not to rerun
 

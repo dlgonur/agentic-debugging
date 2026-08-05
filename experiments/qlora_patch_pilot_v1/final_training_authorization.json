@@ -10,10 +10,15 @@
   "methodology": "Owner-delegated independent FirstMate AI audit; not human review.",
   "audit_mode": "independent_ai",
   "audit_result": {
+    "total_rows": 75,
+    "accepted_packet_rows": 50,
+    "rejected_packet_rows": 25,
     "accepted_packet_accept": 39,
     "accepted_packet_reject": 11,
     "rejected_packet_accept": 0,
-    "rejected_packet_reject": 25
+    "rejected_packet_reject": 25,
+    "reviewer": "FirstMate / GPT-5.6 Thinking",
+    "reviewer_type": "independent_ai_reviewer"
   },
   "corpus": {
     "tier": "minimum",
@@ -21,6 +26,37 @@
     "validation": 150,
     "top_up": false,
     "note": "Accepted unchanged for one bounded, descriptive QLoRA pilot. The 39/50 accepted-sample uphold rate is a disclosed quality signal; the corpus is not claimed clean or high precision. No top-up is authorized; a top-up would increase quantity without addressing the observed precision problem."
+  },
+  "corpus_artifacts": {
+    "train_jsonl": {
+      "logical_path": "corpus/train.jsonl",
+      "rows": 1000,
+      "size_bytes": 2586334,
+      "sha256": "118d7283230afada32c4b3a8be844713bae835b9351c535f86c72e4e8075a9a7"
+    },
+    "validation_jsonl": {
+      "logical_path": "corpus/validation.jsonl",
+      "rows": 150,
+      "size_bytes": 387309,
+      "sha256": "216a3a6c6d0f422d6141c2303f3284910c3614761c4d3f29d8cacb56cdb62aee"
+    },
+    "corpus_manifest": {
+      "logical_path": "corpus/external_artifacts.json",
+      "size_bytes": 4991,
+      "sha256": "afbd89e874ccea12c7b3e1d9afe7adbb4b2ddab7c064b5d6aa902df65a9fc584"
+    }
+  },
+  "audit_artifacts": {
+    "completed_audit_csv": {
+      "logical_path": "independent-audit/firstmate_independent_audit_completed.csv",
+      "size_bytes": 40450,
+      "sha256": "b7d39ae9dd59e126f138e95bfb661d36a189a86210a3fb1b367a5a4437653bfc"
+    },
+    "completed_audit_manifest": {
+      "logical_path": "independent-audit/firstmate_independent_audit_manifest.json",
+      "size_bytes": 1359,
+      "sha256": "2cd76b8350862863cfe1eaf26c4a0e228d086d3f68e3cbbf13ec8f5959adc285"
+    }
   },
   "model": {
     "repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
@@ -37,14 +73,17 @@
     "generation": "c7409ac44c99d64c9f2c36fa2edb19ff1919051ef0e12d61008182c171be518e"
   },
   "required_repository_ancestor": "66fb5d5",
-  "issued_at": "2026-08-05T02:15:00+03:00",
+  "issued_at": "2026-08-05T08:15:00+03:00",
   "fail_closed_conditions": [
-    "final-training authorization record must validate before any model load",
+    "final-training authorization record must validate against the exact real artifact files before any model load",
+    "train, validation, corpus-manifest, completed-audit CSV and completed-audit manifest SHA-256 identities are recomputed from the supplied files and must match this record exactly",
+    "train/validation row counts and byte sizes must match this record exactly",
+    "the completed audit CSV must pass the fail-closed independent_ai audit validation with the frozen packet identities and order",
     "held-out generation authorization remains false and is never implied by this record",
-    "corpus counts must remain 1000 train / 150 validation with empty repository overlap",
-    "no top-up, no corpus rebuild, no filter weakening",
+    "corpus tier stays minimum with no top-up and no corpus rebuild",
+    "each training attempt uses a fresh run directory under final-training/runs/<run-id>/; existing output is never reused",
     "no prompt or hyperparameter change based on future held-out results",
     "no held-out task content is accessed, loaded, or generated"
   ],
-  "authorizes_training_only_statement": "This record authorizes exactly one bounded final QLoRA training run on the frozen 1000-train/150-validation corpus. It does NOT authorize held-out access, held-out generation, base-versus-tuned evaluation, dataset acquisition, or any corpus modification."
+  "authorizes_training_only_statement": "This record authorizes exactly one bounded final QLoRA training run on the frozen 1000-train/150-validation corpus bound by the exact artifact identities above. It does NOT authorize held-out access, held-out generation, base-versus-tuned evaluation, dataset acquisition, or any corpus modification."
 }

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import csv
+import datetime
 import difflib
 import hashlib
 import json
@@ -1147,8 +1148,18 @@ def validate_final_training_authorization(
     *,
     repository_root: str | Path,
     corpus_dir: str | Path,
+    transformation_config_path: str | Path,
+    train_jsonl: str | Path,
+    validation_jsonl: str | Path,
+    corpus_manifest: str | Path,
+    completed_audit_csv: str | Path,
+    completed_audit_manifest: str | Path,
 ) -> dict[str, Any]:
-    """Fail-closed validation of the separate final-training authorization record."""
+    """Fail-closed validation of the separate final-training authorization record.
+
+    Every corpus and audit artifact identity is recomputed from the supplied
+    files; a structurally valid JSON record alone never reports COMPLETE.
+    """
     root = Path(repository_root)
     authorization_path = Path(authorization_path)
     if not authorization_path.is_file():
@@ -1178,23 +1189,69 @@ def validate_final_training_authorization(
         problems.append("methodology disclosure missing or incorrect")
     if authorization.get("audit_mode") != AUDIT_MODE_INDEPENDENT_AI:
         problems.append(f"audit_mode {authorization.get('audit_mode')!r} is not independent_ai")
-    expected_audit = {
-        "accepted_packet_accept": 39,
-        "accepted_packet_reject": 11,
-        "rejected_packet_accept": 0,
-        "rejected_packet_reject": 25,
-    }
+
+    declared_artifacts = authorization.get("corpus_artifacts", {})
+    corpus_artifact_identities: dict[str, dict[str, Any]] = {}
+    for kind, path in (
+        ("train_jsonl", train_jsonl),
+        ("validation_jsonl", validation_jsonl),
+        ("corpus_manifest", corpus_manifest),
+    ):
+        observed = _verify_bound_artifact(declared_artifacts.get(kind), Path(path), kind, problems)
+        corpus_artifact_identities[kind] = observed
+
+    declared_audit_artifacts = authorization.get("audit_artifacts", {})
+    audit_artifact_identities: dict[str, dict[str, Any]] = {}
+    for kind, path in (
+        ("completed_audit_csv", completed_audit_csv),
+        ("completed_audit_manifest", completed_audit_manifest),
+    ):
+        observed = _verify_bound_artifact(declared_audit_artifacts.get(kind), Path(path), kind, problems)
+        audit_artifact_identities[kind] = observed
+
+    try:
+        audit_validation = validate_completed_audits(
+            corpus_dir, transformation_config_path, completed_audit_path=completed_audit_csv
+        )
+    except CorpusBuildError as exc:
+        problems.append(f"completed audit validation failed: {exc}")
+        audit_validation = None
     audit_result = authorization.get("audit_result", {})
-    for key, value in expected_audit.items():
-        if audit_result.get(key) != value:
-            problems.append(f"audit_result.{key} {audit_result.get(key)!r} does not equal {value}")
+    expected_audit_counts: dict[str, Any] = {}
+    if audit_validation is not None:
+        expected_audit_counts = {
+            "total_rows": audit_validation["accepted_packet_total"] + audit_validation["rejected_packet_total"],
+            "accepted_packet_rows": audit_validation["accepted_packet_total"],
+            "rejected_packet_rows": audit_validation["rejected_packet_total"],
+            "accepted_packet_accept": audit_validation["accepted_packet_accept"],
+            "accepted_packet_reject": audit_validation["accepted_packet_reject"],
+            "rejected_packet_accept": audit_validation["rejected_packet_accept"],
+            "rejected_packet_reject": audit_validation["rejected_packet_reject"],
+        }
+        for key, value in expected_audit_counts.items():
+            if audit_result.get(key) != value:
+                problems.append(f"audit_result.{key} {audit_result.get(key)!r} does not match the validated {value}")
+    else:
+        problems.append("completed audit could not be validated; audit counts not verified")
+    if audit_result.get("reviewer") != FINAL_TRAINING_APPROVER:
+        problems.append(f"audit_result.reviewer {audit_result.get('reviewer')!r} is not {FINAL_TRAINING_APPROVER!r}")
+    if audit_result.get("reviewer_type") != INDEPENDENT_REVIEWER_TYPE:
+        problems.append(f"audit_result.reviewer_type {audit_result.get('reviewer_type')!r} is not {INDEPENDENT_REVIEWER_TYPE!r}")
+
     corpus = authorization.get("corpus", {})
-    if corpus.get("tier") != "minimum" or corpus.get("train") != 1000 or corpus.get("validation") != 150:
-        problems.append(f"corpus declaration {corpus!r} does not match the accepted 1000/150 minimum corpus")
+    if corpus.get("tier") != "minimum":
+        problems.append(f"corpus.tier {corpus.get('tier')!r} is not minimum")
     if authorization.get("top_up") not in (False, None):
         problems.append("top_up must not be declared")
     if corpus.get("top_up") not in (False, None):
         problems.append("corpus.top_up must not be declared")
+    train_rows = corpus_artifact_identities["train_jsonl"].get("rows", 0)
+    validation_rows = corpus_artifact_identities["validation_jsonl"].get("rows", 0)
+    if corpus.get("train") != train_rows:
+        problems.append(f"corpus.train {corpus.get('train')!r} does not match the bound train rows {train_rows}")
+    if corpus.get("validation") != validation_rows:
+        problems.append(f"corpus.validation {corpus.get('validation')!r} does not match the bound validation rows {validation_rows}")
+
     model = authorization.get("model", {})
     training = load_json(root / freeze["training"]["path"])
     if model.get("repository") != training["model_repository"] or model.get("revision") != training["model_revision"]:
@@ -1205,10 +1262,12 @@ def validate_final_training_authorization(
     if authorization.get("required_repository_ancestor") != freeze["repository_baseline"]["base_commit"]:
         problems.append("required_repository_ancestor does not match the freeze baseline")
     declared = authorization.get("configuration_identities", {})
+    configuration_identities: dict[str, str] = {}
     for key, section in (("prompt_contract", "prompt_contract"), ("transformation", "transformation"), ("training", "training"), ("generation", "generation")):
         configured = Path(freeze[section]["path"])
         path = configured if configured.is_absolute() else root / configured
         actual = sha256_bytes(canonical_json_bytes(load_json(path)))
+        configuration_identities[key] = actual
         if declared.get(key) != actual:
             problems.append(f"configuration_identity.{key} {declared.get(key)!r} does not match the recomputed {actual}")
         if freeze[section]["sha256"] != actual:
@@ -1224,8 +1283,11 @@ def validate_final_training_authorization(
         problems.append(f"corpus summary missing: {corpus_summary_path}")
     else:
         summary = load_json(corpus_summary_path)
-        if summary.get("train_examples") != 1000 or summary.get("validation_examples") != 150:
-            problems.append(f"corpus counts {summary.get('train_examples')}/{summary.get('validation_examples')} do not match 1000/150")
+        if summary.get("train_examples") != train_rows or summary.get("validation_examples") != validation_rows:
+            problems.append(
+                f"corpus summary counts {summary.get('train_examples')}/{summary.get('validation_examples')} "
+                f"do not match the bound {train_rows}/{validation_rows}"
+            )
     if not dedup_path.is_file():
         problems.append(f"dedup report missing: {dedup_path}")
     else:
@@ -1238,12 +1300,132 @@ def validate_final_training_authorization(
     return {
         "schema_version": FINAL_TRAINING_AUTH_SCHEMA,
         "experiment_id": freeze["experiment_id"],
+        "authorization_path": str(authorization_path),
+        "authorization_sha256": sha256_bytes(authorization_path.read_bytes()),
         "authorization_scope": FINAL_TRAINING_SCOPE,
         "authorized": True,
         "held_out_generation_authorized": False,
         "base_versus_tuned_evaluation_authorized": False,
         "authorized_by": FINAL_TRAINING_APPROVER,
-        "audit_result": expected_audit,
-        "corpus": {"tier": "minimum", "train": 1000, "validation": 150},
+        "authorization_type": FINAL_TRAINING_AUTH_TYPE,
+        "methodology": INDEPENDENT_AUDIT_METHODOLOGY,
+        "audit_mode": AUDIT_MODE_INDEPENDENT_AI,
+        "repository_identities": {
+            "required_ancestor": freeze["repository_baseline"]["base_commit"],
+            "freeze_sha256": sha256_bytes(canonical_json_bytes(freeze)),
+        },
+        "configuration_identities": configuration_identities,
+        "corpus_artifact_identities": corpus_artifact_identities,
+        "audit_artifact_identities": audit_artifact_identities,
+        "row_counts": {"train": train_rows, "validation": validation_rows},
+        "audit_counts": expected_audit_counts,
+        "reviewer_identity": audit_result.get("reviewer"),
+        "reviewer_type": audit_result.get("reviewer_type"),
+        "corpus": {"tier": "minimum", "train": train_rows, "validation": validation_rows, "top_up": False},
         "status": "COMPLETE",
     }
+
+
+def _verify_bound_artifact(
+    declared: Mapping[str, Any] | None,
+    path: Path,
+    kind: str,
+    problems: list[str],
+) -> dict[str, Any]:
+    """Recompute the artifact's identity from the actual file and bind it to the declaration."""
+    if declared is None or not isinstance(declared, Mapping):
+        problems.append(f"authorization declares no {kind} artifact binding")
+        return {"path": str(path)}
+    if not path.is_file():
+        problems.append(f"{kind} artifact missing: {path}")
+        return {"path": str(path)}
+    declared_hash = str(declared.get("sha256", ""))
+    if not re.fullmatch(r"[0-9a-f]{64}", declared_hash):
+        problems.append(f"{kind}: declared sha256 is missing or malformed")
+    actual_hash = sha256_bytes(path.read_bytes())
+    logical_path = str(declared.get("logical_path", ""))
+    if not logical_path or ".." in PurePosixPath(logical_path).parts or PurePosixPath(logical_path).is_absolute():
+        problems.append(f"{kind}: logical_path is missing, absolute, or traversing")
+    observed: dict[str, Any] = {
+        "path": str(path),
+        "logical_path": logical_path,
+        "size_bytes": path.stat().st_size,
+        "sha256": actual_hash,
+    }
+    if declared_hash and declared_hash != actual_hash:
+        problems.append(f"{kind} sha256 mismatch: declared {declared_hash}, actual {actual_hash}")
+    declared_size = declared.get("size_bytes")
+    if declared_size is not None and int(declared_size) != path.stat().st_size:
+        problems.append(
+            f"{kind} byte-size mismatch: declared {declared_size}, actual {path.stat().st_size}"
+        )
+    if "rows" in declared:
+        actual_rows = sum(1 for line in path.open("r", encoding="utf-8") if line.strip())
+        observed["rows"] = actual_rows
+        if int(declared["rows"]) != actual_rows:
+            problems.append(
+                f"{kind} row-count mismatch: declared {declared['rows']}, actual {actual_rows}"
+            )
+    return observed
+
+import datetime
+
+
+def create_final_training_run(
+    runs_root: str | Path,
+    authorization_path: str | Path,
+    *,
+    run_id: str | None = None,
+) -> dict[str, Any]:
+    """Create one fresh isolated final-training run directory; never reuse output."""
+    auth_path = Path(authorization_path)
+    if not auth_path.is_file():
+        raise CorpusBuildError(f"final-training authorization record missing: {auth_path}")
+    authorization_sha256 = sha256_bytes(auth_path.read_bytes())
+    if run_id is None:
+        run_id = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + authorization_sha256[:8]
+    run_dir = Path(runs_root) / run_id
+    if run_dir.exists():
+        raise CorpusBuildError(f"run directory already exists; a fresh run id is required: {run_dir}")
+    run_dir.mkdir(parents=True)
+    run_context = {
+        "run_id": run_id,
+        "authorization_path": str(auth_path),
+        "authorization_sha256": authorization_sha256,
+        "created_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "status": "INCOMPLETE",
+    }
+    _write_json(run_dir / "run_context.json", run_context)
+    (run_dir / "INCOMPLETE").write_text("INCOMPLETE run; see run_status.json\n", encoding="utf-8")
+    return {
+        "run_id": run_id,
+        "run_dir": str(run_dir),
+        "authorization_sha256": authorization_sha256,
+        "run_context": run_context,
+    }
+
+
+def write_final_run_status(
+    run_dir: str | Path,
+    *,
+    final_status: str,
+    manifest_sha256: str,
+) -> dict[str, Any]:
+    """Write the unambiguous completion record for a run directory."""
+    directory = Path(run_dir)
+    if not directory.is_dir():
+        raise CorpusBuildError(f"run directory missing: {directory}")
+    incomplete = directory / "INCOMPLETE"
+    run_status = {
+        "run_id": (directory / "run_context.json").is_file()
+        and load_json(directory / "run_context.json").get("run_id"),
+        "status": "COMPLETE",
+        "final_status": final_status,
+        "completed_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "manifest_sha256": manifest_sha256,
+    }
+    _write_json(directory / "run_status.json", run_status)
+    (directory / "RUN_COMPLETE").write_text("COMPLETE run; see run_status.json\n", encoding="utf-8")
+    if incomplete.is_file():
+        incomplete.unlink()
+    return run_status

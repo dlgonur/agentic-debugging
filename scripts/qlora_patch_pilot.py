@@ -53,6 +53,12 @@ def build_parser() -> argparse.ArgumentParser:
     auth.add_argument("--authorization", required=True)
     auth.add_argument("--repository-root", required=True)
     auth.add_argument("--corpus-dir", required=True)
+    auth.add_argument("--transformation-config", required=True)
+    auth.add_argument("--train-jsonl", required=True)
+    auth.add_argument("--validation-jsonl", required=True)
+    auth.add_argument("--corpus-manifest", required=True)
+    auth.add_argument("--completed-audit-csv", required=True)
+    auth.add_argument("--completed-audit-manifest", required=True)
     return parser
 
 
@@ -76,7 +82,15 @@ def main() -> int:
         result = create_non_held_out_verifier_smoke(args.repository_root, args.output)
     elif args.command == "validate-final-training-auth":
         result = validate_final_training_authorization(
-            args.authorization, repository_root=args.repository_root, corpus_dir=args.corpus_dir
+            args.authorization,
+            repository_root=args.repository_root,
+            corpus_dir=args.corpus_dir,
+            transformation_config_path=args.transformation_config,
+            train_jsonl=args.train_jsonl,
+            validation_jsonl=args.validation_jsonl,
+            corpus_manifest=args.corpus_manifest,
+            completed_audit_csv=args.completed_audit_csv,
+            completed_audit_manifest=args.completed_audit_manifest,
         )
     else:
         result = verify_freeze_record(args.repository_root, args.freeze_record)
