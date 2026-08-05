@@ -4,6 +4,10 @@
     "max_public_evidence_bytes": 20000
   },
   "case1_observed": {
+    "case_id": "quixbugs-paired-pilot-v4:quixbugs-is-valid-parenthesization-smoke-v1:pdb-on-uncertainty",
+    "order_index": 4,
+    "task_id": "quixbugs-is-valid-parenthesization-smoke-v1",
+    "policy": "pdb-on-uncertainty",
     "provider_process_attempts": 10,
     "logical_model_calls": 10,
     "retries": 0,
@@ -17,6 +21,10 @@
     "interrupted": false
   },
   "case2_observed": {
+    "case_id": "quixbugs-paired-pilot-v4:quixbugs-find-in-sorted-smoke-v1:pdb-on-uncertainty",
+    "order_index": 1,
+    "task_id": "quixbugs-find-in-sorted-smoke-v1",
+    "policy": "pdb-on-uncertainty",
     "provider_process_attempts": 15,
     "logical_model_calls": 14,
     "retries": 1,

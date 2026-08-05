@@ -1885,6 +1885,34 @@ def validate_budget_exhaustion_provenance(value: Any, *, budgets: Mapping[str, A
             raise LiveRunnerError("budget exhaustion provenance persisted bytes exceed the configured limit")
 
 
+def validate_record_budget_exhaustion(record: Mapping[str, Any], *, budgets: Mapping[str, Any]) -> None:
+    """Central record-level fail-closed validation of persisted
+    budget-exhaustion provenance.
+
+    A case record without ``budget_exhaustion`` has nothing to check.  A
+    record carrying the provenance must satisfy the provenance contract
+    (:func:`validate_budget_exhaustion_provenance`) against the frozen
+    budgets, and the provenance ``persisted_bytes`` must equal the record's
+    persisted ``public_evidence_bytes`` exactly, so the semantic clamp is
+    verified from the persisted record itself.  Hash bindings never
+    substitute for this semantic check; the check runs on the record before
+    persistence (``run_campaign``) and again on every case embedded in a
+    campaign record (``validate_campaign_record``, which
+    ``verify_attempt_package`` routes through).
+    """
+    if "budget_exhaustion" not in record:
+        return
+    validate_budget_exhaustion_provenance(record["budget_exhaustion"], budgets=budgets)
+    persisted = record["budget_exhaustion"]["persisted_bytes"]
+    persisted_evidence = record["public_evidence_bytes"]
+    if type(persisted_evidence) is not int or persisted_evidence < 0:
+        raise LiveRunnerError("persisted public evidence bytes must be a non-negative integer")
+    if persisted != persisted_evidence:
+        raise LiveRunnerError(
+            f"budget exhaustion provenance persisted bytes ({persisted}) differ from the persisted public evidence bytes ({persisted_evidence})"
+        )
+
+
 def enforce_case_budgets(outcome: Mapping[str, Any], manifest: Mapping[str, Any], *, case_policy: str) -> None:
     """Enforce the frozen v2 manifest budgets on a produced case outcome."""
     budgets = manifest["budgets"]
@@ -3516,6 +3544,14 @@ def run_campaign(
             record = materialize_case_record(manifest, case, authorization, route_observation, outcome,
                                              attempt_identity=identity, execution_commit=execution_commit)
             try:
+                validate_record_budget_exhaustion(record, budgets=manifest["budgets"])
+            except (LiveRunnerError, KeyError, TypeError, ValueError) as exc:
+                abort_info = ("SCHEMA_INCONSISTENCY", f"case record budget-exhaustion provenance is invalid: {exc}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            try:
                 validator.validate_result(record)
             except (pilot.PilotError, KeyError, TypeError, ValueError) as exc:
                 abort_info = ("SCHEMA_INCONSISTENCY", f"case record failed the frozen v2 result validation: {exc}")
@@ -3906,6 +3942,11 @@ def validate_campaign_record(record: Mapping[str, Any], manifest: Mapping[str, A
         body = {key: value for key, value in entry.items() if key != "record_sha256"}
         if pilot.result_sha256(body) != entry.get("record_sha256"):
             raise LiveRunnerError(f"campaign case record hash binding mismatch: {case_id}")
+        # Semantic fail-closed check for every embedded case carrying the
+        # budget-exhaustion provenance: the provenance contract against the
+        # frozen budgets and the exact persisted-bytes/evidence equality.
+        # Hash bindings alone never substitute for this check.
+        validate_record_budget_exhaustion(entry, budgets=manifest["budgets"])
     proof = record.get("provider_call_proof")
     if not isinstance(proof, Mapping):
         raise LiveRunnerError("campaign provider-call proof is missing")

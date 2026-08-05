@@ -34,6 +34,9 @@ representable.
 """
 from __future__ import annotations
 
+import copy
+import hashlib
+import json
 import sys
 import time
 from pathlib import Path
@@ -744,6 +747,20 @@ def _fixture_attempt() -> dict:
     return json.loads(ATTEMPT_FIXTURE_PATH.read_text(encoding="utf-8"))
 
 
+def _resolve_fixture_case(manifest, observed) -> dict:
+    """Resolve the exact frozen case for one recorded fixture case and assert
+    every identity field (case_id, order_index, task_id, policy) matches the
+    live v4 manifest."""
+    frozen = {case["case_id"]: case for case in manifest["case_order"]}
+    case_id = observed["case_id"]
+    assert case_id in frozen, f"fixture case_id {case_id!r} is not a frozen v4 case"
+    case = frozen[case_id]
+    assert case["order_index"] == observed["order_index"], (case["order_index"], observed["order_index"])
+    assert case["task_id"] == observed["task_id"], (case["task_id"], observed["task_id"])
+    assert case["policy"] == observed["policy"], (case["policy"], observed["policy"])
+    return case
+
+
 def _fixture_outcome(manifest, case, observed, *, interrupted: bool, patch_applied: bool) -> dict:
     """Build the raw adapter-shaped outcome for one recorded V4 case from the
     sanitized attempt fixture (aggregate accounting only)."""
@@ -806,8 +823,9 @@ def _fixture_outcome(manifest, case, observed, *, interrupted: bool, patch_appli
 
 
 def test_attempt_fixture_is_sanitized_and_identifies_v4_attempt():
-    """The artifact fixture carries only aggregate accounting and the frozen
-    budget; no credentials, raw provider output, or private material."""
+    """The artifact fixture carries only aggregate accounting, the frozen
+    budget, and the exact frozen case identities; no credentials, raw
+    provider output, or private material."""
     blob = ATTEMPT_FIXTURE_PATH.read_text(encoding="utf-8")
     for marker in ("auth.json", "api_key", "bearer", "sessionID", "step_start", "provider_stdout",
                    "provider_stderr", "usage", "cost", "gold", "oracle", "correct_python_programs"):
@@ -816,9 +834,33 @@ def test_attempt_fixture_is_sanitized_and_identifies_v4_attempt():
     assert attempt["attempt_identity"] == V4_ATTEMPT_IDENTITY
     assert set(attempt) == {"attempt_identity", "budget", "case1_observed", "case2_observed"}
     assert attempt["budget"]["max_public_evidence_bytes"] == 20000
+    for label in ("case1_observed", "case2_observed"):
+        for field in ("case_id", "order_index", "task_id", "policy"):
+            assert field in attempt[label], f"{label} is missing identity field {field}"
+    assert attempt["case1_observed"]["case_id"] != attempt["case2_observed"]["case_id"]
     assert attempt["case1_observed"]["public_evidence_bytes"] == 26139
     assert attempt["case2_observed"]["public_evidence_bytes"] == 38534
     assert attempt["case2_observed"]["interrupted"] is True
+
+
+def test_v4_fixture_cases_bind_to_exact_frozen_identities(manifest_v4):
+    """Both recorded fixture cases resolve to distinct frozen v4 cases and
+    every identity field (case_id, order_index, task_id, policy) matches the
+    live v4 manifest exactly; neither case is selected by a positional
+    default."""
+    attempt = _fixture_attempt()
+    frozen = {case["case_id"]: case for case in manifest_v4["case_order"]}
+    for label in ("case1_observed", "case2_observed"):
+        observed = attempt[label]
+        case = _resolve_fixture_case(manifest_v4, observed)
+        assert case["case_id"] == observed["case_id"]
+        assert case["order_index"] == observed["order_index"]
+        assert case["task_id"] == observed["task_id"]
+        assert case["policy"] == observed["policy"]
+    case1 = frozen[attempt["case1_observed"]["case_id"]]
+    case2 = frozen[attempt["case2_observed"]["case_id"]]
+    assert case1["case_id"] != case2["case_id"]
+    assert case1["order_index"] != case2["order_index"]
 
 
 def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v4, auth_v4, tmp_path, git_state_provider):
@@ -828,13 +870,17 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     run materialized no case record and aborted BUDGET_EXCEEDED) now flows
     end to end: outcome validation, budget rewriting, materialization, frozen
     result validation, campaign persistence and package verification.  The
-    persisted record preserves the interruption identity and every accounting
+    case is resolved from its exact frozen case_id (order_index 1,
+    find-in-sorted / pdb-on-uncertainty) and the persisted record proves the
+    exact identity, preserves the interruption identity and every accounting
     counter, clamps public evidence to 20,000, and carries the machine-
     readable budget_exhaustion provenance; the campaign terminalizes as the
     typed ABORTED / INTERRUPTED package."""
     attempt = _fixture_attempt()
     case2 = attempt["case2_observed"]
-    case = manifest_v4["case_order"][0]
+    case = _resolve_fixture_case(manifest_v4, case2)
+    assert case2["case_id"] == manifest_v4["case_order"][0]["case_id"]
+    assert case2["policy"] == "pdb-on-uncertainty"
     raw = _fixture_outcome(manifest_v4, case, case2, interrupted=True, patch_applied=True)
 
     runner.validate_case_outcome(raw)
@@ -865,6 +911,10 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     runner.enforce_case_budgets(rewritten, manifest_v4, case_policy=case["policy"])
 
     record = _materialize_and_validate(manifest_v4, case, rewritten, auth=auth_v4)
+    assert record["case_id"] == case2["case_id"]
+    assert record["order_index"] == case2["order_index"]
+    assert record["task_id"] == case2["task_id"]
+    assert record["policy"] == case2["policy"]
     assert record["public_evidence_bytes"] == 20000
     assert record["interrupted"] is True
     assert record["patch_submissions"] == 1
@@ -872,6 +922,7 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     assert record["provider_process_attempts"] == 15
     assert record["budget_exhaustion"]["observed_bytes"] == 38534
     assert record["budget_exhaustion"]["persisted_bytes"] == 20000
+    runner.validate_record_budget_exhaustion(record, budgets=manifest_v4["budgets"])
 
     entries = _completed_entries(manifest_v4)
     entries[0] = {"provider_process_attempts": 15, "outcome": raw}
@@ -885,6 +936,10 @@ def test_v4_attempt_3b5d7488_interrupted_budget_exhaustion_end_to_end(manifest_v
     assert campaign_record["stop_reason"] == "INTERRUPTED"
     assert campaign_record["case_lifecycle_states"][case["case_id"]] == "completed"
     first = campaign_record["cases"][0]
+    assert first["case_id"] == case2["case_id"]
+    assert first["order_index"] == case2["order_index"]
+    assert first["task_id"] == case2["task_id"]
+    assert first["policy"] == case2["policy"]
     assert first["terminal_status"] == "INFRASTRUCTURE_ERROR"
     assert first["public_evidence_bytes"] == 20000
     assert first["interrupted"] is True
@@ -907,10 +962,14 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
     """The actual V4 Case 1 shape (malformed patch rejection, 26,139 observed
     public-evidence bytes, 10 provider processes, no applied candidate,
     verifier never ran) materializes as a schema-valid terminal with the
-    budget clamped and the campaign continuing to the remaining cases."""
+    budget clamped and the campaign continuing to the remaining cases.  The
+    case is resolved from its exact frozen case_id (order_index 4,
+    is-valid-parenthesization / pdb-on-uncertainty), distinct from Case 2."""
     attempt = _fixture_attempt()
     case1 = attempt["case1_observed"]
-    case = manifest_v4["case_order"][0]
+    case = _resolve_fixture_case(manifest_v4, case1)
+    assert case1["case_id"] != attempt["case2_observed"]["case_id"]
+    assert case1["policy"] == "pdb-on-uncertainty"
     raw = _fixture_outcome(manifest_v4, case, case1, interrupted=False, patch_applied=False)
     assert raw["patch_submissions"] == 0
     assert raw["verifier_runs"] == 0
@@ -936,6 +995,10 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
     runner.enforce_case_budgets(rewritten, manifest_v4, case_policy=case["policy"])
 
     record = _materialize_and_validate(manifest_v4, case, rewritten, auth=auth_v4)
+    assert record["case_id"] == case1["case_id"]
+    assert record["order_index"] == case1["order_index"]
+    assert record["task_id"] == case1["task_id"]
+    assert record["policy"] == case1["policy"]
     assert record["public_evidence_bytes"] == 20000
     assert record["interrupted"] is False
     assert record["patch_submissions"] == 0
@@ -943,7 +1006,7 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
     assert record["budget_exhaustion"]["observed_bytes"] == 26139
 
     entries = _completed_entries(manifest_v4)
-    entries[0] = {"provider_process_attempts": 10, "outcome": raw}
+    entries[3] = {"provider_process_attempts": 10, "outcome": raw}
     campaign_record, factory, case_runner, output = _run_campaign_custom(
         manifest_v4, auth_v4, tmp_path,
         case_runner=ScriptedCaseRunner(entries),
@@ -951,13 +1014,16 @@ def test_v4_attempt_case1_malformed_patch_replay_from_fixture(manifest_v4, auth_
         git_state_provider=git_state_provider,
     )
     assert campaign_record["status"] == "COMPLETED"
-    first = campaign_record["cases"][0]
-    assert first["terminal_status"] == "INFRASTRUCTURE_ERROR"
-    assert first["public_evidence_bytes"] == 20000
-    assert first["interrupted"] is False
-    assert first["patch_submissions"] == 0
-    assert first["verifier_runs"] == 0
-    assert first["budget_exhaustion"]["observed_bytes"] == 26139
+    case1_record = campaign_record["cases"][3]
+    assert case1_record["case_id"] == case1["case_id"]
+    assert case1_record["order_index"] == case1["order_index"]
+    assert case1_record["policy"] == case1["policy"]
+    assert case1_record["terminal_status"] == "INFRASTRUCTURE_ERROR"
+    assert case1_record["public_evidence_bytes"] == 20000
+    assert case1_record["interrupted"] is False
+    assert case1_record["patch_submissions"] == 0
+    assert case1_record["verifier_runs"] == 0
+    assert case1_record["budget_exhaustion"]["observed_bytes"] == 26139
     assert runner.verify_attempt_package(output, manifest_v4)["consistent"] is True
     runner.validate_campaign_record(campaign_record, manifest_v4)
 
@@ -1048,3 +1114,113 @@ def test_adapter_maps_reporting_interrupted_to_outcome_interrupted(manifest_v4):
         source_hash=source_hash,
     )
     assert outcome_normal["interrupted"] is False
+
+
+# ---- fail-closed budget provenance after persistence --------------------------
+
+
+def _v4_case2_campaign_record(manifest_v4, auth_v4, tmp_path, git_state_provider):
+    """Build the actual V4 Case 2 campaign (ABORTED / INTERRUPTED with one
+    budget-exhausted case record) and return (record, output_root)."""
+    attempt = _fixture_attempt()
+    case2 = attempt["case2_observed"]
+    case = _resolve_fixture_case(manifest_v4, case2)
+    raw = _fixture_outcome(manifest_v4, case, case2, interrupted=True, patch_applied=True)
+    entries = _completed_entries(manifest_v4)
+    entries[0] = {"provider_process_attempts": 15, "outcome": raw}
+    record, factory, case_runner, output = _run_campaign_custom(
+        manifest_v4, auth_v4, tmp_path,
+        case_runner=ScriptedCaseRunner(entries),
+        runner_entries=entries,
+        git_state_provider=git_state_provider,
+    )
+    assert record["status"] == "ABORTED"
+    assert record["cases"][0]["budget_exhaustion"]["persisted_bytes"] == 20000
+    return record, output
+
+
+def _recompute_record_sha256(entry: dict) -> dict:
+    body = {key: value for key, value in entry.items() if key != "record_sha256"}
+    entry["record_sha256"] = pilot.result_sha256(body)
+    return entry
+
+
+def test_campaign_validation_rejects_bad_budget_provenance(manifest_v4, auth_v4, tmp_path, git_state_provider):
+    """validate_campaign_record rejects every recorded provenance corruption:
+    persisted bytes differing from public_evidence_bytes, wrong configured
+    limit, observed bytes not exceeding the limit, contradictory truncated
+    state, and malformed/extra provenance fields.  Hash bindings alone never
+    substitute for the semantic check: the embedded record_sha256 is
+    recomputed so the provenance check is the rejecting gate."""
+    record, output = _v4_case2_campaign_record(manifest_v4, auth_v4, tmp_path, git_state_provider)
+    case_entry = copy.deepcopy(record["cases"][0])
+
+    def expect_reject(mutate, message_part):
+        mutated = copy.deepcopy(case_entry)
+        mutate(mutated)
+        mutated = _recompute_record_sha256(mutated)
+        with pytest.raises(runner.LiveRunnerError, match=message_part):
+            runner.validate_campaign_record({**record, "cases": [mutated]}, manifest_v4)
+
+    expect_reject(
+        lambda entry: entry["budget_exhaustion"].update(persisted_bytes=19999),
+        "persisted bytes \\(19999\\) differ from the persisted public evidence bytes \\(20000\\)",
+    )
+    expect_reject(
+        lambda entry: entry["budget_exhaustion"].update(configured_limit=19999),
+        "configured limit does not match the frozen budget",
+    )
+    expect_reject(
+        lambda entry: entry["budget_exhaustion"].update(observed_bytes=20000, truncated=False),
+        "observed bytes do not exceed the configured limit",
+    )
+    expect_reject(
+        lambda entry: entry["budget_exhaustion"].update(truncated=False),
+        "truncated flag is inconsistent",
+    )
+    expect_reject(
+        lambda entry: entry["budget_exhaustion"].update(extra_field=1),
+        "fields are not exact",
+    )
+    expect_reject(
+        lambda entry: entry["budget_exhaustion"].pop("state"),
+        "fields are not exact",
+    )
+    # The unmutated record still validates.
+    runner.validate_campaign_record(record, manifest_v4)
+
+
+def test_package_verification_rejects_bad_budget_provenance(manifest_v4, auth_v4, tmp_path, git_state_provider):
+    """verify_attempt_package rejects a package whose persisted case record
+    carries corrupted budget-exhaustion provenance (through campaign
+    validation), even when every hash binding is recomputed consistently."""
+    record, output = _v4_case2_campaign_record(manifest_v4, auth_v4, tmp_path, git_state_provider)
+    assert runner.verify_attempt_package(output, manifest_v4)["consistent"] is True
+
+    def tamper(provenance_mutate):
+        root = Path(output)
+        campaign = json.loads((root / "campaign.json").read_text(encoding="utf-8"))
+        commit = json.loads((root / "terminal-commit.json").read_text(encoding="utf-8"))
+        entry = campaign["cases"][0]
+        case_path = root / "cases" / f"case-{int(entry['order_index']):02d}-{entry['case_id'].replace(':', '__')}.json"
+        on_disk = json.loads(case_path.read_text(encoding="utf-8"))
+        provenance_mutate(on_disk["budget_exhaustion"])
+        new_sha = pilot.result_sha256(on_disk)
+        entry["record_sha256"] = new_sha
+        payload = lambda value: json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n"
+        case_path.write_text(payload(on_disk), encoding="utf-8")
+        (root / "campaign.json").write_text(payload(campaign), encoding="utf-8")
+        commit["campaign_json_sha256"] = hashlib.sha256((root / "campaign.json").read_bytes()).hexdigest()
+        commit["case_inventory"] = [
+            {"case_id": item["case_id"], "order_index": item["order_index"], "record_sha256": item["record_sha256"]}
+            for item in campaign["cases"]
+        ]
+        (root / "terminal-commit.json").write_text(payload(commit), encoding="utf-8")
+
+    tamper(lambda provenance: provenance.update(persisted_bytes=19999))
+    with pytest.raises(runner.LiveRunnerError, match="campaign record consistency"):
+        runner.verify_attempt_package(output, manifest_v4)
+
+    tamper(lambda provenance: provenance.update(configured_limit=19999))
+    with pytest.raises(runner.LiveRunnerError, match="campaign record consistency"):
+        runner.verify_attempt_package(output, manifest_v4)
