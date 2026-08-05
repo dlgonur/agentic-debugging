@@ -1,9 +1,9 @@
 # Friday Presentation Plan v1
 
-**Document version:** 1.1
+**Document version:** 1.2
 **Snapshot date:** 2026-08-05
-**Source baseline:** `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (accepted on `main`); campaign infrastructure accepted through `0abb588df46605a9a754c051e71ebe17692c09db`; V4 sanitized-fixture/replay identity mapping corrected and accepted through `fc7c85b`. This presentation delivery was prepared from that accepted baseline; it does not require or depend on any task branch.
-**Base commit:** campaign infrastructure accepted on `main` through `0abb588df46605a9a754c051e71ebe17692c09db`; `main` accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (V4 sanitized-fixture/replay identity mapping corrected and accepted through `fc7c85b`)
+**Source baseline:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` is the accepted presentation plan/deck/cue delivery commit and the source baseline for this task's final-delivery candidate; campaign infrastructure accepted through `0abb588df46605a9a754c051e71ebe17692c09db`; V4 identity correction accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5`. Version 1.1 of this document was prepared from `fc7c85b`; version 1.2 updates the baseline identity and links the delivery bundle (`docs/FRIDAY_DELIVERY_MANIFEST_V1.md`, `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`, `docs/FRIDAY_STATUS_HANDOFF_V1.md`) — an uncommitted candidate built on top of `456f0e9` during review, whose integration commit is not yet known.
+**Base commit:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` (accepted presentation delivery commit; `main` head on 2026-08-05); campaign infrastructure accepted on `main` through `0abb588df46605a9a754c051e71ebe17692c09db`; V4 identity correction accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5`. On presentation day, run from clean `main` matching `origin/main`, containing the delivery bundle files and descending from `456f0e9`.
 **Presentation duration target:** 20–25 minutes talk plus demo and Q&A (primary), with a 10–12-minute shortened track
 **Scope boundary:** This is a professor-facing presentation and demo runbook only. It is not a slide deck, not the final technical report, not a claim that the project is a finished automated repair system, not an authorization to run another provider campaign, and not an authorization for final QLoRA training or held-out generation. It changes no code and authorizes no execution.
 
@@ -184,6 +184,9 @@ Every material claim in the presentation must trace to tracked repository eviden
 | Real minimum-tier corpus 1,000/150, zero leakage, zero repository overlap; one-step CUDA update + adapter reload succeeded | FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main (labeled Layer 2 in the status map, items 9/12); status map item 9 and Section 5 QLoRA boundary |
 | Owner-delegated independent FirstMate AI audit of the 75 frozen corpus rows complete: 39 ACCEPT / 36 REJECT, reviewer identity disclosed; corpus not modified | Owner-supplied result; FirstMate-reviewed external experimental evidence not yet merged or durably tracked on main. This is an AI audit, not human review. Final QLoRA training was externally authorized by FirstMate on 2026-08-05; no accepted final-training artifact exists yet and results are pending FirstMate artifact review; fail-closed audit validation and the corpus acceptance decision remain pending (Section 8) |
 | RAG NO-GO-FOR-NOW, SFT DEFER, DPO NO-GO-FOR-NOW | `docs/DATASET_EVALUATION_DECISION_V1.md` Section 10; `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` |
+| Friday delivery bundle identity and inventory | `docs/FRIDAY_DELIVERY_MANIFEST_V1.md` (bundle inventory with SHA-256, evidence index, exact commands, fallbacks, rehearsal evidence) |
+| Final preflight and rehearsal gate | `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md` (consolidated checklist; rehearsal evidence from the 2026-08-05 single-task run) |
+| Project-status handoff and post-Friday batches | `docs/FRIDAY_STATUS_HANDOFF_V1.md` (completed/partial/pending/blocked; batches B1–B7) |
 
 ## 5. Friday demo runbook
 
@@ -191,29 +194,33 @@ Every material claim in the presentation must trace to tracked repository eviden
 
 Commands below are exactly the established entry points documented in `docs/DEMO_GUIDE_V1.md` Section 2 and `agentic_debugger/demo/cli.py`. Nothing here runs a model, WSL, or network.
 
-Prerequisites:
+Prerequisites (complete environment setup before presentation day; `pip install`
+may require package-index access or already-cached dependencies — the demo
+itself has zero provider/network dependency once the environment is prepared):
 
 ```powershell
 python -m pip install -e .[test]
 ```
 
-Full run (10 cases, ~seconds):
+Full run (10 cases, ~seconds) — always into a fresh unique output directory
+(never reuse, delete, or overwrite a prior output):
 
 ```powershell
-python -m agentic_debugger.demo --output-dir demo-out
+$fullOut = "demo-out-full-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+python -m agentic_debugger.demo --output-dir $fullOut
 ```
 
 Expected success criteria (documented in `docs/DEMO_TASK9.md` / `DEMO_GUIDE_V1.md`):
 
 - exit code 0;
-- `demo-out/results.json` and `demo-out/technical-evaluation-summary.md` report 5 curated tasks × 2 policies = 10 cases;
+- `$fullOut/results.json` and `$fullOut/technical-evaluation-summary.md` report 5 curated tasks × 2 policies = 10 cases;
 - all controller `Done`; all verifier `COMPLETED`/`RESOLVED`; F2P 10/10; P2P 22/22; localization `CORRECT_TARGET_SYMBOL` 10/10;
 - canonical fixtures unchanged; every workspace cleaned;
-- per-case trajectories under `demo-out/trajectories/<case>.events.jsonl` and `.semantic.json`.
+- per-case trajectories under `$fullOut/trajectories/<case>.events.jsonl` and `.semantic.json`.
 
 Narration order inside the demo (each step maps to a visible artifact):
 
-1. Task/repository input — `--list-tasks` shows the 5 curated task IDs; run one case first for narration: `python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002`.
+1. Task/repository input — `--list-tasks` shows the 5 curated task IDs; run one case first for narration: `python -m agentic_debugger.demo --output-dir $demoOut --task-id curated-off-by-one-002` (fresh `$demoOut` per run, as in Section 5.3 of `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`).
 2. Controller state transitions — open `<case>.events.jsonl`: reproduce → understand → (PDB gate) → patch → validate.
 3. Typed tools — point to the same file: file-read, code-search, test-run, patch-apply directives with validated arguments.
 4. PDB-capable path — narrate the `pdb-on-uncertainty` cases and their scripted evidence boundary (offline stand-in, 21 scripted PDB observations; see `docs/DEMO_TASK9.md`). The golden trajectory `tests/golden_trajectories/data/pdb-gated-successful-repair.json` can be shown as the recorded PDB-gated repair path.
@@ -222,10 +229,12 @@ Narration order inside the demo (each step maps to a visible artifact):
 7. Structured result and metrics — `technical-evaluation-summary.md`.
 8. Workspace cleanup — the summary reports every workspace cleaned.
 
-Optional stricter check (only when a clean 10/10 is certain):
+Optional stricter check (only when a clean 10/10 is certain) — fresh unique
+output directory:
 
 ```powershell
-python -m agentic_debugger.demo --output-dir demo-out --strict
+$strictOut = "demo-out-strict-" + (Get-Date -Format "yyyyMMdd-HHmmss")
+python -m agentic_debugger.demo --output-dir $strictOut --strict
 ```
 
 ### 5.2 Demo boundary statements
@@ -347,7 +356,7 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 | Colab unavailable | Present Section 8A as readiness evidence only: frozen methodology, frozen configs, leakage-checked real corpus, one-step CUDA update and adapter reload (labeled external evidence). State the prescribed pending-results sentence; the post-Friday near term is final-training artifact review and corpus acceptance (instructor items 12/13). Do not substitute prompt changes or smoke runs for a training result. |
 | Final QLoRA training incomplete | Same as Colab-unavailable branch: all Section 8B fields remain `PENDING — DO NOT INFER`; the segment becomes "methodology and readiness, results pending". |
 | Deterministic demo command fails | Re-check `python -m pip install -e .[test]`; then retry the single-task form `python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002`. If `--strict` fails, it is a regression signal per `docs/DEMO_GUIDE_V1.md` Section 6 — do not force it. Last resort: present preserved demo outputs (`results.json`, `technical-evaluation-summary.md`, trajectories) as recorded evidence instead of a live run. |
-| Internet unavailable | The primary demo needs no network and no WSL. Do not attempt any provider interaction. The recorded v4 evidence is local; if its files are not available, rely on the tracked facts in `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` and `research/quixbugs/PAIRED_PILOT_V4.json` (Section 6). |
+| Internet unavailable | Safe only when the environment is already prepared (install and import checks done before presentation day). The primary demo itself needs no network and no WSL. Do not attempt any provider interaction. The recorded v4 evidence is local; if its files are not available, rely on the tracked facts in `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` and `research/quixbugs/PAIRED_PILOT_V4.json` (Section 6). |
 | Recorded provider evidence unavailable | Present the tracked account of the v4 attempt (status map Section 5 boundary; v4 manifest) without quoting review-package files. No durable claim depends on `_ai-review/` or `operator/`. |
 | Presentation time shortened to 10–12 minutes | Use the core arc: scope snapshot (1 min) → architecture (2 min) → deterministic evidence + live findings (3 min) → limitations (1 min) → QLoRA verified state/pending (1 min) → single-task demo (2 min) → roadmap (1 min). Drop the full 10-case demo to the `--task-id curated-off-by-one-002` single case. |
 
@@ -368,7 +377,10 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 
 ## 11. Final pre-presentation checklist
 
-- [ ] Repository baseline noted: campaign infrastructure accepted on `main` through `0abb588df46605a9a754c051e71ebe17692c09db`; `main` accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (V4 sanitized-fixture/replay identity mapping corrected and accepted).
+The consolidated final gate is `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`; this
+section remains the plan-scoped subset.
+
+- [ ] Repository baseline noted: accepted source baseline `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` (accepted presentation plan/deck/cue delivery commit); campaign infrastructure accepted through `0abb588df46605a9a754c051e71ebe17692c09db`; V4 identity correction accepted through `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5`; on presentation day, run from clean `main` matching `origin/main`, containing the delivery bundle files and descending from `456f0e9`.
 - [ ] Git check: current branch is `main`; local `main` matches `origin/main`; tracked working tree is clean. No requirement that ignored `.opencode/` or `_ai-review/` files be absent.
 - [ ] Python environment ready: `python -m pip install -e .[test]` succeeds; `python --version` is 3.11+.
 - [ ] Deterministic demo verified once beforehand: `python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002` (single-case rehearsal) and, if desired, the full `--output-dir demo-out` run; expected counters recorded (`docs/DEMO_GUIDE_V1.md` Section 2).
@@ -379,6 +391,7 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 - [ ] Offline copies of presentation evidence exist (no dependency on internet for demo or evidence).
 - [ ] Timing rehearsal done: segments 1–7 ≤ ~20 min; demo within segment 8; 10–12-minute shortened version rehearsed (Section 9).
 - [ ] Prohibited-claim review: scan Section 7 list; confirm no slide/sentence claims live repair, PDB benefit, gold-patch model performance, final metrics, BugsInPy execution, or RAG/DPO implementation.
+- [ ] Fresh single-task demo rehearsal executed once with a timestamped output directory (checklist Section 3); rehearsal artifacts preserved as local operational fallback only.
 
 ## 12. Post-Friday roadmap tied to the instructor's 27-item list
 
@@ -406,3 +419,7 @@ Never weaken verifier gates, patch validation, containment, dataset leakage chec
 | Evaluation across all five metric families on a completed campaign | 26 |
 
 The roadmap does not schedule a wider no-model QuixBugs campaign (the decision gate records the fallback dataset's job as done) and does not authorize any provider, training, or campaign execution by itself.
+
+The grouped post-Friday engineering batches (B1–B7) live in
+`docs/FRIDAY_STATUS_HANDOFF_V1.md` Section 5; this section and that table are
+the two coordinated views of the same roadmap.

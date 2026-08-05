@@ -535,10 +535,11 @@ Note on recorded-case identity: the sanitized attempt fixture and replay
 assertions accepted at `0abb588` associated the two observed shapes with the
 wrong frozen cases (the malformed shape with `is-valid-parenthesization` /
 `pdb-on-uncertainty` and the applied-patch interrupted shape with
-`find-in-sorted` / `pdb-on-uncertainty`). The 2026-08-05 Friday-readiness
-candidate in this branch corrects that fixture/test identity mapping using
-the preserved campaign record, private transport evidence, provider-reported
-cost sums, and the frozen v4 case order. Production budgets, the frozen
+`find-in-sorted` / `pdb-on-uncertainty`). That fixture/test identity mapping
+was corrected using the preserved campaign record, private transport
+evidence, provider-reported cost sums, and the frozen v4 case order, and is
+accepted on `main` at `fc7c85b` — it is no longer a pending Friday-readiness
+candidate. Production budgets, the frozen
 manifest, route, provider, authorization, and controller behavior are
 unchanged.
 
@@ -595,3 +596,37 @@ QLoRA status (2026-08-05):
   false`; that is the historical branch-bound freeze record, not evidence
   about the current external operational authorization of final training
   (which was granted on 2026-08-05).
+
+## Current status (2026-08-05) — Friday professor delivery bundle
+
+The offline professor-facing delivery package for Friday 2026-08-07 is
+prepared as documentation and rehearsal work only, built from accepted source
+baseline `456f0e9` (the accepted presentation plan/deck/cue delivery commit;
+campaign infrastructure accepted through `0abb588`; V4 identity correction
+accepted through `fc7c85b`). The bundle itself — the manifest, preflight
+checklist, and status handoff — is an uncommitted candidate built on top of
+`456f0e9` during review; its eventual integration commit is not yet known:
+
+- `docs/FRIDAY_DELIVERY_MANIFEST_V1.md` — submission manifest, evidence
+  index, exact setup/demo/reproduction/fallback/presentation-day commands,
+  and the rehearsal evidence;
+- `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md` — consolidated final preflight and
+  rehearsal checklist;
+- `docs/FRIDAY_STATUS_HANDOFF_V1.md` — concise completed/partial/pending/
+  blocked handoff and the grouped post-Friday engineering batches (B1–B7);
+- `docs/FRIDAY_PRESENTATION_PLAN_V1.md`, `docs/FRIDAY_PRESENTATION_DECK_V1.md`,
+  `docs/FRIDAY_PRESENTATION_CUE_SHEET_V1.md` — updated to v1.2 against the
+  `456f0e9` baseline identity.
+
+A fresh single-task deterministic demo rehearsal ran on 2026-08-05 with the
+exact presentation command shape: exit 0, 2 cases over
+`curated-off-by-one-002` (both policies), verifier `RESOLVED` 2/2, F2P 2/2,
+P2P 4/4, localization `CORRECT_TARGET_SYMBOL` 2/2, 0 provider / 0 network
+attempts, workspaces `CLEANED`, canonical fixtures unchanged, trajectories
+replay-valid; artifacts preserved under the ignored `_ai-review/` location as
+local operational fallback only (never a durable claim source). No provider,
+live campaign, WSL, BugsInPy, QLoRA training, held-out generation, or broad
+test-suite execution occurred, and no commit was made during the
+coding-agent build/rehearsal phase before FirstMate integration. On
+presentation day, run from clean `main` matching `origin/main`, containing
+the delivery bundle files and descending from `456f0e9`.

@@ -1,7 +1,7 @@
 # Friday Presentation Cue Sheet v1
 
-**Version:** 1.1 — 2026-08-05
-**Source baseline:** `fc7c85b9858eba993f6bacc8ea9b4f805873f1a5` (accepted on `main`); campaign infrastructure accepted through `0abb588`; V4 identity-mapping correction accepted through `fc7c85b`. Presentation delivery prepared from that accepted baseline.
+**Version:** 1.2 — 2026-08-05
+**Source baseline:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` is the accepted presentation plan/deck/cue delivery commit and the source baseline for this task's final-delivery candidate; campaign infrastructure accepted through `0abb588`; V4 identity correction accepted through `fc7c85b`. Version 1.1 was prepared from `fc7c85b`; version 1.2 updates the baseline identity. On presentation day, run from clean `main` matching `origin/main`, containing the delivery bundle files and descending from `456f0e9`.
 **Usage:** presenter-side quick reference only. Full content, evidence paths, and overclaim boundaries live in `docs/FRIDAY_PRESENTATION_DECK_V1.md`; runbook and Q&A in `docs/FRIDAY_PRESENTATION_PLAN_V1.md`.
 
 ---
@@ -118,7 +118,7 @@ Demo sırasında söylenecek sınır: "Bu, scripted stand-in ile platform göste
 
 ## 10. Sunum öncesi kontrol listesi
 
-- [ ] Git kontrolü: güncel branch `main`; yerel `main`, `origin/main` ile aynı; tracked working tree temiz. (Ignored `.opencode/` veya `_ai-review/` dosyalarının bulunmaması gerekmez.)
+- [ ] Git kontrolü: sunum günü temiz `main` üzerinden, `origin/main` ile aynı, delivery bundle dosyalarını içeren ve kabul edilmiş kaynak baseline `456f0e9`'dan türeyen bir ağaçtan çalışılır; tracked working tree temiz. (Ignored `.opencode/` veya `_ai-review/` dosyalarının bulunmaması gerekmez.)
 - [ ] `python -m pip install -e .[test]` başarılı; `python --version` 3.11+.
 - [ ] Tek-task provası bir kez çalıştırıldı: exit 0, 2 case, 0 provider/network; çıktılar yerel operasyonel fallback olarak saklandı (durable iddia kaynağı değil).
 - [ ] QLoRA alanları boş; reçete cümlesi (§7) hazır; smoke cümlesi "one-step CUDA QLoRA smoke update + adapter save/reload" olarak doğru.

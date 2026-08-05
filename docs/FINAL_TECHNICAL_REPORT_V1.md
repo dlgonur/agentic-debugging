@@ -444,6 +444,21 @@ In priority order, consistent with the Decision Gate:
    SWE-Doctor) and the root-cause/statement-level localization metrics named
    as gaps in Dataset and Evaluation Decision v1.
 
+## 13. Final contribution
+
+This project delivers a verifier-backed, fail-closed, single-controller
+agentic debugging platform with a real PDB integration, a replay-verified
+event/trajectory system, an explicitly-authorized real-model live evaluation
+harness (now at wire protocol 1.3 after three contract-repair rounds), and a
+licensed, infra-validated external-dataset path (QuixBugs, eight tasks, 100%
+gold-patch pass rate) alongside a fully-specified but license-blocked primary
+external dataset (BugsInPy). Its central contribution to date is
+**infrastructure and evaluation methodology**, built and demonstrated to a
+standard where the next real-model experiment is well-defined and cheap, not
+a claim about debugging performance, PDB effectiveness, or model quality —
+those claims are explicitly deferred to the future work this report and the
+accompanying Decision Gate lay out.
+
 ## 14. Revision note (2026-08-05) — state through accepted campaign infrastructure
 
 The body of this report is a point-in-time snapshot through the eight-task
@@ -459,12 +474,13 @@ historical body above.
   attempt-package verification). Accepted campaign validation: focused
   campaign integration suite 389 passed; bounded full suite 3394 passed, 3
   skipped, same six known OpenCode wrapper/transport failures.
-- **Recorded-case identity correction (2026-08-05 candidate).** The
+- **Recorded-case identity correction.** The
   sanitized attempt fixture and replay assertions accepted at `0abb588`
-  associated the two observed shapes with the wrong frozen cases; the
-  Friday-readiness candidate in this branch corrects that fixture/test
-  identity mapping using the preserved campaign record, private transport
-  evidence, cost sums, and the frozen v4 case order. Production budgets,
+  associated the two observed shapes with the wrong frozen cases; that
+  fixture/test identity mapping was corrected using the preserved campaign
+  record, private transport evidence, cost sums, and the frozen v4 case
+  order, and is accepted on `main` at `fc7c85b` — it is no longer a pending
+  Friday-readiness candidate. Production budgets,
   the frozen manifest, route, provider, authorization, and controller
   behavior are unchanged.
 - **Recorded V4 attempt (`3b5d7488…`).** V4 Case 1 (`find_in_sorted` /
@@ -499,18 +515,3 @@ historical body above.
 - **Current operating facts** (see `README.md` "Current status
   (2026-08-05)", `TODO.md`, `docs/PROJECT_TRACKER.md` 2026-08-05 entry, and
   `docs/FRIDAY_PRESENTATION_PLAN_V1.md` for the full evidence paths).
-
-## 13. Final contribution
-
-This project delivers a verifier-backed, fail-closed, single-controller
-agentic debugging platform with a real PDB integration, a replay-verified
-event/trajectory system, an explicitly-authorized real-model live evaluation
-harness (now at wire protocol 1.3 after three contract-repair rounds), and a
-licensed, infra-validated external-dataset path (QuixBugs, eight tasks, 100%
-gold-patch pass rate) alongside a fully-specified but license-blocked primary
-external dataset (BugsInPy). Its central contribution to date is
-**infrastructure and evaluation methodology**, built and demonstrated to a
-standard where the next real-model experiment is well-defined and cheap, not
-a claim about debugging performance, PDB effectiveness, or model quality —
-those claims are explicitly deferred to the future work this report and the
-accompanying Decision Gate lay out.

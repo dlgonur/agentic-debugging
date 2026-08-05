@@ -1073,6 +1073,29 @@ made.
 
 ## Last Updated
 
+2026-08-05 (Friday professor delivery bundle; campaign infrastructure accepted on main; V4 attempt record; QLoRA implementation)
+
+The full 2026-08-05 log entry is above this section (campaign infrastructure
+accepted on `main` through `0abb588`; V4 attempt `3b5d7488...` case
+boundaries; fixture identity correction accepted at `fc7c85b`; QLoRA
+implementation accepted at `3f0d3e7` on the unmerged experiment branch;
+external AI audit 39 ACCEPT / 36 REJECT; final training authorized 2026-08-05
+with no accepted artifact; held-out generation unauthorized). This delivery
+pass — built from accepted source baseline `456f0e9`, the accepted
+presentation plan/deck/cue delivery commit — adds the offline Friday
+professor package (`docs/FRIDAY_DELIVERY_MANIFEST_V1.md`,
+`docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`, `docs/FRIDAY_STATUS_HANDOFF_V1.md`,
+plan/deck/cue sheet v1.2) and a fresh single-task demo rehearsal (exit 0, 2
+cases, 2/2 RESOLVED, F2P 2/2, P2P 4/4, 0 provider/0 network, workspaces
+CLEANED; evidence preserved under the ignored `_ai-review/` location). The
+bundle is an uncommitted candidate built on top of `456f0e9` during review;
+its integration commit is not yet known. No instructor TODO status is
+promoted; no provider, campaign, WSL, training, or benchmark execution
+occurred; no commit was made during the coding-agent build/rehearsal phase
+before FirstMate integration.
+
+Earlier history:
+
 2026-08-03 (OpenCode Go npm-native + full public-evidence budget repair v3,
 transport-only)
 
@@ -1667,15 +1690,16 @@ model performance, PDB effectiveness, RAG, SFT, DPO.
   `INFRASTRUCTURE_ERROR` / `ABORTED/INTERRUPTED` terminals with exact
   observed byte counts in `budget_exhaustion` provenance and counters clamped
   to the frozen 20,000-byte limit.
-- The fixture identity correction (2026-08-05, current Friday-readiness
-  candidate): the sanitized attempt fixture and replay assertions accepted at
-  `0abb588` associated the two observed shapes with the wrong frozen cases;
-  the current candidate corrects that fixture/test identity mapping per the
-  preserved campaign record and private transport (the 26,139-byte malformed
-  shape to `find-in-sorted` / `pdb-on-uncertainty` order 1, the 38,534-byte
-  applied-patch interrupted shape to `find-in-sorted` / `static-baseline`
-  order 2). Production budgets, manifest, route, provider, authorization,
-  and controller behavior are unchanged.
+- The fixture identity correction (2026-08-05): the sanitized attempt fixture
+  and replay assertions accepted at `0abb588` associated the two observed
+  shapes with the wrong frozen cases; that fixture/test identity mapping was
+  corrected per the preserved campaign record and private transport (the
+  26,139-byte malformed shape to `find-in-sorted` / `pdb-on-uncertainty`
+  order 1, the 38,534-byte applied-patch interrupted shape to
+  `find-in-sorted` / `static-baseline` order 2) and is accepted on `main` at
+  `fc7c85b` — it is no longer a pending Friday-readiness candidate.
+  Production budgets, manifest, route, provider, authorization, and
+  controller behavior are unchanged.
 - This repair establishes no verifier-confirmed live repair, demonstrates no
   live PDB benefit, and is not a post-repair provider campaign. The Authorized
   Six-Case Live Campaign remains open and unauthorized; the next authorized

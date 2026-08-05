@@ -52,10 +52,11 @@ python -m pip install -e .[test]
 python -m agentic_debugger.demo --output-dir demo-out
 ```
 
-Useful options:
+Useful options (`--output-dir` is required by every invocation, including
+`--list-tasks`):
 
 ```powershell
-python -m agentic_debugger.demo --list-tasks
+python -m agentic_debugger.demo --output-dir demo-out --list-tasks
 python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002
 python -m agentic_debugger.demo --output-dir demo-out --policy static-baseline
 python -m agentic_debugger.demo --output-dir demo-out --strict
