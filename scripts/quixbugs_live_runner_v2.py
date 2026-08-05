@@ -289,7 +289,7 @@ OUTCOME_FIELDS = frozenset({
     "wall_clock_duration_seconds", "public_evidence_bytes",
     "canonical_source_restoration", "owned_workspace_cleanup", "evidence_consistency",
     "public_request_hash", "source_hash", "candidate_hash", "repair_outcome",
-    "resource_ids",
+    "resource_ids", "interrupted",
 })
 
 ZERO_PDB_COUNTS = {
@@ -2121,6 +2121,7 @@ def _budget_exhausted_outcome(
             "candidate_hash": None,
             "repair_outcome": "NO_CANDIDATE",
             "resource_ids": {},
+            "interrupted": False,
         }
 
     # --- completed RESOLVED lifecycle (live-proven shape from attempt
@@ -3228,6 +3229,8 @@ def run_campaign(
     validator = pilot.CampaignResultValidator(manifest, authorization)
     stop_active: tuple[str, dict[str, Any]] | None = None
     abort_info: tuple[str, str] | None = None
+    requests_before = 0
+    launches_before = 0
     counts = {
         "logical_model_calls": 0, "provider_process_attempts": 0, "transport_retries": 0,
         "accepted_directives": 0, "malformed_directive_rejections": 0,
@@ -3236,309 +3239,346 @@ def run_campaign(
     }
 
     for case in manifest["case_order"]:
-        case_id = case["case_id"]
-        if abort_info is not None:
-            lifecycle[case_id] = "unstarted"
-            continue
-        if stop_active is not None:
-            stop_reason, trigger = stop_active
-            if trigger["kind"] == "prior_case":
-                stop_evidence = build_campaign_stop_evidence(
-                    manifest, stop_reason,
-                    trigger_case_id=trigger["case_id"],
-                    trigger_result_sha256=trigger["result_sha256"],
-                    authority_identity=None, authority_record_sha256=None,
-                    evidence_reference=f"{identity}:stop:{stop_reason}",
-                    extra=_reason_specific_stop_fields(manifest, stop_reason, trigger["record"]),
+        try:
+            case_id = case["case_id"]
+            if abort_info is not None:
+                lifecycle[case_id] = "unstarted"
+                continue
+            if stop_active is not None:
+                stop_reason, trigger = stop_active
+                if trigger["kind"] == "prior_case":
+                    stop_evidence = build_campaign_stop_evidence(
+                        manifest, stop_reason,
+                        trigger_case_id=trigger["case_id"],
+                        trigger_result_sha256=trigger["result_sha256"],
+                        authority_identity=None, authority_record_sha256=None,
+                        evidence_reference=f"{identity}:stop:{stop_reason}",
+                        extra=_reason_specific_stop_fields(manifest, stop_reason, trigger["record"]),
+                    )
+                else:
+                    stop_evidence = build_campaign_stop_evidence(
+                        manifest, stop_reason,
+                        trigger_case_id=None, trigger_result_sha256=None,
+                        authority_identity=trigger["identity"],
+                        authority_record_sha256=trigger["record_sha256"],
+                        evidence_reference=f"{identity}:stop:{stop_reason}",
+                        extra=trigger["extra"],
+                    )
+                record = build_campaign_stop_record(manifest, case, authorization, stop_evidence,
+                                                    attempt_identity=identity, execution_commit=execution_commit)
+                validator.validate_result(record)
+                _write_case_record(record, case)
+                records.append(record)
+                lifecycle[case_id] = "blocked"
+                counts["blocked_case_count"] += 1
+                counts["unstarted_case_count"] -= 1
+                continue
+
+            try:
+                authority = _pre_case_authority_check(
+                    manifest,
+                    git_state_provider=git_state_provider,
+                    execution_commit=execution_commit,
+                    now=reference_time,
                 )
-            else:
+            except LiveRunnerError as exc:
+                abort_info = ("SCHEMA_INCONSISTENCY", f"pre-case authority recheck failed closed: {exc}")
+                lifecycle[case_id] = "unstarted"
+                break
+            if authority is not None:
+                stop_reason, authority_record = authority
+                try:
+                    validator.register_authority_checks([authority_record])
+                except (pilot.PilotError, KeyError, TypeError, ValueError) as exc:
+                    abort_info = ("SCHEMA_INCONSISTENCY", f"authority-check record failed the frozen validation: {exc}")
+                    lifecycle[case_id] = "unstarted"
+                    break
+                stored = validator.validated_authority_records[authority_record["identity"]]
+                extra = {
+                    "expected_manifest_hash": authority_record.get("expected_manifest_hash"),
+                    "observed_manifest_hash": authority_record.get("observed_manifest_hash"),
+                    "expected_qualification_contract_hash": authority_record.get("expected_qualification_contract_hash"),
+                    "observed_qualification_contract_hash": authority_record.get("observed_qualification_contract_hash"),
+                    "expected_source_authority_hash": authority_record.get("expected_source_authority_hash"),
+                    "observed_source_authority_hash": authority_record.get("observed_source_authority_hash"),
+                }
+                stop_active = (stop_reason, {"kind": "authority", "identity": authority_record["identity"], "record_sha256": stored.sha256, "extra": extra})
                 stop_evidence = build_campaign_stop_evidence(
                     manifest, stop_reason,
                     trigger_case_id=None, trigger_result_sha256=None,
-                    authority_identity=trigger["identity"],
-                    authority_record_sha256=trigger["record_sha256"],
+                    authority_identity=authority_record["identity"],
+                    authority_record_sha256=stored.sha256,
                     evidence_reference=f"{identity}:stop:{stop_reason}",
-                    extra=trigger["extra"],
+                    extra=extra,
                 )
-            record = build_campaign_stop_record(manifest, case, authorization, stop_evidence,
-                                                attempt_identity=identity, execution_commit=execution_commit)
-            validator.validate_result(record)
-            _write_case_record(record, case)
-            records.append(record)
-            lifecycle[case_id] = "blocked"
-            counts["blocked_case_count"] += 1
-            counts["unstarted_case_count"] -= 1
-            continue
+                record = build_campaign_stop_record(manifest, case, authorization, stop_evidence,
+                                                    attempt_identity=identity, execution_commit=execution_commit)
+                validator.validate_result(record)
+                _write_case_record(record, case)
+                records.append(record)
+                lifecycle[case_id] = "blocked"
+                counts["blocked_case_count"] += 1
+                counts["unstarted_case_count"] -= 1
+                continue
 
-        try:
-            authority = _pre_case_authority_check(
-                manifest,
-                git_state_provider=git_state_provider,
-                execution_commit=execution_commit,
-                now=reference_time,
-            )
-        except LiveRunnerError as exc:
-            abort_info = ("SCHEMA_INCONSISTENCY", f"pre-case authority recheck failed closed: {exc}")
-            lifecycle[case_id] = "unstarted"
-            break
-        if authority is not None:
-            stop_reason, authority_record = authority
+            lifecycle[case_id] = "provider-attempted"
+            attempted_order.append(case_id)
+            requests_before = counter.logical_requests
+            launches_before = counter.process_launches
             try:
-                validator.register_authority_checks([authority_record])
-            except (pilot.PilotError, KeyError, TypeError, ValueError) as exc:
-                abort_info = ("SCHEMA_INCONSISTENCY", f"authority-check record failed the frozen validation: {exc}")
-                lifecycle[case_id] = "unstarted"
+                transport = _CountingTransportProxy(transport_factory(case), counter)
+            except Exception as exc:
+                abort_info = ("TRANSPORT_NOT_CONFIGURED", f"provider transport could not be created: {type(exc).__name__}: {exc}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
                 break
-            stored = validator.validated_authority_records[authority_record["identity"]]
-            extra = {
-                "expected_manifest_hash": authority_record.get("expected_manifest_hash"),
-                "observed_manifest_hash": authority_record.get("observed_manifest_hash"),
-                "expected_qualification_contract_hash": authority_record.get("expected_qualification_contract_hash"),
-                "observed_qualification_contract_hash": authority_record.get("observed_qualification_contract_hash"),
-                "expected_source_authority_hash": authority_record.get("expected_source_authority_hash"),
-                "observed_source_authority_hash": authority_record.get("observed_source_authority_hash"),
-            }
-            stop_active = (stop_reason, {"kind": "authority", "identity": authority_record["identity"], "record_sha256": stored.sha256, "extra": extra})
-            stop_evidence = build_campaign_stop_evidence(
-                manifest, stop_reason,
-                trigger_case_id=None, trigger_result_sha256=None,
-                authority_identity=authority_record["identity"],
-                authority_record_sha256=stored.sha256,
-                evidence_reference=f"{identity}:stop:{stop_reason}",
-                extra=extra,
-            )
-            record = build_campaign_stop_record(manifest, case, authorization, stop_evidence,
-                                                attempt_identity=identity, execution_commit=execution_commit)
-            validator.validate_result(record)
-            _write_case_record(record, case)
-            records.append(record)
-            lifecycle[case_id] = "blocked"
-            counts["blocked_case_count"] += 1
-            counts["unstarted_case_count"] -= 1
-            continue
-
-        lifecycle[case_id] = "provider-attempted"
-        attempted_order.append(case_id)
-        requests_before = counter.logical_requests
-        launches_before = counter.process_launches
-        try:
-            transport = _CountingTransportProxy(transport_factory(case), counter)
-        except Exception as exc:
-            abort_info = ("TRANSPORT_NOT_CONFIGURED", f"provider transport could not be created: {type(exc).__name__}: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            break
-        counter.transports_created += 1
-        run_id = deterministic_run_id(identity, case)
-        session_id = deterministic_session_id(identity, case)
-        try:
-            outcome = case_runner(
-                case,
-                attempt_identity=identity,
-                run_id=run_id,
-                session_id=session_id,
-                transport=transport,
-                route_observation=route_observation,
-                budgets=manifest["budgets"],
-                clock=clock,
-            )
-        except RouteDriftError as exc:
-            outcome = _drift_outcome(case, run_id, route_observation, counter.logical_requests - requests_before, exc, manifest)
-        except LiveRunnerError as exc:
-            abort_info = ("UNEXPECTED_CASE_FAILURE", f"case runner failed closed: {type(exc).__name__}: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        except Exception as exc:
-            abort_info = ("UNEXPECTED_CASE_FAILURE", f"case runner raised {type(exc).__name__}: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        if not isinstance(outcome, Mapping):
-            abort_info = ("UNEXPECTED_CASE_FAILURE", "case runner returned a non-object outcome")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        try:
-            validate_case_outcome(outcome)
-        except LiveRunnerError as exc:
-            abort_info = ("SCHEMA_INCONSISTENCY", f"case outcome is invalid: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        try:
-            enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
-        except PublicEvidenceBudgetExhausted as exc:
-            # Anticipated case-level public-evidence budget exhaustion: the
-            # next public request could not be constructed within the frozen
-            # case limit.  The case is stopped here (no further provider
-            # process is launched), materialized as a frozen-schema-valid
-            # terminal case result with all completed accounting preserved,
-            # and the campaign continues with the remaining frozen cases.
-            rewritten = _budget_exhausted_outcome(
-                case, outcome, exc,
-                run_id=run_id,
-                manifest=manifest,
-            )
-            if rewritten is None:
-                abort_info = ("BUDGET_EXCEEDED", f"case public-evidence budget exhausted but the frozen case-result schema has no valid terminal representation for this shape: {exc}")
+            counter.transports_created += 1
+            run_id = deterministic_run_id(identity, case)
+            session_id = deterministic_session_id(identity, case)
+            try:
+                outcome = case_runner(
+                    case,
+                    attempt_identity=identity,
+                    run_id=run_id,
+                    session_id=session_id,
+                    transport=transport,
+                    route_observation=route_observation,
+                    budgets=manifest["budgets"],
+                    clock=clock,
+                )
+            except RouteDriftError as exc:
+                outcome = _drift_outcome(case, run_id, route_observation, counter.logical_requests - requests_before, exc, manifest)
+            except LiveRunnerError as exc:
+                abort_info = ("UNEXPECTED_CASE_FAILURE", f"case runner failed closed: {type(exc).__name__}: {exc}")
                 lifecycle[case_id] = "aborted"
                 counts["unstarted_case_count"] -= 1
                 counts["provider_process_attempts"] += counter.process_launches - launches_before
                 break
-            outcome = rewritten
-            # The rewritten outcome must still satisfy every other frozen
-            # budget; a residual violation (for example the case wall-clock
-            # timeout or a PDB budget) is a genuine accounting violation and
-            # still aborts the campaign.
+            except Exception as exc:
+                abort_info = ("UNEXPECTED_CASE_FAILURE", f"case runner raised {type(exc).__name__}: {exc}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            if not isinstance(outcome, Mapping):
+                abort_info = ("UNEXPECTED_CASE_FAILURE", "case runner returned a non-object outcome")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            try:
+                validate_case_outcome(outcome)
+            except LiveRunnerError as exc:
+                abort_info = ("SCHEMA_INCONSISTENCY", f"case outcome is invalid: {exc}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
             try:
                 enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
-            except StaticPolicyPdbViolation as residual:
-                abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {residual}")
+            except PublicEvidenceBudgetExhausted as exc:
+                # Anticipated case-level public-evidence budget exhaustion: the
+                # next public request could not be constructed within the frozen
+                # case limit.  The case is stopped here (no further provider
+                # process is launched), materialized as a frozen-schema-valid
+                # terminal case result with all completed accounting preserved,
+                # and the campaign continues with the remaining frozen cases.
+                rewritten = _budget_exhausted_outcome(
+                    case, outcome, exc,
+                    run_id=run_id,
+                    manifest=manifest,
+                )
+                if rewritten is None:
+                    abort_info = ("BUDGET_EXCEEDED", f"case public-evidence budget exhausted but the frozen case-result schema has no valid terminal representation for this shape: {exc}")
+                    lifecycle[case_id] = "aborted"
+                    counts["unstarted_case_count"] -= 1
+                    counts["provider_process_attempts"] += counter.process_launches - launches_before
+                    break
+                outcome = rewritten
+                # The rewritten outcome must still satisfy every other frozen
+                # budget; a residual violation (for example the case wall-clock
+                # timeout or a PDB budget) is a genuine accounting violation and
+                # still aborts the campaign.
+                try:
+                    enforce_case_budgets(outcome, manifest, case_policy=case["policy"])
+                except StaticPolicyPdbViolation as residual:
+                    abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {residual}")
+                    lifecycle[case_id] = "aborted"
+                    counts["unstarted_case_count"] -= 1
+                    counts["provider_process_attempts"] += counter.process_launches - launches_before
+                    break
+                except (LiveRunnerError, KeyError, TypeError, ValueError) as residual:
+                    abort_info = ("BUDGET_EXCEEDED", f"case budget or accounting violation: {residual}")
+                    lifecycle[case_id] = "aborted"
+                    counts["unstarted_case_count"] -= 1
+                    counts["provider_process_attempts"] += counter.process_launches - launches_before
+                    break
+            except StaticPolicyPdbViolation as exc:
+                abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {exc}")
                 lifecycle[case_id] = "aborted"
                 counts["unstarted_case_count"] -= 1
                 counts["provider_process_attempts"] += counter.process_launches - launches_before
                 break
-            except (LiveRunnerError, KeyError, TypeError, ValueError) as residual:
-                abort_info = ("BUDGET_EXCEEDED", f"case budget or accounting violation: {residual}")
+            except (LiveRunnerError, KeyError, TypeError, ValueError) as exc:
+                abort_info = ("BUDGET_EXCEEDED", f"case budget or accounting violation: {exc}")
                 lifecycle[case_id] = "aborted"
                 counts["unstarted_case_count"] -= 1
                 counts["provider_process_attempts"] += counter.process_launches - launches_before
                 break
-        except StaticPolicyPdbViolation as exc:
-            abort_info = ("STATIC_POLICY_PDB_VIOLATION", f"case budget or accounting violation: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        except (LiveRunnerError, KeyError, TypeError, ValueError) as exc:
-            abort_info = ("BUDGET_EXCEEDED", f"case budget or accounting violation: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        if outcome["provider_process_attempts"] != counter.process_launches - launches_before:
-            abort_info = ("SCHEMA_INCONSISTENCY", "case outcome provider-process count disagrees with the transport counter")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        if counter.logical_requests - requests_before != counter.process_launches - launches_before:
-            abort_info = ("SCHEMA_INCONSISTENCY", "case outcome logical-request accounting disagrees with the transport counter")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
+            if outcome["provider_process_attempts"] != counter.process_launches - launches_before:
+                abort_info = ("SCHEMA_INCONSISTENCY", "case outcome provider-process count disagrees with the transport counter")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            if counter.logical_requests - requests_before != counter.process_launches - launches_before:
+                abort_info = ("SCHEMA_INCONSISTENCY", "case outcome logical-request accounting disagrees with the transport counter")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
 
-        record = materialize_case_record(manifest, case, authorization, route_observation, outcome,
-                                         attempt_identity=identity, execution_commit=execution_commit)
-        try:
-            validator.validate_result(record)
-        except (pilot.PilotError, KeyError, TypeError, ValueError) as exc:
-            abort_info = ("SCHEMA_INCONSISTENCY", f"case record failed the frozen v2 result validation: {exc}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        clean, violations = sanitize_public_payload(record, private_markers)
-        if violations:
-            abort_info = ("PUBLIC_PRIVATE_BOUNDARY_VIOLATION", f"public record exposes private material markers: {violations}")
-            lifecycle[case_id] = "aborted"
-            counts["unstarted_case_count"] -= 1
-            counts["provider_process_attempts"] += counter.process_launches - launches_before
-            break
-        _write_case_record(clean, case)
-        append_private_evidence(private_evidence_path, {
-            "record_kind": "private-case-evidence",
-            "case_id": case_id,
-            "attempt_identity": identity,
-            "execution_commit": execution_commit,
-            "record_sha256": pilot.result_sha256(record),
-            "lifecycle": {
-                "case_id": case_id,
-                "provider_process_attempts": outcome["provider_process_attempts"],
-                "logical_model_calls": outcome["logical_model_calls"],
-                "transport_retries": outcome["retries"],
-                "accepted_directives": outcome["valid_directives"],
-                "terminal_status": outcome["terminal_status"],
-            },
-        })
-        records.append(record)
-        counts["logical_model_calls"] += int(outcome["logical_model_calls"])
-        counts["provider_process_attempts"] += int(outcome["provider_process_attempts"])
-        counts["transport_retries"] += int(outcome["retries"])
-        counts["accepted_directives"] += int(outcome["valid_directives"])
-        counts["malformed_directive_rejections"] += int(outcome["malformed_directive_rejections"])
-        counts["unstarted_case_count"] -= 1
-
-        # Post-case authority re-verification: after the case runner returned
-        # and after its cleanup/restoration phase, independently re-verify the
-        # execution commit, baseline ancestry, index/tracked cleanliness, and
-        # the tracked manifest and source-integrity authorities.  Drift
-        # invalidates the affected case: its raw execution outcome is preserved
-        # only as quarantined authority-invalidated evidence, it never counts
-        # as completed, and the campaign stops with the accepted typed
-        # authority/campaign-stop evidence.
-        try:
-            post_case_drift = _verify_authority_state(
-                manifest,
-                git_state_provider=git_state_provider,
-                execution_commit=execution_commit,
-                now=reference_time,
-            )
-        except LiveRunnerError as exc:
-            abort_info = ("SCHEMA_INCONSISTENCY", f"post-case authority recheck failed closed: {exc}")
-            break
-        if post_case_drift is not None:
-            stop_reason, authority_record = post_case_drift
+            record = materialize_case_record(manifest, case, authorization, route_observation, outcome,
+                                             attempt_identity=identity, execution_commit=execution_commit)
             try:
-                validator.register_authority_checks([authority_record])
+                validator.validate_result(record)
             except (pilot.PilotError, KeyError, TypeError, ValueError) as exc:
-                abort_info = ("SCHEMA_INCONSISTENCY", f"authority-check record failed the frozen validation: {exc}")
+                abort_info = ("SCHEMA_INCONSISTENCY", f"case record failed the frozen v2 result validation: {exc}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
                 break
-            stored = validator.validated_authority_records[authority_record["identity"]]
-            extra = {
-                "expected_manifest_hash": authority_record.get("expected_manifest_hash"),
-                "observed_manifest_hash": authority_record.get("observed_manifest_hash"),
-                "expected_qualification_contract_hash": authority_record.get("expected_qualification_contract_hash"),
-                "observed_qualification_contract_hash": authority_record.get("observed_qualification_contract_hash"),
-                "expected_source_authority_hash": authority_record.get("expected_source_authority_hash"),
-                "observed_source_authority_hash": authority_record.get("observed_source_authority_hash"),
-            }
-            lifecycle[case_id] = "authority-invalidated"
-            counts["invalidated_case_count"] += 1
-            authority_invalidated_cases.append({
+            clean, violations = sanitize_public_payload(record, private_markers)
+            if violations:
+                abort_info = ("PUBLIC_PRIVATE_BOUNDARY_VIOLATION", f"public record exposes private material markers: {violations}")
+                lifecycle[case_id] = "aborted"
+                counts["unstarted_case_count"] -= 1
+                counts["provider_process_attempts"] += counter.process_launches - launches_before
+                break
+            _write_case_record(clean, case)
+            append_private_evidence(private_evidence_path, {
+                "record_kind": "private-case-evidence",
                 "case_id": case_id,
-                "original_raw_terminal_outcome": outcome["terminal_status"],
-                "original_terminal_reason_code": outcome["terminal_reason_code"],
-                "authority_failure_reason": stop_reason,
-                "authority_check_record_sha256": stored.sha256,
-                "provider_contact_occurred": int(outcome["provider_process_attempts"]) > 0,
-                "excluded_from_evaluation": True,
-                "observed_at": reference_time.isoformat().replace("+00:00", "Z"),
+                "attempt_identity": identity,
+                "execution_commit": execution_commit,
+                "record_sha256": pilot.result_sha256(record),
+                "lifecycle": {
+                    "case_id": case_id,
+                    "provider_process_attempts": outcome["provider_process_attempts"],
+                    "logical_model_calls": outcome["logical_model_calls"],
+                    "transport_retries": outcome["retries"],
+                    "accepted_directives": outcome["valid_directives"],
+                    "terminal_status": outcome["terminal_status"],
+                },
             })
-            stop_active = (stop_reason, {
-                "kind": "authority",
-                "identity": authority_record["identity"],
-                "record_sha256": stored.sha256,
-                "extra": extra,
-                "post_case_case_id": case_id,
-            })
-            continue
+            records.append(record)
+            counts["logical_model_calls"] += int(outcome["logical_model_calls"])
+            counts["provider_process_attempts"] += int(outcome["provider_process_attempts"])
+            counts["transport_retries"] += int(outcome["retries"])
+            counts["accepted_directives"] += int(outcome["valid_directives"])
+            counts["malformed_directive_rejections"] += int(outcome["malformed_directive_rejections"])
+            counts["unstarted_case_count"] -= 1
 
-        lifecycle[case_id] = "completed"
-        if outcome["terminal_status"] in COMPLETED_TERMINAL_STATUSES:
-            counts["completed_case_count"] += 1
-        elif outcome["terminal_status"] == "BLOCKED":
-            counts["blocked_case_count"] += 1
+            # Post-case authority re-verification: after the case runner returned
+            # and after its cleanup/restoration phase, independently re-verify the
+            # execution commit, baseline ancestry, index/tracked cleanliness, and
+            # the tracked manifest and source-integrity authorities.  Drift
+            # invalidates the affected case: its raw execution outcome is preserved
+            # only as quarantined authority-invalidated evidence, it never counts
+            # as completed, and the campaign stops with the accepted typed
+            # authority/campaign-stop evidence.
+            try:
+                post_case_drift = _verify_authority_state(
+                    manifest,
+                    git_state_provider=git_state_provider,
+                    execution_commit=execution_commit,
+                    now=reference_time,
+                )
+            except LiveRunnerError as exc:
+                abort_info = ("SCHEMA_INCONSISTENCY", f"post-case authority recheck failed closed: {exc}")
+                break
+            if post_case_drift is not None:
+                stop_reason, authority_record = post_case_drift
+                try:
+                    validator.register_authority_checks([authority_record])
+                except (pilot.PilotError, KeyError, TypeError, ValueError) as exc:
+                    abort_info = ("SCHEMA_INCONSISTENCY", f"authority-check record failed the frozen validation: {exc}")
+                    break
+                stored = validator.validated_authority_records[authority_record["identity"]]
+                extra = {
+                    "expected_manifest_hash": authority_record.get("expected_manifest_hash"),
+                    "observed_manifest_hash": authority_record.get("observed_manifest_hash"),
+                    "expected_qualification_contract_hash": authority_record.get("expected_qualification_contract_hash"),
+                    "observed_qualification_contract_hash": authority_record.get("observed_qualification_contract_hash"),
+                    "expected_source_authority_hash": authority_record.get("expected_source_authority_hash"),
+                    "observed_source_authority_hash": authority_record.get("observed_source_authority_hash"),
+                }
+                lifecycle[case_id] = "authority-invalidated"
+                counts["invalidated_case_count"] += 1
+                authority_invalidated_cases.append({
+                    "case_id": case_id,
+                    "original_raw_terminal_outcome": outcome["terminal_status"],
+                    "original_terminal_reason_code": outcome["terminal_reason_code"],
+                    "authority_failure_reason": stop_reason,
+                    "authority_check_record_sha256": stored.sha256,
+                    "provider_contact_occurred": int(outcome["provider_process_attempts"]) > 0,
+                    "excluded_from_evaluation": True,
+                    "observed_at": reference_time.isoformat().replace("+00:00", "Z"),
+                })
+                stop_active = (stop_reason, {
+                    "kind": "authority",
+                    "identity": authority_record["identity"],
+                    "record_sha256": stored.sha256,
+                    "extra": extra,
+                    "post_case_case_id": case_id,
+                })
+                continue
 
-        stop_reason = _stop_reason_for_infrastructure(outcome)
-        if stop_reason is not None:
-            stop_active = (stop_reason, {"kind": "prior_case", "case_id": case_id, "result_sha256": pilot.result_sha256(record), "record": record})
+            lifecycle[case_id] = "completed"
+            if outcome["terminal_status"] in COMPLETED_TERMINAL_STATUSES:
+                counts["completed_case_count"] += 1
+            elif outcome["terminal_status"] == "BLOCKED":
+                counts["blocked_case_count"] += 1
+
+            # An operator-interrupted case (the accepted case runner converts a
+            # KeyboardInterrupt into an INCOMPLETE live result carrying the full
+            # completed accounting) is terminalized as an ordinary schema-valid
+            # case record above, and the campaign then stops: the interrupt is an
+            # explicit operator stop signal, not a case-level terminal, so the
+            # remaining frozen cases stay unstarted and the ledger terminalizes
+            # ABORTED / INTERRUPTED with the interrupted case's record preserved
+            # (whether a patch was applied and whether verification ran stay in
+            # the case record's accounting).
+            if outcome.get("interrupted") is True:
+                abort_info = ("INTERRUPTED", f"campaign interrupted by operator during case {case_id}; completed case accounting preserved in the case record")
+                break
+
+            stop_reason = _stop_reason_for_infrastructure(outcome)
+            if stop_reason is not None:
+                stop_active = (stop_reason, {"kind": "prior_case", "case_id": case_id, "result_sha256": pilot.result_sha256(record), "record": record})
+        except KeyboardInterrupt:
+            # The operator interrupted the campaign while a case was in
+            # flight.  When the in-flight case already produced a materialized
+            # record (written before the interrupt), the record is preserved
+            # and reconciled as completed/blocked; otherwise the case is
+            # marked aborted.  Either way the campaign terminalizes as a
+            # typed ABORTED / INTERRUPTED package instead of escaping with no
+            # terminal record.
+            in_flight = next((cid for cid, state in lifecycle.items() if state == "provider-attempted"), None)
+            if in_flight is not None:
+                materialized = next((entry for entry in records if entry["case_id"] == in_flight), None)
+                if materialized is not None:
+                    lifecycle[in_flight] = "completed" if materialized["terminal_status"] in COMPLETED_TERMINAL_STATUSES else "blocked"
+                    if materialized["terminal_status"] in COMPLETED_TERMINAL_STATUSES:
+                        counts["completed_case_count"] += 1
+                    else:
+                        counts["blocked_case_count"] += 1
+                else:
+                    lifecycle[in_flight] = "aborted"
+                    counts["unstarted_case_count"] -= 1
+                    counts["provider_process_attempts"] += counter.process_launches - launches_before
+            abort_info = ("INTERRUPTED", f"campaign interrupted by operator during case {in_flight or 'setup'}")
+            break
 
     for case in manifest["case_order"]:
         lifecycle.setdefault(case["case_id"], "unstarted")
@@ -3554,6 +3594,9 @@ def run_campaign(
                 execution_commit=execution_commit,
                 now=reference_time,
             )
+        except KeyboardInterrupt:
+            abort_info = ("INTERRUPTED", "campaign interrupted by operator during the pre-terminal authority recheck")
+            pre_terminal_drift = None
         except LiveRunnerError as exc:
             abort_info = ("SCHEMA_INCONSISTENCY", f"pre-terminal authority recheck failed closed: {exc}")
             pre_terminal_drift = None
@@ -3684,6 +3727,7 @@ def _drift_outcome(
         "candidate_hash": None,
         "repair_outcome": "NO_CANDIDATE",
         "resource_ids": {},
+        "interrupted": False,
     }
 
 

@@ -1383,6 +1383,7 @@ def _static_baseline_pre_validate_exhausted_outcome(manifest, case, route, **ove
         "candidate_hash": _v3_candidate_hash(),
         "repair_outcome": "NO_CANDIDATE",
         "resource_ids": {},
+        "interrupted": False,
     }
     outcome.update(overrides)
     return outcome
@@ -1717,6 +1718,7 @@ def _completed_post_apply_exhausted_outcome(manifest, case, route, *, verifier_o
         "candidate_hash": _v4_candidate_hash(),
         "repair_outcome": "RESOLVED" if resolved else "NO_CANDIDATE",
         "resource_ids": {},
+        "interrupted": False,
     }
     outcome.update(overrides)
     return outcome

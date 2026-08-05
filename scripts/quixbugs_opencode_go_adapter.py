@@ -2045,6 +2045,19 @@ def _outcome_from_live_case(
     public_request_hash = hashlib.sha256(
         pilot.canonical_json({"run_id": run_id, "events": events_jsonl}).encode("utf-8")
     ).hexdigest()
+    # A zero-contact pre-provider failure (harness error, preflight-blocked
+    # case, or operator interruption before any provider response) must not
+    # claim public-request or source identity: the frozen result schema
+    # requires both hashes to be null on the pre-provider shape, because no
+    # public request was ever constructed and no owned workspace was ever
+    # executed against.  The raw inventory source hash is only meaningful
+    # once the case actually touched the pinned source, so it is dropped for
+    # the no-contact terminal.
+    if isinstance(infrastructure, Mapping) and infrastructure.get("stage") in {
+        "pre_provider", "workspace_pre_provider", "containment_pre_provider",
+    }:
+        public_request_hash = None
+        source_hash = None
 
     return {
         "terminal_status": terminal_status,
@@ -2101,6 +2114,7 @@ def _outcome_from_live_case(
         "candidate_hash": candidate_hash,
         "repair_outcome": "RESOLVED" if terminal_status == "RESOLVED" else ("NO_CANDIDATE"),
         "resource_ids": {},
+        "interrupted": bool(reporting.get("interrupted")),
     }
 
 

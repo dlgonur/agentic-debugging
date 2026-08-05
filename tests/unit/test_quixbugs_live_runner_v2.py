@@ -185,6 +185,7 @@ def _base_outcome(manifest, case, route_observation):
         "candidate_hash": None,
         "repair_outcome": "NO_CANDIDATE",
         "resource_ids": {},
+        "interrupted": False,
     }
 
 
