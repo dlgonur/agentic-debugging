@@ -1141,6 +1141,31 @@ FINAL_TRAINING_AUTH_SCHEMA = "final-training-authorization-v1"
 FINAL_TRAINING_SCOPE = "final_training_only"
 FINAL_TRAINING_APPROVER = "FirstMate / GPT-5.6 Thinking"
 FINAL_TRAINING_AUTH_TYPE = "owner-delegated FirstMate gate"
+FINAL_TRAINING_FINAL_STATUS = "FINAL_TRAINING_COMPLETE_AWAITING_FIRSTMATE_REVIEW"
+FINAL_TRAINING_MANIFEST_SCHEMA = "external-artifact-manifest-v1"
+PAYLOAD_MANIFEST_EXCLUDED_NAMES = {
+    "external_artifacts.json",
+    "final_training_summary.json",
+    "run_status.json",
+    "RUN_COMPLETE",
+    "INCOMPLETE",
+}
+TEMP_FILE_SUFFIXES = (".tmp", ".part", "~")
+REQUIRED_SUMMARY_FIELDS = (
+    "run_id",
+    "final_status",
+    "manifest_sha256",
+    "reload_verification",
+    "held_out_generation_authorized",
+    "held_out_accessed",
+)
+EXPECTED_ARTIFACT_LOGICAL_PATHS = {
+    "train_jsonl": "corpus/train.jsonl",
+    "validation_jsonl": "corpus/validation.jsonl",
+    "corpus_manifest": "corpus/external_artifacts.json",
+    "completed_audit_csv": "independent-audit/firstmate_independent_audit_completed.csv",
+    "completed_audit_manifest": "independent-audit/firstmate_independent_audit_manifest.json",
+}
 
 
 def validate_final_training_authorization(
@@ -1197,7 +1222,10 @@ def validate_final_training_authorization(
         ("validation_jsonl", validation_jsonl),
         ("corpus_manifest", corpus_manifest),
     ):
-        observed = _verify_bound_artifact(declared_artifacts.get(kind), Path(path), kind, problems)
+        observed = _verify_bound_artifact(
+            declared_artifacts.get(kind), Path(path), kind, problems,
+            expected_logical_path=EXPECTED_ARTIFACT_LOGICAL_PATHS[kind],
+        )
         corpus_artifact_identities[kind] = observed
 
     declared_audit_artifacts = authorization.get("audit_artifacts", {})
@@ -1206,7 +1234,10 @@ def validate_final_training_authorization(
         ("completed_audit_csv", completed_audit_csv),
         ("completed_audit_manifest", completed_audit_manifest),
     ):
-        observed = _verify_bound_artifact(declared_audit_artifacts.get(kind), Path(path), kind, problems)
+        observed = _verify_bound_artifact(
+            declared_audit_artifacts.get(kind), Path(path), kind, problems,
+            expected_logical_path=EXPECTED_ARTIFACT_LOGICAL_PATHS[kind],
+        )
         audit_artifact_identities[kind] = observed
 
     try:
@@ -1331,6 +1362,8 @@ def _verify_bound_artifact(
     path: Path,
     kind: str,
     problems: list[str],
+    *,
+    expected_logical_path: str,
 ) -> dict[str, Any]:
     """Recompute the artifact's identity from the actual file and bind it to the declaration."""
     if declared is None or not isinstance(declared, Mapping):
@@ -1344,8 +1377,13 @@ def _verify_bound_artifact(
         problems.append(f"{kind}: declared sha256 is missing or malformed")
     actual_hash = sha256_bytes(path.read_bytes())
     logical_path = str(declared.get("logical_path", ""))
-    if not logical_path or ".." in PurePosixPath(logical_path).parts or PurePosixPath(logical_path).is_absolute():
-        problems.append(f"{kind}: logical_path is missing, absolute, or traversing")
+    if not _canonical_relative_logical_path(logical_path):
+        problems.append(f"{kind}: logical_path is missing, absolute, traversing, or non-canonical")
+    elif logical_path != expected_logical_path:
+        problems.append(
+            f"{kind}: logical_path {logical_path!r} does not equal the exact canonical "
+            f"identity {expected_logical_path!r}"
+        )
     observed: dict[str, Any] = {
         "path": str(path),
         "logical_path": logical_path,
@@ -1368,7 +1406,63 @@ def _verify_bound_artifact(
             )
     return observed
 
-import datetime
+
+def _canonical_relative_logical_path(value: str) -> bool:
+    """A logical artifact path must be canonical: relative posix, no traversal, no non-canonical separators."""
+    if not value or "\\" in value:
+        return False
+    pure = PurePosixPath(value)
+    if pure.is_absolute() or ".." in pure.parts or "." in pure.parts or "//" in value:
+        return False
+    return pure.as_posix() == value
+
+
+def _is_payload_artifact(relative: PurePosixPath) -> bool:
+    if relative.name in PAYLOAD_MANIFEST_EXCLUDED_NAMES:
+        return False
+    return not relative.name.endswith(TEMP_FILE_SUFFIXES)
+
+
+def _collect_payload_artifacts(run_dir: Path) -> list[tuple[PurePosixPath, Path]]:
+    """Deterministic immutable-payload selection within the active run directory."""
+    artifacts: list[tuple[PurePosixPath, Path]] = []
+    for path in sorted(item for item in run_dir.rglob("*") if item.is_file()):
+        relative = path.relative_to(run_dir).as_posix()
+        pure = PurePosixPath(relative)
+        if _is_payload_artifact(pure):
+            artifacts.append((pure, path))
+    return artifacts
+
+
+def write_payload_manifest(
+    run_dir: str | Path,
+    *,
+    configuration_identity: str,
+    provenance_identity: str,
+) -> dict[str, Any]:
+    """Write external_artifacts.json covering only immutable run payload artifacts."""
+    directory = Path(run_dir)
+    if not directory.is_dir():
+        raise CorpusBuildError(f"run directory missing: {directory}")
+    artifacts: list[dict[str, Any]] = []
+    for relative, path in _collect_payload_artifacts(directory):
+        artifacts.append({
+            "path": relative.as_posix(),
+            "size_bytes": path.stat().st_size,
+            "sha256": sha256_bytes(path.read_bytes()),
+            "artifact_kind": f"final-training-payload:{relative.parts[0]}",
+            "configuration_identity": configuration_identity,
+            "provenance_identity": provenance_identity,
+        })
+    manifest = {
+        "schema_version": FINAL_TRAINING_MANIFEST_SCHEMA,
+        "external_root": str(directory),
+        "configuration_identity": configuration_identity,
+        "provenance_identity": provenance_identity,
+        "artifacts": artifacts,
+    }
+    _write_json(directory / "external_artifacts.json", manifest)
+    return manifest
 
 
 def create_final_training_run(
@@ -1408,24 +1502,147 @@ def create_final_training_run(
 def write_final_run_status(
     run_dir: str | Path,
     *,
-    final_status: str,
     manifest_sha256: str,
+    summary_sha256: str,
 ) -> dict[str, Any]:
-    """Write the unambiguous completion record for a run directory."""
+    """Authoritative fail-closed completion for a final-training run.
+
+    Validates the full run package (immutable payload manifest, once-finalized
+    summary, reload verification, held-out boundary), then writes
+    run_status.json, writes RUN_COMPLETE last, and only then removes INCOMPLETE.
+    """
     directory = Path(run_dir)
     if not directory.is_dir():
         raise CorpusBuildError(f"run directory missing: {directory}")
     incomplete = directory / "INCOMPLETE"
+    run_complete = directory / "RUN_COMPLETE"
+    manifest_path = directory / "external_artifacts.json"
+    summary_path = directory / "final_training_summary.json"
+    run_status_path = directory / "run_status.json"
+
+    problems: list[str] = []
+    if not incomplete.is_file():
+        problems.append("INCOMPLETE marker is missing; the run is not in an active incomplete state")
+    if run_complete.exists():
+        problems.append("RUN_COMPLETE already exists; a second completion attempt is prohibited")
+    if not manifest_path.is_file():
+        problems.append(f"payload manifest missing: {manifest_path}")
+    if not re.fullmatch(r"[0-9a-f]{64}", manifest_sha256):
+        problems.append("supplied manifest sha256 is not canonical lowercase SHA-256")
+    if not summary_path.is_file():
+        problems.append(f"final summary missing: {summary_path}")
+    if not re.fullmatch(r"[0-9a-f]{64}", summary_sha256):
+        problems.append("supplied summary sha256 is not canonical lowercase SHA-256")
+
+    run_context = load_json(directory / "run_context.json") if (directory / "run_context.json").is_file() else {}
+    active_run_id = run_context.get("run_id")
+
+    if manifest_path.is_file():
+        actual_manifest_sha = sha256_bytes(manifest_path.read_bytes())
+        if actual_manifest_sha != manifest_sha256:
+            problems.append(
+                f"manifest sha256 mismatch: supplied {manifest_sha256}, recomputed {actual_manifest_sha}"
+            )
+        try:
+            manifest = load_json(manifest_path)
+        except CorpusBuildError as exc:
+            problems.append(f"manifest is not valid JSON: {exc}")
+            manifest = {}
+        if manifest.get("schema_version") != FINAL_TRAINING_MANIFEST_SCHEMA:
+            problems.append(f"manifest schema_version is not {FINAL_TRAINING_MANIFEST_SCHEMA!r}")
+        if str(manifest.get("external_root", "")) != str(directory):
+            problems.append("manifest external_root does not match the active run directory")
+        manifested = manifest.get("artifacts", [])
+        expected_payload = _collect_payload_artifacts(directory)
+        expected_paths = [relative.as_posix() for relative, _ in expected_payload]
+        manifested_paths = [str(entry.get("path", "")) for entry in manifested]
+        if manifested_paths != expected_paths:
+            problems.append("manifest does not describe exactly the active-run immutable payload artifacts")
+        for entry in manifested:
+            relative = str(entry.get("path", ""))
+            if not _canonical_relative_logical_path(relative):
+                problems.append(f"manifest artifact path is not canonical: {relative!r}")
+                continue
+            artifact_path = directory / relative
+            if not artifact_path.is_file():
+                problems.append(f"manifest artifact missing: {relative}")
+                continue
+            actual_size = artifact_path.stat().st_size
+            actual_hash = sha256_bytes(artifact_path.read_bytes())
+            if int(entry.get("size_bytes", -1)) != actual_size:
+                problems.append(f"manifest artifact size mismatch: {relative}")
+            if str(entry.get("sha256", "")) != actual_hash:
+                problems.append(f"manifest artifact sha256 mismatch: {relative}")
+
+    if summary_path.is_file():
+        actual_summary_sha = sha256_bytes(summary_path.read_bytes())
+        if actual_summary_sha != summary_sha256:
+            problems.append(
+                f"summary sha256 mismatch: supplied {summary_sha256}, recomputed {actual_summary_sha}"
+            )
+        try:
+            summary = load_json(summary_path)
+        except CorpusBuildError as exc:
+            problems.append(f"summary is not valid JSON: {exc}")
+            summary = {}
+        for field in REQUIRED_SUMMARY_FIELDS:
+            if field not in summary:
+                problems.append(f"summary is missing required field {field}")
+        if summary.get("run_id") != active_run_id:
+            problems.append(f"summary run_id does not match the active run {active_run_id!r}")
+        if summary.get("final_status") != FINAL_TRAINING_FINAL_STATUS:
+            problems.append(
+                f"summary final_status {summary.get('final_status')!r} is not {FINAL_TRAINING_FINAL_STATUS!r}"
+            )
+        if summary.get("manifest_sha256") != manifest_sha256:
+            problems.append("summary does not reference the exact manifest sha256")
+        reload_verification = summary.get("reload_verification")
+        if not isinstance(reload_verification, dict) or reload_verification.get("adapter_reloaded") is not True:
+            problems.append("reload verification is not explicitly successful")
+        if summary.get("held_out_generation_authorized") is not False:
+            problems.append("held_out_generation_authorized is not false")
+        if summary.get("held_out_accessed") is not False:
+            problems.append("held_out_accessed is not false")
+
+    if problems:
+        raise CorpusBuildError("final run completion validation failed: " + "; ".join(problems))
+
     run_status = {
-        "run_id": (directory / "run_context.json").is_file()
-        and load_json(directory / "run_context.json").get("run_id"),
+        "run_id": active_run_id,
         "status": "COMPLETE",
-        "final_status": final_status,
-        "completed_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "final_status": FINAL_TRAINING_FINAL_STATUS,
+        "manifest_path": str(manifest_path),
         "manifest_sha256": manifest_sha256,
+        "final_summary_path": str(summary_path),
+        "final_summary_sha256": summary_sha256,
+        "reload_verification": summary.get("reload_verification"),
+        "completed_at_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+        "held_out_generation_authorized": False,
+        "held_out_accessed": False,
     }
-    _write_json(directory / "run_status.json", run_status)
-    (directory / "RUN_COMPLETE").write_text("COMPLETE run; see run_status.json\n", encoding="utf-8")
+    _write_json_atomic(run_status_path, run_status)
+    verified = load_json(run_status_path)
+    if verified.get("run_id") != active_run_id or verified.get("manifest_sha256") != manifest_sha256:
+        raise CorpusBuildError("run_status.json verification failed after write")
+    run_status_sha = sha256_bytes(run_status_path.read_bytes())
+    _write_json_atomic(
+        run_complete,
+        {
+            "run_id": active_run_id,
+            "status": "COMPLETE",
+            "final_status": FINAL_TRAINING_FINAL_STATUS,
+            "manifest_sha256": manifest_sha256,
+            "final_summary_sha256": summary_sha256,
+            "run_status_sha256": run_status_sha,
+        },
+    )
     if incomplete.is_file():
         incomplete.unlink()
     return run_status
+
+
+def _write_json_atomic(path: Path, value: Any) -> None:
+    """Write a JSON record via a temporary file and atomic replace."""
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+    os.replace(temporary, path)

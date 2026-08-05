@@ -727,12 +727,14 @@ from pathlib import Path
 import pytest
 
 from agentic_debugger.training.patch_pilot import (
+    FINAL_TRAINING_FINAL_STATUS,
     CorpusBuildError,
     create_final_training_run,
     validate_completed_audits,
     validate_final_training_authorization,
     write_external_manifest,
     write_final_run_status,
+    write_payload_manifest,
 )
 
 AUTH_TEST_ANCHOR = "def _auth_fixture(tmp_path: Path) -> Path:"
@@ -1039,16 +1041,6 @@ def test_final_training_run_dir_second_initialization_same_id_fails(tmp_path: Pa
         create_final_training_run(runs, fixture["auth"], run_id="run-z")
 
 
-def test_final_training_run_status_marks_complete(tmp_path: Path) -> None:
-    fixture = _auth_fixture_full(tmp_path)
-    runs = tmp_path / "runs"
-    created = create_final_training_run(runs, fixture["auth"], run_id="run-c")
-    status = write_final_run_status(created["run_dir"], final_status="FINAL_TRAINING_COMPLETE_AWAITING_FIRSTMATE_REVIEW", manifest_sha256="0" * 64)
-    assert status["status"] == "COMPLETE"
-    assert not (runs / "run-c" / "INCOMPLETE").exists()
-    assert (runs / "run-c" / "RUN_COMPLETE").is_file()
-
-
 def test_manifest_collection_restricted_to_active_run_dir(tmp_path: Path) -> None:
     active = tmp_path / "active"
     active.mkdir()
@@ -1060,3 +1052,285 @@ def test_manifest_collection_restricted_to_active_run_dir(tmp_path: Path) -> Non
     paths = [artifact["path"] for artifact in manifest["artifacts"]]
     assert paths == ["a.txt"]
     assert "b.txt" not in paths
+
+def _completion_run(tmp_path: Path) -> dict:
+    """Build a valid run package: immutable payloads, payload manifest, once-finalized summary."""
+    fixture = _auth_fixture_full(tmp_path)
+    runs = tmp_path / "runs"
+    created = create_final_training_run(runs, fixture["auth"], run_id="run-t")
+    run_dir = Path(created["run_dir"])
+    (run_dir / "adapter-final").mkdir()
+    (run_dir / "adapter-final" / "adapter_model.safetensors").write_bytes(b"adapter-bytes-1")
+    (run_dir / "tokenizer.json").write_text('{"tok": 1}\n', encoding="utf-8")
+    (run_dir / "trainer_state.json").write_text('{"global_step": 1}\n', encoding="utf-8")
+    (run_dir / "training_log_history.json").write_text("[]\n", encoding="utf-8")
+    (run_dir / "runtime_environment.json").write_text('{"gpu": "T4"}\n', encoding="utf-8")
+    (run_dir / "memory_timing.json").write_text('{"elapsed_seconds": 1.0}\n', encoding="utf-8")
+    (run_dir / "reload_verification.json").write_text('{"adapter_reloaded": true}\n', encoding="utf-8")
+    write_payload_manifest(run_dir, configuration_identity="0" * 64, provenance_identity="test")
+    manifest_sha256 = _sha256_bytes((run_dir / "external_artifacts.json").read_bytes())
+    summary = {
+        "schema_version": "final-training-summary-v1",
+        "experiment_id": "qlora-patch-pilot-v1",
+        "run_id": "run-t",
+        "final_status": FINAL_TRAINING_FINAL_STATUS,
+        "manifest_sha256": manifest_sha256,
+        "reload_verification": {"adapter_reloaded": True},
+        "held_out_generation_authorized": False,
+        "held_out_accessed": False,
+        "train_loss": 0.5,
+    }
+    (run_dir / "final_training_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    summary_sha256 = _sha256_bytes((run_dir / "final_training_summary.json").read_bytes())
+    return {
+        "run_dir": run_dir,
+        "manifest_sha256": manifest_sha256,
+        "summary_sha256": summary_sha256,
+    }
+
+
+def _rewrite_summary(run_dir: Path, summary: dict) -> str:
+    (run_dir / "final_training_summary.json").write_text(json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+    return _sha256_bytes((run_dir / "final_training_summary.json").read_bytes())
+
+
+def _complete(pkg: dict, **kwargs: str) -> dict:
+    return write_final_run_status(pkg["run_dir"], manifest_sha256=kwargs.get("manifest_sha256", pkg["manifest_sha256"]), summary_sha256=kwargs.get("summary_sha256", pkg["summary_sha256"]))
+
+
+def test_completion_valid_package_succeeds(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    result = _complete(pkg)
+    assert result["status"] == "COMPLETE"
+    assert result["final_status"] == FINAL_TRAINING_FINAL_STATUS
+
+
+def test_completion_missing_manifest_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    (pkg["run_dir"] / "external_artifacts.json").unlink()
+    with pytest.raises(CorpusBuildError, match="payload manifest missing"):
+        _complete(pkg)
+
+
+def test_completion_malformed_manifest_sha_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    with pytest.raises(CorpusBuildError, match="not canonical"):
+        _complete(pkg, manifest_sha256="xyz")
+
+
+def test_completion_fake_manifest_sha_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    with pytest.raises(CorpusBuildError, match="manifest sha256 mismatch"):
+        _complete(pkg, manifest_sha256="0" * 64)
+
+
+def test_completion_stale_manifest_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    (pkg["run_dir"] / "adapter-final" / "adapter_model.safetensors").write_bytes(b"modified-after-manifest")
+    with pytest.raises(CorpusBuildError, match="manifest artifact sha256 mismatch"):
+        _complete(pkg)
+
+
+def test_completion_missing_summary_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    (pkg["run_dir"] / "final_training_summary.json").unlink()
+    with pytest.raises(CorpusBuildError, match="final summary missing"):
+        _complete(pkg)
+
+
+def test_completion_stale_summary_hash_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    with pytest.raises(CorpusBuildError, match="summary sha256 mismatch"):
+        _complete(pkg, summary_sha256="0" * 64)
+
+
+def test_completion_summary_wrong_manifest_hash_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    summary["manifest_sha256"] = "1" * 64
+    summary_sha256 = _rewrite_summary(pkg["run_dir"], summary)
+    with pytest.raises(CorpusBuildError, match="does not reference the exact manifest sha256"):
+        _complete(pkg, summary_sha256=summary_sha256)
+
+
+def test_completion_unsupported_final_status_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    summary["final_status"] = "SOMETHING_ELSE"
+    summary_sha256 = _rewrite_summary(pkg["run_dir"], summary)
+    with pytest.raises(CorpusBuildError, match="final_status"):
+        _complete(pkg, summary_sha256=summary_sha256)
+
+
+def test_completion_reload_false_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    summary["reload_verification"] = {"adapter_reloaded": False}
+    summary_sha256 = _rewrite_summary(pkg["run_dir"], summary)
+    with pytest.raises(CorpusBuildError, match="reload verification is not explicitly successful"):
+        _complete(pkg, summary_sha256=summary_sha256)
+
+
+def test_completion_held_out_accessed_true_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    summary["held_out_accessed"] = True
+    summary_sha256 = _rewrite_summary(pkg["run_dir"], summary)
+    with pytest.raises(CorpusBuildError, match="held_out_accessed is not false"):
+        _complete(pkg, summary_sha256=summary_sha256)
+
+
+def test_completion_premature_missing_required_field_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary = json.loads((pkg["run_dir"] / "final_training_summary.json").read_text(encoding="utf-8"))
+    del summary["train_loss"]
+    del summary["reload_verification"]
+    summary_sha256 = _rewrite_summary(pkg["run_dir"], summary)
+    with pytest.raises(CorpusBuildError, match="missing required field"):
+        _complete(pkg, summary_sha256=summary_sha256)
+
+
+def test_completion_no_run_complete_after_failure(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    with pytest.raises(CorpusBuildError):
+        _complete(pkg, manifest_sha256="0" * 64)
+    assert not (pkg["run_dir"] / "RUN_COMPLETE").exists()
+
+
+def test_completion_incomplete_remains_after_failure(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    with pytest.raises(CorpusBuildError):
+        _complete(pkg, manifest_sha256="0" * 64)
+    assert (pkg["run_dir"] / "INCOMPLETE").is_file()
+
+
+def test_completion_success_writes_status_and_marker(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    _complete(pkg)
+    run_status = json.loads((pkg["run_dir"] / "run_status.json").read_text(encoding="utf-8"))
+    assert run_status["status"] == "COMPLETE"
+    assert run_status["manifest_sha256"] == pkg["manifest_sha256"]
+    assert run_status["final_summary_sha256"] == pkg["summary_sha256"]
+    assert (pkg["run_dir"] / "RUN_COMPLETE").is_file()
+    marker = json.loads((pkg["run_dir"] / "RUN_COMPLETE").read_text(encoding="utf-8"))
+    assert marker["run_id"] == "run-t"
+    assert marker["manifest_sha256"] == pkg["manifest_sha256"]
+
+
+def test_completion_success_removes_incomplete(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    _complete(pkg)
+    assert not (pkg["run_dir"] / "INCOMPLETE").exists()
+
+
+def test_completion_second_attempt_fails(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    _complete(pkg)
+    with pytest.raises(CorpusBuildError, match="second completion attempt"):
+        _complete(pkg)
+
+
+def test_payload_manifest_excludes_control_files(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    manifest = json.loads((pkg["run_dir"] / "external_artifacts.json").read_text(encoding="utf-8"))
+    paths = {entry["path"] for entry in manifest["artifacts"]}
+    for excluded in ("external_artifacts.json", "final_training_summary.json", "run_status.json", "RUN_COMPLETE", "INCOMPLETE"):
+        assert excluded not in paths
+    assert "adapter-final/adapter_model.safetensors" in paths
+    assert "reload_verification.json" in paths
+
+
+def test_payload_manifest_excludes_other_run_files(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    other = tmp_path / "other-run"
+    other.mkdir()
+    (other / "foreign.bin").write_bytes(b"foreign")
+    manifest = json.loads((pkg["run_dir"] / "external_artifacts.json").read_text(encoding="utf-8"))
+    paths = {entry["path"] for entry in manifest["artifacts"]}
+    assert "foreign.bin" not in paths
+    manifest["artifacts"].append({"path": "foreign.bin", "size_bytes": 7, "sha256": "0" * 64})
+    (pkg["run_dir"] / "external_artifacts.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="exactly the active-run immutable payload"):
+        _complete(pkg, manifest_sha256=_sha256_bytes((pkg["run_dir"] / "external_artifacts.json").read_bytes()))
+
+
+def test_completion_does_not_rewrite_summary(tmp_path: Path) -> None:
+    pkg = _completion_run(tmp_path)
+    summary_path = pkg["run_dir"] / "final_training_summary.json"
+    before = summary_path.read_bytes()
+    _complete(pkg)
+    assert summary_path.read_bytes() == before
+
+
+def _mutate_logical_path(tmp_path: Path, section: str, kind: str, new_path: str) -> Path:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record[section][kind]["logical_path"] = new_path
+    path = tmp_path / "logical-drift.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    return path
+
+
+@pytest.mark.parametrize(
+    "section,kind,new_path,expected",
+    [
+        ("corpus_artifacts", "train_jsonl", "somewhere/other-file.jsonl", "train_jsonl"),
+        ("corpus_artifacts", "validation_jsonl", "somewhere/other-file.jsonl", "validation_jsonl"),
+        ("corpus_artifacts", "corpus_manifest", "somewhere/other-manifest.json", "corpus_manifest"),
+        ("audit_artifacts", "completed_audit_csv", "somewhere/other-audit.csv", "completed_audit_csv"),
+        ("audit_artifacts", "completed_audit_manifest", "somewhere/other-audit-manifest.json", "completed_audit_manifest"),
+    ],
+)
+def test_logical_path_drift_fails(tmp_path: Path, section: str, kind: str, new_path: str, expected: str) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record[section][kind]["logical_path"] = new_path
+    path = tmp_path / "logical-drift.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match=f"{expected}.*exact canonical"):
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
+
+
+def test_logical_path_backslash_fails(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    record = json.loads(fixture["auth"].read_text(encoding="utf-8"))
+    record["corpus_artifacts"]["train_jsonl"]["logical_path"] = "corpus\\train.jsonl"
+    path = tmp_path / "backslash.json"
+    path.write_text(json.dumps(record, indent=2) + "\n", encoding="utf-8")
+    with pytest.raises(CorpusBuildError, match="non-canonical"):
+        validate_final_training_authorization(
+            path, repository_root=ROOT, corpus_dir=fixture["corpus_dir"],
+            transformation_config_path=fixture["config"], train_jsonl=fixture["train"],
+            validation_jsonl=fixture["validation"], corpus_manifest=fixture["corpus_manifest"],
+            completed_audit_csv=fixture["audit_csv"], completed_audit_manifest=fixture["audit_manifest"],
+        )
+
+
+def test_exact_canonical_logical_paths_pass(tmp_path: Path) -> None:
+    fixture = _auth_fixture_full(tmp_path)
+    result = _validate_auth_fixture(tmp_path, fixture)
+    assert result["corpus_artifact_identities"]["train_jsonl"]["logical_path"] == "corpus/train.jsonl"
+    assert result["corpus_artifact_identities"]["validation_jsonl"]["logical_path"] == "corpus/validation.jsonl"
+    assert result["corpus_artifact_identities"]["corpus_manifest"]["logical_path"] == "corpus/external_artifacts.json"
+    assert result["audit_artifact_identities"]["completed_audit_csv"]["logical_path"] == "independent-audit/firstmate_independent_audit_completed.csv"
+    assert result["audit_artifact_identities"]["completed_audit_manifest"]["logical_path"] == "independent-audit/firstmate_independent_audit_manifest.json"
+
+
+def test_notebook_uses_write_final_run_status() -> None:
+    nb = json.loads((EXPERIMENT / "colab/agentic_debugging_qlora_final_training.ipynb").read_text(encoding="utf-8"))
+    code = "\n".join("".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code")
+    assert "write_final_run_status(RUN_DIR, manifest_sha256=manifest_sha256, summary_sha256=summary_sha256)" in code
+
+
+def test_notebook_no_duplicate_manual_completion_sequence() -> None:
+    nb = json.loads((EXPERIMENT / "colab/agentic_debugging_qlora_final_training.ipynb").read_text(encoding="utf-8"))
+    code = "\n".join("".join(cell["source"]) for cell in nb["cells"] if cell["cell_type"] == "code")
+    assert "'run_status.json').write_text" not in code
+    assert "'RUN_COMPLETE').write_text" not in code
+    assert "'INCOMPLETE').unlink" not in code
+    assert code.count("'final_training_summary.json').write_text") == 1
