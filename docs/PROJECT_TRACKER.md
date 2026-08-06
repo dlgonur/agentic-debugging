@@ -190,7 +190,7 @@ Rules:
 
 - [x] 6.1.1 Start with PDB only.
 - [x] 6.1.2 Define PDB command schema.
-- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı 2026-08-06 — `run_post_mortem` PDB protocol/worker/session operation; reuses existing PDB protocol, worker channel, and session lifecycle; offline-capable, no provider/network; captures bounded, side-effect-safe structured traceback evidence (exception type/message, traceback frames, innermost-frame locals) on unhandled exception; evidence capture never invokes arbitrary user-defined `__repr__`/`__str__`/properties/iteration — it reuses the accepted exact-built-in summarization machinery; frame locals are iterated in a bounded manner (never the full mapping), all text fields are UTF-8-byte-bounded, and the complete serialized response is proven within `MAX_LINE_LENGTH`; successful exit produces no post-mortem; tracebackless failure fails closed (success=false, empty result, bounded error); SystemExit(0) and SystemExit(nonzero) both report exited with no post-mortem; one-execution-per-session invariant preserved; evidence is bound to script and session identity (the existing PDB API does not carry task/case identity without a public contract change); the response is deterministic, bounded, JSON-serializable protocol evidence suitable for later event persistence (it is not currently integrated into the accepted event/replay trajectory path); 26 focused tests in `tests/unit/test_pdb_post_mortem.py`; accepted on the `goal/friday-main-repo-completion-v1` candidate, not yet merged.)
+- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı 2026-08-06 — `run_post_mortem` PDB protocol/worker/session operation; reuses existing PDB protocol, worker channel, and session lifecycle; offline-capable, no provider/network; captures bounded, side-effect-safe structured traceback evidence (exception type/message, traceback frames, innermost-frame locals) on unhandled exception; evidence capture never invokes arbitrary user-defined `__repr__`/`__str__`/properties/iteration/metaclass presentation hooks — value summarization reuses the accepted exact-built-in machinery, and the exception summary reads only exact descriptors (`type.__dict__['__name__']`, `BaseException.__dict__['args']`); traceback frames come from a single bounded walk (hard scan ceiling `_POST_MORTEM_MAX_TB_SCAN`, innermost 16-frame tail, no source-line loading, explicit `frames_truncated`, fail-closed bounded `traceback_error` on malformed/cyclic structures); innermost-frame locals are collected with a hard inspection ceiling (`_POST_MORTEM_LOCALS_SCAN_CEILING`) and fail-closed mutation handling, never the full mapping; all text fields are UTF-8-byte-bounded with the truncation marker included inside the limit, and the complete serialized response is proven within `MAX_LINE_LENGTH`; successful exit produces no post-mortem; tracebackless failure fails closed through the real worker branch emitting the authoritative `_post_mortem_missing_traceback_response` (success=false, empty result, bounded error, worker/session lifecycle `failed`); SystemExit(0) and SystemExit(nonzero) both report exited with no post-mortem; one-execution-per-session invariant preserved; evidence is bound to script and session identity (the existing PDB API does not carry task/case identity without a public contract change); the response is deterministic, bounded, JSON-serializable protocol evidence suitable for later event persistence (it is not currently integrated into the accepted event/replay trajectory path); 70 unique focused tests in `tests/unit/test_pdb_post_mortem.py` (AST definition count = unique name count = pytest collected count); accepted on the `fix/post-mortem-pdb-evidence-v1` candidate, not yet merged.)
 - [x] 6.2.1 Serialize debugger outputs into model-readable structured text.
 - [x] 6.3.1 Support stack inspection.
 - [x] 6.3.2 Support local variable inspection.
@@ -1115,27 +1115,44 @@ not yet integrated; their eventual integration commit is not known:
   is deterministic, bounded, JSON-serializable protocol evidence suitable for
   later event persistence (it is not currently integrated into the accepted
   event/replay trajectory path). Offline-capable; no provider/network;
-  successful exit produces no post-mortem; tracebackless failure fails closed;
-  one-execution-per-session invariant preserved. Focused tests added. The
+  successful exit produces no post-mortem; tracebackless failure fails closed
+  through the real worker branch (authoritative `PdbResponse`, success=false,
+  empty result, bounded error, lifecycle `failed`); one-execution-per-session
+  invariant preserved. Evidence capture never invokes target presentation
+  code: exception summarization uses exact descriptors only, traceback frames
+  come from one bounded walk (hard scan ceiling, no source-line loading,
+  explicit truncation, fail-closed bounded error evidence), and locals are
+  collected with a hard inspection ceiling and fail-closed mutation handling;
+  all text fields are UTF-8-byte-bounded with the truncation marker inside
+  the limit. 70 unique focused tests (no shadowed definitions). The
   tracked TODO 6.1.3 subtask status is determined by its actual acceptance
   contract (see the tracker 6.x log).
 
 Accepted validation: focused suites (live-runner 286; wrapper+transport 100
 in isolation; transport-factory+case-runner 55 in both orders; V4
-budget/verifier+replay; post-mortem 26 + PDB protocol/session/integration 945;
+budget/verifier+replay; post-mortem 70 + PDB protocol/session/integration 919;
 compileall exit 0; deterministic demo exit 0, 2/2 RESOLVED, F2P 2/2, P2P 4/4,
-0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Final bounded full
-suite: **3435 passed, 3 skipped, 1 failed** — the suite is NOT green. The
-single remaining failure (`test_selftest_mode_is_synthetic_only`) is a
-pre-existing wrapper preflight subprocess-chain flake under full-suite OS
-resource pressure, reproducible on the exact clean `ab464dd` baseline (3394
-passed, 3 skipped, 6 failed: 5 known wrapper/transport defects now fixed by
-this candidate + the same selftest flake). The previous order-dependent
-failure family (the transport/case-runner cascades under full-suite ordering)
-is repaired; the race/drain regression tests are unit-level and do not
-amplify OS resource pressure. No instructor TODO status is promoted by this
-pass; no provider, live campaign, WSL, BugsInPy, QLoRA, or held-out execution
-occurred; no commit/merge/push was made during the coding-agent build phase.
+0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Final full suite (fresh
+process, `fix/post-mortem-pdb-evidence-v1` candidate):
+**3448 passed, 3 skipped, 32 failed** — the suite is NOT green. The 32
+failures are all in the pre-existing wrapper-preflight subprocess-chain
+family (`tests/unit/test_opencode_go_transport_factory.py` 16,
+`tests/unit/test_opencode_go_wrapper_repair.py` 13,
+`tests/unit/test_opencode_go_case_runner.py` 3) with
+`LiveTransportError(kind="process_error"): provider process exited nonzero`
+from the synthetic wrapper chain; every one of them passes in isolation
+(85/85 across the three files) and none references the changed PDB code
+paths. The same wrapper-preflight subprocess-chain family is documented as a
+pre-existing full-suite resource-pressure flake (reproduced on the clean
+`ab464dd` baseline) and previously surfaced as
+`test_selftest_mode_is_synthetic_only`; in this run that selftest node
+passed and the pressure surfaced in sibling wrapper-chain nodes instead. The
+previous order-dependent failure family (the transport/case-runner cascades
+under full-suite ordering) is repaired; the race/drain regression tests are
+unit-level and do not amplify OS resource pressure. No instructor TODO status
+is promoted by this pass; no provider, live campaign, WSL, BugsInPy, QLoRA,
+or held-out execution occurred; no commit/merge/push was made during the
+coding-agent build phase.
 
 Earlier history:
 

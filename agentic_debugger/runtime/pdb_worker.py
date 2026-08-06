@@ -64,6 +64,20 @@ _POST_MORTEM_MAX_TYPE_NAME_UTF8 = 256
 _POST_MORTEM_MAX_FILE_UTF8 = 512
 _POST_MORTEM_MAX_FUNCTION_UTF8 = 512
 _POST_MORTEM_MAX_SCRIPT_UTF8 = 512
+# Hard scan ceiling for the manual traceback walk: real traceback chains are
+# bounded by the recursion limit (~1000 nodes), so a generous fixed ceiling
+# never truncates legitimate evidence while guaranteeing termination on any
+# injected cyclic or malformed chain.
+_POST_MORTEM_MAX_TB_SCAN = 4096
+# Hard inspection ceiling for the bounded local scan: at most this many
+# mapping entries are ever inspected, independent of mapping size, and the
+# scan stops as soon as _POST_MORTEM_MAX_LOCALS non-dunder names are accepted.
+_POST_MORTEM_LOCALS_SCAN_CEILING = _POST_MORTEM_MAX_LOCALS * 4
+# UTF-8 truncation marker; always emitted inside the declared byte budget.
+_POST_MORTEM_TRUNCATION_MARKER = '\u2026'
+_POST_MORTEM_TRUNCATION_MARKER_UTF8 = len(
+    _POST_MORTEM_TRUNCATION_MARKER.encode('utf-8')
+)
 # Keeps JSON integer conversion comfortably below Python's default decimal
 # conversion limit while preserving ordinary large integers losslessly.
 _MAX_SERIALIZED_INT_BITS = 4096
@@ -993,16 +1007,110 @@ def _successful_response_fits(response: PdbResponse) -> bool:
 def _post_mortem_bounded_text(value: Any, maximum_utf8: int) -> str:
     """Return a UTF-8-byte-bounded, sanitized copy of a text field.
 
-    Uses only exact built-in string operations (no ``str()`` on arbitrary
-    objects, no user code).  ``value`` must already be a ``str`` or a type
-    whose ``str()`` is built-in (``int``, ``float``, ``bool``); for unknown
-    types the caller must extract the text via safe descriptors first."""
+    The complete returned byte sequence — including any truncation marker —
+    never exceeds ``maximum_utf8`` UTF-8 bytes.  Values that already fit are
+    returned unchanged.  Only exact built-in types (``str``, ``int``,
+    ``float``, ``bool``) are converted with their exact built-in ``str()``
+    representation; any other type is opaque and yields ``""`` — no user
+    ``__str__``/``__repr__`` is ever invoked.  Every character is encoded
+    with ``errors='replace'``, so lone surrogates and malformed Unicode
+    become U+FFFD and the result is always JSON-serializable.
+
+    ``maximum_utf8`` must be a non-negative exact ``int``."""
+    if type(maximum_utf8) is not int or maximum_utf8 < 0:
+        return ""
     if type(value) is str:
         text = value
-    else:
+    elif type(value) in (int, float, bool):
         text = str(value)
+    else:
+        return ""
+    if maximum_utf8 == 0:
+        return ""
+    # A value that already fits within the limit is returned unchanged; the
+    # truncation marker is only used when the value genuinely exceeds the
+    # limit, and it is then included inside the declared byte budget.
     preview, truncated = _utf8_preview(text, maximum_utf8)
-    return preview + ("…" if truncated else "")
+    if not truncated:
+        return preview
+    marker_utf8 = _POST_MORTEM_TRUNCATION_MARKER_UTF8
+    if maximum_utf8 >= marker_utf8:
+        content_preview, _ = _utf8_preview(
+            text, maximum_utf8 - marker_utf8
+        )
+        return content_preview + _POST_MORTEM_TRUNCATION_MARKER
+    return preview
+
+
+# Exact descriptor-based exception identity/argument access: these CPython
+# getset descriptors are read directly, bypassing any subclass property,
+# custom metaclass ``__getattribute__``, or metaclass attribute hook.  A
+# custom exception can never inject presentation code into this path.
+_TYPE_NAME_DESCRIPTOR = type.__dict__['__name__']
+_BASE_EXCEPTION_ARGS_DESCRIPTOR = BaseException.__dict__['args']
+
+
+def _safe_exception_type_name(exc_type: Any) -> str:
+    """Return the exact short type name of an exception type without
+    consulting the instance or any metaclass presentation hook."""
+    try:
+        name = _TYPE_NAME_DESCRIPTOR.__get__(exc_type, type(exc_type))
+    except BaseException:
+        return 'unknown'
+    if type(name) is not str:
+        return 'unknown'
+    bounded = _post_mortem_bounded_text(name, _POST_MORTEM_MAX_TYPE_NAME_UTF8)
+    return bounded or 'unknown'
+
+
+def _safe_exception_message(exc: BaseException) -> str:
+    """Return a bounded, side-effect-safe textual summary of an exception.
+
+    Uses only exact descriptor operations: the type name comes from the
+    ``type.__dict__['__name__']`` getset descriptor and the arguments from
+    the ``BaseException.__dict__['args']`` getset descriptor, so no custom
+    ``__str__``, ``__repr__``, property, or metaclass hook on the target
+    exception is ever invoked.  Exact built-in scalar arguments (str, bytes,
+    int, float, bool, None) are rendered by exact built-in operations;
+    unknown argument objects become opaque type metadata via
+    :func:`_safe_type_name`.  The result is UTF-8-byte-bounded and
+    JSON-serializable."""
+    try:
+        args = _BASE_EXCEPTION_ARGS_DESCRIPTOR.__get__(exc, type(exc))
+    except BaseException:
+        return '<unprintable exception>'
+    parts: List[str] = []
+    if type(args) is tuple:
+        for arg in args:
+            if type(arg) is str:
+                parts.append(arg)
+            elif type(arg) is bytes:
+                parts.append(arg.decode('utf-8', errors='replace'))
+            elif type(arg) in (int, float, bool) or arg is None:
+                if type(arg) in (int, float, bool):
+                    parts.append(str(arg))
+                else:
+                    parts.append('None')
+            else:
+                parts.append(_safe_type_name(arg))
+    message = '; '.join(parts)
+    if not message:
+        message = _safe_exception_type_name(type(exc))
+    return _post_mortem_bounded_text(message, _POST_MORTEM_MAX_EXC_MESSAGE_UTF8)
+
+
+def _safe_exception_error_message(exc: BaseException) -> str:
+    """Post-mortem exception message with the established evidence shape.
+
+    Returns ``"Target raised <type>: <message>"`` built exclusively from
+    :func:`_safe_exception_type_name` and :func:`_safe_exception_message`, so
+    no target-defined presentation code is executed.  UTF-8-byte-bounded."""
+    type_name = _safe_exception_type_name(type(exc))
+    message = _safe_exception_message(exc)
+    return _post_mortem_bounded_text(
+        f"Target raised {type_name}: {message}",
+        _POST_MORTEM_MAX_EXC_MESSAGE_UTF8,
+    )
 
 
 def _safe_local_summary(value: Any) -> Dict[str, Any]:
@@ -1030,6 +1138,158 @@ def _has_traceback(captured_exc: Optional[Tuple[type, BaseException, Any]]) -> b
     if captured_exc is None:
         return False
     return captured_exc[2] is not None
+
+
+def _bounded_traceback_frames(
+    tb: Any,
+) -> Tuple[List[Dict[str, Any]], Any, bool, bool, Optional[str]]:
+    """Walk a traceback chain with a hard scan ceiling, retaining only the
+    innermost ``_POST_MORTEM_MAX_FRAMES`` frames.
+
+    Never materializes the complete chain and never loads source lines: each
+    visited node contributes only its frame's ``co_filename``, ``co_name``,
+    and ``f_lineno`` (exact frame/code metadata reads).  The walk stops after
+    at most ``_POST_MORTEM_MAX_TB_SCAN`` visited nodes, which guarantees
+    termination on injected cyclic chains; a malformed node (missing or
+    inaccessible expected fields) fails closed.  The innermost frame object
+    is captured during the single walk so the caller never rewalks the
+    chain.
+
+    Returns ``(frames, innermost_frame, truncation_marker, walk_terminated,
+    error)`` where ``frames`` is the deterministic innermost tail in
+    outermost-to-innermost order, ``innermost_frame`` is the last visited
+    frame object (or None on malformed structure), ``truncation_marker`` is
+    True when more frames existed than the reported tail,
+    ``walk_terminated`` is True when the hard scan ceiling was hit, and
+    ``error`` is a bounded fail-closed reason or None."""
+    frames: List[Dict[str, Any]] = []
+    tail: List[Dict[str, Any]] = []
+    innermost_frame: Any = None
+    visited = 0
+    node = tb
+    while node is not None:
+        if visited >= _POST_MORTEM_MAX_TB_SCAN:
+            frames = list(tail)
+            return frames, innermost_frame, True, True, (
+                "traceback scan ceiling reached"
+            )
+        visited += 1
+        try:
+            frame = node.tb_frame
+            code = frame.f_code
+            filename = code.co_filename
+            func_name = code.co_name
+            lineno = frame.f_lineno
+        except BaseException:
+            frames = list(tail)
+            return frames, None, True, False, "traceback node is malformed"
+        if type(filename) is not str:
+            filename = ''
+        if type(func_name) is not str:
+            func_name = ''
+        if type(lineno) is not int:
+            lineno = 0
+        entry = {
+            'file': _post_mortem_bounded_text(
+                os.path.basename(filename) if filename else '',
+                _POST_MORTEM_MAX_FILE_UTF8,
+            ),
+            'line': lineno,
+            'function': _post_mortem_bounded_text(
+                func_name, _POST_MORTEM_MAX_FUNCTION_UTF8,
+            ),
+        }
+        if len(tail) >= _POST_MORTEM_MAX_FRAMES:
+            tail.pop(0)
+        tail.append(entry)
+        innermost_frame = frame
+        try:
+            node = node.tb_next
+        except BaseException:
+            frames = list(tail)
+            return frames, innermost_frame, True, False, (
+                "traceback chain is malformed"
+            )
+    frames = list(tail)
+    truncated = visited > _POST_MORTEM_MAX_FRAMES
+    return frames, innermost_frame, truncated, False, None
+
+
+def _collect_bounded_locals(
+    mapping: Any,
+    max_entries: int,
+    length_op: Optional[Callable[[Any], int]] = None,
+    items_op: Optional[Callable[[Any], Any]] = None,
+) -> Tuple[Optional[List[Tuple[str, Any]]], int, bool, Optional[str]]:
+    """Collect a deterministic bounded set of local name/value pairs.
+
+    Uses only the exact mapping length and items operations: for a plain
+    ``dict`` or the frame-locals proxy these are resolved from the accepted
+    :func:`_frame_locals_operations`; tests may inject equivalent exact
+    operations as a narrow seam.  The mapping is iterated lazily — never
+    materialized via ``list(mapping.items())`` — and at most
+    ``_POST_MORTEM_LOCALS_SCAN_CEILING`` entries are inspected; the accepted
+    non-dunder entries are sorted deterministically by name.  A size change
+    during the scan (mutation) or any iteration failure fails closed.
+
+    Returns ``(entries, inspected, truncated, error)``: ``entries`` is
+    ``None`` on failure, ``inspected`` is the exact number of mapping entries
+    examined, ``truncated`` is True when accepted entries were dropped, and
+    ``error`` is a bounded reason or None."""
+    if type(max_entries) is not int or max_entries < 0:
+        return None, 0, False, "local limit is invalid"
+    operations = (
+        (length_op, items_op)
+        if length_op is not None and items_op is not None
+        else _frame_locals_operations(mapping)
+    )
+    if operations is None:
+        return None, 0, False, "frame locals are unavailable for this pause"
+    length_operation, items_operation = operations
+    entries: List[Tuple[str, Any]] = []
+    inspected = 0
+    collected = 0
+    truncated = False
+    iterator: Any = None
+    stored_name: Any = None
+    stored_value: Any = None
+    try:
+        original_size = length_operation(mapping)
+        iterator = iter(items_operation(mapping))
+        for index in range(_POST_MORTEM_LOCALS_SCAN_CEILING + 1):
+            try:
+                stored_name, stored_value = next(iterator)
+            except StopIteration:
+                if length_operation(mapping) != original_size:
+                    return None, inspected, False, (
+                        "frame locals mutated during bounded scan"
+                    )
+                break
+            except RuntimeError:
+                return None, inspected, False, (
+                    "frame locals mutated during bounded scan"
+                )
+            if index == _POST_MORTEM_LOCALS_SCAN_CEILING:
+                truncated = True
+                break
+            inspected += 1
+            if type(stored_name) is not str:
+                continue
+            if stored_name.startswith('__'):
+                continue
+            if collected >= max_entries:
+                truncated = True
+                break
+            collected += 1
+            entries.append((stored_name, stored_value))
+        entries.sort(key=lambda entry: entry[0])
+        return entries, inspected, truncated, None
+    except (MemoryError, RuntimeError, TypeError, ValueError):
+        return None, inspected, False, "frame locals scan failed safely"
+    finally:
+        stored_value = None
+        stored_name = None
+        iterator = None
 
 
 def _bounded_local_repr_pure(value: Any) -> str:
@@ -1066,92 +1326,97 @@ def _capture_post_mortem_evidence_pure(
     accepted :func:`_summarize_value` / :func:`_safe_type_name` machinery —
     never calls ``repr()``, ``str()``, ``__repr__``, ``__str__``, properties,
     or iteration on target *value instances*.  All text fields are
-    UTF-8-byte-bounded.  Frame locals are iterated in a bounded manner
-    (at most ``_POST_MORTEM_MAX_LOCALS`` entries are inspected, never the
-    full mapping).  If ``tb`` is ``None``, returns empty frame/local evidence
-    (the caller is responsible for the fail-closed decision via
-    :func:`_has_traceback`)."""
+    UTF-8-byte-bounded (truncation marker included in the budget).  The
+    exception type identity comes from the ``type.__dict__['__name__']``
+    descriptor (no metaclass hooks); the message comes from
+    ``safe_error_message``, which the worker supplies as the side-effect-safe
+    :func:`_safe_exception_error_message`.  Traceback frames are produced by
+    the single bounded walk :func:`_bounded_traceback_frames` (hard scan
+    ceiling, innermost tail, no source loading); the innermost frame's
+    locals are collected by :func:`_collect_bounded_locals` with a hard
+    inspection ceiling and fail-closed mutation handling.  If ``tb`` is
+    ``None``, returns empty frame/local evidence (the caller is responsible
+    for the fail-closed decision via :func:`_has_traceback`)."""
     exc_repr = safe_error_message(exc_value)
-    type_name_raw = getattr(exc_type, "__name__", "unknown")
-    type_name = _post_mortem_bounded_text(type_name_raw, _POST_MORTEM_MAX_TYPE_NAME_UTF8)
+    type_name = _safe_exception_type_name(exc_type)
     exc_message = _post_mortem_bounded_text(exc_repr, _POST_MORTEM_MAX_EXC_MESSAGE_UTF8)
     script_bounded = _post_mortem_bounded_text(script_normalized, _POST_MORTEM_MAX_SCRIPT_UTF8)
     frames: List[Dict[str, Any]] = []
+    innermost_frame: Any = None
+    frames_truncated = False
+    traceback_error: Optional[str] = None
     if tb is not None:
-        extracted = traceback.extract_tb(tb)
-        for entry in extracted[-_POST_MORTEM_MAX_FRAMES:]:
-            frames.append({
-                'file': _post_mortem_bounded_text(
-                    os.path.basename(entry.filename) if entry.filename else '',
-                    _POST_MORTEM_MAX_FILE_UTF8,
-                ),
-                'line': int(entry.lineno) if entry.lineno else 0,
-                'function': _post_mortem_bounded_text(
-                    str(entry.name) if entry.name else '',
-                    _POST_MORTEM_MAX_FUNCTION_UTF8,
-                ),
-            })
+        frames, innermost_frame, frames_truncated, _terminated, tb_error = (
+            _bounded_traceback_frames(tb)
+        )
+        if tb_error is not None:
+            frames_truncated = True
+            traceback_error = _post_mortem_bounded_text(
+                tb_error, _POST_MORTEM_MAX_TEXT_UTF8
+            )
     innermost: Dict[str, Any] = {}
-    innermost_frame = tb
-    while innermost_frame is not None and innermost_frame.tb_next is not None:
-        innermost_frame = innermost_frame.tb_next
     if innermost_frame is not None:
-        tb_frame = innermost_frame.tb_frame
         local_names: List[str] = []
         local_values: List[Dict[str, Any]] = []
         truncated_locals = False
-        inspected = 0
-        collected = 0
-        # Iterate the frame-local mapping in a bounded manner: never
-        # materialize the full mapping.  ``f_locals`` may be a dict or a
-        # frame-locals proxy; both support ``.items()`` for iteration.  We
-        # iterate and stop as soon as we have collected
-        # ``_POST_MORTEM_MAX_LOCALS`` non-dunder entries.  Mutation or
-        # iteration failure fails closed (no fabricated evidence).
         try:
-            local_items = tb_frame.f_locals.items()
+            local_mapping = innermost_frame.f_locals
         except BaseException:
-            local_items = iter(())
-        for name, value in local_items:
-            inspected += 1
-            if inspected > _POST_MORTEM_MAX_LOCALS * 4:
-                # Safety bound: never iterate more than 4x the limit even if
-                # many dunder names are skipped.
+            local_mapping = None
+        if local_mapping is None:
+            truncated_locals = True
+        else:
+            entries, _inspected, truncated_locals, _local_error = (
+                _collect_bounded_locals(
+                    local_mapping, _POST_MORTEM_MAX_LOCALS
+                )
+            )
+            if entries is None:
+                entries = []
                 truncated_locals = True
-                break
-            name_str = name if type(name) is str else str(name)
-            if name_str.startswith('__'):
-                continue
-            if collected >= _POST_MORTEM_MAX_LOCALS:
-                truncated_locals = True
-                break
-            collected += 1
-            bounded_name = _post_mortem_bounded_text(name_str, _POST_MORTEM_MAX_TEXT_UTF8)
-            local_names.append(bounded_name)
-            summary = _safe_local_summary(value)
-            local_values.append({
-                'name': bounded_name,
-                'summary': summary,
-                'type': _post_mortem_bounded_text(
-                    summary.get('type') or 'unknown',
-                    _POST_MORTEM_MAX_TYPE_NAME_UTF8,
-                ),
-            })
+            for name, value in entries:
+                bounded_name = _post_mortem_bounded_text(
+                    name, _POST_MORTEM_MAX_TEXT_UTF8
+                )
+                local_names.append(bounded_name)
+                summary = _safe_local_summary(value)
+                local_values.append({
+                    'name': bounded_name,
+                    'summary': summary,
+                    'type': _post_mortem_bounded_text(
+                        summary.get('type') or 'unknown',
+                        _POST_MORTEM_MAX_TYPE_NAME_UTF8,
+                    ),
+                })
+        try:
+            code = innermost_frame.f_code
+            co_filename = code.co_filename
+            co_name = code.co_name
+            lineno = innermost_frame.f_lineno
+        except BaseException:
+            co_filename = ''
+            co_name = ''
+            lineno = 0
+        if type(co_filename) is not str:
+            co_filename = ''
+        if type(co_name) is not str:
+            co_name = ''
+        if type(lineno) is not int:
+            lineno = 0
         innermost = {
             'file': _post_mortem_bounded_text(
-                os.path.basename(tb_frame.f_code.co_filename) if tb_frame.f_code.co_filename else '',
+                os.path.basename(co_filename) if co_filename else '',
                 _POST_MORTEM_MAX_FILE_UTF8,
             ),
-            'line': int(tb_frame.f_lineno),
+            'line': lineno,
             'function': _post_mortem_bounded_text(
-                str(tb_frame.f_code.co_name),
-                _POST_MORTEM_MAX_FUNCTION_UTF8,
+                co_name, _POST_MORTEM_MAX_FUNCTION_UTF8,
             ),
             'local_names': local_names,
             'local_values': local_values,
             'locals_truncated': truncated_locals,
         }
-    return {
+    evidence: Dict[str, Any] = {
         'exception': {
             'type': type_name,
             'message': exc_message,
@@ -1163,7 +1428,29 @@ def _capture_post_mortem_evidence_pure(
         'traceback_frames': frames,
         'innermost_frame': innermost,
         'script': script_bounded,
+        'frames_truncated': frames_truncated,
     }
+    if traceback_error is not None:
+        evidence['traceback_error'] = traceback_error
+    return evidence
+
+
+def _post_mortem_missing_traceback_response(request_id: int) -> PdbResponse:
+    """Authoritative fail-closed response for a captured exception with no
+    traceback: success False, empty result, bounded non-empty error, and no
+    fabricated frame or local evidence.  The worker sends exactly this
+    response, so tests exercise the real branch contract."""
+    error_msg = (
+        "post-mortem entry rejected: no traceback was captured "
+        "for the failing target"
+    )
+    return PdbResponse(
+        protocol_version=PROTOCOL_VERSION,
+        request_id=request_id,
+        success=False,
+        result={},
+        error=error_msg,
+    )
 
 
 class PdbWorker:
@@ -1535,21 +1822,17 @@ class PdbWorker:
             # An unhandled exception was captured: build the structured
             # post-mortem evidence.  If the traceback is missing, fail closed
             # rather than fabricate frame evidence.  The traceback-presence
-            # decision is factored into _has_traceback for testability.
+            # decision is factored into _has_traceback for testability, and
+            # the authoritative fail-closed response is built by
+            # _post_mortem_missing_traceback_response so the real branch is
+            # testable without a subprocess.
             if not _has_traceback(captured_exc):
-                error_msg = "post-mortem entry rejected: no traceback was captured for the failing target"
-                response = PdbResponse(
-                    protocol_version=PROTOCOL_VERSION,
-                    request_id=request_id,
-                    success=False,
-                    result={},
-                    error=error_msg,
-                )
+                response = _post_mortem_missing_traceback_response(request_id)
                 self._send_response(response)
                 with self._condition:
                     self._lifecycle['state'] = 'failed'
                     self._lifecycle['script'] = script_normalized
-                    self._lifecycle['error'] = error_msg
+                    self._lifecycle['error'] = response.error
                     self._condition.notify_all()
                 return
 
@@ -1563,7 +1846,10 @@ class PdbWorker:
                 'exception': evidence['exception'],
                 'traceback_frames': evidence['traceback_frames'],
                 'innermost_frame': evidence['innermost_frame'],
+                'frames_truncated': evidence.get('frames_truncated', False),
             }
+            if evidence.get('traceback_error'):
+                result['traceback_error'] = evidence['traceback_error']
             response = PdbResponse(
                 protocol_version=PROTOCOL_VERSION,
                 request_id=request_id,
@@ -1593,9 +1879,12 @@ class PdbWorker:
         tb: Any,
     ) -> Dict[str, Any]:
         """Build bounded, sanitized post-mortem evidence from a captured
-        exception (delegates to the module-level pure helper)."""
+        exception (delegates to the module-level pure helper with the
+        side-effect-safe exception message function, so no target-defined
+        ``__str__``/``__repr__``/metaclass presentation code is invoked)."""
         return _capture_post_mortem_evidence_pure(
-            script_normalized, exc_type, exc_value, tb, self._safe_error_message,
+            script_normalized, exc_type, exc_value, tb,
+            _safe_exception_error_message,
         )
 
     def _bounded_local_repr(self, value: Any) -> str:
