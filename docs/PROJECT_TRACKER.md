@@ -1075,13 +1075,14 @@ made.
 
 2026-08-06 (Friday main-repo completion hardening: ledger time provenance, transport teardown race, known wrapper/transport test failures, post-mortem PDB entry)
 
-This pass is an uncommitted hardening candidate on the
-`goal/friday-main-repo-completion-v1` branch, built on top of the accepted
-Friday delivery bundle commit `ab464dd` (`456f0e9` is the earlier
-presentation plan/deck/cue commit; the original delivery bundle is accepted
-and integrated on `main` at `ab464dd`). The hardening candidate's modified
-copies of the manifest, preflight checklist, handoff, README, and tracker are
-not yet integrated; their eventual integration commit is not known:
+This pass is accepted and integrated on `main` at `62deca4` (the
+`fix/post-mortem-pdb-bounds-v2` branch), built on top of the accepted Friday
+delivery bundle commit `ab464dd` (`456f0e9` is the earlier presentation
+plan/deck/cue commit; the original delivery bundle is accepted and integrated
+on `main` at `ab464dd`). A follow-up bounds pass (exception-argument work
+bounds, huge-int fail-closed handling, no-overread local scan) is currently
+an uncommitted candidate on top of `62deca4`; its eventual integration commit
+is not known:
 
 - Campaign ledger time provenance (`scripts/quixbugs_live_runner_v2.py`): the
   terminal ledger `updated_at`, the create-once `terminal-commit.json`
@@ -1124,16 +1125,41 @@ not yet integrated; their eventual integration commit is not known:
   explicit truncation, fail-closed bounded error evidence), and locals are
   collected with a hard inspection ceiling and fail-closed mutation handling;
   all text fields are UTF-8-byte-bounded with the truncation marker inside
-  the limit. 70 unique focused tests (no shadowed definitions). The
+  the limit. 90 unique focused tests (no shadowed definitions). The
   tracked TODO 6.1.3 subtask status is determined by its actual acceptance
   contract (see the tracker 6.x log).
+- Bounds-v2 follow-up (`agentic_debugger/runtime/pdb_worker.py` +
+  `tests/unit/test_pdb_post_mortem.py`, uncommitted candidate on `62deca4`):
+  exception-argument summarization is now work-bounded as well as
+  byte-bounded — at most `_POST_MORTEM_EXC_ARGS_MAX_SCAN` (64) arguments are
+  inspected, a remaining UTF-8 byte budget (`_POST_MORTEM_MAX_EXC_MESSAGE_UTF8`,
+  1024) is reduced while processing with separators and the omission/truncation
+  marker inside the same budget, huge exact `str` arguments are only previewed
+  (never copied in full), huge exact `bytes` arguments are only decoded from a
+  bounded prefix (never decoded completely), and huge exact `int` arguments
+  are decimalized only below the safe bit ceiling
+  (`_MAX_SERIALIZED_INT_BITS` = 4096) and otherwise rendered as stable
+  `<int bits=N>` metadata — Python's integer-to-string conversion digit limit
+  previously raised `ValueError` from `str(huge_int)` inside the helper and
+  escaped into evidence capture; `_post_mortem_bounded_text` applies the same
+  bit rule and fails closed on any exact-built-in conversion failure. The
+  bounded-local scan checks the scan budget before every iterator advance:
+  actual successful advances never exceed the declared ceiling, returned
+  `inspected` equals successful advances, no `next()` probe occurs after
+  budget exhaustion, and the exact mapping length decides unseen entries
+  without peeking one extra item (one additional advance is only required to
+  discover a further accepted entry when the length is unavailable). New
+  instrumented tests count iterator advances directly (`_CountingIterator`)
+  for the ceiling, ceiling−1, exactly-at-ceiling, 32-accepted ± remainder,
+  and unavailable-length boundary cases; 20 tests added (70 → 90, all unique).
 
 Accepted validation: focused suites (live-runner 286; wrapper+transport 100
 in isolation; transport-factory+case-runner 55 in both orders; V4
-budget/verifier+replay; post-mortem 70 + PDB protocol/session/integration 919;
-compileall exit 0; deterministic demo exit 0, 2/2 RESOLVED, F2P 2/2, P2P 4/4,
-0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Final full suite (fresh
-process, `fix/post-mortem-pdb-evidence-v1` candidate):
+budget/verifier+replay; post-mortem 90 + PDB protocol/session/integration 964
+(1054 PDB-surface tests); compileall exit 0; deterministic demo exit 0, 2/2
+RESOLVED, F2P 2/2, P2P 4/4,
+0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Recorded full suite on
+the integrated checkpoint (fresh process, content of `62deca4`):
 **3448 passed, 3 skipped, 32 failed** — the suite is NOT green. The 32
 failures are all in the pre-existing wrapper-preflight subprocess-chain
 family (`tests/unit/test_opencode_go_transport_factory.py` 16,
@@ -1145,14 +1171,23 @@ from the synthetic wrapper chain; every one of them passes in isolation
 paths. The same wrapper-preflight subprocess-chain family is documented as a
 pre-existing full-suite resource-pressure flake (reproduced on the clean
 `ab464dd` baseline) and previously surfaced as
-`test_selftest_mode_is_synthetic_only`; in this run that selftest node
-passed and the pressure surfaced in sibling wrapper-chain nodes instead. The
-previous order-dependent failure family (the transport/case-runner cascades
-under full-suite ordering) is repaired; the race/drain regression tests are
-unit-level and do not amplify OS resource pressure. No instructor TODO status
-is promoted by this pass; no provider, live campaign, WSL, BugsInPy, QLoRA,
-or held-out execution occurred; no commit/merge/push was made during the
-coding-agent build phase.
+`test_selftest_mode_is_synthetic_only`; in that run the selftest node passed
+and the pressure surfaced in sibling wrapper-chain nodes instead. Bounds-v2
+A/B classification (2026-08-06, fresh processes, same machine and
+environment): L1 isolation 85/85 and L2 heavy wrapper subset 395/395 passed
+on both the clean `62deca4` checkpoint and the candidate; the L3 36-file
+prefix-load sequence reproduced the family on BOTH trees with the identical
+32-node failure set (32 failed / 1463 passed / 3 skipped, ~830 s each) and
+the same `LiveTransportError(kind="process_error")` signature — the family
+reproduces on the exact clean checkpoint without any candidate change, is
+consistent with cumulative OS resource pressure on the synthetic wrapper
+subprocess chain, and is not implicated in or amplified by the candidate.
+The previous order-dependent failure family (the transport/case-runner
+cascades under full-suite ordering) is repaired; the race/drain regression
+tests are unit-level and do not amplify OS resource pressure. No instructor
+TODO status is promoted by this pass; no provider, live campaign, WSL,
+BugsInPy, QLoRA, or held-out execution occurred; no commit/merge/push was
+made during the coding-agent build phase.
 
 Earlier history:
 

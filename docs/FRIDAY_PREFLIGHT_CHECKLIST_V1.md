@@ -7,9 +7,10 @@ at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
 **Source baseline:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` — accepted
 presentation plan/deck/cue delivery commit; campaign infrastructure accepted
 through `0abb588`; V4 identity correction accepted through `fc7c85b`. The
-original checklist is accepted at `ab464dd`. The current hardening revisions
-to this file are an uncommitted candidate built on top of `ab464dd`; their
-eventual integration commit is not known.
+original checklist is accepted at `ab464dd`. The 2026-08-06 main-repo
+completion hardening is accepted and integrated on `main` at `62deca4`. The
+current bounds-v2 revisions to this file are an uncommitted candidate built
+on top of `62deca4`; their eventual integration commit is not known.
 **Presentation:** 2026-08-07, main track 24.5 min (Q&A excluded), short track
 11.5 min (Q&A excluded) — timings per `docs/FRIDAY_PRESENTATION_CUE_SHEET_V1.md`.
 **Usage:** run the day before and once more on presentation day. This checklist

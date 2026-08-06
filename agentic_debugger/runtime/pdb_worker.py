@@ -64,6 +64,14 @@ _POST_MORTEM_MAX_TYPE_NAME_UTF8 = 256
 _POST_MORTEM_MAX_FILE_UTF8 = 512
 _POST_MORTEM_MAX_FUNCTION_UTF8 = 512
 _POST_MORTEM_MAX_SCRIPT_UTF8 = 512
+# Hard argument ceiling for exception summarization: at most this many
+# exception arguments are ever inspected, independent of the real argument
+# tuple length.  Together with _POST_MORTEM_MAX_EXC_MESSAGE_UTF8 (the total
+# message byte budget) this makes exception-argument summarization
+# work-bounded as well as byte-bounded: no full argument list is ever joined
+# and no complete huge str/bytes value is ever copied or decoded before
+# truncation.
+_POST_MORTEM_EXC_ARGS_MAX_SCAN = 64
 # Hard scan ceiling for the manual traceback walk: real traceback chains are
 # bounded by the recursion limit (~1000 nodes), so a generous fixed ceiling
 # never truncates legitimate evidence while guaranteeing termination on any
@@ -1021,7 +1029,28 @@ def _post_mortem_bounded_text(value: Any, maximum_utf8: int) -> str:
         return ""
     if type(value) is str:
         text = value
-    elif type(value) in (int, float, bool):
+    elif type(value) is int:
+        # Exact integers use the same safe bit ceiling as the rest of the
+        # evidence machinery: values beyond _MAX_SERIALIZED_INT_BITS are never
+        # decimalized (Python's integer-to-string conversion limit can raise
+        # ValueError on such values) and instead render as stable bounded
+        # metadata.  Any exact-built-in conversion failure fails closed.
+        bits = _safe_exact_int_bits(value)
+        if bits is None:
+            return ""
+        if bits > _MAX_SERIALIZED_INT_BITS:
+            text = f"<int bits={bits}>"
+        else:
+            try:
+                text = str(value)
+            except BaseException:
+                return ""
+    elif type(value) is float:
+        try:
+            text = str(value)
+        except BaseException:
+            return ""
+    elif type(value) is bool:
         text = str(value)
     else:
         return ""
@@ -1063,6 +1092,88 @@ def _safe_exception_type_name(exc_type: Any) -> str:
     return bounded or 'unknown'
 
 
+def _safe_exact_int_bits(value: Any) -> Optional[int]:
+    """Return the exact bit length of an exact ``int``, or ``None`` on any
+    failure.  ``int.bit_length`` is an exact built-in operation that never
+    decimalizes the value, so it is always safe and cheap even for integers
+    far beyond Python's integer-to-string conversion digit limit."""
+    try:
+        bits = int.bit_length(value)
+    except BaseException:
+        return None
+    if type(bits) is not int or bits < 0:
+        return None
+    return bits
+
+
+def _render_single_exception_arg(arg: Any, limit: int) -> Tuple[str, bool]:
+    """Render one exact exception argument to at most ``limit`` UTF-8 bytes.
+
+    Returns ``(rendered, truncated)`` where ``truncated`` is True when the
+    rendered text is a bounded preview (an argument-truncation marker is then
+    already included inside ``limit`` when it fits).  Only exact built-in
+    operations are used: exact ``str`` values are previewed character by
+    character (never copied in full), exact ``bytes`` values are sliced to a
+    bounded prefix *before* decoding (the complete object is never decoded),
+    exact ``int`` values are decimalized only below the safe bit ceiling and
+    otherwise rendered as stable ``<int bits=N>`` metadata, and unknown/custom
+    objects become opaque type metadata via :func:`_safe_type_name`.  No
+    user-defined presentation or iteration hook is ever invoked."""
+    if limit < 0:
+        return '', True
+    if type(arg) is str:
+        preview, truncated = _utf8_preview(arg, limit)
+        if not truncated:
+            return preview, False
+        if limit >= _POST_MORTEM_TRUNCATION_MARKER_UTF8:
+            content, _ = _utf8_preview(
+                arg, limit - _POST_MORTEM_TRUNCATION_MARKER_UTF8
+            )
+            return content + _POST_MORTEM_TRUNCATION_MARKER, True
+        return preview, True
+    if type(arg) is bytes:
+        size = bytes.__len__(arg)
+        if size == 0:
+            return '', False
+        prefix = arg[:_MAX_BYTES_PREVIEW]
+        try:
+            decoded = bytes.decode(prefix, 'utf-8', errors='replace')
+        except BaseException:
+            return _safe_type_name(arg), True
+        preview, truncated = _utf8_preview(decoded, limit)
+        if not truncated and size <= _MAX_BYTES_PREVIEW:
+            return preview, False
+        if limit >= _POST_MORTEM_TRUNCATION_MARKER_UTF8:
+            content, _ = _utf8_preview(
+                decoded, limit - _POST_MORTEM_TRUNCATION_MARKER_UTF8
+            )
+            return content + _POST_MORTEM_TRUNCATION_MARKER, True
+        return preview, True
+    if arg is None:
+        return 'None', False
+    if type(arg) is bool:
+        try:
+            return str(arg), False
+        except BaseException:
+            return _safe_type_name(arg), True
+    if type(arg) is int:
+        bits = _safe_exact_int_bits(arg)
+        if bits is None:
+            return '<int bits=unknown>', False
+        if bits > _MAX_SERIALIZED_INT_BITS:
+            return f"<int bits={bits}>", False
+        try:
+            return str(arg), False
+        except BaseException:
+            return f"<int bits={bits}>", False
+    if type(arg) is float:
+        try:
+            return str(arg), False
+        except BaseException:
+            return _safe_type_name(arg), True
+    return _safe_type_name(arg), False
+
+
 def _safe_exception_message(exc: BaseException) -> str:
     """Return a bounded, side-effect-safe textual summary of an exception.
 
@@ -1073,30 +1184,61 @@ def _safe_exception_message(exc: BaseException) -> str:
     exception is ever invoked.  Exact built-in scalar arguments (str, bytes,
     int, float, bool, None) are rendered by exact built-in operations;
     unknown argument objects become opaque type metadata via
-    :func:`_safe_type_name`.  The result is UTF-8-byte-bounded and
-    JSON-serializable."""
+    :func:`_safe_type_name`.
+
+    The summarization is both work-bounded and byte-bounded: at most
+    ``_POST_MORTEM_EXC_ARGS_MAX_SCAN`` arguments are inspected, a remaining
+    UTF-8 byte budget is reduced while processing (separators and the
+    omission/truncation marker ``'…'`` are included inside the same
+    ``_POST_MORTEM_MAX_EXC_MESSAGE_UTF8`` budget), no list of every rendered
+    argument and no full-length joined message is ever built, huge exact
+    ``str`` values are only previewed, huge exact ``bytes`` values are only
+    decoded from a bounded prefix, and huge exact ``int`` values are never
+    decimalized.  The result is deterministic and JSON-serializable."""
     try:
         args = _BASE_EXCEPTION_ARGS_DESCRIPTOR.__get__(exc, type(exc))
     except BaseException:
         return '<unprintable exception>'
+    if type(args) is not tuple:
+        return _safe_exception_type_name(type(exc))
+    total_args = tuple.__len__(args)
+    if total_args == 0:
+        return _safe_exception_type_name(type(exc))
+    budget = _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    separator = '; '
+    separator_utf8 = len(separator.encode('utf-8'))
+    marker = _POST_MORTEM_TRUNCATION_MARKER
+    marker_utf8 = _POST_MORTEM_TRUNCATION_MARKER_UTF8
     parts: List[str] = []
-    if type(args) is tuple:
-        for arg in args:
-            if type(arg) is str:
-                parts.append(arg)
-            elif type(arg) is bytes:
-                parts.append(arg.decode('utf-8', errors='replace'))
-            elif type(arg) in (int, float, bool) or arg is None:
-                if type(arg) in (int, float, bool):
-                    parts.append(str(arg))
-                else:
-                    parts.append('None')
-            else:
-                parts.append(_safe_type_name(arg))
-    message = '; '.join(parts)
+    used = 0
+    inspected = 0
+    for index in range(
+        min(total_args, _POST_MORTEM_EXC_ARGS_MAX_SCAN)
+    ):
+        inspected = index + 1
+        remaining = budget - used
+        separator_cost = separator_utf8 if parts else 0
+        if remaining - separator_cost < 1:
+            break
+        part, arg_truncated = _render_single_exception_arg(
+            arg=args[index], limit=remaining - separator_cost
+        )
+        part_utf8 = part.encode('utf-8', errors='replace')
+        if used + separator_cost + len(part_utf8) > budget:
+            break
+        if parts:
+            parts.append(separator)
+        parts.append(part)
+        used += separator_cost + len(part_utf8)
+        if arg_truncated:
+            break
+    if inspected < total_args and used + marker_utf8 <= budget:
+        parts.append(marker)
+        used += marker_utf8
+    message = ''.join(parts)
     if not message:
         message = _safe_exception_type_name(type(exc))
-    return _post_mortem_bounded_text(message, _POST_MORTEM_MAX_EXC_MESSAGE_UTF8)
+    return _post_mortem_bounded_text(message, budget)
 
 
 def _safe_exception_error_message(exc: BaseException) -> str:
@@ -1227,10 +1369,24 @@ def _collect_bounded_locals(
     ``dict`` or the frame-locals proxy these are resolved from the accepted
     :func:`_frame_locals_operations`; tests may inject equivalent exact
     operations as a narrow seam.  The mapping is iterated lazily — never
-    materialized via ``list(mapping.items())`` — and at most
-    ``_POST_MORTEM_LOCALS_SCAN_CEILING`` entries are inspected; the accepted
-    non-dunder entries are sorted deterministically by name.  A size change
-    during the scan (mutation) or any iteration failure fails closed.
+    materialized via ``list(mapping.items())`` — the scan budget is checked
+    *before* every iterator advance, and at most
+    ``_POST_MORTEM_LOCALS_SCAN_CEILING`` entries are ever inspected (actual
+    successful iterator advances never exceed the declared ceiling and
+    ``inspected`` equals the number of successful advances; no ``next()``
+    probe is issued after the budget is exhausted).  The accepted non-dunder
+    entries are sorted deterministically by name.  A size change during the
+    scan (mutation) or any iteration failure fails closed.
+
+    When the exact mapping length is available, unseen entries are decided
+    from it: ``original_size > inspected`` reports truncation, ``original_size
+    == inspected`` does not, and no extra advance is required to discover
+    whether a further accepted entry exists.  When the exact length is
+    unavailable and the scan ceiling is exhausted, truncation is reported
+    without advancing once more; when the exact length is unavailable and the
+    acceptance bound (``max_entries``) was reached, one additional advance is
+    required to discover whether more entries remain (a further successful
+    advance reports truncation; ``StopIteration`` means none remain).
 
     Returns ``(entries, inspected, truncated, error)``: ``entries`` is
     ``None`` on failure, ``inspected`` is the exact number of mapping entries
@@ -1254,13 +1410,36 @@ def _collect_bounded_locals(
     stored_name: Any = None
     stored_value: Any = None
     try:
-        original_size = length_operation(mapping)
+        raw_size = length_operation(mapping)
+        if type(raw_size) is int and raw_size >= 0:
+            original_size = raw_size
+            exact_length = True
+        else:
+            original_size = None
+            exact_length = False
         iterator = iter(items_operation(mapping))
-        for index in range(_POST_MORTEM_LOCALS_SCAN_CEILING + 1):
+        while True:
+            if exact_length and inspected >= original_size:
+                # The exact mapping length proves the scan is complete; no
+                # further advance (and no StopIteration probe) is needed.
+                break
+            if inspected >= _POST_MORTEM_LOCALS_SCAN_CEILING:
+                # Budget exhausted before any further advance.  With an exact
+                # mapping length this implies unseen entries remain
+                # (otherwise the length-exit above would have fired); with no
+                # usable length, report truncation honestly without advancing.
+                truncated = True
+                break
+            if collected >= max_entries:
+                if exact_length:
+                    truncated = True
+                    break
+                # No usable length: one additional advance is required to
+                # discover whether more entries remain.
             try:
                 stored_name, stored_value = next(iterator)
             except StopIteration:
-                if length_operation(mapping) != original_size:
+                if exact_length and length_operation(mapping) != original_size:
                     return None, inspected, False, (
                         "frame locals mutated during bounded scan"
                     )
@@ -1269,9 +1448,6 @@ def _collect_bounded_locals(
                 return None, inspected, False, (
                     "frame locals mutated during bounded scan"
                 )
-            if index == _POST_MORTEM_LOCALS_SCAN_CEILING:
-                truncated = True
-                break
             inspected += 1
             if type(stored_name) is not str:
                 continue

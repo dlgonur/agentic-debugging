@@ -45,11 +45,14 @@ from agentic_debugger.runtime.pdb_protocol import (
 from agentic_debugger.runtime.pdb_session import PdbSession, PdbSessionState
 from agentic_debugger.runtime.pdb_worker import (
     PdbWorker,
+    _MAX_BYTES_PREVIEW,
+    _POST_MORTEM_EXC_ARGS_MAX_SCAN,
     _POST_MORTEM_LOCALS_SCAN_CEILING,
     _POST_MORTEM_MAX_EXC_MESSAGE_UTF8,
     _POST_MORTEM_MAX_FRAMES,
     _POST_MORTEM_MAX_LOCALS,
     _POST_MORTEM_MAX_TEXT_UTF8,
+    _POST_MORTEM_TRUNCATION_MARKER,
     _bounded_traceback_frames,
     _capture_post_mortem_evidence_pure,
     _collect_bounded_locals,
@@ -545,6 +548,176 @@ def test_bounded_locals_skips_dunder_and_non_string_keys():
     assert inspected == 4
 
 
+class _CountingIterator:
+    """Instrumented iterator wrapper: counts every ``next()`` invocation
+    (including a final StopIteration probe), every successful advance, and
+    records the retrieved values so tests can prove the scan never retrieves
+    an entry beyond the declared ceiling."""
+
+    def __init__(self, inner):
+        self._inner = inner
+        self.calls = 0
+        self.successful = 0
+        self.retrieved = []
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        self.calls += 1
+        value = next(self._inner)
+        self.successful += 1
+        self.retrieved.append(value)
+        return value
+
+
+def _counting_items(count: int, dunder: bool = False):
+    def _items(mapping):
+        for index in range(count):
+            yield (f"__dunder_{index}" if dunder else f"v{index}"), index
+
+    return _items
+
+
+def test_bounded_locals_large_dunder_mapping_advances_exactly_ceiling():
+    counting = _CountingIterator(
+        _counting_items(5000, dunder=True)(object())
+    )
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: 5000,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    # The scan budget is checked before every advance: exactly ceiling
+    # successful advances, no ceiling+1 retrieval, no StopIteration probe.
+    assert counting.calls == counting.successful == _POST_MORTEM_LOCALS_SCAN_CEILING
+    assert inspected == counting.successful
+    assert counting.retrieved[-1][0] == f"__dunder_{_POST_MORTEM_LOCALS_SCAN_CEILING - 1}"
+    assert truncated is True
+    assert entries == []
+
+
+def test_bounded_locals_mapping_exactly_at_ceiling_has_no_probe():
+    counting = _CountingIterator(
+        _counting_items(_POST_MORTEM_LOCALS_SCAN_CEILING, dunder=True)(object())
+    )
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: _POST_MORTEM_LOCALS_SCAN_CEILING,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    # The exact length proves the scan is complete: no extra advance and no
+    # StopIteration probe occur, so calls == successful == inspected.
+    assert counting.calls == counting.successful == _POST_MORTEM_LOCALS_SCAN_CEILING
+    assert inspected == counting.successful
+    assert truncated is False
+    assert entries == []
+
+
+def test_bounded_locals_mapping_one_before_ceiling_matches_exactly():
+    count = _POST_MORTEM_LOCALS_SCAN_CEILING - 1
+    counting = _CountingIterator(
+        _counting_items(count, dunder=True)(object())
+    )
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: count,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    assert counting.calls == counting.successful == count
+    assert inspected == counting.successful
+    assert truncated is False
+    assert entries == []
+
+
+def test_bounded_locals_32_accepted_no_remainder_advances_exactly_32():
+    count = _POST_MORTEM_MAX_LOCALS
+    counting = _CountingIterator(_counting_items(count)(object()))
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: count,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    assert counting.calls == counting.successful == count
+    assert inspected == counting.successful
+    assert truncated is False
+    assert len(entries) == count
+    assert [name for name, _ in entries] == sorted(
+        f"v{index}" for index in range(count)
+    )
+
+
+def test_bounded_locals_32_accepted_with_remainder_no_extra_advance():
+    counting = _CountingIterator(_counting_items(100)(object()))
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: 100,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    # With the exact mapping length available, the acceptance-bound decision
+    # needs no extra advance: inspected == collected == 32 and truncation is
+    # reported from the known unseen remainder.
+    assert counting.calls == counting.successful == _POST_MORTEM_MAX_LOCALS
+    assert inspected == counting.successful
+    assert truncated is True
+    assert len(entries) == _POST_MORTEM_MAX_LOCALS
+
+
+def test_bounded_locals_unavailable_length_ceiling_reports_truncated_without_advance():
+    counting = _CountingIterator(
+        _counting_items(5000, dunder=True)(object())
+    )
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: None,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    assert counting.calls == counting.successful == _POST_MORTEM_LOCALS_SCAN_CEILING
+    assert inspected == counting.successful
+    assert truncated is True
+    assert entries == []
+
+
+def test_bounded_locals_unavailable_length_one_advance_finds_remainder():
+    counting = _CountingIterator(_counting_items(33)(object()))
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: None,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    # Without a usable length, one additional advance is required to discover
+    # that a 33rd entry exists; it succeeds, so all 33 calls advanced.
+    assert counting.calls == counting.successful == 33
+    assert inspected == counting.successful
+    assert truncated is True
+    assert len(entries) == _POST_MORTEM_MAX_LOCALS
+
+
+def test_bounded_locals_unavailable_length_no_remainder_probes_stop():
+    count = _POST_MORTEM_MAX_LOCALS
+    counting = _CountingIterator(_counting_items(count)(object()))
+    entries, inspected, truncated, error = _collect_bounded_locals(
+        object(), _POST_MORTEM_MAX_LOCALS,
+        length_op=lambda mapping: None,
+        items_op=lambda mapping: counting,
+    )
+    assert error is None
+    # Without a usable length, the single StopIteration probe is the only way
+    # to learn that no remainder exists; the probe does not retrieve an entry.
+    assert counting.calls == count + 1
+    assert counting.successful == count
+    assert inspected == counting.successful
+    assert truncated is False
+    assert len(entries) == count
+
+
 def test_local_limit_enforced_on_real_frame():
     many_locals_src_lines = ["def f():"]
     for index in range(_POST_MORTEM_MAX_LOCALS + 20):
@@ -795,6 +968,151 @@ def test_evidence_exception_fields_never_invoke_target_code_and_stay_bounded():
         value = evidence["exception"][field]
         assert len(value.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
     json.dumps(evidence, allow_nan=False)
+
+
+# ---- exception-argument work bounds ----------------------------------------
+
+
+def test_safe_exception_message_never_inspects_beyond_args_ceiling():
+    # 10,000 arguments: the message contains the first ceiling arguments and
+    # the omission marker, and never reaches argument index `ceiling`.
+    exc = ValueError(*range(10000))
+    message = _safe_exception_message(exc)
+    assert _POST_MORTEM_EXC_ARGS_MAX_SCAN > 0
+    assert f"{_POST_MORTEM_EXC_ARGS_MAX_SCAN - 1}" in message
+    assert f"; {_POST_MORTEM_EXC_ARGS_MAX_SCAN}" not in message
+    assert _POST_MORTEM_TRUNCATION_MARKER in message
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    json.dumps(message)
+
+
+def test_safe_exception_message_omitted_arg_beyond_ceiling_is_marker_only():
+    # The argument at index `ceiling` is a huge exact int whose metadata would
+    # be visible if it were inspected; it must not appear, proving the scan
+    # stopped at the documented ceiling.
+    exc = ValueError(*range(_POST_MORTEM_EXC_ARGS_MAX_SCAN), 10**5000)
+    message = _safe_exception_message(exc)
+    assert "<int bits=16610>" not in message
+    assert _POST_MORTEM_TRUNCATION_MARKER in message
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+
+
+def test_safe_exception_message_very_large_exact_string_is_previewed():
+    exc = ValueError("a" * (10**6))
+    message = _safe_exception_message(exc)
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    assert _POST_MORTEM_TRUNCATION_MARKER in message
+    assert "a" in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_large_exact_bytes_never_fully_decoded(monkeypatch):
+    # ``bytes.decode`` is an immutable built-in method and cannot be patched;
+    # instrument the module's ``_utf8_preview`` seam instead: every decoded
+    # text must pass through it, so the largest string it ever sees proves
+    # the decode input was a bounded prefix, never the complete 2 MB object.
+    seen = []
+    real_preview = worker_module._utf8_preview
+
+    def spying_preview(value, maximum):
+        seen.append(str.__len__(value))
+        return real_preview(value, maximum)
+
+    monkeypatch.setattr(worker_module, "_utf8_preview", spying_preview)
+    payload = b"x" * (2 * 10**6)
+    message = _safe_exception_message(ValueError(payload))
+    assert seen and max(seen) <= _MAX_BYTES_PREVIEW
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    assert _POST_MORTEM_TRUNCATION_MARKER in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_huge_positive_integer_is_bounded_metadata():
+    message = _safe_exception_message(ValueError(10**5000))
+    assert message == "<int bits=16610>"
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    json.dumps(message)
+
+
+def test_safe_exception_message_huge_negative_integer_is_bounded_metadata():
+    message = _safe_exception_message(ValueError(-(10**5000)))
+    assert message == "<int bits=16610>"
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    json.dumps(message)
+
+
+def test_safe_exception_message_mixed_args_exhausting_byte_budget():
+    exc = ValueError("a" * 900, "b" * 900, "c" * 900)
+    first = _safe_exception_message(exc)
+    second = _safe_exception_message(exc)
+    assert first == second
+    assert len(first.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    assert first.startswith("a")
+    json.dumps(first)
+
+
+def test_safe_exception_message_small_exception_output_unchanged():
+    assert _safe_exception_message(ValueError("boom")) == "boom"
+    assert _safe_exception_message(ValueError("a", "b")) == "a; b"
+    assert (
+        _safe_exception_message(ValueError(1, "two", 3.5, True, None, b"raw"))
+        == "1; two; 3.5; True; None; raw"
+    )
+
+
+def test_safe_exception_message_hostile_str_never_invoked_with_huge_int():
+    sentinel = {"str": 0}
+
+    class Hostile(Exception):
+        def __str__(self):
+            sentinel["str"] += 1
+            raise RuntimeError("must not be invoked")
+
+    exc = Hostile(10**5000, "payload")
+    message = _safe_exception_message(exc)
+    assert sentinel["str"] == 0
+    assert "payload" in message
+    assert "<int bits=16610>" in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_huge_integer_evidence_level_does_not_raise():
+    chain = _FakeTb(_FakeFrame("huge.py", "f", 1, locals_={}))
+    evidence = _capture_post_mortem_evidence_pure(
+        "huge.py", ValueError, ValueError(10**5000), chain,
+        _safe_exception_error_message,
+    )
+    message = evidence["exception"]["message"]
+    assert "<int bits=16610>" in message
+    for field in ("type", "message", "repr"):
+        assert len(evidence["exception"][field].encode("utf-8")) <= (
+            _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+        )
+    json.dumps(evidence, allow_nan=False)
+
+
+def test_session_huge_integer_argument_yields_bounded_post_mortem():
+    root = _make_workspace(
+        "huge_int_target.py",
+        "def boom():\n"
+        "    raise ValueError(10 ** 5000)\n"
+        "boom()\n",
+    )
+    try:
+        with TaskWorkspace(str(root)) as ws:
+            with PdbSession(ws) as session:
+                response = session.run_post_mortem("huge_int_target.py")
+    finally:
+        shutil.rmtree(str(root), ignore_errors=True)
+    assert response.success is True
+    result = response.result
+    assert result["status"] == "post_mortem"
+    message = result["exception"]["message"]
+    assert "<int bits=16610>" in message
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    serialized = serialize_response(response)
+    assert len(serialized) <= MAX_LINE_LENGTH
+    assert json.loads(serialized)["result"]["exception"]["message"] == message
 
 
 # ---- missing-traceback failure ---------------------------------------------
@@ -1084,6 +1402,16 @@ def test_bounded_text_exact_builtin_scalars_use_builtin_str():
     assert _post_mortem_bounded_text(42, 256) == "42"
     assert _post_mortem_bounded_text(3.5, 256) == "3.5"
     assert _post_mortem_bounded_text(True, 256) == "True"
+
+
+def test_bounded_text_huge_exact_int_uses_metadata_never_decimalizes():
+    assert _post_mortem_bounded_text(10**5000, 256) == "<int bits=16610>"
+    assert _post_mortem_bounded_text(-(10**5000), 256) == "<int bits=16610>"
+    assert _post_mortem_bounded_text(0, 256) == "0"
+    assert _post_mortem_bounded_text(42, 256) == "42"
+    out = _post_mortem_bounded_text(10**5000, 8)
+    assert len(out.encode("utf-8")) <= 8
+    json.dumps(out)
 
 
 def test_bounded_text_unknown_value_is_opaque_without_str():

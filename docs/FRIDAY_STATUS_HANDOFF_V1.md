@@ -7,9 +7,10 @@ at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
 **Source baseline:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` — the accepted
 presentation plan/deck/cue delivery commit. Campaign infrastructure accepted
 through `0abb588`; V4 identity correction accepted through `fc7c85b`. The
-original handoff is accepted at `ab464dd`. The current hardening revisions to
-this file are an uncommitted candidate built on top of `ab464dd`; their
-eventual integration commit is not known.
+original handoff is accepted at `ab464dd`. The 2026-08-06 main-repo
+completion hardening is accepted and integrated on `main` at `62deca4`. The
+current bounds-v2 revisions to this file are an uncommitted candidate built
+on top of `62deca4`; their eventual integration commit is not known.
 **Purpose:** one concise, evidence-backed statement of what the internship
 delivers on Friday 2026-08-07, what is partial, what is pending, and what is
 blocked. Every status below traces to `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md`
@@ -67,6 +68,19 @@ Friday horizon means "active work or honest limitation", never "complete".
   SFT/DPO Decision Gate v1, Final Technical Report v1 (+2026-08-05 revision),
   Demo Guide v1, Demo Task 9, Friday presentation plan/deck/cue sheet v1.2,
   and this delivery bundle (manifest, preflight checklist, handoff).
+- 2026-08-06 main-repo completion hardening (integrated at `62deca4`):
+  campaign ledger timestamp provenance; transport teardown race repair; the
+  six known wrapper/transport test failures repaired (now hermetic); and the
+  post-mortem PDB entry (TODO 6.1.3) — bounded, side-effect-safe structured
+  traceback evidence on unhandled exception, 90 unique focused tests in
+  `tests/unit/test_pdb_post_mortem.py`. A bounds-v2 follow-up (exception
+  argument count/byte ceilings, huge-int fail-closed metadata, no-overread
+  local scan) is an uncommitted candidate on top of `62deca4`. The recorded
+  full suite is NOT green: 3448 passed / 3 skipped / 32 failed, all 32 in
+  the pre-existing wrapper-preflight subprocess-chain family (85/85 pass in
+  isolation); a bounds-v2 A/B reproduced the identical 32-node failure set on
+  both the clean `62deca4` checkpoint and the candidate, classifying the
+  family as environmental resource pressure, not candidate-caused.
 
 ### PARTIAL / IN PROGRESS (material progress, honest limits)
 
@@ -133,9 +147,11 @@ Friday horizon means "active work or honest limitation", never "complete".
 
 - Git state: the original Friday delivery bundle is accepted and integrated
   on `main` at `ab464dd` (the earlier presentation plan/deck/cue delivery
-  commit is `456f0e9`). The current hardening revisions to this handoff are
-  an uncommitted candidate on `goal/friday-main-repo-completion-v1` built on
-  top of `ab464dd`; their eventual integration commit is not known.
+  commit is `456f0e9`). The 2026-08-06 main-repo completion hardening is
+  accepted and integrated on `main` at `62deca4`. The current bounds-v2
+  revisions to this handoff are an uncommitted candidate on
+  `fix/post-mortem-pdb-bounds-v2` built on top of `62deca4`; their eventual
+  integration commit is not known.
 - The daily-requirement item (0.1, one diary page per workday) remains open;
   the diary was extended through 2026-08-06; the 2026-07-20, 2026-07-23, and
   2026-07-24 weekday gaps were backfilled from tracked git evidence, and a
@@ -161,6 +177,9 @@ by listing):
 | **B6 — BugsInPy unblock path** | License/redistribution review resolution; OS/container-level containment upgrade; execution only after both clear | 6, 7, 8, 26 | License authority; containment design accepted |
 | **B7 — Long-term model work** | RAG over repo code/tests/issues/errors (14), fine-tuned+RAG integration (15), preference dataset (19), DPO/RLHF (20), four-way comparison (21), GDB/LLDB adapters (22) | 14, 15, 19, 20, 21, 22 | B1–B3 accepted; separate decisions |
 
-Housekeeping item (non-blocking): campaign ledger `created_at`/`updated_at`
-uses the campaign-start `reference_time`; ledger end timestamps should be
-fixed in a separate task.
+Housekeeping item (resolved 2026-08-06 at `62deca4`): the campaign ledger
+`updated_at`, the create-once `terminal-commit.json` `created_at`, and the
+post-campaign authority `observed_at` timestamps now reflect the actual
+finalization/detection time rather than the campaign-start `reference_time`;
+only the ledger `created_at` and the pre-campaign/in-loop authority gates
+keep using the frozen `reference_time` by design.
