@@ -8,9 +8,10 @@ at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
 presentation plan/deck/cue delivery commit; campaign infrastructure accepted
 through `0abb588`; V4 identity correction accepted through `fc7c85b`. The
 original checklist is accepted at `ab464dd`. The 2026-08-06 main-repo
-completion hardening is accepted and integrated on `main` at `62deca4`. The
-current bounds-v2 revisions to this file are an uncommitted candidate built
-on top of `62deca4`; their eventual integration commit is not known.
+completion hardening is accepted and integrated on `main` at `62deca4`, and
+the bounded post-mortem evidence layer is part of the accepted presentation
+state on `main`. The exact presentation-day tip is recorded by the preflight
+`git rev-parse HEAD` check on presentation day.
 **Presentation:** 2026-08-07, main track 24.5 min (Q&A excluded), short track
 11.5 min (Q&A excluded) — timings per `docs/FRIDAY_PRESENTATION_CUE_SHEET_V1.md`.
 **Usage:** run the day before and once more on presentation day. This checklist
@@ -21,11 +22,12 @@ sheet's Section 10 checklist are the per-document versions.
 
 ## 1. Repository and Git preflight
 
-- [ ] Presentation baseline recorded: on presentation day, run from clean
+- [ ] Presentation baseline recorded: on presentation day, run `git rev-parse
+      HEAD` and record the output as the presentation-day tip; run from clean
       `main == origin/main` containing the final accepted delivery bundle
-      files (the original bundle is accepted at `ab464dd`; any hardening
-      revisions must be integrated before presentation day). Do not present
-      from the candidate branch.
+      files (the original bundle is accepted at `ab464dd`; the bounded
+      post-mortem evidence layer is part of the accepted presentation state).
+      Do not present from a temporary branch state.
 - [ ] `git status` shows no tracked modifications; only ignored local files
       (`.opencode/`, `_ai-review/`, `operator/`) may be present.
 - [ ] The Friday delivery bundle files exist at HEAD:
@@ -145,7 +147,8 @@ sheet's Section 10 checklist are the per-document versions.
 ## 9. Presentation-day sequence (executable summary)
 
 1. `git status` clean on `main` matching `origin/main`, containing the
-   delivery bundle files and descending from `456f0e9`.
+   delivery bundle files and descending from `456f0e9`; record `git rev-parse
+   HEAD` as the presentation-day tip.
 2. `python -m pip install -e .[test]` (only if the environment changed after
    preparation; may need package-index access or cached dependencies).
 3. Open deck; run the main or short track per timing.

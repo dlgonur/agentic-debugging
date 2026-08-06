@@ -1060,6 +1060,226 @@ def test_safe_exception_message_small_exception_output_unchanged():
     )
 
 
+# ---- marker reservation and omission guarantees ----------------------------
+
+
+def test_safe_exception_message_marker_counterexample_exact_full_budget():
+    # 65 exact-string arguments: arguments 0..62 are 14 ASCII bytes each,
+    # argument 63 is 16 ASCII bytes, and the 63 "; " separators contribute
+    # 126 bytes, so the first 64 arguments occupy exactly 1024 UTF-8 bytes.
+    # The 65th argument is omitted by the scan ceiling; the omission marker
+    # must be carved from the final represented argument and still end the
+    # message inside the budget.
+    args = ["a" * 14] * 63 + ["b" * 16] + ["c"]
+    exc = ValueError(*args)
+    message = _safe_exception_message(exc)
+    expected = "; ".join(["a" * 14] * 63 + ["b" * 10]) + _POST_MORTEM_TRUNCATION_MARKER
+    assert message == expected
+    assert len(message.encode("utf-8")) == 1021
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert "c" not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_marker_reservation_one_byte_below():
+    # The first 64 represented arguments occupy exactly 1021 bytes: the
+    # marker fits without touching the final represented argument.
+    args = ["a" * 14] * 63 + ["b" * 13] + ["c"]
+    exc = ValueError(*args)
+    message = _safe_exception_message(exc)
+    expected = "; ".join(["a" * 14] * 63 + ["b" * 13]) + _POST_MORTEM_TRUNCATION_MARKER
+    assert message == expected
+    assert len(message.encode("utf-8")) == 1024
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    json.dumps(message)
+
+
+def test_safe_exception_message_marker_reservation_one_byte_above():
+    # The first 64 represented arguments occupy exactly 1022 bytes: the
+    # marker is carved from the final represented argument, which is
+    # re-rendered once at a reduced limit and still ends the message.
+    args = ["a" * 14] * 63 + ["b" * 14] + ["c"]
+    exc = ValueError(*args)
+    message = _safe_exception_message(exc)
+    expected = "; ".join(["a" * 14] * 63 + ["b" * 10]) + _POST_MORTEM_TRUNCATION_MARKER
+    assert message == expected
+    assert len(message.encode("utf-8")) == 1021
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    json.dumps(message)
+
+
+def test_safe_exception_message_marker_reservation_multibyte_final_arg():
+    # The final represented argument is a multi-byte UTF-8 string at the
+    # reservation boundary; the re-render must never split a code point.
+    args = ["a" * 14] * 63 + ["\u00e9" * 7] + ["c"]
+    exc = ValueError(*args)
+    message = _safe_exception_message(exc)
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert message.endswith("\u00e9" * 5 + _POST_MORTEM_TRUNCATION_MARKER)
+    assert message.encode("utf-8").decode("utf-8") == message
+    json.dumps(message)
+
+
+def test_safe_exception_message_internal_truncation_with_later_args_single_marker():
+    # The first argument is internally truncated; later arguments remain.
+    # Exactly one final marker: the truncated part already carries its own.
+    exc = ValueError("a" * 5000, "b", "c")
+    message = _safe_exception_message(exc)
+    assert message == "a" * 1021 + _POST_MORTEM_TRUNCATION_MARKER
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert "b" not in message
+    assert "c" not in message
+    assert len(message.encode("utf-8")) == 1024
+    json.dumps(message)
+
+
+def test_safe_exception_message_all_64_represented_no_synthetic_marker():
+    # All 64 arguments are fully represented and no 65th argument exists:
+    # the message is preserved byte-for-byte with no synthetic marker.
+    args = ["a" * 14] * 63 + ["b" * 16]
+    exc = ValueError(*args)
+    message = _safe_exception_message(exc)
+    assert message == "; ".join(args)
+    assert len(message.encode("utf-8")) == 1024
+    assert _POST_MORTEM_TRUNCATION_MARKER not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_literal_ellipsis_with_omission_still_marked():
+    # A fully represented exact string that legitimately ends with the marker
+    # character is never mistaken for a synthetic marker: when later
+    # arguments are omitted, the synthetic marker is still appended.
+    exc = ValueError(*((["a"] * 63) + ["hello\u2026"] + ["z"] * 80))
+    message = _safe_exception_message(exc)
+    expected = "; ".join(["a"] * 63 + ["hello\u2026"]) + _POST_MORTEM_TRUNCATION_MARKER
+    assert message == expected
+    assert "hello\u2026" in message
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 2
+    assert "z" not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_literal_ellipsis_no_omission_unchanged():
+    # A real value ending with the marker character and no omission or
+    # truncation keeps its exact output: no synthetic marker is added.
+    assert _safe_exception_message(ValueError("hello\u2026")) == "hello\u2026"
+    assert _safe_exception_message(ValueError("x", "hello\u2026")) == "x; hello\u2026"
+
+
+def test_safe_exception_message_budget_smaller_than_marker_no_marker(monkeypatch):
+    # With a total budget smaller than the 3-byte marker, no marker may be
+    # emitted; the rendered prefix is preserved and stays within the budget.
+    monkeypatch.setattr(worker_module, "_POST_MORTEM_MAX_EXC_MESSAGE_UTF8", 2)
+    exc = ValueError("a", "b")
+    message = _safe_exception_message(exc)
+    assert _POST_MORTEM_TRUNCATION_MARKER not in message
+    assert len(message.encode("utf-8")) <= 2
+    assert message == "a"
+    json.dumps(message)
+
+
+def test_safe_exception_message_arg_65_never_retrieved():
+    # Argument index 64 is a huge exact int whose metadata would be visible
+    # if it were inspected; the scan ceiling plus marker reservation must
+    # never reach it.
+    exc = ValueError(*((["a" * 14] * 63) + ["b" * 16] + [10**5000]))
+    message = _safe_exception_message(exc)
+    assert "<int bits=16610>" not in message
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    json.dumps(message)
+
+
+def test_safe_exception_message_byte_exhaustion_below_ceiling_marker():
+    # 64 arguments where the first 63 occupy exactly 1022 bytes: the 64th
+    # is omitted by the byte budget, not the ceiling, and the marker is
+    # still reserved inside the budget.
+    exc = ValueError(*((["a" * 14] * 62) + ["b" * 30] + ["c"]))
+    message = _safe_exception_message(exc)
+    expected = "; ".join(["a" * 14] * 62 + ["b" * 26]) + _POST_MORTEM_TRUNCATION_MARKER
+    assert message == expected
+    assert len(message.encode("utf-8")) == 1021
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert "c" not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_huge_renderable_int_overflow_marked():
+    # A huge but legal exact int (below the metadata bit ceiling) renders
+    # longer than the budget and is skipped by the loop; the omission is
+    # still represented by exactly one final marker.
+    exc = ValueError(10**1200)
+    message = _safe_exception_message(exc)
+    assert message == _POST_MORTEM_TRUNCATION_MARKER
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert len(message.encode("utf-8")) <= _POST_MORTEM_MAX_EXC_MESSAGE_UTF8
+    json.dumps(message)
+
+
+def test_safe_exception_message_int_overflow_after_rendered_arg_is_marked():
+    exc = ValueError("a" * 100, 10**1200)
+    message = _safe_exception_message(exc)
+    assert message == "a" * 100 + _POST_MORTEM_TRUNCATION_MARKER
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert message.endswith(_POST_MORTEM_TRUNCATION_MARKER)
+    json.dumps(message)
+
+
+def test_safe_exception_message_empty_final_string_separator_only_space():
+    # The 1022-byte first argument plus the 2-byte separator plus the
+    # zero-byte empty exact string occupy exactly 1024 bytes: the empty
+    # argument is fully represented and no marker may appear.
+    exc = ValueError("a" * 1022, "")
+    message = _safe_exception_message(exc)
+    assert message == "a" * 1022 + "; "
+    assert len(message.encode("utf-8")) == 1024
+    assert _POST_MORTEM_TRUNCATION_MARKER not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_empty_final_bytes_separator_only_space():
+    # Same exact-boundary case with an empty exact bytes argument.
+    exc = ValueError("a" * 1022, b"")
+    message = _safe_exception_message(exc)
+    assert message == "a" * 1022 + "; "
+    assert len(message.encode("utf-8")) == 1024
+    assert _POST_MORTEM_TRUNCATION_MARKER not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_empty_final_arg_with_later_omission_marker():
+    # The empty argument is represented (separator-only space), but the
+    # later argument cannot fit: exactly one final synthetic marker.
+    exc = ValueError("a" * 1021, "", "x")
+    message = _safe_exception_message(exc)
+    assert message == "a" * 1021 + _POST_MORTEM_TRUNCATION_MARKER
+    assert len(message.encode("utf-8")) == 1024
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert "x" not in message
+    json.dumps(message)
+
+
+def test_safe_exception_message_zero_arg_bytes_nonempty_final_omitted():
+    # Zero available argument bytes with a non-empty final argument: the
+    # argument is omitted and the marker behavior stays correct (the first
+    # argument is squeezed by exactly the marker size).
+    exc = ValueError("a" * 1022, "x")
+    message = _safe_exception_message(exc)
+    assert message == "a" * 1018 + _POST_MORTEM_TRUNCATION_MARKER
+    assert len(message.encode("utf-8")) == 1021
+    assert message.count(_POST_MORTEM_TRUNCATION_MARKER) == 1
+    assert "x" not in message
+    json.dumps(message)
+
+
 def test_safe_exception_message_hostile_str_never_invoked_with_huge_int():
     sentinel = {"str": 0}
 

@@ -8,9 +8,12 @@ at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
 presentation plan/deck/cue delivery commit. Campaign infrastructure accepted
 through `0abb588`; V4 identity correction accepted through `fc7c85b`. The
 original handoff is accepted at `ab464dd`. The 2026-08-06 main-repo
-completion hardening is accepted and integrated on `main` at `62deca4`. The
-current bounds-v2 revisions to this file are an uncommitted candidate built
-on top of `62deca4`; their eventual integration commit is not known.
+completion hardening is accepted and integrated on `main` at `62deca4`, and
+the bounded post-mortem evidence layer (exception-argument work bounds with
+the omission marker reserved inside the byte budget, huge-int fail-closed
+metadata, no-overread local scan) is part of the accepted presentation state
+on `main`. The exact presentation-day tip is recorded by the preflight
+`git rev-parse HEAD` check.
 **Purpose:** one concise, evidence-backed statement of what the internship
 delivers on Friday 2026-08-07, what is partial, what is pending, and what is
 blocked. Every status below traces to `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md`
@@ -69,18 +72,24 @@ Friday horizon means "active work or honest limitation", never "complete".
   Demo Guide v1, Demo Task 9, Friday presentation plan/deck/cue sheet v1.2,
   and this delivery bundle (manifest, preflight checklist, handoff).
 - 2026-08-06 main-repo completion hardening (integrated at `62deca4`):
-  campaign ledger timestamp provenance; transport teardown race repair; the
-  six known wrapper/transport test failures repaired (now hermetic); and the
-  post-mortem PDB entry (TODO 6.1.3) — bounded, side-effect-safe structured
-  traceback evidence on unhandled exception, 90 unique focused tests in
-  `tests/unit/test_pdb_post_mortem.py`. A bounds-v2 follow-up (exception
-  argument count/byte ceilings, huge-int fail-closed metadata, no-overread
-  local scan) is an uncommitted candidate on top of `62deca4`. The recorded
-  full suite is NOT green: 3448 passed / 3 skipped / 32 failed, all 32 in
-  the pre-existing wrapper-preflight subprocess-chain family (85/85 pass in
-  isolation); a bounds-v2 A/B reproduced the identical 32-node failure set on
-  both the clean `62deca4` checkpoint and the candidate, classifying the
-  family as environmental resource pressure, not candidate-caused.
+  campaign ledger timestamp provenance; repair of deterministic defects —
+  the transport teardown race, the output-drain/transport ordering defect,
+  four wrapper/transport test-contract defects, and two environment-gated
+  preflight tests made hermetic, with deterministic unit-level regression
+  coverage; and the post-mortem PDB entry (TODO 6.1.3) — bounded,
+  side-effect-safe structured traceback evidence on unhandled exception,
+  107 unique focused tests in `tests/unit/test_pdb_post_mortem.py`. The
+  bounded post-mortem evidence layer (exception argument count/byte
+  ceilings, huge-int fail-closed metadata, no-overread local scan, omission
+  marker reserved inside the byte budget) is part of the accepted
+  presentation state on `main`. The remaining nondeterministic family —
+  synthetic wrapper-preflight subprocess-chain failures under cumulative
+  resource pressure — is NOT repaired and no repair is claimed: the recorded
+  full suite is NOT green (3448 passed / 3 skipped / 32 failed), the family
+  passes 85/85 in isolation and 395/395 in the heavy subset, and a bounds-v2
+  A/B reproduced the identical 32-node failure set on both the clean
+  `62deca4` checkpoint and the candidate, classifying the family as
+  environmental resource pressure, not candidate-caused.
 
 ### PARTIAL / IN PROGRESS (material progress, honest limits)
 
@@ -148,10 +157,10 @@ Friday horizon means "active work or honest limitation", never "complete".
 - Git state: the original Friday delivery bundle is accepted and integrated
   on `main` at `ab464dd` (the earlier presentation plan/deck/cue delivery
   commit is `456f0e9`). The 2026-08-06 main-repo completion hardening is
-  accepted and integrated on `main` at `62deca4`. The current bounds-v2
-  revisions to this handoff are an uncommitted candidate on
-  `fix/post-mortem-pdb-bounds-v2` built on top of `62deca4`; their eventual
-  integration commit is not known.
+  accepted and integrated on `main` at `62deca4`; the bounded post-mortem
+  evidence layer is part of the accepted presentation state on `main`. The
+  exact presentation-day tip is recorded by the preflight `git rev-parse
+  HEAD` check; presentation runs from clean `main == origin/main`.
 - The daily-requirement item (0.1, one diary page per workday) remains open;
   the diary was extended through 2026-08-06; the 2026-07-20, 2026-07-23, and
   2026-07-24 weekday gaps were backfilled from tracked git evidence, and a

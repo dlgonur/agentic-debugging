@@ -1194,7 +1194,24 @@ def _safe_exception_message(exc: BaseException) -> str:
     argument and no full-length joined message is ever built, huge exact
     ``str`` values are only previewed, huge exact ``bytes`` values are only
     decoded from a bounded prefix, and huge exact ``int`` values are never
-    decimalized.  The result is deterministic and JSON-serializable."""
+    decimalized.  The result is deterministic and JSON-serializable.
+
+    Marker reservation: whenever any argument or argument tail is not
+    represented and the budget can hold the marker, the final message ends
+    with exactly one marker, reserved inside the budget.  Marker decisions
+    use the explicit ``truncated`` metadata returned by
+    :func:`_render_single_exception_arg` — never the rendered text suffix —
+    so a real argument value that legitimately ends with the marker
+    character is never mistaken for a synthetic marker.  When the budget is
+    already full without the marker, the final represented argument is
+    re-rendered at most once with the marker slot carved from its own
+    limit; when even that cannot carry the marker, the final marker-less
+    tail is dropped so the marker fits.  An exact empty ``str`` or
+    ``bytes`` argument is still represented when only the separator fits
+    (zero available argument bytes); a non-empty argument with no available
+    argument bytes is omitted like any other unrepresentable argument.
+    Arguments beyond the scan ceiling are never inspected, and all work
+    stays bounded by argument count and byte count."""
     try:
         args = _BASE_EXCEPTION_ARGS_DESCRIPTOR.__get__(exc, type(exc))
     except BaseException:
@@ -1211,30 +1228,107 @@ def _safe_exception_message(exc: BaseException) -> str:
     marker_utf8 = _POST_MORTEM_TRUNCATION_MARKER_UTF8
     parts: List[str] = []
     used = 0
-    inspected = 0
+    rendered_count = 0
+    last_arg: Any = None
+    last_part_len = 0
+    last_sep_cost = 0
+    last_limit = 0
+    last_truncated = False
+    last_render_skipped = False
     for index in range(
         min(total_args, _POST_MORTEM_EXC_ARGS_MAX_SCAN)
     ):
-        inspected = index + 1
         remaining = budget - used
         separator_cost = separator_utf8 if parts else 0
-        if remaining - separator_cost < 1:
+        # A negative available argument budget cannot render anything; a
+        # zero budget may still represent an exact zero-byte argument (an
+        # empty exact str/bytes value) when the separator itself fits.
+        if remaining - separator_cost < 0:
             break
         part, arg_truncated = _render_single_exception_arg(
             arg=args[index], limit=remaining - separator_cost
         )
         part_utf8 = part.encode('utf-8', errors='replace')
         if used + separator_cost + len(part_utf8) > budget:
+            last_render_skipped = True
+            break
+        if arg_truncated and not part_utf8:
+            # A truncated argument whose preview is empty (for example a
+            # non-empty argument at a zero-byte limit) cannot be represented
+            # at all: it is omitted, never silently rendered as an empty
+            # part.
+            last_render_skipped = True
             break
         if parts:
             parts.append(separator)
         parts.append(part)
         used += separator_cost + len(part_utf8)
+        rendered_count += 1
+        last_arg = args[index]
+        last_part_len = len(part_utf8)
+        last_sep_cost = separator_cost
+        last_limit = remaining - separator_cost
+        last_truncated = arg_truncated
+        last_render_skipped = False
         if arg_truncated:
             break
-    if inspected < total_args and used + marker_utf8 <= budget:
-        parts.append(marker)
-        used += marker_utf8
+    omission = (
+        rendered_count < total_args or last_truncated or last_render_skipped
+    )
+    if omission and marker_utf8 <= budget:
+        # The marker can only be reserved when the budget can hold it;
+        # otherwise the rendered prefix stays exactly as the loop produced
+        # it (the final bound still trims it to the budget).
+        if last_truncated and last_limit >= marker_utf8:
+            # The final represented argument already ends with its own
+            # synthetic marker (exact str/bytes preview); appending another
+            # would create a duplicate.  Exactly one final marker holds.
+            pass
+        else:
+            if last_truncated and parts:
+                # Marker-less truncated tail (limit smaller than the marker):
+                # drop it so the marker fits in the freed space.
+                parts.pop()
+                used -= last_part_len
+                if last_sep_cost:
+                    parts.pop()
+                    used -= last_sep_cost
+            deficit = used + marker_utf8 - budget
+            if deficit <= 0:
+                parts.append(marker)
+                used += marker_utf8
+            elif parts and not last_truncated:
+                # Budget already full without a marker: carve the marker
+                # slot out of the final represented argument by re-rendering
+                # it once at a reduced limit.
+                squeeze_limit = last_part_len - deficit
+                if squeeze_limit >= 1:
+                    squeezed, squeezed_truncated = _render_single_exception_arg(
+                        arg=last_arg, limit=squeeze_limit
+                    )
+                    if squeezed_truncated and squeeze_limit >= marker_utf8:
+                        squeezed_utf8 = squeezed.encode('utf-8', errors='replace')
+                        parts[-1] = squeezed
+                        used = used - last_part_len + len(squeezed_utf8)
+                    else:
+                        parts.pop()
+                        used -= last_part_len
+                        if last_sep_cost:
+                            parts.pop()
+                            used -= last_sep_cost
+                        parts.append(marker)
+                        used += marker_utf8
+                else:
+                    parts.pop()
+                    used -= last_part_len
+                    if last_sep_cost:
+                        parts.pop()
+                        used -= last_sep_cost
+                    parts.append(marker)
+                    used += marker_utf8
+            elif used + marker_utf8 <= budget:
+                parts.append(marker)
+                used += marker_utf8
     message = ''.join(parts)
     if not message:
         message = _safe_exception_type_name(type(exc))

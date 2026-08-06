@@ -11,11 +11,13 @@ original delivery bundle (manifest, preflight checklist, handoff, and
 documentation corrections) is accepted at `ab464dd`. The 2026-08-06
 main-repo completion hardening (campaign ledger time provenance, transport
 teardown race, known wrapper/transport test failures, post-mortem PDB entry)
-is accepted and integrated on `main` at `62deca4`. The current bounds-v2
-revisions to this file are an uncommitted candidate built on top of
-`62deca4`; their eventual integration commit is not known. On presentation
-day, run from clean `main == origin/main` containing the final accepted
-files.
+is accepted and integrated on `main` at `62deca4`, and the bounded
+post-mortem evidence layer (exception-argument work bounds with the omission
+marker reserved inside the byte budget, huge-int fail-closed metadata, and
+the no-overread local scan) is part of the accepted presentation state on
+`main`. The exact presentation-day tip identity is recorded by the preflight
+`git rev-parse HEAD` check. On presentation day, run from clean
+`main == origin/main` containing the final accepted files.
 **Presentation date:** Friday 2026-08-07
 **Purpose:** the professor-facing submission package. This manifest is the
 index: what the bundle contains, what evidence backs every material claim,
@@ -33,19 +35,19 @@ authority.
 | Path | Role | SHA-256 |
 |---|---|---|
 | `docs/FRIDAY_DELIVERY_MANIFEST_V1.md` | This manifest and evidence index | *self-referential — recompute with the hash command below; all other bundle files are pinned* |
-| `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md` | Final preflight and rehearsal checklist | `4094f67b89e68ee1733e80ed7dddc782e526c827b7a25246beb1d92da1aa7aa0` |
-| `docs/FRIDAY_STATUS_HANDOFF_V1.md` | Concise project-status handoff and post-Friday batches | `40ef80d343849bf3a6fb4fcdc093bf18e81d6efb1877e953fbcd0cd25b0e506f` |
-| `docs/FRIDAY_PRESENTATION_PLAN_V1.md` | Presentation runbook, evidence table, Q&A, contingency (v1.2) | `188804dcec6d74ac82059bd3f02e9fe6dc0caa6533bffb0eb0c2cc2a128e3216` |
-| `docs/FRIDAY_PRESENTATION_DECK_V1.md` | 17-slide Turkish deck, main + short track (v1.2) | `2fe6034ba1abf90ba6644ec9a141280fd0cda2602a16e0b4dfad927369a479cb` |
+| `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md` | Final preflight and rehearsal checklist | `26b50a2c2ad03987b956bb64391cfc84ba6d8fe9098b2c995436badffc2772cd` |
+| `docs/FRIDAY_STATUS_HANDOFF_V1.md` | Concise project-status handoff and post-Friday batches | `8a8895cebe3e43a0f50d6bef123a45a88836c7ac5112e0db40863cb2a42f532a` |
+| `docs/FRIDAY_PRESENTATION_PLAN_V1.md` | Presentation runbook, evidence table, Q&A, contingency (v1.2) | `5a53ed3e830bed2d84e9c4fc8b182142d701711a62e9405410f89387c5123db6` |
+| `docs/FRIDAY_PRESENTATION_DECK_V1.md` | 17-slide Turkish deck, main + short track (v1.2) | `1c05ba29910185ca9e08082ee5153b2956a8734dc2ad6b42dd665985d2b12b8d` |
 | `docs/FRIDAY_PRESENTATION_CUE_SHEET_V1.md` | Presenter quick reference, timings, verbatim sentences (v1.2) | `614dee288b095dc66dff949706e6a2dbf05a799376a4a9b0b3769a6702dc5461` |
 | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_TODO.md` | Instructor's original 27-item list (byte-identical, unchanged) | `9e97a17ea8ab6d67ae7da008a6b497dc219bec2ba79dbcf09f8b5411155e88e3` |
 | `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` | Per-item status map 7/10/3/7/0 with evidence layers | `cb4bca5f28bdfbd94375477969c8dd2320b02d5206a1b7ba77410768ac6683d1` |
 | `docs/FINAL_TECHNICAL_REPORT_V1.md` | Final technical report incl. 2026-08-05 revision | `b14b9534b91b794f7129639d2d090aa87ab9024787e3cac726377dfbeb76d629` |
 | `docs/DEMO_GUIDE_V1.md` | Demo guide (offline demo + recorded QuixBugs entry points) | `1e327548fb594a09d253a127c950e03e8a2c591f02a47c35565eb4fe9555987b` |
 | `docs/DEMO_TASK9.md` | Task 9 demonstration contract and results | `aa404e8dfde1d5b30fad2a639351fbb688b58017ee4b58816fddde44beca9773` |
-| `README.md` | Project status incl. 2026-08-05 campaign/QLoRA facts and 2026-08-06 hardening | `03bd91c90f5bd498a47cf881839bc77fd2afe52cac0898632a5ecd71aa27bce9` |
+| `README.md` | Project status incl. 2026-08-05 campaign/QLoRA facts and 2026-08-06 hardening | `e7273fdacaf00f66e386a306194883c42309650703193f3116fa251764f451e2` |
 | `TODO.md` | Project TODO (2026-08-05 routing note) | `de312304a96c0985ed4a9392cded22fdaf78782452ef4430a4267b462d08b3d2` |
-| `docs/PROJECT_TRACKER.md` | Execution tracker incl. 2026-08-05 and 2026-08-06 entries | `14eb8501c005d94e86f0a453da5fc48bc15a21689aca4a1d1022edfd02a9a8ed` |
+| `docs/PROJECT_TRACKER.md` | Execution tracker incl. 2026-08-05 and 2026-08-06 entries | `c369a68f56e14ce212f4c43fbcd0c1c577fb40daaaac9f244cfd83016d9d3570` |
 | `research/quixbugs/PAIRED_PILOT_V4.json` | Frozen v4 campaign contract (canonical SHA-256 `020dfc1f7b8f23aa96a4d7c7942429e306cc290906abfed5ce96cde22b90354d`; raw file bytes hash to `8c103f9dea553a8245c277341fd2f22bc285894a32017d2057819e9355c5cd29` — the canonical hash is the canonical-JSON serialization hash per project canonical JSON rules) | — |
 
 Hash commands (PowerShell, from the repository root):
@@ -78,8 +80,8 @@ claim.
 | Campaign infrastructure accepted on `main` through `0abb588`; identity correction at `fc7c85b`; focused 389 / full 3394 + 3 skipped + six known failures | `docs/PROJECT_TRACKER.md` 2026-08-05; `README.md` |
 | Model selection frozen (Qwen/Qwen2.5-Coder-7B-Instruct, revision `c03e6d35…`, Apache-2.0) | `experiments/qlora_patch_pilot_v1/freeze_record.json` on `experiment/qlora-patch-pilot-v1` commit `3f0d3e7` |
 | QLoRA methodology frozen; implementation accepted at `3f0d3e7`; owner suite 3457 / 3 / 36 | `experiments/qlora_patch_pilot_v1/` (configs, SMOKE_EVIDENCE, notebook); `tests/unit/test_qlora_patch_pilot.py`; `docs/PROJECT_TRACKER.md` 2026-08-05 |
-| 2026-08-06 hardening: post-mortem PDB entry (TODO 6.1.3) with 90 unique focused tests; campaign ledger timestamp provenance; transport teardown race repaired; known wrapper/transport failures repaired | `README.md`; `docs/PROJECT_TRACKER.md` 2026-08-06; `tests/unit/test_pdb_post_mortem.py` |
-| Full suite NOT green (recorded): 3448 passed / 3 skipped / 32 failed; the 32 failures are the pre-existing wrapper-preflight subprocess-chain family, passing 85/85 in isolation; bounds-v2 A/B reproduces the identical 32-node failure set on both the clean `62deca4` checkpoint and the candidate | `README.md`; `docs/PROJECT_TRACKER.md` 2026-08-06 |
+| 2026-08-06 hardening: post-mortem PDB entry (TODO 6.1.3) with 107 unique focused tests (omission marker reserved inside the byte budget; empty-argument exact-boundary representation); campaign ledger timestamp provenance; deterministic wrapper/transport defects repaired (teardown race, output-drain ordering, 4 test-contract defects, 2 hermetic env-gated tests) | `README.md`; `docs/PROJECT_TRACKER.md` 2026-08-06; `tests/unit/test_pdb_post_mortem.py` |
+| Full suite NOT green (recorded): 3448 passed / 3 skipped / 32 failed; the 32 failures are the pre-existing wrapper-preflight subprocess-chain family, NOT repaired, passing 85/85 in isolation and 395/395 in the heavy subset; bounds-v2 A/B reproduces the identical 32-node failure set on both the clean `62deca4` checkpoint and the candidate | `README.md`; `docs/PROJECT_TRACKER.md` 2026-08-06 |
 | Real minimum-tier corpus 1,000/150, zero leakage; one-step CUDA update + adapter reload | Layer 2 (FirstMate-reviewed external evidence, not merged); status map items 9/12 |
 | Independent FirstMate AI audit of 75 frozen rows: 39 ACCEPT / 36 REJECT, AI reviewer identity disclosed; corpus not modified; final training authorized 2026-08-05; no accepted artifact; held-out unauthorized | Status map §5 QLoRA boundary; plan §8; README 2026-08-05 |
 | RAG NO-GO-FOR-NOW, SFT DEFER, DPO NO-GO-FOR-NOW | `docs/DATASET_EVALUATION_DECISION_V1.md` §10; `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` |
@@ -162,9 +164,9 @@ python -m agentic_debugger.demo --output-dir $strictOut --strict
 ### 3.6 Presentation-day sequence
 
 1. Git check: clean `main` matching `origin/main`, containing the delivery
-   bundle files (once integrated) and descending from the accepted source
-   baseline `456f0e9`; clean tracked tree. Do not present from the candidate
-   branch.
+   bundle files and descending from the accepted source baseline `456f0e9`;
+   clean tracked tree; `git rev-parse HEAD` output recorded as the
+   presentation-day tip. Do not present from a temporary branch state.
 2. Deck open; main track (24.5 min) or short track (11.5 min).
 3. Slide 16: run §3.2 demo; open `results.json`, summary, PDB-policy
    `events.jsonl`, `.semantic.json`; state the scripted stand-in boundary.

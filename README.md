@@ -635,32 +635,34 @@ the final accepted delivery bundle files and descending from `ab464dd`.
 
 The 2026-08-06 bounded Friday main-repository hardening pass is accepted and
 integrated on `main` at `62deca4` (the `fix/post-mortem-pdb-bounds-v2` branch,
-built on top of the accepted `ab464dd` delivery bundle). A follow-up bounds
-pass (exception-argument work bounds, huge-int fail-closed handling, and the
-no-overread local scan) is currently an uncommitted candidate on top of
-`62deca4`; its eventual integration commit is not known. The hardening closes
-four tracked infrastructure items without promoting any instructor TODO status
-and without any provider, live campaign, WSL, BugsInPy, QLoRA, or held-out
-execution:
+built on top of the accepted `ab464dd` delivery bundle), and the bounded
+post-mortem evidence layer (exception-argument work bounds, huge-int
+fail-closed handling, the no-overread local scan, and the omission marker
+reserved inside the byte budget) is part of the accepted presentation state
+on `main`. The exact presentation-day tip identity is recorded by the
+preflight `git rev-parse HEAD` check; presentation runs from clean
+`main == origin/main`. The hardening closes four tracked infrastructure
+items without promoting any instructor TODO status and without any provider,
+live campaign, WSL, BugsInPy, QLoRA, or held-out execution:
 
 - Campaign ledger time provenance (`scripts/quixbugs_live_runner_v2.py`):
   terminal ledger `updated_at`, `terminal-commit.json` `created_at`, and
   post-campaign authority `observed_at` now reflect actual finalization time,
   not the campaign-start `reference_time`. The documented non-blocking
   timestamp follow-up is resolved. 6 focused tests added.
-- OpenCode request-thread teardown race and output-drain race
-  (`scripts/quixbugs_opencode_go_adapter.py`): the `process.stdin is not None`
-  background-thread assertion that cascaded under full-suite ordering is
-  replaced with a teardown-aware writer guard, and the post-`wait()` reader
-  join now uses a generous pipe-drain bound so a slowly-draining stdout is
-  captured completely; the previous order-dependent transport/case-runner
-  failure family is repaired. 4 regression
-  tests added. The selftest full-suite flake is NOT part of that repair: it
-  remains a pre-existing wrapper-preflight subprocess-chain flake under
-  full-suite OS resource pressure (see the validation note below).
-- Known wrapper/transport test failures (4 test defects + 2 env-gated): all
-  6 are repaired; the two env-gated preflight tests are now hermetic (no real
-  OpenCode install required).
+- Repaired (deterministic) — OpenCode request-thread teardown race and
+  output-drain race (`scripts/quixbugs_opencode_go_adapter.py`): the
+  `process.stdin is not None` background-thread assertion that cascaded under
+  full-suite ordering is replaced with a teardown-aware writer guard, and the
+  post-`wait()` reader join now uses a generous pipe-drain bound so a
+  slowly-draining stdout is captured completely; the previous order-dependent
+  transport/case-runner failure family is repaired. 4 regression tests added.
+  The selftest full-suite flake is NOT part of that repair: it remains a
+  pre-existing wrapper-preflight subprocess-chain flake under full-suite OS
+  resource pressure (see the validation note below).
+- Repaired (deterministic) — known wrapper/transport test failures (4 test
+  defects + 2 env-gated): all 6 are repaired; the two env-gated preflight
+  tests are now hermetic (no real OpenCode install required).
 - Post-mortem PDB entry (TODO 6.1.3): `run_post_mortem` PDB
   protocol/worker/session operation captures bounded structured traceback
   evidence on unhandled exception; offline-capable; reuses the existing PDB
@@ -676,8 +678,8 @@ execution:
   fail-closed mutation handling. All text fields are UTF-8-byte-bounded with
   the truncation marker included inside the limit. The real missing-traceback
   worker branch emits the authoritative fail-closed `PdbResponse` (success
-  false, empty result, bounded error). The bounds-v2 follow-up makes exception
-  summarization work-bounded as well as byte-bounded: at most
+  false, empty result, bounded error). The bounds-v2 evidence layer makes
+  exception summarization work-bounded as well as byte-bounded: at most
   `_POST_MORTEM_EXC_ARGS_MAX_SCAN` (64) arguments are inspected, a remaining
   UTF-8 byte budget (`_POST_MORTEM_MAX_EXC_MESSAGE_UTF8`, 1024) is reduced
   while processing with separators and the omission marker inside the same
@@ -686,11 +688,16 @@ execution:
   (beyond `_MAX_SERIALIZED_INT_BITS` = 4096 bits) are rendered as stable
   `<int bits=N>` metadata instead of being decimalized (Python's integer
   string-conversion digit limit would otherwise raise `ValueError` and break
-  evidence capture). The bounded-local scan now checks the budget before
+  evidence capture). The omission marker is reserved inside the budget:
+  whenever any argument or argument tail is unrepresented, the final message
+  ends with exactly one marker, and marker decisions use explicit truncation
+  metadata from the argument renderer — never the rendered text suffix — so
+  a real argument value that ends with the marker character is never
+  misread. The bounded-local scan now checks the budget before
   every iterator advance: actual successful advances never exceed the
   declared ceiling, returned `inspected` equals successful advances, and the
   exact mapping length decides unseen entries without peeking one extra item.
-  90 unique focused tests in
+  107 unique focused tests in
   `tests/unit/test_pdb_post_mortem.py` (AST definition count = unique name
   count = pytest collected count). The tracked TODO
   6.1.3 subtask status is determined by its actual acceptance contract (see
@@ -698,12 +705,13 @@ execution:
 
 Accepted validation: focused suites pass (live-runner 286; wrapper+transport
 100 in isolation; transport-factory+case-runner 55 in both orders; V4
-budget/verifier+replay; post-mortem 90 + PDB protocol/session/integration 964
-(1054 PDB-surface tests in total); compileall exit 0; deterministic demo exit
+budget/verifier+replay; post-mortem 107 + PDB protocol/session/integration 964
+(1071 PDB-surface tests in total); compileall exit 0; deterministic demo exit
 0, 2/2 RESOLVED, F2P 2/2, P2P 4/4,
-0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Recorded full suite on
-the integrated checkpoint (fresh process, content of `62deca4`):
-**3448 passed, 3 skipped, 32 failed** — the suite is NOT green. The 32
+0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Recorded full suite
+(2026-08-06, fresh process, content of `62deca4`):
+**3448 passed, 3 skipped, 32 failed** — the suite is NOT green, and the
+remaining 32-node family is NOT repaired (no repair is claimed). The 32
 failures are all in the pre-existing wrapper-preflight subprocess-chain
 family (`test_opencode_go_transport_factory.py` 16,
 `test_opencode_go_wrapper_repair.py` 13, `test_opencode_go_case_runner.py` 3)
