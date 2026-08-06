@@ -23,6 +23,48 @@ The project investigates the path from traditional debugging, fault localization
 - research/papers/: local paper archive; PDFs are gitignored
 - TODO.md: project TODO list
 
+## RAG, comparison and preference infrastructure (2026-08-06)
+
+Deterministic, provider-free engineering sprint on
+`goal/friday-rag-comparison-v1` (baseline `e92634e3`):
+
+- **Repository-native RAG** (`agentic_debugger/rag/`) — stdlib-only lexical
+  index (`repository-index-v1`) and retrieval (`retrieval-result-v1`) over
+  source, tests, safe task/issue projections and captured failure output;
+  revision-bound, budgeted, fail-closed. See `docs/REPOSITORY_RAG_V1.md`.
+- **Optional RAG context injection** — additive `rag_context` at the
+  demo/model-adapter and live-adapter boundaries; off by default; default
+  requests byte-identical; 20 KB public-request bound enforced. No model
+  family-specific code; the frozen QuixBugs runner is unchanged.
+- **Unified comparison harness** (`agentic_debugger/comparison/`) —
+  strict imported-generation artifacts (`generation-artifact-v1`) and native
+  agentic conditions through the existing verifier/controller/demo paths;
+  normalized `comparison-v1` metrics; JSON/CSV/Markdown reports with
+  aggregates and baseline delta. Entry point:
+  `python -m agentic_debugger.comparison demo` (offline).
+- **Preference-pair exporter** (`agentic_debugger/preference/`) — ordered
+  verifier-backed rules, strict `preference-pair-v1` pairs (JSONL) plus
+  audit; held-out and oracle-contamination guards; DPO/RLHF is out of scope
+  for this sprint. See `docs/PREFERENCE_EXPORTER_V1.md`.
+
+Decision scope: `docs/RAG_COMPARISON_DECISION_V2.md` supersedes the v1 gate's
+RAG `NO-GO-FOR-NOW` only for this authorized offline infrastructure scope.
+Imported base/tuned demo identities are labeled `offline-deterministic-demo`
+and are infrastructure evidence, not model performance.
+
+Repair 1 (2026-08-06, same branch) hardened the contracts without changing
+scope: candidate patches are strictly bound to the recorded raw output
+(`patch_extraction` exact/substring with reconstruction and hash
+verification at load); primary `evaluation` attempts are separated from
+`preference-fixture` attempts in aggregates/deltas/reports; RAG
+index/retrieval/RagContext artifacts recompute and verify every identity
+field; free-form JSON payloads are recursively bounded; imported-attempt
+telemetry and response bounds are reconciled (external generation
+provider/network telemetry separated from local verification counters);
+preference-pair identity binds response/patch/evidence hashes and is
+verified on load; chunking preserves full module line coverage via
+deterministic gap chunks.
+
 ## Accepted project status (through 2026-07-31)
 
 An MVP agentic debugging implementation is accepted through Task 9: a single

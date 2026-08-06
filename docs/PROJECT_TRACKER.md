@@ -125,15 +125,18 @@ Rules:
 
 ## 4. Phase 4 — RAG and Agent Tools
 
-- [ ] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages.
-- [ ] 4.2 Combine fine-tuned model with RAG.
+- [x] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages. (Completed 2026-08-06 — deterministic repository-native lexical RAG v1, `agentic_debugger/rag/`: fixture-scoped default + declared corpus-root/repo mode; source/test/issue/failure documents; safe task/issue projection with unit-tested oracle exclusion; explicit exclusion rules; `repository-index-v1`/`retrieval-result-v1` strict artifacts; revision binding; documented bounds; fail-closed. Infrastructure completion only; no RAG performance claim. See `docs/REPOSITORY_RAG_V1.md`, `docs/RAG_COMPARISON_DECISION_V2.md`.)
+- [ ] 4.2 Combine fine-tuned model with RAG. (Partial 2026-08-06 — optional `rag_context` injection ready at the demo/model-adapter and `LiveModelAdapter` boundaries (additive; default request/case byte-identity proven; 20 KB public-request bound enforced pre-transport). Real fine-tuned generation import + verified combination remains open.)
 - [x] 4.3 Develop file-read, code-search, test-run, and patch-apply tools.
 - [x] 4.4 Create the debugging agent.
 - [ ] 4.5 Make the model localize faults, identify root cause, and generate patches.
 
 ### 4.x Subtasks / Log
 
-- [ ] 4.1.1 Define repository indexing strategy.
+- [x] 4.1.1 Define repository indexing strategy. (Completed 2026-08-06 — deterministic chunking (AST symbol boundaries + line windows), exclusion rules, revision binding.)
+- [x] 4.1.2 RAG retrieval and bounds v1 (2026-08-06): identifier-aware tokenization, integer token-overlap scoring, dedup, deterministic tie order, max-results/max-context-bytes budgets, truncation flags, latency excluded from identity. (Repair 1: retrieval result recomputes and verifies query/retrieval identities and selection byte counts on load; selections verified against the bound index.)
+- [x] 4.1.3 RAG agent-context v1 (2026-08-06): bounded `RagContext` (`to_request_mapping` / `to_record_mapping`), 20 KB public-request budget mirror. (Repair 1: strict `RagChunkRef` validation, bound retrieval identity, lookalike-object rejection at demo/live boundaries; full module line coverage via deterministic gap chunks.)
+- [x] 4.1.4 RAG index integrity v1 (2026-08-06, repair 1): recomputed index_id/corpus_digest/chunk identities on build and load, document uniqueness, chunk→document binding, final-size cap including index_id, tampering tests.
 - [x] 4.3.1 Build deterministic file-read tool.
 - [x] 4.3.2 Build deterministic code-search tool.
 - [x] 4.3.3 Build deterministic test-run tool.
@@ -167,15 +170,16 @@ Rules:
 
 ## 5. Phase 5 — Preference Optimization
 
-- [ ] 5.1 Create preference dataset from successful and failed debugging outputs.
+- [ ] 5.1 Create preference dataset from successful and failed debugging outputs. (Partial 2026-08-06 — exporter v1 infrastructure complete and deterministic demo-scale pairs produced from verifier evidence; production corpus awaits real attempts. See `docs/PREFERENCE_EXPORTER_V1.md`.)
 - [ ] 5.2 Apply DPO or an appropriate RLHF method.
-- [ ] 5.3 Compare base model, fine-tuned model, RAG-supported model, and agentic system.
+- [ ] 5.3 Compare base model, fine-tuned model, RAG-supported model, and agentic system. (Partial 2026-08-06 — comparison harness v1 complete (imported `generation-artifact-v1` + native agentic conditions; normalized `comparison-v1` metrics; JSON/CSV/Markdown; aggregates; delta vs baseline; see `docs/COMPARISON_HARNESS_V1.md`); real base-versus-tuned comparison awaits real imported generations. Synthetic `offline-deterministic-demo` identities are not model performance.)
 
 ### 5.x Subtasks / Log
 
 - [ ] 5.1.1 Defer until enough real/debugger trajectories exist.
+- [x] 5.1.2 Preference-pair exporter v1 (2026-08-06): ordered rules, `preference-pair-v1` schema, held-out/oracle-answer-contamination/duplicate/same-response/no-evidence guards, JSONL + audit; no DPO/RLHF. (Repair 1: pair identity binds response/patch/verifier-evidence hashes and is verified on load; contamination checked on the full response before any storage bound; marker-inclusive UTF-8-safe response bounding; complete audit keys.)
 - [ ] 5.2.1 Defer DPO/RLHF until SFT baseline is measured.
-- [ ] 5.3.1 Define comparison protocol after MVP.
+- [x] 5.3.1 Comparison protocol v1 (2026-08-06): `comparison-v1` schema, condition identities, declared baseline, imported + native modes. (Repair 1: strict attempt roles — evaluation vs preference-fixture — with at-most-one primary per task/condition; raw-output-to-patch binding; recursive JSON bounds; telemetry separation; `memory_bytes` in metrics/CSV.)
 
 ---
 
@@ -203,7 +207,7 @@ Rules:
 
 ## 7. Phase 7 — Evaluation and Final Report
 
-- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Metrics are defined — see 7.1.1-7.1.5 — but no real model has been evaluated against an external dataset yet, so there is no cross-dataset model result to report against these metrics.)
+- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Metrics are defined — see 7.1.1-7.1.5 — and the comparison harness now derives them (`comparison-v1`: failure categories, aggregates, delta, cost/tokens, retrieval, replay, cleanup; see `docs/COMPARISON_HARNESS_V1.md`), but no real model has been evaluated against an external dataset yet, so there is no cross-dataset model result to report against these metrics.)
 - [x] 7.2 Prepare a working agentic debugging demo and technical report. (Demo Guide v1 and Final Technical Report v1 completed and accepted 2026-07-31 — infrastructure/evaluation-platform demo and report, explicitly not a model-debugging-performance demo; see below.)
 
 ### 7.x Subtasks / Log
@@ -213,6 +217,7 @@ Rules:
 - [x] 7.1.3 Define patch correctness metric (verifier outcome, fail-to-pass, pass-to-pass, and full-suite consistency).
 - [x] 7.1.4 Define cost/runtime metric (transport timing and provider-reported usage/cost metadata with qualification).
 - [x] 7.1.5 Define debugger-action metric (PDB openings, observations, action counts, and policy restrictions).
+- [x] 7.1.6 Comparison-harness metric derivation v1 (2026-08-06): normalized failure-category vocabulary, per-condition aggregates, baseline delta, CSV projection.
 - [x] 7.2.1 Prepare demo scenario (Task 9 deterministic five-task, two-policy demonstration).
 - [x] 7.2.2 Prepare final technical report outline. (Superseded by the completed Final Technical Report v1 — `docs/FINAL_TECHNICAL_REPORT_V1.md`.)
 - [x] 7.2.3 Model, RAG, Fine-Tuning and DPO Decision Gate v1 — `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`. PROCEED (narrow) on model-access strategy, NO-GO-FOR-NOW on RAG, DEFER on SFT, NO-GO-FOR-NOW on DPO; eight QuixBugs tasks judged sufficient for infrastructure validation only, not model selection, training, or generalization claims.

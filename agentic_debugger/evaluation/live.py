@@ -33,6 +33,7 @@ from agentic_debugger.evaluation.runner import bounded_error, load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
 from agentic_debugger.events.schema import RunEvent
+from agentic_debugger.rag.context import PUBLIC_REQUEST_BYTE_BUDGET, RagContext
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 class LiveEvaluationError(RuntimeError): pass
@@ -528,10 +529,17 @@ def _parse(
     raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized or missing directive 'kind'")
 
 class LiveModelAdapter:
-    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic):
+    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
         self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]
+        # Optional RAG context: when None (the default) the public request is
+        # byte-for-byte unchanged and ``retrieved_context`` is never emitted.
+        # When supplied it must be a validated RagContext; arbitrary
+        # lookalike objects are rejected at this boundary (repair 1).
+        if rag_context is not None and not isinstance(rag_context, RagContext):
+            raise LiveConfigurationError("rag_context must be a validated RagContext")
+        self._rag_context=rag_context
         self._failure_reproduced = False
         self._pdb_session_active = False
         self._runtime_transition_authorized = False
@@ -668,7 +676,10 @@ class LiveModelAdapter:
         contracts = self._effective_contract(snapshot)
         runtime_allowed = self._runtime_transition_allowed(snapshot)
         effective_actions = list(contracts)
-        return {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        if self._rag_context is not None:
+            payload["retrieved_context"] = self._rag_context.to_request_mapping()
+        return payload
     def next_directive(self,snapshot):
         self._observe_snapshot(snapshot)
         # The gate is consumed from ``UNDERSTAND``.  ``_runtime_transition_authorized``
@@ -696,6 +707,14 @@ class LiveModelAdapter:
                 self.metrics.termination_reason="request_serialization"; raise LiveModelAdapterError("live model context could not be serialized") from None
             if len(request_bytes)>MAX_MODEL_RESPONSE_BYTES:
                 self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context exceeded the configured request bound")
+            # RAG-enabled guard: the canonical public request (which is what
+            # the transport serializes and byte-bounds) must stay inside the
+            # frozen public-evidence budget even with the retrieved context
+            # added.  Fail closed here, before any transport call; the guard
+            # applies only when RAG context was explicitly enabled, so the
+            # frozen QuixBugs runner behavior is unchanged.
+            if self._rag_context is not None and len(request_bytes)>PUBLIC_REQUEST_BYTE_BUDGET:
+                self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context plus RAG context exceeded the public request bound")
             self.metrics.model_requests+=1
             timeout_seconds=min(self.config.request_timeout_seconds,self._remaining())
             phase_started=self.clock()

@@ -219,6 +219,7 @@ class DemoCaseResult:
     wall_clock_ms: int
     semantic_events: tuple[dict[str, Any], ...] = field(default=(), repr=False, compare=False)
     events_jsonl: str = field(default="", repr=False, compare=False)
+    retrieval: Optional[dict[str, Any]] = field(default=None, repr=False, compare=False)
 
     @property
     def case_id(self) -> str:
@@ -227,7 +228,7 @@ class DemoCaseResult:
     def to_mapping(self) -> dict[str, Any]:
         """Return the deterministic, machine-readable case record."""
 
-        return {
+        mapping = {
             "case_id": self.case_id,
             "task_id": self.task_id,
             "policy": self.policy,
@@ -245,6 +246,11 @@ class DemoCaseResult:
             "offline": self.offline,
             "diagnostics": list(self.diagnostics),
         }
+        # Additive retrieval block: present only when RAG context was
+        # explicitly supplied, so the default demo output stays byte-identical.
+        if self.retrieval is not None:
+            mapping["retrieval"] = self.retrieval
+        return mapping
 
     def timing_mapping(self) -> dict[str, Any]:
         """Return the wall-clock measurement, which is never deterministic."""
@@ -698,8 +704,16 @@ def run_demo_case(
     task_id: str,
     policy: DemoPolicy,
     workspace_parent: str | Path,
+    rag_context: Any = None,
 ) -> DemoCaseResult:
-    """Execute one curated task under one demonstration policy end to end."""
+    """Execute one curated task under one demonstration policy end to end.
+
+    ``rag_context`` is an optional additive seam: when supplied (and only
+    then) it is handed to the offline model, which records its retrieval
+    evidence on the case result without changing any directive.  Default
+    no-RAG behavior is unchanged and the default case record is
+    byte-identical.
+    """
 
     if type(policy) is not DemoPolicy:
         raise DemoInputError("policy must be a DemoPolicy")
@@ -770,7 +784,10 @@ def run_demo_case(
                 probe=probe,
             )
             model = DemoPolicyModel(
-                scenario=scenario, patch=patch_text, pdb_policy=pdb_mode
+                scenario=scenario,
+                patch=patch_text,
+                pdb_policy=pdb_mode,
+                rag_context=rag_context,
             )
             controller = DeterministicController(
                 build_registry(context),
@@ -857,7 +874,6 @@ def run_demo_case(
         fixture_before=fixture_before,
         fixture_after=fixture_after,
     )
-
 
 def _release(
     context: Optional[DemoToolContext],
@@ -1021,6 +1037,7 @@ def _assemble_case(
         wall_clock_ms=wall_clock_ms,
         semantic_events=semantic_events,
         events_jsonl=events_jsonl,
+        retrieval=model_used.retrieval_record if model_used else None,
     )
 
 

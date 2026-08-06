@@ -92,6 +92,7 @@ class DemoPolicyModel:
         scenario: DemoScenario,
         patch: str,
         pdb_policy: PdbPolicy,
+        rag_context: Optional[Any] = None,
     ) -> None:
         if type(pdb_policy) is not PdbPolicy:
             raise ModelAdapterError("pdb_policy must be a PdbPolicy")
@@ -100,6 +101,21 @@ class DemoPolicyModel:
         self._scenario = scenario
         self._patch = patch
         self._pdb_policy = pdb_policy
+        self._rag_context = rag_context
+        self.retrieval_record: Optional[dict[str, Any]] = None
+        if rag_context is not None:
+            # Only a validated RagContext may cross this boundary; arbitrary
+            # lookalike objects are rejected (repair 1).
+            from agentic_debugger.rag.context import RagContext
+
+            if not isinstance(rag_context, RagContext):
+                raise ModelAdapterError(
+                    "rag_context must be a validated RagContext"
+                )
+            record = rag_context.to_record_mapping()
+            if type(record) is not dict:
+                raise ModelAdapterError("rag_context record must be a mapping")
+            self.retrieval_record = record
 
         self._phase = "reproduce"
         self._symbol_line: Optional[int] = None
