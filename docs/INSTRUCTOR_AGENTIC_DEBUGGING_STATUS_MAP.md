@@ -1,4 +1,9 @@
-# Instructor Agentic Debugging TODO — Status Map v1
+# Instructor Agentic Debugging TODO — Status Map v2
+
+> Reconciled 2026-08-07 against tracked history at `1e680b1`. See
+> `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md` for the commit-level
+> correction record. External QLoRA evidence is preserved as external and the
+> separate experiment repository/branch was not modified.
 
 ## 1. Purpose and snapshot identity
 
@@ -11,10 +16,9 @@ and remains byte-identical and unchanged at:
 This map is a separate derived record. It does not edit the instructor
 checklist, `TODO.md`, `README.md`, or `docs/PROJECT_TRACKER.md`.
 
-- Snapshot branch: `docs/instructor-todo-status-map-v1`
-- Snapshot base commit: `4087aa056eefa387f006ccaa98138c20ca14d4f0`
-- Snapshot date: 2026-08-05
-- Git state at writing: clean tracked working tree, no commits made.
+- Reconciled branch: `goal/friday-final-completion-codex-v1`
+- Reconciled base commit: `1e680b13eb25f19bd14fdeb6004e85bd9f8adb4d`
+- Reconciliation date: 2026-08-07
 
 Each item below carries:
 
@@ -53,8 +57,9 @@ Conservative acceptance rules applied throughout:
   the frozen held-out comparison.
 - RAG, DPO/RLHF, GDB and LLDB work are not COMPLETED without implementation
   evidence.
-- PDB-only implementation counts as PARTIAL for the item worded
-  "PDB, GDB veya LLDB".
+- PDB-only implementation satisfies the item worded "PDB, GDB veya LLDB"
+  because `veya` means “or” and the accepted project scope is Python/PDB-first.
+  This does not claim a GDB or LLDB implementation.
 - A correct model diagnosis or patch proposal without independent verifier
   confirmation is not a successful repair.
 - Implemented infrastructure is distinguished from experimentally validated
@@ -75,43 +80,47 @@ Conservative acceptance rules applied throughout:
 
 | № | Status | Item (abridged) | Horizon |
 |---|---|---|---|
-| 1 | PARTIAL | Debugging / automated debugging / fault localization / program repair literature review | FRIDAY PRESENTATION |
-| 2 | PARTIAL | LLM-based debugging studies | FRIDAY PRESENTATION |
+| 1 | COMPLETED | Debugging / automated debugging / fault localization / program repair literature review | FRIDAY PRESENTATION |
+| 2 | COMPLETED | LLM-based debugging studies | FRIDAY PRESENTATION |
 | 3 | PARTIAL | Agentic debugging, tool-using agents, multi-agent debugging | FRIDAY PRESENTATION |
-| 4 | PARTIAL | Compare traditional / LLM-based / agentic debugging | FRIDAY PRESENTATION |
+| 4 | COMPLETED | Compare traditional / LLM-based / agentic debugging | FRIDAY PRESENTATION |
 | 5 | COMPLETED | Study SWE-Agent, OpenHands, AutoCodeRover, Agentless, ChatDBG | FRIDAY PRESENTATION |
 | 6 | COMPLETED | Research debugging/bug-fix datasets on HF and open platforms | FRIDAY PRESENTATION |
 | 7 | COMPLETED | Compare SWE-bench family, BugsInPy, Defects4J, QuixBugs | FRIDAY PRESENTATION |
-| 8 | PARTIAL | Select datasets for fine-tuning, RAG, evaluation | FRIDAY PRESENTATION |
+| 8 | COMPLETED | Select datasets/corpora for fine-tuning, RAG, evaluation | FRIDAY PRESENTATION |
 | 9 | IN PROGRESS | Analyze datasets, prepare train/test split | FRIDAY PRESENTATION |
 | 10 | COMPLETED | Select open-source code model (branch-bound) | FRIDAY PRESENTATION |
 | 11 | IN PROGRESS | Convert dataset to instruction-response format | FRIDAY PRESENTATION |
 | 12 | IN PROGRESS | Supervised fine-tuning with LoRA or QLoRA | FRIDAY PRESENTATION |
 | 13 | NOT STARTED | Compare pre- and post-fine-tuning model | FRIDAY PRESENTATION |
-| 14 | NOT STARTED | Build RAG system | LONG TERM |
-| 15 | NOT STARTED | Combine fine-tuned model with RAG | LONG TERM |
+| 14 | COMPLETED | Build RAG system | FRIDAY PRESENTATION |
+| 15 | PARTIAL | Combine fine-tuned model with RAG | POST-FRIDAY NEAR TERM |
 | 16 | COMPLETED | File-read / code-search / test-run / patch-apply tools | FRIDAY PRESENTATION |
 | 17 | COMPLETED | Create the debugging agent | FRIDAY PRESENTATION |
 | 18 | PARTIAL | Model localizes faults, root cause, generates patches | FRIDAY PRESENTATION |
-| 19 | NOT STARTED | Create preference dataset | LONG TERM |
+| 19 | PARTIAL | Create preference dataset | LONG TERM |
 | 20 | NOT STARTED | Apply DPO or RLHF | LONG TERM |
-| 21 | NOT STARTED | Compare base / fine-tuned / RAG / agentic | LONG TERM |
-| 22 | PARTIAL | Develop debugger adapter (PDB done; GDB/LLDB missing) | FRIDAY (PDB) / LONG TERM (GDB/LLDB) |
+| 21 | PARTIAL | Compare base / fine-tuned / RAG / agentic | LONG TERM |
+| 22 | COMPLETED | Develop debugger adapter (PDB alternative) | FRIDAY PRESENTATION |
 | 23 | NOT STARTED | Fine-tuned model generates debugger commands | POST-FRIDAY NEAR TERM |
 | 24 | PARTIAL | Breakpoint / variable / stack / step debugging | FRIDAY PRESENTATION |
 | 25 | PARTIAL | Patch generation + test validation after debugger | FRIDAY PRESENTATION |
 | 26 | PARTIAL | Evaluate by success rate, localization, test pass, cost, runtime | FRIDAY PRESENTATION |
 | 27 | COMPLETED | Working demo and technical report | FRIDAY PRESENTATION |
 
-Totals: COMPLETED 7 — PARTIAL 10 — IN PROGRESS 3 — NOT STARTED 7 — BLOCKED 0 — TOTAL 27.
+Totals: COMPLETED 13 — PARTIAL 8 — IN PROGRESS 3 — NOT STARTED 3 — BLOCKED 0 — TOTAL 27.
 
 ## 4. Per-item sections
 
-### Item 1 — PARTIAL — FRIDAY PRESENTATION
+### Item 1 — COMPLETED — FRIDAY PRESENTATION
 
 **Exact wording:** "Debugging, automated debugging, fault localization ve program repair konularında literatür taraması yap."
 
-**Current state:** A substantial literature-review foundation exists: initial concept notes, three independently generated AI research reports, a cross-report synthesis, a source-consensus matrix, and a claims-to-verify list. Tier 1 papers (ChatDBG, debug-gym, Agentless, SWE-bench) are archived and read; several Tier 2 papers are read with manual notes. The top-level Phase 1 tracker item remains open, with a minority of reading/verification subtasks still unchecked.
+**Current state:** A bounded, reviewed literature survey now consolidates the
+tracked primary-source notes across debugging, automated debugging, fault
+localization, and program repair. Unverified frontier claims are explicitly
+excluded rather than promoted. The deliverable was accepted at `3c23b6e` and
+tracker Phase 1.1 is closed.
 
 **Evidence (Layer 1):**
 - `research/literature_notes_01.md` (core concepts)
@@ -120,40 +129,41 @@ Totals: COMPLETED 7 — PARTIAL 10 — IN PROGRESS 3 — NOT STARTED 7 — BLOCK
 - `research/reports/synthesis/source_consensus_matrix_v1.md`
 - `research/reports/synthesis/claims_to_verify_v1.md` (open items remain)
 - `research/papers/tier1_must_read/`, `research/papers/tier2_core_sections/`
+- `docs/AUTOMATED_DEBUGGING_LITERATURE_SURVEY_V1.md`
 - `research/notes/2023_swe_bench_notes.md`, `2024_agentless_notes.md`,
   `2024_chatdbg_notes.md`, `2025_debug_gym_notes.md`
 - `docs/PROJECT_TRACKER.md` Phase 1.1 subtasks (1.1.1–1.1.9 checked;
   top-level 1.1 unchecked)
 
-**Missing work:** Closing the claims-to-verify list against primary sources;
-finishing remaining Tier 2/3 reading; a consolidated reviewed literature
-survey document; tracker Phase 1.1 closure.
+**Missing work:** None for the bounded instructor item. Additional Tier 2/3
+reading remains useful future breadth, not a prerequisite for this tracked
+survey's completion.
 
 **Acceptance criteria for COMPLETED:** A reviewed, evidence-backed literature
-survey covering debugging, automated debugging, fault localization, and
-program repair is tracked, with the Phase 1.1 tracker item closed and no
-open verification claims.
+survey covering the four named topics is tracked and excludes unsupported
+claims; satisfied.
 
-### Item 2 — PARTIAL — FRIDAY PRESENTATION
+### Item 2 — COMPLETED — FRIDAY PRESENTATION
 
 **Exact wording:** "LLM-based debugging çalışmalarını incele."
 
-**Current state:** LLM-based debugging work is studied in depth for ChatDBG,
-debug-gym, LDB, and SWE-bench, with manual notes. Additional named studies
-(Self-Debugging, DebugBench) remain unread, and the tracker subtasks 1.2.2 /
-1.2.3 are still open.
+**Current state:** LLM-based debugging is covered by a consolidated review
+grounded in the tracked ChatDBG, debug-gym, LDB, and SWE-bench notes. The
+review was accepted at `3c23b6e`; unreviewed studies are identified as future
+breadth and are not used as evidence.
 
 **Evidence (Layer 1):**
 - `research/notes/2024_chatdbg_notes.md`, `2025_debug_gym_notes.md`,
   `2024_ldb_notes.md`, `2023_swe_bench_notes.md`
 - `research/synthesis/pdb_debugger_agent_mvp_rationale.md` (Tier 1 reading)
-- `docs/PROJECT_TRACKER.md` Phase 1.2 (1.2.0, 1.2.1 checked; 1.2.2–1.2.4 open)
+- `docs/LLM_BASED_DEBUGGING_LITERATURE_REVIEW_V1.md`
+- `docs/PROJECT_TRACKER.md` Phase 1.2
 
-**Missing work:** Read Self-Debugging and DebugBench; write the summary of
-how LLM debugging differs from static code repair; tracker Phase 1.2 closure.
+**Missing work:** None for the bounded review. Self-Debugging, DebugBench, and
+future papers may extend coverage later.
 
-**Acceptance criteria for COMPLETED:** Named LLM-debugging studies are read
-with notes, and a reviewed synthesis of LLM-based debugging is tracked.
+**Acceptance criteria for COMPLETED:** Representative LLM-debugging studies
+are read with notes and a reviewed synthesis is tracked; satisfied.
 
 ### Item 3 — PARTIAL — FRIDAY PRESENTATION
 
@@ -177,30 +187,28 @@ debugging review; tracker Phase 1.3 closure.
 debugging literature is reviewed with notes, including the named frontier
 systems.
 
-### Item 4 — PARTIAL — FRIDAY PRESENTATION
+### Item 4 — COMPLETED — FRIDAY PRESENTATION
 
 **Exact wording:** "Geleneksel debugging, LLM-based debugging ve agentic debugging yaklaşımlarını karşılaştır."
 
-**Current state:** Comparison work exists as synthesis documents and the
-system capability matrix (traditional/LLM/agentic distinctions, static vs
-dynamic debugging, fault localization vs root-cause analysis, repository
-agents vs debugger agents, APR plausibility vs correctness). The comparison
-is embedded in research syntheses rather than a single consolidated reviewed
-deliverable, and the top-level tracker item remains open.
+**Current state:** A consolidated comparison now covers traditional,
+automated/APR, LLM-based, and agentic/tool-using debugging across evidence,
+localization, root-cause reasoning, tool use, verification, reproducibility,
+cost, strengths, and failure modes. It was accepted at `3c23b6e`.
 
 **Evidence (Layer 1):**
 - `research/synthesis/pdb_debugger_agent_mvp_rationale.md` (§9 System
   Capability Matrix v1)
 - `research/reports/synthesis/phase1_cross_report_synthesis_v1.md`
 - `docs/FINAL_TECHNICAL_REPORT_V1.md` §1
+- `docs/DEBUGGING_APPROACH_COMPARISON_V1.md`
 - `docs/PROJECT_TRACKER.md` Phase 1.4 (1.4.1–1.4.4 checked)
 
-**Missing work:** A consolidated, reviewed comparison deliverable and
-tracker Phase 1.4 closure.
+**Missing work:** None for the comparison deliverable.
 
 **Acceptance criteria for COMPLETED:** A tracked comparison document covers
 traditional vs LLM-based vs agentic debugging with evidence-backed
-conclusions.
+conclusions; satisfied.
 
 ### Item 5 — COMPLETED — FRIDAY PRESENTATION
 
@@ -261,16 +269,17 @@ localization suitability, environment cost, and licensing. Tracker subtasks
 **Acceptance criteria for COMPLETED:** Six-dataset comparison recorded;
 satisfied.
 
-### Item 8 — PARTIAL — FRIDAY PRESENTATION
+### Item 8 — COMPLETED — FRIDAY PRESENTATION
 
 **Exact wording:** "Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç."
 
-**Current state:** Evaluation datasets and fine-tuning corpora are selected:
-BugsInPy primary / QuixBugs fallback / curated smoke gate for evaluation, and
-the CommitPackFT Python corpus plus five curated held-out tasks for
-fine-tuning. However, a final RAG dataset/corpus has not been selected and
-accepted; the recorded RAG NO-GO / defer decisions do not satisfy the full
-wording of the item, which names RAG explicitly.
+**Current state:** The three uses now have explicit selections: the external
+QLoRA work records CommitPackFT Python plus curated held-out tasks for
+fine-tuning; BugsInPy primary / QuixBugs fallback / curated smoke fixtures are
+the evaluation route; and repository source, tests, safe task/issue
+projections, and captured failure output are the accepted RAG corpus in
+`repository-index-v1`. Selection does not imply that external execution or
+model-performance evaluation is complete.
 
 **Evidence (Layer 1):**
 - `docs/DATASET_EVALUATION_DECISION_V1.md` (evaluation selection;
@@ -279,17 +288,16 @@ wording of the item, which names RAG explicitly.
 - `experiments/qlora_patch_pilot_v1/freeze_record.json` (CommitPackFT
   config `python`, pinned revision; five curated held-out tasks) on branch
   `experiment/qlora-patch-pilot-v1` branch-head commit `3f0d3e7`
+- `docs/REPOSITORY_RAG_V1.md`, `docs/RAG_COMPARISON_DECISION_V2.md`
+- `agentic_debugger/rag/corpus.py`
 
-**Missing work:** Explicit selection and acceptance of a RAG corpus (or an
-accepted documented decision that names the RAG corpus requirement and its
-trigger), and an explicit acceptance record for the fine-tuning corpus once
-the fail-closed audit validation and corpus acceptance decision complete
-(owner-delegated independent FirstMate AI audit of the 75 frozen rows is
-complete externally; this is an AI audit, not a human audit).
+**Missing work:** None for selection. Corpus-quality acceptance, final
+training, and empirical evaluation remain separate execution items (9–13).
 
 **Acceptance criteria for COMPLETED:** A tracked selection covers a
 fine-tuning corpus, a RAG corpus (or an accepted equivalent decision with
-trigger), and an evaluation dataset, each with acceptance evidence.
+trigger), and an evaluation dataset; satisfied with the evidence boundaries
+above.
 
 ### Item 9 — IN PROGRESS — FRIDAY PRESENTATION
 
@@ -442,38 +450,47 @@ generated patches; metrics and analysis.
 five frozen held-out tasks with identical prompt/generation contracts, and
 the independent verifier is applied to all generated patches.
 
-### Item 14 — NOT STARTED — LONG TERM
+### Item 14 — COMPLETED — FRIDAY PRESENTATION
 
 **Exact wording:** "Repository kodları, testler, issue açıklamaları ve hata mesajları için RAG sistemi kur."
 
-**Current state:** No RAG system is implemented. Repository RAG is recorded
-as NO-GO-FOR-NOW / DEFER in both decision documents; the existing
-deterministic file-read and code-search tools are explicitly labeled as not
-RAG.
+**Current state:** Repository-native deterministic lexical RAG is implemented
+and accepted at `1e680b1`: corpus construction over source/tests/safe
+task-and-issue projections/failure output, AST-aware chunking, revision-bound
+strict index and retrieval artifacts, bounded context, explicit exclusions,
+and optional demo/live-adapter injection. The earlier RAG `NO-GO-FOR-NOW` is
+superseded only for this offline infrastructure scope. No performance benefit
+is claimed.
 
 **Evidence (Layer 1):**
-- `docs/DATASET_EVALUATION_DECISION_V1.md` §10 (RAG NO-GO-FOR-NOW)
-- `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` §2 (RAG NO-GO / DEFER)
-- `agentic_debugger/skills/file_skills.py`, `search_skills.py` (deterministic
-  tools, not retrieval)
+- `agentic_debugger/rag/`
+- `docs/REPOSITORY_RAG_V1.md`
+- `docs/RAG_COMPARISON_DECISION_V2.md`
+- RAG/comparison/preference unit and integration tests accepted at `1e680b1`
 
-**Missing work:** RAG system over repository code, tests, issue
-descriptions, and error messages; retrieval evaluation.
+**Missing work:** None for building the named RAG system. Real-model retrieval
+ablation remains an empirical comparison item.
 
 **Acceptance criteria for COMPLETED:** A working RAG system over the four
-named content types, evaluated against a non-RAG baseline.
+named content types exists with bounded, validated retrieval artifacts;
+satisfied. The deterministic comparison harness supplies a non-performance
+baseline seam without implying model improvement.
 
-### Item 15 — NOT STARTED — LONG TERM
+### Item 15 — PARTIAL — POST-FRIDAY NEAR TERM
 
 **Exact wording:** "Fine-tuned modeli RAG sistemiyle birleştir."
 
-**Current state:** No fine-tuned model and no RAG system exist, so no
-combination exists.
+**Current state:** The RAG side and integration seam exist: validated
+`RagContext` can be injected additively at demo and `LiveModelAdapter`
+boundaries while default requests remain byte-identical. No accepted
+fine-tuned generation has been combined with it, so this is not complete.
 
-**Evidence (Layer 1):** Items 12 and 14 are not complete
-(`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`).
+**Evidence (Layer 1):** `agentic_debugger/rag/`,
+`agentic_debugger/evaluation/live.py`, `agentic_debugger/demo/model.py`, and
+`docs/RAG_COMPARISON_DECISION_V2.md`; item 12 remains external/in progress.
 
-**Missing work:** Depends on items 12 and 14; integration and evaluation.
+**Missing work:** Accepted tuned-model generations passed through the RAG
+boundary and evaluated with the common verifier contract.
 
 **Acceptance criteria for COMPLETED:** The fine-tuned model operates over the
 RAG system end-to-end with measured retrieval and repair outcomes.
@@ -554,19 +571,24 @@ root-cause metrics over an external dataset.
 verifier-confirmed `RESOLVED` with recorded correct localization and
 root-cause statements.
 
-### Item 19 — NOT STARTED — LONG TERM
+### Item 19 — PARTIAL — LONG TERM
 
 **Exact wording:** "Başarılı ve başarısız debugging çıktılarından preference veri seti oluştur."
 
-**Current state:** No preference dataset exists; creation is explicitly
-deferred until enough real/debugger trajectories exist.
+**Current state:** A strict verifier-backed preference-pair exporter and
+`preference-pair-v1` schema exist, with ordered evidence rules, held-out and
+oracle-contamination guards, deterministic JSONL/audit output, and
+demo-scale successful/failed pairs. A production corpus from real debugging
+attempts does not yet exist.
 
 **Evidence (Layer 1):**
-- `docs/PROJECT_TRACKER.md` Phase 5.1 (defer recorded)
-- `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` (DPO NO-GO-FOR-NOW)
+- `agentic_debugger/preference/`
+- `docs/PREFERENCE_EXPORTER_V1.md`
+- `tests/unit/test_preference_*.py`,
+  `tests/integration/test_comparison_end_to_end.py`
 
-**Missing work:** Preference dataset from successful and failed debugging
-outputs with reliable success/failure labels.
+**Missing work:** A reviewed production dataset from authorized real attempts
+with reliable verifier labels and sufficient breadth.
 
 **Acceptance criteria for COMPLETED:** A reviewed preference dataset exists
 with paired successful/failed trajectories and validated labels.
@@ -589,31 +611,36 @@ or RLHF run and evaluation.
 applied on the accepted preference dataset with an SFT baseline and
 evaluation.
 
-### Item 21 — NOT STARTED — LONG TERM
+### Item 21 — PARTIAL — LONG TERM
 
 **Exact wording:** "Base model, fine-tuned model, RAG destekli model ve agentic sistemi karşılaştır."
 
-**Current state:** No four-way comparison exists; it depends on the
-fine-tuned model (item 12), RAG (item 14), and their combination (item 15).
+**Current state:** The unified `comparison-v1` harness supports imported base
+and fine-tuned generations plus native RAG-assisted and agentic conditions,
+with normalized metrics, JSON/CSV/Markdown reports, aggregates, and baseline
+deltas. Its deterministic four-condition demo uses explicitly synthetic
+identities and therefore proves infrastructure only, not model performance.
 
 **Evidence (Layer 1):**
-- `docs/PROJECT_TRACKER.md` Phase 5.3 (comparison protocol deferred)
+- `agentic_debugger/comparison/`
+- `docs/COMPARISON_HARNESS_V1.md`
+- `tests/integration/test_comparison_end_to_end.py`
 
-**Missing work:** Fine-tuned model, RAG model, agentic system, and a common
-comparison protocol with the same prompt contract, verifier, and metrics.
+**Missing work:** Authorized real base/tuned generations and real RAG/agentic
+runs under the same frozen prompt, task, verifier, and metric contract.
 
 **Acceptance criteria for COMPLETED:** All four conditions are run under a
 common contract and compared with the independent verifier.
 
-### Item 22 — PARTIAL — FRIDAY (PDB) / LONG TERM (GDB/LLDB)
+### Item 22 — COMPLETED — FRIDAY PRESENTATION
 
 **Exact wording:** "PDB, GDB veya LLDB için bir debugger adapter geliştir."
 
 **Current state:** A PDB adapter is complete and accepted (session lifecycle,
 breakpoints, execution control, stack/frame/locals inspection, safe
-evaluation). GDB and LLDB adapters are not implemented. Because the item
-names three debuggers and only PDB exists, the item is PARTIAL (an
-alternative "or" reading is noted but not used for a COMPLETED claim).
+evaluation, and bounded post-mortem entry). The Turkish “veya” makes PDB one
+valid alternative, matching the repository's explicit Python/PDB-first scope.
+GDB and LLDB are intentionally not implemented.
 
 **Evidence (Layer 1):**
 - `agentic_debugger/runtime/pdb_session.py`, `pdb_worker.py`,
@@ -621,13 +648,13 @@ alternative "or" reading is noted but not used for a COMPLETED claim).
 - `agentic_debugger/quixbugs/contained_pdb.py`
 - `docs/PROJECT_TRACKER.md` Phase 6.1 and Tasks 4A–4D
   (commits `c8539a4`, `84fe9e2`, `9a921bd`, `24ecc7a`, `17a7ebb`)
-- `TODO.md` Phase 6 note: "yalnızca PDB için; GDB/LLDB henüz geliştirilmedi"
+- post-mortem PDB commits `f7ba129`..`e92634e`
 
-**Missing work:** GDB and/or LLDB adapter, or explicit instructor
-confirmation that the "veya" reading makes PDB-only sufficient.
+**Missing work:** None within the accepted PDB alternative. Adding GDB/LLDB
+would require an explicit scope change.
 
-**Acceptance criteria for COMPLETED:** PDB plus at least one of GDB/LLDB is
-implemented, or the owner confirms PDB-only satisfies the wording.
+**Acceptance criteria for COMPLETED:** At least one named debugger adapter is
+implemented and accepted; satisfied by PDB.
 
 ### Item 23 — NOT STARTED — POST-FRIDAY NEAR TERM
 
@@ -836,8 +863,10 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 - **BugsInPy boundary.** BugsInPy source acquisition and execution remain
   license-gated (`docs/BUGSINPY_LICENSE_GATE_V1.md`); metadata/preflight
   work may continue, execution may not.
-- **RAG / SFT / DPO decisions.** RAG NO-GO-FOR-NOW, SFT DEFER, DPO
-  NO-GO-FOR-NOW are recorded decisions, not completions (see item 8).
+- **RAG / SFT / DPO decisions.** `docs/RAG_COMPARISON_DECISION_V2.md`
+  supersedes the earlier RAG `NO-GO-FOR-NOW` only for the accepted offline
+  RAG infrastructure. SFT remains external/in progress and DPO remains
+  `NO-GO-FOR-NOW`; no model-performance completion follows from RAG v1.
 - **Evidence-layer rule.** Layer 2 (FirstMate-reviewed external evidence not
   yet merged or durably tracked on main) supports IN PROGRESS claims only.
   No COMPLETED claim in this map rests solely on ignored `_ai-review/` or
@@ -847,9 +876,10 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 
 ### FRIDAY PRESENTATION (active work + honest limitations; completion not implied)
 
-- Items 1–4: reviewed literature and honest gaps.
+- Items 1, 2, and 4: completed bounded literature deliverables; item 3 keeps
+  the explicit frontier multi-agent breadth gap.
 - Items 5–7: completed dataset/system research.
-- Item 8: selections reported with the explicit RAG selection gap.
+- Item 8: fine-tuning, RAG, and evaluation selections recorded.
 - Item 9: real corpus produced; owner-delegated independent FirstMate AI
   audit complete externally; fail-closed validation and corpus acceptance
   pending.
@@ -863,7 +893,7 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 - Items 16–17: working prototype and demonstrable architecture.
 - Item 18: honest live findings (diagnosis/patch intent, zero
   verifier-confirmed repairs).
-- Item 22 (PDB portion): PDB adapter as part of the prototype.
+- Item 22: completed PDB adapter (the accepted “or” alternative).
 - Items 24–25: mechanism demonstrated; zero live PDB observations reported
   honestly.
 - Item 26: metrics and limitations from live attempts.
@@ -884,9 +914,10 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 ### LONG TERM
 
 - Item 3: full multi-agent debugging studies.
-- Items 14–15: RAG system and fine-tuned-model-plus-RAG integration.
-- Items 19–21: preference dataset, DPO/RLHF, four-way comparison.
-- Item 22: GDB and LLDB adapters.
+- Item 15: accepted tuned-model-plus-RAG execution.
+- Items 19–21: production preference dataset, DPO/RLHF, and real four-way
+  comparison (export/comparison infrastructure is already present).
+- GDB and LLDB adapters only if the accepted Python/PDB-first scope changes.
 - Defects4J integration (outside the current Python/PDB track).
 
 ## 7. Evidence index
@@ -926,10 +957,11 @@ exist and are accepted; satisfied with the explicit scope boundary above.
 
 ## 8. Method and limitations note
 
-- This map was produced by inspecting the live repository at snapshot base
-  `4087aa0` (branch `docs/instructor-todo-status-map-v1`, clean working
-  tree): source, tests, manifests, decision documents, tracker, diary, and
-  the unmerged experiment branch content.
+- This v2 map was reconciled on 2026-08-07 against tracked history through
+  `1e680b1`; the original v1 snapshot was based at `4087aa0`. Source, tests,
+  manifests, decision documents, tracker, diary, and recorded external QLoRA
+  boundaries were inspected. The separate QLoRA repository/branch was not
+  modified.
 - All 27 item wordings are quoted from
   `docs/INSTRUCTOR_AGENTIC_DEBUGGING_TODO.md` in order; the original file is
   unchanged (verified by an empty diff against the snapshot base).

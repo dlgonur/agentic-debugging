@@ -27,10 +27,10 @@ Rules:
 
 ## 1. Phase 1 — Literature Review
 
-- [ ] 1.1 Research debugging, automated debugging, fault localization, and program repair.
-- [ ] 1.2 Study LLM-based debugging work.
+- [x] 1.1 Research debugging, automated debugging, fault localization, and program repair. (Bounded reviewed survey accepted at `3c23b6e`; unresolved claims are excluded rather than asserted.)
+- [x] 1.2 Study LLM-based debugging work. (Bounded reviewed synthesis accepted at `3c23b6e`; additional frontier reading remains optional follow-up.)
 - [ ] 1.3 Study agentic debugging, tool-using agents, and multi-agent debugging.
-- [ ] 1.4 Compare traditional debugging, LLM-based debugging, and agentic debugging.
+- [x] 1.4 Compare traditional debugging, LLM-based debugging, and agentic debugging. (`docs/DEBUGGING_APPROACH_COMPARISON_V1.md`, accepted at `3c23b6e`.)
 - [ ] 1.5 Study SWE-Agent, OpenHands, AutoCodeRover, Agentless, and ChatDBG.
 
 ### 1.1 Subtasks / Log
@@ -109,14 +109,14 @@ Rules:
 
 ## 3. Phase 3 — Model and Fine-tuning
 
-- [ ] 3.1 Select an open-source code model.
+- [x] 3.1 Select an open-source code model. (External/branch-bound selection recorded: `Qwen/Qwen2.5-Coder-7B-Instruct` at the pinned revision; no QLoRA repository change in this reconciliation.)
 - [ ] 3.2 Convert dataset to instruction-response format if needed.
 - [ ] 3.3 Run supervised fine-tuning with LoRA or QLoRA.
 - [ ] 3.4 Compare pre-fine-tuning and post-fine-tuning model performance.
 
 ### 3.x Subtasks / Log
 
-- [ ] 3.1.1 Defer final model selection until baseline experiments exist.
+- [x] 3.1.1 Record the selected model identity, revision, and license. (Completed on the external QLoRA branch at `3f0d3e7`; main repository records the decision without importing or modifying that repository.)
 - [ ] 3.2.1 Draft instruction-response schema for debugger trajectories.
 - [ ] 3.3.1 Collect successful debugger trajectories before SFT.
 - [ ] 3.4.1 Define pre/post fine-tuning evaluation protocol.
@@ -185,16 +185,16 @@ Rules:
 
 ## 6. Phase 6 — Debugger Adapter
 
-- [x] 6.1 Develop a debugger adapter for PDB, GDB, or LLDB. (Completed for PDB only; GDB and LLDB remain unimplemented.)
+- [x] 6.1 Develop a debugger adapter for PDB, GDB, or LLDB. (Completed for the instructor's “or” requirement with the accepted Python/PDB-first adapter; GDB/LLDB are outside current scope.)
 - [ ] 6.2 Enable the fine-tuned model to generate debugger commands and interpret outputs.
-- [x] 6.3 Enable breakpoint placement, variable inspection, stack trace reading, and step-by-step debugging.
-- [x] 6.4 Enable patch generation and test validation after debugger interaction.
+- [ ] 6.3 Enable breakpoint placement, variable inspection, stack trace reading, and step-by-step debugging. (Partial: full mechanism and scripted trajectories exist; no accepted live-model full sequence.)
+- [ ] 6.4 Enable patch generation and test validation after debugger interaction. (Partial: mechanism is verifier-backed; no accepted PDB-after-live-model resolved case.)
 
 ### 6.x Subtasks / Log
 
 - [x] 6.1.1 Start with PDB only.
 - [x] 6.1.2 Define PDB command schema.
-- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı 2026-08-06 — `run_post_mortem` PDB protocol/worker/session operation; reuses existing PDB protocol, worker channel, and session lifecycle; offline-capable, no provider/network; captures bounded, side-effect-safe structured traceback evidence (exception type/message, traceback frames, innermost-frame locals) on unhandled exception; evidence capture never invokes arbitrary user-defined `__repr__`/`__str__`/properties/iteration/metaclass presentation hooks — value summarization reuses the accepted exact-built-in machinery, and the exception summary reads only exact descriptors (`type.__dict__['__name__']`, `BaseException.__dict__['args']`); traceback frames come from a single bounded walk (hard scan ceiling `_POST_MORTEM_MAX_TB_SCAN`, innermost 16-frame tail, no source-line loading, explicit `frames_truncated`, fail-closed bounded `traceback_error` on malformed/cyclic structures); innermost-frame locals are collected with a hard inspection ceiling (`_POST_MORTEM_LOCALS_SCAN_CEILING`) and fail-closed mutation handling, never the full mapping; all text fields are UTF-8-byte-bounded with the truncation marker included inside the limit, and the complete serialized response is proven within `MAX_LINE_LENGTH`; successful exit produces no post-mortem; tracebackless failure fails closed through the real worker branch emitting the authoritative `_post_mortem_missing_traceback_response` (success=false, empty result, bounded error, worker/session lifecycle `failed`); SystemExit(0) and SystemExit(nonzero) both report exited with no post-mortem; one-execution-per-session invariant preserved; evidence is bound to script and session identity (the existing PDB API does not carry task/case identity without a public contract change); the response is deterministic, bounded, JSON-serializable protocol evidence suitable for later event persistence (it is not currently integrated into the accepted event/replay trajectory path); 70 unique focused tests in `tests/unit/test_pdb_post_mortem.py` (AST definition count = unique name count = pytest collected count); accepted on the `fix/post-mortem-pdb-evidence-v1` candidate, not yet merged.)
+- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı ve main history'ye entegre: `f7ba129`..`e92634e`; bounded, side-effect-safe `run_post_mortem` protocol/worker/session operation; 107 unique focused tests. Structured response event/replay entegrasyonuna hazırdır fakat henüz first-class trajectory observation değildir.)
 - [x] 6.2.1 Serialize debugger outputs into model-readable structured text.
 - [x] 6.3.1 Support stack inspection.
 - [x] 6.3.2 Support local variable inspection.

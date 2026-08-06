@@ -2,6 +2,13 @@
 
 ## Durum notu
 
+**2026-08-07 reconciliation:** Current status is reconciled against reachable
+history at `1e680b1` in
+`docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md`. This corrects stale
+pre-merge claims about the literature syntheses (`3c23b6e`), post-mortem PDB
+work (`f7ba129`..`e92634e`), and RAG/comparison/preference infrastructure
+(`1e680b1`). External QLoRA state is recorded but not modified.
+
 Aşağıdaki faz listesi, stajın orijinal geniş araştırma/ürün planını temsil eder.
 Bu plan içinde bazı maddeler, fine-tuning veya RAG üzerinden değil,
 deterministic tool'lar ve verifier-backed bir controller agent üzerinden
@@ -138,11 +145,11 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 1 — Literature Review
 
-- [ ] Debugging, automated debugging, fault localization ve program repair konularında literatür taraması yap.
-- [ ] LLM-based debugging çalışmalarını incele.
+- [x] Debugging, automated debugging, fault localization ve program repair konularında literatür taraması yap. (Tamamlandı 2026-08-05 — `docs/AUTOMATED_DEBUGGING_LITERATURE_SURVEY_V1.md`, commit `3c23b6e`; doğrulanmamış iddialar kapsam dışı bırakıldı.)
+- [x] LLM-based debugging çalışmalarını incele. (Tamamlandı 2026-08-05 — `docs/LLM_BASED_DEBUGGING_LITERATURE_REVIEW_V1.md`, commit `3c23b6e`; ek frontier okuma gelecek iş olabilir fakat tamamlanmış bounded review'ı geçersiz kılmaz.)
 - [ ] Agentic debugging, tool-using agents ve multi-agent debugging çalışmalarını incele.
-- [ ] Geleneksel debugging, LLM-based debugging ve agentic debugging yaklaşımlarını karşılaştır.
-- [ ] SWE-Agent, OpenHands, AutoCodeRover, Agentless ve ChatDBG gibi sistemleri incele.
+- [x] Geleneksel debugging, LLM-based debugging ve agentic debugging yaklaşımlarını karşılaştır. (Tamamlandı 2026-08-05 — `docs/DEBUGGING_APPROACH_COMPARISON_V1.md`, commit `3c23b6e`.)
+- [x] SWE-Agent, OpenHands, AutoCodeRover, Agentless ve ChatDBG gibi sistemleri incele. (Tamamlandı — reviewed notes + system capability matrix.)
 
 ## Phase 2 — Dataset Research
 
@@ -153,7 +160,7 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 3 — Model and Fine-tuning
 
-- [ ] Seçilen açık kaynak kod modelini belirle.
+- [x] Seçilen açık kaynak kod modelini belirle. (Tamamlandı, external/branch-bound karar — `Qwen/Qwen2.5-Coder-7B-Instruct`, pinned revision; ayrı QLoRA repository/branch bu reconciliation'da değiştirilmedi.)
 - [ ] Veri seti modele uygun değilse instruction-response formatına dönüştür.
 - [ ] LoRA veya QLoRA ile supervised fine-tuning yap.
 - [ ] Fine-tuning öncesi ve sonrası modeli karşılaştır.
@@ -174,10 +181,10 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 6 — Debugger Adapter
 
-- [x] PDB, GDB veya LLDB için bir debugger adapter geliştir. (Tamamlandı — yalnızca PDB için; GDB/LLDB henüz geliştirilmedi. bkz. docs/PROJECT_TRACKER.md Task 4A-4D.)
+- [x] PDB, GDB veya LLDB için bir debugger adapter geliştir. (Tamamlandı — instructor maddesindeki “veya” seçeneği PDB ile karşılandı; accepted Python/PDB-first scope, Task 4A-4D ve post-mortem PDB `e92634e`. GDB/LLDB kapsam dışıdır.)
 - [ ] Fine-tuned modelin debugger komutları üretmesini ve çıktıları yorumlamasını sağla. (Fine-tuning henüz başlamadı; typed-action eşdeğeri fine-tuning olmadan mevcut controller/harness üzerinden çalışıyor.)
-- [x] Modelin breakpoint koymasını, değişkenleri incelemesini, stack trace okumasını ve adım adım debug yapmasını sağla. (Tamamlandı — bkz. docs/PROJECT_TRACKER.md Task 4B-4D.)
-- [x] Modelin debugger etkileşiminden sonra patch üretmesini ve testlerle doğrulamasını sağla. (Tamamlandı — verifier-backed patch workflow, Task 7 ve Task 9 entegrasyonu; bkz. docs/PROJECT_TRACKER.md.)
+- [ ] Modelin breakpoint koymasını, değişkenleri incelemesini, stack trace okumasını ve adım adım debug yapmasını sağla. (Partial — Task 4B-4D ve scripted Task 9 mekanizmayı kanıtlıyor; accepted live-model full PDB sequence yok.)
+- [ ] Modelin debugger etkileşiminden sonra patch üretmesini ve testlerle doğrulamasını sağla. (Partial — verifier-backed scripted workflow tamam; PDB sonrası verifier-confirmed live-model repair yok.)
 
 ## Phase 7 — Evaluation and Final Report
 

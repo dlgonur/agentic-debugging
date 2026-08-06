@@ -2,6 +2,13 @@
 
 Research and prototype workspace for an agentic debugging system.
 
+Current reconciled status (2026-08-07): tracked history through `1e680b1`
+contains the literature syntheses, bounded post-mortem PDB implementation,
+repository RAG, unified comparison harness, and preference-pair exporter.
+See `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md` for the
+claim-by-claim correction of older snapshot text. External QLoRA work remains
+outside this main-repository reconciliation.
+
 The project investigates the path from traditional debugging, fault localization, automated program repair, LLM-based debugging, and repository-level software engineering agents toward interactive debugger-assisted agents.
 
 ## Initial research direction
