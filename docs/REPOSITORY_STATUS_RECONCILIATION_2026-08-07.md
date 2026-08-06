@@ -50,14 +50,17 @@ not promote stronger scientific claims. In particular:
 
 ## Genuinely open main-repository work
 
+Completed after the reconciliation snapshot:
+
+- tracker 7.1.2, strict root-cause explanation metric, is implemented and
+  documented in `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`.
+
 The following work can proceed locally without changing external authority:
 
-1. Define and integrate the missing root-cause explanation metric (tracker
-   7.1.2) with strict, reviewable records rather than lexical-oracle matching.
-2. Integrate bounded post-mortem PDB evidence into the accepted event/replay
+1. Integrate bounded post-mortem PDB evidence into the accepted event/replay
    trajectory path; the current response is protocol-ready but not persisted
    as a first-class trajectory observation.
-3. Keep the daily diary and durable status records current.
+2. Keep the daily diary and durable status records current.
 
 The following work cannot be completed honestly from the main repository
 alone:

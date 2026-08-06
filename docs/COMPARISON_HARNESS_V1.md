@@ -60,6 +60,13 @@ cost/tokens when supplied; retrieval count/bytes/latency (RAG only); replay
 validity; cleanup status; canonical source unchanged; provider/network
 attempt counts.
 
+Optional root-cause explanation evidence uses a nested, independently
+validated `root-cause-assessment-v1` record in attempt provenance. Aggregates,
+deltas, and CSV expose assessment coverage, explicit missingness, closed
+outcomes, and correct rates. Patch success and lexical similarity to hidden
+oracle text are never treated as root-cause correctness. See
+`docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`.
+
 ## 5. Report outputs
 
 * canonical JSON (`experiment.json`, `comparison-v1`) with deterministic and
@@ -68,7 +75,8 @@ attempt counts.
 * Markdown report (`comparison.md`): per-task results, per-condition
   aggregates, delta against the declared baseline, notes;
 * per-condition aggregates (resolved rate, valid patch, F2P/P2P totals,
-  localization, cleanup, offline counters, failure categories);
+  localization, root-cause assessment coverage/outcomes, cleanup, offline
+  counters, failure categories);
 * delta entries (aggregate + per-task) against the baseline condition.
 
 Every report states: **"This deterministic pilot is not statistically

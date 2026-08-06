@@ -346,6 +346,27 @@ class AttemptRecord:
         if type(self.provenance) is not dict:
             raise ComparisonInvariantError("provenance must be a mapping")
         _validate_json_bounds(self.provenance, "provenance")
+        root_cause_raw = self.provenance.get("root_cause_assessment")
+        if root_cause_raw is not None:
+            from agentic_debugger.evaluation.root_cause_metric import (
+                RootCauseAssessment,
+                RootCauseMetricError,
+            )
+
+            try:
+                root_cause = RootCauseAssessment.from_mapping(root_cause_raw)
+            except RootCauseMetricError as exc:
+                raise ComparisonInvariantError(
+                    f"invalid provenance.root_cause_assessment: {exc}"
+                ) from exc
+            if root_cause.attempt_id != self.attempt_id:
+                raise ComparisonInvariantError(
+                    "provenance.root_cause_assessment attempt_id mismatch"
+                )
+            if root_cause.task_id != self.task_id:
+                raise ComparisonInvariantError(
+                    "provenance.root_cause_assessment task_id mismatch"
+                )
         if self.cleanup_status == "cleaned":
             if self.verifier_evidence is None or self.verifier_status != "COMPLETED":
                 raise ComparisonInvariantError(

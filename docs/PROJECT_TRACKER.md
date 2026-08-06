@@ -213,7 +213,7 @@ Rules:
 ### 7.x Subtasks / Log
 
 - [x] 7.1.1 Define localization metric (`CORRECT_TARGET_SYMBOL` and related localization outcomes).
-- [ ] 7.1.2 Define root-cause explanation metric.
+- [x] 7.1.2 Define root-cause explanation metric. (Completed 2026-08-07 — strict `root-cause-assessment-v1` / `root-cause-rubric-v1`; three explicit causal dimensions, contradiction and evidence binding, derived closed outcomes, content identity, bounds/tamper rejection, explicit missingness and denominators, additive validated `comparison-v1` provenance integration with aggregates/deltas/CSV. No lexical-oracle scoring and no live-model performance claim. See `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`.)
 - [x] 7.1.3 Define patch correctness metric (verifier outcome, fail-to-pass, pass-to-pass, and full-suite consistency).
 - [x] 7.1.4 Define cost/runtime metric (transport timing and provider-reported usage/cost metadata with qualification).
 - [x] 7.1.5 Define debugger-action metric (PDB openings, observations, action counts, and policy restrictions).

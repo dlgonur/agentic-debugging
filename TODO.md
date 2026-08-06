@@ -188,7 +188,7 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 7 — Evaluation and Final Report
 
-- [ ] Sonuçları başarı oranı, localization accuracy, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Partial 2026-08-06 — metrik altyapısı comparison harness üzerinden tamamlandı (failure categories, aggregates, delta, cost/tokens, retrieval, replay, cleanup; bkz. docs/COMPARISON_HARNESS_V1.md); ancak henüz hiçbir gerçek model sonucu bu metriklere karşı raporlanmadığı için madde açık kalır.) (Metrikler tanımlı; ancak henüz hiçbir external dataset üzerinde gerçek bir model çalıştırılmadığı için bu metriklere karşı raporlanacak bir model sonucu yok.)
+- [ ] Sonuçları başarı oranı, localization accuracy, root-cause explanation, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Partial 2026-08-07 — comparison harness metrikleri ile strict `root-cause-assessment-v1` / explicit-missingness entegrasyonu tamamlandı; bkz. `docs/COMPARISON_HARNESS_V1.md`, `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`. Hiçbir gerçek external-model campaign sonucu olmadığı için top-level değerlendirme açık kalır.)
 - [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı 2026-07-31 — Final Technical Report v1 ve Demo Guide v1; bu bir altyapı/evaluation-platform demosu ve raporudur, model debugging performance demosu değildir. Bkz. `docs/FINAL_TECHNICAL_REPORT_V1.md`, `docs/DEMO_GUIDE_V1.md`, `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`.)
 
 ### Live-runner material repair (2026-08-02, runner-only)

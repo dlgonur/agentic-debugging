@@ -132,6 +132,12 @@ def experiment_document(
             "generation telemetry (external_provider_attempts/"
             "external_network_attempts) when supplied by the imported artifact."
         ),
+        "root_cause_metric_note": (
+            "Root-cause outcomes come only from strict independent "
+            "root-cause-assessment-v1 records bound in attempt provenance. "
+            "Missing assessments remain explicit and are never inferred from "
+            "patch success or lexical similarity to hidden oracle text."
+        ),
         "nondeterministic_top_level_keys": list(NONDETERMINISTIC_RESULT_KEYS),
     }
     return document

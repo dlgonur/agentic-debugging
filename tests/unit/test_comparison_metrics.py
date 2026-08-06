@@ -22,7 +22,12 @@ from agentic_debugger.comparison.metrics import (
     normalize_failure_category,
     to_csv_text,
 )
-from agentic_debugger.comparison.schema import AttemptRecord, ComparisonExperiment
+from agentic_debugger.comparison.schema import (
+    AttemptRecord,
+    ComparisonExperiment,
+    ComparisonInvariantError,
+)
+from agentic_debugger.evaluation.root_cause_metric import build_root_cause_assessment
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK_ID = "curated-off-by-one-002"
@@ -82,6 +87,29 @@ def _attempt(**overrides):
             base["response_text"].encode("utf-8")
         ).hexdigest()
     return AttemptRecord.from_mapping(base)
+
+
+def _with_root_cause(attempt, **overrides):
+    values = {
+        "task_id": attempt.task_id,
+        "attempt_id": attempt.attempt_id,
+        "assessor_kind": "independent-human",
+        "assessor_id": "comparison-reviewer",
+        "claim_text": "The upper loop bound omits the final required index.",
+        "mechanism": "SATISFIED",
+        "failure_connection": "SATISFIED",
+        "repair_alignment": "SATISFIED",
+        "contradicts_evidence": False,
+        "evidence_refs": ("trajectory:event-12",),
+    }
+    values.update(overrides)
+    assessment = build_root_cause_assessment(**values)
+    mapping = attempt.to_mapping()
+    mapping["provenance"] = {
+        **mapping["provenance"],
+        "root_cause_assessment": assessment.to_mapping(),
+    }
+    return AttemptRecord.from_mapping(mapping)
 
 
 def test_failure_category_mapping():
@@ -160,6 +188,69 @@ def test_aggregates_are_derived_from_evaluation_records_only():
     assert by_condition["agentic"]["retrieval_count"] == 3
     assert by_condition["base"]["memory_bytes"] == 1024
     assert by_condition["base"]["external_provider_attempts"] == 0
+    assert by_condition["base"]["root_cause_assessment_records"] == 0
+    assert by_condition["base"]["root_cause_missing_assessments"] == 1
+    assert by_condition["base"]["root_cause_correct_rate"] == 0.0
+
+
+def test_root_cause_assessments_feed_aggregates_delta_and_csv():
+    base = _with_root_cause(_attempt(attempt_id=f"{TASK_ID}:base"))
+    agentic = _with_root_cause(
+        _attempt(
+            attempt_id=f"{TASK_ID}:agentic",
+            condition_id="agentic",
+            mode="native",
+        ),
+        repair_alignment="PARTIAL",
+    )
+    experiment = _experiment([base, agentic])
+    aggregates = aggregate_all(experiment)
+    by_condition = {b["condition_id"]: b for b in aggregates["conditions"]}
+    assert by_condition["base"]["root_cause_assessment_records"] == 1
+    assert by_condition["base"]["root_cause_assessed_claims"] == 1
+    assert by_condition["base"]["root_cause_correct"] == 1
+    assert by_condition["base"]["root_cause_correct_rate"] == 1.0
+    assert by_condition["agentic"]["root_cause_partially_correct"] == 1
+    assert by_condition["agentic"]["root_cause_correct_rate"] == 0.0
+    delta = delta_against_baseline(experiment, aggregates)
+    aggregate_delta = {
+        (entry["condition_id"], entry["metric"]): entry["delta"]
+        for entry in delta["delta_entries"]
+        if entry["task_id"] is None
+    }
+    assert aggregate_delta[("agentic", "root_cause_correct")] == -1.0
+    assert aggregate_delta[("agentic", "root_cause_correct_rate")] == -1.0
+    csv = to_csv_text(csv_rows(experiment))
+    assert "root_cause_outcome" in csv.splitlines()[0]
+    assert "CORRECT" in csv
+    assert "PARTIALLY_CORRECT" in csv
+
+
+def test_mismatched_or_tampered_root_cause_assessment_fails_closed():
+    attempt = _with_root_cause(_attempt(attempt_id=f"{TASK_ID}:base"))
+    mapping = attempt.to_mapping()
+    mapping["provenance"]["root_cause_assessment"]["attempt_id"] = "wrong"
+    with pytest.raises(ComparisonInvariantError, match="root_cause_assessment"):
+        AttemptRecord.from_mapping(mapping)
+
+
+def test_valid_but_wrong_task_root_cause_assessment_fails_at_schema_boundary():
+    attempt = _attempt(attempt_id=f"{TASK_ID}:base")
+    assessment = build_root_cause_assessment(
+        task_id="curated-wrong-branch-003",
+        attempt_id=attempt.attempt_id,
+        assessor_kind="independent-human",
+        assessor_id="comparison-reviewer",
+        claim_text=None,
+        evidence_refs=("trajectory:no-root-cause-action",),
+    )
+    mapping = attempt.to_mapping()
+    mapping["provenance"] = {
+        **mapping["provenance"],
+        "root_cause_assessment": assessment.to_mapping(),
+    }
+    with pytest.raises(ComparisonInvariantError, match="task_id mismatch"):
+        AttemptRecord.from_mapping(mapping)
 
 
 def test_old_synthetic_base_0_50_vs_tuned_1_00_is_impossible():

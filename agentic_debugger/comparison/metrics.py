@@ -22,6 +22,10 @@ from agentic_debugger.comparison.schema import (
     FAILURE_CATEGORIES,
     AttemptRecord,
 )
+from agentic_debugger.evaluation.root_cause_metric import (
+    RootCauseAssessment,
+    RootCauseMetricError,
+)
 
 
 class MetricsError(ValueError):
@@ -37,6 +41,16 @@ AGGREGATE_METRICS = (
     "resolved",
     "resolved_rate",
     "correct_target_file",
+    "root_cause_assessment_records",
+    "root_cause_missing_assessments",
+    "root_cause_assessed_claims",
+    "root_cause_correct",
+    "root_cause_partially_correct",
+    "root_cause_incorrect",
+    "root_cause_not_provided",
+    "root_cause_not_assessed",
+    "root_cause_assessment_coverage_rate",
+    "root_cause_correct_rate",
     "f2p_passed",
     "f2p_total",
     "p2p_passed",
@@ -60,6 +74,14 @@ _SUM_METRICS = {
     "valid_patch",
     "resolved",
     "correct_target_file",
+    "root_cause_assessment_records",
+    "root_cause_missing_assessments",
+    "root_cause_assessed_claims",
+    "root_cause_correct",
+    "root_cause_partially_correct",
+    "root_cause_incorrect",
+    "root_cause_not_provided",
+    "root_cause_not_assessed",
     "f2p_passed",
     "f2p_total",
     "p2p_passed",
@@ -138,6 +160,36 @@ def _rate(passed: Optional[int], total: Optional[int]) -> Optional[float]:
     return round(passed / total, 6)
 
 
+def root_cause_assessment_for_attempt(
+    attempt: AttemptRecord,
+) -> Optional[RootCauseAssessment]:
+    """Load and bind an optional assessment from attempt provenance.
+
+    Keeping the additive record in ``provenance`` preserves the strict
+    ``comparison-v1`` wire schema.  If present, it is still validated through
+    the independent assessment schema and must match the attempt/task exactly.
+    """
+
+    raw = attempt.provenance.get("root_cause_assessment")
+    if raw is None:
+        return None
+    try:
+        assessment = RootCauseAssessment.from_mapping(raw)
+    except RootCauseMetricError as exc:
+        raise MetricsError(
+            f"invalid root-cause assessment for {attempt.attempt_id!r}: {exc}"
+        ) from exc
+    if assessment.attempt_id != attempt.attempt_id:
+        raise MetricsError(
+            f"root-cause assessment attempt mismatch for {attempt.attempt_id!r}"
+        )
+    if assessment.task_id != attempt.task_id:
+        raise MetricsError(
+            f"root-cause assessment task mismatch for {attempt.attempt_id!r}"
+        )
+    return assessment
+
+
 def aggregate_condition(
     attempts: Sequence[AttemptRecord],
     *,
@@ -170,6 +222,26 @@ def aggregate_condition(
         return sum(int(getattr(a, field) or 0) for a in primary)
 
     resolved = _count(lambda a: a.verifier_outcome == "RESOLVED")
+    root_cause_assessments = [
+        assessment
+        for attempt in primary
+        if (assessment := root_cause_assessment_for_attempt(attempt)) is not None
+    ]
+    root_cause_counts = {
+        outcome: sum(1 for assessment in root_cause_assessments if assessment.outcome == outcome)
+        for outcome in (
+            "CORRECT",
+            "PARTIALLY_CORRECT",
+            "INCORRECT",
+            "NOT_PROVIDED",
+            "NOT_ASSESSED",
+        )
+    }
+    root_cause_assessed = (
+        root_cause_counts["CORRECT"]
+        + root_cause_counts["PARTIALLY_CORRECT"]
+        + root_cause_counts["INCORRECT"]
+    )
     bucket = {
         "condition_id": condition,
         "attempts": len(primary),
@@ -179,6 +251,20 @@ def aggregate_condition(
         "resolved": resolved,
         "resolved_rate": _rate(resolved, len(primary)),
         "correct_target_file": _count(lambda a: a.correct_target_file is True),
+        "root_cause_assessment_records": len(root_cause_assessments),
+        "root_cause_missing_assessments": len(primary) - len(root_cause_assessments),
+        "root_cause_assessed_claims": root_cause_assessed,
+        "root_cause_correct": root_cause_counts["CORRECT"],
+        "root_cause_partially_correct": root_cause_counts["PARTIALLY_CORRECT"],
+        "root_cause_incorrect": root_cause_counts["INCORRECT"],
+        "root_cause_not_provided": root_cause_counts["NOT_PROVIDED"],
+        "root_cause_not_assessed": root_cause_counts["NOT_ASSESSED"],
+        "root_cause_assessment_coverage_rate": _rate(
+            len(root_cause_assessments), len(primary)
+        ),
+        "root_cause_correct_rate": _rate(
+            root_cause_counts["CORRECT"], len(primary)
+        ),
         "f2p_passed": _sum_int("f2p_passed"),
         "f2p_total": _sum_int("f2p_total"),
         "p2p_passed": _sum_int("p2p_passed"),
@@ -342,6 +428,8 @@ CSV_COLUMNS: Tuple[str, ...] = (
     "valid_patch",
     "correct_target_file",
     "localization_outcome",
+    "root_cause_outcome",
+    "root_cause_assessment_id",
     "f2p_passed",
     "f2p_total",
     "p2p_passed",
@@ -377,6 +465,13 @@ def csv_rows(experiment: Any) -> Tuple[Tuple[str, ...], ...]:
     rows: List[Tuple[str, ...]] = [CSV_COLUMNS]
     for attempt in attempts:
         record = attempt.to_mapping()
+        assessment = root_cause_assessment_for_attempt(attempt)
+        record["root_cause_outcome"] = (
+            assessment.outcome if assessment is not None else None
+        )
+        record["root_cause_assessment_id"] = (
+            assessment.assessment_id if assessment is not None else None
+        )
         rows.append(
             tuple(
                 "" if record.get(column) is None else str(record.get(column))
@@ -403,6 +498,7 @@ __all__ = [
     "MetricsError",
     "normalize_failure_category",
     "attempt_facts",
+    "root_cause_assessment_for_attempt",
     "aggregate_condition",
     "aggregate_all",
     "delta_against_baseline",
