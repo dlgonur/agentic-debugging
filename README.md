@@ -600,12 +600,12 @@ QLoRA status (2026-08-05):
 ## Current status (2026-08-05) — Friday professor delivery bundle
 
 The offline professor-facing delivery package for Friday 2026-08-07 is
-prepared as documentation and rehearsal work only, built from accepted source
-baseline `456f0e9` (the accepted presentation plan/deck/cue delivery commit;
-campaign infrastructure accepted through `0abb588`; V4 identity correction
-accepted through `fc7c85b`). The bundle itself — the manifest, preflight
-checklist, and status handoff — is an uncommitted candidate built on top of
-`456f0e9` during review; its eventual integration commit is not yet known:
+prepared as documentation and rehearsal work only. The original delivery
+bundle (manifest, preflight checklist, status handoff, and presentation
+plan/deck/cue sheet v1.2) was built from the accepted source baseline
+`456f0e9` (the accepted presentation plan/deck/cue delivery commit; campaign
+infrastructure accepted through `0abb588`; V4 identity correction accepted
+through `fc7c85b`) and is accepted and integrated on `main` at `ab464dd`:
 
 - `docs/FRIDAY_DELIVERY_MANIFEST_V1.md` — submission manifest, evidence
   index, exact setup/demo/reproduction/fallback/presentation-day commands,
@@ -629,4 +629,56 @@ live campaign, WSL, BugsInPy, QLoRA training, held-out generation, or broad
 test-suite execution occurred, and no commit was made during the
 coding-agent build/rehearsal phase before FirstMate integration. On
 presentation day, run from clean `main` matching `origin/main`, containing
-the delivery bundle files and descending from `456f0e9`.
+the final accepted delivery bundle files and descending from `ab464dd`.
+
+## Current status (2026-08-06) — Friday main-repo completion hardening
+
+A bounded Friday main-repository hardening pass was completed as an
+uncommitted candidate on the `goal/friday-main-repo-completion-v1` branch,
+built on top of the accepted `ab464dd` delivery bundle. The hardening
+candidate's modified copies of the manifest, preflight checklist, handoff,
+README, and tracker are not yet integrated; their eventual integration commit
+is not known. The pass closes four tracked infrastructure items without
+promoting any instructor TODO status and without any provider, live campaign,
+WSL, BugsInPy, QLoRA, or held-out execution:
+
+- Campaign ledger time provenance (`scripts/quixbugs_live_runner_v2.py`):
+  terminal ledger `updated_at`, `terminal-commit.json` `created_at`, and
+  post-campaign authority `observed_at` now reflect actual finalization time,
+  not the campaign-start `reference_time`. The documented non-blocking
+  timestamp follow-up is resolved. 6 focused tests added.
+- OpenCode request-thread teardown race and output-drain race
+  (`scripts/quixbugs_opencode_go_adapter.py`): the `process.stdin is not None`
+  background-thread assertion that cascaded under full-suite ordering is
+  replaced with a teardown-aware writer guard, and the post-`wait()` reader
+  join now uses a generous pipe-drain bound so a slowly-draining stdout is
+  captured completely; the previous order-dependent transport/case-runner
+  failure family and the selftest full-suite flake are repaired. 4 regression
+  tests added.
+- Known wrapper/transport test failures (4 test defects + 2 env-gated): all
+  6 are repaired; the two env-gated preflight tests are now hermetic (no real
+  OpenCode install required).
+- Post-mortem PDB entry (TODO 6.1.3): `run_post_mortem` PDB
+  protocol/worker/session operation captures bounded structured traceback
+  evidence on unhandled exception; offline-capable; reuses the existing PDB
+  protocol/worker/session framework; focused tests added. The tracked TODO
+  6.1.3 subtask status is determined by its actual acceptance contract (see
+  `docs/PROJECT_TRACKER.md`).
+
+Accepted validation: focused suites pass (live-runner 286; wrapper+transport
+100 in isolation; transport-factory+case-runner 55 in both orders; V4
+budget/verifier+replay; post-mortem 26 + PDB protocol/session/integration 945;
+compileall exit 0; deterministic demo exit 0, 2/2 RESOLVED, F2P 2/2, P2P 4/4,
+0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Final bounded full
+suite: **3435 passed, 3 skipped, 1 failed** — the suite is NOT green. The
+single remaining failure (`test_selftest_mode_is_synthetic_only`) is a
+pre-existing wrapper preflight subprocess-chain flake under full-suite OS
+resource pressure, reproducible on the exact clean `ab464dd` baseline (which
+has 6 failures: 5 known wrapper/transport defects now fixed by this candidate
++ the same selftest flake). The transport-factory/case-runner order-dependent
+cascade family IS repaired (the reader-join pipe-drain fix and
+teardown-aware writer guard eliminate the
+`PytestUnhandledThreadExceptionWarning` cascade); the race/drain regression
+tests are unit-level and do not amplify OS resource pressure. No instructor
+TODO status is promoted; no commit/merge/push was made during the coding-agent
+build phase.

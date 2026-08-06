@@ -3141,6 +3141,14 @@ def run_campaign(
         authority_stop_info: Mapping[str, Any] | None = None,
         authority_invalidated_cases: list[Mapping[str, Any]] | None = None,
     ) -> dict[str, Any]:
+        # The terminal ledger entry and the create-once terminal commitment
+        # are written AFTER the case loop and the post-campaign authority
+        # recheck have finished; their timestamps must reflect the actual
+        # finalization instant, not the campaign-start reference_time.  The
+        # ledger ``created_at`` (the genuine claim time) and every pre-campaign
+        # / in-loop authority gate keep using ``reference_time`` because those
+        # gates are evaluated against the campaign's frozen start identity.
+        finalization_time = _utc_now(clock)
         aborted = sum(1 for value in lifecycle.values() if value == "aborted")
         invalidated = sum(1 for value in lifecycle.values() if value == "authority-invalidated")
         counts = dict(counts)
@@ -3209,7 +3217,7 @@ def run_campaign(
         terminal_entry = dict(ledger_entry)
         terminal_entry.update({
             "status": intended_status,
-            "updated_at": reference_time.isoformat().replace("+00:00", "Z"),
+            "updated_at": finalization_time.isoformat().replace("+00:00", "Z"),
             "stop_reason": stop_reason,
         })
         campaign["ledger"] = terminal_entry
@@ -3244,7 +3252,7 @@ def run_campaign(
         terminal_entry = dict(ledger_entry)
         terminal_entry.update({
             "status": final_status,
-            "updated_at": reference_time.isoformat().replace("+00:00", "Z"),
+            "updated_at": finalization_time.isoformat().replace("+00:00", "Z"),
             "stop_reason": campaign["stop_reason"],
         })
         campaign["ledger"] = terminal_entry
@@ -3282,7 +3290,7 @@ def run_campaign(
                     {"case_id": entry["case_id"], "order_index": entry["order_index"], "record_sha256": entry["record_sha256"]}
                     for entry in campaign["cases"]
                 ],
-                "created_at": reference_time.isoformat().replace("+00:00", "Z"),
+                "created_at": finalization_time.isoformat().replace("+00:00", "Z"),
             }
             try:
                 _assert_finite_json(commitment)
@@ -3308,7 +3316,7 @@ def run_campaign(
                 downgraded = dict(ledger_entry)
                 downgraded.update({
                     "status": "ABORTED",
-                    "updated_at": reference_time.isoformat().replace("+00:00", "Z"),
+                    "updated_at": finalization_time.isoformat().replace("+00:00", "Z"),
                     "stop_reason": "OUTPUT_INTEGRITY_FAILURE",
                 })
                 try:
@@ -3599,11 +3607,12 @@ def run_campaign(
             # as completed, and the campaign stops with the accepted typed
             # authority/campaign-stop evidence.
             try:
+                post_case_check_time = _utc_now(clock)
                 post_case_drift = _verify_authority_state(
                     manifest,
                     git_state_provider=git_state_provider,
                     execution_commit=execution_commit,
-                    now=reference_time,
+                    now=post_case_check_time,
                 )
             except LiveRunnerError as exc:
                 abort_info = ("SCHEMA_INCONSISTENCY", f"post-case authority recheck failed closed: {exc}")
@@ -3634,7 +3643,7 @@ def run_campaign(
                     "authority_check_record_sha256": stored.sha256,
                     "provider_contact_occurred": int(outcome["provider_process_attempts"]) > 0,
                     "excluded_from_evaluation": True,
-                    "observed_at": reference_time.isoformat().replace("+00:00", "Z"),
+                    "observed_at": post_case_check_time.isoformat().replace("+00:00", "Z"),
                 })
                 stop_active = (stop_reason, {
                     "kind": "authority",
@@ -3697,13 +3706,16 @@ def run_campaign(
     # Final authority check immediately before terminal ledger finalization.
     # Drift here prevents a terminal COMPLETED ledger or campaign.
     authority_stop_info: dict[str, Any] | None = None
+    pre_terminal_check_time: datetime | None = None
+    pre_terminal_drift: tuple[str, dict[str, Any]] | None = None
     if abort_info is None and stop_active is None:
         try:
+            pre_terminal_check_time = _utc_now(clock)
             pre_terminal_drift = _verify_authority_state(
                 manifest,
                 git_state_provider=git_state_provider,
                 execution_commit=execution_commit,
-                now=reference_time,
+                now=pre_terminal_check_time,
             )
         except KeyboardInterrupt:
             abort_info = ("INTERRUPTED", "campaign interrupted by operator during the pre-terminal authority recheck")
@@ -3735,12 +3747,16 @@ def run_campaign(
                 })
     if stop_active is not None and stop_active[1]["kind"] == "authority":
         trigger = stop_active[1]
+        if pre_terminal_drift is not None and pre_terminal_check_time is not None:
+            authority_observed_at = pre_terminal_check_time
+        else:
+            authority_observed_at = _utc_now(clock)
         authority_stop_info = {
             "reason_code": stop_active[0],
             "identity": trigger["identity"],
             "authority_check_record_sha256": trigger["record_sha256"],
             "affected_case_id": trigger.get("post_case_case_id"),
-            "observed_at": reference_time.isoformat().replace("+00:00", "Z"),
+            "observed_at": authority_observed_at.isoformat().replace("+00:00", "Z"),
         }
 
     if abort_info is not None:

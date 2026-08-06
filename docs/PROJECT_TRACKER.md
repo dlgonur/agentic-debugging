@@ -190,7 +190,7 @@ Rules:
 
 - [x] 6.1.1 Start with PDB only.
 - [x] 6.1.2 Define PDB command schema.
-- [ ] 6.1.3 Implement post-mortem PDB entry for failing Python script/test.
+- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı 2026-08-06 — `run_post_mortem` PDB protocol/worker/session operation; reuses existing PDB protocol, worker channel, and session lifecycle; offline-capable, no provider/network; captures bounded, side-effect-safe structured traceback evidence (exception type/message, traceback frames, innermost-frame locals) on unhandled exception; evidence capture never invokes arbitrary user-defined `__repr__`/`__str__`/properties/iteration — it reuses the accepted exact-built-in summarization machinery; frame locals are iterated in a bounded manner (never the full mapping), all text fields are UTF-8-byte-bounded, and the complete serialized response is proven within `MAX_LINE_LENGTH`; successful exit produces no post-mortem; tracebackless failure fails closed (success=false, empty result, bounded error); SystemExit(0) and SystemExit(nonzero) both report exited with no post-mortem; one-execution-per-session invariant preserved; evidence is bound to script and session identity (the existing PDB API does not carry task/case identity without a public contract change); the response is deterministic, bounded, JSON-serializable protocol evidence suitable for later event persistence (it is not currently integrated into the accepted event/replay trajectory path); 26 focused tests in `tests/unit/test_pdb_post_mortem.py`; accepted on the `goal/friday-main-repo-completion-v1` candidate, not yet merged.)
 - [x] 6.2.1 Serialize debugger outputs into model-readable structured text.
 - [x] 6.3.1 Support stack inspection.
 - [x] 6.3.2 Support local variable inspection.
@@ -1073,28 +1073,88 @@ made.
 
 ## Last Updated
 
+2026-08-06 (Friday main-repo completion hardening: ledger time provenance, transport teardown race, known wrapper/transport test failures, post-mortem PDB entry)
+
+This pass is an uncommitted hardening candidate on the
+`goal/friday-main-repo-completion-v1` branch, built on top of the accepted
+Friday delivery bundle commit `ab464dd` (`456f0e9` is the earlier
+presentation plan/deck/cue commit; the original delivery bundle is accepted
+and integrated on `main` at `ab464dd`). The hardening candidate's modified
+copies of the manifest, preflight checklist, handoff, README, and tracker are
+not yet integrated; their eventual integration commit is not known:
+
+- Campaign ledger time provenance (`scripts/quixbugs_live_runner_v2.py`): the
+  terminal ledger `updated_at`, the create-once `terminal-commit.json`
+  `created_at`, the post-campaign authority `observed_at`, and the post-case
+  authority-invalidated `observed_at` now reflect the actual finalization /
+  detection time rather than reusing the campaign-start `reference_time`. The
+  ledger `created_at` (genuine claim time) and every pre-campaign / in-loop
+  authority gate keep using `reference_time` (those gates are evaluated
+  against the campaign's frozen start identity). Deterministic clock
+  injection is preserved. 6 focused tests added.
+- OpenCode request-thread teardown race (`scripts/quixbugs_opencode_go_adapter.py`):
+  the `process.stdin is not None` background-thread assertion that surfaced as
+  `PytestUnhandledThreadExceptionWarning` and cascaded under full-suite
+  ordering is replaced with a teardown-aware writer guard. The writer
+  captures any failure into `write_error` and joins before process
+  termination; a benign `BrokenPipeError` on a process that exited 0 with a
+  valid response is no longer misclassified as a transport failure. 3
+  deterministic regression tests added.
+- Known wrapper/transport test failures repaired (4 test defects + 2
+  env-gated): zero-price catalog fingerprint binding; `message_is_single_positional`
+  run-path/preflight contract (the run-path `transport_preflight` record now
+  carries the same contract fields as the `--preflight` CLI record); sibling
+  `opencode.exe` resolver test set up the trusted npm layout so the intended
+  error path fires; the two env-gated real-wrapper preflight tests are now
+  hermetic (fake profile + fake npm-layout native + synthetic auth), so they
+  pass without a real OpenCode install.
+- Post-mortem PDB entry (TODO 6.1.3): `run_post_mortem` PDB
+  protocol/worker/session operation that runs a Python script and captures
+  bounded structured traceback evidence on unhandled exception. Reuses the
+  existing PDB protocol, worker channel, and session lifecycle; the response
+  is deterministic, bounded, JSON-serializable protocol evidence suitable for
+  later event persistence (it is not currently integrated into the accepted
+  event/replay trajectory path). Offline-capable; no provider/network;
+  successful exit produces no post-mortem; tracebackless failure fails closed;
+  one-execution-per-session invariant preserved. Focused tests added. The
+  tracked TODO 6.1.3 subtask status is determined by its actual acceptance
+  contract (see the tracker 6.x log).
+
+Accepted validation: focused suites (live-runner 286; wrapper+transport 100
+in isolation; transport-factory+case-runner 55 in both orders; V4
+budget/verifier+replay; post-mortem 26 + PDB protocol/session/integration 945;
+compileall exit 0; deterministic demo exit 0, 2/2 RESOLVED, F2P 2/2, P2P 4/4,
+0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Final bounded full
+suite: **3435 passed, 3 skipped, 1 failed** — the suite is NOT green. The
+single remaining failure (`test_selftest_mode_is_synthetic_only`) is a
+pre-existing wrapper preflight subprocess-chain flake under full-suite OS
+resource pressure, reproducible on the exact clean `ab464dd` baseline (3394
+passed, 3 skipped, 6 failed: 5 known wrapper/transport defects now fixed by
+this candidate + the same selftest flake). The previous order-dependent
+failure family (the transport/case-runner cascades under full-suite ordering)
+is repaired; the race/drain regression tests are unit-level and do not
+amplify OS resource pressure. No instructor TODO status is promoted by this
+pass; no provider, live campaign, WSL, BugsInPy, QLoRA, or held-out execution
+occurred; no commit/merge/push was made during the coding-agent build phase.
+
+Earlier history:
+
 2026-08-05 (Friday professor delivery bundle; campaign infrastructure accepted on main; V4 attempt record; QLoRA implementation)
 
-The full 2026-08-05 log entry is above this section (campaign infrastructure
-accepted on `main` through `0abb588`; V4 attempt `3b5d7488...` case
-boundaries; fixture identity correction accepted at `fc7c85b`; QLoRA
-implementation accepted at `3f0d3e7` on the unmerged experiment branch;
-external AI audit 39 ACCEPT / 36 REJECT; final training authorized 2026-08-05
-with no accepted artifact; held-out generation unauthorized). This delivery
-pass — built from accepted source baseline `456f0e9`, the accepted
-presentation plan/deck/cue delivery commit — adds the offline Friday
+The Friday professor delivery bundle is committed and integrated on `main`
+at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
+`456f0e9`; campaign infrastructure accepted through `0abb588`; V4 identity
+correction accepted through `fc7c85b`; QLoRA implementation accepted at
+`3f0d3e7` on the unmerged experiment branch; external AI audit 39 ACCEPT / 36
+REJECT; final training authorized 2026-08-05 with no accepted artifact; held-out
+generation unauthorized). The delivery bundle adds the offline Friday
 professor package (`docs/FRIDAY_DELIVERY_MANIFEST_V1.md`,
 `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`, `docs/FRIDAY_STATUS_HANDOFF_V1.md`,
 plan/deck/cue sheet v1.2) and a fresh single-task demo rehearsal (exit 0, 2
 cases, 2/2 RESOLVED, F2P 2/2, P2P 4/4, 0 provider/0 network, workspaces
-CLEANED; evidence preserved under the ignored `_ai-review/` location). The
-bundle is an uncommitted candidate built on top of `456f0e9` during review;
-its integration commit is not yet known. No instructor TODO status is
-promoted; no provider, campaign, WSL, training, or benchmark execution
-occurred; no commit was made during the coding-agent build/rehearsal phase
-before FirstMate integration.
-
-Earlier history:
+CLEANED; evidence preserved under the ignored `_ai-review/` location). No
+instructor TODO status is promoted; no provider, campaign, WSL, training, or
+benchmark execution occurred.
 
 2026-08-03 (OpenCode Go npm-native + full public-evidence budget repair v3,
 transport-only)

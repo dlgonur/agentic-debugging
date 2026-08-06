@@ -388,7 +388,7 @@ class TestSerialization:
              "start_paused_target", "continue_paused_target",
              "get_target_status", "terminate_paused_target",
              "get_stack_summary", "get_frame", "get_frame_locals",
-             "safe_eval_expression"}
+             "safe_eval_expression", "run_post_mortem"}
         )
 
     def test_run_to_breakpoint_operation_accepted(self):

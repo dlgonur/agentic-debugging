@@ -13,7 +13,7 @@ import sys
 import threading
 import traceback
 import types
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
 from agentic_debugger.runtime.pdb_protocol import (
     PROTOCOL_VERSION,
@@ -51,6 +51,19 @@ _MAX_CONSTANT_BYTES = 1024
 _MAX_COMPARISON_TEXT_BYTES = 4096
 _MAX_DICT_SCAN_ENTRIES = 256
 _MAX_FRAME_LOCAL_ENTRIES = 4096
+# Post-mortem evidence bounds: a bounded tail of traceback frames, a bounded
+# set of innermost-frame locals, and byte-bounded text fields.  These keep
+# post-mortem evidence deterministic and replay-safe without dumping
+# unbounded source or object graphs, and without invoking any user-defined
+# ``__repr__``, ``__str__``, properties, or iteration on target objects.
+_POST_MORTEM_MAX_FRAMES = 16
+_POST_MORTEM_MAX_LOCALS = 32
+_POST_MORTEM_MAX_TEXT_UTF8 = 256
+_POST_MORTEM_MAX_EXC_MESSAGE_UTF8 = 1024
+_POST_MORTEM_MAX_TYPE_NAME_UTF8 = 256
+_POST_MORTEM_MAX_FILE_UTF8 = 512
+_POST_MORTEM_MAX_FUNCTION_UTF8 = 512
+_POST_MORTEM_MAX_SCRIPT_UTF8 = 512
 # Keeps JSON integer conversion comfortably below Python's default decimal
 # conversion limit while preserving ordinary large integers losslessly.
 _MAX_SERIALIZED_INT_BITS = 4096
@@ -977,6 +990,182 @@ def _successful_response_fits(response: PdbResponse) -> bool:
     return True
 
 
+def _post_mortem_bounded_text(value: Any, maximum_utf8: int) -> str:
+    """Return a UTF-8-byte-bounded, sanitized copy of a text field.
+
+    Uses only exact built-in string operations (no ``str()`` on arbitrary
+    objects, no user code).  ``value`` must already be a ``str`` or a type
+    whose ``str()`` is built-in (``int``, ``float``, ``bool``); for unknown
+    types the caller must extract the text via safe descriptors first."""
+    if type(value) is str:
+        text = value
+    else:
+        text = str(value)
+    preview, truncated = _utf8_preview(text, maximum_utf8)
+    return preview + ("…" if truncated else "")
+
+
+def _safe_local_summary(value: Any) -> Dict[str, Any]:
+    """Return a bounded, side-effect-safe summary of a local variable value.
+
+    Reuses the accepted :func:`_summarize_value` machinery, which uses only
+    exact built-in operations (``type()``, ``len()``, ``str.__len__``,
+    ``bytes.hex``, ``int.bit_length``, descriptor ``__get__`` on the *type*
+    not the instance).  Never calls ``repr()``, ``str()``, ``__repr__``,
+    ``__str__``, properties, or iteration on the *value instance*.  For
+    unknown/custom types, reports ``kind: 'object'`` with bounded type
+    metadata and no value preview."""
+    try:
+        return _summarize_value(value)
+    except BaseException:
+        return _empty_value_summary('object', value)
+
+
+def _has_traceback(captured_exc: Optional[Tuple[type, BaseException, Any]]) -> bool:
+    """Decide whether a captured exception carries a real traceback.
+
+    Factored as a pure helper so the worker's fail-closed decision
+    (``captured_exc is None or captured_exc[2] is None``) is testable in
+    isolation without relying on ``raise exc.with_traceback(None)``."""
+    if captured_exc is None:
+        return False
+    return captured_exc[2] is not None
+
+
+def _bounded_local_repr_pure(value: Any) -> str:
+    """Return a bounded, side-effect-safe textual summary of a local value.
+
+    Deprecated in favor of :func:`_safe_local_summary`; retained only for
+    backward compatibility with earlier tests.  Does NOT invoke
+    ``repr(value)`` — uses :func:`_safe_local_summary` and renders the
+    ``kind``/``type``/``value`` fields into a bounded string."""
+    summary = _safe_local_summary(value)
+    parts = [summary.get('kind', 'object')]
+    type_name = summary.get('type')
+    if type_name and type_name != 'object':
+        parts.append(type_name)
+    val = summary.get('value')
+    if val is not None and type(val) is str:
+        parts.append(_post_mortem_bounded_text(val, _POST_MORTEM_MAX_TEXT_UTF8))
+    return '<' + ' '.join(parts) + '>'
+
+
+def _capture_post_mortem_evidence_pure(
+    script_normalized: str,
+    exc_type: type,
+    exc_value: BaseException,
+    tb: Any,
+    safe_error_message: Callable[[BaseException], str],
+) -> Dict[str, Any]:
+    """Build bounded, side-effect-safe post-mortem evidence from a captured
+    exception.
+
+    Pure module-level helper (no ``self``) so it can be unit-tested with
+    controlled injection (e.g. a ``None`` traceback, a deep frame chain, many
+    locals, adversarial objects).  Uses only exact built-in operations and the
+    accepted :func:`_summarize_value` / :func:`_safe_type_name` machinery —
+    never calls ``repr()``, ``str()``, ``__repr__``, ``__str__``, properties,
+    or iteration on target *value instances*.  All text fields are
+    UTF-8-byte-bounded.  Frame locals are iterated in a bounded manner
+    (at most ``_POST_MORTEM_MAX_LOCALS`` entries are inspected, never the
+    full mapping).  If ``tb`` is ``None``, returns empty frame/local evidence
+    (the caller is responsible for the fail-closed decision via
+    :func:`_has_traceback`)."""
+    exc_repr = safe_error_message(exc_value)
+    type_name_raw = getattr(exc_type, "__name__", "unknown")
+    type_name = _post_mortem_bounded_text(type_name_raw, _POST_MORTEM_MAX_TYPE_NAME_UTF8)
+    exc_message = _post_mortem_bounded_text(exc_repr, _POST_MORTEM_MAX_EXC_MESSAGE_UTF8)
+    script_bounded = _post_mortem_bounded_text(script_normalized, _POST_MORTEM_MAX_SCRIPT_UTF8)
+    frames: List[Dict[str, Any]] = []
+    if tb is not None:
+        extracted = traceback.extract_tb(tb)
+        for entry in extracted[-_POST_MORTEM_MAX_FRAMES:]:
+            frames.append({
+                'file': _post_mortem_bounded_text(
+                    os.path.basename(entry.filename) if entry.filename else '',
+                    _POST_MORTEM_MAX_FILE_UTF8,
+                ),
+                'line': int(entry.lineno) if entry.lineno else 0,
+                'function': _post_mortem_bounded_text(
+                    str(entry.name) if entry.name else '',
+                    _POST_MORTEM_MAX_FUNCTION_UTF8,
+                ),
+            })
+    innermost: Dict[str, Any] = {}
+    innermost_frame = tb
+    while innermost_frame is not None and innermost_frame.tb_next is not None:
+        innermost_frame = innermost_frame.tb_next
+    if innermost_frame is not None:
+        tb_frame = innermost_frame.tb_frame
+        local_names: List[str] = []
+        local_values: List[Dict[str, Any]] = []
+        truncated_locals = False
+        inspected = 0
+        collected = 0
+        # Iterate the frame-local mapping in a bounded manner: never
+        # materialize the full mapping.  ``f_locals`` may be a dict or a
+        # frame-locals proxy; both support ``.items()`` for iteration.  We
+        # iterate and stop as soon as we have collected
+        # ``_POST_MORTEM_MAX_LOCALS`` non-dunder entries.  Mutation or
+        # iteration failure fails closed (no fabricated evidence).
+        try:
+            local_items = tb_frame.f_locals.items()
+        except BaseException:
+            local_items = iter(())
+        for name, value in local_items:
+            inspected += 1
+            if inspected > _POST_MORTEM_MAX_LOCALS * 4:
+                # Safety bound: never iterate more than 4x the limit even if
+                # many dunder names are skipped.
+                truncated_locals = True
+                break
+            name_str = name if type(name) is str else str(name)
+            if name_str.startswith('__'):
+                continue
+            if collected >= _POST_MORTEM_MAX_LOCALS:
+                truncated_locals = True
+                break
+            collected += 1
+            bounded_name = _post_mortem_bounded_text(name_str, _POST_MORTEM_MAX_TEXT_UTF8)
+            local_names.append(bounded_name)
+            summary = _safe_local_summary(value)
+            local_values.append({
+                'name': bounded_name,
+                'summary': summary,
+                'type': _post_mortem_bounded_text(
+                    summary.get('type') or 'unknown',
+                    _POST_MORTEM_MAX_TYPE_NAME_UTF8,
+                ),
+            })
+        innermost = {
+            'file': _post_mortem_bounded_text(
+                os.path.basename(tb_frame.f_code.co_filename) if tb_frame.f_code.co_filename else '',
+                _POST_MORTEM_MAX_FILE_UTF8,
+            ),
+            'line': int(tb_frame.f_lineno),
+            'function': _post_mortem_bounded_text(
+                str(tb_frame.f_code.co_name),
+                _POST_MORTEM_MAX_FUNCTION_UTF8,
+            ),
+            'local_names': local_names,
+            'local_values': local_values,
+            'locals_truncated': truncated_locals,
+        }
+    return {
+        'exception': {
+            'type': type_name,
+            'message': exc_message,
+            'repr': _post_mortem_bounded_text(
+                f"{type_name}: {exc_message}",
+                _POST_MORTEM_MAX_EXC_MESSAGE_UTF8,
+            ),
+        },
+        'traceback_frames': frames,
+        'innermost_frame': innermost,
+        'script': script_bounded,
+    }
+
+
 class PdbWorker:
     def __init__(self) -> None:
         self._pdb_stdin = io.StringIO()
@@ -1082,6 +1271,8 @@ class PdbWorker:
             self._handle_get_frame_locals(request)
         elif op == "safe_eval_expression":
             self._handle_safe_eval_expression(request)
+        elif op == "run_post_mortem":
+            self._handle_run_post_mortem(request)
         else:
             self._send_error(
                 request_id=request.request_id,
@@ -1178,6 +1369,238 @@ class PdbWorker:
 
         self._target_started = True
         self._execute_target(script_normalized, script_abs, bps, av, source_bytes, request.request_id)
+
+    def _handle_run_post_mortem(self, request: PdbRequest) -> None:
+        """Run a Python script to completion; if it terminates with an
+        unhandled exception, capture the structured traceback as post-mortem
+        runtime evidence.  No interactive PDB session is entered: the worker
+        captures the failure's call stack, exception identity, and the
+        innermost frame's locals snapshot deterministically, then reports it
+        as a ``post_mortem`` result.  A successful exit produces no
+        post-mortem evidence (the result reports ``status: "exited"`` with
+        ``post_mortem: false``); a failure without a traceback (e.g. a bare
+        ``SystemExit``) fails closed with ``status: "failed"`` and no
+        fabricated traceback.  Exactly one execution is allowed per worker."""
+        payload = request.payload
+
+        for field in ('script', 'argv'):
+            if field not in payload:
+                self._send_error(
+                    request.request_id,
+                    f"Missing required payload field: {field}"
+                )
+                return
+
+        for field in payload:
+            if field not in ('script', 'argv'):
+                self._send_error(
+                    request.request_id,
+                    f"Unknown payload field: {field}"
+                )
+                return
+
+        if self._target_started:
+            self._send_error(
+                request.request_id,
+                "Target execution already completed on this worker"
+            )
+            return
+
+        workspace_root = os.getcwd()
+        script = payload['script']
+        argv_raw = payload['argv']
+
+        sv = self._read_validated_workspace_script(script, workspace_root, request.request_id)
+        if sv is None:
+            return
+        script_normalized, script_abs, source_bytes = sv
+
+        av = self._validate_argv(argv_raw, request.request_id)
+        if av is None:
+            return
+
+        self._target_started = True
+        self._execute_post_mortem_target(script_normalized, script_abs, av, source_bytes, request.request_id)
+
+    def _execute_post_mortem_target(
+        self,
+        script_normalized: str,
+        script_abs: str,
+        argv: List[str],
+        source_bytes: bytes,
+        request_id: int,
+    ) -> None:
+        """Run the script and capture post-mortem traceback evidence on failure.
+
+        Reuses the same argv/path/stdin/stdout isolation and restoration
+        contract as :meth:`_execute_target`, but never installs a trace
+        function and never enters an interactive paused state.  The captured
+        evidence is bounded and sanitized: only the exception type, message,
+        and a bounded list of traceback frames (file, line, function) plus
+        the innermost frame's local-variable names and bounded repr values.
+        """
+        saved_argv = list(sys.argv)
+        saved_path = list(sys.path)
+        saved_stdin = sys.stdin
+        saved_stdout = sys.stdout
+        saved_stderr = sys.stderr
+        saved_cwd = os.getcwd()
+
+        try:
+            script_dir = os.path.dirname(script_abs)
+            sys.argv = [script_normalized] + argv
+            sys.path = [script_dir] + saved_path
+            sys.stdin = _NullReader()
+            sys.stdout = _DiscardStdout()
+            sys.stderr = _DiscardStderr()
+
+            try:
+                code = compile(source_bytes, script_abs, 'exec')
+            except SyntaxError as e:
+                error_msg = self._safe_error_message(e)
+                self._send_error(request_id, error_msg)
+                with self._condition:
+                    self._lifecycle['state'] = 'failed'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['error'] = error_msg
+                    self._condition.notify_all()
+                return
+
+            captured_exc: Optional[Tuple[type, BaseException, Any]] = None
+            try:
+                globs: Dict[str, Any] = {
+                    '__name__': '__main__',
+                    '__doc__': None,
+                    '__package__': None,
+                    '__loader__': None,
+                    '__spec__': None,
+                    '__file__': script_abs,
+                    '__builtins__': builtins.__dict__,
+                }
+                exec(code, globs, globs)
+            except SystemExit as e:
+                ec = e.code
+                if ec is None:
+                    exit_code = 0
+                elif isinstance(ec, bool):
+                    exit_code = 1 if ec else 0
+                elif isinstance(ec, int):
+                    exit_code = ec
+                else:
+                    exit_code = 1
+                result = {
+                    'status': 'exited',
+                    'script': script_normalized,
+                    'exit_code': exit_code,
+                    'post_mortem': False,
+                }
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=True,
+                    result=result,
+                    error="",
+                )
+                self._send_response(response)
+                with self._condition:
+                    self._lifecycle['state'] = 'exited'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['exit_code'] = exit_code
+                    self._condition.notify_all()
+                return
+            except BaseException as e:
+                captured_exc = (type(e), e, e.__traceback__)
+            else:
+                result = {
+                    'status': 'exited',
+                    'script': script_normalized,
+                    'exit_code': 0,
+                    'post_mortem': False,
+                }
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=True,
+                    result=result,
+                    error="",
+                )
+                self._send_response(response)
+                with self._condition:
+                    self._lifecycle['state'] = 'exited'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['exit_code'] = 0
+                    self._condition.notify_all()
+                return
+
+            # An unhandled exception was captured: build the structured
+            # post-mortem evidence.  If the traceback is missing, fail closed
+            # rather than fabricate frame evidence.  The traceback-presence
+            # decision is factored into _has_traceback for testability.
+            if not _has_traceback(captured_exc):
+                error_msg = "post-mortem entry rejected: no traceback was captured for the failing target"
+                response = PdbResponse(
+                    protocol_version=PROTOCOL_VERSION,
+                    request_id=request_id,
+                    success=False,
+                    result={},
+                    error=error_msg,
+                )
+                self._send_response(response)
+                with self._condition:
+                    self._lifecycle['state'] = 'failed'
+                    self._lifecycle['script'] = script_normalized
+                    self._lifecycle['error'] = error_msg
+                    self._condition.notify_all()
+                return
+
+            evidence = self._capture_post_mortem_evidence(
+                script_normalized, captured_exc[0], captured_exc[1], captured_exc[2]
+            )
+            result: Dict[str, Any] = {
+                'status': 'post_mortem',
+                'script': evidence.get('script', script_normalized),
+                'post_mortem': True,
+                'exception': evidence['exception'],
+                'traceback_frames': evidence['traceback_frames'],
+                'innermost_frame': evidence['innermost_frame'],
+            }
+            response = PdbResponse(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=request_id,
+                success=True,
+                result=result,
+                error="",
+            )
+            self._send_response(response)
+            with self._condition:
+                self._lifecycle['state'] = 'failed'
+                self._lifecycle['script'] = script_normalized
+                self._lifecycle['error'] = evidence['exception']['repr']
+                self._condition.notify_all()
+        finally:
+            sys.argv = saved_argv
+            sys.path = saved_path
+            sys.stdin = saved_stdin
+            sys.stdout = saved_stdout
+            sys.stderr = saved_stderr
+            os.chdir(saved_cwd)
+
+    def _capture_post_mortem_evidence(
+        self,
+        script_normalized: str,
+        exc_type: type,
+        exc_value: BaseException,
+        tb: Any,
+    ) -> Dict[str, Any]:
+        """Build bounded, sanitized post-mortem evidence from a captured
+        exception (delegates to the module-level pure helper)."""
+        return _capture_post_mortem_evidence_pure(
+            script_normalized, exc_type, exc_value, tb, self._safe_error_message,
+        )
+
+    def _bounded_local_repr(self, value: Any) -> str:
+        """Return a bounded, sanitized repr of a local variable value."""
+        return _bounded_local_repr_pure(value)
 
     def _read_validated_workspace_script(
         self,

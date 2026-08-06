@@ -491,6 +491,30 @@ Kaynak kod tarama ve patch lifecycle katmanı tamamlandı. Branch incelenip main
 
 ---
 
+## 20 Temmuz 2026
+
+**Çalışmanın Konusu:** MVP Workspace/Command Runtime ve Source Retrieval/Patch Lifecycle foundation'ının main üzerine kabulü; MVP progress kayıtlarının güncellenmesi
+
+### Yapılan Çalışmalar
+
+Bugün Task 3 (kaynak kod tarama ve deterministic patch lifecycle) kapsamında üretilen iki temel foundation katmanının `main` üzerine kabul edilmesini ve MVP progress kayıtlarının güncellenmesini tamamladım. Çalışma, 19 Temmuz'da `feature/mvp-source-patch-lifecycle-v1` branch'inde başlatılan implementation'ın closeout aşamasına karşılık geliyor.
+
+Bu gün kabul edilen commit'ler (git tarihçesi üzerinden):
+
+- `778d38c Add workspace and command runtime` — disposable workspace, symlink/path-traversal koruması, bounded command runner ve process-tree cleanup foundation'ı.
+- `e396799 Add source retrieval and patch lifecycle` — bounded source-file reading, deterministic literal kod arama, AST tabanlı function/class keşfi, strict unified-diff parser, exact-file/directory allow/deny policy, `tests` ve `task.json` zorunlu koruması, encoding/hash koruması ve atomic replacement.
+- `132b5e9 Update MVP progress records` — `docs/PROJECT_TRACKER.md` üzerinde Task 1–3 ilerlemesinin kaydedilmesi.
+
+### Öğrendiklerim
+
+Bir implementation task'inin kodlanması bittiğinde işin bitmediğini; workspace cleanup, process exit propagation, hash koruması ve progress kayıtlarının doğru sırayla kapatılmasının da kabulün bir parçası olduğunu gördüm. Foundation katmanlarının (workspace, command runner, patcher) birbirinden bağımsız test edilebilmesinin, sonraki PDB ve controller task'lerinin güvenini artırdığını öğrendim.
+
+### Sonuç / Bir Sonraki Adım
+
+MVP foundation'ının runtime ve patch lifecycle katmanları `main` üzerinde kabul edildi. Bir sonraki adım, Task 4A — PDB Session Lifecycle and Protocol Foundation v1 geliştirmesidir; bu task PDB worker izolasyonu, protokol doğrulaması ve cleanup mekanizmalarını kuracak.
+
+---
+
 ## 21 Temmuz 2026
 
 **Çalışmanın Konusu:** Task 4A — PDB Session Lifecycle and Protocol Foundation v1 geliştirmesi, bağımsız inceleme ve test doğrulaması
@@ -1443,6 +1467,54 @@ Task 7 trusted-local çalışır ve OS-level hostile-code sandbox değildir. Bu 
 Task 7 tamamlandı. `feature/mvp-verifier-runner-v1` branch'i fast-forward olarak `main` branch'ine merge edilip push edildi; `main` ve `origin/main` artık `1b0af78` commit'ini gösteriyor.
 
 Bir sonraki tek aktif implementation maddesi **Task 8 — Golden Trajectories v1**'dir. Task 8, sabit model action sequence'leri, kararlı event expectation'ları, replay validation, patch/test assertion'ları ve no-real-model CI coverage sağlamalıdır. Task 8 henüz başlamamıştır.
+
+---
+
+## 23 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 5 — Hardened Controller State Machine v1; deterministic tool dispatch boundary ve scripted model adapter contract'larının `main` üzerine kabulü
+
+### Yapılan Çalışmalar
+
+Bugün Task 5 (controller state machine ve typed tool dispatch) kapsamında üretilen üç bileşenin `main` üzerine kabul edilmesini tamamladım. Çalışma, 22 Temmuz'da başlatılan Task 4D (safe PDB expression evaluation) sonrası controller katmanının closeout aşamasına karşılık geliyor.
+
+Bu gün kabul edilen commit'ler (git tarihçesi üzerinden):
+
+- `e2187e2 Add deterministic tool dispatch boundary` — controller ile runtime araçları arasındaki tek dispatch yüzeyi; argument validation, state allowlist'leri, denied path'ler ve typed tool rejection reason'ları.
+- `365dc49 Add scripted model adapter contracts` — deterministik test double için typed directive kind'ları (action, transition, add/revise/set hypothesis) ve controller snapshot serialization.
+- `43d00c8 Add hardened controller state machine v1` — Reproduce → Understand → (gate) → RuntimeEvidence → Patch → Validate → Done/Failed state machine, transition graph, budget enforcement ve failure-step stop reason'ları.
+- `084d73c Update Task 5 progress records` — `docs/PROJECT_TRACKER.md` üzerinde Task 5 ilerlemesinin kaydedilmesi.
+
+### Öğrendiklerim
+
+Controller state machine'inin "budget exhaustion = dur" değil, "budget exhaustion = typed stop reason ile dur" olması gerektiğini öğrendim. Tool dispatch boundary'sinin tek bir yüzeyden geçmesinin, ileride live-model entegrasyonunda directive-feedback cycle'ı ve PDB gate'lerini güvenli tutmanın temeli olduğunu gördüm. Scripted model adapter'ın, gerçek model olmadan controller davranışının golden trajectory'lerle test edilebilmesini sağladığını öğrendim.
+
+### Sonuç / Bir Sonraki Adım
+
+Controller state machine, tool dispatch ve scripted model adapter `main` üzerinde kabul edildi. Bir sonraki adım, Task 6 — Curated Benchmark Fixtures v1; bu task beş küçük pytest fixture'ı, oracle masking ve canonical-hash immutability sağlayacak.
+
+---
+
+## 24 Temmuz 2026
+
+**Çalışmanın Konusu:** Task 6 — Curated Benchmark Fixtures v1; beş küçük pytest fixture'ının ve canonical-hash immutability doğrulamasının `main` üzerine kabulü
+
+### Yapılan Çalışmalar
+
+Bugün Task 6 (curated benchmark fixtures) kapsamında üretilen fixture paketinin `main` üzerine kabul edilmesini tamamladım. Çalışma, controller'ın kabulünden sonra gerçek reproduction/test/verifier döngüsünü destekleyecek küçük, güvenilir ve immutability korumalı fixture'ların closeout aşamasına karşılık geliyor.
+
+Bu gün kabul edilen commit'ler (git tarihçesi üzerinden):
+
+- `eedcccb Add curated benchmark fixtures v1` — beş küçük Python/pytest fixture'ı (`curated-none-handling-001`, `curated-off-by-one-002`, `curated-condition-003`, `curated-wrong-default-004`, `curated-missing-return-005`); her biri `task.json` (DebugTask), reproduction command, exact F2P/P2P test vector'ları, constraints ve evaluator-only `Oracle` içeriyor. `agent_visible_mapping()` oracle'ı model görmesinden önce maskeliyor; canonical-hash immutability doğrulaması fixture'ın patch öncesi/sonrası değişmediğini kanıtlıyor.
+- `5cb6370 Update Task 6 progress records` — `docs/PROJECT_TRACKER.md` üzerinde Task 6 ilerlemesinin kaydedilmesi.
+
+### Öğrendiklerim
+
+Küçük, sentetik fixture'ların gerçek external benchmark'lardan önce neden değerli olduğunu öğrendim: reproduction, F2P/P2P oracle yapısı, verifier cleanup ve canonical immutality gibi contract'ların hepsini küçük ölçekte kanıtlayabiliyorlar. Oracle masking'in bir güven tercih değil, bir doğruluk gereği olduğunu gördüm — gold patch veya hidden test modelin gördüğü task'a asla sızmamalı.
+
+### Sonuç / Bir Sonraki Adım
+
+Curated fixture'lar `main` üzerinde kabul edildi. Bir sonraki adım, Task 7 — Verifier and Evaluation Runner v1; bu task bağımsız verifier'ı, baseline/candidate/full-suite pipeline'ını ve cleanup accounting'i kuracak.
 
 ---
 
@@ -2789,4 +2861,24 @@ Kampanya altyapisi ve paired-pilot v4 terminal kontrati `main` uzerinde `0abb588
 
 ## 5 Agustos 2026 (on dorduncu islem) - Friday professor delivery bundle (offline, documentation + rehearsal)
 
-Friday 2026-08-07 profesor sunumu icin offline teslimat paketi hazirlandi (yalnizca dokumantasyon ve prova). Kabul edilmis kaynak baseline `456f0e9`'dur: `456f0e9`, kabul edilmis sunum plan/deck/cue delivery commit'i ve bu final-delivery adayinin kaynak baseline'idir; bu bundle (manifest/preflight checklist/handoff ve dokumantasyon duzeltmeleri), `456f0e9` uzerine FirstMate review'i sirasinda insa edilen commit edilmemis bir adaydir ve entegrasyon commit'i henuz bilinmiyor. Kampanya altyapisi `0abb588` ile, V4 identity duzeltmesi `fc7c85b` ile kabul edildi. Olusturulan dosyalar: `docs/FRIDAY_DELIVERY_MANIFEST_V1.md`, `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`, `docs/FRIDAY_STATUS_HANDOFF_V1.md`; plan/deck/cue sheet v1.2; README, tracker (Last Updated), DEMO_TASK9 (`--list-tasks` icin `--output-dir` zorunlulugu), rapor bolum sirasi ve bu defter guncellendi. Taze deterministik single-task demo provasi sunum komutu formuyla calistirildi ve dogrulandi: exit 0; 2 case (`curated-off-by-one-002`, iki policy); verifier `RESOLVED` 2/2; F2P 2/2; P2P 4/4; localization `CORRECT_TARGET_SYMBOL` 2/2; olculen 0 provider / 0 network; workspace `CLEANED`; canonical fixture degismedi; trajectory'ler replay-valid. Prova ciktisi yalnizca yerel operasyonel fallback olarak ignored `_ai-review/` altinda korunuyor (durable iddia kaynagi degildir). Hicbir provider, live campaign, WSL, BugsInPy, QLoRA egitimi, held-out generation veya genis test suite'i calistirilmadi; hicbir instructor TODO maddesi isaretlenmedi. Kodlama-agentinin build/prova fazinda (FirstMate entegrasyonundan once) hicbir commit/merge/push yapilmadi.
+Friday 2026-08-07 profesor sunumu icin offline teslimat paketi hazirlandi (yalnizca dokumantasyon ve prova). Kabul edilmis kaynak baseline `456f0e9`'dur: `456f0e9`, kabul edilmis sunum plan/deck/cue delivery commit'idir; kampanya altyapisi `0abb588` ile, V4 identity duzeltmesi `fc7c85b` ile kabul edildi. Olusturulan dosyalar: `docs/FRIDAY_DELIVERY_MANIFEST_V1.md`, `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md`, `docs/FRIDAY_STATUS_HANDOFF_V1.md`; plan/deck/cue sheet v1.2; README, tracker (Last Updated), DEMO_TASK9 (`--list-tasks` icin `--output-dir` zorunlulugu), rapor bolum sirasi ve bu defter guncellendi. Taze deterministik single-task demo provasi sunum komutu formuyla calistirildi ve dogrulandi: exit 0; 2 case (`curated-off-by-one-002`, iki policy); verifier `RESOLVED` 2/2; F2P 2/2; P2P 4/4; localization `CORRECT_TARGET_SYMBOL` 2/2; olculen 0 provider / 0 network; workspace `CLEANED`; canonical fixture degismedi; trajectory'ler replay-valid. Prova ciktisi yalnizca yerel operasyonel fallback olarak ignored `_ai-review/` altinda korunuyor (durable iddia kaynagi degildir). Hicbir provider, live campaign, WSL, BugsInPy, QLoRA egitimi, held-out generation veya genis test suite'i calistirilmadi; hicbir instructor TODO maddesi isaretlenmedi. Bu bundle daha sonra `ab464dd` commit'inde `main` uzerine kabul edildi (bkz. 6 Agustos 2026 girisi).
+
+---
+
+## 6 Agustos 2026 - Friday main-repo completion hardening (ledger time provenance, transport teardown race, known test failures, post-mortem PDB)
+
+Bugun Cuma (2026-08-07) sunumundan once main repository'nin kabul edilen altyapisini sinirli ve guvenli biçimde sertlestirdim. Calisma, kabul edilmis Friday delivery bundle commit'i `ab464dd` uzerine `goal/friday-main-repo-completion-v1` aday branch'inde yurutuldu; hicbir provider, live campaign, WSL, BugsInPy, QLoRA veya held-out calismasi yapilmadi.
+
+Yapilan dort altyapi sertlestirme:
+
+1. **Kampanya ledger zaman provenansı (`scripts/quixbugs_live_runner_v2.py`).** Belgelendirilmis timestamp hatasini onardım: terminal ledger `updated_at`, create-once `terminal-commit.json` `created_at`, post-campaign authority `observed_at` ve post-case authority-invalidated `observed_at` artik gercek finalization/detection zamanini yansitiyor (kampanya-baslangıç `reference_time`'i kullanmak yerine). Ledger `created_at` (gerçek claim zamanı) ve tum pre-campaign/in-loop authority gate'leri `reference_time`'i koruyor (bu gate'ler kampanyanın frozen başlangıç kimliğine göre değerlendiriliyor). Deterministik clock injection korundu. 6 odakli test eklendi.
+
+2. **OpenCode request-thread teardown race (`scripts/quixbugs_opencode_go_adapter.py`).** Background `write_request` thread'indeki `process.stdin is not None` assertion'ı (full-suite siralaması altında `PytestUnhandledThreadExceptionWarning` olarak yüzeye çıkıp 31 ek failure'a cascading oluyordu) teardown-aware bir guard ile değiştirildi. Writer her hatayı `write_error`'a yakalıyor, process termination öncesi join oluyor; 0 exit + gecerli response ile benign `BrokenPipeError` artık transport failure olarak yanlış sınıflandırılmıyor. 3 deterministik regresyon testi eklendi.
+
+3. **Bilinen wrapper/transport test failure'ları (4 test + 2 env-gated).** Zero-price catalog fingerprint binding; `message_is_single_positional` run-path/preflight contract (run-path `transport_preflight` kaydı artık `--preflight` CLI kaydıyla ayni contract alanlarını tasiyor); sibling `opencode.exe` resolver testi (trusted npm layout kuruldu, hedeflenen error path tetiklendi); iki env-gated real-wrapper preflight testi artık hermetik (fake profile + fake npm-layout native + synthetic auth ile gerçek OpenCode kurulu olmadan geçiyor).
+
+4. **Post-mortem PDB entry (TODO 6.1.3).** `run_post_mortem` PDB protocol/worker/session operation'i eklendi: bir Python script'i çalıştırıp handled edilmemiş exception'da bounded, side-effect-safe structured traceback evidence (exception type/message, traceback frames, innermost-frame locals) yakalıyor. Evidence capture keyfi kullanıcı `__repr__`/`__str__`/property/iteration çağırmıyor (kabul edilen exact-built-in summarization yeniden kullanılıyor); frame locals sinirli şekilde iterate ediliyor (full mapping materialize edilmiyor); tum text alanlari UTF-8 byte-bounded; tam serialize response `MAX_LINE_LENGTH` icinde kanitlanmis; tracebackless failure fail-closed (`_has_traceback` factored helper ile); SystemExit(0) ve SystemExit(nonzero) post-mortem olmadan exited raporluyor; one-execution-per-session invariant korundu. 26 odakli test eklendi. TODO 6.1.3 tracker alt-görevi kanıtla kapatıldı (script+session identity; task/case identity ve event/replay entegrasyonu iddia edilmiyor).
+
+Final repair round (FirstMate repair 2): review paketi ic tutarliliga kavusturuldu (stale totals kaldirildi: 3395/3/17 ve 3420/3/1 gecersiz); verifier script Git-state cozuldu (intent-to-add yeni dosya, git-visible); post-mortem evidence capture genuinely bounded ve side-effect-safe hale getirildi; candidate full-suite artisinin kok nedeni teshis edildi (yeni transport-factory race testlerinin wrapper subprocess zincirini 100 kez spawn ederek OS kaynak basincini artirmasi) ve race/drain regresyon testleri unit-level'a indirildi (amplifikasyon ortadan kalkti).
+
+Kabul edilen dogrulama: odakli suite'ler (live-runner 286; wrapper+transport 100; transport-factory+case-runner her iki sirada 55; V4 budget/verifier+replay; post-mortem 26 + PDB protocol/session/integration 945; compileall exit 0; manifest hash verifier 13 MATCH; deterministik demo exit 0, 2/2 RESOLVED, F2P 2/2, P2P 4/4, 0 provider/0 network, replay-valid 2/2, CLEANED 2/2). Temiz izole `ab464dd` baseline tam suite: 3394 passed, 3 skipped, 6 failed. Final candidate tam suite: **3435 passed, 3 skipped, 1 failed** (`test_selftest_mode_is_synthetic_only` — temiz baseline'da da fail eden, onceden var olan wrapper preflight subprocess-chain flake; suite GREEN degil). Hicbir instructor TODO status'u terfi etmedi; hicbir commit/merge/push yapilmadi.

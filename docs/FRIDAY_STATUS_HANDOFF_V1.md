@@ -1,13 +1,15 @@
 # Friday Status Handoff v1
 
 **Date:** 2026-08-05
-**Branch:** `goal/friday-final-delivery-v1` (candidate; see baseline note)
+**Branch:** the original delivery bundle is accepted and integrated on `main`
+at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
+`456f0e9`).
 **Source baseline:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` — the accepted
-presentation plan/deck/cue delivery commit and the source baseline for this
-task's final-delivery candidate. Campaign infrastructure accepted through
-`0abb588`; V4 identity correction accepted through `fc7c85b`. This handoff is
-part of the uncommitted Friday final-delivery candidate built on top of
-`456f0e9` during review; its integration commit is not yet known.
+presentation plan/deck/cue delivery commit. Campaign infrastructure accepted
+through `0abb588`; V4 identity correction accepted through `fc7c85b`. The
+original handoff is accepted at `ab464dd`. The current hardening revisions to
+this file are an uncommitted candidate built on top of `ab464dd`; their
+eventual integration commit is not known.
 **Purpose:** one concise, evidence-backed statement of what the internship
 delivers on Friday 2026-08-07, what is partial, what is pending, and what is
 blocked. Every status below traces to `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md`
@@ -129,20 +131,20 @@ Friday horizon means "active work or honest limitation", never "complete".
 
 ## 4. Operational notes for the handoff
 
-- Git state: `main` == `origin/main` == `456f0e9` (the accepted presentation
-  plan/deck/cue delivery commit); this delivery bundle is the uncommitted
-  candidate on `goal/friday-final-delivery-v1`; no commit/merge/push was made
-  during the coding-agent build/rehearsal phase before FirstMate
-  integration, and the candidate's eventual integration commit is not yet
-  known.
+- Git state: the original Friday delivery bundle is accepted and integrated
+  on `main` at `ab464dd` (the earlier presentation plan/deck/cue delivery
+  commit is `456f0e9`). The current hardening revisions to this handoff are
+  an uncommitted candidate on `goal/friday-main-repo-completion-v1` built on
+  top of `ab464dd`; their eventual integration commit is not known.
 - The daily-requirement item (0.1, one diary page per workday) remains open;
-  the diary was extended through 2026-08-05 in this bundle but later days are
-  the intern's to record.
-- Review package: `_ai-review/friday-final-delivery-v1/` (ignored) with the
-  candidate patch, changed files, validation logs, claim-to-evidence matrix,
-  and delivery artifact inventory.
-- Presentation day runs from clean `main` matching `origin/main`, containing
-  the delivery bundle files (once integrated) and descending from `456f0e9`.
+  the diary was extended through 2026-08-06; the 2026-07-20, 2026-07-23, and
+  2026-07-24 weekday gaps were backfilled from tracked git evidence, and a
+  2026-08-06 entry records the main-repo completion hardening.
+- Review package: `_ai-review/friday-main-repo-completion-v1/` (ignored) with
+  the candidate patch, changed files, validation logs, claim-to-evidence
+  matrix, and delivery artifact inventory.
+- Presentation day runs from clean `main == origin/main` containing the final
+  accepted delivery bundle files.
 
 ## 5. Post-Friday technical task batches
 

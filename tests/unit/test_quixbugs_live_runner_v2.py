@@ -468,8 +468,8 @@ class RecordingTransportFactory:
         return transport
 
 
-def _run_campaign(manifest, auth, tmp_path, *, route_evidence=None, runner_entries=None, git_state_provider=None, **kwargs):
-    output = tmp_path / "attempt-out"
+def _run_campaign(manifest, auth, tmp_path, *, route_evidence=None, runner_entries=None, git_state_provider=None, output_name="attempt-out", **kwargs):
+    output = tmp_path / output_name
     factory = RecordingTransportFactory()
     entries = runner_entries if runner_entries is not None else [
         {"provider_process_attempts": 1, "outcome": _completed_outcome(manifest, case, _route_evidence(manifest))}
@@ -1995,6 +1995,177 @@ def test_commitment_tampering_is_rejected(manifest, auth, tmp_path, git_state_pr
     with pytest.raises(runner.LiveRunnerError) as exc:
         runner.verify_attempt_package(output, manifest)
     assert "identity mismatch" in str(exc.value)
+
+
+def _parse_iso(value: str) -> datetime:
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _anchored_advancing_clock(*, step: float = 100.0, hold_first: bool = False):
+    """A deterministic clock anchored to the real current UTC epoch so that the
+    campaign-start ``reference_time`` stays within the route-evidence staleness
+    window (600s) and after the frozen ``authorization_created_at``.  Each call
+    advances by ``step`` seconds, so terminal timestamps move forward while the
+    campaign-start identity remains stable."""
+    base = datetime.now(timezone.utc).timestamp()
+    state = {"t": base}
+
+    def clock():
+        if hold_first:
+            value = state["t"]
+            state["t"] += step
+            return value
+        state["t"] += step
+        return state["t"]
+
+    return clock
+
+
+def test_terminal_ledger_updated_at_reflects_finalization_not_campaign_start(manifest, auth, tmp_path, git_state_provider):
+    # A deterministic clock anchored to real-now and advancing by 100s per
+    # _utc_now(clock) call.  The terminal ledger updated_at is captured at
+    # finalization (after the case loop), so it must be strictly later than the
+    # ledger created_at (campaign start), proving it is not a silent copy of
+    # the campaign-start reference_time.
+    clock = _anchored_advancing_clock(step=100.0, hold_first=True)
+    record, _, _, output = _run_campaign(
+        manifest, auth, tmp_path, git_state_provider=git_state_provider, clock=clock,
+    )
+    assert record["status"] == "COMPLETED"
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    terminal_entry = next(iter(ledger.values()))
+    assert terminal_entry["status"] == "COMPLETED"
+    created = _parse_iso(terminal_entry["created_at"])
+    updated = _parse_iso(terminal_entry["updated_at"])
+    assert updated > created, (terminal_entry["created_at"], terminal_entry["updated_at"])
+    assert (updated - created).total_seconds() >= 100.0
+
+
+def test_terminal_commit_created_at_reflects_commitment_creation_time(manifest, auth, tmp_path, git_state_provider):
+    clock = _anchored_advancing_clock(step=50.0, hold_first=True)
+    record, _, _, output = _run_campaign(
+        manifest, auth, tmp_path, git_state_provider=git_state_provider, clock=clock,
+    )
+    assert record["status"] == "COMPLETED"
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    terminal_entry = next(iter(ledger.values()))
+    commitment = json.loads((output / "terminal-commit.json").read_text(encoding="utf-8"))
+    commit_created = _parse_iso(commitment["created_at"])
+    ledger_created = _parse_iso(terminal_entry["created_at"])
+    ledger_updated = _parse_iso(terminal_entry["updated_at"])
+    # The terminal commitment is created last; its timestamp must be >= the
+    # terminal ledger updated_at (both are finalization-time, not start-time).
+    assert commit_created >= ledger_updated
+    assert commit_created > ledger_created
+
+
+def test_campaign_start_identity_remains_stable_under_fake_clock(manifest, auth, tmp_path, git_state_provider):
+    # The ledger created_at remains bound to the campaign-start reference_time
+    # (the first clock value, held stable) even when the clock advances during
+    # the run; only the terminal timestamps move forward.
+    clock = _anchored_advancing_clock(step=25.0, hold_first=True)
+    record, _, _, output = _run_campaign(
+        manifest, auth, tmp_path, git_state_provider=git_state_provider, clock=clock,
+    )
+    assert record["status"] == "COMPLETED"
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    terminal_entry = next(iter(ledger.values()))
+    created = _parse_iso(terminal_entry["created_at"])
+    updated = _parse_iso(terminal_entry["updated_at"])
+    # created_at is the campaign-start reference_time (the held first value);
+    # updated_at is finalization-time and must be strictly later.
+    assert updated > created
+
+
+def test_pre_terminal_authority_observed_at_reflects_detection_time(manifest, auth, tmp_path):
+    # Drift detected by the post-campaign pre-terminal authority recheck must
+    # carry an observed_at that is the detection time, not the campaign-start
+    # reference_time.  The drift provider returns clean state for every in-loop
+    # pre/post-case check (12 calls for 6 cases) and drifts on the pre-terminal
+    # check (call 14), mirroring test_drift_after_final_case_before_terminalization.
+    clock = _anchored_advancing_clock(step=10.0, hold_first=True)
+    record, _, case_runner, output = _run_campaign(
+        manifest, auth, tmp_path, git_state_provider=_drift_at_provider(manifest, 14), clock=clock,
+    )
+    assert record["status"] == "PARTIAL"
+    assert record["stop_reason"] == "TRACKED_SOURCE_CHANGED"
+    assert record["authority_stop"]["affected_case_id"] is None
+    assert len(case_runner.order_log) == 6
+    assert record["counts"]["completed_case_count"] == 6
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    terminal_entry = next(iter(ledger.values()))
+    campaign_start = _parse_iso(terminal_entry["created_at"])
+    observed = _parse_iso(record["authority_stop"]["observed_at"])
+    # The pre-terminal detection happens after the campaign start.
+    assert observed > campaign_start
+    assert runner.validate_campaign_record(record, manifest) is True
+    assert runner.verify_attempt_package(output, manifest)["consistent"] is True
+
+
+def test_post_case_authority_invalidated_observed_at_reflects_case_detection_time(manifest, auth, tmp_path):
+    # Drift detected during the post-case authority recheck (inside the loop)
+    # must carry an observed_at that is the per-case detection time, not the
+    # campaign-start reference_time.  Drift on call 3 (the post-case check of
+    # the first completed case), mirroring test_drift_during_first_case_stops.
+    clock = _anchored_advancing_clock(step=33.0, hold_first=True)
+    record, _, _, output = _run_campaign(
+        manifest, auth, tmp_path, git_state_provider=_drift_at_provider(manifest, 3), clock=clock,
+    )
+    assert record["status"] == "PARTIAL"
+    assert record["stop_reason"] == "TRACKED_SOURCE_CHANGED"
+    invalidated = record["authority_invalidated_cases"]
+    assert len(invalidated) == 1
+    ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+    terminal_entry = next(iter(ledger.values()))
+    campaign_start = _parse_iso(terminal_entry["created_at"])
+    observed = _parse_iso(invalidated[0]["observed_at"])
+    # The first post-case check happens after the campaign start.
+    assert observed > campaign_start
+    assert runner.validate_campaign_record(record, manifest) is True
+    assert runner.verify_attempt_package(output, manifest)["consistent"] is True
+
+
+def test_deterministic_fake_clock_remains_deterministic_across_runs(manifest, auth, tmp_path, git_state_provider):
+    # Two runs with identical fake-clock shapes must produce identical terminal
+    # ledger timestamp deltas, proving the clock injection remains deterministic
+    # (the campaign-start identity is held and the advancement is reproducible).
+    # Absolute timestamps differ because the clock is anchored to the real epoch
+    # at fixture time, so the assertion compares the delta between created_at and
+    # updated_at, which is determined solely by the clock's step and the number
+    # of _utc_now calls.  Each run uses a fresh output directory and a fresh
+    # attempt identity to avoid the attempt-owner duplicate gate.
+    def run_once(suffix: str):
+        output = tmp_path / f"attempt-out-{suffix}"
+        run_auth = _valid_authorization(
+            manifest, output,
+            campaign_attempt_identity="quixbugs-paired-pilot-v2-attempt-" + (suffix * 64)[:64],
+        )
+        clock = _anchored_advancing_clock(step=17.0, hold_first=True)
+        record = runner.run_campaign(
+            manifest,
+            authorization=run_auth,
+            output_root=output,
+            route_evidence_provider=lambda: _route_evidence(manifest),
+            transport_factory=RecordingTransportFactory(),
+            case_runner=ScriptedCaseRunner(_completed_entries(manifest)),
+            git_state_provider=git_state_provider,
+            clock=clock,
+        )
+        assert record["status"] == "COMPLETED"
+        ledger = json.loads((output / "ledger.json").read_text(encoding="utf-8"))
+        terminal_entry = next(iter(ledger.values()))
+        commitment = json.loads((output / "terminal-commit.json").read_text(encoding="utf-8"))
+        return terminal_entry, commitment
+
+    e1, c1 = run_once("a")
+    e2, c2 = run_once("b")
+    delta1 = _parse_iso(e1["updated_at"]) - _parse_iso(e1["created_at"])
+    delta2 = _parse_iso(e2["updated_at"]) - _parse_iso(e2["created_at"])
+    assert delta1 == delta2
+    cdelta1 = _parse_iso(c1["created_at"]) - _parse_iso(e1["created_at"])
+    cdelta2 = _parse_iso(c2["created_at"]) - _parse_iso(e2["created_at"])
+    assert cdelta1 == cdelta2
+
 
 
 def test_interrupted_attempt_is_not_silently_resumed(manifest, auth, tmp_path, git_state_provider):

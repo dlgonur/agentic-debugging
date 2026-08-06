@@ -351,6 +351,19 @@ class OpenCodeGoAdapterError(ValueError):
     """A fail-closed adapter wiring error."""
 
 
+#: Bounded join timeout for the stdout/stderr reader threads after the
+#: provider process has exited (``process.wait()`` returned).  This is a
+#: pipe-drain bound, NOT a request timeout: the reader threads hit EOF as
+#: soon as the OS closes the process's stdout/stderr pipe, which has already
+#: happened because ``process.wait()`` returned.  Under full-suite resource
+#: pressure the 2-second join used previously could expire before the OS
+#: finished flushing the pipe buffer, leaving ``stdout.text()`` with an
+#: incomplete response that was then misclassified as ``invalid_response``.
+#: 15 seconds is generous for a pipe drain (the process is already dead) and
+#: never extends the request's own ``bounded_timeout`` deadline.
+_READER_JOIN_TIMEOUT_SECONDS = 15.0
+
+
 class _BoundedCapture:
     def __init__(self, maximum_bytes: int) -> None:
         self.maximum_bytes = maximum_bytes
@@ -1303,13 +1316,32 @@ class OpenCodeGoTransport:
         for thread in out_threads:
             thread.start()
         write_error: list[Exception] = []
+        # Teardown-aware writer guard: the background writer thread must not
+        # raise an unhandled exception (which surfaces as
+        # PytestUnhandledThreadExceptionWarning and cascades under full-suite
+        # ordering) when the process has already exited or its stdin was closed
+        # by the time the thread runs.  Every failure path is captured into
+        # ``write_error`` and reported through the accepted transport path
+        # rather than escaping as an unhandled thread exception.
+        writer_closed = threading.Event()
 
         def write_request() -> None:
             try:
-                assert process.stdin is not None
-                process.stdin.write(request_bytes)
-                process.stdin.close()
-            except (BrokenPipeError, OSError) as exc:
+                stdin = process.stdin
+                if stdin is None or stdin.closed:
+                    # The process exited (or its stdin was closed by teardown)
+                    # before the writer could run; nothing to write.  The
+                    # downstream process.wait() / read-thread join observes the
+                    # real outcome; the transport reports it as the accepted
+                    # provider failure or completion.
+                    return
+                if writer_closed.is_set():
+                    return
+                stdin.write(request_bytes)
+                stdin.close()
+            except (BrokenPipeError, OSError, ValueError) as exc:
+                write_error.append(exc)
+            except Exception as exc:  # pragma: no cover - defensive capture
                 write_error.append(exc)
 
         writer = threading.Thread(target=write_request, daemon=True)
@@ -1317,7 +1349,11 @@ class OpenCodeGoTransport:
         deadline = started + bounded_timeout
         writer.join(timeout=max(0.0, deadline - time.monotonic()))
         if writer.is_alive():
+            # Signal the writer to stop before tearing down the process so the
+            # background thread never writes into a torn-down pipe.
+            writer_closed.set()
             _terminate_process_tree(process)
+            writer.join(timeout=2)
             for thread in out_threads:
                 thread.join(timeout=2)
             self.last_timed_out = True
@@ -1330,7 +1366,9 @@ class OpenCodeGoTransport:
         try:
             process.wait(timeout=max(0.0, deadline - time.monotonic()))
         except subprocess.TimeoutExpired:
+            writer_closed.set()
             _terminate_process_tree(process)
+            writer.join(timeout=2)
             for thread in out_threads:
                 thread.join(timeout=2)
             self.last_timed_out = True
@@ -1340,13 +1378,30 @@ class OpenCodeGoTransport:
                 "timed_out": True, "provider_exit_code": process.returncode,
             })
             raise _transport_error("request_timeout", "provider request timed out", timed_out=True) from None
+        # The writer has finished; join it explicitly so no background thread
+        # outlives the process and so any captured write_error is visible before
+        # the transport reports the outcome.
+        writer_closed.set()
+        writer.join(timeout=2)
+        # The reader threads drain the process's stdout/stderr pipes.  After
+        # ``process.wait()`` returned the process is dead and the pipes are
+        # EOF-bound, so the join is a pipe-drain wait, not a request timeout.
+        # Use the generous pipe-drain bound so full-suite resource pressure
+        # never truncates the captured response.
         for thread in out_threads:
-            thread.join(timeout=2)
+            thread.join(timeout=_READER_JOIN_TIMEOUT_SECONDS)
         elapsed = time.monotonic() - started
         self.last_process_exit_code = process.returncode
         raw_stdout = stdout.text()
         raw_stderr = stderr.text()
         diagnostics = self._bounded_diagnostics(raw_stdout, raw_stderr)
+        # A captured stdin-write failure (broken pipe after early process exit,
+        # or a closed pipe from teardown) is benign when the process exited 0
+        # and produced a parseable response — the process simply closed its
+        # stdin before the writer's close() completed.  It is reported as an
+        # explicit transport failure ONLY when the process did not produce a
+        # usable outcome (nonzero exit, oversized output, or empty stdout),
+        # so a benign close race is never misclassified as a real failure.
         if stdout.truncated or stderr.truncated:
             self.last_provider_error_category = "response_too_large"
             self._record("attempt", {
@@ -1356,6 +1411,14 @@ class OpenCodeGoTransport:
             })
             raise _transport_error("response_too_large", "provider output exceeded the configured bound")
         if process.returncode != 0:
+            if write_error:
+                self.last_provider_error_category = "process_error"
+                self._record("attempt", {
+                    "event": "provider_write_failure", "case_id": self.case_id, "attempt": self.process_attempts,
+                    "provider_exit_code": process.returncode,
+                    "error": f"{type(write_error[0]).__name__}: {write_error[0]}",
+                })
+                raise _transport_error("process_error", f"provider request write failed: {write_error[0]}") from None
             self.last_provider_error_category = "process_error"
             self._record("attempt", {
                 "event": "provider_exit_failure", "case_id": self.case_id, "attempt": self.process_attempts,

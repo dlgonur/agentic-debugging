@@ -1658,6 +1658,8 @@ def main(argv: list[str] | None = None) -> int:
             "command_line_character_count": len(subprocess.list2cmdline(command)),
             "command_line_within_native_bound": len(subprocess.list2cmdline(command)) <= MAX_NATIVE_COMMAND_LINE_CHARS,
             "file_argument_absent": "--file" not in command,
+            "message_is_single_positional": command.index("run") == 1 and isinstance(command[2], str) and bool(command[2]),
+            "message_inline_request_present": isinstance(command[2], str) and command[2].strip() != "",
             "isolation": {
                 "config_path": str(isolation["config_path"]),
                 "config_sha256": hashlib.sha256(isolation["config_path"].read_bytes()).hexdigest(),

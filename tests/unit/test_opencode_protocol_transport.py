@@ -437,12 +437,18 @@ def test_jsonl_transport_stripped_environment_is_explicit_and_has_no_profile_inf
 
 
 def test_no_inference_preflight_succeeds_through_stripped_transport_environment(tmp_path: Path) -> None:
-    auth = transport._auth_state_path()
-    if not auth.is_file():
-        pytest.skip("configured OpenCode auth state is unavailable")
+    # Hermetic real-subprocess preflight: a fake profile with synthetic auth
+    # state, a fake launcher with the trusted npm layout, and a compiled fake
+    # native ``opencode.exe`` forwarding to a script that answers the legacy
+    # catalog/effective-config responses.  This exercises the real wrapper
+    # ``--preflight`` subprocess without depending on a real OpenCode install
+    # or real operator auth state.
+    profile = tmp_path / "fake-profile"
+    auth = profile / ".local" / "share" / "opencode" / "auth.json"
+    auth.parent.mkdir(parents=True, exist_ok=True)
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
     fake_dir = tmp_path / "fake-opencode"
     fake_dir.mkdir()
-    fake_launcher = fake_dir / "opencode.cmd"
     fake_impl = fake_dir / "fake_opencode.py"
     fake_impl.write_text(
         "import json, pathlib, sys\n"
@@ -460,10 +466,15 @@ def test_no_inference_preflight_succeeds_through_stripped_transport_environment(
         "    raise SystemExit(92)\n",
         encoding="utf-8",
     )
+    fake_launcher = fake_dir / "opencode.cmd"
     fake_launcher.write_text(f'@"{sys.executable}" "%~dp0fake_opencode.py" %*\n', encoding="utf-8")
-    opencode_go_test_support.synthetic.build_fake_native_executable(fake_dir, target_script=fake_impl)
+    native_bin = fake_dir / "node_modules" / "opencode-ai" / "bin"
+    native_bin.mkdir(parents=True, exist_ok=True)
+    opencode_go_test_support.synthetic.build_fake_native_executable(native_bin, target_script=fake_impl)
     environment = JsonlCommandTransport.subprocess_environment()
     environment["PATH"] = str(fake_dir)
+    environment["USERPROFILE"] = str(profile)
+    environment["HOME"] = str(profile)
     evidence = tmp_path / "preflight.jsonl"
     child = subprocess.run(
         [sys.executable, str(Path(transport.__file__)), "--preflight", "--model", MODEL, "--variant", "max", "--evidence-file", str(evidence)],
@@ -495,9 +506,10 @@ def test_go_preflight_reaches_catalog_parsing_under_synthetic_successful_models_
     """The wrapper Go preflight reaches catalog parsing and effective-config
     validation under a synthetic successful ``models opencode-go`` response,
     and never executes ``opencode run``."""
-    auth = transport._auth_state_path()
-    if not auth.is_file():
-        pytest.skip("configured OpenCode auth state is unavailable")
+    profile = tmp_path / "fake-profile-go"
+    auth = profile / ".local" / "share" / "opencode" / "auth.json"
+    auth.parent.mkdir(parents=True, exist_ok=True)
+    auth.write_text("synthetic auth fixture", encoding="utf-8")
     go_model = "opencode-go/test-deepseek-v4-flash"
     go_catalog = json.dumps({
         "id": "test-deepseek-v4-flash",
@@ -532,9 +544,13 @@ def test_go_preflight_reaches_catalog_parsing_under_synthetic_successful_models_
         encoding="utf-8",
     )
     fake_launcher.write_text(f'@"{sys.executable}" "%~dp0fake_opencode_go.py" %*\n', encoding="utf-8")
-    opencode_go_test_support.synthetic.build_fake_native_executable(fake_dir, target_script=fake_impl)
+    native_bin = fake_dir / "node_modules" / "opencode-ai" / "bin"
+    native_bin.mkdir(parents=True, exist_ok=True)
+    opencode_go_test_support.synthetic.build_fake_native_executable(native_bin, target_script=fake_impl)
     environment = JsonlCommandTransport.subprocess_environment()
     environment["PATH"] = str(fake_dir)
+    environment["USERPROFILE"] = str(profile)
+    environment["HOME"] = str(profile)
     evidence = tmp_path / "go-preflight.jsonl"
     child = subprocess.run(
         [
@@ -1331,6 +1347,13 @@ def test_sibling_opencode_exe_is_not_implicitly_trusted(monkeypatch: pytest.Monk
     launcher.write_text("@echo off\r\n", encoding="utf-8")
     sibling = fake_bin / "opencode.exe"
     sibling.write_bytes(b"unrelated sibling binary")
+    # The trusted npm package root exists (so _npm_package_root passes) but the
+    # deterministic npm-shim target ``bin\opencode.exe`` is absent; the sibling
+    # at the launcher-dir level is never consulted, so resolution fails with
+    # the "not found under the trusted npm package root" error rather than
+    # silently trusting the sibling.
+    package_root = fake_bin / "node_modules" / "opencode-ai"
+    package_root.mkdir(parents=True)
     with pytest.raises(RuntimeError, match="not found under the trusted npm package root"):
         transport._resolve_native_executable(str(launcher))
     # With a valid npm candidate present, the sibling is ignored.

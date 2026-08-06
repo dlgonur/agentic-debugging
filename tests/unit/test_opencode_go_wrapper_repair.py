@@ -342,7 +342,16 @@ def test_opencode_go_mode_rejects_other_provider_identities_before_run(monkeypat
 
 
 def test_opencode_go_mode_accepts_zero_catalog_prices_without_requiring_them(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    rc, _, _ = _run_wrapper_main(monkeypatch, tmp_path, route_mode="opencode-go", catalog=ZERO_CATALOG)
+    # The zero-price catalog has its own deterministic fingerprint; the
+    # authorization-bound expected fingerprint must match the catalog actually
+    # observed (the wrapper independently recomputes it during Go preflight),
+    # so the zero-price contract is exercised under a consistent binding rather
+    # than a nonzero-catalog fingerprint that would falsely imply drift.
+    zero_fingerprint = wrapper.catalog_entry_fingerprint(json.loads(ZERO_CATALOG))
+    rc, _, _ = _run_wrapper_main(
+        monkeypatch, tmp_path, route_mode="opencode-go", catalog=ZERO_CATALOG,
+        extra_args=["--expected-catalog-fingerprint", zero_fingerprint],
+    )
     assert rc == 0
 
 

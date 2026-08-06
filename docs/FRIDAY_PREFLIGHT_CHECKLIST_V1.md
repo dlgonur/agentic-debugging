@@ -1,13 +1,15 @@
 # Friday Preflight and Rehearsal Checklist v1
 
 **Date:** 2026-08-05
-**Branch:** `goal/friday-final-delivery-v1` (candidate; see baseline note)
+**Branch:** the original delivery bundle is accepted and integrated on `main`
+at `ab464dd` (the earlier presentation plan/deck/cue delivery commit is
+`456f0e9`).
 **Source baseline:** `456f0e9a6576aab912f5af5980d756ff4e1e9dc3` — accepted
-presentation plan/deck/cue delivery commit, built from accepted source
-baseline `456f0e9`; campaign infrastructure accepted through `0abb588`; V4
-identity correction accepted through `fc7c85b`. This checklist is part of the
-uncommitted Friday final-delivery candidate; its integration commit is not
-yet known.
+presentation plan/deck/cue delivery commit; campaign infrastructure accepted
+through `0abb588`; V4 identity correction accepted through `fc7c85b`. The
+original checklist is accepted at `ab464dd`. The current hardening revisions
+to this file are an uncommitted candidate built on top of `ab464dd`; their
+eventual integration commit is not known.
 **Presentation:** 2026-08-07, main track 24.5 min (Q&A excluded), short track
 11.5 min (Q&A excluded) — timings per `docs/FRIDAY_PRESENTATION_CUE_SHEET_V1.md`.
 **Usage:** run the day before and once more on presentation day. This checklist
@@ -19,9 +21,10 @@ sheet's Section 10 checklist are the per-document versions.
 ## 1. Repository and Git preflight
 
 - [ ] Presentation baseline recorded: on presentation day, run from clean
-      `main` matching `origin/main`, containing the delivery bundle files
-      (once integrated) and descending from the accepted source baseline
-      `456f0e9`. Do not present from the candidate branch.
+      `main == origin/main` containing the final accepted delivery bundle
+      files (the original bundle is accepted at `ab464dd`; any hardening
+      revisions must be integrated before presentation day). Do not present
+      from the candidate branch.
 - [ ] `git status` shows no tracked modifications; only ignored local files
       (`.opencode/`, `_ai-review/`, `operator/`) may be present.
 - [ ] The Friday delivery bundle files exist at HEAD:

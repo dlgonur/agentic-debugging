@@ -789,6 +789,93 @@ class PdbSession:
         finally:
             self._request_lock.release()
 
+    def run_post_mortem(
+        self,
+        script: str,
+        argv: Sequence[str] = (),
+    ) -> PdbResponse:
+        """Run a Python script to completion and capture post-mortem evidence
+        if it terminates with an unhandled exception.
+
+        This is the offline-capable post-mortem entry point (TODO 6.1.3): it
+        reuses the existing PDB protocol/worker channel, requires the same
+        READY state and one-execution-per-session invariant as
+        :meth:`run_to_breakpoint`, and never enters an interactive paused
+        session.  On a successful exit the response carries
+        ``status: "exited"`` with ``post_mortem: false``; on an unhandled
+        exception it carries ``status: "post_mortem"`` with the bounded,
+        structured traceback evidence (exception type/message, traceback
+        frames, innermost-frame locals snapshot).  A failure without a
+        traceback fails closed with ``success: false`` and no fabricated
+        frame evidence."""
+        if not self._request_lock.acquire(timeout=self._request_timeout):
+            raise PdbSessionError(
+                "A request is already in flight; only one "
+                "in-flight request is supported"
+            )
+        try:
+            with self._state_lock:
+                if self._state != PdbSessionState.READY:
+                    raise PdbSessionStateError(
+                        f"Cannot run_post_mortem from state "
+                        f"{self._state.value}; expected READY"
+                    )
+                if self._target_consumed:
+                    raise PdbSessionStateError(
+                        "Target execution already completed on this session; "
+                        "exactly one execution is allowed"
+                    )
+
+            script_val, source_bytes = self._validate_script_and_read(script)
+            argv_val = self._validate_argv(argv)
+
+            with self._state_lock:
+                self._target_consumed = True
+
+            payload: Dict[str, Any] = {
+                "script": script_val,
+                "argv": argv_val,
+            }
+
+            request = PdbRequest(
+                protocol_version=PROTOCOL_VERSION,
+                request_id=self._allocate_request_id(),
+                operation="run_post_mortem",
+                payload=payload,
+            )
+
+            response = self._send_and_receive(
+                request, self._request_timeout
+            )
+
+            if response.success:
+                status = response.result.get("status")
+                with self._state_lock:
+                    if status == "post_mortem":
+                        self._target_lifecycle_state = "failed"
+                    elif status == "exited":
+                        self._target_lifecycle_state = "exited"
+                    self._active_script = script_val
+                    self._active_breakpoints = None
+            else:
+                if response.result != {}:
+                    self._fail_and_cleanup(
+                        PdbProtocolError(
+                            "Failed response must have empty result, "
+                            f"got {response.result}"
+                        )
+                    )
+                with self._state_lock:
+                    self._target_lifecycle_state = "failed"
+                    self._active_script = script_val
+                    self._active_breakpoints = None
+
+            return response
+        except Exception:
+            raise
+        finally:
+            self._request_lock.release()
+
     def start_paused_target(
         self,
         script: str,
