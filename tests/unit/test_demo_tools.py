@@ -381,6 +381,28 @@ class TestProbePreparation:
             prepare_pdb_probe(source, scenario_for(TASK_ID), tmp_path / "out")
 
 
+class TestPostMortemToolCleanup:
+    def test_session_factory_failure_removes_owned_workspace(
+        self, context: DemoToolContext, tmp_path: Path
+    ) -> None:
+        context.probe = prepare_pdb_probe(
+            FIXTURE, scenario_for(TASK_ID), tmp_path / "probe-parent"
+        )
+        context.baseline_failure_reproduced = True
+
+        def fail_factory(workspace):
+            raise RuntimeError("synthetic session factory failure")
+
+        context.pdb_session_factory = fail_factory
+        observation = _dispatch(
+            context, "get_failure_trace", ControllerState.REPRODUCE, {}
+        )
+        assert observation.status is ObservationStatus.ERROR
+        assert _reason(observation) == ToolDispatchReason.TOOL_ERROR.value
+        assert context.pdb_session is None
+        assert context.pdb_workspace is None
+
+
 class TestArgvConstruction:
     def test_node_ids_replace_the_manifest_selection(self) -> None:
         base = ["python", "-m", "pytest", "tests/t.py::a", "-q", "-p", "no:cacheprovider"]

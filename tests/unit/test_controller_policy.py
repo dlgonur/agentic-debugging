@@ -76,6 +76,7 @@ EXPECTED_BUDGETS = {
     "run_tests": BudgetKind.TEST_RUNS,
     "run_reproduction": BudgetKind.TEST_RUNS,
     "run_regression_tests": BudgetKind.TEST_RUNS,
+    "get_failure_trace": BudgetKind.PDB_OBSERVATIONS,
     "get_stack_summary": BudgetKind.PDB_OBSERVATIONS,
     "get_frame": BudgetKind.PDB_OBSERVATIONS,
     "get_frame_locals": BudgetKind.PDB_OBSERVATIONS,

@@ -184,6 +184,7 @@ def test_two_action_trajectory_has_deterministic_ids_and_reason_based_budget():
     assert result.steps[1].action.action_id == "action-000000001"
     assert result.steps[1].observation.observation_id == "observation-000000001"
     assert result.budget_state.test_runs == 1
+    assert result.budget_state.pdb_observations == 1
     assert counters == {"validator": 2, "handler": 2}
 
 

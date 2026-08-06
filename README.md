@@ -9,6 +9,14 @@ See `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md` for the
 claim-by-claim correction of older snapshot text. External QLoRA work remains
 outside this main-repository reconciliation.
 
+Two 2026-08-07 local follow-ups close the remaining metric/persistence gaps:
+`root-cause-assessment-v1` supplies explicit independent root-cause scoring,
+and the existing `get_failure_trace` action now records bounded post-mortem
+PDB evidence through ToolResult, controller observation, canonical events,
+replay, and cleanup. See `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md` and
+`docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. Neither is a live-model
+performance claim.
+
 The project investigates the path from traditional debugging, fault localization, automated program repair, LLM-based debugging, and repository-level software engineering agents toward interactive debugger-assisted agents.
 
 ## Initial research direction

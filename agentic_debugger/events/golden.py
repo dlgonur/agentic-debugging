@@ -224,8 +224,8 @@ class GoldenArtifact:
         final_model_calls = final_event["payload"].get("model_calls")
         if final_model_calls != candidate["expected_model_call_count"]:
             raise GoldenArtifactError("final model_calls does not match expected model call count")
-        pdb_action_names = {"start_pdb_session", "get_stack_summary", "get_frame_locals", "stop_pdb_session"}
-        pdb_observation_names = {"get_stack_summary", "get_frame_locals"}
+        pdb_action_names = {"start_pdb_session", "get_failure_trace", "get_stack_summary", "get_frame_locals", "stop_pdb_session"}
+        pdb_observation_names = {"get_failure_trace", "get_stack_summary", "get_frame_locals"}
         derived_pdb = {
             "actions": sum(event["name"] in pdb_action_names for event in events if event["event_type"] == EventType.ACTION.value),
             "observations": sum(event["name"] in pdb_observation_names for event in events if event["event_type"] == EventType.OBSERVATION.value),

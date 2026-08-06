@@ -88,6 +88,7 @@ NONDETERMINISTIC_RESULT_KEYS: tuple[str, ...] = ("environment", "timing")
 _PDB_ACTION_NAMES = frozenset(
     {
         "start_pdb_session",
+        "get_failure_trace",
         "get_stack_summary",
         "get_frame",
         "get_frame_locals",
@@ -98,6 +99,7 @@ _PDB_ACTION_NAMES = frozenset(
 )
 _PDB_OBSERVATION_ACTION_NAMES = frozenset(
     {
+        "get_failure_trace",
         "get_stack_summary",
         "get_frame",
         "get_frame_locals",

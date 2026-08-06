@@ -194,7 +194,7 @@ Rules:
 
 - [x] 6.1.1 Start with PDB only.
 - [x] 6.1.2 Define PDB command schema.
-- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı ve main history'ye entegre: `f7ba129`..`e92634e`; bounded, side-effect-safe `run_post_mortem` protocol/worker/session operation; 107 unique focused tests. Structured response event/replay entegrasyonuna hazırdır fakat henüz first-class trajectory observation değildir.)
+- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı ve main history'ye entegre: `f7ba129`..`e92634e`; bounded, side-effect-safe `run_post_mortem` protocol/worker/session operation; 107 unique focused tests. 2026-08-07 follow-up: existing `get_failure_trace` action üzerinden PDB-observation budget'ına bağlı ToolResult/controller Observation/RunEvent/replay/semantic-projection yolu ve cleanup kanıtı eklendi; bkz. `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`.)
 - [x] 6.2.1 Serialize debugger outputs into model-readable structured text.
 - [x] 6.3.1 Support stack inspection.
 - [x] 6.3.2 Support local variable inspection.
@@ -1121,9 +1121,10 @@ and presentation runs from clean `main == origin/main`:
   protocol/worker/session operation that runs a Python script and captures
   bounded structured traceback evidence on unhandled exception. Reuses the
   existing PDB protocol, worker channel, and session lifecycle; the response
-  is deterministic, bounded, JSON-serializable protocol evidence suitable for
-  later event persistence (it is not currently integrated into the accepted
-  event/replay trajectory path). Offline-capable; no provider/network;
+  is deterministic, bounded, JSON-serializable protocol evidence. The
+  historical limitation recorded here was closed on 2026-08-07 through the
+  existing `get_failure_trace` controller/tool/event/replay path; see
+  `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. Offline-capable; no provider/network;
   successful exit produces no post-mortem; tracebackless failure fails closed
   through the real worker branch (authoritative `PdbResponse`, success=false,
   empty result, bounded error, lifecycle `failed`); one-execution-per-session

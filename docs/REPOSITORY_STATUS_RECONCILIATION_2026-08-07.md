@@ -54,13 +54,12 @@ Completed after the reconciliation snapshot:
 
 - tracker 7.1.2, strict root-cause explanation metric, is implemented and
   documented in `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`.
+- bounded post-mortem PDB evidence is integrated through the existing
+  controller ToolResult/Observation and canonical event/replay path; see
+  `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`.
 
-The following work can proceed locally without changing external authority:
-
-1. Integrate bounded post-mortem PDB evidence into the accepted event/replay
-   trajectory path; the current response is protocol-ready but not persisted
-   as a first-class trajectory observation.
-2. Keep the daily diary and durable status records current.
+The remaining local maintenance item is to keep the daily diary and durable
+status records current as milestones land.
 
 The following work cannot be completed honestly from the main repository
 alone:

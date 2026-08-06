@@ -9,6 +9,14 @@ pre-merge claims about the literature syntheses (`3c23b6e`), post-mortem PDB
 work (`f7ba129`..`e92634e`), and RAG/comparison/preference infrastructure
 (`1e680b1`). External QLoRA state is recorded but not modified.
 
+**2026-08-07 local completion follow-ups:** Tracker 7.1.2 now has a strict
+root-cause explanation assessment/aggregation contract, and bounded
+post-mortem PDB evidence now uses the existing `get_failure_trace` controller
+action and canonical event/replay path. See
+`docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md` and
+`docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. These are infrastructure
+completions, not live-model performance evidence.
+
 Aşağıdaki faz listesi, stajın orijinal geniş araştırma/ürün planını temsil eder.
 Bu plan içinde bazı maddeler, fine-tuning veya RAG üzerinden değil,
 deterministic tool'lar ve verifier-backed bir controller agent üzerinden

@@ -6,6 +6,7 @@ Every handler delegates to an already-accepted component:
 Controller action             Backing implementation
 ============================  =======================================
 ``run_reproduction``          ``runtime.test_runner.TestRunner``
+``get_failure_trace``         ``runtime.pdb_session.PdbSession.run_post_mortem``
 ``run_regression_tests``      ``runtime.test_runner.TestRunner``
 ``find_function``             ``skills.search_skills.find_function``
 ``get_source_window``         ``skills.file_skills.get_source_window``
@@ -444,6 +445,101 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
             "controller validation outcome classified",
         )
 
+    def handle_get_failure_trace(
+        action: Action, arguments: dict[str, object]
+    ) -> ToolResult:
+        """Capture one bounded post-mortem PDB observation and clean up.
+
+        The action is legal only after the baseline failure has been
+        reproduced, uses the already-prepared disposable probe copy, and is
+        charged to the controller's PDB-observation budget.  The full strict
+        ``PdbResponse`` mapping is retained in the ToolResult, so canonical
+        trajectory projection/replay records the actual protocol evidence.
+        """
+
+        if pdb_policy is PdbPolicy.DISABLED:
+            raise _safe_rejection("PDB access is disabled by evaluation policy")
+        if context.baseline_failure_reproduced is not True:
+            raise _safe_rejection(
+                "post-mortem failure trace requires a reproduced baseline failure"
+            )
+        probe = context.probe
+        if probe is None:
+            raise _safe_rejection("no post-mortem probe is configured for this task")
+        if context.pdb_session is not None or context.pdb_workspace is not None:
+            raise _safe_rejection("a PDB session is already active")
+
+        try:
+            workspace = TaskWorkspace(
+                str(probe.source_dir), parent_dir=str(probe.parent_dir)
+            )
+        except WorkspaceError as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.pdb_workspace = workspace
+        try:
+            session = context.pdb_session_factory(workspace)
+        except Exception as exc:
+            cleanup_errors = context.release_pdb()
+            if cleanup_errors:
+                raise ToolExecutionError(
+                    bounded_diagnostic(cleanup_errors[0], context.workspace.root)
+                ) from exc
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.pdb_session = session
+        try:
+            session.start()
+            context.pdb_session_started = True
+            response = session.run_post_mortem(probe.script)
+        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            cleanup_errors = context.release_pdb()
+            if cleanup_errors:
+                raise ToolExecutionError(
+                    bounded_diagnostic(cleanup_errors[0], context.workspace.root)
+                ) from exc
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+
+        serialization_error: Exception | None = None
+        response_mapping: dict[str, Any] | None = None
+        try:
+            response_mapping = _json_safe(
+                response.to_mapping(), "post-mortem PDB response"
+            )
+        except Exception as exc:
+            serialization_error = exc
+        cleanup_errors = context.release_pdb()
+        if cleanup_errors:
+            raise ToolExecutionError(
+                bounded_diagnostic(cleanup_errors[0], context.workspace.root)
+            )
+        if serialization_error is not None:
+            raise ToolExecutionError(
+                bounded_diagnostic(serialization_error, context.workspace.root)
+            ) from serialization_error
+        if response_mapping is None:
+            raise ToolExecutionError("post-mortem PDB response was not retained")
+        if response.success is not True:
+            raise ToolExecutionError("post-mortem PDB request failed closed")
+
+        status = response.result.get("status")
+        post_mortem = response.result.get("post_mortem") is True
+        if status not in {"post_mortem", "exited"}:
+            raise ToolExecutionError("post-mortem PDB response has invalid status")
+        context.pdb_observation_names.append("get_failure_trace")
+        return _ok(
+            {
+                "evidence_kind": "pdb-post-mortem-v1",
+                "pdb_response": response_mapping,
+                "post_mortem": post_mortem,
+                "session_stopped": context.pdb_session is None,
+                "workspace_removed": context.pdb_workspace is None,
+            },
+            (
+                "bounded post-mortem traceback evidence captured"
+                if post_mortem
+                else "post-mortem target exited without traceback evidence"
+            ),
+        )
+
     # -- static source retrieval ------------------------------------------
 
     def handle_find_function(action: Action, arguments: dict[str, object]) -> ToolResult:
@@ -638,6 +734,7 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
     return ToolRegistry(
         (
             spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
+            spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
             spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
             spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
             spec(

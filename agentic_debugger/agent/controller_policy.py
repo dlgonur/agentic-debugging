@@ -237,6 +237,10 @@ _BUDGET_KIND_BY_ACTION: Final = MappingProxyType(
         ActionName.RUN_TESTS: BudgetKind.TEST_RUNS,
         ActionName.RUN_REPRODUCTION: BudgetKind.TEST_RUNS,
         ActionName.RUN_REGRESSION_TESTS: BudgetKind.TEST_RUNS,
+        # The accepted implementation of get_failure_trace is a bounded
+        # post-mortem PDB observation. It must not bypass the PDB evidence
+        # budget merely because it runs to completion instead of pausing.
+        ActionName.GET_FAILURE_TRACE: BudgetKind.PDB_OBSERVATIONS,
         ActionName.GET_STACK_SUMMARY: BudgetKind.PDB_OBSERVATIONS,
         ActionName.GET_FRAME: BudgetKind.PDB_OBSERVATIONS,
         ActionName.GET_FRAME_LOCALS: BudgetKind.PDB_OBSERVATIONS,
