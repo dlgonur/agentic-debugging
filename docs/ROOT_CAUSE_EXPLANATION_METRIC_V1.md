@@ -19,10 +19,21 @@ Implementation: `agentic_debugger/evaluation/root_cause_metric.py`.
   `deterministic-fixture`) and a disclosed assessor identifier;
 - SHA-256 of the bounded claim text (the claim and oracle text are not stored
   in the assessment artifact);
+- a `claim_binding` that ties `claim_sha256` to the exact attempt evidence the
+  claim was extracted from — a bounded response substring (with byte offset and
+  SHA-256 of the source response) or a trajectory hypothesis reference (with
+  the hypothesis offset and SHA-256 of the hypothesis statement);
 - rubric version `root-cause-rubric-v1`;
 - three explicit dimensions;
 - contradiction judgment and evidence references;
 - a derived closed outcome and content-derived assessment identity.
+
+`claim_binding` and `claim_sha256` must both be present (assessed claim) or
+both absent (`NOT_PROVIDED`).  Mismatched or invented claim hashes are rejected
+at load time.  Evidence references must use the `{trajectory|verifier}:ref`
+shape and, when the attempt's declared evidence set is supplied, every
+reference must appear in that declared set — arbitrary strings are not
+accepted.
 
 The three dimensions are:
 

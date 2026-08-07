@@ -27,10 +27,14 @@ from agentic_debugger.comparison.schema import (
     ComparisonExperiment,
     ComparisonInvariantError,
 )
-from agentic_debugger.evaluation.root_cause_metric import build_root_cause_assessment
+from agentic_debugger.evaluation.root_cause_metric import (
+    ClaimBinding,
+    build_root_cause_assessment,
+)
 
 ROOT = Path(__file__).resolve().parents[2]
 TASK_ID = "curated-off-by-one-002"
+SOURCE_SHA256 = "b" * 64
 
 
 def _attempt(**overrides):
@@ -96,6 +100,11 @@ def _with_root_cause(attempt, **overrides):
         "assessor_kind": "independent-human",
         "assessor_id": "comparison-reviewer",
         "claim_text": "The upper loop bound omits the final required index.",
+        "claim_binding": ClaimBinding(
+            kind="response-substring",
+            source_sha256=SOURCE_SHA256,
+            offset=10,
+        ),
         "mechanism": "SATISFIED",
         "failure_connection": "SATISFIED",
         "repair_alignment": "SATISFIED",
@@ -242,6 +251,7 @@ def test_valid_but_wrong_task_root_cause_assessment_fails_at_schema_boundary():
         assessor_kind="independent-human",
         assessor_id="comparison-reviewer",
         claim_text=None,
+        claim_binding=None,
         evidence_refs=("trajectory:no-root-cause-action",),
     )
     mapping = attempt.to_mapping()
@@ -250,6 +260,33 @@ def test_valid_but_wrong_task_root_cause_assessment_fails_at_schema_boundary():
         "root_cause_assessment": assessment.to_mapping(),
     }
     with pytest.raises(ComparisonInvariantError, match="task_id mismatch"):
+        AttemptRecord.from_mapping(mapping)
+
+
+def test_root_cause_evidence_refs_validated_against_declared_evidence():
+    """When provenance carries declared_evidence, assessment refs must be in it."""
+    attempt = _with_root_cause(_attempt(attempt_id=f"{TASK_ID}:base"))
+    mapping = attempt.to_mapping()
+    mapping["provenance"] = {
+        **mapping["provenance"],
+        "declared_evidence": ["trajectory:event-12", "verifier:f2p-1"],
+    }
+    # Legal: the assessment's evidence_refs are in the declared set.
+    record = AttemptRecord.from_mapping(mapping)
+    assert record.provenance["declared_evidence"] == [
+        "trajectory:event-12", "verifier:f2p-1"
+    ]
+
+
+def test_root_cause_evidence_refs_not_in_declared_set_fail_closed():
+    attempt = _with_root_cause(_attempt(attempt_id=f"{TASK_ID}:base"))
+    mapping = attempt.to_mapping()
+    # The assessment uses trajectory:event-12 but the declared set omits it.
+    mapping["provenance"] = {
+        **mapping["provenance"],
+        "declared_evidence": ["trajectory:event-99"],
+    }
+    with pytest.raises(ComparisonInvariantError, match="evidence_refs"):
         AttemptRecord.from_mapping(mapping)
 
 

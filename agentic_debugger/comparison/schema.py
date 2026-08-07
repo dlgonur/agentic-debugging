@@ -351,6 +351,7 @@ class AttemptRecord:
             from agentic_debugger.evaluation.root_cause_metric import (
                 RootCauseAssessment,
                 RootCauseMetricError,
+                _validate_evidence_refs_against_declared,
             )
 
             try:
@@ -367,6 +368,21 @@ class AttemptRecord:
                 raise ComparisonInvariantError(
                     "provenance.root_cause_assessment task_id mismatch"
                 )
+            declared_evidence_raw = self.provenance.get("declared_evidence")
+            if declared_evidence_raw is not None:
+                if type(declared_evidence_raw) is not list:
+                    raise ComparisonInvariantError(
+                        "provenance.declared_evidence must be a list or absent"
+                    )
+                declared_evidence = tuple(declared_evidence_raw)
+                try:
+                    _validate_evidence_refs_against_declared(
+                        root_cause.evidence_refs, declared_evidence
+                    )
+                except RootCauseMetricError as exc:
+                    raise ComparisonInvariantError(
+                        f"provenance.root_cause_assessment evidence_refs: {exc}"
+                    ) from exc
         if self.cleanup_status == "cleaned":
             if self.verifier_evidence is None or self.verifier_status != "COMPLETED":
                 raise ComparisonInvariantError(

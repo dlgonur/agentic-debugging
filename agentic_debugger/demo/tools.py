@@ -490,7 +490,11 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
             session.start()
             context.pdb_session_started = True
             response = session.run_post_mortem(probe.script)
-        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+        except Exception as exc:
+            # Catch every exception (not just PdbSessionError/TimeoutError) so
+            # an unexpected OSError, BrokenPipeError, RuntimeError, or worker
+            # crash still releases the PDB session and removes the disposable
+            # workspace.  Without this, a non-PDB exception leaks both.
             cleanup_errors = context.release_pdb()
             if cleanup_errors:
                 raise ToolExecutionError(

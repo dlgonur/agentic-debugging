@@ -133,7 +133,7 @@ tracker Phase 1.1 is closed.
 - `research/notes/2023_swe_bench_notes.md`, `2024_agentless_notes.md`,
   `2024_chatdbg_notes.md`, `2025_debug_gym_notes.md`
 - `docs/PROJECT_TRACKER.md` Phase 1.1 subtasks (1.1.1–1.1.9 checked;
-  top-level 1.1 unchecked)
+  top-level 1.1 checked)
 
 **Missing work:** None for the bounded instructor item. Additional Tier 2/3
 reading remains useful future breadth, not a prerequisite for this tracked

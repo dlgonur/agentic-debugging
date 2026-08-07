@@ -5,6 +5,15 @@ failure.  This module therefore records an independent rubric assessment and
 derives its outcome from explicit dimension judgments.  It deliberately does
 not use lexical similarity to hidden oracle text and does not retain the claim
 text; only its SHA-256 identity is stored.
+
+Every assessment carries a ``claim_binding`` that ties ``claim_sha256`` to the
+exact attempt evidence the claim was extracted from — a bounded response
+substring (with byte offset and SHA-256 of the source response) or a trajectory
+hypothesis reference (with the hypothesis/action offset and SHA-256 of the
+hypothesis statement).  Mismatched or invented claim hashes are rejected at
+load time.  Evidence references must use the ``kind:ref`` shape and, when the
+attempt's declared evidence set is supplied, every reference must appear in
+that declared set — arbitrary strings are not accepted.
 """
 
 from __future__ import annotations
@@ -13,7 +22,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence, Tuple
+from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional, Sequence, Tuple
 
 
 ROOT_CAUSE_ASSESSMENT_SCHEMA_VERSION = "root-cause-assessment-v1"
@@ -40,6 +49,16 @@ ROOT_CAUSE_ASSESSOR_KINDS = (
     "deterministic-fixture",
 )
 
+ROOT_CAUSE_CLAIM_BINDING_KINDS = (
+    "response-substring",
+    "trajectory-hypothesis",
+)
+
+ROOT_CAUSE_EVIDENCE_REF_KINDS = (
+    "trajectory",
+    "verifier",
+)
+
 MAX_ROOT_CAUSE_CLAIM_BYTES = 16 * 1024
 MAX_ROOT_CAUSE_EVIDENCE_REFS = 32
 MAX_ROOT_CAUSE_EVIDENCE_REF_BYTES = 512
@@ -47,6 +66,7 @@ MAX_ROOT_CAUSE_EVIDENCE_REF_BYTES = 512
 _ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:/-]{0,255}$")
 _TASK_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 _HEX64_PATTERN = re.compile(r"^[a-f0-9]{64}$")
+_EVIDENCE_REF_PATTERN = re.compile(r"^(trajectory|verifier):[A-Za-z0-9][A-Za-z0-9._:/-]{0,254}$")
 
 
 class RootCauseMetricError(ValueError):
@@ -110,10 +130,113 @@ def _validate_evidence_refs(value: Any) -> Tuple[str, ...]:
                 f"evidence_refs[{index}] exceeds the "
                 f"{MAX_ROOT_CAUSE_EVIDENCE_REF_BYTES}-byte cap"
             )
+        if _EVIDENCE_REF_PATTERN.match(item) is None:
+            raise RootCauseMetricError(
+                f"evidence_refs[{index}] must use the "
+                f"{{'trajectory'|'verifier'}}:ref shape: {item!r}"
+            )
         result.append(item)
     if len(set(result)) != len(result):
         raise RootCauseMetricError("evidence_refs must be unique")
     return tuple(result)
+
+
+def _validate_evidence_refs_against_declared(
+    refs: Tuple[str, ...],
+    declared_evidence: Optional[Sequence[str]],
+) -> None:
+    """Reject evidence references absent from the attempt's declared evidence.
+
+    When the caller supplies the attempt's declared event/verifier evidence set,
+    every reference in ``refs`` must appear in that set.  This prevents an
+    assessor from inventing evidence references that the attempt never declared.
+    """
+
+    if declared_evidence is None:
+        return
+    declared: FrozenSet[str] = frozenset(declared_evidence)
+    if not declared:
+        if refs:
+            raise RootCauseMetricError(
+                "declared evidence set is empty but evidence_refs are present"
+            )
+        return
+    unknown = [ref for ref in refs if ref not in declared]
+    if unknown:
+        raise RootCauseMetricError(
+            f"evidence_refs reference undeclared attempt evidence: {unknown}"
+        )
+
+
+@dataclass(frozen=True)
+class ClaimBinding:
+    """Bind ``claim_sha256`` to the exact attempt evidence the claim came from.
+
+    A binding is one of:
+
+    - ``response-substring`` — the claim was taken from a bounded model response
+      whose SHA-256 is ``source_sha256``; ``offset`` is the UTF-8 byte offset of
+      the claim substring within that response.
+    - ``trajectory-hypothesis`` — the claim was taken from a controller
+      hypothesis action; ``offset`` is the trajectory event/hypothesis index and
+      ``source_sha256`` is the SHA-256 of the hypothesis statement text.
+
+    The binding proves that ``claim_sha256`` was derived from real attempt
+    evidence, not invented.  At load time the binding is checked for
+    self-consistency (kind, non-empty source hash, non-negative offset) and the
+    ``RootCauseAssessment`` verifies that ``claim_sha256`` is ``None`` if and
+    only if the binding is ``None``.
+    """
+
+    kind: str
+    source_sha256: str
+    offset: int
+
+    _KNOWN_FIELDS = {"kind", "source_sha256", "offset"}
+
+    def __post_init__(self) -> None:
+        if self.kind not in ROOT_CAUSE_CLAIM_BINDING_KINDS:
+            raise RootCauseMetricError(
+                f"unknown claim_binding kind: {self.kind!r}"
+            )
+        _validate_identifier(self.source_sha256, "source_sha256", _HEX64_PATTERN)
+        if type(self.offset) is not int or isinstance(self.offset, bool) or self.offset < 0:
+            raise RootCauseMetricError("claim_binding offset must be a non-negative integer")
+
+    def to_mapping(self) -> Dict[str, Any]:
+        return {
+            "kind": self.kind,
+            "source_sha256": self.source_sha256,
+            "offset": self.offset,
+        }
+
+    @staticmethod
+    def from_mapping(value: Any) -> "ClaimBinding":
+        if not isinstance(value, Mapping):
+            raise RootCauseMetricError("claim_binding must be a mapping")
+        missing = ClaimBinding._KNOWN_FIELDS - set(value)
+        extra = set(value) - ClaimBinding._KNOWN_FIELDS
+        if missing:
+            raise RootCauseMetricError(
+                f"missing claim_binding fields: {sorted(missing)}"
+            )
+        if extra:
+            raise RootCauseMetricError(
+                f"unknown claim_binding fields: {sorted(extra)}"
+            )
+        return ClaimBinding(
+            kind=_require_exact_string(value["kind"], "claim_binding.kind"),
+            source_sha256=value["source_sha256"],
+            offset=value["offset"],
+        )
+
+
+def _validate_optional_claim_binding(value: Any) -> Optional[ClaimBinding]:
+    if value is None:
+        return None
+    if type(value) is ClaimBinding:
+        return value
+    return ClaimBinding.from_mapping(value)
 
 
 def derive_root_cause_outcome(
@@ -198,6 +321,7 @@ class RootCauseAssessment:
     assessor_kind: str
     assessor_id: str
     claim_sha256: Optional[str]
+    claim_binding: Optional[ClaimBinding]
     mechanism: str
     failure_connection: str
     repair_alignment: str
@@ -214,6 +338,7 @@ class RootCauseAssessment:
         "assessor_kind",
         "assessor_id",
         "claim_sha256",
+        "claim_binding",
         "mechanism",
         "failure_connection",
         "repair_alignment",
@@ -239,6 +364,11 @@ class RootCauseAssessment:
             )
         _validate_identifier(self.assessor_id, "assessor_id", _ID_PATTERN)
         _validate_optional_hash(self.claim_sha256, "claim_sha256")
+        binding = _validate_optional_claim_binding(self.claim_binding)
+        if (self.claim_sha256 is None) != (binding is None):
+            raise RootCauseMetricError(
+                "claim_sha256 and claim_binding must both be present or both absent"
+            )
         refs = _validate_evidence_refs(self.evidence_refs)
         if refs != self.evidence_refs:
             raise RootCauseMetricError("evidence_refs must be an immutable tuple")
@@ -266,6 +396,9 @@ class RootCauseAssessment:
             "assessor_kind": self.assessor_kind,
             "assessor_id": self.assessor_id,
             "claim_sha256": self.claim_sha256,
+            "claim_binding": (
+                self.claim_binding.to_mapping() if self.claim_binding is not None else None
+            ),
             "mechanism": self.mechanism,
             "failure_connection": self.failure_connection,
             "repair_alignment": self.repair_alignment,
@@ -298,6 +431,7 @@ class RootCauseAssessment:
         contradiction = value["contradicts_evidence"]
         if contradiction is not None and type(contradiction) is not bool:
             raise RootCauseMetricError("contradicts_evidence must be bool or null")
+        binding = _validate_optional_claim_binding(value["claim_binding"])
         return RootCauseAssessment(
             schema_version=_require_exact_string(
                 value["schema_version"], "schema_version"
@@ -321,6 +455,7 @@ class RootCauseAssessment:
             claim_sha256=_validate_optional_hash(
                 value["claim_sha256"], "claim_sha256"
             ),
+            claim_binding=binding,
             mechanism=_validate_rating(value["mechanism"], "mechanism"),
             failure_connection=_validate_rating(
                 value["failure_connection"], "failure_connection"
@@ -341,13 +476,22 @@ def build_root_cause_assessment(
     assessor_kind: str,
     assessor_id: str,
     claim_text: Optional[str],
+    claim_binding: Optional[ClaimBinding] = None,
     mechanism: str = "NOT_ASSESSED",
     failure_connection: str = "NOT_ASSESSED",
     repair_alignment: str = "NOT_ASSESSED",
     contradicts_evidence: Optional[bool] = None,
     evidence_refs: Sequence[str] = (),
+    declared_evidence: Optional[Sequence[str]] = None,
 ) -> RootCauseAssessment:
-    """Build a canonical assessment without storing oracle or claim text."""
+    """Build a canonical assessment without storing oracle or claim text.
+
+    ``claim_binding`` ties ``claim_sha256`` to the exact attempt evidence the
+    claim was extracted from.  It must be present when ``claim_text`` is present
+    and absent when ``claim_text`` is ``None``.  ``declared_evidence``, when
+    supplied, is the attempt's declared event/verifier evidence set; every
+    ``evidence_refs`` entry must appear in it.
+    """
 
     if claim_text is None:
         claim_sha256 = None
@@ -359,7 +503,13 @@ def build_root_cause_assessment(
                 f"claim_text exceeds the {MAX_ROOT_CAUSE_CLAIM_BYTES}-byte cap"
             )
         claim_sha256 = _sha256_text(claim_text)
+    binding = _validate_optional_claim_binding(claim_binding)
+    if (claim_sha256 is None) != (binding is None):
+        raise RootCauseMetricError(
+            "claim_text and claim_binding must both be present or both absent"
+        )
     refs = _validate_evidence_refs(evidence_refs)
+    _validate_evidence_refs_against_declared(refs, declared_evidence)
     outcome = derive_root_cause_outcome(
         claim_sha256=claim_sha256,
         mechanism=mechanism,
@@ -376,6 +526,7 @@ def build_root_cause_assessment(
         "assessor_kind": assessor_kind,
         "assessor_id": assessor_id,
         "claim_sha256": claim_sha256,
+        "claim_binding": binding.to_mapping() if binding is not None else None,
         "mechanism": mechanism,
         "failure_connection": failure_connection,
         "repair_alignment": repair_alignment,
@@ -387,7 +538,9 @@ def build_root_cause_assessment(
     return RootCauseAssessment(
         assessment_id=assessment_id,
         evidence_refs=refs,
-        **{key: value for key, value in payload.items() if key != "evidence_refs"},
+        claim_binding=binding,
+        **{key: value for key, value in payload.items()
+           if key not in ("evidence_refs", "claim_binding")},
     )
 
 
@@ -448,10 +601,13 @@ __all__ = [
     "ROOT_CAUSE_OUTCOMES",
     "ROOT_CAUSE_DIMENSION_RATINGS",
     "ROOT_CAUSE_ASSESSOR_KINDS",
+    "ROOT_CAUSE_CLAIM_BINDING_KINDS",
+    "ROOT_CAUSE_EVIDENCE_REF_KINDS",
     "MAX_ROOT_CAUSE_CLAIM_BYTES",
     "MAX_ROOT_CAUSE_EVIDENCE_REFS",
     "MAX_ROOT_CAUSE_EVIDENCE_REF_BYTES",
     "RootCauseMetricError",
+    "ClaimBinding",
     "RootCauseAssessment",
     "derive_root_cause_outcome",
     "build_root_cause_assessment",

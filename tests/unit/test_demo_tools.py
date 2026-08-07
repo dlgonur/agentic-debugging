@@ -402,6 +402,74 @@ class TestPostMortemToolCleanup:
         assert context.pdb_session is None
         assert context.pdb_workspace is None
 
+    def test_unexpected_start_exception_still_cleans_up(
+        self, context: DemoToolContext, tmp_path: Path
+    ) -> None:
+        """Regression: a non-PdbSessionError from start() must not leak the session/workspace."""
+
+        class _BoomOnStart:
+            def __init__(self, workspace):
+                self.workspace = workspace
+                self.stopped = False
+
+            def start(self):
+                raise OSError("unexpected worker pipe failure")
+
+            def run_post_mortem(self, script):
+                raise AssertionError("run_post_mortem should not be reached")
+
+            def stop(self):
+                self.stopped = True
+
+        context.probe = prepare_pdb_probe(
+            FIXTURE, scenario_for(TASK_ID), tmp_path / "probe-parent"
+        )
+        context.baseline_failure_reproduced = True
+        context.pdb_session_factory = _BoomOnStart
+        observation = _dispatch(
+            context, "get_failure_trace", ControllerState.REPRODUCE, {}
+        )
+        assert observation.status is ObservationStatus.ERROR
+        assert _reason(observation) == ToolDispatchReason.TOOL_ERROR.value
+        # The session and workspace must be released, not leaked.
+        assert context.pdb_session is None
+        assert context.pdb_workspace is None
+        assert context.pdb_session_started is False
+
+    def test_unexpected_run_post_mortem_exception_still_cleans_up(
+        self, context: DemoToolContext, tmp_path: Path
+    ) -> None:
+        """Regression: a non-PdbSessionError from run_post_mortem() must not leak."""
+
+        class _BoomOnRun:
+            def __init__(self, workspace):
+                self.workspace = workspace
+                self.stopped = False
+
+            def start(self):
+                pass
+
+            def run_post_mortem(self, script):
+                raise RuntimeError("unexpected serialization crash")
+
+            def stop(self):
+                self.stopped = True
+
+        context.probe = prepare_pdb_probe(
+            FIXTURE, scenario_for(TASK_ID), tmp_path / "probe-parent"
+        )
+        context.baseline_failure_reproduced = True
+        context.pdb_session_factory = _BoomOnRun
+        observation = _dispatch(
+            context, "get_failure_trace", ControllerState.REPRODUCE, {}
+        )
+        assert observation.status is ObservationStatus.ERROR
+        assert _reason(observation) == ToolDispatchReason.TOOL_ERROR.value
+        assert context.pdb_session is None
+        assert context.pdb_workspace is None
+        # start() succeeded so the started flag was set before the crash.
+        assert context.pdb_session_started is True
+
 
 class TestArgvConstruction:
     def test_node_ids_replace_the_manifest_selection(self) -> None:
