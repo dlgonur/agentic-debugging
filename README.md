@@ -17,6 +17,15 @@ replay, and cleanup. See `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md` and
 `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. Neither is a live-model
 performance claim.
 
+The same completion pass also resolves the previously recorded 32-node
+OpenCode wrapper full-suite family. The cause was a test-only compiled
+forwarder cache whose distinct target keys shared one per-PID output path,
+not generic OS resource pressure. Target-specific unique build directories
+restore hermetic ordering; the post-fix full suite completed with 3733
+passed and 3 skipped. See
+`docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md` for the diagnosis and exact
+validation boundary.
+
 The project investigates the path from traditional debugging, fault localization, automated program repair, LLM-based debugging, and repository-level software engineering agents toward interactive debugger-assisted agents.
 
 ## Initial research direction
@@ -714,9 +723,11 @@ live campaign, WSL, BugsInPy, QLoRA, or held-out execution:
   post-`wait()` reader join now uses a generous pipe-drain bound so a
   slowly-draining stdout is captured completely; the previous order-dependent
   transport/case-runner failure family is repaired. 4 regression tests added.
-  The selftest full-suite flake is NOT part of that repair: it remains a
-  pre-existing wrapper-preflight subprocess-chain flake under full-suite OS
-  resource pressure (see the validation note below).
+  At this historical checkpoint, a separate wrapper-preflight family was
+  still classified as an OS-resource-pressure flake. The 2026-08-07
+  full-suite repair supersedes that diagnosis with the proven test-only
+  target-cache collision described in
+  `docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
 - Repaired (deterministic) — known wrapper/transport test failures (4 test
   defects + 2 env-gated): all 6 are repaired; the two env-gated preflight
   tests are now hermetic (no real OpenCode install required).
@@ -794,3 +805,9 @@ checkpoint without any candidate change, is consistent with cumulative OS
 resource pressure on the synthetic wrapper subprocess chain, and is not
 implicated in or amplified by the candidate. No instructor TODO status is
 promoted; no commit/merge/push was made during the coding-agent build phase.
+
+2026-08-07 superseding result: the shared per-PID compiled-forwarder path was
+the actual order-dependent cause. After assigning every target-specific
+cache key its own unique build directory, the previously failing family and
+the full suite pass (3733 passed, 3 skipped). The 2026-08-06 counts above
+remain historical evidence, not current repository status.

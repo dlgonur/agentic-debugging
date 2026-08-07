@@ -22,6 +22,7 @@ Rules:
 - [x] 0.1.2 Created day 02 draft from cross-report synthesis: research/reports/synthesis/diary_day_02_draft.md.
 - [x] 0.1.3 Normalize diary entries into final daily format.
 - [x] 0.1.4 Extend the consolidated diary through 30 July 2026, including Tasks 10A, 10B-R1/R3, the Zen matrix, the R4 audit, and the R5 source closeout.
+- [x] 0.1.5 Extend the consolidated diary through 7 August 2026, including status reconciliation, root-cause scoring, post-mortem trajectory persistence, and the full-suite cache repair.
 
 ---
 
@@ -1078,6 +1079,25 @@ made.
 
 ## Last Updated
 
+2026-08-07 (repository reconciliation, root-cause explanation metric,
+post-mortem trajectory persistence, and full-suite forwarder-cache repair)
+
+The current branch reconciles instructor/TODO/tracker claims against reachable
+history, adds strict independent `root-cause-assessment-v1` scoring, persists
+bounded post-mortem PDB evidence through the accepted controller/event/replay
+path, and repairs the historical synthetic OpenCode wrapper failure family.
+The latter was an order-dependent test-fixture bug: distinct
+`(interpreter, target_script)` cache keys compiled to one shared per-PID
+assembly path. Unique target-specific build directories now make disk and
+cache identities agree; the production wrapper and provider gates are
+unchanged. Validation: affected surface 156 passed; post-fix full suite 3733
+passed / 3 skipped; the sole tuple-return collection warning was subsequently
+removed and final collection is 3735 tests without warnings. See
+`docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md`,
+`docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`,
+`docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`, and
+`docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
+
 2026-08-06 (Friday main-repo completion hardening: ledger time provenance, transport teardown race, known wrapper/transport test failures, post-mortem PDB entry; final bounds-v2 marker-reservation repair and durable Friday documentation wording)
 
 This pass is accepted and integrated on `main` at `62deca4` (the
@@ -1212,6 +1232,11 @@ tests are unit-level and do not amplify OS resource pressure. No instructor
 TODO status is promoted by this pass; no provider, live campaign, WSL,
 BugsInPy, QLoRA, or held-out execution occurred; no commit/merge/push was
 made during the coding-agent build phase.
+
+This 2026-08-06 diagnosis is historical. The 2026-08-07 follow-up proved the
+shared per-PID compiled-forwarder output path was the actual order-dependent
+cause, repaired it without changing production transport gates, and produced
+a green full suite. See `docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
 
 Earlier history:
 

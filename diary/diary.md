@@ -2902,6 +2902,7 @@ Yapilan dort ana is:
 Deterministik demo (2 curated task): index + retrieval (provenance ile) + 3 imported artifact (correct base, synthetic tuned stand-in, deterministik non-repair patch - verdict verifier tarafindan, el yazilmadi) + 2 native condition (parity) -> 4-condition rapor + preference pairs. Sonuclar: verifier RESOLVED correct attempts, NO_OP non-repair, parity saglandi, replay-valid, CLEANED, canonical fixture degismedi, 0 provider / 0 network; deterministik view iki kosu arasi byte-identical (timing alanlari haric).
 
 Testler: yeni unit suite'ler (rag, comparison, preference, live-request) + integration demo suite + etkilenen yuzeyler (demo 289, live/verifier/patcher/workspace/search 418) gecti; compileall exit 0; `git diff --check` temiz. Instructor TODO: RAG sistemi (Phase 4 RAG item, tracker 4.1) kanitla kapatildi; fine-tuned+RAG ve gercek base-versus-tuned karsilastirmasi ve production preference corpusu acik/partial kaldi (sentetik kimlikler model performansi iddiasi degildir; karar kaydi `docs/RAG_COMPARISON_DECISION_V2.md` v1'deki RAG NO-GO'nun yalnizca bu yetkilendirilmis offline altyapi kapsami icin supersede edildigini kaydeder). Commit/merge/push yapilmadi.
+
 ---
 
 ## 6 Agustos 2026 (on altinci islem) - Repair 1: RAG/comparison/preference contract hardening
@@ -2923,3 +2924,62 @@ Onceki sprint'in adayini FirstMate-style contract hardening ile guclendirdim (ye
 7. **Chunk coverage.** Symbol-aware chunking, symbol disi satirlar (docstring, imports, constant'lar, kod arasi, trailing) icin deterministik gap chunk'lari uretiyor; her non-empty satir en az bir chunk'ta temsil ediliyor (module-coverage testi ile tam satir kapsami kanitlandi).
 
 Dogrulama: yeni suite 188 passed (rag 92, comparison 40, live-request, preference, integration 4) + etkilenen yuzeyler 707 passed; compileall exit 0; `git diff --check` temiz. Taze demo: 4 primary condition x 2 task; condition basina tam 2 primary attempt (base'de ek 2 labeled auxiliary preference-fixture); tum condition'larda resolved 2/2, rate 1.0 (sentetik tuned ustunlugu yok, delta 0); replay-valid 4/4; cleanup cleaned 10/10; canonical fixture degismedi; local provider/network 0/0; external telemetry ayrildi; 4 verifier-backed preference pair. Karar kaydi `docs/RAG_COMPARISON_DECISION_V2.md` §5; hicbir gate degismedi. Commit/merge/push yapilmadi.
+
+---
+
+## 7 Agustos 2026 - Main repository final reconciliation ve completion pass
+
+Bugun ana repository'nin instructor checklist, TODO, README, project tracker,
+source, test ve ulasilabilir Git history durumunu birlikte denetledim. Eski
+"unmerged/pending" notlarinin bir kismi artik teknik gercegi yansitmiyordu:
+literature synthesis commit'i `3c23b6e`, final bounded post-mortem PDB zinciri
+`f7ba129`..`e92634e`, RAG/comparison/preference altyapisi `1e680b1`, Friday
+delivery `ab464dd` ve V4 identity fix `fc7c85b` mevcut history'de ulasilabilir.
+Bu nedenle `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md` ile 27
+instructor maddesini kanita gore yeniden siniflandirdim: 13 completed, 8
+partial, 3 dis QLoRA kanitina bagli in progress ve 3 not started. Ayri QLoRA
+repository/branch'ine dokunmadim; training veya held-out sonucu uydurmadim.
+
+Iki eksik main-repo altyapi sonucunu tamamladim. Birincisi, root-cause
+aciklamalari icin strict `root-cause-assessment-v1` kontrati: bagimsiz assessor
+kimligi, mechanism/failure-connection/repair-alignment boyutlari, outcome'un
+deterministik turetilmesi, tam schema/content-id yeniden dogrulamasi, claim
+metnini/oracle'i saklamayan hash ve bounded evidence reference'lari, explicit
+missingness ve iki denominator'lu aggregation. Comparison JSON/CSV/Markdown
+raporlari bu metrigi additive provenance uzerinden tasiyor; eski
+`comparison-v1` wire semasi degismedi. Ikinci olarak mevcut
+`get_failure_trace` action'ini PDB-observation budget'ina baglayip real
+`PdbSession.run_post_mortem` cevabini ToolResult -> controller Observation ->
+canonical RunEvent -> replay/semantic projection yoluna entegre ettim.
+Baseline reproduce, policy, prepared disposable probe ve active-session
+gate'leri fail-closed; basarili observation ancak PDB session ve workspace
+temizlendikten sonra uretiliyor. Bu iki sonuc live-model performans iddiasi
+degildir.
+
+Final broad-suite audit'i eski 32-node OpenCode wrapper ailesi hakkindaki
+"OS resource pressure" teshisini de duzeltti. Ilk observable full-order run,
+1495 pass + 3 skip sonrasinda
+`test_campaign_route_drift_during_case_stops_with_typed_contract` node'unda
+`ABORTED`/`PARTIAL` farkiyla durdu; node tek basina 1/1 gecti. Private synthetic
+evidence gercek kok nedeni gosterdi: `opencode_go_synthetic_executable.py`
+in-memory cache'i `(interpreter, target_script)` ile key'lenirken tum key'ler
+ayni `%TEMP%/opencode-go-forwarder-<pid>/opencode.exe` dosyasina compile
+ediliyordu. Onceki route-preflight fake'i `1.18.10` binary'sini birakiyor,
+sonraki `1.0.0` synthetic fixture ayni stale binary'yi kopyaliyor ve real
+wrapper dogru sekilde native/launcher version drift ile fail-closed oluyordu.
+Her cache miss artik unique `mkdtemp` build root'una compile oluyor ve root
+process exit'inde temizleniyor. Iki farkli target'i ayni process'te calistiran
+explicit regression eklendi; production wrapper/provider/authorization
+gate'leri degismedi.
+
+Dogrulama: root-cause/comparison odakli 69 pass ve ilgili daha genis unit
+yuzeyi 81 pass; comparison integration 4 pass; post-mortem controller/real
+worker/replay 162 pass, demo uyumluluk 112 pass, PDB event/replay/golden 265
+pass, live/model/registry 209 pass; forwarder exact-order reproduction 5 pass
+ve affected wrapper/transport/case-runner/protocol 156 pass. Post-fix full
+suite **3733 passed, 3 skipped** (1417.80 s). Tek warning, pytest'in tuple
+donduren bir RAG helper'ini test sanmasiydi; helper private adla duzeltildi,
+RAG+cache focused 28 pass ve final collect-only 3735 test/warning yok.
+`compileall` ve `git diff --check` temiz. Hicbir provider, network route, live
+campaign, WSL benchmark, BugsInPy source/execution, QLoRA repository,
+training veya held-out generation kullanilmadi; merge/push yapilmadi.

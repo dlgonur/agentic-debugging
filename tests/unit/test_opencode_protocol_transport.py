@@ -436,6 +436,37 @@ def test_jsonl_transport_stripped_environment_is_explicit_and_has_no_profile_inf
     assert not any(name in environment for name in ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH"))
 
 
+def test_fake_native_forwarder_cache_keeps_distinct_targets(tmp_path: Path) -> None:
+    """Each target-specific cache key must own a distinct compiled binary."""
+    executables: list[Path] = []
+    for label in ("first-target", "second-target"):
+        target = tmp_path / label / "fake_opencode.py"
+        target.parent.mkdir()
+        target.write_text(f"print({label!r})\n", encoding="utf-8")
+        native_bin = tmp_path / label / "native"
+        executables.append(
+            opencode_go_test_support.synthetic.build_fake_native_executable(
+                native_bin, target_script=target
+            )
+        )
+
+    outputs = [
+        subprocess.run(
+            [str(executable), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            timeout=30,
+        )
+        for executable in executables
+    ]
+    assert [(result.returncode, result.stdout.strip()) for result in outputs] == [
+        (0, "first-target"),
+        (0, "second-target"),
+    ]
+
+
 def test_no_inference_preflight_succeeds_through_stripped_transport_environment(tmp_path: Path) -> None:
     # Hermetic real-subprocess preflight: a fake profile with synthetic auth
     # state, a fake launcher with the trusted npm layout, and a compiled fake
@@ -1339,7 +1370,7 @@ def test_native_executable_resolves_npm_package_layout_and_fails_closed(monkeypa
 
 
 def test_sibling_opencode_exe_is_not_implicitly_trusted(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    """An unrelated ``<launcher-dir>\opencode.exe`` is never accepted merely
+    """An unrelated ``<launcher-dir>\\opencode.exe`` is never accepted merely
     because it exists; only the trusted npm package layout is considered."""
     fake_bin = tmp_path / "fake-launcher"
     fake_bin.mkdir()

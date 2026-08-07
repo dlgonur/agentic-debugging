@@ -17,6 +17,14 @@ action and canonical event/replay path. See
 `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. These are infrastructure
 completions, not live-model performance evidence.
 
+**2026-08-07 full-suite follow-up:** The historical 32-node synthetic
+OpenCode wrapper failure family is repaired. Its actual cause was a
+test-only compiled-forwarder cache collision across distinct target scripts,
+not generic OS resource pressure. The post-fix full suite completed with
+3733 passed and 3 skipped; see
+`docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`. Production provider and route
+gates were not changed.
+
 Aşağıdaki faz listesi, stajın orijinal geniş araştırma/ürün planını temsil eder.
 Bu plan içinde bazı maddeler, fine-tuning veya RAG üzerinden değil,
 deterministic tool'lar ve verifier-backed bir controller agent üzerinden

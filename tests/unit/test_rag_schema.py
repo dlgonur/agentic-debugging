@@ -234,7 +234,7 @@ def test_index_round_trip_preserves_content_and_identity():
     assert reloaded.chunks == index.chunks
 
 
-def test_retrieval_mapping_helpers():
+def _retrieval_mapping_helpers():
     def selection(text: str = "def f():\n    pass\n") -> dict:
         chunk_id = Chunk.identity("source:a.py", "a.py", 1, 2, text)
         return {
@@ -269,7 +269,7 @@ def test_retrieval_mapping_helpers():
 
 
 def test_retrieval_result_round_trip_and_strictness():
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     result = RetrievalResult.from_mapping(mapping)
     assert result.retrieval_id != "0" * 64
     reloaded = RetrievalResult.from_text(result.to_text())
@@ -281,32 +281,32 @@ def test_retrieval_result_round_trip_and_strictness():
 
 def test_arbitrary_retrieval_id_must_not_load():
     """A mapping with an arbitrary ``"0"*64`` retrieval id must not load."""
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["retrieval_id"] = "0" * 64
     with pytest.raises(RagValidationError):
         RetrievalResult.from_mapping(mapping)
 
 
 def test_retrieval_rejects_tampered_query_identity():
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["query_identity"] = "9" * 64
     with pytest.raises(RagValidationError):
         RetrievalResult.from_mapping(mapping)
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["query"] = "tampered query"
     with pytest.raises(RagValidationError):
         RetrievalResult.from_mapping(mapping)
 
 
 def test_retrieval_rejects_tampered_selection_bytes():
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["selected"][0]["bytes"] += 1
     with pytest.raises(RagValidationError):
         RetrievalResult.from_mapping(mapping)
 
 
 def test_retrieval_rejects_selection_count_over_cap():
-    mapping, sel = test_retrieval_mapping_helpers()
+    mapping, sel = _retrieval_mapping_helpers()
     mapping["selected"] = [dict(sel), dict(sel)]
     mapping["selected"][1]["text"] = "def g():\n    pass\n"
     mapping["selected"][1]["chunk_id"] = Chunk.identity(
@@ -320,14 +320,14 @@ def test_retrieval_rejects_selection_count_over_cap():
 
 
 def test_retrieval_rejects_total_bytes_over_context_cap():
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["max_context_bytes"] = mapping["selected_bytes"] - 1
     with pytest.raises(RagValidationError):
         RetrievalResult.from_mapping(mapping)
 
 
 def test_retrieval_rejects_duplicate_selections():
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["selected"] = [dict(mapping["selected"][0]), dict(mapping["selected"][0])]
     mapping["selected_bytes"] = mapping["selected"][0]["bytes"] * 2
     with pytest.raises(RagValidationError):
@@ -335,7 +335,7 @@ def test_retrieval_rejects_duplicate_selections():
 
 
 def test_retrieval_rejects_wrong_selected_bytes_sum():
-    mapping, _ = test_retrieval_mapping_helpers()
+    mapping, _ = _retrieval_mapping_helpers()
     mapping["selected_bytes"] += 1
     with pytest.raises(RagValidationError):
         RetrievalResult.from_mapping(mapping)

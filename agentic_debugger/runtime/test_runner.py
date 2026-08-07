@@ -12,6 +12,8 @@ from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
 class TestRunKind(Enum):
+    __test__ = False  # pytest: production contract, not a test container
+
     REPRODUCTION = "reproduction"
     SELECTED = "selected"
     REGRESSION = "regression"
@@ -20,6 +22,8 @@ class TestRunKind(Enum):
 
 @dataclass(frozen=True)
 class TestRunResult:
+    __test__ = False  # pytest: production result type, not a test container
+
     command_result: CommandResult
     kind: TestRunKind
     passed: bool
@@ -44,6 +48,8 @@ class TestRunner:
     Delegates actual subprocess execution to ``CommandRunner``; does not
     create its own subprocess paths.
     """
+
+    __test__ = False  # pytest: production runner, not a test container
 
     def __init__(
         self,

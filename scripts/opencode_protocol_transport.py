@@ -1522,7 +1522,7 @@ def observe_isolated_catalog(
     ``opencode.exe --version`` proof, and the route-mode ``models``
     inspection); ``opencode run`` is never constructed or executed here.
     The native ``opencode.exe`` selected by the npm shim (the
-    ``bin\opencode.exe`` target under the trusted ``opencode-ai`` package
+    ``bin\\opencode.exe`` target under the trusted ``opencode-ai`` package
     root) is resolved and version-proven against the launcher (same
     installation) and, in OpenCode Go mode, against the authorization-bound
     expected version.

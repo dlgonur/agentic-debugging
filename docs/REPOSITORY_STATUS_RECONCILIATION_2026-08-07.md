@@ -57,6 +57,10 @@ Completed after the reconciliation snapshot:
 - bounded post-mortem PDB evidence is integrated through the existing
   controller ToolResult/Observation and canonical event/replay path; see
   `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`.
+- the historical 32-node synthetic OpenCode wrapper full-suite family is
+  repaired. The proven cause was a test-only forwarder cache collision across
+  distinct target scripts; the post-fix suite completed with 3733 passed and
+  3 skipped. See `docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
 
 The remaining local maintenance item is to keep the daily diary and durable
 status records current as milestones land.

@@ -80,6 +80,7 @@ Usage (as spawned by the wrapper through the ``opencode.cmd`` shim):
 """
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import shutil
@@ -470,8 +471,14 @@ def _compile_forwarder(interpreter: str, target_script: str) -> Path:
     powershell = _shutil.which("powershell") or _shutil.which("pwsh")
     if not powershell:
         raise RuntimeError("PowerShell is required to build the fake native executable fixture")
-    work = Path(tempfile.gettempdir()) / f"opencode-go-forwarder-{os.getpid()}"
-    work.mkdir(parents=True, exist_ok=True)
+    # Every cache key needs its own assembly path.  Reusing one per-process
+    # output path caused PowerShell Add-Type to retain the first compiled
+    # target while later cache keys pointed at that stale executable.  It also
+    # allowed a reused OS PID to inherit an abandoned build directory.  A
+    # unique owned directory makes the on-disk artifact agree with the
+    # in-memory (interpreter, target_script) key.
+    work = Path(tempfile.mkdtemp(prefix=f"opencode-go-forwarder-{os.getpid()}-"))
+    atexit.register(shutil.rmtree, work, ignore_errors=True)
     source_path = work / "forwarder.cs"
     output = work / "opencode.exe"
     source = _FORWARDER_SOURCE.replace("{{PYTHON}}", _cs_string_literal(interpreter)).replace("{{SCRIPT}}", _cs_string_literal(target_script))
