@@ -61,6 +61,10 @@ Completed after the reconciliation snapshot:
   repaired. The proven cause was a test-only forwarder cache collision across
   distinct target scripts; the post-fix suite completed with 3733 passed and
   3 skipped. See `docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
+- tracker 1.5 and 1.2.4 are aligned with their already-accepted evidence: all
+  five named systems have reviewed notes plus a capability matrix, and the
+  consolidated LLM review §5 already contains the static-repair distinction.
+  Self-Debugging, DebugBench, and frontier-system verification remain open.
 
 The remaining local maintenance item is to keep the daily diary and durable
 status records current as milestones land.

@@ -2972,6 +2972,12 @@ process exit'inde temizleniyor. Iki farkli target'i ayni process'te calistiran
 explicit regression eklendi; production wrapper/provider/authorization
 gate'leri degismedi.
 
+Son tracker denetiminde iki stale checkbox daha kanitla duzeltildi: bes isimli
+sistem calismasinin tum notlari ve capability matrix'i mevcut oldugu icin 1.5,
+LLM debugging ile static repair farklari review §5'te zaten ozetlendigi icin
+1.2.4 kapatildi. Primary note'u olmayan Self-Debugging, DebugBench ve frontier
+multi-agent verification maddeleri acik birakildi.
+
 Dogrulama: root-cause/comparison odakli 69 pass ve ilgili daha genis unit
 yuzeyi 81 pass; comparison integration 4 pass; post-mortem controller/real
 worker/replay 162 pass, demo uyumluluk 112 pass, PDB event/replay/golden 265

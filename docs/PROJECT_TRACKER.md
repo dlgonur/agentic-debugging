@@ -32,7 +32,7 @@ Rules:
 - [x] 1.2 Study LLM-based debugging work. (Bounded reviewed synthesis accepted at `3c23b6e`; additional frontier reading remains optional follow-up.)
 - [ ] 1.3 Study agentic debugging, tool-using agents, and multi-agent debugging.
 - [x] 1.4 Compare traditional debugging, LLM-based debugging, and agentic debugging. (`docs/DEBUGGING_APPROACH_COMPARISON_V1.md`, accepted at `3c23b6e`.)
-- [ ] 1.5 Study SWE-Agent, OpenHands, AutoCodeRover, Agentless, and ChatDBG.
+- [x] 1.5 Study SWE-Agent, OpenHands, AutoCodeRover, Agentless, and ChatDBG. (All five have dedicated reviewed notes; capability matrix v1 is tracked. This aligns the parent with completed subtasks 1.5.1–1.5.6 and instructor item 5.)
 
 ### 1.1 Subtasks / Log
 
@@ -59,7 +59,7 @@ Rules:
 - [x] 1.2.1 Read LDB / Debug Like a Human.
 - [ ] 1.2.2 Read Self-Debugging.
 - [ ] 1.2.3 Read DebugBench.
-- [ ] 1.2.4 Summarize how LLM debugging differs from static code repair.
+- [x] 1.2.4 Summarize how LLM debugging differs from static code repair. (`docs/LLM_BASED_DEBUGGING_LITERATURE_REVIEW_V1.md` §5 records the evidence acquisition, hypothesis revision, causal target, tool, validation, and data distinctions.)
 
 ### 1.3 Subtasks / Log
 
