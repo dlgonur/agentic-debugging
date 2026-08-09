@@ -42,6 +42,9 @@ class ActionName(str, Enum):
     GET_FRAME_LOCALS = "get_frame_locals"
     SAFE_EVAL_EXPRESSION = "safe_eval_expression"
     INSPECT_CALLER_FRAME = "inspect_caller_frame"
+    CONTINUE_PDB_SESSION = "continue_pdb_session"
+    STEP_PDB_SESSION = "step_pdb_session"
+    NEXT_PDB_SESSION = "next_pdb_session"
     DISCARD_HYPOTHESIS = "discard_hypothesis"
     STOP_PDB_SESSION = "stop_pdb_session"
 
@@ -185,6 +188,9 @@ _ALLOWED_ACTIONS_BY_STATE: Final = MappingProxyType(
                 ActionName.GET_SOURCE_WINDOW,
                 ActionName.SAFE_EVAL_EXPRESSION,
                 ActionName.INSPECT_CALLER_FRAME,
+                ActionName.CONTINUE_PDB_SESSION,
+                ActionName.STEP_PDB_SESSION,
+                ActionName.NEXT_PDB_SESSION,
                 ActionName.DISCARD_HYPOTHESIS,
                 ActionName.REQUEST_MORE_EVIDENCE,
                 ActionName.STOP_PDB_SESSION,
@@ -246,6 +252,9 @@ _BUDGET_KIND_BY_ACTION: Final = MappingProxyType(
         ActionName.GET_FRAME_LOCALS: BudgetKind.PDB_OBSERVATIONS,
         ActionName.SAFE_EVAL_EXPRESSION: BudgetKind.PDB_OBSERVATIONS,
         ActionName.INSPECT_CALLER_FRAME: BudgetKind.PDB_OBSERVATIONS,
+        ActionName.CONTINUE_PDB_SESSION: BudgetKind.PDB_OBSERVATIONS,
+        ActionName.STEP_PDB_SESSION: BudgetKind.PDB_OBSERVATIONS,
+        ActionName.NEXT_PDB_SESSION: BudgetKind.PDB_OBSERVATIONS,
         ActionName.SEARCH_CODE: BudgetKind.SOURCE_OBSERVATIONS,
         ActionName.FIND_FUNCTION: BudgetKind.SOURCE_OBSERVATIONS,
         ActionName.FIND_CLASS: BudgetKind.SOURCE_OBSERVATIONS,

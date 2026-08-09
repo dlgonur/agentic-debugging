@@ -170,22 +170,41 @@ class _PdbPersistentRunner(pdb.Pdb):
         self._lifecycle: Dict[str, Any] = lifecycle
 
     def user_line(self, frame: Any, return_to_frame: Any = None) -> None:
-        if (frame.f_lineno in self._breakpoints and
-            os.path.normcase(os.path.abspath(frame.f_code.co_filename)) == self._script_canonic):
-            with self._condition:
-                self._lifecycle['pause_generation'] += 1
-                self._lifecycle['state'] = 'paused'
-                self._lifecycle['line'] = frame.f_lineno
-                self._lifecycle['function'] = frame.f_code.co_name
-                self._lifecycle['_paused_frame'] = frame
-                self._condition.notify_all()
-                try:
-                    while self._lifecycle['state'] == 'paused':
-                        self._condition.wait()
-                    if self._lifecycle['state'] == 'terminating':
-                        raise _TerminationSentinel()
-                finally:
-                    self._lifecycle['_paused_frame'] = None
+        is_target_script = (
+            os.path.normcase(os.path.abspath(frame.f_code.co_filename))
+            == self._script_canonic
+        )
+        if not is_target_script:
+            return
+
+        with self._condition:
+            resume_mode = self._lifecycle.get('_resume_mode')
+            resume_frame = self._lifecycle.get('_resume_frame')
+            forced_pause = (
+                resume_mode == 'step'
+                or (resume_mode == 'next' and frame is resume_frame)
+            )
+            if frame.f_lineno not in self._breakpoints and not forced_pause:
+                return
+
+            # A forced step/next is one-shot.  Breakpoint hits also consume a
+            # pending execution-control request so a later line cannot create
+            # a second, hidden pause from the same model action.
+            self._lifecycle['_resume_mode'] = None
+            self._lifecycle['_resume_frame'] = None
+            self._lifecycle['pause_generation'] += 1
+            self._lifecycle['state'] = 'paused'
+            self._lifecycle['line'] = frame.f_lineno
+            self._lifecycle['function'] = frame.f_code.co_name
+            self._lifecycle['_paused_frame'] = frame
+            self._condition.notify_all()
+            try:
+                while self._lifecycle['state'] == 'paused':
+                    self._condition.wait()
+                if self._lifecycle['state'] == 'terminating':
+                    raise _TerminationSentinel()
+            finally:
+                self._lifecycle['_paused_frame'] = None
 
     def user_call(self, frame: Any, argument: Any) -> None:
         pass
@@ -1747,6 +1766,8 @@ class PdbWorker:
             '_start_script': '',
             'pause_generation': 0,
             '_paused_frame': None,
+            '_resume_mode': None,
+            '_resume_frame': None,
         }
         self._target_thread: Optional[threading.Thread] = None
         self._unsafe = False
@@ -1816,6 +1837,10 @@ class PdbWorker:
             self._handle_start_paused_target(request)
         elif op == "continue_paused_target":
             self._handle_continue_paused_target(request)
+        elif op == "step_paused_target":
+            self._handle_step_paused_target(request)
+        elif op == "next_paused_target":
+            self._handle_next_paused_target(request)
         elif op == "get_target_status":
             self._handle_get_target_status(request)
         elif op == "terminate_paused_target":
@@ -2596,6 +2621,8 @@ class PdbWorker:
             self._lifecycle['state'] = 'failed'
             self._lifecycle['error'] = safe_error
             self._lifecycle['_paused_frame'] = None
+            self._lifecycle['_resume_mode'] = None
+            self._lifecycle['_resume_frame'] = None
             self._condition.notify_all()
         return safe_error
 
@@ -2689,6 +2716,8 @@ class PdbWorker:
                 with self._condition:
                     self._lifecycle['state'] = pending_state
                     self._lifecycle['_paused_frame'] = None
+                    self._lifecycle['_resume_mode'] = None
+                    self._lifecycle['_resume_frame'] = None
                     if pending_state == 'exited':
                         self._lifecycle['exit_code'] = pending_exit_code
                     elif pending_state == 'failed':
@@ -2760,6 +2789,8 @@ class PdbWorker:
             self._lifecycle['error'] = ''
             self._lifecycle['pause_generation'] = 0
             self._lifecycle['_paused_frame'] = None
+            self._lifecycle['_resume_mode'] = None
+            self._lifecycle['_resume_frame'] = None
 
         self._target_thread = threading.Thread(
             target=self._execute_target_persistent,
@@ -2832,6 +2863,24 @@ class PdbWorker:
             )
 
     def _handle_continue_paused_target(self, request: PdbRequest) -> None:
+        self._handle_resume_paused_target(request, "continue")
+
+    def _handle_step_paused_target(self, request: PdbRequest) -> None:
+        self._handle_resume_paused_target(request, "step")
+
+    def _handle_next_paused_target(self, request: PdbRequest) -> None:
+        self._handle_resume_paused_target(request, "next")
+
+    def _handle_resume_paused_target(
+        self,
+        request: PdbRequest,
+        mode: str,
+    ) -> None:
+        if mode not in {"continue", "step", "next"}:
+            self._send_error(request.request_id, "Unsupported resume mode")
+            return
+        verb = mode
+        past_tense = {"continue": "continued", "step": "stepped", "next": "nexted"}[mode]
         payload = request.payload
         if not isinstance(payload, dict):
             self._send_error(request.request_id, "payload must be a mapping")
@@ -2851,7 +2900,7 @@ class PdbWorker:
             state = self._lifecycle['state']
             target_thread = self._target_thread
             if state != 'paused':
-                failure = f"Cannot continue target in state: {state}"
+                failure = f"Cannot {verb} target in state: {state}"
             elif target_thread is None:
                 invariant_failure = (
                     "Paused target invariant failure: target thread is missing"
@@ -2861,11 +2910,27 @@ class PdbWorker:
                     "Paused target invariant failure: target thread is not alive"
                 )
             else:
+                paused_frame = self._lifecycle.get('_paused_frame')
+                if mode == 'next' and paused_frame is None:
+                    invariant_failure = (
+                        "Paused target invariant failure: paused frame is missing"
+                    )
+                    paused_frame = None
+                if invariant_failure is not None:
+                    pass
+                else:
+                    self._lifecycle['_resume_mode'] = (
+                        mode if mode in {'step', 'next'} else None
+                    )
+                    self._lifecycle['_resume_frame'] = (
+                        paused_frame if mode == 'next' else None
+                    )
                 pause_generation = self._lifecycle['pause_generation']
-                self._lifecycle['state'] = 'running'
-                self._condition.notify_all()
+                if invariant_failure is None:
+                    self._lifecycle['state'] = 'running'
+                    self._condition.notify_all()
 
-                while True:
+                while invariant_failure is None:
                     state = self._lifecycle['state']
                     current_generation = self._lifecycle['pause_generation']
                     if state == 'paused':
@@ -2889,7 +2954,7 @@ class PdbWorker:
                     if state != 'running':
                         invariant_failure = (
                             "Paused target invariant failure: unexpected "
-                            f"lifecycle state after continue: {state}"
+                            f"lifecycle state after {verb}: {state}"
                         )
                         break
                     self._condition.wait()
@@ -2922,7 +2987,7 @@ class PdbWorker:
                 self._target_thread = None
                 self._send_error(
                     request.request_id,
-                    "Target thread did not complete after continued outcome"
+                    f"Target thread did not complete after {past_tense} outcome"
                 )
                 return
             self._target_thread = None
@@ -2936,7 +3001,8 @@ class PdbWorker:
         if state != terminal_state:
             self._send_error(
                 request.request_id,
-                f"Continued target terminal state changed unexpectedly: {state}"
+                f"{past_tense.capitalize()} target terminal state changed "
+                f"unexpectedly: {state}"
             )
         elif state == 'exited':
             self._send_response(PdbResponse(

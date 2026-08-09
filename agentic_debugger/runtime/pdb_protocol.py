@@ -12,7 +12,8 @@ PROTOCOL_VERSION = 1
 
 SUPPORTED_OPERATIONS = frozenset({
     "hello", "ping", "shutdown", "run_to_breakpoint",
-    "start_paused_target", "continue_paused_target", "get_target_status",
+    "start_paused_target", "continue_paused_target", "step_paused_target",
+    "next_paused_target", "get_target_status",
     "terminate_paused_target", "get_stack_summary", "get_frame",
     "get_frame_locals", "safe_eval_expression", "run_post_mortem",
 })

@@ -1242,6 +1242,41 @@ class PdbSession:
             ) from e
 
     def continue_paused_target(self) -> Dict[str, object]:
+        return self._resume_paused_target(
+            operation="continue_paused_target",
+            verb="continue",
+            transient_state="continuing",
+            require_breakpoint_result=True,
+        )
+
+    def step_paused_target(self) -> Dict[str, object]:
+        """Advance to the next traced line in the active target script."""
+
+        return self._resume_paused_target(
+            operation="step_paused_target",
+            verb="step",
+            transient_state="stepping",
+            require_breakpoint_result=False,
+        )
+
+    def next_paused_target(self) -> Dict[str, object]:
+        """Advance to the next traced line in the currently paused frame."""
+
+        return self._resume_paused_target(
+            operation="next_paused_target",
+            verb="next",
+            transient_state="nexting",
+            require_breakpoint_result=False,
+        )
+
+    def _resume_paused_target(
+        self,
+        *,
+        operation: str,
+        verb: str,
+        transient_state: str,
+        require_breakpoint_result: bool,
+    ) -> Dict[str, object]:
         if not self._request_lock.acquire(timeout=self._request_timeout):
             raise PdbSessionError(
                 "A request is already in flight; only one "
@@ -1251,12 +1286,12 @@ class PdbSession:
             with self._state_lock:
                 if self._state != PdbSessionState.READY:
                     raise PdbSessionStateError(
-                        f"Cannot continue_paused_target from state "
+                        f"Cannot {operation} from state "
                         f"{self._state.value}; expected READY"
                     )
                 if self._target_lifecycle_state != "paused":
                     raise PdbSessionStateError(
-                        f"Cannot continue_paused_target in local lifecycle "
+                        f"Cannot {operation} in local lifecycle "
                         f"state {self._target_lifecycle_state!r}; "
                         f"expected 'paused'"
                     )
@@ -1264,15 +1299,15 @@ class PdbSession:
                 active_breakpoints = self._active_breakpoints
                 if not isinstance(active_script, str):
                     raise PdbSessionStateError(
-                        "Cannot continue_paused_target without active "
+                        f"Cannot {operation} without active "
                         "target metadata"
                     )
-                self._target_lifecycle_state = "continuing"
+                self._target_lifecycle_state = transient_state
 
             request = PdbRequest(
                 protocol_version=PROTOCOL_VERSION,
                 request_id=self._allocate_request_id(),
-                operation="continue_paused_target",
+                operation=operation,
                 payload={},
             )
             response = self._send_and_receive(
@@ -1283,18 +1318,21 @@ class PdbSession:
                 if response.result != {}:
                     self._fail_and_cleanup(
                         PdbProtocolError(
-                            "Failed continue_paused_target response must "
+                            f"Failed {operation} response must "
                             f"have empty result, got {response.result}"
                         )
                     )
                 self._update_local_lifecycle("unknown", active_script)
                 raise PdbSessionError(
-                    f"Continue failed: {response.error}"
+                    f"{verb.capitalize()} failed: {response.error}"
                 )
 
             try:
-                state = self._validate_continue_result(
-                    response, active_script, active_breakpoints
+                state = self._validate_persistent_outcome_result(
+                    response,
+                    active_script,
+                    active_breakpoints if require_breakpoint_result else None,
+                    operation,
                 )
             except (PdbProtocolError, PdbSessionError) as e:
                 self._fail_and_cleanup(e)
@@ -1305,7 +1343,7 @@ class PdbSession:
             raise
         finally:
             with self._state_lock:
-                if self._target_lifecycle_state == "continuing":
+                if self._target_lifecycle_state == transient_state:
                     self._target_lifecycle_state = "unknown"
             self._request_lock.release()
 

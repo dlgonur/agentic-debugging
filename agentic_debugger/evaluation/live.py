@@ -308,6 +308,9 @@ _PDB_ACTIONS = frozenset({
     ActionName.GET_FRAME_LOCALS,
     ActionName.SAFE_EVAL_EXPRESSION,
     ActionName.INSPECT_CALLER_FRAME,
+    ActionName.CONTINUE_PDB_SESSION,
+    ActionName.STEP_PDB_SESSION,
+    ActionName.NEXT_PDB_SESSION,
     ActionName.STOP_PDB_SESSION,
 })
 _SESSION_ACTIONS = frozenset({
@@ -316,6 +319,9 @@ _SESSION_ACTIONS = frozenset({
     ActionName.GET_FRAME_LOCALS,
     ActionName.SAFE_EVAL_EXPRESSION,
     ActionName.INSPECT_CALLER_FRAME,
+    ActionName.CONTINUE_PDB_SESSION,
+    ActionName.STEP_PDB_SESSION,
+    ActionName.NEXT_PDB_SESSION,
     ActionName.STOP_PDB_SESSION,
 })
 
@@ -532,7 +538,7 @@ class LiveModelAdapter:
     def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
-        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]
+        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]; self.directive_attempts=[]
         # Optional RAG context: when None (the default) the public request is
         # byte-for-byte unchanged and ``retrieved_context`` is never emitted.
         # When supplied it must be a validated RagContext; arbitrary
@@ -724,6 +730,16 @@ class LiveModelAdapter:
                 self.metrics.model_responses+=1
                 self.metrics.usage(response.get("usage"))
                 raw_directive=_resolve_raw_directive(response)
+                attempt_record={
+                    "model_call_index": logical_request_index,
+                    "transport_attempt_index": attempt+1,
+                    "state": snapshot.state.value,
+                    "directive": redact_for_recording(raw_directive),
+                    "accepted": False,
+                    "rejection": None,
+                }
+                self.directive_attempts.append(attempt_record)
+                del self.directive_attempts[:-256]
                 # Canonical PDB gate recording point.  The model's real
                 # ``UNDERSTAND -> RUNTIME_EVIDENCE`` transition *attempt* is
                 # visible in ``raw_directive`` before :func:`_parse` can reject
@@ -747,6 +763,7 @@ class LiveModelAdapter:
                     self._pdb_gate_recorded_for_index = snapshot.model_call_index
                 contracts = effective_contract
                 directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed)))
+                attempt_record["accepted"] = True
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
@@ -770,6 +787,13 @@ class LiveModelAdapter:
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
             except LiveModelAdapterError as exc:
                 rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt+1}
+                if (
+                    self.directive_attempts
+                    and self.directive_attempts[-1].get("model_call_index") == logical_request_index
+                    and self.directive_attempts[-1].get("transport_attempt_index") == attempt+1
+                    and self.directive_attempts[-1].get("accepted") is False
+                ):
+                    self.directive_attempts[-1]["rejection"] = dict(rejection)
                 self.directive_rejections.append(dict(rejection))
                 self.metrics.error("invalid_model_response")
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
@@ -976,7 +1000,14 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         elif verifier.outcome is not None and verifier.outcome.value=="RESOLVED": status=LiveCaseStatus.RESOLVED
         else: status=LiveCaseStatus.UNRESOLVED
     elif policy is DemoPolicy.PDB_ON_UNCERTAINTY and not any(
-        step.action and step.action.name in {ActionName.GET_STACK_SUMMARY.value, ActionName.GET_FRAME_LOCALS.value, ActionName.SAFE_EVAL_EXPRESSION.value}
+        step.action and step.action.name in {
+            ActionName.GET_STACK_SUMMARY.value,
+            ActionName.GET_FRAME_LOCALS.value,
+            ActionName.SAFE_EVAL_EXPRESSION.value,
+            ActionName.CONTINUE_PDB_SESSION.value,
+            ActionName.STEP_PDB_SESSION.value,
+            ActionName.NEXT_PDB_SESSION.value,
+        }
         and step.observation and step.observation.status.value == "ok"
         for step in (result.steps if result is not None else ())
     ): status=LiveCaseStatus.PDB_NOT_REACHED
@@ -990,7 +1021,14 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     pdb_success=0; pdb_failed=0
     if result is not None:
         for step in result.steps:
-            if step.action and step.action.name in {ActionName.GET_STACK_SUMMARY,ActionName.GET_FRAME_LOCALS,ActionName.SAFE_EVAL_EXPRESSION}:
+            if step.action and step.action.name in {
+                ActionName.GET_STACK_SUMMARY,
+                ActionName.GET_FRAME_LOCALS,
+                ActionName.SAFE_EVAL_EXPRESSION,
+                ActionName.CONTINUE_PDB_SESSION,
+                ActionName.STEP_PDB_SESSION,
+                ActionName.NEXT_PDB_SESSION,
+            }:
                 if step.observation and step.observation.status.value=="ok": pdb_success+=1
                 else: pdb_failed+=1
     model_phase_ms=int(live_adapter.model_phase_elapsed_seconds*1000) if live_adapter else 0
@@ -1014,16 +1052,25 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         evidence=evidence,
     )
 
-def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local"):
+def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False):
     repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve(); task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
     case_id=f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"; run_id=f"live-{case_id}"; started=time.monotonic()
     case_dir=None; workspace=None; context=None; result=None; live_adapter=None; metrics=LiveModelMetrics(); diagnostics=[]; interrupted=False; controller_failed=False
     try:
         case_dir=_owned_case_dir(parent)
         workspace=TaskWorkspace(str(repo/CURATED_RELATIVE_ROOT/task_id),parent_dir=str(case_dir))
-        probe=prepare_pdb_probe(repo/CURATED_RELATIVE_ROOT/task_id,scenario_for(task_id),case_dir) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
+        probe=prepare_pdb_probe(
+            repo/CURATED_RELATIVE_ROOT/task_id,
+            scenario_for(task_id),
+            case_dir,
+            model_selects_breakpoint=interactive_debugger_controls,
+        ) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
         context=DemoToolContext(task=task,workspace=workspace,patch="",probe=probe)
-        registry=build_registry(context,pdb_policy=pdb_policy_for(policy))
+        registry=build_registry(
+            context,
+            pdb_policy=pdb_policy_for(policy),
+            interactive_debugger_controls=interactive_debugger_controls,
+        )
         live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id)
         metrics=live_adapter.metrics
         controller=DeterministicController(registry,live_adapter,ControllerRunConfig(max_model_calls=limits.max_controller_steps))
@@ -1037,6 +1084,21 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
         interrupted=True; diagnostics.append("run interrupted by operator")
     except Exception as exc:
         diagnostics.append(redact_for_recording(bounded_error(exc)))
+    observable_evidence = None
+    if retain_observable_model_directives and live_adapter is not None:
+        observable_evidence = {
+            "observable_model_directive_attempts": list(live_adapter.directive_attempts),
+            "observable_model_directives": [
+                {
+                    "model_call_index": entry.get("request_index"),
+                    "state": entry.get("state"),
+                    "directive": entry.get("directive"),
+                    "last_observation": entry.get("last_observation"),
+                }
+                for entry in live_adapter.history
+                if entry.get("directive") is not None
+            ]
+        }
     return _finalize_live_case(
         task_id=task_id,policy=policy,repetition=repetition,case_id=case_id,run_id=run_id,config=config,
         task=task,context=context,workspace=workspace,result=result,metrics=metrics,live_adapter=live_adapter,
@@ -1044,11 +1106,12 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
         verify=lambda: EvaluationVerifier(str(repo),workspace_parent=str(case_dir)).evaluate(task,context.candidate_patch),
         extra_cleanup=lambda: _remove_owned_case_dir(case_dir,parent),
         extra_cleanup_owned=case_dir is not None,
+        evidence=observable_evidence,
     )
 
 run_live_case=_acceptance_live_case
 
-def _acceptance_live_evaluation(*,repository_root,authorization,config,limits,task_ids=None,policies=None,repetitions=1,workspace_parent=None,transport_factory=None,evaluation_id=None):
+def _acceptance_live_evaluation(*,repository_root,authorization,config,limits,task_ids=None,policies=None,repetitions=1,workspace_parent=None,transport_factory=None,evaluation_id=None,interactive_debugger_controls=False,retain_observable_model_directives=False):
     if type(authorization) is not LiveExecutionAuthorization: raise LiveOptInError("live execution requires explicit authorization")
     if type(repetitions) is not int or not 1<=repetitions<=100: raise LiveConfigurationError("repetitions is invalid")
     evaluation_id,run_label=_new_evaluation_identity(evaluation_id)
@@ -1069,7 +1132,7 @@ def _acceptance_live_evaluation(*,repository_root,authorization,config,limits,ta
                 for repetition in range(1,repetitions+1):
                     try:
                         transport=transport_factory(load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json")),policy,repetition) if transport_factory else JsonlCommandTransport(config,max_output_bytes=limits.max_response_bytes)
-                        cases.append(run_live_case(repository_root=repo,task_id=task_id,policy=policy,repetition=repetition,workspace_parent=parent,config=config,limits=limits,transport=transport,evaluation_id=evaluation_id))
+                        cases.append(run_live_case(repository_root=repo,task_id=task_id,policy=policy,repetition=repetition,workspace_parent=parent,config=config,limits=limits,transport=transport,evaluation_id=evaluation_id,interactive_debugger_controls=interactive_debugger_controls,retain_observable_model_directives=retain_observable_model_directives))
                     except KeyboardInterrupt:
                         interrupted=True; stop=True; cases.append(_interrupted_case_result(task_id,policy,repetition,evaluation_id,"transport setup")); break
                     if cases[-1].status is LiveCaseStatus.INCOMPLETE:

@@ -16,6 +16,9 @@ Controller action             Backing implementation
 ``get_stack_summary``         ``runtime.pdb_session.PdbSession``
 ``get_frame_locals``          ``runtime.pdb_session.PdbSession``
 ``safe_eval_expression``      ``runtime.pdb_session.PdbSession``
+``continue_pdb_session``      ``runtime.pdb_session.PdbSession``
+``step_pdb_session``          ``runtime.pdb_session.PdbSession``
+``next_pdb_session``          ``runtime.pdb_session.PdbSession``
 ``stop_pdb_session``          ``runtime.pdb_session.PdbSession``
 ``classify_outcome``          ``evaluation.outcome_taxonomy``
 ============================  =======================================
@@ -135,11 +138,13 @@ def _validator(
     optional: Optional[dict[str, type]] = None,
     *,
     enums: Optional[dict[str, tuple[object, ...]]] = None,
+    minimums: Optional[dict[str, int]] = None,
 ) -> Callable[[dict[str, object]], dict[str, object]]:
     """Build a strict argument validator that rejects unknown keys."""
 
     optional = optional or {}
     enums = enums or {}
+    minimums = minimums or {}
     known = set(required) | set(optional)
 
     def validate(arguments: dict[str, object]) -> dict[str, object]:
@@ -161,6 +166,10 @@ def _validator(
                 raise _safe_rejection(f"argument {name} must be non-empty")
             if expected is int and value < 0:
                 raise _safe_rejection(f"argument {name} must be non-negative")
+            if expected is int and name in minimums and value < minimums[name]:
+                raise _safe_rejection(
+                    f"argument {name} must be at least {minimums[name]}"
+                )
             if name in enums and value not in enums[name]:
                 raise _safe_rejection(f"argument {name} has an unsupported value")
         return dict(arguments)
@@ -176,7 +185,7 @@ def _validator(
         if expected is str:
             constraint["min_length"] = 1
         if expected is int:
-            constraint["minimum"] = 0
+            constraint["minimum"] = minimums.get(name, 0)
         if name in enums:
             constraint["enum"] = list(enums[name])
         properties[name] = constraint
@@ -220,12 +229,16 @@ def prepare_pdb_probe(
     fixture_dir: Path,
     scenario: DemoScenario,
     parent_dir: Path,
+    *,
+    model_selects_breakpoint: bool = False,
 ) -> PdbProbe:
     """Copy the canonical fixture and append one module-level probe driver.
 
     The canonical fixture is never written to.  The copy receives a single
     appended driver function plus its call so the focus function actually runs
-    under the debugger, and the breakpoint is resolved from the fixture AST.
+    under the debugger.  The accepted demo resolves its fixed breakpoint from
+    the fixture AST.  The tuned-debugger pilot can instead leave the stored
+    breakpoint unset (0) so the live model must supply ``breakpoint_line``.
     """
 
     probe = scenario.runtime_probe
@@ -237,7 +250,9 @@ def prepare_pdb_probe(
     if not module.is_file():
         raise DemoToolError(f"probe module is missing from the fixture: {probe.module_path}")
     original = module.read_text(encoding="utf-8")
-    breakpoint_line = resolve_probe_breakpoint(original, probe)
+    breakpoint_line = (
+        0 if model_selects_breakpoint else resolve_probe_breakpoint(original, probe)
+    )
     module.write_text(original + probe_driver_source(probe), encoding="utf-8", newline="\n")
     return PdbProbe(
         source_dir=source_dir,
@@ -344,7 +359,12 @@ def _ok(payload: dict[str, Any], summary: str) -> ToolResult:
     return ToolResult(ObservationStatus.OK, payload, summary)
 
 
-def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolRegistry:
+def build_registry(
+    context: DemoToolContext,
+    *,
+    pdb_policy: Any = None,
+    interactive_debugger_controls: bool = False,
+) -> ToolRegistry:
     """Register every demonstration tool against the accepted registry."""
 
     task = context.task
@@ -649,6 +669,10 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
             raise _safe_rejection("no runtime probe is configured for this task")
         if context.pdb_session is not None:
             raise _safe_rejection("a PDB session is already active")
+        if interactive_debugger_controls and context.pdb_session_started:
+            raise _safe_rejection(
+                "interactive debugger pilot permits one PDB session per case"
+            )
         try:
             workspace = TaskWorkspace(str(probe.source_dir), parent_dir=str(probe.parent_dir))
         except WorkspaceError as exc:
@@ -658,25 +682,35 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
         # stopped and its workspace removed by release_pdb().
         session = context.pdb_session_factory(workspace)
         context.pdb_session = session
+        breakpoint_line = (
+            int(arguments["breakpoint_line"])
+            if interactive_debugger_controls
+            else probe.breakpoint_line
+        )
+        if breakpoint_line <= 0:
+            context.release_pdb()
+            raise _safe_rejection("breakpoint_line must be positive")
         try:
             session.start()
             context.pdb_session_started = True
-            started = session.start_paused_target(probe.script, [probe.breakpoint_line])
+            started = session.start_paused_target(probe.script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
             context.release_pdb()
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
         if started.get("state") != "paused":
             context.release_pdb()
             raise ToolExecutionError("runtime probe did not reach the declared breakpoint")
+        payload = {
+            "state": "paused",
+            "script": started["script"],
+            "line": started["line"],
+            "function": started["function"],
+            "breakpoint_line": breakpoint_line,
+        }
+        if not interactive_debugger_controls:
+            payload["focus_function"] = probe.focus_function
         return _ok(
-            {
-                "state": "paused",
-                "script": started["script"],
-                "line": started["line"],
-                "function": started["function"],
-                "breakpoint_line": probe.breakpoint_line,
-                "focus_function": probe.focus_function,
-            },
+            payload,
             "runtime probe paused at the declared breakpoint",
         )
 
@@ -720,7 +754,32 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
             "restricted runtime expression evaluated",
         )
 
+    def handle_execution_control(
+        action: Action,
+        arguments: dict[str, object],
+    ) -> ToolResult:
+        action_name = ActionName(action.name)
+        session = context.require_session(action.name)
+        operation = {
+            ActionName.CONTINUE_PDB_SESSION: session.continue_paused_target,
+            ActionName.STEP_PDB_SESSION: session.step_paused_target,
+            ActionName.NEXT_PDB_SESSION: session.next_paused_target,
+        }[action_name]
+        try:
+            result = operation()
+        except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        context.pdb_observation_names.append(action.name)
+        return _ok(
+            _json_safe(dict(result), action.name),
+            f"debugger execution control completed: {action.name}",
+        )
+
     def handle_stop_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
+        if interactive_debugger_controls and context.pdb_session is None:
+            raise _safe_rejection(
+                "interactive debugger pilot stop requires an active PDB session"
+            )
         started = context.pdb_session_started
         had_workspace = context.pdb_workspace is not None
         errors = context.release_pdb()
@@ -735,56 +794,79 @@ def build_registry(context: DemoToolContext, *, pdb_policy: Any = None) -> ToolR
             "PDB session stopped and its workspace released",
         )
 
-    return ToolRegistry(
-        (
-            spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
-            spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
-            spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
-            spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
-            spec(
-                ActionName.FIND_FUNCTION,
-                _validator({"name": str, "path": str}),
-                handle_find_function,
+    tool_specs = [
+        spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
+        spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
+        spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
+        spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
+        spec(
+            ActionName.FIND_FUNCTION,
+            _validator({"name": str, "path": str}),
+            handle_find_function,
+        ),
+        spec(
+            ActionName.GET_SOURCE_WINDOW,
+            _validator({"path": str, "line": int}),
+            handle_get_source_window,
+        ),
+        spec(
+            ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
+            _validator(
+                {
+                    "hypothesis_id": str,
+                    "statement": str,
+                    "target_file": str,
+                    "target_symbol": str,
+                    "confidence": str,
+                },
+                enums={
+                    "confidence": tuple(item.value for item in HypothesisConfidence)
+                },
             ),
-            spec(
-                ActionName.GET_SOURCE_WINDOW,
-                _validator({"path": str, "line": int}),
-                handle_get_source_window,
+            handle_express_hypothesis,
+        ),
+        spec(ActionName.APPLY_PATCH, _validator({"patch": str}), handle_apply_patch),
+        spec(ActionName.REVERT_PATCH, _validator({}), handle_revert_patch),
+        spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
+        spec(
+            ActionName.START_PDB_SESSION,
+            _validator(
+                {"breakpoint_line": int}
+                if interactive_debugger_controls
+                else {},
+                minimums={"breakpoint_line": 1}
+                if interactive_debugger_controls
+                else None,
             ),
-            spec(
-                ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
-                _validator(
-                    {
-                        "hypothesis_id": str,
-                        "statement": str,
-                        "target_file": str,
-                        "target_symbol": str,
-                        "confidence": str,
-                    },
-                    enums={
-                        "confidence": tuple(item.value for item in HypothesisConfidence)
-                    },
+            handle_start_pdb,
+        ),
+        spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
+        spec(
+            ActionName.GET_FRAME_LOCALS,
+            _validator({"frame_id": int, "pause_generation": int}),
+            handle_frame_locals,
+        ),
+        spec(
+            ActionName.SAFE_EVAL_EXPRESSION,
+            _validator({"frame_id": int, "pause_generation": int, "expression": str}),
+            handle_safe_eval,
+        ),
+    ]
+    if interactive_debugger_controls:
+        control_validator = _validator({})
+        tool_specs.extend(
+            [
+                spec(
+                    ActionName.CONTINUE_PDB_SESSION,
+                    control_validator,
+                    handle_execution_control,
                 ),
-                handle_express_hypothesis,
-            ),
-            spec(ActionName.APPLY_PATCH, _validator({"patch": str}), handle_apply_patch),
-            spec(ActionName.REVERT_PATCH, _validator({}), handle_revert_patch),
-            spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
-            spec(ActionName.START_PDB_SESSION, _validator({}), handle_start_pdb),
-            spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
-            spec(
-                ActionName.GET_FRAME_LOCALS,
-                _validator({"frame_id": int, "pause_generation": int}),
-                handle_frame_locals,
-            ),
-            spec(
-                ActionName.SAFE_EVAL_EXPRESSION,
-                _validator({"frame_id": int, "pause_generation": int, "expression": str}),
-                handle_safe_eval,
-            ),
-            spec(ActionName.STOP_PDB_SESSION, _validator({}), handle_stop_pdb),
+                spec(ActionName.STEP_PDB_SESSION, control_validator, handle_execution_control),
+                spec(ActionName.NEXT_PDB_SESSION, control_validator, handle_execution_control),
+            ]
         )
-    )
+    tool_specs.append(spec(ActionName.STOP_PDB_SESSION, _validator({}), handle_stop_pdb))
+    return ToolRegistry(tuple(tool_specs))
 
 
 __all__ = [

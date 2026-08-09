@@ -27,7 +27,8 @@ EXPECTED_ACTIONS = {
     "find_function", "find_class", "get_source_window", "extract_failing_test",
     "express_root_cause_hypothesis", "request_more_evidence", "start_pdb_session",
     "get_stack_summary", "get_frame", "get_frame_locals", "safe_eval_expression",
-    "inspect_caller_frame", "discard_hypothesis", "stop_pdb_session", "apply_patch",
+    "inspect_caller_frame", "continue_pdb_session", "step_pdb_session",
+    "next_pdb_session", "discard_hypothesis", "stop_pdb_session", "apply_patch",
     "syntax_check", "revert_patch", "run_regression_tests", "classify_outcome",
 }
 
@@ -40,6 +41,7 @@ EXPECTED_ALLOWLISTS = {
     ControllerState.RUNTIME_EVIDENCE: {
         "start_pdb_session", "get_stack_summary", "get_frame", "get_frame_locals",
         "get_source_window", "safe_eval_expression", "inspect_caller_frame",
+        "continue_pdb_session", "step_pdb_session", "next_pdb_session",
         "discard_hypothesis", "request_more_evidence", "stop_pdb_session",
     },
     ControllerState.PATCH: {"apply_patch", "syntax_check", "revert_patch"},
@@ -82,6 +84,9 @@ EXPECTED_BUDGETS = {
     "get_frame_locals": BudgetKind.PDB_OBSERVATIONS,
     "safe_eval_expression": BudgetKind.PDB_OBSERVATIONS,
     "inspect_caller_frame": BudgetKind.PDB_OBSERVATIONS,
+    "continue_pdb_session": BudgetKind.PDB_OBSERVATIONS,
+    "step_pdb_session": BudgetKind.PDB_OBSERVATIONS,
+    "next_pdb_session": BudgetKind.PDB_OBSERVATIONS,
     "search_code": BudgetKind.SOURCE_OBSERVATIONS,
     "find_function": BudgetKind.SOURCE_OBSERVATIONS,
     "find_class": BudgetKind.SOURCE_OBSERVATIONS,

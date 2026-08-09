@@ -14,6 +14,7 @@ from typing import Iterator
 
 import pytest
 
+from agentic_debugger.agent.controller_policy import ActionName
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolDispatchReason
 from agentic_debugger.demo.catalog import (
@@ -366,6 +367,19 @@ class TestProbePreparation:
         original = (FIXTURE / probe.script).read_text(encoding="utf-8")
         assert copied.startswith(original)
 
+    def test_interactive_probe_does_not_resolve_a_hidden_breakpoint(
+        self, tmp_path: Path
+    ) -> None:
+        probe = prepare_pdb_probe(
+            FIXTURE,
+            scenario_for(TASK_ID),
+            tmp_path,
+            model_selects_breakpoint=True,
+        )
+        assert probe.breakpoint_line == 0
+        copied = (probe.source_dir / probe.script).read_text(encoding="utf-8")
+        assert PROBE_DRIVER_FUNCTION in copied
+
     def test_probe_refuses_to_overwrite_an_existing_directory(
         self, tmp_path: Path
     ) -> None:
@@ -493,3 +507,54 @@ class TestArgvConstruction:
             "-q",
             "tests/t.py::a",
         ]
+
+
+def test_interactive_debugger_registry_is_opt_in_and_model_selectable(
+    context: DemoToolContext,
+) -> None:
+    default_registry = build_registry(context)
+    default_names = {item.value for item in default_registry.names()}
+    assert "continue_pdb_session" not in default_names
+    assert "step_pdb_session" not in default_names
+    assert "next_pdb_session" not in default_names
+    assert default_registry.argument_contracts()[ActionName.START_PDB_SESSION]["required"] == []
+
+    interactive = build_registry(context, interactive_debugger_controls=True)
+    names = {item.value for item in interactive.names()}
+    assert {"continue_pdb_session", "step_pdb_session", "next_pdb_session"} <= names
+    start_contract = interactive.argument_contracts()[ActionName.START_PDB_SESSION]
+    assert start_contract["required"] == ["breakpoint_line"]
+    assert start_contract["properties"]["breakpoint_line"] == {"type": "integer", "minimum": 1}
+
+
+def test_interactive_execution_control_dispatches_typed_session_methods(
+    context: DemoToolContext,
+) -> None:
+    class FakeSession:
+        def step_paused_target(self):
+            return {"state": "paused", "script": "x.py", "line": 4, "function": "f"}
+
+        def next_paused_target(self):
+            return {"state": "paused", "script": "x.py", "line": 5, "function": "f"}
+
+        def continue_paused_target(self):
+            return {"state": "exited", "script": "x.py", "exit_code": 0}
+
+        def stop(self):
+            return None
+
+    context.pdb_session = FakeSession()  # type: ignore[assignment]
+    registry = build_registry(context, interactive_debugger_controls=True)
+    action = Action(
+        action_id="action-000000001",
+        run_id="demo-run",
+        task_id=context.task.task_id,
+        state=ControllerState.RUNTIME_EVIDENCE,
+        name="step_pdb_session",
+        arguments={},
+    )
+    observation = registry.dispatch(action, observation_id="observation-000000001")
+    assert observation.status is ObservationStatus.OK
+    assert observation.payload["state"] == "paused"
+    assert observation.payload["line"] == 4
+    assert context.pdb_observation_names[-1] == "step_pdb_session"

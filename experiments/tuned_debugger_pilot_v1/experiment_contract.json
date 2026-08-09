@@ -1,0 +1,142 @@
+{
+  "schema_version": "tuned-debugger-pilot-v1",
+  "research_question": "For the same five curated Python debugging tasks and the same tuned Qwen2.5-Coder-7B model, does allowing typed interactive PDB actions change observable debugging behavior and verifier-authoritative repair outcomes relative to static repair?",
+  "source_baseline": {
+    "audited_main_commit": "da4df9435228a0b3bfdf504baf9e71ae2fa95226",
+    "audited_source_archive_sha256": "5ce752757cb51eb47c260f2680ce4d0ec59d4560f3a841be80fcfc4acfa37aaa"
+  },
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_requirement": "frozen PEFT adapter selected by Chat B",
+    "adapter_present_at_freeze": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-none-handling-001",
+      "fixture_tree_sha256": "11fcd99767052b52e786eeb9bc3947c8af0d2708322e251fb10da2166e341bec",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20,
+      "agent_visible_mapping_sha256": "163dc07c4ce1019efc063496f3954e8c19baba05960c8075e352616cc6d0ab5b"
+    },
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20,
+      "agent_visible_mapping_sha256": "1fb0eb6e7951c24180adbbdbfc3b45cce6de4429205d4be246f4fee6e52f388b"
+    },
+    {
+      "task_id": "curated-wrong-branch-003",
+      "fixture_tree_sha256": "1b94c309024b782a9fa9902ebc9a1b1dd0816f6bd3e862b0396852dabe8b9393",
+      "f2p": 1,
+      "p2p": 3,
+      "test_timeout_seconds": 20,
+      "agent_visible_mapping_sha256": "1f1a184c1a28ac4ef099004f9de7e18dbadf92cddacb84c70829350ddd24efde"
+    },
+    {
+      "task_id": "curated-mutation-alias-004",
+      "fixture_tree_sha256": "f3e73c5b9ecf182018fe139518d66f3b5c0ed9af12e104456ae304fb6208b56a",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20,
+      "agent_visible_mapping_sha256": "566d4fb050b60b63d490e7eaf0c8b73051e310a016d99488550ef1ce2dda482c"
+    },
+    {
+      "task_id": "curated-caller-callee-005",
+      "fixture_tree_sha256": "003ed4df6be9e58417f1ec2aa75821eccf065ad1614f930852aabd9115b7bba9",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20,
+      "agent_visible_mapping_sha256": "3fd9ba0cb5e5c832e40c4ac6b59d3500e147c1b74f2da0b0717970f5e2ee283e"
+    }
+  ],
+  "conditions": [
+    {
+      "condition_id": "A-static-repair",
+      "policy": "static-baseline",
+      "interactive_debugger_controls": false
+    },
+    {
+      "condition_id": "B-debugger-assisted",
+      "policy": "pdb-on-uncertainty",
+      "interactive_debugger_controls": true
+    }
+  ],
+  "pairing": {
+    "repetitions_per_task_condition": 1,
+    "same_task_agent_visible_mapping_required": true,
+    "same_fixture_tree_required": true,
+    "task_order_fixed": true,
+    "condition_order_fixed": true
+  },
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 24,
+    "model_requests_max": 28,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "verifier_contract": {
+    "authority": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "clean_baseline_required": true,
+    "baseline_reproduction_required": true,
+    "syntax_validation_required": true,
+    "individual_f2p_required": true,
+    "individual_p2p_required": true,
+    "full_suite_consistency_required": true,
+    "canonical_fixture_immutability_required": true,
+    "workspace_cleanup_required": true,
+    "success_outcome": "RESOLVED"
+  },
+  "required_evidence": [
+    "model_action",
+    "debugger_command",
+    "command_execution_result",
+    "selected_breakpoint",
+    "selected_frame",
+    "selected_variable_expression",
+    "structured_debugger_observation",
+    "observable_root_cause_or_localization",
+    "post_debugger_model_directive",
+    "patch",
+    "patch_apply",
+    "F2P",
+    "P2P",
+    "RESOLVED",
+    "debugger_turns",
+    "runtime",
+    "tokens"
+  ],
+  "metrics": {
+    "debugger_command_valid_rate": "accepted debugger action directives / debugger action directives emitted",
+    "debugger_command_execution_rate": "successful debugger command observations / accepted debugger commands",
+    "debugger_output_interpretation": "independent root-cause rubric over the first observable model directive after debugger evidence; NOT_ASSESSED until scored",
+    "breakpoint_selection": "record model-selected breakpoint_line and whether execution paused there",
+    "frame_variable_selection": "record frame_id and safe_eval expression selected by the model",
+    "localization": "existing verifier localization outcome",
+    "patch_application": "existing PatchManager/verifier patch application evidence",
+    "F2P": "independent verifier fail-to-pass passed/total",
+    "P2P": "independent verifier pass-to-pass passed/total",
+    "RESOLVED": "independent verifier semantic outcome",
+    "debugger_turns": "count of debugger action events",
+    "runtime": "case/model-phase/model-transport duration",
+    "tokens": "prompt/completion/total token counts from the local transport"
+  },
+  "claims_boundary": "This 10-case run is a pilot. It can establish tuned-model use of the debugger path and paired task-level outcomes; it cannot establish broad debugger superiority."
+}
