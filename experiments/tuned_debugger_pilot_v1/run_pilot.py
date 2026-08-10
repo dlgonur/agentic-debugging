@@ -5,7 +5,8 @@ The existing live controller owns orchestration and the existing verifier owns
 correctness.  This file contributes only:
 
 * frozen contract validation;
-* a local Qwen2.5 + PEFT ``ModelTransport`` implementation;
+* a local Qwen2.5 ``ModelTransport`` implementation (optionally with a frozen
+  PEFT adapter, or ``--base-only`` with no adapter weights);
 * one 10-case A/B invocation; and
 * a review-oriented projection of already-recorded public trajectory evidence.
 
@@ -193,11 +194,15 @@ def _adapter_identity(adapter_path: Path) -> dict[str, Any]:
 
 
 class LocalQwenPeftTransport:
-    """Local pinned Qwen2.5 base + frozen PEFT adapter transport.
+    """Local pinned Qwen2.5 base + optional frozen PEFT adapter transport.
 
     Imports are lazy so ``--validate-only`` has no model/GPU dependency.
     The transport returns the exact envelope already consumed by
     ``LiveModelAdapter``: ``{"directive": ..., "usage": ...}``.
+
+    ``base_only`` selects the RAW control condition: the identical pinned base
+    and tokenizer path are used, and no PEFT weights are attached.  All other
+    semantics (prompt, serialization, generation, budgets) are shared.
     """
 
     SYSTEM_PROMPT = (
@@ -212,9 +217,10 @@ class LocalQwenPeftTransport:
         *,
         base_repository: str,
         base_revision: str,
-        adapter_path: Path,
+        adapter_path: Path | None,
         max_new_tokens: int,
         max_input_tokens: int,
+        base_only: bool = False,
     ) -> None:
         try:
             import torch
@@ -228,12 +234,18 @@ class LocalQwenPeftTransport:
         if not torch.cuda.is_available():
             raise RuntimeError("real 7B pilot requires a CUDA runtime")
 
-        adapter_config = json.loads((adapter_path / "adapter_config.json").read_text(encoding="utf-8"))
-        declared_base = adapter_config.get("base_model_name_or_path")
-        if declared_base not in {None, "", base_repository}:
-            raise RuntimeError(
-                "tuned adapter declares a different base model: " + str(declared_base)
-            )
+        if base_only == (adapter_path is not None):
+            raise RuntimeError("exactly one of base-only or adapter-path must be selected")
+
+        if base_only:
+            adapter_config = None
+        else:
+            adapter_config = json.loads((adapter_path / "adapter_config.json").read_text(encoding="utf-8"))
+            declared_base = adapter_config.get("base_model_name_or_path")
+            if declared_base not in {None, "", base_repository}:
+                raise RuntimeError(
+                    "tuned adapter declares a different base model: " + str(declared_base)
+                )
 
         compute_dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
         quantization = BitsAndBytesConfig(
@@ -255,11 +267,14 @@ class LocalQwenPeftTransport:
             quantization_config=quantization,
             torch_dtype=compute_dtype,
         )
-        self.model = PeftModel.from_pretrained(
-            base,
-            str(adapter_path),
-            is_trainable=False,
-        )
+        if base_only:
+            self.model = base
+        else:
+            self.model = PeftModel.from_pretrained(
+                base,
+                str(adapter_path),
+                is_trainable=False,
+            )
         self.model.eval()
         self.torch = torch
         self.max_new_tokens = max_new_tokens
@@ -509,7 +524,7 @@ def _case_evidence(case: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
-def _build_evidence(report: Mapping[str, Any], validation: Mapping[str, Any], adapter: Mapping[str, Any]) -> dict[str, Any]:
+def _build_evidence(report: Mapping[str, Any], validation: Mapping[str, Any], adapter: Mapping[str, Any] | None) -> dict[str, Any]:
     return {
         "schema_version": "tuned-debugger-pilot-evidence-v1",
         "contract_sha256": validation["contract_sha256"],
@@ -528,9 +543,48 @@ def _write_json(path: Path, value: Any) -> None:
     path.write_text(json.dumps(value, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 
 
+def _run_identity(
+    validation: Mapping[str, Any],
+    model_contract: Mapping[str, Any],
+    adapter: Mapping[str, Any] | None,
+    task_ids: tuple[str, ...],
+    conditions: list[str],
+    *,
+    base_only: bool,
+    chat_template: str | None,
+) -> dict[str, Any]:
+    if base_only:
+        return {
+            "contract_sha256": validation["contract_sha256"],
+            "model_condition": "RAW_BASE",
+            "adapter_applied": False,
+            "adapter_path": None,
+            "adapter_identity": None,
+            "base_repository": model_contract["base_repository"],
+            "base_revision": model_contract["base_revision"],
+            "tokenizer_identity": {
+                "repository": model_contract["base_repository"],
+                "revision": model_contract["base_revision"],
+                "source": "AutoTokenizer.from_pretrained(base_repository, revision=base_revision)",
+                "chat_template_sha256": _sha256_bytes((chat_template or "").encode("utf-8")),
+            },
+            "task_ids": list(task_ids),
+            "conditions": conditions,
+        }
+    return {
+        "contract_sha256": validation["contract_sha256"],
+        "adapter_identity": adapter,
+        "base_repository": model_contract["base_repository"],
+        "base_revision": model_contract["base_revision"],
+        "task_ids": list(task_ids),
+        "conditions": conditions,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--validate-only", action="store_true")
+    parser.add_argument("--base-only", action="store_true")
     parser.add_argument("--adapter-path", type=Path)
     parser.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
@@ -541,27 +595,42 @@ def main() -> int:
         print(json.dumps({"status": "PASS", **validation}, indent=2))
         return 0
 
-    if args.adapter_path is None:
+    if args.base_only and args.adapter_path is not None:
+        raise SystemExit("--base-only and --adapter-path are mutually exclusive")
+    if not args.base_only and args.adapter_path is None:
         raise SystemExit("waiting for frozen tuned adapter from Chat B")
     if args.output_dir is None:
         raise SystemExit("--output-dir is required for a real pilot run")
 
-    adapter_path = args.adapter_path.resolve()
-    adapter = _adapter_identity(adapter_path)
     model_contract = contract["model"]
     generation = model_contract["generation"]
-    transport = LocalQwenPeftTransport(
-        base_repository=model_contract["base_repository"],
-        base_revision=model_contract["base_revision"],
-        adapter_path=adapter_path,
-        max_new_tokens=generation["max_new_tokens"],
-        max_input_tokens=generation["max_input_tokens"],
-    )
+    adapter: dict[str, Any] | None = None
+    if args.base_only:
+        transport = LocalQwenPeftTransport(
+            base_repository=model_contract["base_repository"],
+            base_revision=model_contract["base_revision"],
+            adapter_path=None,
+            max_new_tokens=generation["max_new_tokens"],
+            max_input_tokens=generation["max_input_tokens"],
+            base_only=True,
+        )
+    else:
+        adapter_path = args.adapter_path.resolve()
+        adapter = _adapter_identity(adapter_path)
+        transport = LocalQwenPeftTransport(
+            base_repository=model_contract["base_repository"],
+            base_revision=model_contract["base_revision"],
+            adapter_path=adapter_path,
+            max_new_tokens=generation["max_new_tokens"],
+            max_input_tokens=generation["max_input_tokens"],
+        )
 
     budgets = contract["budgets"]
     config = LiveModelConfig(
         model_name=(
-            f"{model_contract['base_repository']}+PEFT:{adapter['tree_identity_sha256'][:12]}"
+            f"{model_contract['base_repository']}+RAW-BASE"
+            if args.base_only
+            else f"{model_contract['base_repository']}+PEFT:{adapter['tree_identity_sha256'][:12]}"
         ),
         # A custom transport is injected, so this command is never executed.
         # It remains an inert non-secret identity field required by LiveModelConfig.
@@ -601,14 +670,15 @@ def main() -> int:
     )
     _write_json(
         output_dir / "run_identity.json",
-        {
-            "contract_sha256": validation["contract_sha256"],
-            "adapter_identity": adapter,
-            "base_repository": model_contract["base_repository"],
-            "base_revision": model_contract["base_revision"],
-            "task_ids": list(_task_ids(contract)),
-            "conditions": [item["condition_id"] for item in contract["conditions"]],
-        },
+        _run_identity(
+            validation,
+            model_contract,
+            adapter,
+            _task_ids(contract),
+            [item["condition_id"] for item in contract["conditions"]],
+            base_only=args.base_only,
+            chat_template=transport.tokenizer.chat_template,
+        ),
     )
     print(str(output_dir / "pilot_report.json"))
     print(str(output_dir / "pilot_evidence.json"))

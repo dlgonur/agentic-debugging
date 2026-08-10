@@ -36,6 +36,20 @@ PDB actions from the live contract. The debugger-assisted condition permits one
 session start, at most eight accepted observation/control actions, and one stop
 (ten accepted debugger actions maximum).
 
+## RAW base control (no adapter)
+
+```powershell
+python experiments/tuned_debugger_pilot_v1/run_pilot.py `
+  --base-only `
+  --output-dir artifacts\tuned_debugger_pilot_v1\run-raw-qwen25-001
+```
+
+`--base-only` loads the same pinned base revision with the identical frozen
+tokenizer/chat-template, quantization, generation and budget path, but attaches
+no PEFT weights. `--base-only` and `--adapter-path` are mutually exclusive.
+`run_identity.json` records `model_condition = RAW_BASE`, `adapter_applied =
+false` and `adapter_path = null`.
+
 `pilot_report.json` is the untouched live-evaluation report.
 `pilot_evidence.json` is a derived, review-oriented projection retaining the
 required public evidence fields. Observable model directives are typed JSON
