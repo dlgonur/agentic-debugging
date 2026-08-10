@@ -1,0 +1,115 @@
+{
+  "schema_version": "s4-cp118-rag-definitive",
+  "research_question": "Under the frozen v1.2.1 one-shot protocol with the ONLY treatment difference being RAG OFF -> frozen repository RAG ON, does the definitive cp118 tuned checkpoint (Qwen/Qwen2.5-Coder-7B-Instruct + cp118 PEFT/QLoRA adapter) change its frozen extraction/apply/resolution outcome over the frozen quix40 40-task cohort?",
+  "source_baseline": {
+    "branch": "experiment/cp118-rag-definitive",
+    "baseline_commit": "1ff3571ae55fb6fb1bb9f30150cd3bfde997d9f8",
+    "note": "S4 starts from the accepted local integration baseline. No S1/D1/S2 branch content is merged or cherry-picked. The live run binds to the committed clean HEAD (source_commit_sha) of this branch after the owner source-freeze commit."
+  },
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": true,
+    "adapter_identity": {
+      "purpose": "definitive surviving cp118 tuned checkpoint (PEFT/QLoRA)",
+      "selected_checkpoint_step": 118,
+      "selection_rule": "best surviving saved checkpoint by held-out SWE-rebench validation eval_loss only",
+      "swe_rebench_eval_loss": 0.45070546865463257,
+      "tree_identity_sha256": "65b5ed9a354d4b2c03ba86e2b8065118e11abab9c439cb481b5739f1b86e7c00",
+      "files": [
+        {"path": "ADAPTER_MANIFEST.json", "sha256": "1737cbb4692e41101c3f1204b234fc8000c14fabdedfbcad5869d04eefb47e82", "size_bytes": 1641},
+        {"path": "README.md", "sha256": "a5d7fb3cdb484f69923761fe282ae83babc2e0e2d1df59375cfe3b8eb6d577a0", "size_bytes": 5214},
+        {"path": "adapter_config.json", "sha256": "e90c81572a360622003e5971c8c27ac989f6f0807e24a01d7a99478467ae1c62", "size_bytes": 1109},
+        {"path": "adapter_model.safetensors", "sha256": "59398e322efc9de8ba4b8952b1a06405913438314fd8dd7e5c0c0227ed535533", "size_bytes": 161533192},
+        {"path": "chat_template.jinja", "sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f", "size_bytes": 2507},
+        {"path": "tokenizer.json", "sha256": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8", "size_bytes": 11421892},
+        {"path": "tokenizer_config.json", "sha256": "8b6f658e2435ec8da6866013cb485a1d2a6559bed4bf76ed99ea68b031854b41", "size_bytes": 693}
+      ]
+    },
+    "loading": "4-bit NF4 double-quant base (bitsandbytes), PeftModel.from_pretrained(is_trainable=False), bf16 compute — the established tuned-pilot mechanism"
+  },
+  "rag": {
+    "enabled": true,
+    "mode": "repo",
+    "corpus": {
+      "quixbugs_revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+      "scope_dirs": ["python_programs", "python_testcases"],
+      "answer_bearing_exclusions": ["correct_python_programs", "correct_java_programs", "java_programs", "java_testcases", "json_testcases", "conftest.py", "tester.py", "quixbugs.pdf", "JavaDeserialization.*", "build.gradle", "README.md", "LICENSE", ".git"],
+      "note": "Scoped view of the actual frozen repository revision (byte-identical copies, per-file SHA-256 verified). QuixBugs tests live under python_testcases/, which the frozen repo-mode rule classifies as kind=source (the rule keys on a literal tests/ prefix); provenance records this honestly and retrieval does not filter by kind."
+    },
+    "retrieval": {
+      "max_results": 8,
+      "max_context_bytes": 4000,
+      "frozen_bounds_note": "The frozen retrieval bound (MAX_RETRIEVAL_CONTEXT_BYTES=4096) exceeds the frozen agent-context cap (MAX_RAG_CONTEXT_BYTES=4000); RagContext.from_retrieval fails closed on results in (4000,4096]. S4 passes the frozen agent-context cap (4000) as the retrieval bound so the frozen constraints coexist (Amendment 2); reductions are reported explicitly via context_bytes_truncated (never silent). No retrieval parameter is tuned.",
+      "query_max_bytes": 2000,
+      "scoring": "integer token-overlap (identifier-aware [a-z0-9_]+), deterministic tie order (score desc, path asc, start_line asc, chunk_id asc)",
+      "truncation": "explicit result_count_truncated / context_bytes_truncated / [query-truncated] marker; never silent"
+    },
+    "context": {
+      "max_bytes": 4000,
+      "injection": "additive canonical RagContext.to_request_mapping() block after FAILING_TEST_OUTPUT, before OUTPUT_REQUIREMENTS (deterministic)",
+      "public_request_byte_budget": 20000,
+      "public_request_byte_budget_scope": "LiveModelAdapter agentic public-request mapping only (agentic_debugger/evaluation/live.py); NOT the one-shot generation prompt limit"
+    },
+    "anti_oracle": "task_issue_projection whitelist (task_id/title/description/tags only); gold/fixed code and answer-bearing content structurally absent from the scoped corpus; unit-tested"
+  },
+  "protocol": {
+    "name": "raw-c9-v1.2.1-oneshot",
+    "output_requirements": "PATCH-first OUTPUT_REQUIREMENTS_V121 (verbatim frozen block; drift-tested)",
+    "frozen_sources": {
+      "cpu_eval_script_sha256": "1ba69505c64814122d732482aadd4840c36cb1525505c5381cdfe85a04d3056e",
+      "cpu_eval_script_path": "experiments/raw-pilot-v1.1/scripts/RAW_C9_5Model_40Task_Protocol_v1_2_1_CPU_EVAL_v1.py",
+      "gpu_generate_script_sha256": "0c3fe8bf90827980520c217f948af287580663a14c34e9e230fe0ce9d0e7cf8b",
+      "gpu_generate_script_path": "experiments/raw-pilot-v1.1/scripts/RAW_C9_5Model_40Task_Protocol_v1_2_1_GPU_GENERATE_v1.py",
+      "note": "Untracked frozen protocol sources consumed by S4 at runtime are bound by SHA-256 identity and verified fail-closed before import/use; the raw-pilot directories are not staged."
+    },
+    "generation": {
+      "do_sample": false,
+      "num_beams": 1,
+      "max_new_tokens": 4096,
+      "max_prompt_tokens": 24576,
+      "temperature_top_p": "never set (NOT_RECORDED)"
+    },
+    "tokenizer": "AutoTokenizer.from_pretrained(base, revision) chat template, add_generation_prompt=True; decode skip_special_tokens=True (frozen)"
+  },
+  "cohort": {
+    "name": "quix40-v1",
+    "manifest_path": "experiments/raw-pilot-v1.1/state/quix40-v1/pilot_manifest_frozen_v1.jsonl",
+    "manifest_sha256": "572082482a64adabc8c790293580a9869cdda485a3813505f14adec850577afd",
+    "bundle_path": "experiments/raw-pilot-v1.1/artifacts/quix40-v1-state.zip",
+    "bundle_sha256": "41b9b633c70baae09be4e8f0570932e52f59fc7f25de36e4dec2c4ca66f6bbeb",
+    "quixbugs_revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+    "task_count": 40,
+    "note": "Same frozen cohort as the accepted RAW (20/40 apply, 5/40 RESOLVED) and cp118 RAG-OFF (0/40 apply, 0/40 RESOLVED) results"
+  },
+  "evaluation": {
+    "primary": "exact frozen C9 v1.2.1 CPU evaluation semantics (strict_compliance, extract_patch_semantic_v121, parse_files_independent, parse_symbols_independent, symbol_ground_truth, git apply --check/apply on the frozen revision worktree, pytest on the visible test, truncation rule output_tokens>=4096)",
+    "f2p": "test_pass (supplied-oracle designated visible test) — the frozen RESOLVED basis",
+    "p2p": "NOT_RECORDED",
+    "p2p_reason": "the frozen v1.2.1 CPU evaluator never ran pass-to-pass"
+  },
+  "metrics": {
+    "primary": ["strict extraction", "semantic extraction", "file localization", "symbol localization", "patch apply", "F2P (test_pass)", "RESOLVED (supplied-oracle)", "truncation", "output tokens", "prompt tokens", "latency", "peak VRAM"],
+    "rag": ["index_id", "query_identity", "retrieval_id", "context_identity", "selected chunk count", "selected_bytes", "retrieved-context bytes", "retrieval/context truncation flags", "base/assembled prompt bytes", "assembled prompt tokens", "protocol max_prompt_tokens truncation"],
+    "not_recorded": ["P2P", "temperature", "top_p", "monetary cost", "cp118 RAG-OFF per-task raw evidence (Drive-hosted D7 bundle; accepted aggregates in the master plan)"]
+  },
+  "budgets": {
+    "per_task_wall_clock_seconds": 900,
+    "infrastructure_retries_per_task": 2,
+    "campaign_wall_clock_hours": 8,
+    "retry_scope": "infrastructure failures ONLY, applied ONLY BEFORE a valid model completion: transport errors, process/timeout errors, and CUDA out-of-memory (explicitly normalized into the transport-error policy). After a model completion is obtained, persistence/validation failures abort fail-closed and NEVER regenerate. No prompt or retrieval changes on retry.",
+    "timing_truthfulness": "OBSERVATIONAL / STOP-POLICY LIMITS — the runner has no hard per-task or campaign wall-clock enforcement mechanism; per-task generation_latency_s and campaign elapsed time are recorded truthfully in the marker/evidence, and the operator enforces the stop policy from the recorded timings. The declared bounds are not claimed as enforced.",
+    "resume_rule": "a valid already-completed task in the same run directory is never regenerated (raw/meta/retrieval evidence validated and skipped); incomplete/corrupt partial evidence is never treated as valid (fail closed with the exact task ids); the completion marker is written only after all 40 valid pairs exist"
+  },
+  "stop_rule": "Once all 40 tasks have valid raw/meta/retrieval evidence and the frozen-semantics evaluation completes, STOP and preserve the result whether positive, neutral or negative. No retrieval tuning, no prompt tuning, no reruns after observing results. Results enter the S5 common comparison.",
+  "not_allowed": [
+    "retrieval parameter changes until performance improves",
+    "embeddings or new retrieval architecture",
+    "another model or checkpoint substitution",
+    "retraining or checkpoint sweep",
+    "S1-P patch serialization normalizer",
+    "debugger-interface treatment from S1/D1/S2",
+    "gold/fixed code or answer-bearing retrieval",
+    "weakening path, syntax, timeout, cleanup or regression checks"
+  ]
+}
