@@ -1,0 +1,126 @@
+{
+  "schema_version": "debugger-interaction-v2-d1",
+  "research_question": "After successful baseline failure reproduction, if administrative controller phase navigation is handled deterministically and frozen RAW Qwen is placed directly at the existing RUNTIME_EVIDENCE interaction boundary, can it use the existing simplified debugger command surface to enter a real PDB interaction loop?",
+  "source_baseline": {
+    "s1_accepted_parent_commit": "2d4bc14c16d1a7eb3e7fa72c8fbd23259cb5cc4f",
+    "note": "D1 is based on the accepted S1 source commit. The live run binds to the committed clean HEAD (source_commit_sha) which must descend from this accepted S1 baseline. D1 adds files under experiments/debugger_interaction_v2_d1/ only; production core and S1 files are unchanged."
+  },
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20
+    }
+  ],
+  "conditions": [
+    {
+      "condition_id": "D1-forced-runtime-entry-sanity",
+      "policy": "always_on",
+      "interactive_debugger_controls": true,
+      "model_facing_interface": "state-specific-bridge-grammar",
+      "base_experiment": "S1-raw-debugger-feasibility"
+    }
+  ],
+  "d1_treatment": {
+    "description": "D1 changes only administrative controller phase navigation after verified reproduction. After the model's own reproduce action produces a real observation with failure_reproduced == true, the experiment-local D1 harness deterministically performs the existing legal administrative transitions REPRODUCE -> UNDERSTAND -> RUNTIME_EVIDENCE, then calls the RAW model using the EXISTING S1 RUNTIME_EVIDENCE state-specific command surface. From that point onward, model debugger/action choices remain model-authored.",
+    "automated_only": [
+      "REPRODUCE -> UNDERSTAND",
+      "UNDERSTAND -> RUNTIME_EVIDENCE"
+    ],
+    "automation_trigger": "real run_reproduction observation with failure_reproduced == true",
+    "never_automated": [
+      "source", "break", "stack", "locals", "print", "step", "next",
+      "continue", "stop", "diagnosis", "patch"
+    ],
+    "no_breakpoint_selection": true,
+    "no_runtime_evidence_injection": true,
+    "no_pdb_observation_modification": true,
+    "administrative_transitions_do_not_count_as_debugger_commands": true,
+    "stop_rule": "If successful reproduction does not occur, STOP; do not force runtime entry."
+  },
+  "treatment_differences_from_s1": {
+    "administrative_phase_navigation": true,
+    "description": "S1 left REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE to the model, which fixated on the reproduce self-loop (Live Run 1, frozen). D1 automates ONLY these two administrative phase transitions after verified reproduction; the model-facing RUNTIME_EVIDENCE prompt, bridge grammar, controller, tools, PDB backend, verifier, and budgets are unchanged."
+  },
+  "frozen_variables": {
+    "model": "Qwen/Qwen2.5-Coder-7B-Instruct @ c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "model_condition": "RAW_BASE (no PEFT adapter)",
+    "rag": "OFF",
+    "task": "curated-off-by-one-002",
+    "controller": "DeterministicController (unchanged)",
+    "pdb_backend": "PdbSession/PdbWorker (unchanged)",
+    "verifier": "EvaluationVerifier (unchanged)",
+    "evidence_architecture": "project_controller_run + JsonlEventLogger + replay_events (unchanged)",
+    "tokenizer_chat_template": "frozen at base revision (same as v1)",
+    "quantization": "4-bit NF4 with double quantization (same as v1)",
+    "decoding": "do_sample=False, num_beams=1 (same as v1)"
+  },
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 24,
+    "model_requests_max": 28,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "verifier_contract": {
+    "authority": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "clean_baseline_required": true,
+    "baseline_reproduction_required": true,
+    "syntax_validation_required": true,
+    "individual_f2p_required": true,
+    "individual_p2p_required": true,
+    "full_suite_consistency_required": true,
+    "canonical_fixture_immutability_required": true,
+    "workspace_cleanup_required": true,
+    "success_outcome": "RESOLVED"
+  },
+  "gate_b_criteria": {
+    "description": "Interaction loop (not one-shot). All four conditions must hold. Administrative transitions inserted by the D1 harness do NOT count as model debugger commands.",
+    "conditions": [
+      "1. RAW model emits a valid debugger command accepted by the controller that reaches the real PDB backend.",
+      "2. A real PDB observation is produced and bound into the next model request via prior_observation_id + rendered_observation_sha256 provenance.",
+      "3. After receiving that request, the model emits a second accepted debugger command.",
+      "4. That second command also reaches the real PDB backend and produces another real observation."
+    ],
+    "model_authored_source_before_break_allowed": true
+  },
+  "gate_c_criteria": {
+    "description": "Full dynamic trajectory: runtime evidence -> post-debug diagnosis -> patch -> verifier.",
+    "resolved_ideal_not_required": true
+  },
+  "stop_rule": {
+    "after_the_single_d1_live_run": [
+      "NO more S1 interface repairs",
+      "NO command hiding campaign",
+      "NO prompt wording campaign",
+      "NO alternative grammar",
+      "NO larger token budget",
+      "NO second curated task",
+      "NO v2.1/v2.2",
+      "NO another debugger-policy variation"
+    ],
+    "d1_is_the_final_s1_interface_sanity_diagnostic": true
+  },
+  "claims_boundary": "D1 is a single-run interface sanity diagnostic of the S1 STOP gate. It is NOT a new protocol campaign, NOT S1 v2.1, NOT a prompt-optimization campaign, and NOT a general repair pass. A successful D1 supports only: under the S1 simplified/direct-access treatment with deterministic administrative phase navigation after verified reproduction, frozen RAW Qwen2.5-Coder-7B-Instruct can (or cannot) enter a real PDB interaction loop on curated-off-by-one-002."
+}
