@@ -1,0 +1,104 @@
+{
+  "schema_version": "debugger-interaction-v2",
+  "research_question": "After baseline failure reproduction, when bounded debugger access is directly available, can frozen RAW Qwen2.5-Coder-7B use a simplified state-specific command interface to enter and sustain a real PDB interaction loop?",
+  "source_baseline": {
+    "audited_main_commit": "1ff3571ae55fb6fb1bb9f30150cd3bfde997d9f8",
+    "note": "Live HEAD of experiment/debugger-interaction-v2 at S0 closeout."
+  },
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20
+    }
+  ],
+  "conditions": [
+    {
+      "condition_id": "S1-raw-debugger-feasibility",
+      "policy": "always_on",
+      "interactive_debugger_controls": true,
+      "model_facing_interface": "state-specific-bridge-grammar"
+    }
+  ],
+  "treatment_differences_from_v1": {
+    "simplified_interface": true,
+    "interface_description": "A small line-oriented command grammar (17 commands) with state-specific command visibility, replacing the full typed JSON directive protocol (26 actions, 5 directive kinds, per-action JSON-schema arguments, state allowlists, transition graph, hypothesis ledger operations).",
+    "debugger_policy": "always_on",
+    "debugger_policy_description": "PdbPolicy.ALWAYS_ON instead of the historical PDB_ON_UNCERTAINTY gate. The uncertainty/hypothesis gate was enforced primarily in the existing LiveModelAdapter path; since S1 uses a new experiment-local DebuggerBridgeAdapter through the ModelAdapter seam, claiming to preserve PDB_ON_UNCERTAINTY would be incorrect. ALWAYS_ON means debugger access is not hypothesis-gated; it does not bypass baseline failure reproduction or budgets.",
+    "raw_text_retention": true,
+    "raw_text_retention_description": "The S1 transport always retains the decoded model text in the response envelope, even on parse failure. The v1 transport discarded raw text on JSON parse failure."
+  },
+  "frozen_variables": {
+    "model": "Qwen/Qwen2.5-Coder-7B-Instruct @ c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "model_condition": "RAW_BASE (no PEFT adapter)",
+    "rag": "OFF",
+    "task": "curated-off-by-one-002",
+    "controller": "DeterministicController (unchanged)",
+    "pdb_backend": "PdbSession/PdbWorker (unchanged)",
+    "verifier": "EvaluationVerifier (unchanged)",
+    "evidence_architecture": "project_controller_run + JsonlEventLogger + replay_events (unchanged)",
+    "tokenizer_chat_template": "frozen at base revision (same as v1)",
+    "quantization": "4-bit NF4 with double quantization (same as v1)",
+    "decoding": "do_sample=False, num_beams=1 (same as v1)"
+  },
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 24,
+    "model_requests_max": 28,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "verifier_contract": {
+    "authority": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "clean_baseline_required": true,
+    "baseline_reproduction_required": true,
+    "syntax_validation_required": true,
+    "individual_f2p_required": true,
+    "individual_p2p_required": true,
+    "full_suite_consistency_required": true,
+    "canonical_fixture_immutability_required": true,
+    "workspace_cleanup_required": true,
+    "success_outcome": "RESOLVED"
+  },
+  "gate_b_criteria": {
+    "description": "Interaction loop (not one-shot). All four conditions must hold:",
+    "conditions": [
+      "1. RAW model emits a valid debugger command accepted by the controller that reaches the real PDB backend.",
+      "2. A real PDB observation is produced and bound into the next model request via prior_observation_id + rendered_observation_sha256 provenance.",
+      "3. After receiving that request, the model emits a second accepted debugger command.",
+      "4. That second command also reaches the real PDB backend and produces another real observation."
+    ]
+  },
+  "gate_c_criteria": {
+    "description": "Full dynamic trajectory: runtime evidence -> post-debug diagnosis -> patch -> verifier.",
+    "resolved_ideal_not_required": true
+  },
+  "repair_budget": {
+    "initial_implementation": true,
+    "max_material_repair_passes": 2,
+    "stop_condition": "If the deterministic bridge is correct (all parser and PDB integration tests pass) but the live run yields zero accepted debugger actions or zero debugger exposure, STOP interface engineering.",
+    "no_protocol_hardening_campaigns": true
+  },
+  "claims_boundary": "This is a mechanism/interface feasibility experiment. It is NOT a strict causal ablation against v1 where interface is claimed to be the only changed variable. Treatment differences from v1: (1) simplified state-specific model-facing command interface; (2) debugger policy = PdbPolicy.ALWAYS_ON instead of the historical PDB_ON_UNCERTAINTY gate. A successful S1 supports only: 'RAW Qwen can perform bounded real debugger interaction under the S1 simplified/direct-access treatment.' It cannot establish that interface simplification alone caused the difference from v1."
+}
