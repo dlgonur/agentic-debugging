@@ -1,0 +1,158 @@
+{
+  "schema_version": "debugger-interaction-v2-s2-cp118",
+  "research_question": "Under the EXACT frozen D1 treatment (deterministic administrative phase navigation REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE after a real failure_reproduced==true observation, then the unchanged S1 RUNTIME_EVIDENCE model-facing surface), with the ONLY material model-condition change being RAW Qwen2.5-Coder-7B-Instruct -> the definitive surviving cp118 tuned checkpoint, can the cp118 model enter a real PDB interaction loop on curated-off-by-one-002?",
+  "source_baseline": {
+    "s1_accepted_parent_commit": "2d4bc14c16d1a7eb3e7fa72c8fbd23259cb5cc4f",
+    "d1_source_commit": "7bda64d04a6165eb47bfb232094976e82e1155ed",
+    "note": "S2 is based on the accepted D1 source commit (which in turn descends from the accepted S1 source commit). The live run binds to the committed clean HEAD (source_commit_sha) which must descend from these accepted baselines. S2 adds files under experiments/debugger_interaction_v2_s2_cp118/ only; production core, S1 files, and D1 files are unchanged."
+  },
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": true,
+    "adapter_identity": {
+      "purpose": "definitive surviving cp118 tuned checkpoint (PEFT/QLoRA)",
+      "selected_checkpoint_step": 118,
+      "selection_rule": "best surviving saved checkpoint by held-out SWE-rebench validation eval_loss only",
+      "swe_rebench_eval_loss": 0.45070546865463257,
+      "tree_identity_sha256": "65b5ed9a354d4b2c03ba86e2b8065118e11abab9c439cb481b5739f1b86e7c00",
+      "files": [
+        {"path": "ADAPTER_MANIFEST.json", "sha256": "1737cbb4692e41101c3f1204b234fc8000c14fabdedfbcad5869d04eefb47e82", "size_bytes": 1641},
+        {"path": "README.md", "sha256": "a5d7fb3cdb484f69923761fe282ae83babc2e0e2d1df59375cfe3b8eb6d577a0", "size_bytes": 5214},
+        {"path": "adapter_config.json", "sha256": "e90c81572a360622003e5971c8c27ac989f6f0807e24a01d7a99478467ae1c62", "size_bytes": 1109},
+        {"path": "adapter_model.safetensors", "sha256": "59398e322efc9de8ba4b8952b1a06405913438314fd8dd7e5c0c0227ed535533", "size_bytes": 161533192},
+        {"path": "chat_template.jinja", "sha256": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f", "size_bytes": 2507},
+        {"path": "tokenizer.json", "sha256": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8", "size_bytes": 11421892},
+        {"path": "tokenizer_config.json", "sha256": "8b6f658e2435ec8da6866013cb485a1d2a6559bed4bf76ed99ea68b031854b41", "size_bytes": 693}
+      ]
+    },
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec",
+      "f2p": 1,
+      "p2p": 2,
+      "test_timeout_seconds": 20
+    }
+  ],
+  "conditions": [
+    {
+      "condition_id": "S2-cp118-frozen-D1-runtime-entry",
+      "policy": "always_on",
+      "interactive_debugger_controls": true,
+      "model_facing_interface": "state-specific-bridge-grammar",
+      "base_experiment": "D1-forced-runtime-entry-sanity"
+    }
+  ],
+  "s2_treatment": {
+    "description": "S2 replicates the frozen D1 treatment EXACTLY (deterministic administrative REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE after a real failure_reproduced==true observation; everything from RUNTIME_EVIDENCE onward model-authored at the unchanged S1 state-specific command surface) and changes ONLY the model condition: RAW Qwen2.5-Coder-7B-Instruct base -> the definitive surviving cp118 tuned checkpoint (PEFT/QLoRA adapter, base c03e6d358207e414f1eca0bb1891e29f1db0e242, adapter identity above).",
+    "automated_only": [
+      "REPRODUCE -> UNDERSTAND",
+      "UNDERSTAND -> RUNTIME_EVIDENCE"
+    ],
+    "automation_trigger": "real run_reproduction observation with failure_reproduced == true",
+    "never_automated": [
+      "source", "break", "stack", "locals", "print", "step", "next",
+      "continue", "stop", "diagnosis", "patch"
+    ],
+    "no_breakpoint_selection": true,
+    "no_runtime_evidence_injection": true,
+    "no_pdb_observation_modification": true,
+    "administrative_transitions_do_not_count_as_debugger_commands": true,
+    "stop_rule": "If successful reproduction does not occur, STOP; do not force runtime entry."
+  },
+  "treatment_differences_from_d1": {
+    "model_condition": "RAW_BASE -> CP118_TUNED (definitive surviving cp118 PEFT/QLoRA checkpoint)",
+    "adapter_applied": "false -> true (RAW base only -> cp118 PEFT adapter applied)",
+    "adapter_identity_frozen": true,
+    "description": "The ONLY material model-condition change relative to D1 is RAW Qwen2.5-Coder-7B-Instruct -> the definitive cp118 tuned checkpoint. The D1 harness automation (administrative phase navigation only), the S1 RUNTIME_EVIDENCE prompt/grammar, controller, state machine, ToolRegistry, PdbPolicy.ALWAYS_ON, PDB backend, verifier, task, budgets, timeouts, generation configuration, quantization, RAG OFF, and evidence/provenance architecture are reused unchanged. The D1 harness may still automate ONLY REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE after real failure_reproduced==true; it must not choose any debugger command or breakpoint.",
+    "everything_else_unchanged": true
+  },
+  "frozen_variables": {
+    "model": "Qwen/Qwen2.5-Coder-7B-Instruct @ c03e6d358207e414f1eca0bb1891e29f1db0e242 + definitive cp118 PEFT adapter",
+    "model_condition": "CP118_TUNED (PEFT/QLoRA adapter applied)",
+    "rag": "OFF",
+    "task": "curated-off-by-one-002",
+    "controller": "DeterministicController (unchanged)",
+    "pdb_backend": "PdbSession/PdbWorker (unchanged)",
+    "verifier": "EvaluationVerifier (unchanged)",
+    "evidence_architecture": "project_controller_run + JsonlEventLogger + replay_events (unchanged)",
+    "tokenizer_chat_template": "frozen at base revision (same as D1/v1)",
+    "quantization": "4-bit NF4 with double quantization (same as D1/v1)",
+    "decoding": "do_sample=False, num_beams=1 (same as D1/v1)"
+  },
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 24,
+    "model_requests_max": 28,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "verifier_contract": {
+    "authority": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "clean_baseline_required": true,
+    "baseline_reproduction_required": true,
+    "syntax_validation_required": true,
+    "individual_f2p_required": true,
+    "individual_p2p_required": true,
+    "full_suite_consistency_required": true,
+    "canonical_fixture_immutability_required": true,
+    "workspace_cleanup_required": true,
+    "success_outcome": "RESOLVED"
+  },
+  "gate_b_criteria": {
+    "legacy": {
+      "description": "The repository's existing Gate-B computation, unchanged (experiments/debugger_interaction_v2/runner.py:_compute_gate_b). Administrative transitions inserted by the D1 harness do NOT count.",
+      "conditions": [
+        "1. Model emits a valid debugger command accepted by the controller that reaches the real PDB backend.",
+        "2. A real PDB observation is produced and bound into the next model request via prior_observation_id + rendered_observation_sha256 provenance.",
+        "3. After receiving that request, the model emits a second accepted debugger command.",
+        "4. That second command also reaches the real PDB backend and produces another real observation."
+      ]
+    },
+    "strict": {
+      "description": "A real iterative debugger loop. Tool-error observations may be retained as real provenance evidence but MUST NOT satisfy Gate B strict.",
+      "conditions": [
+        "1. First MODEL-AUTHORED accepted PDB command.",
+        "2. The command reaches the real PDB backend.",
+        "3. It produces a SUCCESSFUL NON-ERROR PDB observation/state (observation status OK).",
+        "4. That exact observation is bound into the next actual model request (prior_observation_id + rendered_observation_sha256 provenance).",
+        "5. The model authors a second accepted PDB command.",
+        "6. The second command reaches the real PDB backend and also produces a successful non-error PDB observation/control result (observation status OK)."
+      ],
+      "administrative_transitions_do_not_count": true
+    }
+  },
+  "gate_c_criteria": {
+    "description": "Full dynamic trajectory kept separate: successful runtime evidence -> model-authored post-debug diagnosis -> patch -> verifier. Report patch apply, F2P, P2P and RESOLVED honestly.",
+    "resolved_ideal_not_required": true
+  },
+  "patch_policy": {
+    "description": "The S1-P serialization-normalization diagnostic is NOT part of the S2 treatment. No patch normalizer is applied. If the cp118 model produces a malformed or non-applicable patch, the RAW live outcome is preserved exactly; any serialization analysis would be a separate post-hoc diagnostic, not part of this run.",
+    "patch_normalizer_applied": false
+  },
+  "stop_rule": {
+    "after_the_single_s2_live_run": [
+      "NO rerun because output is undesirable",
+      "NO repair or prompt/interface modification after seeing the result",
+      "NO further debugger-interface campaign"
+    ],
+    "s2_is_the_single_cp118-on-D1-treatment_diagnostic": true
+  },
+  "claims_boundary": "S2 is a single-run model-condition diagnostic. It is NOT a new protocol campaign, NOT an interface repair, NOT a prompt-optimization campaign, and NOT a general repair pass. A successful S2 supports only: under the frozen D1 treatment with deterministic administrative phase navigation after verified reproduction, the definitive cp118 tuned checkpoint can (or cannot) enter a real PDB interaction loop on curated-off-by-one-002. Do NOT infer broad fine-tuning conclusions from one task."
+}
