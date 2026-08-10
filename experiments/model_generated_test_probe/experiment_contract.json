@@ -1,0 +1,85 @@
+{
+  "schema_version": "model-generated-test-probe-v1",
+  "experiment_id": "model-generated-test-probe",
+  "research_question": "Given an explicit expected behavior specification and buggy source, can the frozen RAW Qwen2.5-Coder-7B model generate an executable regression test that exposes the bug, and can a separately model-produced repair satisfy that same frozen test?",
+  "claims_boundary": "This probe measures: given an explicit expected behavior specification and buggy source, can the frozen RAW model generate an executable regression test that exposes the bug, and can a separately model-produced repair satisfy that same frozen test? It does NOT measure: autonomous discovery of the specification; correctness based solely on the generated test; general unit-test-generation performance. The independent EvaluationVerifier remains the final correctness authority. A result where generated-test: buggy FAIL, generated-test: model-fixed PASS, verifier: NOT RESOLVED is scientifically valid and must be reported honestly.",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "task": {
+    "task_id": "curated-none-handling-001",
+    "fixture_tree_sha256": "11fcd99767052b52e786eeb9bc3947c8af0d2708322e251fb10da2166e341bec",
+    "target_module": "display_name.py",
+    "target_symbol": "format_display_name",
+    "f2p": 1,
+    "p2p": 2,
+    "test_timeout_seconds": 20
+  },
+  "behavior_spec": {
+    "sha256": "c3ce767a7517cef0d7b4a6cc0e3a1df0f8ea0a8968ad07f16103bb9849f936f2",
+    "note": "The explicit public behavior contract supplied to the model as part of the test-generation input. This is intentionally part of the treatment; it is NOT leakage for this auxiliary probe. Generating a test from a specified expected behavior is what is being measured. The model is NOT claimed to have discovered the requirement."
+  },
+  "prompts": {
+    "system_prompt_generation_sha256": "1d7a4962997709d83e83eb047764f24eef55faf792951a01bf4afe53c7a1ea69",
+    "system_prompt_fix_sha256": "ec07ee7ae14a77930913dd08142bc4ad11a86363d3e9a7e258df5fbe772b88c7",
+    "frozen": true
+  },
+  "budgets": {
+    "generation_attempts_max": 3,
+    "fix_attempts_max": 1,
+    "test_timeout_seconds": 20,
+    "model_request_timeout_seconds": 60
+  },
+  "retry_policy": {
+    "retry_triggers": [
+      "non_extractable_response",
+      "generated_test_not_executable"
+    ],
+    "do_not_retry_for": [
+      "buggy_code_passes_frozen_test",
+      "fixed_code_fails_frozen_test",
+      "malformed_fix_diff",
+      "verifier_not_resolved"
+    ],
+    "no_prompt_tuning_until_pass": true,
+    "stop_if_buggy_passes_frozen_test": true
+  },
+  "anti_leakage": {
+    "oracle_shown_to_model": false,
+    "fixed_or_gold_source_shown": false,
+    "gold_patch_shown": false,
+    "runtime_evidence_hint_shown": false,
+    "existing_fixture_test_source_shown": false,
+    "existing_test_node_names_shown": false,
+    "behavior_spec_is_intentionally_shown": true,
+    "behavior_spec_is_not_leakage_for_this_probe": true
+  },
+  "verifier_contract": {
+    "authority": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "verifier_is_correctness_authority": true,
+    "generated_test_is_auxiliary_evidence": true,
+    "clean_baseline_required": true,
+    "canonical_fixture_immutability_required": true,
+    "workspace_cleanup_required": true,
+    "success_outcome": "RESOLVED"
+  },
+  "reuse": {
+    "model_transport": "experiments.debugger_interaction_v2.adapter.ModelTransport / TransportResponse / TransportError",
+    "raw_qwen_transport": "experiments.debugger_interaction_v2.transport.LocalRawQwenTransport",
+    "offline_transport_doubles": "experiments.debugger_interaction_v2.transport.FakeTransport / FailingTransport",
+    "task_loader": "agentic_debugger.evaluation.runner.load_task",
+    "workspace": "agentic_debugger.runtime.workspace.TaskWorkspace",
+    "patcher": "agentic_debugger.runtime.patcher.PatchManager",
+    "test_runner": "agentic_debugger.runtime.test_runner.TestRunner",
+    "verifier": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "oracle_stripping": "agentic_debugger.evaluation.task_schema.DebugTask.agent_visible_mapping"
+  }
+}
