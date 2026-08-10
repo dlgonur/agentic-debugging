@@ -5,7 +5,7 @@
 **Execution control:** Main FirstMate  
 **Date:** 2026-08-10  
 **Status:** ACTIVE  
-**Current stage:** `S0 — Current branch/evidence closeout before Debugger Interaction v2`
+**Current stage:** `S1 — Debugger Interaction v2: RAW Feasibility`
 
 ---
 
@@ -481,7 +481,19 @@ When a stage is accepted:
 
 # S0 — Current Branch / Evidence Closeout
 
-**Status:** CURRENT
+**Status:** DONE
+
+## Closeout result
+
+- Accepted baseline/campaign HEAD before this doc edit: `5c2f04b`.
+- Tuned-debugger-pilot (cp118) and RAW-control provenance verified against the live repository and frozen artifacts.
+- Frozen experiment contract SHA256: `47210df79123831e55895004e15abeda051549fce18711d636e1791b882daeab`.
+- `run_pilot.py --validate-only` returned PASS (10 validated cases; A/B agent-visible mappings identical for all 5 tasks).
+- 204 focused tests passed, 0 failed (tuned-debugger-pilot unit, PDB interactive controls integration, demo tools, controller policy, PDB protocol).
+- No source repair was required; the campaign was provenance-clean.
+- Debugger exposure remains 0 for RAW and cp118, therefore debugger effectiveness remains NOT MEASURED.
+- S0 closed by Main FirstMate.
+- S1 authorized as the next stage.
 
 ## Objective
 
@@ -518,7 +530,7 @@ S0 is DONE when:
 
 # S1 — Debugger Interaction v2: RAW Feasibility
 
-**Status:** NEXT
+**Status:** CURRENT
 
 ## Objective
 
@@ -1055,22 +1067,17 @@ S7 and S8 must not block the critical debugger experiment unless a specific evid
 
 ## CURRENT_STAGE
 
-`S0 — Current Branch / Evidence Closeout`
+`S1 — Debugger Interaction v2: RAW Feasibility`
 
 ## NEXT_STAGE
 
-`S1 — Debugger Interaction v2: RAW Feasibility`
+`S2 — cp118 on the Frozen Working Debugger Interface`
 
 ## Current Main FirstMate instruction
 
-Do not start Debugger Interaction v2 implementation yet.
+S0 (Current Branch / Evidence Closeout) is closed. S1 (Debugger Interaction v2: RAW Feasibility) is now authorized for a separate fresh coding-agent PLAN task.
 
-First:
-
-1. close the existing branch/evidence state;
-2. establish the clean baseline;
-3. review the coding-agent PLAN;
-4. only then authorize BUILD.
+S1 implementation has NOT started. The next coding-agent session should begin in PLAN mode: inspect the live repository, propose the S1 implementation and validation plan, and submit it for Main FirstMate review before any BUILD.
 
 ---
 
