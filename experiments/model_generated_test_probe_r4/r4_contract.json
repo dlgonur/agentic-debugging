@@ -1,0 +1,97 @@
+{
+  "schema_version": "model-generated-test-probe-r4-v1",
+  "experiment_id": "model-generated-test-probe-r4",
+  "research_question": "Given the buggy function and its agent-visible behavioral task/specification, can the frozen RAW Qwen2.5-Coder-7B-Instruct model generate, on its FIRST and ONLY attempt, a regression test that (a) is executable, (b) FAILS the buggy implementation for the intended behavioral reason, and (c) PASSES the accepted R3.2 verified repair (R_fix_C)?",
+  "claims_boundary": "This probe measures regression-test generation ONLY: given an agent-visible task statement (title + description, faithfully rendered, no harness-authored behavioral spec) and the buggy source, can the frozen RAW model author an executable pytest regression test that exposes the bug on the first attempt? It does NOT measure: debugger success, repair generation, autonomous discovery of the specification, or correctness based solely on the generated test. The independent EvaluationVerifier remains the final correctness authority over the frozen F2P/P2P contract; the model-generated test is additional professor-facing evidence and never replaces it. A single-attempt failure at any stage leaves R4 OPEN with the first causal boundary recorded; no retry, no prompt tuning, no second model request is used to rescue the primary result.",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "task": {
+    "task_id": "curated-off-by-one-002",
+    "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec",
+    "target_module": "recent_window.py",
+    "target_symbol": "recent_window",
+    "f2p": 1,
+    "p2p": 2,
+    "test_timeout_seconds": 20
+  },
+  "spec_section": {
+    "sha256": "18aea9f1f430465dac938b24385b079f6b0016e95fd617ae5be1aefdf7056604",
+    "note": "The model-facing task/spec section is rendered ONLY from task.agent_visible_mapping() title + description fields (R4 amendment 1). No harness-authored behavioral spec is added; facts not present in the agent-visible task (e.g., non-positive/empty behavior) are NOT supplied. The exact rendered section and its SHA-256 are recorded in evidence. The harness does not decide the regression assertion for the model."
+  },
+  "prompts": {
+    "system_prompt_generation_sha256": "9787ba568d6df689bed392dc5e125fce4d8dcebab4551ecf6d9499fa142aa055",
+    "frozen": true,
+    "generation_calls_max": 1
+  },
+  "budgets": {
+    "generation_attempts_max": 1,
+    "test_timeout_seconds": 20,
+    "model_request_timeout_seconds": 60
+  },
+  "retry_policy": {
+    "single_attempt_only": true,
+    "no_retry": true,
+    "first_causal_boundary_recorded_on_failure": true,
+    "r4_remains_open_on_failure": true,
+    "no_prompt_tuning_until_pass": true
+  },
+  "anti_leakage": {
+    "oracle_shown_to_model": false,
+    "fixed_or_gold_source_shown": false,
+    "gold_patch_shown": false,
+    "runtime_evidence_hint_shown": false,
+    "existing_fixture_test_source_shown": false,
+    "existing_test_node_names_shown": false,
+    "harness_authored_behavior_spec_shown": false,
+    "task_fields_faithfully_rendered": true,
+    "r3_repair_b_or_c_shown": false
+  },
+  "r3_fix_identity": {
+    "r_fix_b_sha256": "831b1c2bc347c9812296de5ddb7ebac5f6f414bbd6512561b4cb29066e6e2c76",
+    "r_fix_b_source": "tests/fixtures/r31_model_patch_raw.patch (tracked frozen R3.1 live model semantic repair, debugger-informed)",
+    "r_fix_c_sha256": "8c051faa605d9cf736540301e204639870408b288ab1ceb8348845afc674b990",
+    "r_fix_c_source": "deterministic metadata-only hunk-count normalization of R_fix_B via experiments/debugger_interaction_v2_r3/serialization.py (accepted R3.2 verifier input)",
+    "semantic_body_fingerprint_sha256": "002fc5ca376c48ffc035b3b0b73ef0bb6735713ef9cff78603fe879e5703fb34",
+    "fail_closed_before_fixed_side": true
+  },
+  "verifier_contract": {
+    "authority": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "verifier_is_correctness_authority": true,
+    "generated_test_is_auxiliary_evidence": true,
+    "clean_baseline_required": true,
+    "canonical_fixture_immutability_required": true,
+    "workspace_cleanup_required": true,
+    "success_outcome": "RESOLVED",
+    "frozen_contract": {
+      "status": "COMPLETED",
+      "outcome": "RESOLVED",
+      "f2p": "1/1 PASS",
+      "p2p": "2/2 PASS",
+      "full_suite": "PASS",
+      "syntax": "PASS",
+      "canonical_fixture_unchanged": true,
+      "workspace": "CLEANED"
+    }
+  },
+  "reuse": {
+    "model_transport": "experiments.debugger_interaction_v2_r3.transport.LocalRawQwenTransport (tracked; same frozen identity/config as S1-P)",
+    "offline_transport_doubles": "experiments.debugger_interaction_v2_r3.transport.FakeTransport / FailingTransport",
+    "normalizer": "experiments.debugger_interaction_v2_r3.serialization.normalize_hunk_counts",
+    "task_loader": "agentic_debugger.evaluation.runner.load_task",
+    "workspace": "agentic_debugger.runtime.workspace.TaskWorkspace",
+    "patcher": "agentic_debugger.runtime.patcher.PatchManager",
+    "test_runner": "agentic_debugger.runtime.test_runner.TestRunner",
+    "verifier": "agentic_debugger.evaluation.verifier.EvaluationVerifier",
+    "oracle_stripping": "agentic_debugger.evaluation.task_schema.DebugTask.agent_visible_mapping",
+    "historical_s1p_provenance": "experiments/model_generated_test_probe/ @ c47be60e6919626b6f431cd337d1d847a97f0722 (branch experiment/model-generated-test-probe) — bounded reimplementation, NOT imported at runtime"
+  }
+}
