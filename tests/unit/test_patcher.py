@@ -512,6 +512,56 @@ class TestPatchApply:
         with pytest.raises(PatchApplyError, match="Context mismatch"):
             pm.apply_patch(diff)
 
+    def test_bounded_context_fuzz_applies_misaligned_hunk(self, patcher_workspace):
+        """A hunk whose declared start position is imprecise (the context
+        body belongs to an earlier line) is applied via bounded deterministic
+        fuzz; content matching stays exact and the displacement is recorded."""
+        ws = patcher_workspace
+        resolved = ws.resolve_path("profile.py")
+        source = (
+            "def format_name(first, last):\n"
+            "    first = first.strip()\n"
+            "    last = last.strip()\n"
+            '    return f"{first} {last}"\n'
+        )
+        Path(resolved).write_bytes(source.encode("utf-8"))
+        # Declared start -4 (the 'return' line) while the body begins at the
+        # 'first = ...' line (position 2): 2-line displacement.
+        diff = """\
+--- a/profile.py
++++ b/profile.py
+@@ -4,3 +4,3 @@
+     first = first.strip()
+     last = last.strip()
+-    return f"{first} {last}"
++    return f"{first} {last}".title()
+"""
+        pm = make_pm(patcher_workspace)
+        result = pm.apply_patch(diff)
+        assert result.success is True
+        assert result.hunk_adjustments == (("profile.py", 1, -2),)
+        content = Path(resolved).read_text()
+        assert 'return f"{first} {last}".title()' in content
+        assert "first = first.strip()" in content
+
+    def test_context_fuzz_never_matches_wrong_content(self, patcher_workspace):
+        """Bounded fuzz is location-only: content that does not exist in the
+        file anywhere still fails closed (no fabricated application)."""
+        ws = patcher_workspace
+        resolved = ws.resolve_path("profile.py")
+        Path(resolved).write_bytes(b"a\nb\nc\nd\n")
+        diff = """\
+--- a/profile.py
++++ b/profile.py
+@@ -2,2 +2,2 @@
+ def nonexistent_function():
+-    return 1
++    return 2
+"""
+        pm = make_pm(patcher_workspace)
+        with pytest.raises(PatchApplyError, match="Context mismatch"):
+            pm.apply_patch(diff)
+
     def test_active_snapshot_exists(self, patcher_workspace):
         pm = make_pm(patcher_workspace)
         pm.apply_patch(VALID_DIFF)

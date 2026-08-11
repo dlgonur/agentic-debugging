@@ -120,7 +120,7 @@ R5_TASKS = (
 )
 
 R5_BUDGETS = {
-    "task_max_patch_attempts": 2,
+    "task_max_patch_attempts": 4,
     "task_max_test_runs": 5,
     "task_max_pdb_observations": 8,
     "debugger_session_starts_max": 1,
@@ -324,6 +324,28 @@ def _build_task_description(task: Any) -> str:
     return "\n".join(lines)
 
 
+def _contract_budget_limits(contract: dict[str, Any], task: Any) -> "ControllerBudgetLimits":
+    """Controller budget limits for the frozen final treatment.
+
+    Derived from the per-task public constraints, with the common frozen
+    contract patch-attempt budget overriding the fixture default (the
+    fixture constraints are canonical and never edited; the experiment
+    contract is the frozen treatment surface).  Other budget fields stay
+    exactly as the task constraints declare.
+    """
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    frozen_patch_attempts = contract["budgets"]["task_max_patch_attempts"]
+    if type(frozen_patch_attempts) is not int or frozen_patch_attempts <= 0:
+        raise RuntimeError("contract task_max_patch_attempts must be a positive integer")
+    return ControllerBudgetLimits(
+        max_patch_attempts=frozen_patch_attempts,
+        max_test_runs=limits.max_test_runs,
+        max_pdb_observations=limits.max_pdb_observations,
+        max_active_hypotheses=limits.max_active_hypotheses,
+        max_source_observations=limits.max_source_observations,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Gates (strict, provenance-bound, original-region)
 # ---------------------------------------------------------------------------
@@ -471,27 +493,98 @@ def _compute_gate_r5_chain(
     if hash_c is None or not _next_telemetry_binds(str(obs_c.get("observation_id")), hash_c):
         return {"passed": False, "reason": "C: inspection observation not provenance-bound", "observation_id": obs_c.get("observation_id")}
 
-    # --- Step D: step OR next -> OK PAUSED original-region production ---
+    # --- Step D: step OR next -> OK; either PAUSED in the original region
+    #     (normal progression) or a real TERMINAL outcome (exited/failed/
+    #     terminated) with real exit/error evidence (crash-on-step path) ---
     obs_d = None
+    terminal = False
     for i in range(obs_idx, len(obs_list)):
         obs = obs_list[i]
         if obs.get("name") in ("step_pdb_session", "next_pdb_session") and obs.get("status") == "ok":
             payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
-            if (
-                payload.get("state") == "paused"
-                and payload.get("script") == expected_script
-                and _in_original_region(payload, original_line_count)
-            ):
-                fn = payload.get("function")
-                if type(fn) is str and fn:
+            if payload.get("state") == "paused":
+                if (
+                    payload.get("script") == expected_script
+                    and _in_original_region(payload, original_line_count)
+                ):
+                    fn = payload.get("function")
+                    if type(fn) is str and fn:
+                        obs_d = obs
+                        terminal = False
+                        obs_idx = i + 1
+                        break
+            elif payload.get("state") in ("exited", "failed", "terminated"):
+                exit_code = payload.get("exit_code")
+                error = payload.get("error")
+                has_terminal_evidence = (
+                    type(exit_code) is int
+                    or (type(error) is str and bool(error))
+                )
+                if has_terminal_evidence:
                     obs_d = obs
+                    terminal = True
                     obs_idx = i + 1
                     break
     if obs_d is None:
-        return {"passed": False, "reason": "no OK step/next PAUSED in original region after C", "G1": g1}
+        return {"passed": False, "reason": "no OK step/next PAUSED or TERMINAL evidence after C", "G1": g1}
     hash_d = _render_hash(obs_d, expected_script=expected_script, original_line_count=original_line_count)
     if hash_d is None or not _next_telemetry_binds(str(obs_d.get("observation_id")), hash_d):
         return {"passed": False, "reason": "D: step/next observation not provenance-bound", "observation_id": obs_d.get("observation_id")}
+
+    # --- Terminal path: the target ended during the control action.  The
+    #     diagnosis must be bound to the terminal step observation and the
+    #     trajectory must carry the REAL reproduction failure output (a real
+    #     test diagnostic from the task's own reproduction command). ---
+    if terminal:
+        repro = None
+        for obs in obs_list:
+            if obs.get("name") == "run_reproduction" and obs.get("status") == "ok":
+                payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
+                if payload.get("failure_reproduced") is True:
+                    failure_output = payload.get("failure_output")
+                    if type(failure_output) is str and failure_output:
+                        repro = obs
+                        break
+        if repro is None:
+            return {"passed": False, "reason": "terminal step without real reproduction failure output", "G1": g1}
+        obs_terminal_id = str(obs_d.get("observation_id"))
+        later_ok_ids: set[str] = set()
+        found_terminal = False
+        for obs in obs_list:
+            if obs.get("observation_id") == obs_terminal_id:
+                found_terminal = True
+            if found_terminal and obs.get("status") == "ok":
+                oid = obs.get("observation_id")
+                if isinstance(oid, str):
+                    later_ok_ids.add(oid)
+        diagnosis_after_terminal = None
+        for rec in telemetry:
+            td = rec.get("translated_directive", {}) or {}
+            pr = rec.get("parse_result", {}) or {}
+            if pr.get("status") == "accepted" and td.get("is_diagnosis") is True:
+                text = td.get("diagnosis_text")
+                if type(text) is str and text.strip():
+                    prov = rec.get("provenance", {}) or {}
+                    prior = prov.get("prior_observation_id")
+                    if isinstance(prior, str) and prior in later_ok_ids:
+                        diagnosis_after_terminal = rec
+                        break
+        if diagnosis_after_terminal is None:
+            return {"passed": False, "reason": "no diagnosis bound to terminal step evidence", "G1": g1}
+        return {
+            "passed": True,
+            "reason": "model authored break->stack G1->locals/print G1->step/next TERMINAL (real exit/error evidence + real reproduction failure output)->diagnosis, all OK, provenance-bound",
+            "terminal_path": True,
+            "observation_ids": {
+                "break": obs_a_id,
+                "stack_G1": obs_b.get("observation_id"),
+                "inspection": obs_c.get("observation_id"),
+                "step": obs_d.get("observation_id"),
+            },
+            "G1": g1,
+            "G2": None,
+            "diagnosis_text": diagnosis_after_terminal.get("translated_directive", {}).get("diagnosis_text", "")[:200],
+        }
 
     # --- Step E: stack -> OK G2>G1 ---
     obs_e = None
@@ -546,6 +639,7 @@ def _compute_gate_r5_chain(
     return {
         "passed": True,
         "reason": "model authored break->stack G1->locals/print G1->step/next PAUSED->stack G2>G1->diagnosis, all OK, original-region, provenance-bound",
+        "terminal_path": False,
         "observation_ids": {
             "break": obs_a_id,
             "stack_G1": obs_b.get("observation_id"),
@@ -658,6 +752,72 @@ def _utc_now() -> str:
     return datetime.datetime.now(datetime.timezone.utc).isoformat()
 
 
+_VERIFIER_FEEDBACK_DETAIL_CHARS = 900
+
+
+def _bounded_verifier_detail(record: Any) -> str:
+    """Bounded tail of one real failing-test record (the exception/assertion
+    summary is at the end of pytest -vv output)."""
+    raw = ""
+    for attr in ("stdout", "stderr"):
+        value = getattr(record, attr, None)
+        if type(value) is str and value:
+            raw = value if not raw else raw + "\n" + value
+    if not raw.strip():
+        return ""
+    if len(raw) <= _VERIFIER_FEEDBACK_DETAIL_CHARS:
+        return raw
+    marker = "... [output truncated] ...\n"
+    return marker + raw[-(_VERIFIER_FEEDBACK_DETAIL_CHARS - len(marker)):]
+
+
+def _make_verifier_feedback() -> Callable[[Any, str], dict[str, Any]]:
+    """Build the real-verifier feedback callback for the tool layer.
+
+    Every accepted candidate patch is evaluated by the independent
+    EvaluationVerifier in its own disposable workspace; a bounded feedback
+    mapping (status/outcome/counts/failing details) is returned for the
+    apply_patch observation.  This is the accepted real verifier — the same
+    class of evidence a developer gets from running the tests — and it is
+    never a fabricated or oracle-based signal.
+    """
+    def feedback(task: Any, diff: str) -> dict[str, Any]:
+        evaluation = EvaluationVerifier(
+            str(REPO_ROOT), workspace_parent=None
+        ).evaluate(task, diff)
+        failures: list[dict[str, Any]] = []
+        for kind, records in (
+            ("f2p", evaluation.post_patch_f2p),
+            ("p2p", evaluation.post_patch_p2p),
+        ):
+            for record in records:
+                status = record.status.value if hasattr(record.status, "value") else str(record.status)
+                if status != "PASS":
+                    failures.append({
+                        "node_id": record.node_id,
+                        "kind": kind,
+                        "status": status,
+                        "detail": _bounded_verifier_detail(record),
+                    })
+        full_suite = evaluation.full_suite
+        return {
+            "status": evaluation.status.value if hasattr(evaluation.status, "value") else str(evaluation.status),
+            "outcome": evaluation.outcome.value if hasattr(evaluation.outcome, "value") else str(evaluation.outcome),
+            "stop_reason": evaluation.stop_reason,
+            "f2p_total": evaluation.f2p_total,
+            "f2p_passed": evaluation.f2p_passed,
+            "p2p_total": evaluation.p2p_total,
+            "p2p_passed": evaluation.p2p_passed,
+            "full_suite": (
+                full_suite.status.value if full_suite is not None and hasattr(full_suite.status, "value") else None
+            ),
+            "syntax": evaluation.syntax.passed if evaluation.syntax else None,
+            "failures": failures[:3],
+            "candidate_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+        }
+    return feedback
+
+
 def run_experiment(
     contract: dict[str, Any],
     transport: Any,
@@ -699,6 +859,7 @@ def run_experiment(
     context = DemoToolContext(
         task=task, workspace=workspace, patch="", probe=r5_probe.probe,
         pdb_session_factory=pdb_session_factory,
+        verifier_feedback_fn=_make_verifier_feedback(),
     )
     registry = build_registry(
         context, pdb_policy=PdbPolicy.ALWAYS_ON,
@@ -730,7 +891,7 @@ def run_experiment(
 
     snapshot = ControllerSnapshot(
         f"r5-{task_id}", task_id, ControllerState.REPRODUCE, 0,
-        ControllerBudgetLimits.from_task_constraints(task.constraints),
+        _contract_budget_limits(contract, task),
         ControllerBudgetState(), HypothesisLedger(),
     )
 
@@ -880,6 +1041,12 @@ def run_experiment(
         },
         "diagnosis_provenance": diagnosis_provenance,
         "runtime_slice": runtime_slice,
+        "verifier_feedback_history": list(getattr(context, "verifier_feedback_history", []) or []),
+        "budget_limits": {
+            "max_patch_attempts": _contract_budget_limits(contract, task).max_patch_attempts,
+            "max_test_runs": _contract_budget_limits(contract, task).max_test_runs,
+            "max_pdb_observations": _contract_budget_limits(contract, task).max_pdb_observations,
+        },
         "gate_results": {"gate_chain": gate_chain, "gate_patch": gate_patch},
         "interface_info": {
             "script_path": module_path,
@@ -1057,6 +1224,8 @@ def _first_causal_failure(evidence: dict[str, Any], task_id: str) -> str:
         if "step" in reason or "next" in reason:
             if "PAUSED" in reason or "post-step" in reason or "G2" in reason:
                 return "post-step pause"
+            if "terminal" in reason or "reproduction failure output" in reason:
+                return "post-step pause"
             return "step/control"
         if "diagnosis" in reason:
             return "diagnosis"
@@ -1124,6 +1293,7 @@ def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str) -> di
         ),
         "breakpoint_line": (break_rec or {}).get("translated_directive", {}).get("arguments", {}).get("breakpoint_line"),
         "G1": chain.get("G1"),
+        "terminal_path": bool(chain.get("terminal_path")),
         "inspection_command": (inspect_rec or {}).get("translated_directive", {}).get("action_name"),
         "inspection_type": (inspect_rec or {}).get("translated_directive", {}).get("action_name"),
         "step_next_command": (step_rec or {}).get("translated_directive", {}).get("action_name"),
@@ -1177,6 +1347,7 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
         "end_to_end_resolved": sum(1 for r in rows if r["verifier_outcome"] == "RESOLVED"),
         "tasks_total": len(R5_TASKS),
         "debugger_chain_success": sum(1 for r in rows if r["G2"] is not None),
+        "terminal_path_success": sum(1 for r in rows if r["terminal_path"]),
         "inspection_success": sum(1 for r in rows if r["inspection_command"] is not None),
         "step_post_step_success": sum(1 for r in rows if r["G2"] is not None),
         "diagnosis_success": sum(1 for r in rows if r["diagnosis_present"]),

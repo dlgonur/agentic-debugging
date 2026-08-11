@@ -186,10 +186,210 @@ class TestStackRegionFiltering:
         assert result2.directive.arguments["expression"] == "name"
 
 
+class TestFenceUnwrap:
+    """R5.2 deterministic single-fence unwrap — both shapes and fail-closed
+    behavior.  The unwrap only removes markdown framing; semantics are never
+    invented or altered."""
+
+    DIFF = (
+        "--- a/display_name.py\n"
+        "+++ b/display_name.py\n"
+        "@@ -2,1 +2,1 @@\n"
+        "-    normalized_name = name.strip()\n"
+        "+    normalized_name = name.strip() if name is not None else \"\"\n"
+    )
+
+    def test_bare_fence_synthesizes_patch_command(self):
+        text = "```diff\n" + self.DIFF + "```\n\nThis patch fixes the crash."
+        unwrapped, record = r5_bridge.unwrap_single_fence(text)
+        assert record is not None and record.unwrapped is True
+        assert record.shape == "bare_fence"
+        assert record.synthesized_patch_command is True
+        assert record.fence_language == "diff"
+        assert record.trailing_prose_bytes > 0
+        assert unwrapped.startswith("patch\n--- a/display_name.py")
+
+    def test_patch_plus_fence_shape(self):
+        text = "patch\n```python\n" + self.DIFF + "\n```"
+        unwrapped, record = r5_bridge.unwrap_single_fence(text)
+        assert record is not None and record.unwrapped is True
+        assert record.shape == "patch_plus_fence"
+        assert record.synthesized_patch_command is False
+        assert record.fence_language == "python"
+        assert unwrapped == "patch\n" + self.DIFF
+
+    def test_non_fenced_text_passes_through(self):
+        text = "stack"
+        unwrapped, record = r5_bridge.unwrap_single_fence(text)
+        assert record is None
+        assert unwrapped == "stack"
+
+    def test_unterminated_fence_fails_closed(self):
+        text = "```diff\n" + self.DIFF
+        unwrapped, record = r5_bridge.unwrap_single_fence(text)
+        assert record is None
+        assert unwrapped == text
+
+    def test_empty_fenced_content_fails_closed(self):
+        text = "```diff\n```"
+        unwrapped, record = r5_bridge.unwrap_single_fence(text)
+        assert record is None
+        assert unwrapped == text
+
+    def test_second_fence_in_trailing_prose_fails_closed(self):
+        text = "```diff\n" + self.DIFF + "```\n```python\nx\n```"
+        unwrapped, record = r5_bridge.unwrap_single_fence(text)
+        assert record is None
+        assert unwrapped == text
+
+    def test_unwrapped_fence_parses_as_patch(self):
+        text = "```diff\n" + self.DIFF + "```"
+        unwrapped, _ = r5_bridge.unwrap_single_fence(text)
+        result = r5_bridge.parse(
+            unwrapped, ControllerState.PATCH,
+            patch_stage=r5_bridge.R3PatchStage.NEEDS_FIRST_REPAIR,
+        )
+        assert result.command_token == "patch"
+        assert result.directive.arguments["patch"].startswith("--- a/display_name.py")
+
+
+class TestTerminalStage:
+    """R5.2 terminal runtime progression: crash-on-step evidence allows
+    diagnosis without a second PAUSED pause."""
+
+    def _terminal_observation(self) -> Observation:
+        return _observation(
+            "next_pdb_session",
+            {"state": "exited", "script": "display_name.py", "exit_code": 1},
+        )
+
+    def test_terminal_stage_allows_diagnosis(self):
+        obs = self._terminal_observation()
+        result = r5_bridge.parse(
+            "diagnosis the target crashed on None.strip()",
+            ControllerState.RUNTIME_EVIDENCE, obs,
+            r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+        )
+        assert result.is_diagnosis is True
+        assert result.directive.target_state.value == "Patch"
+
+    def test_terminal_stage_forbids_stack(self):
+        obs = self._terminal_observation()
+        with pytest.raises(r5_bridge.BridgeParseError) as exc:
+            r5_bridge.parse(
+                "stack", ControllerState.RUNTIME_EVIDENCE, obs,
+                r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+            )
+        assert exc.value.category is r5_bridge.BridgeRejection.COMMAND_NOT_IN_LIFECYCLE
+
+    def test_terminal_stage_commands_visible(self):
+        commands = r5_bridge.visible_commands_r2(
+            ControllerState.RUNTIME_EVIDENCE,
+            r5_bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+        )
+        assert commands == ("diagnosis", "failed")
+
+    def test_terminal_observation_rendering_names_the_exit(self):
+        obs = self._terminal_observation()
+        rendered = r5_bridge._render_observation(obs)
+        assert "Execution exited (exit_code=1)" in rendered
+        assert "Terminal: no further pause is available" in rendered
+
+    def test_terminal_prompt_mentions_real_failure_evidence(self):
+        prompt = r5_bridge.render_prompt(
+            ControllerState.RUNTIME_EVIDENCE, None, "Task: t",
+            debugger=r5_bridge.DebuggerContext(
+                script_path="display_name.py",
+                source_text="def f():\n    pass\n",
+                eligible_lines=(2,),
+                lifecycle=r5_bridge.DebuggerLifecycle.CONSUMED_OR_ENDED,
+                r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+                paused_line=2,
+                paused_function="format_display_name",
+            ),
+        )
+        assert "exited or crashed during the last step/next" in prompt
+        assert "real reproduction failure output" in prompt
+
+
+class TestRealFailureEvidenceRendering:
+    """R5.2: the bounded real reproduction failure output (a real test
+    diagnostic from the task's own reproduction command — explicitly
+    permitted by the goal's non-cheating rules) is rendered to the model."""
+
+    def test_reproduction_failure_output_rendered(self):
+        obs = _observation(
+            "run_reproduction",
+            {
+                "phase": "baseline",
+                "exit_code": 1,
+                "passed": False,
+                "failure_reproduced": True,
+                "failure_output": "E AttributeError: 'NoneType' object has no attribute 'strip'",
+            },
+        )
+        rendered = r5_bridge._render_observation(obs)
+        assert "failure_reproduced=True" in rendered
+        assert "Real failure output" in rendered
+        assert "AttributeError" in rendered
+
+    def test_reproduction_without_failure_output_renders_plain(self):
+        obs = _observation(
+            "run_reproduction",
+            {
+                "phase": "baseline",
+                "exit_code": 0,
+                "passed": True,
+                "failure_reproduced": False,
+                "failure_output": "",
+            },
+        )
+        rendered = r5_bridge._render_observation(obs)
+        assert "Real failure output" not in rendered
+
+    def test_apply_patch_verifier_feedback_rendered(self):
+        obs = _observation(
+            "apply_patch",
+            {
+                "applied": True,
+                "changed_files": ["price.py"],
+                "hunk_count": 1,
+                "verifier_feedback": {
+                    "status": "COMPLETED",
+                    "outcome": "REGRESSION",
+                    "f2p_total": 1,
+                    "f2p_passed": 0,
+                    "p2p_total": 2,
+                    "p2p_passed": 0,
+                    "full_suite": "FAIL",
+                    "syntax": True,
+                    "failures": [
+                        {
+                            "kind": "f2p",
+                            "node_id": "tests/test_price.py::test_x",
+                            "status": "FAIL",
+                            "detail": "E TypeError: _format_price() takes 1 positional argument but 2 were given",
+                        }
+                    ],
+                },
+            },
+        )
+        rendered = r5_bridge._render_observation(obs)
+        assert "Real verifier (independent EvaluationVerifier)" in rendered
+        assert "outcome=REGRESSION" in rendered
+        assert "TypeError: _format_price() takes 1 positional argument" in rendered
+
+
 class TestFinalPromptAntiLeakage:
     """Final rendered prompts for every model-facing phase on all five tasks
     must contain no test metadata, no oracle, no reference repair, no
-    RuntimeProbe semantic fields, and no launcher harness text."""
+    RuntimeProbe semantic fields, and no launcher harness text.
+
+    R5.2 note: the REAL bounded reproduction failure output (a real test
+    diagnostic from the task's own public reproduction command) is permitted
+    evidence under the goal's non-cheating rules and is rendered through the
+    observation renderer (tested separately above); it is not injected into
+    these static prompt constructions."""
 
     @pytest.mark.parametrize("task_id", R5_TASKS)
     def test_no_leakage_in_final_rendered_prompts(self, task_id):

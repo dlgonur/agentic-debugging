@@ -29,6 +29,7 @@ The bridge is a pure module: no I/O, no model calls, no side effects.
 from __future__ import annotations
 
 import ast
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import Optional, Sequence
@@ -146,6 +147,11 @@ class R2Stage(str, Enum):
     PAUSED_NEEDS_STEP = "paused_needs_step"
     PAUSED_AFTER_STEP_NEEDS_STACK = "paused_after_step_needs_stack"
     READY_FOR_DIAGNOSIS = "ready_for_diagnosis"
+    # R5.2: the target exited/failed/terminated during a step/next control
+    # action (crash-on-step bug class).  The real terminal observation (exit
+    # code / error) plus the real reproduction failure output are the
+    # diagnosis evidence; no second PAUSED pause can exist by construction.
+    PAUSED_AFTER_TERMINAL_STEP = "paused_after_terminal_step"
     CONSUMED_OR_ENDED = "consumed_or_ended"
 
 
@@ -157,6 +163,7 @@ _R2_STAGE_COMMANDS: dict[R2Stage, frozenset[str]] = {
     R2Stage.PAUSED_NEEDS_STEP: frozenset({"step", "next", "failed"}),
     R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK: frozenset({"stack", "failed"}),
     R2Stage.READY_FOR_DIAGNOSIS: frozenset({"diagnosis", "failed"}),
+    R2Stage.PAUSED_AFTER_TERMINAL_STEP: frozenset({"diagnosis", "failed"}),
     R2Stage.CONSUMED_OR_ENDED: frozenset({"diagnosis", "failed"}),
 }
 
@@ -199,10 +206,134 @@ def patch_diff_affordance(module_path: str) -> str:
     )
 
 
+# ---------------------------------------------------------------------------
+# R5.2 deterministic single-fence unwrapping (frozen, non-oracle)
+# ---------------------------------------------------------------------------
+
+_FENCE_LINE_RE = re.compile(r"^```[A-Za-z0-9_+.-]*[ \t]*$")
+
+
+@dataclass(frozen=True)
+class FenceUnwrapRecord:
+    """Explicit machine-checkable record of a deterministic fence unwrap."""
+
+    unwrapped: bool
+    fence_language: Optional[str] = None
+    closing_fence_present: bool = False
+    trailing_prose_bytes: int = 0
+    synthesized_patch_command: bool = False
+    shape: str = "none"  # "bare_fence" | "patch_plus_fence"
+    content_sha256: Optional[str] = None
+    original_sha256: Optional[str] = None
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "unwrapped": self.unwrapped,
+            "fence_language": self.fence_language,
+            "closing_fence_present": self.closing_fence_present,
+            "trailing_prose_bytes": self.trailing_prose_bytes,
+            "synthesized_patch_command": self.synthesized_patch_command,
+            "shape": self.shape,
+            "content_sha256": self.content_sha256,
+            "original_sha256": self.original_sha256,
+        }
+
+
+def unwrap_single_fence(raw_text: str) -> tuple[str, Optional[FenceUnwrapRecord]]:
+    """Deterministically unwrap exactly one markdown code fence.
+
+    ``raw_text`` is returned unchanged (record ``None``) when it does not
+    start with a fence line or with ``patch`` + a fence line, so the normal
+    parser handles it.  Two deterministic shapes are supported:
+
+    - ``bare_fence``: the whole response is one fenced block; the content
+      between the fences becomes the parse text (a ``patch`` command line is
+      synthesized mechanically when the content begins with ``---``);
+    - ``patch_plus_fence``: the response starts with the ``patch`` command
+      line followed by one fenced block containing the diff.
+
+    For both shapes: exactly one closing fence line must exist, trailing
+    prose after the closing fence is discarded (byte count recorded), and
+    any shape that does not fit fails closed (the original text is returned
+    unchanged and the normal parser rejects it).
+
+    The unwrap never invents or changes code semantics — it only removes
+    deterministic markdown framing around a model-authored command/diff.
+    """
+    if type(raw_text) is not str:
+        return raw_text, None
+    stripped = raw_text.strip()
+    if not stripped:
+        return raw_text, None
+    lines = stripped.split("\n")
+
+    shape = "none"
+    body_start = 0
+    first_line = lines[0].strip()
+    fence_match = _FENCE_LINE_RE.match(first_line)
+    if fence_match is not None:
+        shape = "bare_fence"
+        body_start = 1
+    elif first_line.lower() == "patch" and len(lines) >= 2:
+        second_line = lines[1].strip()
+        if _FENCE_LINE_RE.match(second_line) is not None:
+            shape = "patch_plus_fence"
+            body_start = 2
+    if shape == "none":
+        return raw_text, None
+
+    if shape == "bare_fence":
+        fence_language = first_line[3:].strip() or None
+    else:
+        fence_language = lines[1].strip()[3:] or None
+
+    # Find the closing fence (strictly after the opening line).
+    closing_index: Optional[int] = None
+    for index in range(body_start, len(lines)):
+        if _FENCE_LINE_RE.match(lines[index].strip()):
+            closing_index = index
+            break
+    if closing_index is None:
+        return raw_text, None
+    content = "\n".join(lines[body_start:closing_index])
+    trailing = lines[closing_index + 1:]
+    trailing_text = "\n".join(trailing).strip()
+    # Fail closed if another fence appears in the trailing region or the
+    # content is empty.
+    if any(_FENCE_LINE_RE.match(line.strip()) for line in trailing):
+        return raw_text, None
+    if not content.strip():
+        return raw_text, None
+
+    synthesized = False
+    parse_text = content
+    if shape == "bare_fence":
+        if content.lstrip().startswith("---"):
+            parse_text = "patch\n" + content
+            synthesized = True
+    else:
+        parse_text = "patch\n" + content
+
+    import hashlib as _hashlib
+    return parse_text, FenceUnwrapRecord(
+        unwrapped=True,
+        fence_language=fence_language,
+        closing_fence_present=True,
+        trailing_prose_bytes=len(trailing_text.encode("utf-8")),
+        synthesized_patch_command=synthesized,
+        shape=shape,
+        content_sha256=_hashlib.sha256(parse_text.encode("utf-8")).hexdigest(),
+        original_sha256=_hashlib.sha256(raw_text.encode("utf-8")).hexdigest(),
+    )
+
+
 def _r2_lifecycle_for_stage(stage: R2Stage) -> DebuggerLifecycle:
     if stage is R2Stage.NOT_STARTED:
         return DebuggerLifecycle.NOT_STARTED
     if stage is R2Stage.CONSUMED_OR_ENDED:
+        return DebuggerLifecycle.CONSUMED_OR_ENDED
+    if stage is R2Stage.PAUSED_AFTER_TERMINAL_STEP:
+        # The target has ended; only the terminal observation remains.
         return DebuggerLifecycle.CONSUMED_OR_ENDED
     return DebuggerLifecycle.PAUSED
 
@@ -555,9 +686,13 @@ def parse(
                 BridgeRejection.COMMAND_NOT_IN_STATE,
                 f"diagnosis is not available in state {state.value}",
             )
-        # Diagnosis is only legal in READY_FOR_DIAGNOSIS (r2_stage check already
-        # enforced the lifecycle mask above).  Double-check stage if provided.
-        if r2_stage is not None and r2_stage is not R2Stage.READY_FOR_DIAGNOSIS:
+        # Diagnosis is only legal in READY_FOR_DIAGNOSIS or the R5.2 terminal
+        # stage (r2_stage check already enforced the lifecycle mask above).
+        # Double-check stage if provided.
+        if r2_stage is not None and r2_stage not in (
+            R2Stage.READY_FOR_DIAGNOSIS,
+            R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+        ):
             raise BridgeParseError(
                 BridgeRejection.COMMAND_NOT_IN_LIFECYCLE,
                 "diagnosis is only available after completing the full "
@@ -891,9 +1026,17 @@ SYSTEM_PROMPT_TEMPLATE = (
     "  - Choose a line where execution may pause inside a production function;\n"
     "    candidates are mechanical affordances, not guarantees for every path.\n"
     "  - After 'stack', use 'locals' or 'print <expr>' to inspect the frame.\n"
+    "  - If the program exits or crashes during 'step' or 'next', the\n"
+    "    debugger session ends: that exit is real terminal runtime evidence.\n"
+    "    Record your diagnosis from the real failure output and the locals\n"
+    "    you already observed.\n"
     "  - After debugging, use 'diagnosis <text>' to record your diagnosis.\n"
     "    After diagnosis you will enter the Patch phase — then emit 'patch'\n"
     "    with a unified diff.\n"
+    "  - The 'patch' diff may optionally be wrapped in exactly one markdown\n"
+    "    code fence (``` or ```diff ... ```); the controller unwraps a single\n"
+    "    fence deterministically.  A plain diff without a fence is also\n"
+    "    accepted.\n"
 )
 
 
@@ -992,6 +1135,18 @@ def render_prompt(
                 parts.append(f"Debugger: PDB session paused{line_info} — next: refresh stack with 'stack'")
             elif eff_stage is R2Stage.READY_FOR_DIAGNOSIS:
                 parts.append("Debugger: PDB session paused — ready for diagnosis with 'diagnosis <text>'")
+            elif eff_stage is R2Stage.PAUSED_AFTER_TERMINAL_STEP:
+                line_info = ""
+                if debugger.paused_line is not None and debugger.paused_function is not None:
+                    line_info = f" (was paused at line {debugger.paused_line} in function '{debugger.paused_function}')"
+                parts.append(
+                    f"Debugger: PDB session ended{line_info} — the target "
+                    "exited or crashed during the last step/next and no "
+                    "further pause is possible.  Use the real reproduction "
+                    "failure output and the observed locals as terminal "
+                    "runtime evidence, then record your diagnosis with "
+                    "'diagnosis <text>'."
+                )
             else:
                 parts.append(
                     "Debugger: PDB session ended (one session per case — 'break' is no longer available)"
@@ -1050,7 +1205,7 @@ def render_prompt(
             )
         if debugger.runtime_slice:
             slice_lines = []
-            for key in ("stack_G1", "inspection", "step", "stack_G2"):
+            for key in ("reproduction", "stack_G1", "inspection", "step", "stack_G2"):
                 val = debugger.runtime_slice.get(key)
                 if val:
                     slice_lines.append(f"[{key}]\n{val}")
@@ -1171,6 +1326,21 @@ def _render_observation(
             )
         elif state_val == "exited":
             lines.append(f"  Execution exited (exit_code={payload.get('exit_code')})")
+            lines.append(
+                "  Terminal: no further pause is available; use the real "
+                "reproduction failure output and the observed locals to "
+                "determine the crash point."
+            )
+        elif state_val == "failed":
+            error = payload.get("error")
+            lines.append(
+                f"  Execution failed: {error if error else 'unknown target error'}"
+            )
+            lines.append(
+                "  Terminal: no further pause is available; use the real "
+                "reproduction failure output and the observed locals to "
+                "determine the crash point."
+            )
         else:
             lines.append(f"  state={state_val}")
     elif name == "stop_pdb_session":
@@ -1184,6 +1354,11 @@ def _render_observation(
             f"passed={payload.get('passed')} "
             f"failure_reproduced={payload.get('failure_reproduced')}"
         )
+        failure_output = payload.get("failure_output")
+        if type(failure_output) is str and failure_output:
+            lines.append("  Real failure output (from the reproduction run):")
+            for failure_line in failure_output.splitlines():
+                lines.append(f"    {failure_line}")
     elif name == "get_source_window":
         source_lines = payload.get("lines")
         if type(source_lines) is list and source_lines:
@@ -1202,6 +1377,37 @@ def _render_observation(
             f"  applied={payload.get('applied')} "
             f"changed_files={payload.get('changed_files')}"
         )
+        adjustments = payload.get("hunk_adjustments")
+        if adjustments:
+            lines.append(f"  hunk_adjustments={adjustments}")
+        feedback = payload.get("verifier_feedback")
+        if type(feedback) is dict:
+            if feedback.get("error"):
+                lines.append(
+                    f"  Real verifier error: {feedback.get('error')}"
+                )
+            else:
+                lines.append(
+                    "  Real verifier (independent EvaluationVerifier): "
+                    f"status={feedback.get('status')} "
+                    f"outcome={feedback.get('outcome')} "
+                    f"f2p={feedback.get('f2p_passed')}/{feedback.get('f2p_total')} "
+                    f"p2p={feedback.get('p2p_passed')}/{feedback.get('p2p_total')} "
+                    f"full_suite={feedback.get('full_suite')} "
+                    f"syntax={feedback.get('syntax')}"
+                )
+                failures = feedback.get("failures") or []
+                if failures:
+                    lines.append("  Failing checks:")
+                    for failure in failures[:3]:
+                        lines.append(
+                            f"    [{failure.get('kind')}] {failure.get('node_id')} "
+                            f"({failure.get('status')})"
+                        )
+                        detail = failure.get("detail")
+                        if type(detail) is str and detail:
+                            for detail_line in detail.splitlines()[-14:]:
+                                lines.append(f"      {detail_line}")
     elif name == "syntax_check":
         lines.append(f"  all_passed={payload.get('all_passed')}")
     elif name == "run_regression_tests":
@@ -1237,6 +1443,7 @@ __all__ = [
     "BridgeResult",
     "DebuggerContext",
     "DebuggerLifecycle",
+    "FenceUnwrapRecord",
     "R2Stage",
     "SYSTEM_PROMPT_TEMPLATE",
     "breakpoint_eligible_lines",
@@ -1245,6 +1452,7 @@ __all__ = [
     "parse",
     "patch_diff_affordance",
     "render_prompt",
+    "unwrap_single_fence",
     "visible_commands",
     "visible_commands_r2",
 ]

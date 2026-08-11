@@ -72,7 +72,7 @@ def case_setup(tmp_path):
     return {"tmp": tmp_path}
 
 
-def _run(task_id, commands, tmp_path):
+def _run(task_id, commands, tmp_path, verifier_feedback_fn=None):
     fixture_dir = CURATED_ROOT / task_id
     task = load_task(str(fixture_dir / "task.json"))
     module_path = task_target_module_path(task)
@@ -100,6 +100,7 @@ def _run(task_id, commands, tmp_path):
     context = DemoToolContext(
         task=task, workspace=workspace, patch="", probe=r5_probe.probe,
         pdb_session_factory=_session_factory,
+        verifier_feedback_fn=verifier_feedback_fn,
     )
     registry = build_registry(context, pdb_policy=PdbPolicy.ALWAYS_ON, interactive_debugger_controls=True)
 
@@ -184,6 +185,7 @@ def _run(task_id, commands, tmp_path):
         "candidate": candidate, "verifier": verifier_result,
         "chain": chain_gate, "patch": patch_gate,
         "adapter": adapter, "evidence": evidence,
+        "verifier_feedback_history": list(getattr(context, "verifier_feedback_history", []) or []),
     }
 
 
@@ -235,31 +237,141 @@ class TestR5MatrixScripted:
         assert out["verifier"]["outcome"] == "RESOLVED"
         assert out["patch"]["passed"] is True, out["patch"]
 
-    def test_none_handling_crash_first_line_structural_boundary(self, tmp_path):
+    def test_none_handling_terminal_path_resolved(self, tmp_path):
         """curated-none-handling-001: the failing execution crashes on the
         first executable production line (None.strip()).  A real pause exists
-        (break/stack/locals all succeed at G1), but step/next must crash the
-        target, so no post-step production pause (G2) can exist and the stage
-        machine then forbids diagnosis.  The strict chain fails at
-        post-step pause BY CONSTRUCTION of the bug class — proven here
-        deterministically, with the exact same probe/entrypoint as the live
-        treatment."""
+        (break/stack/locals at G1); step/next crashes the target, so no
+        post-step production pause (G2) can exist.  R5.2 terminal runtime
+        progression preserves the real terminal observation (exited) plus the
+        real reproduction failure output, allows diagnosis from that evidence,
+        and reaches a real verifier RESOLVED — the structural boundary is
+        removed by a common treatment, not by a per-task special case."""
         task_id = "curated-none-handling-001"
+        module_path = task_target_module_path(load_task(str(CURATED_ROOT / task_id / "task.json")))
+        diff = _reference_diff(task_id, module_path)
         commands = (
             "reproduce", "understand", "runtime", "break 2", "stack", "locals",
-            "step", "failed",
+            "next", "diagnosis scripted terminal-path test double diagnosis",
+            f"patch\n{diff}",
         )
         out = _run(task_id, commands, tmp_path)
         chain = out["chain"]
-        # A-C (break, stack G1, locals) succeeded — real pause + inspection.
-        assert chain["passed"] is False
+        assert chain["passed"] is True, chain
+        assert chain.get("terminal_path") is True, chain
         assert chain.get("G1") is not None
-        assert "no OK step/next PAUSED in original region after C" in chain["reason"]
-        # The step crashed the target: the session is consumed; diagnosis is
-        # unavailable outside READY_FOR_DIAGNOSIS, so only 'failed' remains.
-        assert out["evidence"]["controller_result"]["final_state"] == "Failed"
-        # First causal boundary classification agrees.
-        assert _first_causal_failure(out["evidence"], task_id) == "post-step pause"
+        assert chain.get("G2") is None
+        assert out["candidate"] is not None
+        assert out["verifier"]["executed"] is True
+        assert out["verifier"]["status"] == "COMPLETED"
+        assert out["verifier"]["outcome"] == "RESOLVED"
+        assert out["patch"]["passed"] is True, out["patch"]
+
+    def test_fenced_patch_diff_unwrapped_end_to_end(self, tmp_path):
+        """Deterministic single-fence unwrap: a scripted model response that
+        wraps the patch diff in one markdown fence with trailing prose must
+        be unwrapped (bare-fence shape, command synthesized), normalized,
+        applied and verifier-RESOLVED."""
+        task_id = "curated-off-by-one-002"
+        module_path = task_target_module_path(load_task(str(CURATED_ROOT / task_id / "task.json")))
+        diff = _reference_diff(task_id, module_path)
+        fenced = "```diff\n" + diff + "```\n\nThis patch ensures the boundary is included."
+        commands = (
+            "reproduce", "understand", "runtime", "break 2", "stack", "locals",
+            "step", "stack", "diagnosis scripted fenced-diff test double",
+            fenced,
+        )
+        out = _run(task_id, commands, tmp_path)
+        assert out["chain"]["passed"] is True, out["chain"]
+        attempts = out["adapter"].patch_attempts
+        assert attempts, "no patch attempt recorded"
+        unwrap = attempts[-1].get("fence_unwrap", {})
+        assert unwrap.get("unwrapped") is True, unwrap
+        assert unwrap.get("shape") == "bare_fence", unwrap
+        assert unwrap.get("synthesized_patch_command") is True, unwrap
+        assert unwrap.get("trailing_prose_bytes") > 0, unwrap
+        assert out["verifier"]["outcome"] == "RESOLVED"
+        assert out["patch"]["passed"] is True, out["patch"]
+
+    def test_patch_command_plus_fenced_diff_unwrapped(self, tmp_path):
+        """patch_plus_fence shape: 'patch' command line followed by one
+        fenced diff block is unwrapped deterministically."""
+        task_id = "curated-wrong-branch-003"
+        module_path = task_target_module_path(load_task(str(CURATED_ROOT / task_id / "task.json")))
+        diff = _reference_diff(task_id, module_path)
+        commands = (
+            "reproduce", "understand", "runtime", "break 5", "stack", "locals",
+            "step", "stack", "diagnosis scripted patch+fence test double",
+            f"patch\n```python\n{diff}\n```",
+        )
+        out = _run(task_id, commands, tmp_path)
+        assert out["chain"]["passed"] is True, out["chain"]
+        attempts = out["adapter"].patch_attempts
+        assert attempts, "no patch attempt recorded"
+        unwrap = attempts[-1].get("fence_unwrap", {})
+        assert unwrap.get("unwrapped") is True, unwrap
+        assert unwrap.get("shape") == "patch_plus_fence", unwrap
+        assert unwrap.get("synthesized_patch_command") is False, unwrap
+        assert out["verifier"]["outcome"] == "RESOLVED"
+        assert out["patch"]["passed"] is True, out["patch"]
+
+    def test_verifier_feedback_loop_revises_patch_to_resolved(self, tmp_path):
+        """Real verifier-feedback repair loop: a first WRONG model patch is
+        applied, the independent EvaluationVerifier returns real failure
+        diagnostics (bound into the apply_patch observation), the retry
+        replaces the candidate (auto-revert) with the corrected repair, and
+        the final verifier is RESOLVED."""
+        task_id = "curated-caller-callee-005"
+        module_path = task_target_module_path(load_task(str(CURATED_ROOT / task_id / "task.json")))
+        wrong_diff = (
+            "--- a/price.py\n"
+            "+++ b/price.py\n"
+            "@@ -10,4 +10,4 @@ def format_price(amount: int, representation: str) -> str:\n"
+            "     caller_amount = amount\n"
+            "     caller_representation = representation\n"
+            "     callee_input = caller_amount\n"
+            "-    return _format_price(callee_input)\n"
+            "+    return _format_price(caller_amount, caller_representation)\n"
+        )
+        fixed_diff = _reference_diff(task_id, module_path)
+
+        def feedback_fn(task, diff):
+            evaluation = EvaluationVerifier(str(REPO_ROOT), workspace_parent=None).evaluate(task, diff)
+            failures = []
+            for kind, records in (("f2p", evaluation.post_patch_f2p), ("p2p", evaluation.post_patch_p2p)):
+                for record in records:
+                    status = record.status.value if hasattr(record.status, "value") else str(record.status)
+                    if status != "PASS":
+                        failures.append({"kind": kind, "node_id": record.node_id, "status": status, "detail": (record.stdout or "")[-600:]})
+            return {
+                "status": evaluation.status.value if hasattr(evaluation.status, "value") else str(evaluation.status),
+                "outcome": evaluation.outcome.value if hasattr(evaluation.outcome, "value") else str(evaluation.outcome),
+                "f2p_total": evaluation.f2p_total, "f2p_passed": evaluation.f2p_passed,
+                "p2p_total": evaluation.p2p_total, "p2p_passed": evaluation.p2p_passed,
+                "full_suite": evaluation.full_suite.status.value if evaluation.full_suite else None,
+                "syntax": evaluation.syntax.passed if evaluation.syntax else None,
+                "failures": failures[:3],
+            }
+
+        commands = (
+            "reproduce", "understand", "runtime", "break 2", "stack",
+            "print cents", "next", "stack", "diagnosis scripted feedback-loop test double",
+            f"patch\n{wrong_diff}",
+            f"patch\n{fixed_diff}",
+        )
+        out = _run(task_id, commands, tmp_path, verifier_feedback_fn=feedback_fn)
+        # Real verifier feedback was recorded for BOTH accepted patches.
+        history = out["verifier_feedback_history"]
+        assert len(history) == 2, history
+        assert history[0]["outcome"] == "REGRESSION", history[0]
+        assert history[0]["f2p_passed"] == 0, history[0]
+        assert any("TypeError" in (f.get("detail") or "") for f in history[0].get("failures", [])), history[0]
+        assert history[1]["outcome"] == "RESOLVED", history[1]
+        assert out["verifier"]["outcome"] == "RESOLVED", out["verifier"]
+        assert out["patch"]["passed"] is True, out["patch"]
+        attempts = out["adapter"].patch_attempts
+        assert len(attempts) == 2, attempts
+        # First (wrong) patch applied; second replaced it via auto-revert.
+        assert out["candidate"] == fixed_diff
 
     def test_live_semantic_path_has_no_reference_repair_lookup(self):
         """Static proof: the R5 live path never looks up reference repairs."""

@@ -101,6 +101,16 @@ def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
 #: Maximum characters of a bounded diagnostic retained for reporting.
 MAX_DIAGNOSTIC_CHARS = 400
 
+#: Maximum characters of real reproduction failure output surfaced to the
+#: model.  The output is the task's own failing-test run (a real test
+#: diagnostic); only its tail is kept (the traceback/failure summary is at
+#: the end of pytest output).
+MAX_FAILURE_OUTPUT_CHARS = 4000
+
+#: Tail window of a failing-test record output fed back to the model after a
+#: real verifier run (the exception/assertion summary is at the end).
+MAX_VERIFIER_FAILURE_DETAIL_CHARS = 900
+
 
 def _safe_rejection(message: str) -> ToolRejectedError:
     return ToolRejectedError(message, safe_diagnostic=message)
@@ -131,6 +141,29 @@ def _json_safe(value: Any, label: str) -> Any:
         return json.loads(json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True))
     except (TypeError, ValueError, OverflowError) as exc:
         raise ToolExecutionError(f"{label} is not JSON-compatible") from exc
+
+
+def _bounded_tail(text: str, maximum: int) -> str:
+    """Keep the tail of ``text`` at most ``maximum`` characters."""
+    if len(text) <= maximum:
+        return text
+    marker = "... [output truncated] ...\n"
+    return marker + text[-(maximum - len(marker)):]
+
+
+def reproduction_failure_output(result: Any, workspace_root: Optional[str]) -> str:
+    """Bounded, normalized real failure output of a test command.
+
+    ``result`` is a ``TestRunResult``.  The output is the raw stdout/stderr
+    of the executed command (path-normalized and duration-normalized), tail-
+    bounded for model consumption.  Empty when the command produced nothing.
+    """
+    command = result.command_result
+    raw = (command.stdout or "") + "\n" + (command.stderr or "")
+    if not raw.strip():
+        return ""
+    normalized = normalize_output(raw, workspace_root)
+    return _bounded_tail(normalized, MAX_FAILURE_OUTPUT_CHARS)
 
 
 def _validator(
@@ -275,6 +308,7 @@ class DemoToolContext:
         probe: Optional[PdbProbe],
         execution_context: Optional[VerifiedExecutionContext] = None,
         pdb_session_factory: Callable[[TaskWorkspace], PdbSession] = PdbSession,
+        verifier_feedback_fn: Optional[Callable[[DebugTask, str], dict[str, Any]]] = None,
     ) -> None:
         self.task = task
         self.workspace = workspace
@@ -288,6 +322,14 @@ class DemoToolContext:
         # Bubblewrap boundary) injects a factory that builds a session bound
         # to that boundary instead -- the host-local path is never implied.
         self.pdb_session_factory = pdb_session_factory
+        # Optional real-verifier feedback callback: when set, every accepted
+        # candidate patch is evaluated by the independent EvaluationVerifier
+        # and a bounded feedback record is attached to the apply_patch
+        # observation.  The callback returns a JSON-compatible mapping or
+        # raises (the error is bounded into the observation, never a crash).
+        self.verifier_feedback_fn = verifier_feedback_fn
+        # Historical record of every verifier-feedback run (attempt order).
+        self.verifier_feedback_history: list[dict[str, Any]] = []
         self.test_runner = TestRunner(workspace, execution_context=execution_context)
         self.patch_manager = PatchManager(
             workspace,
@@ -412,6 +454,13 @@ def build_registry(
             "expected_exit_code": task.reproduction.expected_exit_code,
             "passed": bool(result.passed),
             "failure_reproduced": reproduced,
+            # Real failure output of the executed reproduction command
+            # (bounded, normalized).  This is a real test diagnostic from the
+            # task's own public reproduction; it never contains oracle or
+            # reference-repair content.
+            "failure_output": reproduction_failure_output(
+                result, context.workspace.root
+            ) if not result.passed else "",
         }
         if phase == "baseline":
             context.baseline_failure_reproduced = reproduced
@@ -605,6 +654,17 @@ def build_registry(
 
     def handle_apply_patch(action: Action, arguments: dict[str, object]) -> ToolResult:
         diff = arguments["patch"]
+        reverted_previous = False
+        # A repair retry replaces the previous accepted candidate: if the
+        # PatchManager still holds an active patch, revert it first so the
+        # new diff is applied to the pristine baseline (deterministic
+        # revise-patch semantics for the verifier-feedback loop).
+        if context.patch_manager.has_active_patch:
+            try:
+                context.patch_manager.revert_patch()
+            except (PatchStateError, PatchApplyError) as exc:
+                raise _safe_rejection(bounded_diagnostic(exc)) from exc
+            reverted_previous = True
         try:
             result = context.patch_manager.apply_patch(diff)
         except (PatchValidationError, PatchAuthorizationError, PatchStateError) as exc:
@@ -617,14 +677,31 @@ def build_registry(
         context.candidate_patch = diff
         context.patch_applied = bool(result.success)
         context.patch_changed_files = tuple(sorted(item.path for item in result.changed_files))
+        # Real independent-verifier feedback on the exact accepted candidate
+        # (optional; bound failures, never crash the tool).
+        verifier_feedback: Optional[dict[str, Any]] = None
+        if context.verifier_feedback_fn is not None:
+            try:
+                verifier_feedback = context.verifier_feedback_fn(task, diff)
+            except BaseException as exc:  # noqa: BLE001 - bounded, recorded
+                verifier_feedback = {
+                    "error": bounded_diagnostic(exc, context.workspace.root),
+                }
+            if isinstance(verifier_feedback, dict):
+                context.verifier_feedback_history.append(dict(verifier_feedback))
+        payload: dict[str, Any] = {
+            "applied": bool(result.success),
+            "changed_files": list(context.patch_changed_files),
+            "hunk_count": result.hunk_count,
+            "patch_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+            "after_sha256": {key: result.after_sha256[key] for key in sorted(result.after_sha256)},
+            "hunk_adjustments": [list(item) for item in result.hunk_adjustments],
+            "reverted_previous": reverted_previous,
+        }
+        if verifier_feedback is not None:
+            payload["verifier_feedback"] = verifier_feedback
         return _ok(
-            {
-                "applied": bool(result.success),
-                "changed_files": list(context.patch_changed_files),
-                "hunk_count": result.hunk_count,
-                "patch_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
-                "after_sha256": {key: result.after_sha256[key] for key in sorted(result.after_sha256)},
-            },
+            _json_safe(payload, "apply_patch"),
             "candidate patch applied to the disposable workspace",
         )
 

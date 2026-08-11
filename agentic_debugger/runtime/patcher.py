@@ -24,6 +24,15 @@ _MAX_PATCH_FILES = 10
 _MAX_PATCH_HUNKS = 100
 _TEMP_PREFIX = ".agentic_debugger_tmp_"
 
+# Bounded context-location fuzz for hunk application (lines).  When the
+# declared hunk start position does not match the file exactly, the applier
+# searches this many lines before/after the declared position for the first
+# position where EVERY context/removed line matches exactly.  This is a
+# deterministic mechanical accommodation of imprecise hunk headers (analogous
+# to GNU patch fuzz / ``git apply -C``); content matching remains exact and
+# the displacement is recorded per hunk in the result.
+_CONTEXT_FUZZ = 10
+
 class _PolicyKind(Enum):
     EXACT_FILE = auto()
     DIRECTORY = auto()
@@ -63,6 +72,10 @@ class PatchApplyResult:
     bytes_before: Dict[str, int]
     bytes_after: Dict[str, int]
     error: Optional[str]
+    # Per-hunk context-location adjustments applied by bounded fuzz:
+    # (1-based hunk index, line displacement from the declared position).
+    # Empty when every hunk applied at its declared position.
+    hunk_adjustments: Tuple[Tuple[int, int], ...] = ()
 
     def to_mapping(self) -> Dict[str, Any]:
         return {
@@ -74,6 +87,7 @@ class PatchApplyResult:
             "bytes_before": dict(self.bytes_before),
             "bytes_after": dict(self.bytes_after),
             "error": self.error,
+            "hunk_adjustments": [list(item) for item in self.hunk_adjustments],
         }
 
 
@@ -544,13 +558,60 @@ def _detect_line_ending(lines: List[str]) -> str:
     return "\n"
 
 
+def _hunk_consumer_lines(hunk: _Hunk) -> List[Tuple[str, str]]:
+    """The context/removed lines that must exist verbatim in the file."""
+    return [(hl.prefix, hl.text) for hl in hunk.lines if hl.prefix in (" ", "-")]
+
+
+def _find_hunk_anchor(
+    lines: List[str],
+    consumer: List[Tuple[str, str]],
+    requested_idx: int,
+    fuzz: int,
+) -> Optional[int]:
+    """Locate the exact position of a hunk's consumer lines.
+
+    Preference order is deterministic: the declared position first, then
+    positions moving outward by one line at a time within ``fuzz`` lines of
+    the declared position.  Every consumer line must match exactly
+    (``rstrip``-normalized); any content mismatch means no anchor.
+    """
+    count = len(consumer)
+    if count == 0:
+        return max(0, min(requested_idx, len(lines)))
+    lo = max(0, requested_idx - fuzz)
+    hi = min(len(lines) - count, requested_idx + fuzz)
+    if lo > hi:
+        return None
+    offsets = [0]
+    for distance in range(1, fuzz + 1):
+        if requested_idx - distance >= lo:
+            offsets.append(-distance)
+        if requested_idx + distance <= hi:
+            offsets.append(distance)
+    for offset in offsets:
+        start = requested_idx + offset
+        if start < lo or start > hi:
+            continue
+        matches = True
+        for i, (prefix, text) in enumerate(consumer):
+            actual = lines[start + i].rstrip("\n\r")
+            if actual != text:
+                matches = False
+                break
+        if matches:
+            return start
+    return None
+
+
 def _apply_hunks(
     original_text: str, hunks: List[_Hunk]
-) -> str:
+) -> Tuple[str, Tuple[Tuple[int, int], ...]]:
     lines = original_text.splitlines(True)
     dominant_eol = _detect_line_ending(lines)
 
     delta = 0
+    adjustments: List[Tuple[int, int]] = []
 
     for hunk_idx, hunk in enumerate(hunks):
         if hunk.old_count == 0:
@@ -558,31 +619,31 @@ def _apply_hunks(
         else:
             adjusted_idx = hunk.old_start - 1 + delta
 
-        if adjusted_idx < 0:
-            raise PatchApplyError(
-                f"Hunk {hunk_idx + 1} adjusts to negative index"
-            )
+        consumer = _hunk_consumer_lines(hunk)
+        consumer_count = len(consumer)
 
-        if adjusted_idx > len(lines):
-            raise PatchApplyError(
-                f"Hunk {hunk_idx + 1} at insertion point "
-                f"{adjusted_idx} beyond file length {len(lines)}"
-            )
-
-        consumer_count = sum(
-            1 for hl in hunk.lines if hl.prefix in (" ", "-")
+        # Bounded deterministic fuzz: the declared position may be imprecise
+        # (imprecise hunk headers are a mechanical formatting defect, not a
+        # semantic one).  The anchor search clamps to the file bounds, so a
+        # declared position outside the file is still accommodated within the
+        # bounded window; content matching remains exact.
+        anchor = _find_hunk_anchor(
+            lines, consumer, adjusted_idx, _CONTEXT_FUZZ
         )
-
-        if adjusted_idx + consumer_count > len(lines):
+        if anchor is None:
             raise PatchApplyError(
-                f"Hunk {hunk_idx + 1} at original line {hunk.old_start} "
-                f"extends beyond file ({len(lines)} lines)"
+                f"Context mismatch in hunk {hunk_idx + 1} "
+                f"at original line {hunk.old_start}: "
+                f"expected {consumer[0][1] if consumer else '<insertion>'!r} "
+                f"(bounded fuzz window {_CONTEXT_FUZZ})"
             )
+        if anchor != adjusted_idx:
+            adjustments.append((hunk_idx + 1, anchor - adjusted_idx))
 
         check_idx = 0
         for hl in hunk.lines:
             if hl.prefix in (" ", "-"):
-                actual = lines[adjusted_idx + check_idx].rstrip("\n\r")
+                actual = lines[anchor + check_idx].rstrip("\n\r")
                 if actual != hl.text:
                     raise PatchApplyError(
                         f"Context mismatch in hunk {hunk_idx + 1} "
@@ -591,15 +652,15 @@ def _apply_hunks(
                     )
                 check_idx += 1
 
-        pre = lines[:adjusted_idx]
-        post = lines[adjusted_idx + consumer_count :]
+        pre = lines[:anchor]
+        post = lines[anchor + consumer_count :]
 
         new_middle: List[str] = []
         orig_offset = 0
         last_non_marker_prefix: Optional[str] = None
         for hl in hunk.lines:
             if hl.prefix == " ":
-                new_middle.append(lines[adjusted_idx + orig_offset])
+                new_middle.append(lines[anchor + orig_offset])
                 orig_offset += 1
                 last_non_marker_prefix = " "
             elif hl.prefix == "-":
@@ -613,9 +674,10 @@ def _apply_hunks(
                     new_middle[-1] = new_middle[-1].rstrip("\n\r")
 
         lines = pre + new_middle + post
-        delta += hunk.new_count - hunk.old_count
+        # Content-length change plus any context-location displacement.
+        delta += (hunk.new_count - hunk.old_count) + (anchor - adjusted_idx)
 
-    return "".join(lines)
+    return "".join(lines), tuple(adjustments)
 
 
 def _detect_encoding(file_path: str) -> Tuple[str, bool]:
@@ -839,6 +901,7 @@ class PatchManager:
                 originals[fp.path] = f.read()
 
         new_contents: Dict[str, bytes] = {}
+        hunk_adjustments: List[Tuple[int, int]] = []
         for fp in file_patches:
             encoding = encoding_map[fp.path]
             original_bytes = originals[fp.path]
@@ -848,7 +911,11 @@ class PatchManager:
                 raise PatchApplyError(
                     f"Cannot decode {fp.path!r} with encoding {encoding!r}: {e}"
                 ) from e
-            new_text = _apply_hunks(original_text, fp.hunks)
+            new_text, adjustments = _apply_hunks(original_text, fp.hunks)
+            hunk_adjustments.extend(
+                (fp.path, hunk_idx, displacement)
+                for hunk_idx, displacement in adjustments
+            )
             try:
                 new_contents[fp.path] = new_text.encode(encoding)
             except (UnicodeEncodeError, LookupError) as e:
@@ -922,6 +989,7 @@ class PatchManager:
             bytes_before={k: len(v) for k, v in originals.items()},
             bytes_after={k: len(v) for k, v in new_contents.items()},
             error=None,
+            hunk_adjustments=tuple(hunk_adjustments),
         )
 
     def revert_patch(self) -> PatchApplyResult:
@@ -999,6 +1067,7 @@ class PatchManager:
                 k: len(v) for k, v in snapshot.files.items()
             },
             error=None,
+            hunk_adjustments=(),
         )
 
     def syntax_check(

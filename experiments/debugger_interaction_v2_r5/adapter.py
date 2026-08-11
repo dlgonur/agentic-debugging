@@ -87,6 +87,11 @@ def make_r5_session_state_provider(context: Any, get_r2_stage: Callable[[], R2St
         if pdb_session is None and started:
             return SessionState(lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=R2Stage.CONSUMED_OR_ENDED)
         stage = get_r2_stage()
+        # R5.2 terminal stage: the target ended during a step/next; the
+        # stage tracker's terminal stage is authoritative and the worker
+        # status query (which would report exited) must not mask it.
+        if stage is R2Stage.PAUSED_AFTER_TERMINAL_STEP:
+            return SessionState(lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=stage)
         if stage in (R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK, R2Stage.READY_FOR_DIAGNOSIS):
             return SessionState(lifecycle=DebuggerLifecycle.PAUSED, r2_stage=stage)
         try:
@@ -163,6 +168,8 @@ class TelemetryRecord:
     rendered_diagnosis_sha256: Optional[str] = None
     model_patch_raw_sha256: Optional[str] = None
     model_patch_serialization_normalized_sha256: Optional[str] = None
+    # R5.2: deterministic single-fence unwrap record (None when no unwrap).
+    fence_unwrap: Optional[dict] = None
     prompt_tokens: Any = NOT_RECORDED
     completion_tokens: Any = NOT_RECORDED
     total_tokens: Any = NOT_RECORDED
@@ -183,6 +190,7 @@ class TelemetryRecord:
             "parse_result": {"status": self.parse_status, "command_token": self.command_token, "normalized_command": self.normalized_command, "rejection_category": self.rejection_category, "rejection_message": self.rejection_message},
             "translated_directive": {"kind": self.directive_kind, "action_name": self.action_name, "arguments": self.directive_arguments, "target_state": self.target_state, "reason": self.directive_reason, "is_diagnosis": self.is_diagnosis, "diagnosis_text": self.diagnosis_text},
             "provenance": {"prior_observation_id": self.prior_observation_id, "prior_observation_sha256": self.prior_observation_sha256, "rendered_observation_sha256": self.rendered_observation_sha256, "rendered_diagnosis_sha256": self.rendered_diagnosis_sha256},
+            "fence_unwrap": self.fence_unwrap,
             "usage": {"prompt_tokens": self.prompt_tokens, "completion_tokens": self.completion_tokens, "total_tokens": self.total_tokens, "provider_reported": self.provider_reported},
             "timing": {"request_duration_ms": self.request_duration_ms, "parse_duration_ms": self.parse_duration_ms},
         }
@@ -222,6 +230,11 @@ class R5StageTracker:
             self._stage = R2Stage.PAUSED_NEEDS_STEP; advanced = True
         elif self._stage is R2Stage.PAUSED_NEEDS_STEP and name in ("step_pdb_session", "next_pdb_session") and state_val == "paused":
             self._stage = R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK; advanced = True
+        elif self._stage is R2Stage.PAUSED_NEEDS_STEP and name in ("step_pdb_session", "next_pdb_session") and state_val in ("exited", "failed", "terminated"):
+            # R5.2 terminal runtime progression: the target ended during the
+            # control action (crash-on-step bug class).  Real terminal
+            # evidence (exit code / error) is preserved; diagnosis follows.
+            self._stage = R2Stage.PAUSED_AFTER_TERMINAL_STEP; advanced = True
         elif self._stage is R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK and name == "get_stack_summary":
             self._stage = R2Stage.READY_FOR_DIAGNOSIS; advanced = True
         if advanced:
@@ -293,6 +306,14 @@ class R5DebuggerBridgeAdapter:
             return
         payload = obs.payload if isinstance(obs.payload, dict) else {}
         name = obs.name
+        # R5.2: the real reproduction failure output is part of the bounded
+        # runtime evidence slice (surfaced again at PATCH time).
+        if name == "run_reproduction" and "reproduction" not in self._runtime_slice:
+            if payload.get("failure_reproduced") is True:
+                failure_output = payload.get("failure_output")
+                if type(failure_output) is str and failure_output:
+                    self._runtime_slice["reproduction"] = self._render_observation(obs)
+                    return
         if name == "get_stack_summary" and self._g1 is None:
             gen = payload.get("pause_generation")
             if type(gen) is int and gen > 0 and "stack_G1" not in self._runtime_slice:
@@ -308,7 +329,8 @@ class R5DebuggerBridgeAdapter:
                 self._g1 = gen
             return
         if name in ("step_pdb_session", "next_pdb_session") and "step" not in self._runtime_slice:
-            if payload.get("state") == "paused":
+            state_val = payload.get("state")
+            if state_val in ("paused", "exited", "failed", "terminated"):
                 self._runtime_slice["step"] = self._render_observation(obs)
                 return
         if name == "get_stack_summary" and self._g1 is not None and "stack_G2" not in self._runtime_slice:
@@ -327,12 +349,12 @@ class R5DebuggerBridgeAdapter:
         prior_obs_id = last_obs.observation_id if last_obs is not None else None
         prior_obs_sha = _sha256(_canonical_json(last_obs.to_mapping())) if last_obs is not None else None
         session_state = self._session_state_provider()
-        if session_state.lifecycle is DebuggerLifecycle.PAUSED:
+        if session_state.lifecycle is DebuggerLifecycle.PAUSED or session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP:
             session_state = SessionState(lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=self._last_paused_line, paused_function=self._last_paused_function, status_diagnostic=session_state.status_diagnostic)
         if state.value == "Patch" and self._retained_diagnosis is not None:
             debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=R2Stage.CONSUMED_OR_ENDED, retained_diagnosis=self._retained_diagnosis, runtime_slice=dict(self._runtime_slice) if self._runtime_slice else None)
         else:
-            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function)
+            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function, runtime_slice=dict(self._runtime_slice) if (session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP and self._runtime_slice) else None)
         feedback: Optional[str] = None
         # R3.1: PATCH progression — first PATCH turn is NEEDS_FIRST_REPAIR
         patch_stage: Optional[bridge.R3PatchStage] = None
@@ -372,7 +394,11 @@ class R5DebuggerBridgeAdapter:
                 raise ModelAdapterError(f"transport failed after {attempt + 1} attempts: {transport_error_cat}")
             parse_start = time.monotonic()
             try:
-                result = bridge.parse(raw_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
+                parse_text, fence_unwrap = bridge.unwrap_single_fence(raw_text)
+                record.fence_unwrap = (
+                    fence_unwrap.to_mapping() if fence_unwrap is not None else None
+                )
+                result = bridge.parse(parse_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
                 # R3.2: normalize only hunk-count metadata (B -> C); fail closed otherwise
                 if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
                     b_diff = result.directive.arguments["patch"]
@@ -411,6 +437,7 @@ class R5DebuggerBridgeAdapter:
                         "model_patch_raw_sha256": norm_record.model_patch_raw_sha256,
                         "model_patch_serialization_normalized_sha256": norm_record.model_patch_serialization_normalized_sha256,
                         "normalization": norm_record.to_mapping(),
+                        "fence_unwrap": record.fence_unwrap,
                     })
             elif hasattr(directive, "target_state"):
                 record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
@@ -457,6 +484,10 @@ class R5DebuggerBridgeAdapter:
             state_val = payload.get("state")
             if state_val == "paused":
                 self._last_paused_line = payload.get("line"); self._last_paused_function = payload.get("function")
+            elif state_val in ("exited", "failed", "terminated"):
+                # R5.2 terminal progression: retain the last paused location
+                # so the terminal stage can name where the target crashed.
+                pass
             else:
                 self._last_paused_line = None; self._last_paused_function = None
 
@@ -531,12 +562,12 @@ class ScriptedBridgeAdapter:
         rendered_obs_sha = self._compute_rendered_obs_hash(last_obs)
         rendered_diag_sha = _sha256(self._retained_diagnosis) if self._retained_diagnosis else None
         session_state = self._session_state_provider()
-        if session_state.lifecycle is DebuggerLifecycle.PAUSED:
+        if session_state.lifecycle is DebuggerLifecycle.PAUSED or session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP:
             session_state = SessionState(lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=self._last_paused_line, paused_function=self._last_paused_function)
         if state.value == "Patch" and self._retained_diagnosis is not None:
             debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=R2Stage.CONSUMED_OR_ENDED, retained_diagnosis=self._retained_diagnosis, runtime_slice=dict(self._runtime_slice) if self._runtime_slice else None)
         else:
-            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function)
+            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function, runtime_slice=dict(self._runtime_slice) if (session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP and self._runtime_slice) else None)
         # R3.1 PATCH stage
         patch_stage: Optional[bridge.R3PatchStage] = None
         if state.value == "Patch":
@@ -545,7 +576,11 @@ class ScriptedBridgeAdapter:
         record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=1, controller_state=state.value, system_prompt_sha256=_sha256(self._system_prompt), user_prompt_sha256=_sha256(user_prompt), user_prompt_summary=_bound_text(user_prompt, 1000), raw_response_text=raw_text, raw_response_status="decoded", raw_response_bytes=len(raw_text.encode("utf-8")), parse_status="not_attempted", prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
         self._telemetry.append(record)
         try:
-            result = bridge.parse(raw_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
+            parse_text, fence_unwrap = bridge.unwrap_single_fence(raw_text)
+            record.fence_unwrap = (
+                fence_unwrap.to_mapping() if fence_unwrap is not None else None
+            )
+            result = bridge.parse(parse_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
             if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
                 b_diff = result.directive.arguments["patch"]
                 try:
@@ -569,6 +604,7 @@ class ScriptedBridgeAdapter:
                     "model_patch_raw_sha256": norm_record.model_patch_raw_sha256,
                     "model_patch_serialization_normalized_sha256": norm_record.model_patch_serialization_normalized_sha256,
                     "normalization": norm_record.to_mapping(),
+                    "fence_unwrap": record.fence_unwrap,
                 })
         elif hasattr(directive, "target_state"):
             record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
@@ -587,6 +623,14 @@ class ScriptedBridgeAdapter:
             return
         payload = obs.payload if isinstance(obs.payload, dict) else {}
         name = obs.name
+        # R5.2: the real reproduction failure output is part of the bounded
+        # runtime evidence slice (surfaced again at PATCH time).
+        if name == "run_reproduction" and "reproduction" not in self._runtime_slice:
+            if payload.get("failure_reproduced") is True:
+                failure_output = payload.get("failure_output")
+                if type(failure_output) is str and failure_output:
+                    self._runtime_slice["reproduction"] = self._render_observation(obs)
+                    return
         if name == "get_stack_summary" and self._g1 is None:
             gen = payload.get("pause_generation")
             if type(gen) is int and gen > 0 and "stack_G1" not in self._runtime_slice:
@@ -600,7 +644,8 @@ class ScriptedBridgeAdapter:
                 self._g1 = gen
             return
         if name in ("step_pdb_session", "next_pdb_session") and "step" not in self._runtime_slice:
-            if payload.get("state") == "paused":
+            state_val = payload.get("state")
+            if state_val in ("paused", "exited", "failed", "terminated"):
                 self._runtime_slice["step"] = self._render_observation(obs); return
         if name == "get_stack_summary" and self._g1 is not None and "stack_G2" not in self._runtime_slice:
             gen = payload.get("pause_generation")
@@ -622,6 +667,10 @@ class ScriptedBridgeAdapter:
             state_val = payload.get("state")
             if state_val == "paused":
                 self._last_paused_line = payload.get("line"); self._last_paused_function = payload.get("function")
+            elif state_val in ("exited", "failed", "terminated"):
+                # R5.2 terminal progression: retain the last paused location
+                # so the terminal stage can name where the target crashed.
+                pass
             else:
                 self._last_paused_line = None; self._last_paused_function = None
 
