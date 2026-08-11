@@ -20,6 +20,7 @@ normalization (B -> C) are identical to the accepted R3 adapter.
 
 from __future__ import annotations
 
+import difflib
 import hashlib
 import json
 import time
@@ -117,6 +118,53 @@ MAX_RAW_TEXT_BYTES = 65536
 
 def _canonical_json(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":"))
+
+
+def _sha256(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def serialize_whole_file_to_diff(
+    script_path: str,
+    original_source: str,
+    model_path: str,
+    model_content: str,
+) -> str:
+    """Deterministic whole-file repair serialization (R5.2).
+
+    The MODEL authors the complete replacement file content; this function
+    only performs the mechanical unified-diff serialization (standard-library
+    ``difflib``) against the original production source.  The resulting diff
+    is what PatchManager applies.  Fails closed on a wrong path or content
+    identical to the original.
+    """
+    if model_path != script_path:
+        raise bridge.BridgeParseError(
+            bridge.BridgeRejection.INVALID_PATCH,
+            f"file path {model_path!r} is not the writable production path "
+            f"{script_path!r}",
+        )
+    original_lines = original_source.splitlines()
+    new_lines = model_content.splitlines()
+    if original_lines == new_lines:
+        raise bridge.BridgeParseError(
+            bridge.BridgeRejection.INVALID_PATCH,
+            "file replacement content is identical to the original source",
+        )
+    diff = "".join(difflib.unified_diff(
+        [line + "\n" for line in original_lines],
+        [line + "\n" for line in new_lines],
+        fromfile=f"a/{script_path}",
+        tofile=f"b/{script_path}",
+        lineterm="\n",
+        n=3,
+    ))
+    if not diff.strip():
+        raise bridge.BridgeParseError(
+            bridge.BridgeRejection.INVALID_PATCH,
+            "file replacement produced an empty diff",
+        )
+    return diff
 
 
 def _sha256(text: str) -> str:
@@ -404,8 +452,30 @@ class R5DebuggerBridgeAdapter:
                     fence_unwrap.to_mapping() if fence_unwrap is not None else None
                 )
                 result = bridge.parse(parse_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
-                # R3.2: normalize only hunk-count metadata (B -> C); fail closed otherwise
+                # R5.2 whole-file representation: mechanically serialize the
+                # model-authored complete file content into the unified diff
+                # that is actually applied (recorded; semantics untouched).
+                whole_file_meta: Optional[dict[str, Any]] = None
                 if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
+                    args = result.directive.arguments
+                    if "whole_file_path" in args:
+                        b_diff = serialize_whole_file_to_diff(
+                            self._script_path, self._source_text,
+                            args["whole_file_path"], args["whole_file_content"],
+                        )
+                        whole_file_meta = {
+                            "path": args["whole_file_path"],
+                            "model_whole_file_sha256": _sha256(args["whole_file_content"]),
+                            "generated_diff_sha256": _sha256(b_diff),
+                        }
+                        result = bridge.BridgeResult(
+                            command_token="file",
+                            normalized_command=f"file {args['whole_file_path']}",
+                            directive=ActionDirective(result.directive.name, {"patch": b_diff}),
+                            is_diagnosis=result.is_diagnosis,
+                            diagnosis_text=result.diagnosis_text,
+                        )
+                    # R3.2: normalize only hunk-count metadata (B -> C); fail closed otherwise
                     b_diff = result.directive.arguments["patch"]
                     try:
                         c_diff, norm_record = normalize_hunk_counts(b_diff)
@@ -436,14 +506,20 @@ class R5DebuggerBridgeAdapter:
                 if record.action_name == "apply_patch":
                     record.model_patch_raw_sha256 = norm_record.model_patch_raw_sha256
                     record.model_patch_serialization_normalized_sha256 = norm_record.model_patch_serialization_normalized_sha256
-                    self._patch_attempts.append({
+                    attempt: dict[str, Any] = {
                         "model_call_index": snapshot.model_call_index,
                         "raw_model_response_sha256": _sha256(raw_text) if raw_text != NOT_AVAILABLE else None,
                         "model_patch_raw_sha256": norm_record.model_patch_raw_sha256,
                         "model_patch_serialization_normalized_sha256": norm_record.model_patch_serialization_normalized_sha256,
                         "normalization": norm_record.to_mapping(),
                         "fence_unwrap": record.fence_unwrap,
-                    })
+                    }
+                    if whole_file_meta is not None:
+                        attempt["representation"] = "whole_file"
+                        attempt["whole_file"] = whole_file_meta
+                    else:
+                        attempt["representation"] = "unified_diff"
+                    self._patch_attempts.append(attempt)
             elif hasattr(directive, "target_state"):
                 record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
             record.is_diagnosis = result.is_diagnosis; record.diagnosis_text = result.diagnosis_text
@@ -586,7 +662,26 @@ class ScriptedBridgeAdapter:
                 fence_unwrap.to_mapping() if fence_unwrap is not None else None
             )
             result = bridge.parse(parse_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
+            whole_file_meta: Optional[dict[str, Any]] = None
             if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
+                args = result.directive.arguments
+                if "whole_file_path" in args:
+                    b_diff = serialize_whole_file_to_diff(
+                        self._script_path, self._source_text,
+                        args["whole_file_path"], args["whole_file_content"],
+                    )
+                    whole_file_meta = {
+                        "path": args["whole_file_path"],
+                        "model_whole_file_sha256": _sha256(args["whole_file_content"]),
+                        "generated_diff_sha256": _sha256(b_diff),
+                    }
+                    result = bridge.BridgeResult(
+                        command_token="file",
+                        normalized_command=f"file {args['whole_file_path']}",
+                        directive=ActionDirective(result.directive.name, {"patch": b_diff}),
+                        is_diagnosis=result.is_diagnosis,
+                        diagnosis_text=result.diagnosis_text,
+                    )
                 b_diff = result.directive.arguments["patch"]
                 try:
                     c_diff, norm_record = normalize_hunk_counts(b_diff)
@@ -603,14 +698,20 @@ class ScriptedBridgeAdapter:
             if record.action_name == "apply_patch":
                 record.model_patch_raw_sha256 = norm_record.model_patch_raw_sha256
                 record.model_patch_serialization_normalized_sha256 = norm_record.model_patch_serialization_normalized_sha256
-                self._patch_attempts.append({
+                attempt: dict[str, Any] = {
                     "model_call_index": snapshot.model_call_index,
                     "raw_model_response_sha256": _sha256(raw_text) if raw_text != NOT_AVAILABLE else None,
                     "model_patch_raw_sha256": norm_record.model_patch_raw_sha256,
                     "model_patch_serialization_normalized_sha256": norm_record.model_patch_serialization_normalized_sha256,
                     "normalization": norm_record.to_mapping(),
                     "fence_unwrap": record.fence_unwrap,
-                })
+                }
+                if whole_file_meta is not None:
+                    attempt["representation"] = "whole_file"
+                    attempt["whole_file"] = whole_file_meta
+                else:
+                    attempt["representation"] = "unified_diff"
+                self._patch_attempts.append(attempt)
         elif hasattr(directive, "target_state"):
             record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
         record.is_diagnosis = result.is_diagnosis; record.diagnosis_text = result.diagnosis_text

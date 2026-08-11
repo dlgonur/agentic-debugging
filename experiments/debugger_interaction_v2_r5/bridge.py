@@ -119,7 +119,7 @@ _ACTION_COMMANDS: dict[str, ActionName] = {
 }
 
 _ALL_COMMANDS: frozenset[str] = frozenset(
-    set(_ACTION_COMMANDS.keys()) | set(_PHASE_ALIASES.keys()) | {"diagnosis"}
+    set(_ACTION_COMMANDS.keys()) | set(_PHASE_ALIASES.keys()) | {"diagnosis", "file"}
 )
 
 _PDB_FRAME_COMMANDS: frozenset[str] = frozenset({"locals", "print"})
@@ -168,31 +168,40 @@ _R2_STAGE_COMMANDS: dict[R2Stage, frozenset[str]] = {
 }
 
 # R3 PATCH checkpoint — bounded to patch+failed only (not syntax/validate/understand).
-_R3_PATCH_COMMANDS: frozenset[str] = frozenset({"patch", "failed"})
+_R3_PATCH_COMMANDS: frozenset[str] = frozenset({"patch", "file", "failed"})
 
 # R3.1 PATCH progression — first PATCH turn forces a genuine repair attempt.
 class R3PatchStage(str, Enum):
     """Bounded PATCH checkpoint progression (R3.1)."""
 
-    NEEDS_FIRST_REPAIR = "patch_needs_first_repair"  # only `patch`
-    RETRY = "patch_retry"                            # patch | failed
+    NEEDS_FIRST_REPAIR = "patch_needs_first_repair"  # only `patch`/`file`
+    RETRY = "patch_retry"                            # patch | file | failed
 
 
 # R3.1 per-stage commands in ControllerState.PATCH.
 _R3_PATCH_STAGE_COMMANDS: dict[R3PatchStage, frozenset[str]] = {
-    R3PatchStage.NEEDS_FIRST_REPAIR: frozenset({"patch"}),
-    R3PatchStage.RETRY: frozenset({"patch", "failed"}),
+    R3PatchStage.NEEDS_FIRST_REPAIR: frozenset({"patch", "file"}),
+    R3PatchStage.RETRY: frozenset({"patch", "file", "failed"}),
 }
 
 
 def patch_diff_affordance(module_path: str) -> str:
-    """Local diff affordance shown immediately before final output instruction.
+    """Local repair affordance shown immediately before final output
+    instruction.
 
-    The example diff names the per-task writable production path (public task
-    data); no oracle or test metadata is involved.
+    Two common repair representations are offered:
+    - ``patch`` with a unified diff (the diff may optionally be wrapped in
+      exactly one markdown code fence);
+    - ``file`` with the COMPLETE replacement file content (the controller
+      deterministically serializes it into the diff to apply).
+
+    Both name the per-task writable production path (public task data); no
+    oracle or test metadata is involved.
     """
     return (
-        "Required response now:\n"
+        "Required response now — produce your best minimal repair using the "
+        "source, debugger observations, and your diagnosis above.  Emit "
+        "either:\n"
         "patch\n"
         f"--- a/{module_path}\n"
         f"+++ b/{module_path}\n"
@@ -200,9 +209,9 @@ def patch_diff_affordance(module_path: str) -> str:
         " <context>\n"
         "-<old line>\n"
         "+<new line>\n"
-        "\n"
-        "Produce your best minimal repair using the source, debugger observations, "
-        "and your diagnosis above."
+        "or, to replace the whole file:\n"
+        f"file {module_path}\n"
+        "<complete replacement file content, nothing else>"
     )
 
 
@@ -391,8 +400,9 @@ _STATE_COMMANDS: dict[ControllerState, frozenset[str]] = {
             "understand", "patch", "failed",
         }
     ),
-    # R3 PATCH is bounded to patch+failed (capability = repair generation only)
-    ControllerState.PATCH: frozenset({"patch", "failed"}),
+    # R3 PATCH is bounded to patch/file/failed (capability = repair
+    # generation only; `file` is the whole-file repair representation)
+    ControllerState.PATCH: frozenset({"patch", "file", "failed"}),
     ControllerState.VALIDATE: frozenset(
         {
             "reproduce", "regression", "classify",
@@ -806,6 +816,55 @@ def parse(
             directive=directive,
         )
 
+    # R5.2 whole-file repair representation: `file <path>` followed by the
+    # COMPLETE replacement file content.  The deterministic layer mechanically
+    # serializes the model's authored content into the unified diff that is
+    # applied; the model authors the code semantics.
+    if token == "file":
+        if len(parts) != 2:
+            raise BridgeParseError(
+                BridgeRejection.MISSING_ARGUMENT,
+                "file requires exactly <path>",
+            )
+        path = parts[1]
+        if not path or path != path.strip():
+            raise BridgeParseError(
+                BridgeRejection.INVALID_ARGUMENT_TYPE,
+                "file path must be non-empty and trimmed",
+            )
+        if len(lines) < 2:
+            raise BridgeParseError(
+                BridgeRejection.INVALID_PATCH,
+                "file requires the complete replacement content after the path",
+            )
+        content = "\n".join(lines[1:])
+        if not content.strip():
+            raise BridgeParseError(
+                BridgeRejection.INVALID_PATCH,
+                "file replacement content is empty",
+            )
+        try:
+            content_bytes = content.encode("utf-8")
+        except UnicodeEncodeError:
+            raise BridgeParseError(
+                BridgeRejection.INVALID_PATCH,
+                "file replacement content must be UTF-8 encodable",
+            ) from None
+        if len(content_bytes) > 32768:
+            raise BridgeParseError(
+                BridgeRejection.INVALID_PATCH,
+                "file replacement content exceeds 32768 bytes",
+            )
+        directive = ActionDirective(
+            ActionName.APPLY_PATCH,
+            {"whole_file_path": path, "whole_file_content": content},
+        )
+        return BridgeResult(
+            command_token="file",
+            normalized_command=f"file {path} ({len(content_bytes)} bytes)",
+            directive=directive,
+        )
+
     if token in _ACTION_COMMANDS:
         action_name = _ACTION_COMMANDS[token]
 
@@ -1039,6 +1098,8 @@ SYSTEM_PROMPT_TEMPLATE = (
     "  next               — step over to the next line in the current frame\n"
     "  diagnosis <text>   — record your root-cause diagnosis after debugging\n"
     "  patch              — apply a unified diff (followed by diff lines)\n"
+    "  file <path>        — replace a whole file (followed by the complete\n"
+    "                       replacement content)\n"
     "  reproduce/understand/runtime/patch/validate\n"
     "                     — transition to a different phase\n"
     "  done               — signal completion\n"
@@ -1068,12 +1129,13 @@ SYSTEM_PROMPT_TEMPLATE = (
     "    Record your diagnosis from the real failure output and the locals\n"
     "    you already observed.\n"
     "  - After debugging, use 'diagnosis <text>' to record your diagnosis.\n"
-    "    After diagnosis you will enter the Patch phase — then emit 'patch'\n"
-    "    with a unified diff.\n"
-    "  - The 'patch' diff may optionally be wrapped in exactly one markdown\n"
-    "    code fence (``` or ```diff ... ```); the controller unwraps a single\n"
-    "    fence deterministically.  A plain diff without a fence is also\n"
-    "    accepted.\n"
+    "    After diagnosis you will enter the Patch phase — then emit either\n"
+    "    'patch' with a unified diff or 'file <path>' with the complete\n"
+    "    replacement file content.\n"
+    "  - The 'patch' diff (or the 'file' content) may optionally be wrapped\n"
+    "    in exactly one markdown code fence (``` or ```diff ... ```); the\n"
+    "    controller unwraps a single fence deterministically.  A plain diff\n"
+    "    without a fence is also accepted.\n"
 )
 
 

@@ -314,6 +314,37 @@ class TestR5MatrixScripted:
         assert out["verifier"]["outcome"] == "RESOLVED"
         assert out["patch"]["passed"] is True, out["patch"]
 
+    def test_whole_file_repair_representation_resolved(self, tmp_path):
+        """R5.2 whole-file repair representation: the model authors the
+        COMPLETE replacement file content; the deterministic layer serializes
+        it into the applied diff.  Terminal crash-on-step task reaches
+        RESOLVED through this representation."""
+        task_id = "curated-none-handling-001"
+        module_path = task_target_module_path(load_task(str(CURATED_ROOT / task_id / "task.json")))
+        fixed_file = (
+            "def format_display_name(name: str | None) -> str:\n"
+            "    if name is None:\n"
+            "        return \"Anonymous\"\n"
+            "    normalized_name = name.strip()\n"
+            "    if not normalized_name:\n"
+            "        return \"Anonymous\"\n"
+            "    return normalized_name.title()\n"
+        )
+        commands = (
+            "reproduce", "understand", "runtime", "break 2", "stack", "locals",
+            "next", "diagnosis scripted whole-file test double",
+            f"file {module_path}\n{fixed_file}",
+        )
+        out = _run(task_id, commands, tmp_path)
+        assert out["chain"]["passed"] is True, out["chain"]
+        assert out["chain"].get("terminal_path") is True, out["chain"]
+        attempts = out["adapter"].patch_attempts
+        assert attempts, "no patch attempt recorded"
+        assert attempts[-1].get("representation") == "whole_file", attempts[-1]
+        assert attempts[-1].get("whole_file", {}).get("generated_diff_sha256"), attempts[-1]
+        assert out["verifier"]["outcome"] == "RESOLVED", out["verifier"]
+        assert out["patch"]["passed"] is True, out["patch"]
+
     def test_verifier_feedback_loop_revises_patch_to_resolved(self, tmp_path):
         """Real verifier-feedback repair loop: a first WRONG model patch is
         applied, the independent EvaluationVerifier returns real failure
