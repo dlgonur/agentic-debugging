@@ -1,0 +1,58 @@
+{
+  "schema_version": "debugger-interaction-v2-r2.1",
+  "experiment_id": "debugger-interaction-v2-r2",
+  "description": "R2 — staged multi-turn debugger interaction: same frozen RAW Qwen2.5-Coder-7B model, same task, same budgets as R1, with the R2 staged-lifecycle interface (break->stack->locals/print->step/next->stack->diagnosis).",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "adapter_path": null,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec"
+    }
+  ],
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 30,
+    "model_requests_max": 32,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "interface_revision": "r2.1",
+  "interface_repairs": {
+    "a_source_visibility": "Production target source with line numbers and breakpoint-eligible lines shown at the break decision point.",
+    "b_source_rendering": "get_source_window observations render actual source lines, not just the summary string.",
+    "c_error_diagnostics": "Bounded/redacted ToolExecutionError diagnostics propagated and rendered in error observations.",
+    "d_tool_execution_diagnostic": "ToolExecutionError carries safe_diagnostic; dispatch extracts it through the existing bounded/redacted safety pipeline.",
+    "e_lifecycle_visibility": "Debugger lifecycle via public PdbSession.get_target_status(); exited/failed/terminated never rendered as PAUSED; fail-closed on status failure.",
+    "f_r2_staging": "R2 staged PAUSED progression: NOT_STARTED->break->PAUSED_NEEDS_STACK->stack->PAUSED_NEEDS_INSPECTION->locals/print->PAUSED_NEEDS_STEP->step/next->PAUSED_AFTER_STEP_NEEDS_STACK->stack->READY_FOR_DIAGNOSIS->diagnosis. Only staged-legal commands advertised/accepted.",
+    "g_stage_tracking": "Experiment-local, idempotent, fail-closed R2StageTracker advancing only from new verified status=ok observations."
+  },
+  "treatment": {
+    "forced_runtime_entry": "Administrative REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE navigation after verified reproduction (reused from D1/R1).",
+    "model_selects_breakpoint": true,
+    "breakpoint_affordance": "compile()+co_lines() derived, production-only, non-oracle. Module-definition lines excluded. Harness driver lines excluded by construction.",
+    "r2_staging": "Staged PAUSED lifecycle enforces genuine multi-turn: inspection and step before diagnosis. Model still chooses every value: line, locals vs print, expression, step vs next, diagnosis text."
+  },
+  "source_baseline": {
+    "r1_accepted_commit": "c842d697890bc5c2c18dcc6a81f60b98fe835044",
+    "note": "R2 descends from accepted R1. R1 evidence preserved immutably."
+  }
+}
