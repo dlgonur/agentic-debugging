@@ -1,0 +1,55 @@
+{
+  "schema_version": "debugger-interaction-v2-r1.1",
+  "experiment_id": "debugger-interaction-v2-r1",
+  "description": "R1 — repaired debugger interaction v2: same frozen RAW Qwen2.5-Coder-7B model, same task, same budgets as D1/S1, with the repaired model-facing interface (source + breakpoint-eligible lines, source rendering, error diagnostics, lifecycle visibility).",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "adapter_path": null,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec"
+    }
+  ],
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 24,
+    "model_requests_max": 28,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "interface_revision": "r1.1",
+  "interface_repairs": {
+    "a_source_visibility": "Production target source with line numbers and breakpoint-eligible lines shown at the break decision point.",
+    "b_source_rendering": "get_source_window observations render actual source lines, not just the summary string.",
+    "c_error_diagnostics": "Bounded/redacted ToolExecutionError diagnostics propagated and rendered in error observations.",
+    "d_tool_execution_diagnostic": "ToolExecutionError carries safe_diagnostic; dispatch extracts it through the existing bounded/redacted safety pipeline.",
+    "e_lifecycle_visibility": "Debugger lifecycle state (NOT_STARTED/PAUSED/CONSUMED_OR_ENDED) shown; only lifecycle-legal commands advertised."
+  },
+  "treatment": {
+    "forced_runtime_entry": "Administrative REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE navigation after verified reproduction (reused from D1).",
+    "model_selects_breakpoint": true,
+    "breakpoint_affordance": "compile()+co_lines() derived, production-only, non-oracle. Module-definition lines excluded. Harness driver lines excluded by construction."
+  },
+  "source_baseline": {
+    "s1_accepted_parent_commit": "2d4bc14c16d1a7eb3e7fa72c8fbd23259cb5cc4f",
+    "note": "R1 descends from the accepted S1 source. The old D1 evidence is preserved immutably."
+  }
+}

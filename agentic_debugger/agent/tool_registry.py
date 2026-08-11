@@ -58,7 +58,23 @@ class ToolTimeoutError(ToolRegistryError):
 
 
 class ToolExecutionError(ToolRegistryError):
-    """Raised by a handler for a bounded, expected execution failure."""
+    """Raised by a handler for a bounded, expected execution failure.
+
+    Carries an optional ``safe_diagnostic`` string that the dispatch layer
+    propagates through the same bounded/redaction pipeline used for
+    :class:`ToolRejectedError`.  The diagnostic must already be safe to surface
+    to the model (no raw exception strings, no secrets, no workspace paths);
+    ``_bounded_safe_diagnostic`` applies a second safety pass regardless.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        safe_diagnostic: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.safe_diagnostic = safe_diagnostic
 
 
 ToolArgumentValidator: TypeAlias = Callable[
@@ -540,13 +556,17 @@ class ToolRegistry:
                 ToolDispatchReason.TOOL_TIMEOUT,
                 _FIXED_SUMMARIES[ToolDispatchReason.TOOL_TIMEOUT],
             )
-        except ToolExecutionError:
+        except ToolExecutionError as exc:
             return _make_observation(
                 action,
                 observation_id,
                 ObservationStatus.ERROR,
                 ToolDispatchReason.TOOL_ERROR,
                 _FIXED_SUMMARIES[ToolDispatchReason.TOOL_ERROR],
+                payload=_rejection_payload(
+                    ToolDispatchReason.TOOL_ERROR,
+                    diagnostic=exc.safe_diagnostic,
+                ),
             )
         except Exception:
             return _make_observation(

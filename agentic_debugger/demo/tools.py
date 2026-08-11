@@ -676,7 +676,8 @@ def build_registry(
         try:
             workspace = TaskWorkspace(str(probe.source_dir), parent_dir=str(probe.parent_dir))
         except WorkspaceError as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+            diag = bounded_diagnostic(exc)
+            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         context.pdb_workspace = workspace
         # Register the session before starting it so a failed start is still
         # stopped and its workspace removed by release_pdb().
@@ -696,10 +697,14 @@ def build_registry(
             started = session.start_paused_target(probe.script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
             context.release_pdb()
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+            diag = bounded_diagnostic(exc)
+            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         if started.get("state") != "paused":
             context.release_pdb()
-            raise ToolExecutionError("runtime probe did not reach the declared breakpoint")
+            raise ToolExecutionError(
+                "runtime probe did not reach the declared breakpoint",
+                safe_diagnostic="runtime probe did not reach the declared breakpoint",
+            )
         payload = {
             "state": "paused",
             "script": started["script"],
@@ -719,10 +724,14 @@ def build_registry(
         try:
             stack = session.get_stack_summary()
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+            diag = bounded_diagnostic(exc)
+            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         generation = stack.get("pause_generation")
         if type(generation) is not int:
-            raise ToolExecutionError("stack summary did not report a pause generation")
+            raise ToolExecutionError(
+                "stack summary did not report a pause generation",
+                safe_diagnostic="stack summary did not report a pause generation",
+            )
         context.pdb_pause_generation = generation
         context.pdb_observation_names.append("get_stack_summary")
         return _ok(_json_safe(dict(stack), "get_stack_summary"), "bounded stack summary collected")
@@ -734,7 +743,8 @@ def build_registry(
                 int(arguments["frame_id"]), int(arguments["pause_generation"])
             )
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+            diag = bounded_diagnostic(exc)
+            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         context.pdb_observation_names.append("get_frame_locals")
         return _ok(_json_safe(dict(result), "get_frame_locals"), "bounded frame locals collected")
 
@@ -747,7 +757,8 @@ def build_registry(
                 str(arguments["expression"]),
             )
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+            diag = bounded_diagnostic(exc)
+            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         context.pdb_observation_names.append("safe_eval_expression")
         return _ok(
             _json_safe(dict(result), "safe_eval_expression"),
@@ -768,7 +779,8 @@ def build_registry(
         try:
             result = operation()
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+            diag = bounded_diagnostic(exc)
+            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         context.pdb_observation_names.append(action.name)
         return _ok(
             _json_safe(dict(result), action.name),
@@ -784,7 +796,8 @@ def build_registry(
         had_workspace = context.pdb_workspace is not None
         errors = context.release_pdb()
         if errors:
-            raise ToolExecutionError(bounded_diagnostic(errors[0], context.workspace.root))
+            diag = bounded_diagnostic(errors[0], context.workspace.root)
+            raise ToolExecutionError(diag, safe_diagnostic=diag)
         return _ok(
             {
                 "stopped": context.pdb_session is None,
