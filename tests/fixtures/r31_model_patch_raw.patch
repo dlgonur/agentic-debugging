@@ -1,0 +1,10 @@
+--- a/recent_window.py
++++ b/recent_window.py
+@@ -7,7 +7,7 @@ def recent_window(values: list[int], size: int) -> list[int]:
+     start_index = max(sequence_length - requested_size, 0)
+     end_index = sequence_length
+     calculated_indexes = list(
+-        range(start_index, end_index - (1 if requested_size == sequence_length else 0))
++        range(start_index, end_index)
+     )
+     return [values[index] for index in calculated_indexes]

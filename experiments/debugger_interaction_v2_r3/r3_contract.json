@@ -1,0 +1,64 @@
+{
+  "schema_version": "debugger-interaction-v2-r3",
+  "experiment_id": "debugger-interaction-v2-r3",
+  "description": "R3 — debugger-informed patch -> verifier. Same RAW Qwen2.5-Coder-7B, same task/budgets as R2, with fix: diagnosis RuntimeEvidence->PATCH (not self-transition), retained diagnosis + runtime slice into bounded PATCH checkpoint (patch+failed only), administrative closeout after apply, verifier authority.",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "adapter_path": null,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec"
+    }
+  ],
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 32,
+    "model_requests_max": 34,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 5,
+    "debugger_accepted_actions_max": 10
+  },
+  "interface_revision": "r3.2",
+  "interface_repairs": {
+    "a_source_visibility": "Production target source with line numbers and breakpoint-eligible lines shown at the break decision point.",
+    "b_source_rendering": "get_source_window observations render actual source lines, not just the summary string.",
+    "c_error_diagnostics": "Bounded/redacted ToolExecutionError diagnostics propagated and rendered in error observations.",
+    "d_tool_execution_diagnostic": "ToolExecutionError carries safe_diagnostic; dispatch extracts it through the existing bounded/redacted safety pipeline.",
+    "e_lifecycle_visibility": "Debugger lifecycle via public PdbSession.get_target_status(); exited/failed/terminated never rendered as PAUSED; fail-closed on status failure.",
+    "f_r2_staging": "R2 staged PAUSED progression: NOT_STARTED->break->PAUSED_NEEDS_STACK->stack->PAUSED_NEEDS_INSPECTION->locals/print->PAUSED_NEEDS_STEP->step/next->PAUSED_AFTER_STEP_NEEDS_STACK->stack->READY_FOR_DIAGNOSIS->diagnosis. Only staged-legal commands advertised/accepted.",
+    "g_stage_tracking": "Experiment-local, idempotent, fail-closed R2StageTracker advancing only from new verified status=ok observations.",
+    "h_r3_diagnosis_to_patch": "R3 fix: diagnosis in READY_FOR_DIAGNOSIS transitions RuntimeEvidence->PATCH (not self-transition). Exact text retained verbatim into bounded PATCH prompt with correlated runtime slice and provenance.",
+    "i_r3_bounded_patch_checkpoint": "PATCH advertises only patch+failed before successful apply. After successful APPLY_PATCH, runner performs deterministic administrative closeout without transport; verifier evaluates exact candidate.",
+    "j_r3_oracle_exclusion": "PATCH prompt excludes reference_repair, oracle root_cause_summary/target_symbols/runtime_evidence_hint, inspect_expressions, gold patch. Contains only task desc, source, exact diagnosis, bounded correlated observations.",
+    "k_r3_truthful_checkpoint": "PATCH prompt states 'Debugger interaction checkpoint complete. No further debugger commands are available in Patch phase.' — does not claim PDB session ended unless actually exited.",
+    "l_r3_2_serialization_normalization": "R3.2: fail-closed metadata-only hunk-count normalizer (serialization.py). B -> C recomputes ONLY old_count/new_count from hunk body (context+removed / context+added), preserving paths, starts, suffix, body lines, ordering, and \\ No newline markers. Semantic/body fingerprint equality required before dispatch; PatchManager and EvaluationVerifier receive C only. A/B/C SHA-256 recorded."
+  },
+  "treatment": {
+    "forced_runtime_entry": "Administrative REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE navigation after verified reproduction (reused from D1/R1/R2).",
+    "model_selects_breakpoint": true,
+    "breakpoint_affordance": "compile()+co_lines() derived, production-only, non-oracle.",
+    "r3_staging": "Same staged PAUSED progression as R2; diagnosis exits to PATCH.",
+    "r3_patch_checkpoint": "Bounded patch checkpoint: patch (unified diff) + failed before apply; administrative bookkeeping after."
+  },
+  "source_baseline": {
+    "r2_accepted_commit": "97cc7fe80b6b1f70d2fd6c6d5e11c1487f443af2",
+    "note": "R3 descends from committed R2 (97cc7fe). R1/R2 evidence preserved immutably."
+  }
+}
