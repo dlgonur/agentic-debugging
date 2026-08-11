@@ -189,29 +189,26 @@ def patch_diff_affordance(module_path: str) -> str:
     """Local repair affordance shown immediately before final output
     instruction.
 
-    Two common repair representations are offered:
-    - ``patch`` with a unified diff (the diff may optionally be wrapped in
-      exactly one markdown code fence);
-    - ``file`` with the COMPLETE replacement file content (the controller
-      deterministically serializes it into the diff to apply).
-
-    Both name the per-task writable production path (public task data); no
-    oracle or test metadata is involved.
+    The WHOLE-FILE representation is the recommended repair output: ``file``
+    with the COMPLETE replacement file content (the controller deterministi-
+    cally serializes it into the diff to apply).  The classic ``patch`` diff
+    remains available as an alternative.  Both name the per-task writable
+    production path (public task data); no oracle or test metadata involved.
     """
     return (
         "Required response now — produce your best minimal repair using the "
-        "source, debugger observations, and your diagnosis above.  Emit "
-        "either:\n"
+        "source, debugger observations, and your diagnosis above.  PREFERRED "
+        "output — replace the whole file (complete content, nothing else):\n"
+        f"file {module_path}\n"
+        "<complete replacement file content>\n"
+        "Alternative — a unified diff:\n"
         "patch\n"
         f"--- a/{module_path}\n"
         f"+++ b/{module_path}\n"
         "@@ ...\n"
         " <context>\n"
         "-<old line>\n"
-        "+<new line>\n"
-        "or, to replace the whole file:\n"
-        f"file {module_path}\n"
-        "<complete replacement file content, nothing else>"
+        "+<new line>"
     )
 
 
@@ -1129,13 +1126,13 @@ SYSTEM_PROMPT_TEMPLATE = (
     "    Record your diagnosis from the real failure output and the locals\n"
     "    you already observed.\n"
     "  - After debugging, use 'diagnosis <text>' to record your diagnosis.\n"
-    "    After diagnosis you will enter the Patch phase — then emit either\n"
-    "    'patch' with a unified diff or 'file <path>' with the complete\n"
-    "    replacement file content.\n"
-    "  - The 'patch' diff (or the 'file' content) may optionally be wrapped\n"
+    "    After diagnosis you will enter the Patch phase — then emit\n"
+    "    'file <path>' with the COMPLETE replacement file content (preferred)\n"
+    "    or 'patch' with a unified diff.\n"
+    "  - The 'file' content (or the 'patch' diff) may optionally be wrapped\n"
     "    in exactly one markdown code fence (``` or ```diff ... ```); the\n"
-    "    controller unwraps a single fence deterministically.  A plain diff\n"
-    "    without a fence is also accepted.\n"
+    "    controller unwraps a single fence deterministically.  A plain\n"
+    "    response without a fence is also accepted.\n"
 )
 
 

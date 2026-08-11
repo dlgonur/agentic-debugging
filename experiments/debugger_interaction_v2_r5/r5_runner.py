@@ -157,8 +157,9 @@ def derive_common_pdb_timeout(max_latency_ms: int) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _load_contract() -> dict[str, Any]:
-    value = json.loads(CONTRACT_PATH.read_text(encoding="utf-8"))
+def _load_contract(name: str = "r5_contract.json") -> dict[str, Any]:
+    path = CONTRACT_PATH.with_name(name)
+    value = json.loads(path.read_text(encoding="utf-8"))
     if value.get("schema_version") != R5_SCHEMA_VERSION:
         raise RuntimeError("unsupported R5 contract")
     return value
@@ -192,17 +193,16 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _validate_contract(contract: dict[str, Any]) -> dict[str, Any]:
+def _validate_contract(contract: dict[str, Any], *, repo: str, revision: str, gen: dict[str, Any]) -> dict[str, Any]:
     model = contract.get("model", {})
-    if model.get("base_repository") != BASE_REPOSITORY:
+    if model.get("base_repository") != repo:
         raise RuntimeError("model base_repository drift")
-    if model.get("base_revision") != BASE_REVISION:
+    if model.get("base_revision") != revision:
         raise RuntimeError("model base_revision drift")
     if model.get("adapter_applied") is not False:
         raise RuntimeError("R5 must be RAW base only")
     if model.get("rag_enabled") is not False:
         raise RuntimeError("R5 must have RAG OFF")
-    gen = model.get("generation", {})
     if gen.get("do_sample") is not False:
         raise RuntimeError("generation.do_sample must be False")
     if gen.get("max_new_tokens") != 1024:
@@ -250,11 +250,13 @@ def _candidate_source_manifest() -> dict[str, str]:
         "experiments/debugger_interaction_v2_r5/bridge.py",
         "experiments/debugger_interaction_v2_r5/adapter.py",
         "experiments/debugger_interaction_v2_r5/transport.py",
+        "experiments/debugger_interaction_v2_r5/transport_14b.py",
         "experiments/debugger_interaction_v2_r5/phase_navigation.py",
         "experiments/debugger_interaction_v2_r5/serialization.py",
         "experiments/debugger_interaction_v2_r5/launcher.py",
         "experiments/debugger_interaction_v2_r5/r5_runner.py",
         "experiments/debugger_interaction_v2_r5/r5_contract.json",
+        "experiments/debugger_interaction_v2_r5/r5_contract_14b.json",
         "agentic_debugger/runtime/patcher.py",
         "agentic_debugger/evaluation/verifier.py",
         "agentic_debugger/evaluation/runner.py",
@@ -871,7 +873,7 @@ def run_experiment(
 
     inner_adapter = R5DebuggerBridgeAdapter(
         transport=transport,
-        model_name=f"{BASE_REPOSITORY}+RAW-BASE-R5",
+        model_name=f"{contract['model']['base_repository']}+{contract['model']['base_revision'][:7]}-R5",
         task_description=task_desc,
         script_path=module_path,
         source_text=original_source,
@@ -1253,13 +1255,14 @@ def _first_causal_failure(evidence: dict[str, Any], task_id: str) -> str:
     return "semantic repair"
 
 
-def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str) -> dict[str, Any]:
+def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str, contract: dict[str, Any]) -> dict[str, Any]:
     chain = evidence.get("gate_results", {}).get("gate_chain") or {}
     patch_gate = evidence.get("gate_results", {}).get("gate_patch") or {}
     verifier = evidence.get("verifier") or {}
     task_meta = evidence.get("task") or {}
     telemetry = evidence.get("telemetry") or []
     controller = evidence.get("controller_result") or {}
+    model = contract.get("model", {})
 
     def _first_of(kind: str) -> Optional[dict[str, Any]]:
         for t in telemetry:
@@ -1283,7 +1286,7 @@ def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str) -> di
     return {
         "task_id": task_id,
         "bug_category": task_meta.get("bug_category"),
-        "model_identity": "Qwen/Qwen2.5-Coder-7B-Instruct@c03e6d358207e414f1eca0bb1891e29f1db0e242",
+        "model_identity": f"{model.get('base_repository')}@{model.get('base_revision')}",
         "treatment_hash": contract_sha,
         "system_prompt_sha256": (evidence.get("interface_info") or {}).get("system_prompt_sha256"),
         "reproduction_success": any(
@@ -1341,7 +1344,7 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
             pdb_session_factory=session_factory,
         )
         per_task_evidence[task_id] = str(case_output / "evidence.json")
-        rows.append(_matrix_row(evidence, task_id, contract_sha))
+        rows.append(_matrix_row(evidence, task_id, contract_sha, contract))
 
     aggregate = {
         "end_to_end_resolved": sum(1 for r in rows if r["verifier_outcome"] == "RESOLVED"),
@@ -1412,6 +1415,33 @@ def _aggregate_boundaries(rows: list[dict[str, Any]]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 
 
+def _model_specs() -> dict[str, dict[str, Any]]:
+    """Frozen model-identity registry for the runner.
+
+    ``raw7b`` is the accepted RAW Qwen2.5-Coder-7B identity (r5.1-r5.3).
+    ``coder14b`` is the model-identity escalation (r5.4): the same treatment
+    with the stronger Qwen2.5-Coder-14B base; results are labeled with the
+    14B identity, never as RAW-7B results.
+    """
+    from experiments.debugger_interaction_v2_r5 import transport_14b
+    return {
+        "raw7b": {
+            "contract_name": "r5_contract.json",
+            "transport_class": LocalRawQwenTransport,
+            "repo": BASE_REPOSITORY,
+            "revision": BASE_REVISION,
+            "generation": GENERATION_CONFIG,
+        },
+        "coder14b": {
+            "contract_name": "r5_contract_14b.json",
+            "transport_class": transport_14b.LocalQwen14BTransport,
+            "repo": transport_14b.BASE_REPOSITORY,
+            "revision": transport_14b.BASE_REVISION,
+            "generation": transport_14b.GENERATION_CONFIG,
+        },
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="R5 — generalized debugger-informed repair matrix"
@@ -1422,15 +1452,27 @@ def main() -> int:
     parser.add_argument("--task", type=str, default=None,
                         help="run a single pre-registered task (affected-set rerun under a repaired revision)")
     parser.add_argument("--output-dir", type=str, default=None)
+    parser.add_argument("--model", type=str, default="raw7b",
+                        choices=("raw7b", "coder14b"),
+                        help="frozen model identity (raw7b = accepted RAW base; coder14b = escalation identity)")
     args = parser.parse_args()
 
     if not (args.validate_only or args.run or args.measure_latency or args.task):
         parser.error("select --validate-only, --measure-latency, --run, or --task")
 
-    contract = _load_contract()
+    specs = _model_specs()
+    spec = specs[args.model]
+    contract = _load_contract(spec["contract_name"])
+    transport_class = spec["transport_class"]
+
+    def validate() -> dict[str, Any]:
+        return _validate_contract(
+            contract, repo=spec["repo"], revision=spec["revision"],
+            gen=spec["generation"],
+        )
 
     if args.validate_only:
-        validation = _validate_contract(contract)
+        validation = validate()
         identity = _r5_run_identity(contract)
         source_commit_sha = identity.get("source_commit_sha")
         validation = dict(validation)
@@ -1438,6 +1480,7 @@ def main() -> int:
         validation["experiment_contract_sha256"] = identity.get("experiment_contract_sha256")
         validation["runtime_python"] = identity.get("runtime_python")
         validation["system_prompt_template_sha256"] = identity.get("system_prompt_template_sha256")
+        validation["model_identity"] = args.model
         if source_commit_sha is None:
             print(json.dumps({
                 "status": "FAIL",
@@ -1481,7 +1524,7 @@ def main() -> int:
             parser.error("--output-dir is required for --task")
         if args.task not in R5_TASKS:
             parser.error(f"--task must be one of the pre-registered tasks: {R5_TASKS}")
-        _validate_contract(contract)
+        validate()
         output_dir = Path(args.output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         pdb_timeout = contract["budgets"]["pdb_request_timeout_seconds"]
@@ -1497,7 +1540,7 @@ def main() -> int:
         case_output = output_dir / args.task
         case_output.mkdir(parents=True, exist_ok=True)
         evidence = run_experiment(
-            contract, LocalRawQwenTransport(), case_output,
+            contract, transport_class(), case_output,
             task_id=args.task,
             pdb_session_factory=session_factory,
         )
@@ -1514,9 +1557,12 @@ def main() -> int:
     if args.run:
         if not args.output_dir:
             parser.error("--output-dir is required for --run")
-        _validate_contract(contract)
+        validate()
         output_dir = Path(args.output_dir)
-        matrix = run_matrix(contract, output_dir, transport_factory=LocalRawQwenTransport)
+        matrix = run_matrix(
+            contract, output_dir,
+            transport_factory=lambda: transport_class(),
+        )
         print(json.dumps({
             "status": "COMPLETE",
             "matrix_path": str(output_dir / "matrix.json"),

@@ -48,7 +48,15 @@ class TestContract:
 
     def test_contract_validates(self):
         contract = _load_contract()
-        validation = _validate_contract(contract)
+        from experiments.debugger_interaction_v2_r5.transport import (
+            BASE_REPOSITORY,
+            BASE_REVISION,
+            GENERATION_CONFIG,
+        )
+        validation = _validate_contract(
+            contract, repo=BASE_REPOSITORY, revision=BASE_REVISION,
+            gen=GENERATION_CONFIG,
+        )
         assert validation["validated"] is True
         assert len(validation["contract_sha256"]) == 64
 
