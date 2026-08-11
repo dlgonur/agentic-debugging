@@ -1,0 +1,265 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>S6 — Real Debugging Evidence (Professor-Facing Evidence Presentation)</title>
+<style>
+  :root{
+    --ink:#1a1a1a; --muted:#5b5b5b; --paper:#ffffff; --line:#d8d8d8;
+    --amber-bg:#fff7e6; --amber-bd:#d59f0f;
+    --blue-bg:#eaf2fb; --blue-bd:#2b6cb0;
+    --red-bg:#fbe9e9; --red-bd:#c53030;
+    --green-bg:#ecf6ec; --green-bd:#2f855a;
+    --grey-bg:#f2f2f2; --grey-bd:#888;
+  }
+  *{box-sizing:border-box}
+  body{font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink); background:var(--paper); margin:0; padding:0 18px 60px; line-height:1.45; max-width:1080px; margin:0 auto;}
+  h1{font-size:1.5rem; margin:1.2rem 0 .2rem;}
+  h2{font-size:1.18rem; margin:2rem 0 .6rem; padding-bottom:.3rem; border-bottom:2px solid var(--line);}
+  h3{font-size:1rem; margin:1.2rem 0 .4rem;}
+  .sub{color:var(--muted); font-size:.92rem; margin:0 0 1rem;}
+  .tag{display:inline-block; font-size:.72rem; font-weight:700; padding:2px 8px; border-radius:3px;
+       border:1px solid; letter-spacing:.03em; vertical-align:middle;}
+  .tag-engineering{background:var(--amber-bg); border-color:var(--amber-bd); color:#744a07;}
+  .tag-real{background:var(--blue-bg); border-color:var(--blue-bd); color:#1a4b82;}
+  .tag-result{background:var(--red-bg); border-color:var(--red-bd); color:#7a1a1a;}
+  .tag-static{background:var(--green-bg); border-color:var(--green-bd); color:#1f6b43;}
+  .tag-prose{background:var(--grey-bg); border-color:var(--grey-bd); color:#444;}
+  .banner{font-size:.9rem; font-weight:700; padding:8px 12px; border-radius:4px; margin:.8rem 0; border:1px solid;}
+  .banner-amber{background:var(--amber-bg); border-color:var(--amber-bd); color:#744a07;}
+  .banner-grey{background:var(--grey-bg); border-color:var(--grey-bd); color:#333;}
+  table{border-collapse:collapse; width:100%; margin:.5rem 0 1rem; font-size:.86rem;}
+  th,td{border:1px solid var(--line); padding:6px 8px; text-align:left; vertical-align:top;}
+  th{background:#f7f7f7; font-weight:600;}
+  td.yes{color:#1f6b43; font-weight:700;}
+  td.no{color:#7a1a1a; font-weight:700;}
+  td.na{color:var(--muted);}
+  .seq{margin:.6rem 0; padding:0; list-style:none;}
+  .seq li{position:relative; padding:7px 10px 7px 110px; margin:0 0 6px; border:1px solid var(--line);
+          border-radius:4px; background:#fafafa; font-size:.9rem;}
+  .seq li .layer{position:absolute; left:0; top:0; bottom:0; width:100px; padding:7px 6px;
+    font-weight:700; font-size:.74rem; text-transform:uppercase; letter-spacing:.04em;
+    display:flex; align-items:center; border-radius:3px 0 0 3px;}
+  .seq li .layer.model{background:var(--blue-bg); color:#1a4b82;}
+  .seq li .layer.controller{background:#eef; color:#3a3a8a;}
+  .seq li .layer.backend{background:var(--red-bg); color:#7a1a1a;}
+  .seq li .layer.result{background:#f0f0f0; color:#444;}
+  .seq li .layer.gate{background:#2a2a2a; color:#fff;}
+  .seq li .val{font-family:Consolas,Menlo,monospace; font-size:.86rem;}
+  .seq li.fail{border-color:var(--red-bd);}
+  .prov{font-size:.78rem; color:var(--muted); margin:.3rem 0 .8rem;}
+  .prov code{background:#f4f4f4; padding:1px 4px; border-radius:2px; font-size:.78rem;}
+  .pill{display:inline-block; font-size:.72rem; padding:1px 7px; border-radius:10px; margin-left:6px;}
+  .pill-amber{background:var(--amber-bg); color:#744a07;}
+  .pill-blue{background:var(--blue-bg); color:#1a4b82;}
+  .pill-grey{background:#eee; color:#444;}
+  .pill-red{background:var(--red-bg); color:#7a1a1a;}
+  .pill-green{background:var(--green-bg); color:#1f6b43;}
+  .legend{font-size:.8rem; color:var(--muted); margin:.5rem 0 1.2rem; border-left:3px solid var(--line); padding-left:10px;}
+  .legend b{color:var(--ink);}
+  .cap{font-size:.86rem; color:#444; margin:.4rem 0;}
+  .cap ul{margin:.2rem 0 .2rem 1.1rem;}
+  .final{background:#f8f8f8; border:1px solid var(--line); border-radius:4px; padding:14px 16px; margin:1rem 0;}
+  .final ul{margin:.3rem 0 0; padding-left:1.1rem;}
+  .final li{margin:.3rem 0;}
+  .status-block{background:#222; color:#eee; border-radius:4px; padding:12px 16px; font-family:Consolas,Menlo,monospace; font-size:.84rem; margin:1rem 0;}
+  .status-block .k{color:#9ec5fe;}
+  .status-block .v-yes{color:#7ee787;}
+  .status-block .v-no{color:#ff8181;}
+  footer{margin-top:2rem; color:var(--muted); font-size:.8rem; border-top:1px solid var(--line); padding-top:1rem;}
+</style>
+</head>
+<body>
+
+<h1>S6 — Real Debugging Evidence</h1>
+<p class="sub">Professor-facing evidence presentation. Bounded real-model debugger result. Static snapshot built from accepted frozen evidence — no runtime fetch, no model inference, no network.</p>
+
+<div class="banner banner-amber" data-claim-id="s6.negative_result_banner">
+  <strong>This is NOT a successful debugger demo.</strong> No real-model dynamic debugger trajectory reached a successful iterative PDB loop. This presentation honestly displays a bounded negative real-model result alongside deterministic engineering capability.
+</div>
+
+<div class="legend">
+  <b>Visual labels — do not confuse engineering capability with real-model success:</b><br>
+  <span class="tag tag-engineering">ENGINEERING CAPABILITY</span> deterministic backend/infrastructure, NOT real-model behavior &nbsp;|&nbsp;
+  <span class="tag tag-real">REAL MODEL TRACE</span> what a real model actually authored/did &nbsp;|&nbsp;
+  <span class="tag tag-result">RESULT</span> outcome of that real-model action &nbsp;|&nbsp;
+  <span class="tag tag-static">STATIC SUCCESS</span> real-provider repair without debugger
+</div>
+
+<!-- ====================== PANEL 1 ====================== -->
+<h2>1 · Project question — Professor TODO #23 / #24 / #25 status</h2>
+<p class="cap">Compact matrix. Engineering capability and real-model behavior are kept in separate columns; a green engineering YES never implies positive model success.</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>TODO</th><th>Capability</th>
+      <th><span class="tag tag-engineering">Engineering evidence</span></th>
+      <th><span class="tag tag-real">RAW real evidence</span></th>
+      <th><span class="tag tag-real">cp118 real evidence</span></th>
+      <th>Positive success?</th>
+      <th>Bounded negative?</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><b>#23</b><br>generates &amp; interprets debugger commands/output</td>
+      <td>command generation &amp; observation return</td>
+      <td class="yes" data-claim-id="todo23.eng">YES</td>
+      <td data-claim-id="todo23.raw">1 cmd <code>break 20</code> → backend <code>tool_error</code></td>
+      <td data-claim-id="todo23.cp118">1 cmd <code>continue</code> → rejected</td>
+      <td class="no" data-claim-id="todo23.positive_real_model_success">NO</td>
+      <td class="yes" data-claim-id="todo23.bounded_negative">YES</td>
+    </tr>
+    <tr>
+      <td><b>#24</b><br>breakpoint / variables / stack / step</td>
+      <td>full PDB grammar implemented</td>
+      <td class="yes" data-claim-id="todo24.eng">YES</td>
+      <td data-claim-id="todo24.raw">only <code>break 20</code> (reached backend → <code>tool_error</code>)</td>
+      <td data-claim-id="todo24.cp118">only <code>continue</code> (rejected)</td>
+      <td class="no" data-claim-id="todo24.positive_real_model_success">NO</td>
+      <td class="yes" data-claim-id="todo24.bounded_negative">YES</td>
+    </tr>
+    <tr>
+      <td><b>#25</b><br>debugger → patch → tests/verifier</td>
+      <td>patch → verifier path implemented</td>
+      <td class="yes" data-claim-id="todo25.eng">YES</td>
+      <td data-claim-id="todo25.raw">no diagnosis, no patch, verifier not run</td>
+      <td data-claim-id="todo25.cp118">no diagnosis, no patch, verifier not run</td>
+      <td class="no" data-claim-id="todo25.positive_real_model_success">NO</td>
+      <td class="yes" data-claim-id="todo25.bounded_negative">YES</td>
+    </tr>
+  </tbody>
+</table>
+<p class="prov">Source carrier: <code>analysis/s5_final_controlled_comparison/s5_professor_todo_coverage_matrix.{md,json}</code> (tracked, clean-checkout available). The static real-provider repair success (QuixBugs gcd) does <b>NOT</b> demonstrate debugger use and is shown separately in Panel 5.</p>
+
+<!-- ====================== PANEL 2 ====================== -->
+<h2>2 · Deterministic debugger capability</h2>
+<span class="banner banner-amber" style="display:block" data-claim-id="eng.not_real_model">ENGINEERING CAPABILITY — NOT REAL-MODEL SUCCESS</span>
+
+<p class="cap">Two distinct categories, per the evidence. Do not assume one golden trajectory exercised every implemented command.</p>
+
+<h3>IMPLEMENTED / DETERMINISTICALLY TESTED CAPABILITY <span class="pill pill-amber">backend source + unit/integration tests</span></h3>
+<p class="cap" data-claim-id="eng.implemented_grammar">
+  Backend protocol commands: <code>run_to_breakpoint</code>, <code>start_paused_target</code>, <code>continue_paused_target</code>, <code>step_paused_target</code>, <code>next_paused_target</code>, <code>get_target_status</code>, <code>terminate_paused_target</code>, <code>get_stack_summary</code>, <code>get_frame</code>, <code>get_frame_locals</code>, <code>safe_eval_expression</code>, <code>run_post_mortem</code>.
+  Integration test exercises <code>step</code>, <code>next</code>, <code>continue</code>, <code>get_stack_summary</code> against a real persistent PDB worker.
+</p>
+<p class="prov">Source: <code>agentic_debugger/runtime/pdb_protocol.py</code> (command set, lines 14–18); <code>tests/integration/test_pdb_interactive_controls.py</code> (step/next/continue/stack). Both tracked, clean-checkout available.</p>
+
+<h3>OBSERVED IN THIS GOLDEN TRAJECTORY <span class="pill pill-green">frozen golden artifact</span></h3>
+<table>
+  <thead><tr><th>Field</th><th>Value</th></tr></thead>
+  <tbody>
+    <tr><td>Artifact</td><td data-claim-id="eng.golden_artifact"><code>tests/golden_trajectories/data/quixbugs-gcd-pdb-reachability-captured-result.json</code></td></tr>
+    <tr><td>Task / verdict</td><td data-claim-id="eng.golden_verdict"><code>quixbugs-gcd-smoke-v1</code> · <code>REACHABILITY_CASE_PASSED</code></td></tr>
+    <tr><td>Breakpoint</td><td data-claim-id="eng.golden_breakpoint">line <code>5</code> on <code>python_programs/gcd.py</code></td></tr>
+    <tr><td>PDB commands observed</td><td data-claim-id="eng.golden_observed_commands"><code>start_pdb_session</code>, <code>get_stack_summary</code>, <code>get_frame_locals</code>, <code>stop_pdb_session</code></td></tr>
+    <tr><td>Successful observations</td><td data-claim-id="eng.golden_successful_obs"><b>2</b> (<code>successful_pdb_observation_count = 2</code>; <code>failed_pdb_observation_count = 0</code>)</td></tr>
+    <tr><td>NOT observed in this trajectory</td><td class="na" data-claim-id="eng.golden_not_observed"><code>continue</code>, <code>step</code>, <code>next</code>, <code>safe_eval_expression</code> — implemented/tested elsewhere, but not exercised in this golden capture</td></tr>
+  </tbody>
+</table>
+<p class="prov">Patch verification is explicitly out of scope for this reachability case. Source tracked, clean-checkout available.</p>
+
+<!-- ====================== PANEL 3 ====================== -->
+<h2>3 · REAL RAW D1 trace <span class="pill pill-blue">frozen_in_repo (local)</span></h2>
+<p class="cap">Exact layering preserved. The model authored <code>break 20</code>; the controller translated it to an internal action. The model did <b>NOT</b> author the literal <code>start_pdb_session</code>. No omitted turns are invented; the repeated rejected <code>reproduce</code> commands and <code>get_source_window</code> source-reads are summarized, not fabricated.</p>
+
+<ol class="seq">
+  <li><span class="layer model">MODEL</span>
+    <span class="val" data-claim-id="d1.model_command">reproduction (baseline failure reproduced), then model-authored PDB command: <code>break 20</code></span></li>
+  <li><span class="layer controller">CONTROLLER</span>
+    <span class="val" data-claim-id="d1.controller_acceptance">accepted the model PDB directive (<code>parse_result.status = "accepted"</code>, <code>normalized_command = "break 20"</code>)</span></li>
+  <li><span class="layer controller">CONTROLLER TRANSLATION / BACKEND DISPATCH</span>
+    <span class="val" data-claim-id="d1.backend_dispatch">translated to internal directive <code>start_pdb_session</code> (args <code>breakpoint_line = 20</code>) — controller-translated, <b>not model-authored</b></span></li>
+  <li class="fail"><span class="layer backend">BACKEND RESULT</span>
+    <span class="val" data-claim-id="d1.backend_result"><code>tool_error</code> — observation <code>status = "error"</code>, <code>dispatch_reason = "tool_error"</code>, <code>summary = "Tool execution failed."</code> (requested line 20 was outside the 19-line probe)</span></li>
+  <li class="fail"><span class="layer result">RESULT</span>
+    <span class="val" data-claim-id="d1.successful_observations">successful non-error PDB observations: <b>0</b> (no second accepted model-authored PDB command)</span></li>
+  <li class="fail"><span class="layer gate">GATE B</span>
+    <span class="val" data-claim-id="d1.gate_b"><b>FAIL</b> — <code>"need &gt;=2 accepted PDB commands, got 1"</code></span></li>
+  <li class="fail"><span class="layer gate">GATE C</span>
+    <span class="val" data-claim-id="d1.gate_c"><b>FAIL</b> — <code>has_diagnosis = false</code>, <code>has_patch = false</code>, <code>verifier_executed = false</code>, <code>resolved = false</code></span></li>
+</ol>
+
+<table>
+  <tbody>
+    <tr><td>Model condition</td><td data-claim-id="d1.model_condition"><code>RAW_BASE</code> · <code>Qwen/Qwen2.5-Coder-7B-Instruct</code> (adapter not applied, RAG off)</td></tr>
+    <tr><td>Task</td><td data-claim-id="d1.task"><code>curated-off-by-one-002</code></td></tr>
+    <tr><td>Controller result</td><td data-claim-id="d1.controller_result"><code>final_state = "Failed"</code>, <code>stop_reason = "budget_exhausted"</code>, <code>model_calls = 17</code></td></tr>
+    <tr><td>Tokens</td><td data-claim-id="d1.tokens">17,686 total (17,506 prompt + 180 completion)</td></tr>
+    <tr><td>Duration</td><td data-claim-id="d1.duration">34,125 ms</td></tr>
+    <tr><td>Post-debug diagnosis / patch</td><td data-claim-id="d1.no_output"><code>post_debug_diagnoses = []</code>; <code>candidate_patch = null</code>; <code>verifier.executed = false</code></td></tr>
+  </tbody>
+</table>
+<p class="prov">Underlying scientific source: <code>experiments/debugger_interaction_v2_d1/runs/run-1-live-2026-08-10/evidence.json</code> (sha256 <code>c7a405cc…</code>) — <b>local untracked evidence</b>, <code>local_untracked_accepted</code> provenance; recorded with its sha256 but NOT clean-checkout reproducible as a scientific source. <b>Reproducibility carrier</b>: the tracked S5 coverage matrix (<code>analysis/s5_final_controlled_comparison/s5_professor_todo_coverage_matrix.json</code>), which reproduces every displayed D1 fact textually and is clean-checkout available. Underlying provenance is not promoted. D1 source commit <code>7bda64d…</code>; contract sha256 <code>1d8819cb…</code>.</p>
+
+<!-- ====================== PANEL 4 ====================== -->
+<h2>4 · REAL cp118 S2 trace <span class="pill pill-grey">master_plan_prose_only</span></h2>
+<p class="cap">The S2 outcome is sourceable only as master-plan prose. There is no in-repo frozen run-result artifact for S2. The figure "5 calls / 3226 tokens" is NOT sourceable to any frozen in-repo artifact and is therefore <b>omitted entirely</b> (not displayed as frozen evidence).</p>
+
+<ol class="seq">
+  <li><span class="layer model">MODEL</span>
+    <span class="val" data-claim-id="s2.model_command">reproduction succeeded; model-authored PDB command: <code>continue</code></span></li>
+  <li class="fail"><span class="layer backend">BACKEND RESULT</span>
+    <span class="val" data-claim-id="s2.backend_result">rejected — no active PDB session existed</span></li>
+  <li class="fail"><span class="layer result">RESULT</span>
+    <span class="val" data-claim-id="s2.successful_observations">successful observations: <b>0</b> (no second PDB command)</span></li>
+  <li class="fail"><span class="layer gate">GATE B</span>
+    <span class="val" data-claim-id="s2.gate_b"><b>FAIL</b> (strict)</span></li>
+  <li class="fail"><span class="layer gate">GATE C</span>
+    <span class="val" data-claim-id="s2.gate_c"><b>FAIL</b> — no diagnosis, no patch, verifier not executed</span></li>
+</ol>
+<p class="prov"><span class="tag tag-prose">PROVENANCE: master_plan_prose_only</span> &nbsp; Underlying scientific source: S5 master plan §S2 (working-doc, untracked prose). <b>Reproducibility carrier</b>: the tracked S5 coverage matrix (<code>analysis/s5_final_controlled_comparison/s5_professor_todo_coverage_matrix.json</code>), which reproduces the S2 outcome textually and is clean-checkout available. Underlying provenance tier remains <code>master_plan_prose_only</code> — not promoted to frozen-run evidence. cp118 adapter identity reused (<code>65b5ed9a…</code>).</p>
+
+<!-- ====================== PANEL 5 ====================== -->
+<h2>5 · Static success boundary <span class="pill pill-green">real-provider static repair</span></h2>
+<p class="cap">A real-provider static model → patch → verifier path reached verifier RESOLVED. This is shown to prove the repair/verifier path can succeed — and to prevent the viewer from confusing it with TODO #25 positive debugger evidence.</p>
+
+<span class="banner banner-amber" style="display:block; background:var(--green-bg); border-color:var(--green-bd); color:#1f6b43;" data-claim-id="static_gcd.static_success_debugger_not_used">
+  <strong>STATIC SUCCESS — DEBUGGER NOT USED</strong>
+</span>
+
+<table>
+  <tbody>
+    <tr><td>Program</td><td data-claim-id="static_gcd.program">QuixBugs <code>gcd</code></td></tr>
+    <tr><td>Path</td><td data-claim-id="static_gcd.path_label">real-provider static model → patch → verifier</td></tr>
+    <tr><td>F2P</td><td data-claim-id="static_gcd.f2p"><b>5/5</b></td></tr>
+    <tr><td>P2P</td><td data-claim-id="static_gcd.p2p"><b>1/1</b></td></tr>
+    <tr><td>Full suite</td><td data-claim-id="static_gcd.full_suite">6/6</td></tr>
+    <tr><td>Verifier outcome</td><td data-claim-id="static_gcd.resolved"><b>COMPLETED / RESOLVED</b></td></tr>
+    <tr><td>Latency</td><td data-claim-id="static_gcd.latency">62.3 s</td></tr>
+  </tbody>
+</table>
+<p class="prov">Wording matches the accepted source: the tracked S5 report labels this axis <strong>"Static real-provider model → patch → verifier"</strong>. The gcd smoke docs (<code>docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md:116</code>, <code>docs/QUIXBUGS_SMOKE_USAGE_V1.md</code>) establish the verifier figures (F2P 5/5, P2P 1/1, RESOLVED) via a gold-patch path; the "real-provider" framing is sourced from the tracked S5 comparison report. The docs do not state "real-model" as a stronger claim, so the primary label is <b>real-provider</b>, not upgraded. Source: <code>research/quixbugs/GCD_SMOKE_MANIFEST_V1.json</code> (tracked), <code>docs/QUIXBUGS_*</code> (tracked), <code>analysis/.../s5_controlled_comparison_report.md</code> (tracked). All clean-checkout available.</p>
+
+<!-- ====================== PANEL 6 ====================== -->
+<h2>6 · Final professor claim</h2>
+<div class="final">
+  <ul>
+    <li data-claim-id="final.infra_exists">The debugger infrastructure exists and is deterministically validated (golden reachability: 2 successful PDB observations; full grammar implemented and unit/integration tested).</li>
+    <li data-claim-id="final.both_produced_cmd">Both real RAW and cp118 produced exactly one model-authored debugger command (<code>break 20</code> and <code>continue</code> respectively).</li>
+    <li data-claim-id="final.no_loop">Neither established a successful iterative PDB loop. RAW's accepted <code>break 20</code> reached the backend but ended in <code>tool_error</code>; cp118's <code>continue</code> was rejected because no active PDB session existed. Both produced 0 successful non-error PDB observations.</li>
+    <li data-claim-id="final.no_patch_to_verifier">No real debugger-informed patch reached the verifier from either model condition.</li>
+    <li data-claim-id="final.bounded_negative">Therefore TODO #23–25 have bounded real-model <b>negative</b> evidence, not positive end-to-end completion.</li>
+    <li data-claim-id="final.open_limitation">A positive real-model dynamic debugger demo remains an open limitation / future-work item; it cannot be produced from the accepted frozen evidence in this repository.</li>
+  </ul>
+</div>
+
+<h3>S6 status semantics</h3>
+<div class="status-block" data-claim-id="s6.status_semantics">
+  <span class="k">presentation_reproducible</span>                            = <span class="v-yes">YES</span><br>
+  <span class="k">positive_real_model_dynamic_debugger_demo</span>         = <span class="v-no">NO</span><br>
+  <span class="k">bounded_negative_real_model_evidence_presented</span>    = <span class="v-yes">YES</span>
+</div>
+<p class="prov">Status semantics reflect the static-snapshot presentation only. The positive-demo field is NO by construction of the accepted evidence; the other two become YES only after the bounded static validation passes (see <code>validation.md</code> in the review package).</p>
+
+<footer>
+  S6 — Real Debugging Evidence · professor-facing evidence presentation.<br>
+  Self-contained static HTML; no external URLs, CDNs, scripts, or stylesheets. Built from accepted frozen evidence; every load-bearing fact carries a <code>data-claim-id</code> bound to an entry in <code>s6_presentation_manifest.json</code>.<br>
+  Baseline HEAD: <code>c20133a1bc4e841b0667aa9d2a3ef2a0f2748196</code> · Branch: <code>presentation/s6-real-debugging-evidence-v1</code>.
+</footer>
+
+</body>
+</html>
