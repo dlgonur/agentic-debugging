@@ -309,7 +309,29 @@ class TestTerminalStage:
             ),
         )
         assert "exited or crashed during the last step/next" in prompt
-        assert "real reproduction failure output" in prompt
+        assert "real failure evidence below" in prompt
+
+    def test_terminal_prompt_renders_mechanical_crash_summary(self):
+        prompt = r5_bridge.render_prompt(
+            ControllerState.RUNTIME_EVIDENCE, None, "Task: t",
+            debugger=r5_bridge.DebuggerContext(
+                script_path="display_name.py",
+                source_text="def f():\n    pass\n",
+                eligible_lines=(2,),
+                lifecycle=r5_bridge.DebuggerLifecycle.CONSUMED_OR_ENDED,
+                r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+                paused_line=2,
+                paused_function="format_display_name",
+                runtime_slice={
+                    "crash_summary": "display_name.py:2: AttributeError",
+                    "reproduction": "[run_reproduction] status=ok\n  failure output",
+                    "step": "[next_pdb_session] status=ok\n  Execution exited (exit_code=1)",
+                },
+            ),
+        )
+        assert "Terminal failure evidence: display_name.py:2: AttributeError" in prompt
+        assert "[reproduction]" in prompt
+        assert "Execution exited (exit_code=1)" in prompt
 
 
 class TestRealFailureEvidenceRendering:

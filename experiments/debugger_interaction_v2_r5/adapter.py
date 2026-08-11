@@ -313,6 +313,11 @@ class R5DebuggerBridgeAdapter:
                 failure_output = payload.get("failure_output")
                 if type(failure_output) is str and failure_output:
                     self._runtime_slice["reproduction"] = self._render_observation(obs)
+                    summary = bridge.crash_summary_from_failure_output(
+                        failure_output, self._script_path
+                    )
+                    if summary:
+                        self._runtime_slice["crash_summary"] = summary
                     return
         if name == "get_stack_summary" and self._g1 is None:
             gen = payload.get("pause_generation")
@@ -630,6 +635,11 @@ class ScriptedBridgeAdapter:
                 failure_output = payload.get("failure_output")
                 if type(failure_output) is str and failure_output:
                     self._runtime_slice["reproduction"] = self._render_observation(obs)
+                    summary = bridge.crash_summary_from_failure_output(
+                        failure_output, self._script_path
+                    )
+                    if summary:
+                        self._runtime_slice["crash_summary"] = summary
                     return
         if name == "get_stack_summary" and self._g1 is None:
             gen = payload.get("pause_generation")

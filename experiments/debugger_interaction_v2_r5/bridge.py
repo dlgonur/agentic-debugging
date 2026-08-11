@@ -207,11 +207,48 @@ def patch_diff_affordance(module_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# R5.2 deterministic single-fence unwrapping (frozen, non-oracle)
+# R5.2 mechanical crash summary from the real failure output (non-oracle)
 # ---------------------------------------------------------------------------
 
-_FENCE_LINE_RE = re.compile(r"^```[A-Za-z0-9_+.-]*[ \t]*$")
+_CRASH_SUMMARY_LINE_RE = re.compile(
+    r"^(.+?\.py):(\d+):\s*([A-Za-z_][A-Za-z0-9_.]*(?:Error|Exception))"
+)
+_EXCEPTION_LINE_RE = re.compile(r"^E\s+(.+)$")
 
+
+def crash_summary_from_failure_output(
+    failure_output: str, script_path: str
+) -> Optional[str]:
+    """Mechanically summarize the crash point from the REAL reproduction
+    output (pytest failure report): the last ``<script>:<line>: <ErrorType>``
+    summary line for the production script plus the last ``E ...`` exception
+    line.  Returns ``None`` (fail closed) when no such evidence exists."""
+    if type(failure_output) is not str or not failure_output:
+        return None
+    if type(script_path) is not str or not script_path:
+        return None
+    normalized_script = script_path.replace("\\", "/")
+    location: Optional[str] = None
+    exception_line: Optional[str] = None
+    for line in failure_output.splitlines():
+        stripped = line.strip()
+        match = _CRASH_SUMMARY_LINE_RE.match(stripped)
+        if match is not None:
+            path = match.group(1).replace("\\", "/")
+            if path.endswith(normalized_script) or normalized_script.endswith(path):
+                location = (
+                    f"{match.group(1)}:{match.group(2)}: {match.group(3)}"
+                )
+        exception_match = _EXCEPTION_LINE_RE.match(stripped)
+        if exception_match is not None:
+            exception_line = exception_match.group(1).strip()
+    if location is None:
+        return None
+    if exception_line:
+        return f"{location} — {exception_line}"
+    return location
+
+_FENCE_LINE_RE = re.compile(r"^```[A-Za-z0-9_+.-]*[ \t]*$")
 
 @dataclass(frozen=True)
 class FenceUnwrapRecord:
@@ -1142,11 +1179,28 @@ def render_prompt(
                 parts.append(
                     f"Debugger: PDB session ended{line_info} — the target "
                     "exited or crashed during the last step/next and no "
-                    "further pause is possible.  Use the real reproduction "
-                    "failure output and the observed locals as terminal "
+                    "further pause is possible.  Use the real failure "
+                    "evidence below and the observed locals as terminal "
                     "runtime evidence, then record your diagnosis with "
                     "'diagnosis <text>'."
                 )
+                crash_summary = (
+                    debugger.runtime_slice.get("crash_summary")
+                    if debugger.runtime_slice else None
+                )
+                if type(crash_summary) is str and crash_summary:
+                    parts.append(f"Terminal failure evidence: {crash_summary}")
+                if debugger.runtime_slice:
+                    slice_lines = []
+                    for key in ("reproduction", "inspection", "step"):
+                        val = debugger.runtime_slice.get(key)
+                        if val:
+                            slice_lines.append(f"[{key}]\n{val}")
+                    if slice_lines:
+                        parts.append(
+                            "Correlated terminal runtime observations (bounded, from real debugger):\n"
+                            + "\n\n".join(slice_lines)
+                        )
             else:
                 parts.append(
                     "Debugger: PDB session ended (one session per case — 'break' is no longer available)"
@@ -1205,10 +1259,13 @@ def render_prompt(
             )
         if debugger.runtime_slice:
             slice_lines = []
-            for key in ("reproduction", "stack_G1", "inspection", "step", "stack_G2"):
+            for key in ("crash_summary", "reproduction", "stack_G1", "inspection", "step", "stack_G2"):
                 val = debugger.runtime_slice.get(key)
                 if val:
-                    slice_lines.append(f"[{key}]\n{val}")
+                    if key == "crash_summary":
+                        slice_lines.append(f"[terminal failure evidence]\n{val}")
+                    else:
+                        slice_lines.append(f"[{key}]\n{val}")
             if slice_lines:
                 parts.append(
                     "\nCorrelated runtime observations (bounded, from real debugger):\n"
