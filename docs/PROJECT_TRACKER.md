@@ -14,7 +14,7 @@ Rules:
 
 ## 0. Daily Requirement
 
-- [ ] 0.1 Write a one-page internship diary entry for each workday.
+- [x] 0.1 Write a one-page internship diary entry for each workday. (Completed through 2026-08-11 — consolidated `diary/diary.md`, including the S9 closeout subsection appended to the 2026-08-11 entry; chronology sourced from Git commit / frozen run timestamps.)
 
 ### 0.1 Subtasks / Log
 
@@ -93,7 +93,7 @@ Rules:
 
 - [x] 2.1 Research debugging and bug-fix datasets on Hugging Face and open-source platforms.
 - [x] 2.2 Compare SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J, and QuixBugs.
-- [x] 2.3 Select datasets suitable for fine-tuning, RAG, and evaluation. (BugsInPy primary; QuixBugs fallback; sequencing decisions recorded in Dataset and Evaluation Decision v1.)
+- [x] 2.3 Select datasets suitable for fine-tuning, RAG, and evaluation. (Final decision: SWE-rebench V2 = primary authentic SFT/post-training dataset; QuixBugs = controlled evaluation cohort, kept entirely outside SFT training; BugsInPy = historical candidate considered during dataset research, not the final primary SFT source. Sequencing decisions recorded in Dataset and Evaluation Decision v1.)
 - [ ] 2.4 Analyze datasets and prepare train/test splits.
 
 ### 2.x Subtasks / Log
@@ -103,7 +103,7 @@ Rules:
 - [x] 2.2.2 Verify BugsInPy. (Primary official paper/repository sources recorded; execution deferred.)
 - [x] 2.2.3 Verify Defects4J. (Primary official repository/paper sources recorded; Python/PDB track no-go-for-now.)
 - [x] 2.2.4 Verify QuixBugs. (Primary official repository/paper sources recorded; fallback decision.)
-- [x] 2.3.1 Decide first evaluation dataset. (BugsInPy primary; QuixBugs fallback; five curated fixtures as smoke gate.)
+- [x] 2.3.1 Decide first evaluation dataset. (Final decision: QuixBugs = controlled evaluation cohort; five curated fixtures as smoke gate; BugsInPy = historical candidate, license-gated, not the final evaluation/SFT source.)
 - [x] 2.4.1 Prepare small reproducible Python bug subset (five curated pytest-compatible fixtures; Task 6).
 
 ---
@@ -227,7 +227,19 @@ Rules:
 
 ---
 
-## Current Focus
+## Current Focus — Final closeout (2026-08-11)
+
+**Final project status (2026-08-11):** the project is **COMPLETE** and closes
+on the accepted bounded-negative path (S9). The single canonical authority for
+final project status and fresh-reviewer handoff is
+`Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage table S0–S9,
+professor-TODO reconciliation, reproducibility audit, evidence paths, explicit
+non-claims, Git integration instructions). Final deliverables:
+`docs/FINAL_TECHNICAL_REPORT_V2.md` (S8) and `diary/diary.md` (through
+2026-08-11). No positive real-model dynamic debugger trajectory is claimed;
+TODO #23–25 are CLOSED — BOUNDED NEGATIVE, S4 is CLOSED — PARTIAL /
+COMPUTE-CONSTRAINED (primary correctness NOT_EVALUATED). The historical focus
+entries below are dated 2026-08-02/03 snapshots and are not current state.
 
 ### QuixBugs paired-pilot v2 live runner (2026-08-02)
 
@@ -1078,6 +1090,11 @@ made.
   suite 88 passed, combined paired-pilot suite 267 passed.
 
 ## Last Updated
+
+2026-08-11 (S9 final closeout: reproducibility audit, status/TODO
+reconciliation, bounded deterministic validation, canonical closeout artifact
+`Agentic_Debugging_Project_Closeout_2026-08-11.md`; project closes on the
+accepted bounded-negative path)
 
 2026-08-07 (repository reconciliation, root-cause explanation metric,
 post-mortem trajectory persistence, and full-suite forwarder-cache repair)

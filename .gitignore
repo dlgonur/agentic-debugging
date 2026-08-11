@@ -40,3 +40,6 @@ task-10b-live-protocol-repair-v1.zip
 
 # Operator authorization artifacts (must never be tracked)
 operator/
+
+# Tool-local state (no project source or evidence; verified 2026-08-11)
+.opencode/

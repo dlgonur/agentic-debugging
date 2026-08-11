@@ -2,7 +2,18 @@
 
 Research and prototype workspace for an agentic debugging system.
 
-Current reconciled status (2026-08-07): tracked history through `1e680b1`
+**Final project status (2026-08-11):** the internship project is **COMPLETE**
+and closes on the accepted bounded-negative path (S9 final closeout). The
+single canonical authority for final project status and fresh-reviewer
+handoff is `Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage
+table S0–S9, professor-TODO reconciliation, reproducibility audit, evidence
+paths, explicit non-claims, and Git integration instructions). Final
+deliverables: `docs/FINAL_TECHNICAL_REPORT_V2.md` (S8) and `diary/diary.md`
+(complete through 2026-08-11). No positive real-model dynamic debugger
+trajectory is claimed; the project closes on honestly established bounded
+negative evidence for the debugger-loop treatment.
+
+Historical status (2026-08-07): tracked history through `1e680b1`
 contains the literature syntheses, bounded post-mortem PDB implementation,
 repository RAG, unified comparison harness, and preference-pair exporter.
 See `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md` for the

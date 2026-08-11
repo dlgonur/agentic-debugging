@@ -3209,3 +3209,41 @@ S8 branch: `docs/s8-final-report-diary-v1`, baseline HEAD `677992f`.
 S8 final deliverables (technical report V2 + diary completion) üretildi.
 Bir sonraki adım Main FirstMate review'dir. S9 (final reproducibility / Git /
 project closeout) ayrı bir aşamadır ve bu BUILD'in kapsamı dışındadır.
+
+### 5. S9 — Final reproducibility / Git / project closeout
+
+S9, S8 entry'sinden sonra ayrı bir BUILD olarak yürütüldü (2026-08-11;
+closeout branch `closeout/s9-final-reproducibility-v1`, S8 baseline
+`fbc2479dfefca6c8d51a21b789d485042688143f`):
+
+- **Final reproducibility audit (bounded):** model identity
+  (Qwen2.5-Coder-7B-Instruct `c03e6d35…`, cp118, S4 contract/run/adapter
+  bindings), dataset identity (SWE-rebench V2 1,594/347; split
+  1,000/150/444; repo-overlap 0; 940/135 no-truncation view; QuixBugs SFT
+  dışında), result identity (RAW Track A/B ayrı; cp118; DPO; S4 partial
+  NOT_EVALUATED; D1; S2; S1-P original vs post-hoc; static gcd; S6 status),
+  provenance tier'ları, report/diary consistency (S8 metrikleri S5 ledger ile
+  tutarlı; S7 tier'ları korundu; diary chronology non-fabricated) —
+  doğrulandı.
+- **Status/TODO reconciliation:** README.md, TODO.md ve
+  docs/PROJECT_TRACKER.md final status notları; TODO #23/#24/#25 =
+  CLOSED — BOUNDED NEGATIVE (engineering capability YES, positive real-model
+  success NO, bounded-negative evidence YES); S4 = CLOSED — PARTIAL /
+  COMPUTE-CONSTRAINED (primary correctness NOT_EVALUATED, RAG success/failure
+  iddiası yok). Historical kayıtlar değiştirilmedi.
+- **Deterministic test/smoke:** compileall PASS; golden trajectories 11
+  passed; focused deterministic unit subset 1,253 passed; integration 368
+  passed; offline demo smoke PASS (2 case, exit 0; model backend
+  `offline-deterministic-demo`, network blocked-in-process; `demo-out/`
+  sonrasında temizlendi); S6 headless presentation smoke — Chrome PASS (DOM
+  döndü, bounded-negative marker mevcut), Edge headless attempt boş DOM —
+  dürüstçe kaydedildi.
+- **Canonical closeout artifact:**
+  `Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage table,
+  professor-TODO reconciliation, reproducibility audit, evidence paths,
+  non-claims, Git integration talimatları).
+- **Git integration preparation:** `main`'e fast-forward entegrasyon
+  sekansı hazırlandı ve doğrulandı (origin/main, local main'in ancestor'ı);
+  S9 BUILD sırasında hiçbir commit/push/merge yapılmadı; S9 commit SHA'sı
+  Main FirstMate acceptance sonrası final Git operator tarafından
+  raporlanacak (önden icat edilmedi).

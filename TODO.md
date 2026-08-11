@@ -2,6 +2,18 @@
 
 ## Durum notu
 
+**2026-08-11 final closeout:** Proje kabul edilen bounded-negative yol üzerinde
+**COMPLETE** olarak kapanmıştır (S9 final closeout). Tek canonical final
+status/handoff otoritesi: `Agentic_Debugging_Project_Closeout_2026-08-11.md`.
+S8 deliverables tamamlandı: `docs/FINAL_TECHNICAL_REPORT_V2.md` ve
+`diary/diary.md` (2026-08-11'e kadar, S9 subsection dahil). S7 literature
+closeout DONE (20 çalışma, `677992f`). Professor TODO #23/#24/#25 =
+**CLOSED — BOUNDED NEGATIVE** (engineering capability YES, positive real-model
+success NO, bounded-negative evidence YES); S4 (fine-tuned+RAG) =
+**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** (primary correctness NOT_EVALUATED,
+no RAG success/failure claim). Bu kapalı statüler yeni deney yetkilendirmesi
+değildir. Aşağıdaki 2026-08-07 notları tarihsel statü kayıtlarıdır.
+
 **2026-08-07 reconciliation:** Current status is reconciled against reachable
 history at `1e680b1` in
 `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md`. This corrects stale
@@ -157,13 +169,13 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Daily requirement
 
-- [ ] Her gün yapılanları 1 sayfa olacak şekilde staj defteri olarak yaz.
+- [x] Her gün yapılanları 1 sayfa olacak şekilde staj defteri olarak yaz. (Tamamlandı 2026-08-11 — consolidated `diary/diary.md` 2026-07-13 → 2026-08-11 chronology, S9 closeout subsection dahil; tarih kaynakları Git commit/frozen run timestamp'leri.)
 
 ## Phase 1 — Literature Review
 
 - [x] Debugging, automated debugging, fault localization ve program repair konularında literatür taraması yap. (Tamamlandı 2026-08-05 — `docs/AUTOMATED_DEBUGGING_LITERATURE_SURVEY_V1.md`, commit `3c23b6e`; doğrulanmamış iddialar kapsam dışı bırakıldı.)
 - [x] LLM-based debugging çalışmalarını incele. (Tamamlandı 2026-08-05 — `docs/LLM_BASED_DEBUGGING_LITERATURE_REVIEW_V1.md`, commit `3c23b6e`; ek frontier okuma gelecek iş olabilir fakat tamamlanmış bounded review'ı geçersiz kılmaz.)
-- [ ] Agentic debugging, tool-using agents ve multi-agent debugging çalışmalarını incele.
+- [x] Agentic debugging, tool-using agents ve multi-agent debugging çalışmalarını incele. (Tamamlandı 2026-08-11 — S7 focused literature closeout, 20 çalışma, `677992f`; evidence tier'ları korundu; bkz. `research/literature/agentic_debugging_literature_closeout_2026-08-11.md`.)
 - [x] Geleneksel debugging, LLM-based debugging ve agentic debugging yaklaşımlarını karşılaştır. (Tamamlandı 2026-08-05 — `docs/DEBUGGING_APPROACH_COMPARISON_V1.md`, commit `3c23b6e`.)
 - [x] SWE-Agent, OpenHands, AutoCodeRover, Agentless ve ChatDBG gibi sistemleri incele. (Tamamlandı — reviewed notes + system capability matrix.)
 
@@ -171,41 +183,41 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 - [x] Hugging Face ve açık kaynak platformlarda debugging ve bug-fix veri setlerini araştır. (Dataset and Evaluation Decision v1.)
 - [x] SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J ve QuixBugs veri setlerini karşılaştır. (Dataset and Evaluation Decision v1.)
-- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (BugsInPy primary, QuixBugs fallback; sequencing decisions recorded in the decision document. BugsInPy execution license-gated; QuixBugs gcd resource-limited real no-model smoke completed and accepted — bkz. docs/QUIXBUGS_SMOKE_USAGE_V1.md.)
-- [ ] Veri setlerini analiz et ve eğitim/test ayrımını hazırla.
+- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (Final karar: **SWE-rebench V2 = birincil authentic SFT / post-training veri seti**; **QuixBugs = kontrollü değerlendirme kohortu ve SFT eğitiminin tamamen dışında**; **BugsInPy = dataset araştırması sırasında değerlendirilen tarihsel aday, final birincil SFT kaynağı değil**. Sequencing decisions recorded in Dataset and Evaluation Decision v1; BugsInPy execution license-gated; QuixBugs gcd resource-limited real no-model smoke completed and accepted — bkz. docs/QUIXBUGS_SMOKE_USAGE_V1.md.)
+- [x] Veri setlerini analiz et ve eğitim/test ayrımını hazırla. (Tamamlandı — SWE-rebench V2: 1,594 görev / 347 repo; frozen split 1,000 train / 150 validation / 444 unused; repo-overlap 0; seed `20260808`; ≤32K no-truncation view 940/135. QuixBugs SFT dışında tutuldu.)
 
 ## Phase 3 — Model and Fine-tuning
 
 - [x] Seçilen açık kaynak kod modelini belirle. (Tamamlandı, external/branch-bound karar — `Qwen/Qwen2.5-Coder-7B-Instruct`, pinned revision; ayrı QLoRA repository/branch bu reconciliation'da değiştirilmedi.)
-- [ ] Veri seti modele uygun değilse instruction-response formatına dönüştür.
-- [ ] LoRA veya QLoRA ile supervised fine-tuning yap.
-- [ ] Fine-tuning öncesi ve sonrası modeli karşılaştır.
+- [x] Veri seti modele uygun değilse instruction-response formatına dönüştür. (Tamamlandı — SFT formulation: input problem statement + oracle-file-localized exact pre-fix source; target `PATCH` + stored gold repair diff; localized-repair / repair-after-localization SFT.)
+- [x] LoRA veya QLoRA ile supervised fine-tuning yap. (Tamamlandı — QLoRA SFT `Qwen/Qwen2.5-Coder-7B-Instruct` @ `c03e6d358207e414f1eca0bb1891e29f1db0e242`; definitive surviving checkpoint cp118.)
+- [x] Fine-tuning öncesi ve sonrası modeli karşılaştır. (Tamamlandı — RAW vs cp118: negative executable-repair transfer; cp118 0/40 apply, 0/40 RESOLVED vs RAW 20/40 apply, 5/40 RESOLVED. "Fine-tuning kötüdür" iddiası değildir.)
 
 ## Phase 4 — RAG and Agent Tools
 
 - [x] Repository kodları, testler, issue açıklamaları ve hata mesajları için RAG sistemi kur. (Tamamlandı 2026-08-06 — deterministik repository-native lexical RAG v1: fixture-scoped default + declared corpus-root modu; source/test/issue/failure dokümanları; oracle-projeksiyon dışlama; explicit exclusion kuralları; `repository-index-v1`/`retrieval-result-v1` strict artifact'ları; revision binding; budget'lar; fail-closed. Bu bir altyapı tamamlamasıdır; RAG'ın model performansına katkısı iddia edilmez. bkz. docs/REPOSITORY_RAG_V1.md, docs/RAG_COMPARISON_DECISION_V2.md.)
-- [ ] Fine-tuned modeli RAG sistemiyle birleştir. (Partial 2026-08-06 — opsiyonel RAG context enjeksiyonu demo/model-adapter ve LiveModelAdapter boundary'lerinde hazır (additive, default byte-identical); ancak gerçek fine-tuned model çıktısı import edilip doğrulanmadığı için fine-tuned+RAG kombinasyonu ve performansı açık kalır.)
+- [ ] Fine-tuned modeli RAG sistemiyle birleştir. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — frozen cp118+RAG treatment 10/40 geçerli pair üretti (frozen manifest sırasının ilk 10'u), kampanya compute fezibility nedeniyle durduruldu; primary correctness **NOT_EVALUATED**; RAG success/failure iddiası yok. Aktif gelecek görevi değildir.)
 - [x] Modelin kullanacağı dosya okuma, kod arama, test çalıştırma ve patch uygulama araçlarını geliştir. (Tamamlandı — deterministic file-read/code-search/test-run/patch-apply tools; bkz. docs/PROJECT_TRACKER.md Task 2-3.)
 - [x] Debugging agentini oluştur. (Tamamlandı — controller state machine ve Task 9 uçtan uca demonstration; bkz. docs/PROJECT_TRACKER.md.)
-- [ ] Modelin hata konumunu bulmasını, root cause belirlemesini ve patch üretmesini sağla.
+- [ ] Modelin hata konumunu bulmasını, root cause belirlemesini ve patch üretmesini sağla. (PARTIAL — static real-provider model→patch→verifier QuixBugs gcd'de verifier RESOLVED'a ulaştı (F2P 5/5, P2P 1/1); full dynamic debugger-informed chain gerçek modelle elde edilmedi — bounded negative.)
 
 ## Phase 5 — Preference Optimization
 
-- [ ] Başarılı ve başarısız debugging çıktılarından preference veri seti oluştur. (Partial 2026-08-06 — preference-pair exporter v1 tamamlandı (ordered verifier-backed rules, `preference-pair-v1`, held-out/oracle-contamination/duplicate guard'ları, JSONL + audit; bkz. docs/PREFERENCE_EXPORTER_V1.md) ve deterministik demo-scale pair'ler üretildi; production preference corpusu gerçek attempt'ler beklediği için açık kalır. DPO/RLHF yapılmadı.)
-- [ ] DPO veya uygun bir RLHF yöntemi uygula.
-- [ ] Base model, fine-tuned model, RAG destekli model ve agentic sistemi karşılaştır. (Partial 2026-08-06 — unified comparison harness v1 tamamlandı (imported `generation-artifact-v1` + native agentic condition'lar; normalized `comparison-v1` metrikler; JSON/CSV/Markdown; aggregates + baseline delta; bkz. docs/COMPARISON_HARNESS_V1.md) ve deterministik demo dört condition'ı çalıştırıyor; gerçek base-versus-tuned karşılaştırması gerçek imported generation'lar beklediği için açık kalır. Beş-task pilot istatistiksel olarak temsil edici değildir.)
+- [x] Başarılı ve başarısız debugging çıktılarından preference veri seti oluştur. (Tamamlandı bounded historical controlled kapsamda — preference-pair exporter v1 (2026-08-06) + historical controlled preference data; authentic production preference corpusu **CLOSED / NOT JUSTIFIED** (yetersiz temiz homojen veri).)
+- [x] DPO veya uygun bir RLHF yöntemi uygula. (Tamamlandı bounded historical controlled investigation olarak — B1 27/30, matched SFT 27/30, DPO 21/30; **negatif sonuç, kampanya CLOSED / NOT JUSTIFIED**.)
+- [x] Base model, fine-tuned model, RAG destekli model ve agentic sistemi karşılaştır. (Tamamlandı S5 üzerinden explicit missingness ile — 8 eksenli canonical ledger, `NOT_RECORDED` / `NOT_EVALUATED`; dört-yönlü tamamlanmış bir correctness matrix olarak sunulmaz.)
 
 ## Phase 6 — Debugger Adapter
 
 - [x] PDB, GDB veya LLDB için bir debugger adapter geliştir. (Tamamlandı — instructor maddesindeki “veya” seçeneği PDB ile karşılandı; accepted Python/PDB-first scope, Task 4A-4D ve post-mortem PDB `e92634e`. GDB/LLDB kapsam dışıdır.)
-- [ ] Fine-tuned modelin debugger komutları üretmesini ve çıktıları yorumlamasını sağla. (Fine-tuning henüz başlamadı; typed-action eşdeğeri fine-tuning olmadan mevcut controller/harness üzerinden çalışıyor.)
-- [ ] Modelin breakpoint koymasını, değişkenleri incelemesini, stack trace okumasını ve adım adım debug yapmasını sağla. (Partial — Task 4B-4D ve scripted Task 9 mekanizmayı kanıtlıyor; accepted live-model full PDB sequence yok.)
-- [ ] Modelin debugger etkileşiminden sonra patch üretmesini ve testlerle doğrulamasını sağla. (Partial — verifier-backed scripted workflow tamam; PDB sonrası verifier-confirmed live-model repair yok.)
+- [ ] Fine-tuned modelin debugger komutları üretmesini ve çıktıları yorumlamasını sağla. (**CLOSED — BOUNDED NEGATIVE** 2026-08-11 — engineering capability YES; deterministic engineering evidence YES; positive real-model success NO (D1 `break 20` → tool error, S2 `continue` → rejected, 0 successful observations); bounded-negative evidence YES. Yeni deney yetkilendirmesi değildir; bkz. S5 coverage matrix.)
+- [ ] Modelin breakpoint koymasını, değişkenleri incelemesini, stack trace okumasını ve adım adım debug yapmasını sağla. (**CLOSED — BOUNDED NEGATIVE** 2026-08-11 — engineering/deterministic capability YES; positive real-model sequence NO; bounded-negative evidence YES. İki model koşulunda da başarılı breakpoint→observation→step/locals dizisi yoktur.)
+- [ ] Modelin debugger etkileşiminden sonra patch üretmesini ve testlerle doğrulamasını sağla. (**CLOSED — BOUNDED NEGATIVE** 2026-08-11 — static model→patch→verifier YES (gcd, non-debugger); debugger-informed real-model patch→verifier NO; bounded-negative evidence YES.)
 
 ## Phase 7 — Evaluation and Final Report
 
-- [ ] Sonuçları başarı oranı, localization accuracy, root-cause explanation, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Partial 2026-08-07 — comparison harness metrikleri ile strict `root-cause-assessment-v1` / explicit-missingness entegrasyonu tamamlandı; bkz. `docs/COMPARISON_HARNESS_V1.md`, `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`. Hiçbir gerçek external-model campaign sonucu olmadığı için top-level değerlendirme açık kalır.)
-- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı 2026-07-31 — Final Technical Report v1 ve Demo Guide v1; bu bir altyapı/evaluation-platform demosu ve raporudur, model debugging performance demosu değildir. Bkz. `docs/FINAL_TECHNICAL_REPORT_V1.md`, `docs/DEMO_GUIDE_V1.md`, `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`.)
+- [x] Sonuçları başarı oranı, localization accuracy, root-cause explanation, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Tamamlandı S5 üzerinden — 8 eksenli canonical comparison ledger; eksik değerler `NOT_RECORDED` / `NOT_EVALUATED` olarak explicit; root-cause assessment contract + comparison harness; hiçbir eksik değer sıfıra çevrilmedi.)
+- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı — Final Technical Report **V2** (`docs/FINAL_TECHNICAL_REPORT_V2.md`, S8) + V1 (2026-07-31) historical; deterministic offline demo + S6 professor-facing bounded-negative evidence presentation (`presentation/s6-real-debugging-evidence/`). Bu bir altyapı/evaluation-platform demosudur, model debugging performance demosu değildir.)
 
 ### Live-runner material repair (2026-08-02, runner-only)
 
