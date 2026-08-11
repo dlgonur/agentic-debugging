@@ -2989,3 +2989,223 @@ RAG+cache focused 28 pass ve final collect-only 3735 test/warning yok.
 `compileall` ve `git diff --check` temiz. Hicbir provider, network route, live
 campaign, WSL benchmark, BugsInPy source/execution, QLoRA repository,
 training veya held-out generation kullanilmadi; merge/push yapilmadi.
+---
+
+## 9 Agustos 2026 - Tuned interactive debugger pilot hazirligi
+
+**Çalışmanın Konusu:** S2 — cp118 debugger etkileşim pilotu için altyapı hazırlığı
+
+### Yapılan Çalışmalar
+
+Bugün `12c014e` commit'inde tuned interactive debugger pilot hazırlığı
+yapıldı. Bu commit, S2 aşamasında cp118 checkpoint'ının D1 runtime-entry
+treatment'i altında debugger kullanımını test etmek için gerekli altyapıyı
+hazırladı. Amaç, RAW ile cp118'i aynı debugger arayüzü altında karşılaştırmak
+ve böylece karşılaştırmayı confound etmekten kaçınmaktı.
+
+### Sonuç / Bir Sonraki Adım
+
+S2 altyapısı hazır hale getirildi. Bir sonraki adımda RAW base control ve
+master execution plan eklenerek D1/S2 deneylerinin ön koşulları
+tamamlanacaktır.
+
+---
+
+## 10 Agustos 2026 - RAW base control, master execution plan, S0 closeout, D1 RAW debugger run ve S4 cp118+RAG partial
+
+**Çalışmanın Konusu:** S0 closeout, debugger interaction v2 D1 RAW run, ve S4 cp118+RAG definitive partial treatment
+
+Bu gün projenin en yoğun günlerinden biri oldu; birden fazla aşamanın
+deneyi ve closeout'u aynı günde gerçekleşti.
+
+### 1. RAW base control ve master execution plan (`0b68c32`, `5c2f04b`)
+
+`0b68c32` (03:59) ile debugger pilotuna RAW base control eklendi.
+`5c2f04b` (12:02) ile master execution plan oluşturuldu. Bu plan S0'dan
+S9'a kadar tüm aşamaların (objective, frozen variables, STOP gate, exit)
+tanımlandığı paylaşılan execution map oldu. Plan, frozen experimental
+evidence ile çeliştiğinde deneysel kanıtın kazanacağını açıkça belirtti.
+
+### 2. S0 closeout ve debugger interaction v2 (`1ff3571`)
+
+`1ff3571` (12:29) ile S0 closeout tamamlandı ve debugger interaction v2'ye
+geçildi. D1 RAW debugger run bu aşamada yürütüldü.
+
+D1 sonuçları (`experiments/debugger_interaction_v2_d1/runs/
+run-1-live-2026-08-10/evidence.json`):
+
+- Model `break 20` PDB komutunu authored etti; controller kabul etti ve
+  `start_pdb_session` directive'ine çevirdi; backend dispatch etti.
+- Backend sonucu: `tool_error` — istenen breakpoint satırı 20, 19 satırlık
+  probe dışındaydı. `break 20` backend'e ulaştı, backend öncesi reddedilmedi.
+- Successful non-error PDB observation: 0.
+- Successful iterative debugger turn: 0.
+- Gate B: FAIL (>=2 kabul edilen PDB komutu gerekli, 1 var).
+- Gate C: FAIL (diagnosis yok, patch yok, verifier çalışmadı).
+- Toplam token: 17,686 (17,506 prompt + 180 completion).
+- Controller: final_state Failed, stop_reason budget_exhausted, 17 model
+  calls.
+
+S1 original raw-run evidence diskte bulunamadı; D1 kanıtı SHA256 ile
+doğrulandı ve authoritative RAW-debugger kaynağı olarak korundu.
+
+### 3. S4 — Definitive cp118 + frozen RAG partial (`acfe131`)
+
+`acfe131` (22:38) ile S4 cp118+RAG definitive experiment commit edildi.
+Frozen cp118 + repository-RAG treatment 40 görevlik quix40 cohort'unda
+başlatıldı.
+
+S4 partial sonuçları (`PARTIAL_RUN_RECORD.json`):
+
+- run_status: PARTIAL / COMPUTE-CONSTRAINED.
+- 10/40 geçerli task üretildi; ilk 10 manifest sırasıyla — random değil,
+  temsilci değil.
+- 5/10 task 4096-token output cap'e ulaştı (descriptive only, 40'a
+  extrapolate edilmez).
+- Campaign, observed local runtime ~30-45 ek saat gerektireceği için
+  Owner/Main FirstMate tarafından compute-budget termination ile durduruldu.
+- Task 11 (hanoi) atomik olarak kesildi ve discard edildi; partial pair
+  tutulmadı.
+- `S4_GENERATION_COMPLETE.json` correctly not written.
+- Primary C9 evaluation: NOT_EVALUATED (evaluator full 40-task completion
+  marker gerektirir, fail-closed).
+- Patch apply: NOT_EVALUATED. RESOLVED: NOT_EVALUATED. P2P: NOT_RECORDED.
+- Generation 2026-08-10T22:45:12+03:00'te başladı, 2026-08-11T07:18:55+03:00'te
+  son task tamamlandı, 07:30'da durduruldu.
+
+S4'ten RAG success/failure claim yapılmaz. cp118+RAG primary correctness
+NOT_EVALUATED olarak canonical comparison'a devredildi.
+
+### Öğrendiklerim
+
+Bugün iki önemli bilimsel sonuç netleşti: (1) D1 RAW debugger run, modelin
+bir PDB komutu authored ettiğini ama successful observation elde edemediğini
+gösterdi — bu bounded negative result. (2) S4 RAG treatment compute-
+constrained kaldı ve primary evaluation NOT_EVALUATED olarak kaldı — bu
+ölçüm, rescue değil.
+
+### Sonuç / Bir Sonraki Adım
+
+S0 closeout, D1 RAW, ve S4 partial tamamlandı. Bir sonraki adımda S5
+canonical controlled comparison ile tüm kabul edilmiş kanıtın sentezi
+yapılacaktır.
+
+---
+
+## 11 Agustos 2026 - S5 controlled comparison, S6 evidence presentation, S7 literature closeout ve S8 final report/diary synthesis
+
+**Çalışmanın Konusu:** S5 canonical comparison, S6 professor-facing presentation, S7 literature closeout ve S8 final report + diary synthesis
+
+Bu gün projenin son sentez aşamaları commit edildi ve S8 final deliverables
+üretilmeye başlandı.
+
+### 1. S5 — Final controlled comparison (`c20133a`, 12:34)
+
+`c20133a` ile S5 canonical controlled comparison commit edildi
+(`analysis/s5_final_controlled_comparison/`). Bu sentez yeni bir model
+campaign değil; kabul edilmiş kanıtın canonical karşılaştırmasıydı. Hiç model
+çalıştırılmadı, S4 resume edilmedi, tarihsel evidence değiştirilmedi.
+
+S5 sekiz ekseni ayrı tuttu: localized executable repair, fine-tuning
+transfer (DPO), RAG treatment, debugger interaction, model-generated test
+capability, serialization sensitivity, static verifier success, local
+inference engineering. Eksenler tek skorda birleştirilmedi.
+
+Anahtar metrikler (S5 ledger'dan):
+
+- RAW: Track A strict 33/40, apply 14/40, RESOLVED 5/40; Track B semantic
+  40/40 extracted, 20/40 apply, 5/40 RESOLVED. Track A ve Track B ayrı
+  tutuldu.
+- cp118: 40/40 extracted, 0/40 apply, 0/40 RESOLVED, 19/40 truncation,
+  39/40 extra-file scope violation.
+- DPO: B1 27/30, SFT 27/30, DPO 21/30. CLOSED / NOT JUSTIFIED.
+- S4: 10/40 PARTIAL, NOT_EVALUATED, 5/10 truncation (40'a extrapolate
+  edilmez).
+- D1: 1 PDB command (`break 20`), tool_error, 0 observations, Gate B/C FAIL.
+- S2: 1 PDB command (`continue`), rejected (no active session), 0
+  observations, Gate B/C FAIL.
+- Static gcd: F2P 5/5, P2P 1/1, RESOLVED — debugger kullanılmadı.
+
+Professor TODO #23/#24/#25: engineering capability YES, deterministic
+evidence YES, positive real-model success NO, bounded negative YES.
+
+S5 ayrıca S4 optimized-rerun için `scientific_necessity: NO-GO` ve
+`current_execution_authorization: NOT_AUTHORIZED_IN_S5` kararı kaydetti.
+
+### 2. S6 — Real debugging evidence presentation (`da2e6dd`, 13:06)
+
+`da2e6dd` ile S6 professor-facing evidence presentation commit edildi
+(`presentation/s6-real-debugging-evidence/`). Self-contained static HTML;
+external URL, CDN, script, stylesheet yok. Her load-bearing fact
+`data-claim-id` ile manifest'e bağlı.
+
+S6 status semantics:
+- presentation_reproducible = YES
+- positive_real_model_dynamic_debugger_demo = NO
+- bounded_negative_real_model_evidence_presented = YES
+
+Bu başarılı bir debugger demo değil; reproducible bounded-negative evidence
+presentation. D1 trace ve S2 trace, explicit provenance tier ile sunuldu.
+D1 scientific source `local_untracked_accepted` (SHA256 kayıtlı, Git'te
+tracked değil); reproducibility carrier olarak tracked S5 coverage matrix
+kullanıldı. Underlying provenance promote edilmedi.
+
+### 3. S7 — Focused literature closeout (`677992f`, 14:10)
+
+`677992f` ile S7 focused literature closeout commit edildi
+(`research/literature/agentic_debugging_literature_closeout_2026-08-11.md`).
+20 çalışma incelendi: debugger-aware systems, tool-using SWE agents,
+dynamic/runtime evidence, multi-agent debugging, tool-use/trajectory
+post-training.
+
+S7 executive conclusion:
+- Runtime evidence debugging/repair'i materially improve edebilir.
+- Raw debugger access alone reliably beneficial değil (ADI ablation: PDB
+  ekleme Claude 3.7'yi 55.0 -> 55.8, GPT-4o'yu 32.6 -> 31.2 düşürdü;
+  FramePilot interface 63.8/36.2/31.4'e ulaştı).
+- Ordinary localized-repair SFT debugger competence otomatik üretmez.
+- Multi-agent credible (BOAD ICLR 2026) ama universal prerequisite değil.
+- Single-agent + deterministic controller + typed tools defensible baseline.
+
+Evidence tier'lar explicit tutuldu: peer-reviewed (FSE, ICML, ICLR, NeurIPS,
+ASE, TOSEM, PACMPL/OOPSLA) vs preprint vs technical report. Preprint'ler
+silently promote edilmedi.
+
+Bottom line: proje deterministic machinery'yi başarıyla inşa etti, ama iki
+tested model policy usable runtime evidence'e ulaşmak için learned
+interaction competence gösteremedi. Bu sonuç literature ile tutarlı.
+Debugger-specific trajectory training ve higher-level state-aware tool
+abstractions en directly evidence-backed next step'ler.
+
+### 4. S8 — Final technical report ve internship diary synthesis
+
+S8 kapsamında final akademik deliverables üretildi:
+
+- `docs/FINAL_TECHNICAL_REPORT_V2.md` — 21 bölüm içeren kapsamlı final
+  teknik rapor. V1 (2026-07-31 QuixBugs gold-baseline snapshot) historical
+  document olarak korundu. Rapor, tüm kabul edilmiş kanıtı bilimsel dizi
+  olarak sundu; training data (SWE-rebench V2) ile evaluation data
+  (QuixBugs/curated) ayrı tutuldu; SFT formulation boundary explicit belirtildi;
+  forbidden-claim audit (10 madde) geçildi; compact provenance appendix her
+  load-bearing metric'i source + tier + tracked-in-git + clean-checkout
+  ile bağladı.
+- `diary/diary.md` — 2026-08-09'dan 2026-08-11'e kadar olan chronology
+  gap bu entries ile tamamlandı. Tüm dates Git commit timestamp ve frozen
+  run timestamp'lerden source edildi; approximate date kullanılmadı; saat
+  icat edilmedi; commit SHA icat edilmedi.
+
+Validation:
+- Phase A (report): 21 bölüm mevcut; tüm metrikler S5/original evidence ile
+  match; forbidden-claim audit 10/10 pass; 13 Main FirstMate amendment
+  uygulandı; provenance appendix consistent.
+- Phase B (diary): existing prefix (2026-07-13 -- 2026-08-07) byte-for-byte
+  unchanged; sadece new entries append edildi; her date sourceable; no
+  invented hour/SHA.
+
+S8 branch: `docs/s8-final-report-diary-v1`, baseline HEAD `677992f`.
+
+### Sonuç / Bir Sonraki Adım
+
+S8 final deliverables (technical report V2 + diary completion) üretildi.
+Bir sonraki adım Main FirstMate review'dir. S9 (final reproducibility / Git /
+project closeout) ayrı bir aşamadır ve bu BUILD'in kapsamı dışındadır.
