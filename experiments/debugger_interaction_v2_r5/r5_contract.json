@@ -1,0 +1,110 @@
+{
+  "schema_version": "debugger-interaction-v2-r5",
+  "experiment_id": "debugger-interaction-v2-r5",
+  "description": "R5 — generalized raw debugger-informed repair matrix over the complete tracked five-task curated set, under ONE common treatment: neutral cwd-safe pytest launcher derived mechanically from task.reproduction.argv; original-source-region breakpoint derivation and stack filtering; parameterized system prompt bound to the per-task writable production path; no F2P/P2P/reproduction test metadata in model prompts; accepted R3 staged debugger state machine, diagnosis->PATCH retention, bounded PATCH checkpoint, metadata-only B->C serialization normalization, real PatchManager, independent EvaluationVerifier.",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": false,
+    "adapter_path": null,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-none-handling-001",
+      "fixture_tree_sha256": "11fcd99767052b52e786eeb9bc3947c8af0d2708322e251fb10da2166e341bec"
+    },
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec"
+    },
+    {
+      "task_id": "curated-wrong-branch-003",
+      "fixture_tree_sha256": "1b94c309024b782a9fa9902ebc9a1b1dd0816f6bd3e862b0396852dabe8b9393"
+    },
+    {
+      "task_id": "curated-mutation-alias-004",
+      "fixture_tree_sha256": "f3e73c5b9ecf182018fe139518d66f3b5c0ed9af12e104456ae304fb6208b56a"
+    },
+    {
+      "task_id": "curated-caller-callee-005",
+      "fixture_tree_sha256": "003ed4df6be9e58417f1ec2aa75821eccf065ad1614f930852aabd9115b7bba9"
+    }
+  ],
+  "budgets": {
+    "task_max_patch_attempts": 2,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 32,
+    "model_requests_max": 34,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 60,
+    "debugger_accepted_actions_max": 10
+  },
+  "timeout_derivation": {
+    "rule": "ONE common pdb_request_timeout_seconds = ceil(max(first-pause latency across all five tasks) * 3 / 1000 / 5) * 5, floor 15; measured deterministically BEFORE any live run of the revision.",
+    "r5_0": {
+      "note": "Initial freeze measured WITHOUT the model loaded (4.6-8.0 s; derived 25 s). During the r5.0 live matrix, rows 003 and 004 timed out at 25 s under live load — proven common harness parameter defect; r5.0 rows preserved unchanged.",
+      "max_first_pause_latency_ms": 8015,
+      "per_task_first_pause_latency_ms": {
+        "curated-none-handling-001": 6280,
+        "curated-off-by-one-002": 8015,
+        "curated-wrong-branch-003": 5500,
+        "curated-mutation-alias-004": 4734,
+        "curated-caller-callee-005": 4625
+      },
+      "derived_pdb_request_timeout_seconds": 25
+    },
+    "r5_1": {
+      "note": "Repaired freeze measured WITH the model loaded (live conditions) for all five tasks; affected rows 003 and 004 rerun under r5.1.",
+      "max_first_pause_latency_ms": 18844,
+      "per_task_first_pause_latency_ms": {
+        "curated-none-handling-001": 18844,
+        "curated-off-by-one-002": 16046,
+        "curated-wrong-branch-003": 14155,
+        "curated-mutation-alias-004": 13313,
+        "curated-caller-callee-005": 14328
+      },
+      "derived_pdb_request_timeout_seconds": 60
+    },
+    "max_first_pause_latency_ms": 18844,
+    "per_task_first_pause_latency_ms": {
+      "curated-none-handling-001": 18844,
+      "curated-off-by-one-002": 16046,
+      "curated-wrong-branch-003": 14155,
+      "curated-mutation-alias-004": 13313,
+      "curated-caller-callee-005": 14328
+    },
+    "derived_pdb_request_timeout_seconds": 60,
+    "measured_at": "live-condition measurement 2026-08-11 (model loaded); frozen before the r5.1 affected-set rerun",
+    "note": "Frozen BEFORE the r5.1 affected-set rerun; no timeout change after seeing any model outcome."
+  },
+  "interface_revision": "r5.1",
+  "interface_repairs": {
+    "r5_1_timeout": "pdb_request_timeout_seconds raised from 25 to 60 after the r5.0 live matrix proved the initial freeze (measured without the model loaded) was insufficient under live load: rows 003/004 broke with PdbSessionTimeoutError before any model measurement. Common harness parameter repair; affected rows 003/004 rerun under r5.1; r5.0 rows preserved unchanged.",
+    "r5_1_verifier_workspace": "EvaluationVerifier workspace parent moved outside the repository tree (system temp): an in-repo parent makes pytest rootdir discovery find the repo pyproject.toml, resolving fixture test node ids against the repo root and invalidating baseline collection. Repair applied to the runner; the r5.0 005 candidate was re-evaluated deterministically on the exact accepted candidate.",
+    "r5_1_verifier_field": "r5_runner verifier mapping fixed: PatchRecord.applied -> PatchRecord.success (AttributeError prevented verifier execution in the r5.0 runner)."
+  },
+  "treatment": {
+    "debugger_entrypoint": "target script = task's single writable production path (constraints.allowed_write_paths); disposable fixture copy receives one neutral cwd-safe guarded pytest launcher generated mechanically from task.reproduction.argv (shape python -m pytest <node> ...; fail closed otherwise); model authors break <line> among original-source compile()+co_lines()-minus-def-lines candidates; breakpoints resolve inside the real failing pytest execution via canonic-filename matching.",
+    "stack_rendering": "model-facing stack rendering filtered to frames with script == production path and 1 <= line <= original_source_line_count (excludes the appended launcher region); raw payload evidence complete; frame ids never renumbered; locals/safe_eval dispatch from authoritative raw payload frame_id/pause_generation.",
+    "model_context": "title + description from agent_visible_mapping; original production source; mechanical eligible breakpoint lines; real debugger/tool observations; bounded real diagnostics. No F2P/P2P node ids, no reproduction argv, no hidden test source, no oracle, no RuntimeProbe, no reference repair.",
+    "state_machine": "accepted R3 staged machine: reproduce -> (admin REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE after verified baseline failure) -> break -> stack -> locals|print -> step|next -> stack -> diagnosis -> bounded PATCH (patch+failed; first turn patch only) -> PatchManager -> administrative closeout -> EvaluationVerifier.",
+    "patch_serialization": "accepted R3.2 policy: A raw model response, B model-authored parsed semantic patch, C deterministic metadata-only hunk-count normalization if and only if strictly mechanical; semantic/body fingerprint equality required; PatchManager and EvaluationVerifier receive C only.",
+    "budget": "one common budget for all five tasks (see budgets); no per-task prompt tuning after seeing outcomes."
+  },
+  "source_baseline": {
+    "r4_accepted_commit": "372d51f1a35e071c677391c9970f7b552bb276f2",
+    "note": "R5 descends from committed R4 baseline (372d51f). R1-R4 evidence preserved immutably."
+  }
+}
