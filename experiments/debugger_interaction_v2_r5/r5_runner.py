@@ -193,14 +193,34 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def _validate_contract(contract: dict[str, Any], *, repo: str, revision: str, gen: dict[str, Any]) -> dict[str, Any]:
+def _validate_contract(
+    contract: dict[str, Any], *, repo: str, revision: str, gen: dict[str, Any],
+    adapter_path: Optional[str] = None,
+) -> dict[str, Any]:
+    """Validate the frozen contract.
+
+    ``adapter_path`` selects the R6 matched PEFT-adapter condition (cp118):
+    the contract must declare ``adapter_applied: true`` and the on-disk
+    adapter must match the frozen contract identity exactly (tree identity +
+    per-file SHA-256 + declared base model).  ``None`` keeps the RAW-base
+    contract behavior unchanged.
+    """
     model = contract.get("model", {})
     if model.get("base_repository") != repo:
         raise RuntimeError("model base_repository drift")
     if model.get("base_revision") != revision:
         raise RuntimeError("model base_revision drift")
-    if model.get("adapter_applied") is not False:
-        raise RuntimeError("R5 must be RAW base only")
+    if adapter_path is None:
+        if model.get("adapter_applied") is not False:
+            raise RuntimeError("RAW-base contract must have adapter_applied False")
+    else:
+        if model.get("adapter_applied") is not True:
+            raise RuntimeError("adapter contract must have adapter_applied True")
+        from experiments.debugger_interaction_v2_r5.transport_cp118 import (
+            validate_adapter_identity,
+        )
+        adapter_identity = model.get("adapter") or {}
+        validate_adapter_identity(Path(adapter_path), adapter_identity)
     if model.get("rag_enabled") is not False:
         raise RuntimeError("R5 must have RAG OFF")
     if gen.get("do_sample") is not False:
@@ -259,6 +279,7 @@ def _candidate_source_manifest() -> dict[str, str]:
         "experiments/debugger_interaction_v2_r5/adapter.py",
         "experiments/debugger_interaction_v2_r5/transport.py",
         "experiments/debugger_interaction_v2_r5/transport_14b.py",
+        "experiments/debugger_interaction_v2_r5/transport_cp118.py",
         "experiments/debugger_interaction_v2_r5/phase_navigation.py",
         "experiments/debugger_interaction_v2_r5/serialization.py",
         "experiments/debugger_interaction_v2_r5/launcher.py",
@@ -266,6 +287,7 @@ def _candidate_source_manifest() -> dict[str, str]:
         "experiments/debugger_interaction_v2_r5/r5_runner.py",
         "experiments/debugger_interaction_v2_r5/r5_contract.json",
         "experiments/debugger_interaction_v2_r5/r5_contract_14b.json",
+        "experiments/debugger_interaction_v2_r5/r5_contract_cp118.json",
         # -- controller / adapter / state machine surface -----------------
         "agentic_debugger/agent/controller.py",
         "agentic_debugger/agent/controller_policy.py",
@@ -308,17 +330,22 @@ def _candidate_source_manifest() -> dict[str, str]:
     return dict(sorted(manifest.items()))
 
 
-def _r5_run_identity(contract: dict[str, Any]) -> dict[str, Any]:
+def _r5_run_identity(contract: dict[str, Any], adapter_path: Optional[str] = None) -> dict[str, Any]:
     model = contract["model"]
+    adapter_applied = model.get("adapter_applied") is True
     return {
         "schema_version": "debugger-interaction-v2-r5-identity",
-        "experiment_id": "debugger-interaction-v2-r5",
+        "experiment_id": contract.get("experiment_id"),
         "source_commit_sha": _git_head(REPO_ROOT),
         "candidate_source_manifest": _candidate_source_manifest(),
         "experiment_contract_sha256": _contract_sha256(contract),
-        "model_condition": "RAW_BASE",
-        "adapter_applied": False,
-        "adapter_path": None,
+        "model_condition": "PEFT_ADAPTER" if adapter_applied else "RAW_BASE",
+        "adapter_applied": adapter_applied,
+        "adapter_label": model.get("adapter_label"),
+        "adapter_path": (
+            str(Path(adapter_path).resolve()) if adapter_path is not None else None
+        ),
+        "adapter_identity": model.get("adapter") if adapter_applied else None,
         "base_repository": model["base_repository"],
         "base_revision": model["base_revision"],
         "rag_enabled": False,
@@ -998,9 +1025,23 @@ def run_experiment(
     stage_tracker = R5StageTracker(module_path, original_source_line_count)
     session_state_provider = make_r5_session_state_provider(context, lambda: stage_tracker.stage)
 
+    contract_model = contract["model"]
+    if contract_model.get("adapter_applied") is True:
+        adapter_label = contract_model.get("adapter_label") or "peft"
+        model_name = (
+            f"{contract_model['base_repository']}"
+            f"+{contract_model['base_revision'][:7]}"
+            f"+{adapter_label}-R5"
+        )
+    else:
+        model_name = (
+            f"{contract_model['base_repository']}"
+            f"+{contract_model['base_revision'][:7]}-R5"
+        )
+
     inner_adapter = R5DebuggerBridgeAdapter(
         transport=transport,
-        model_name=f"{contract['model']['base_repository']}+{contract['model']['base_revision'][:7]}-R5",
+        model_name=model_name,
         task_description=task_desc,
         script_path=module_path,
         source_text=original_source,
@@ -1622,8 +1663,12 @@ def _model_specs() -> dict[str, dict[str, Any]]:
     ``coder14b`` is the model-identity escalation (r5.4): the same treatment
     with the stronger Qwen2.5-Coder-14B base; results are labeled with the
     14B identity, never as RAW-7B results.
+    ``cp118`` is the R6 matched condition: the historical project-fine-tuned
+    checkpoint cp118 (QLoRA adapter on the SAME 7B base revision) under the
+    IDENTICAL frozen r5.9 clean-holdout treatment; results are labeled with
+    the cp118 adapter identity, never as RAW-7B results.
     """
-    from experiments.debugger_interaction_v2_r5 import transport_14b
+    from experiments.debugger_interaction_v2_r5 import transport_14b, transport_cp118
     return {
         "raw7b": {
             "contract_name": "r5_contract.json",
@@ -1631,6 +1676,7 @@ def _model_specs() -> dict[str, dict[str, Any]]:
             "repo": BASE_REPOSITORY,
             "revision": BASE_REVISION,
             "generation": GENERATION_CONFIG,
+            "requires_adapter_path": False,
         },
         "coder14b": {
             "contract_name": "r5_contract_14b.json",
@@ -1638,6 +1684,15 @@ def _model_specs() -> dict[str, dict[str, Any]]:
             "repo": transport_14b.BASE_REPOSITORY,
             "revision": transport_14b.BASE_REVISION,
             "generation": transport_14b.GENERATION_CONFIG,
+            "requires_adapter_path": False,
+        },
+        "cp118": {
+            "contract_name": "r5_contract_cp118.json",
+            "transport_class": transport_cp118.LocalQwenPeftTransport,
+            "repo": transport_cp118.BASE_REPOSITORY,
+            "revision": transport_cp118.BASE_REVISION,
+            "generation": transport_cp118.GENERATION_CONFIG,
+            "requires_adapter_path": True,
         },
     }
 
@@ -1655,8 +1710,10 @@ def main() -> int:
                         help="run a single pre-registered task (affected-set rerun under a repaired revision)")
     parser.add_argument("--output-dir", type=str, default=None)
     parser.add_argument("--model", type=str, default="raw7b",
-                        choices=("raw7b", "coder14b"),
-                        help="frozen model identity (raw7b = accepted RAW base; coder14b = escalation identity)")
+                        choices=("raw7b", "coder14b", "cp118"),
+                        help="frozen model identity (raw7b = accepted RAW base; coder14b = escalation identity; cp118 = matched project-fine-tuned adapter)")
+    parser.add_argument("--adapter-path", type=str, default=None,
+                        help="required for --model cp118: path to the frozen cp118 PEFT adapter directory (identity-verified against the frozen contract)")
     args = parser.parse_args()
 
     if not (args.validate_only or args.run or args.measure_latency or args.task or args.audit_dir):
@@ -1667,18 +1724,29 @@ def main() -> int:
 
     specs = _model_specs()
     spec = specs[args.model]
+    if spec.get("requires_adapter_path") and args.adapter_path is None:
+        parser.error(f"--model {args.model} requires --adapter-path")
+    if not spec.get("requires_adapter_path") and args.adapter_path is not None:
+        parser.error(f"--model {args.model} does not accept --adapter-path")
     contract = _load_contract(spec["contract_name"])
     transport_class = spec["transport_class"]
+    adapter_path = args.adapter_path
 
     def validate() -> dict[str, Any]:
         return _validate_contract(
             contract, repo=spec["repo"], revision=spec["revision"],
-            gen=spec["generation"],
+            gen=spec["generation"], adapter_path=adapter_path,
         )
+
+    def build_transport() -> Any:
+        kwargs: dict[str, Any] = {}
+        if spec.get("requires_adapter_path"):
+            kwargs["adapter_path"] = adapter_path
+        return transport_class(**kwargs)
 
     if args.validate_only:
         validation = validate()
-        identity = _r5_run_identity(contract)
+        identity = _r5_run_identity(contract, adapter_path)
         source_commit_sha = identity.get("source_commit_sha")
         validation = dict(validation)
         validation["source_commit_sha"] = source_commit_sha
@@ -1686,6 +1754,7 @@ def main() -> int:
         validation["runtime_python"] = identity.get("runtime_python")
         validation["system_prompt_template_sha256"] = identity.get("system_prompt_template_sha256")
         validation["model_identity"] = args.model
+        validation["adapter_identity"] = identity.get("adapter_identity")
         if source_commit_sha is None:
             print(json.dumps({
                 "status": "FAIL",
@@ -1745,7 +1814,7 @@ def main() -> int:
         case_output = output_dir / args.task
         case_output.mkdir(parents=True, exist_ok=True)
         evidence = run_experiment(
-            contract, transport_class(), case_output,
+            contract, build_transport(), case_output,
             task_id=args.task,
             pdb_session_factory=session_factory,
         )
@@ -1766,7 +1835,7 @@ def main() -> int:
         output_dir = Path(args.output_dir)
         matrix = run_matrix(
             contract, output_dir,
-            transport_factory=lambda: transport_class(),
+            transport_factory=build_transport,
         )
         print(json.dumps({
             "status": "COMPLETE",

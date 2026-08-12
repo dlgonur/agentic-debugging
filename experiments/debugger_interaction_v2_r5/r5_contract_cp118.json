@@ -1,0 +1,141 @@
+{
+  "schema_version": "debugger-interaction-v2-r5",
+  "experiment_id": "debugger-interaction-v2-r5-cp118",
+  "description": "R6 — MATCHED cp118 clean-holdout matrix: the historical PROJECT-FINE-TUNED checkpoint cp118 (QLoRA/PEFT LoRA adapter, r=16 alpha=32 all-linear, trained from Qwen/Qwen2.5-Coder-7B-Instruct @ c03e6d3... on the accepted SWE-rebench V2 training view; selected as the best surviving saved checkpoint by held-out SWE-rebench validation eval_loss only) attached to the SAME base revision under the IDENTICAL frozen r5.9 clean-holdout treatment that produced the successful 14B matrix: neutral cwd-safe pytest launcher; original-source-region breakpoint/stack filtering; COMMON DETERMINISTIC SANITIZER for the reproduction diagnostic and the verifier-feedback failing records (production exception frames only; hidden test source/assertions/literals/node ids/test names never forwarded; fail closed to a generic behavioral statement); region-filtered Last-observation stacks; truthful R5.9 production-exception path (G2=None when the production frame unwound during a real exception/failure - no fake original-region G2 is claimed); deterministic single-fence unwrap; whole-file repair representation (preferred) with mechanical diff serialization plus classic patch diffs; metadata-only B to C hunk-count normalization; real PatchManager with bounded context fuzz; independent EvaluationVerifier with real verifier-feedback PATCH retries (frozen budget 4); fail-closed ACTUAL-PROMPT anti-leakage audit (leakage_findings == [] required for every exact live prompt); no oracle, no reference repair, no hidden test source.  The interface is NOT simplified compared with the successful 14B condition; only the model identity differs.",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_applied": true,
+    "adapter_label": "cp118",
+    "adapter": {
+      "tree_identity_sha256": "65b5ed9a354d4b2c03ba86e2b8065118e11abab9c439cb481b5739f1b86e7c00",
+      "source_checkpoint": "/content/drive/MyDrive/agentic-debugging/training/d2-qwen25/full-run/trainer/checkpoint-118",
+      "selection_rule": "best surviving saved checkpoint by held-out SWE-rebench validation eval_loss only",
+      "selected_checkpoint_step": 118,
+      "swe_rebench_eval_loss": 0.45070546865463257,
+      "quixbugs_used_for_selection": false,
+      "base_model_id": "Qwen/Qwen2.5-Coder-7B-Instruct",
+      "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "source_checkpoint_adapter_binding_sha256": "f81ed7cf070a043dd11d997026b035e1bad2a54aaf5442fe9e1351455b407a4f",
+      "files": {
+        "ADAPTER_MANIFEST.json": "1737cbb4692e41101c3f1204b234fc8000c14fabdedfbcad5869d04eefb47e82",
+        "README.md": "a5d7fb3cdb484f69923761fe282ae83babc2e0e2d1df59375cfe3b8eb6d577a0",
+        "adapter_config.json": "e90c81572a360622003e5971c8c27ac989f6f0807e24a01d7a99478467ae1c62",
+        "adapter_model.safetensors": "59398e322efc9de8ba4b8952b1a06405913438314fd8dd7e5c0c0227ed535533",
+        "chat_template.jinja": "cd8e9439f0570856fd70470bf8889ebd8b5d1107207f67a5efb46e342330527f",
+        "tokenizer.json": "3fd169731d2cbde95e10bf356d66d5997fd885dd8dbb6fb4684da3f23b2585d8",
+        "tokenizer_config.json": "8b6f658e2435ec8da6866013cb485a1d2a6559bed4bf76ed99ea68b031854b41"
+      }
+    },
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [
+    {
+      "task_id": "curated-none-handling-001",
+      "fixture_tree_sha256": "11fcd99767052b52e786eeb9bc3947c8af0d2708322e251fb10da2166e341bec"
+    },
+    {
+      "task_id": "curated-off-by-one-002",
+      "fixture_tree_sha256": "77acb3be4556abd20afd324eca050d8c5d0fadb42f632f649ba30b5c54da35ec"
+    },
+    {
+      "task_id": "curated-wrong-branch-003",
+      "fixture_tree_sha256": "1b94c309024b782a9fa9902ebc9a1b1dd0816f6bd3e862b0396852dabe8b9393"
+    },
+    {
+      "task_id": "curated-mutation-alias-004",
+      "fixture_tree_sha256": "f3e73c5b9ecf182018fe139518d66f3b5c0ed9af12e104456ae304fb6208b56a"
+    },
+    {
+      "task_id": "curated-caller-callee-005",
+      "fixture_tree_sha256": "003ed4df6be9e58417f1ec2aa75821eccf065ad1614f930852aabd9115b7bba9"
+    }
+  ],
+  "budgets": {
+    "task_max_patch_attempts": 4,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 32,
+    "model_requests_max": 34,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 60,
+    "debugger_accepted_actions_max": 10
+  },
+  "timeout_derivation": {
+    "rule": "ONE common pdb_request_timeout_seconds = ceil(max(first-pause latency across all five tasks) * 3 / 1000 / 5) * 5, floor 15; measured deterministically BEFORE any live run of the revision.",
+    "r5_0": {
+      "note": "Initial freeze measured WITHOUT the model loaded (4.6-8.0 s; derived 25 s). During the r5.0 live matrix, rows 003 and 004 timed out at 25 s under live load — proven common harness parameter defect; r5.0 rows preserved unchanged.",
+      "max_first_pause_latency_ms": 8015,
+      "per_task_first_pause_latency_ms": {
+        "curated-none-handling-001": 6280,
+        "curated-off-by-one-002": 8015,
+        "curated-wrong-branch-003": 5500,
+        "curated-mutation-alias-004": 4734,
+        "curated-caller-callee-005": 4625
+      },
+      "derived_pdb_request_timeout_seconds": 25
+    },
+    "r5_1": {
+      "note": "Repaired freeze measured WITH the model loaded (live conditions) for all five tasks; affected rows 003 and 004 rerun under r5.1.",
+      "max_first_pause_latency_ms": 18844,
+      "per_task_first_pause_latency_ms": {
+        "curated-none-handling-001": 18844,
+        "curated-off-by-one-002": 16046,
+        "curated-wrong-branch-003": 14155,
+        "curated-mutation-alias-004": 13313,
+        "curated-caller-callee-005": 14328
+      },
+      "derived_pdb_request_timeout_seconds": 60
+    },
+    "max_first_pause_latency_ms": 18844,
+    "per_task_first_pause_latency_ms": {
+      "curated-none-handling-001": 18844,
+      "curated-off-by-one-002": 16046,
+      "curated-wrong-branch-003": 14155,
+      "curated-mutation-alias-004": 13313,
+      "curated-caller-callee-005": 14328
+    },
+    "derived_pdb_request_timeout_seconds": 60,
+    "measured_at": "live-condition measurement 2026-08-11 (model loaded); frozen before the r5.1 affected-set rerun",
+    "note": "Frozen BEFORE the r5.1 affected-set rerun; no timeout change after seeing any model outcome."
+  },
+  "interface_revision": "r5.9",
+  "interface_repairs": {
+    "r5_1_timeout": "pdb_request_timeout_seconds raised from 25 to 60 after the r5.0 live matrix proved the initial freeze (measured without the model loaded) was insufficient under live load: rows 003/004 broke with PdbSessionTimeoutError before any model measurement. Common harness parameter repair; affected rows 003/004 rerun under r5.1; r5.0 rows preserved unchanged.",
+    "r5_1_verifier_workspace": "EvaluationVerifier workspace parent moved outside the repository tree (system temp): an in-repo parent makes pytest rootdir discovery find the repo pyproject.toml, resolving fixture test node ids against the repo root and invalidating baseline collection. Repair applied to the runner; the r5.0 005 candidate was re-evaluated deterministically on the exact accepted candidate.",
+    "r5_1_verifier_field": "r5_runner verifier mapping fixed: PatchRecord.applied -> PatchRecord.success (AttributeError prevented verifier execution in the r5.0 runner).",
+    "r5_2_treatment": "R5.2 final treatment freeze (the R5 goal revision): (1) terminal runtime progression — when step/next makes the real target exit/crash (exited/failed/terminated), the real terminal observation (exit code / error) plus the REAL reproduction failure output (bounded stdout/stderr of the task's own failing reproduction command, a real test diagnostic explicitly permitted by the goal's non-cheating rules) become diagnosis evidence and the state machine allows diagnosis directly (no impossible second PAUSED pause); (2) deterministic single-markdown-fence unwrap of model-authored patches (recorded + hashed; the 'patch' command line is synthesized mechanically when the fenced content is a bare unified diff); (3) real verifier-feedback repair loop — every accepted candidate is evaluated by the independent EvaluationVerifier and bounded real failure diagnostics are fed back into the next PATCH turn under a frozen retry policy; (4) bounded context-location fuzz in PatchManager hunk application (exact content matching, displacement recorded) so mechanical diff bookkeeping never dominates semantic repair; (5) frozen contract patch budget raised to 4 attempts (fixture constraints untouched; the contract is the frozen treatment surface).",
+    "r5_3_whole_file_repair": "R5.3 treatment update (frozen for the final matrix): whole-file repair representation added as a common second repair representation.  In the Patch phase the model may emit `file <path>` followed by the COMPLETE replacement file content; the deterministic layer mechanically serializes the model-authored content into the unified diff (standard-library difflib, recorded and hashed) that PatchManager applies.  The r5.2 live matrix (0/5) proved the RAW 7B model diagnoses correctly but repeatedly authors context-precise unified diffs that miss the correct line (001) or repeat a wrong patch under greedy decoding (004/005); removing the mechanical diff-authoring burden is a common interface change, not a per-task answer.  `patch` with a diff remains supported.",
+    "r5_4_model_escalation": "R5.4 MODEL-IDENTITY ESCALATION (recorded per the goal's escalation authority): the r5.2 and r5.3 matrices (RAW Qwen2.5-Coder-7B, frozen treatment) proved every harness mechanism (terminal progression, fence unwrap, whole-file repair serialization, real verifier-feedback loop, context fuzz) works, but the RAW 7B model repeatedly failed to author correct minimal semantic repairs under greedy decoding: 001 patched line 5 instead of the line-2 crash, 003 oscillated between wrong branch reorderings, 004 emitted a no-op diff and never removed the identity check, 005 never wrote the dollars->cents conversion.  Escalation: Qwen2.5-Coder-14B-Instruct, the same family/chat template, identical generation config and NF4 quantization, identical frozen treatment (r5.3 + whole-file representation made the PREFERRED repair output).  RAW-7B results are preserved as the historical baseline; 14B results are labeled with the 14B identity and never called RAW-Qwen results.",
+    "r5_5_content_fence_unwrap": "R5.5 treatment fix (frozen for the final matrix): the r5.4 14B matrix proved every model-authored repair semantically correct, but the model wraps the whole-file replacement content in a markdown fence INSIDE the `file` command; the fence lines became part of the file content and all five rows failed with SYNTAX_FAILED.  Fix: the deterministic single-fence unwrap is now also applied INSIDE `file` replacement content (recorded per attempt).  Common mechanical framing removal; no semantics change.  r5.4 rows preserved as the pre-fix baseline.",
+    "r5_6_verifier_resolved_closeout": "R5.6 treatment fix (frozen for the final matrix): the r5.5 matrix resolved 4/5; on 005 the FIRST candidate was verifier-RESOLVED but the model retried under greedy decoding and replaced it with a wrong patch (REGRESSION).  Fix: when the real independent EvaluationVerifier confirms outcome RESOLVED for an accepted candidate, the harness performs the administrative closeout (PATCH->VALIDATE->DONE) and stops consuming the repair budget — the verifier is the correctness authority.  Common closeout, recorded as administrative bookkeeping; no task-specific logic.",
+    "r5_7_gate_step_region_and_full_prompt": "R5.7 treatment freeze (final matrix): (1) chain gate D accepts a real post-step pause anywhere in the TARGET SCRIPT (a real step may land in the appended launcher when the target's actual control flow goes there after pytest swallows the crash); such an out-of-original-region pause is accepted ONLY when the trajectory also carries the real reproduction failure output as corroborating failure evidence.  Break (gate A) still requires the original production region, so the anti-gaming property is preserved.  (2) telemetry retains the FULL user prompt (not only the 1000-char summary) so the diagnosis-retention gate check is exact for long prompts.",
+    "r5_9_sanitized_diagnostics": "R5.9 CLEAN-HOLDOUT treatment (frozen for the final matrix): the previous r5.7 final matrix was 5/5 verifier-RESOLVED but FirstMate independently reviewed the exact live prompts and found material hidden-test leakage: the raw pytest failure output (test source, assertion expressions, expected literals, node ids, test names) and raw failing-verifier-record tails were forwarded to the model.  Fix: ONE COMMON DETERMINISTIC SANITIZER (agentic_debugger/demo/sanitize.py) now derives the model-facing diagnostic from BOTH dynamic paths: the reproduction failure output and the verifier-feedback failing records. The model may receive the real production exception class+message, the production traceback frame(s) inside the original source region, verifier outcome/counts/syntax, and the generic statement 'baseline behavioral check failed after executing the target behavior'.  It never receives hidden test source, assertion expressions, expected literals, node ids, test filenames/function names, pytest excerpts, or expected-vs-actual diffs.  A diagnostic that cannot be separated safely from hidden-test content fails closed to the generic statement. The old r5.7 matrix is preserved as the historical upper-bound evidence and MUST fail the new anti-leakage audit (regression test).",
+    "r5_9_production_exception_path": "R5.9 CLEAN-HOLDOUT treatment: truthful classification of the crash-on-step path.  The old r5.7 001 row reported terminal_path=false, step_outside_region=true and presented the appended-launcher pause as an original-region G2 (reason string claimed 'original-region'), and the model diagnosis incorrectly discussed the launcher/pause_generation. Fix: when a real post-step/next pause lands OUTSIDE the original production region (the production frame unwound during a real exception/failure), the stage machine classifies the R5.9 PRODUCTION-EXCEPTION path: the last real production frame/locals are retained, the SANITIZED production exception is attached, diagnosis is allowed directly, and no fake original-region G2 exists or is claimed (G2=None).  A pytest-catching exception that leaves the PDB process alive is classified as this corroborated production-exception path rather than literal process termination.  The classification is driven mechanically by pause location + sanitized reproduction evidence; no task-id special case.",
+    "r5_9_region_filtered_observations": "R5.9 CLEAN-HOLDOUT treatment: the 'Last observation' prompt block now renders stack/step observations with the SAME production-region filter as the runtime slice (the r5.8 exploration filtered stacks without changing the state machine and regressed 001; the r5.9 production-exception path removes the regression by never offering a stack after the production frame unwound).  Test-file frames and appended-launcher frames never reach model-facing text; raw payload evidence remains complete and frame ids are never renumbered.",
+    "r5_9_anti_leakage_audit": "R5.9 CLEAN-HOLDOUT treatment: a fail-closed ACTUAL-PROMPT anti-leakage scanner (experiments/debugger_interaction_v2_r5/anti_leakage.py, AUDIT-ONLY - strictly separated from prompt construction) examines every exact live telemetry[*].request.user_prompt_full after the run. For each task it derives forbidden content from the actual fixture evaluation assets (exact F2P/P2P node ids, hidden test filenames, function names, exact source lines, assertion source lines, expected literals, oracle root_cause_summary/runtime_evidence_hint/target_symbols/bug_category, reference repair snippets, RuntimeProbe call source and anchor).  The final matrix PASS gate requires leakage_findings == [] for every actual prompt; legitimate production source/debugger evidence (source definitions, stack frames, pause lines, the module path) is subtracted before source-derived needles are checked.  The old r5.7 prompts MUST fail this audit (regression tests in tests/unit/test_r5_anti_leakage.py).",
+    "r6_cp118_matched_condition": "R6 MATCHED cp118 CONDITION (frozen before the cp118 live matrix): the historical project-fine-tuned checkpoint cp118 is attached to the SAME base revision (Qwen/Qwen2.5-Coder-7B-Instruct @ c03e6d3...) under the IDENTICAL frozen r5.9 clean-holdout treatment (system prompt template, sanitizer, production-exception path, region-filtered observations, budgets, generation config, anti-leakage audit) that produced the successful 14B matrix.  The interface is NOT simplified compared with the successful 14B condition; only the model identity differs.  No timeout, budget, prompt, or sanitizer change was made after seeing any cp118 outcome."
+  },
+  "treatment": {
+    "debugger_entrypoint": "target script = task's single writable production path (constraints.allowed_write_paths); disposable fixture copy receives one neutral cwd-safe guarded pytest launcher generated mechanically from task.reproduction.argv (shape python -m pytest <node> ...; fail closed otherwise); model authors break <line> among original-source compile()+co_lines()-minus-def-lines candidates; breakpoints resolve inside the real failing pytest execution via canonic-filename matching.",
+    "stack_rendering": "model-facing stack rendering filtered to frames with script == production path and 1 <= line <= original_source_line_count (excludes the appended launcher region and test-file frames) in EVERY prompt block (Last observation + runtime slice); raw payload evidence complete; frame ids never renumbered; locals/safe_eval dispatch from authoritative raw payload frame_id/pause_generation.",
+    "model_context": "title + description from agent_visible_mapping; original production source; mechanical eligible breakpoint lines; real debugger/tool observations (production-region filtered); SANITIZED reproduction diagnostic (common deterministic sanitizer: production exception or generic behavioral-failure statement); SANITIZED verifier failure records (status + candidate production exception only). No reproduction argv, no hidden test source, no assertion/literal content, no node ids, no oracle, no RuntimeProbe, no reference repair.",
+    "state_machine": "accepted R3 staged machine plus R5.2 terminal progression and the R5.9 production-exception path: reproduce -> (admin REPRODUCE->UNDERSTAND->RUNTIME_EVIDENCE after verified baseline failure) -> break -> stack -> locals|print -> step|next -> EITHER stack G2>G1 inside the original production region (normal path) OR a REAL terminal outcome (exited/failed/terminated with real exit/error evidence and the sanitized reproduction diagnostic) OR a PAUSED pause outside the production region (R5.9 production-exception path: production frame unwound; G2=None; sanitized production exception attached) -> diagnosis -> bounded PATCH (patch+failed; first turn patch only) with real verifier-feedback retries -> PatchManager -> administrative closeout -> EvaluationVerifier.",
+    "patch_serialization": "R3.2 metadata-only hunk-count normalization (B->C, fingerprint-checked) plus R5.3 whole-file representation: the model authors the complete file content, the deterministic layer generates the unified diff (difflib, recorded+hashed), then normalizes it.  PatchManager and EvaluationVerifier receive C only; A=raw model response, B=model semantic patch (parsed diff or generated diff), C=normalized diff.",
+    "budget": "one common budget for all five tasks (see budgets); no per-task prompt tuning after seeing outcomes."
+  },
+  "source_baseline": {
+    "r4_accepted_commit": "372d51f1a35e071c677391c9970f7b552bb276f2",
+    "note": "R5 descends from committed R4 baseline (372d51f). R1-R4 evidence preserved immutably."
+  }
+}
