@@ -104,13 +104,14 @@ def main() -> int:
         )
 
     rows = []
+    transport = transport_factory()
     for entry in validation_entries:
         task_id = entry["task_id"]
         case_output = run_dir / task_id
         case_output.mkdir(parents=True, exist_ok=True)
         try:
             evidence = run_experiment(
-                contract, transport_factory(), case_output,
+                contract, transport, case_output,
                 task_id=task_id, pdb_session_factory=session_factory,
             )
             row = _matrix_row(evidence, task_id, contract_sha, contract)
@@ -127,6 +128,16 @@ def main() -> int:
                 "error": f"{type(exc).__name__}: {exc}",
             })
             print(f"{task_id}: ERROR {type(exc).__name__}: {exc}")
+        finally:
+            # Free per-task CUDA memory (the model is loaded once and reused;
+            # the PDB sessions/workspaces are cleaned by the runner).
+            import gc
+            gc.collect()
+            try:
+                import torch
+                torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     aggregate = {
         "tasks_total": len(rows),

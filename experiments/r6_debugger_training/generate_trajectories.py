@@ -76,16 +76,21 @@ def changed_original_lines(original: str, corrected: str) -> list[int]:
 
 
 def breakpoint_candidates(eligible: tuple[int, ...], changed: list[int]) -> list[int]:
-    """Eligible lines in the changed region first, then nearest neighbors."""
+    """Eligible lines in the changed region first, then nearest neighbors.
+
+    A gold diff whose changed region contains no executable line (e.g. a
+    pure docstring removal or insertion-only repair) must not collapse the
+    candidate set to module-level-only lines: the nearest executable lines
+    around the region are appended in distance order.
+    """
     if not changed:
         return list(eligible)
     in_region = [line for line in eligible if (line - 1) in changed]
-    if in_region:
-        return in_region
-    nearest = sorted(
-        eligible, key=lambda line: min(abs(line - 1 - c) for c in changed)
+    outside = [line for line in eligible if (line - 1) not in changed]
+    outside = sorted(
+        outside, key=lambda line: min(abs(line - 1 - c) for c in changed)
     )
-    return nearest
+    return in_region + outside
 
 
 def find_pausing_breakpoint(

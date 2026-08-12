@@ -309,9 +309,14 @@ def main() -> int:
         )
         records = []
         dropped: list[dict[str, Any]] = []
+        eos_id = tokenizer.eos_token_id
         for i in range(len(examples)):
             prompt_ids = batch["input_ids"][i]
             completion_ids = completion_batch["input_ids"][i]
+            # The completion target includes the EOS token: the model must
+            # learn to TERMINATE (without EOS supervision, greedy decoding
+            # degenerates into repetition loops — the cp118 failure class).
+            completion_ids = completion_ids + [eos_id]
             total_len = len(prompt_ids) + len(completion_ids)
             if total_len > args.max_length:
                 dropped.append({
