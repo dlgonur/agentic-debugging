@@ -38,15 +38,51 @@ _ADMIN_REASON_UNDERSTAND_TO_RUNTIME = (
     "R5 administrative phase navigation: UNDERSTAND->RUNTIME_EVIDENCE "
     "(forced runtime-entry diagnostic)"
 )
+_ADMIN_REASON_VERIFIER_RESOLVED_PATCH = (
+    "R5 administrative closeout: the independent EvaluationVerifier "
+    "confirmed RESOLVED for the accepted candidate; the repair is complete "
+    "(verifier is the correctness authority)"
+)
+_ADMIN_REASON_VERIFIER_RESOLVED_DONE = (
+    "R5 administrative closeout: VALIDATE->DONE after verifier-confirmed "
+    "RESOLVED"
+)
+
+
+def _verifier_resolved(observation: Any) -> bool:
+    """True when the last apply_patch observation carries a real
+    independent-verifier feedback with outcome exactly RESOLVED."""
+    if observation is None:
+        return False
+    if observation.name != "apply_patch":
+        return False
+    status = observation.status.value if hasattr(observation.status, "value") else str(observation.status)
+    if status not in ("ok", "completed"):
+        return False
+    payload = observation.payload
+    if type(payload) is not dict:
+        return False
+    feedback = payload.get("verifier_feedback")
+    if type(feedback) is not dict:
+        return False
+    return feedback.get("outcome") == "RESOLVED"
 
 
 class R5PhaseNavigationAdapter:
     """Experiment-local wrapper that automates ONLY administrative phase
-    navigation after verified reproduction, then delegates to the model."""
+    navigation after verified reproduction, then delegates to the model.
+
+    R5.5 addition: when the real independent verifier confirms RESOLVED for
+    an accepted candidate, the system performs the administrative closeout
+    (PATCH->VALIDATE->DONE) instead of risking a regression on a further
+    model retry — the verifier is the correctness authority and the repair
+    budget stops being consumed once resolution is proven."""
 
     def __init__(self, inner_adapter: Any) -> None:
         self._inner = inner_adapter
         self._admin_nav_done = False
+        self._closeout_patch_done = False
+        self._closeout_done = False
         self._admin_transitions: list[dict[str, Any]] = []
 
     @property
@@ -83,6 +119,36 @@ class R5PhaseNavigationAdapter:
                     ControllerState.RUNTIME_EVIDENCE,
                     _ADMIN_REASON_UNDERSTAND_TO_RUNTIME,
                 )
+
+        # R5.5 verifier-resolved closeout (administrative; recorded).
+        if (
+            state is ControllerState.PATCH
+            and _verifier_resolved(last_obs)
+            and not self._closeout_patch_done
+        ):
+            self._closeout_patch_done = True
+            self._record_admin_transition(
+                snapshot, ControllerState.VALIDATE,
+                _ADMIN_REASON_VERIFIER_RESOLVED_PATCH,
+            )
+            return TransitionDirective(
+                ControllerState.VALIDATE,
+                _ADMIN_REASON_VERIFIER_RESOLVED_PATCH,
+            )
+        if (
+            state is ControllerState.VALIDATE
+            and self._closeout_patch_done
+            and not self._closeout_done
+        ):
+            self._closeout_done = True
+            self._record_admin_transition(
+                snapshot, ControllerState.DONE,
+                _ADMIN_REASON_VERIFIER_RESOLVED_DONE,
+            )
+            return TransitionDirective(
+                ControllerState.DONE,
+                _ADMIN_REASON_VERIFIER_RESOLVED_DONE,
+            )
 
         return self._inner.next_directive(snapshot)
 
