@@ -1,0 +1,160 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "professor_debug_trace_schema_v1.json",
+  "title": "Professor Debug Trace v1",
+  "description": "One structured debugger trace per final task, derived from REAL final-execution evidence. No hidden test source, oracle fields, chain-of-thought, or fabricated localization.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "task_id",
+    "bug_category",
+    "debugger_path",
+    "model",
+    "treatment",
+    "run_provenance",
+    "failure_reproduction",
+    "debugger_trace",
+    "error_localization",
+    "diagnosis",
+    "repair_attempts",
+    "final_verification",
+    "claims_boundary"
+  ],
+  "properties": {
+    "schema_version": { "const": "professor_debug_trace_v1" },
+    "task_id": { "type": "string", "minLength": 1 },
+    "bug_category": { "type": ["string", "null"] },
+    "debugger_path": {
+      "enum": ["production-exception", "terminal", "normal-G2"]
+    },
+    "model": {
+      "type": "object",
+      "required": ["base", "base_revision", "fine_tuned_checkpoint",
+                   "adapter_identity_sha256", "training_provenance"],
+      "properties": {
+        "base": { "type": ["string", "null"] },
+        "base_revision": { "type": ["string", "null"] },
+        "fine_tuned_checkpoint": { "type": ["string", "null"] },
+        "adapter_identity_sha256": { "type": ["string", "null"] },
+        "training_provenance": { "type": ["string", "null"] }
+      }
+    },
+    "treatment": {
+      "type": "object",
+      "required": ["revision", "contract_sha256", "system_prompt_template_sha256"],
+      "properties": {
+        "revision": { "type": ["string", "null"] },
+        "contract_sha256": { "type": ["string", "null"] },
+        "system_prompt_template_sha256": { "type": ["string", "null"] }
+      }
+    },
+    "run_provenance": {
+      "type": "object",
+      "required": ["source_commit_sha", "evidence_schema"]
+    },
+    "failure_reproduction": {
+      "type": "object",
+      "required": ["reproduced", "sanitized_summary"],
+      "properties": {
+        "reproduced": { "type": "boolean" },
+        "sanitized_summary": { "type": "string" }
+      }
+    },
+    "debugger_trace": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["turn", "phase", "model_command", "status"],
+        "properties": {
+          "turn": { "type": "integer", "minimum": 1 },
+          "phase": { "type": "string" },
+          "model_command": { "type": "string" },
+          "tool_action": { "type": "string" },
+          "status": { "type": "string" },
+          "production_file": { "type": ["string", "null"] },
+          "function": { "type": ["string", "null"] },
+          "line": { "type": ["integer", "null"], "minimum": 1 },
+          "pause_generation": { "type": ["integer", "null"], "minimum": 1 },
+          "runtime_state": { "type": ["string", "null"] },
+          "diagnosis_text": { "type": ["string", "null"] },
+          "frames": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["function", "file", "line", "is_current"],
+              "properties": {
+                "function": { "type": ["string", "null"] },
+                "file": { "type": ["string", "null"] },
+                "line": { "type": ["integer", "null"] },
+                "is_current": { "type": "boolean" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "error_localization": {
+      "type": "object",
+      "required": ["production_file", "function", "line_or_region", "evidence_basis"],
+      "properties": {
+        "production_file": { "type": ["string", "null"] },
+        "function": { "type": ["string", "null"] },
+        "line_or_region": { "type": ["integer", "string", "null"] },
+        "pause_generation": { "type": ["integer", "null"] },
+        "evidence_basis": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["observation", "observation_id"],
+            "properties": {
+              "observation": { "type": "string" },
+              "observation_id": { "type": "string" },
+              "function": { "type": ["string", "null"] },
+              "line": { "type": ["integer", "null"] }
+            }
+          }
+        }
+      }
+    },
+    "diagnosis": {
+      "type": "object",
+      "required": ["model_authored", "text"],
+      "properties": {
+        "model_authored": { "type": "boolean" },
+        "text": { "type": "string" }
+      }
+    },
+    "repair_attempts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["attempt", "representation"],
+        "properties": {
+          "attempt": { "type": "integer", "minimum": 1 },
+          "representation": { "type": "string" },
+          "model_patch_raw_sha256": { "type": ["string", "null"] },
+          "model_patch_serialization_normalized_sha256": { "type": ["string", "null"] },
+          "verifier_outcome": { "type": ["string", "null"] },
+          "verifier_status": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "final_verification": {
+      "type": "object",
+      "required": ["outcome", "verifier_status", "f2p", "p2p"],
+      "properties": {
+        "outcome": { "type": ["string", "null"] },
+        "verifier_status": { "type": ["string", "null"] },
+        "f2p": { "type": "string" },
+        "p2p": { "type": "string" },
+        "full_suite": { "type": ["string", "boolean", "null"] },
+        "syntax_passed": { "type": ["boolean", "null"] },
+        "canonical_fixture_unchanged": { "type": ["boolean", "null"] },
+        "workspace_lifecycle": { "type": ["string", "null"] },
+        "f2p_records": { "type": "array", "items": { "type": "object" } },
+        "p2p_records": { "type": "array", "items": { "type": "object" } }
+      }
+    },
+    "claims_boundary": { "type": "string" }
+  }
+}
