@@ -1169,6 +1169,8 @@ def render_prompt(
     *,
     debugger: Optional[DebuggerContext] = None,
     patch_stage: Optional[R3PatchStage] = None,
+    observation_filter_scripts: Optional[frozenset[str]] = None,
+    observation_original_line_count: Optional[int] = None,
 ) -> str:
     if debugger is not None and debugger.r2_stage is not None:
         r2_stage = debugger.r2_stage
@@ -1203,7 +1205,11 @@ def render_prompt(
         commands = tuple(c for c in commands if c != "understand")
 
     commands_text = "\n".join(f"  - {c}" for c in commands)
-    obs_text = _render_observation(last_observation)
+    obs_text = _render_observation(
+        last_observation,
+        filter_scripts=observation_filter_scripts,
+        original_line_count=observation_original_line_count,
+    )
 
     parts = [
         f"Current phase: {state.value}",
