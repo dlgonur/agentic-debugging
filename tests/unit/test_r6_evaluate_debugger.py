@@ -127,6 +127,50 @@ def test_clean_holdout_aggregate_requires_five_strict_rows_and_zero_leakage(
     assert report["aggregate"]["clean_holdout_5_of_5"] is True
 
 
+def test_validation_status_fails_closed_without_full_debugger_verifier_success() -> None:
+    selected_tasks = ["quixbugs-depth-first-search"]
+    row = {
+        "task_id": selected_tasks[0],
+        "per_task_pass": False,
+        "verifier_status": None,
+        "verifier_outcome": None,
+        "tool_errors": ["reproduction command could not be launched"],
+    }
+
+    assert evaluator._strict_scientific_pass([row], selected_tasks) is False
+    assert evaluator._final_run_status(
+        [row],
+        selected_tasks,
+        suite="validation",
+        anti_leakage={"status": "not_applicable"},
+    ) == "complete_target_not_met"
+
+
+def test_validation_status_accepts_only_ordered_resolved_rows() -> None:
+    selected_tasks = [
+        "quixbugs-depth-first-search",
+        "quixbugs-flatten",
+    ]
+    rows = [
+        {
+            "task_id": task_id,
+            "per_task_pass": True,
+            "verifier_status": "COMPLETED",
+            "verifier_outcome": "RESOLVED",
+        }
+        for task_id in selected_tasks
+    ]
+
+    assert evaluator._strict_scientific_pass(rows, selected_tasks) is True
+    assert evaluator._final_run_status(
+        rows,
+        selected_tasks,
+        suite="validation",
+        anti_leakage={"status": "not_applicable"},
+    ) == "complete"
+    assert evaluator._strict_scientific_pass(list(reversed(rows)), selected_tasks) is False
+
+
 def test_same_transport_is_resident_across_stage_b_without_per_task_cuda_release(
     tmp_path: Path,
     monkeypatch,
@@ -198,6 +242,7 @@ def test_same_transport_is_resident_across_stage_b_without_per_task_cuda_release
             "task_id": task_id,
             "verifier_status": "COMPLETED",
             "verifier_outcome": "RESOLVED",
+            "per_task_pass": True,
             "first_causal_failure": "none",
             "model_calls": 1,
             "breakpoint_line": 1,

@@ -50,3 +50,33 @@ def test_bounded_environment_resolves_child_python_to_evaluator() -> None:
     assert environment["PATH"].split(bounded_probe.os.pathsep)[0] == str(
         Path(sys.executable).resolve().parent
     )
+
+
+def test_windows_child_cwd_policy_rejects_deep_evidence_layout() -> None:
+    deep_root = Path("C:/") / ("deep-segment" * 20)
+
+    try:
+        bounded_probe._child_cwd_policy(
+            deep_root,
+            tag="stage-a",
+            label="adapter-checkpoint-30",
+            task_ids=["quixbugs-depth-first-search"],
+            platform_name="nt",
+        )
+    except RuntimeError as exc:
+        assert "child cwd is too long" in str(exc)
+    else:
+        raise AssertionError("unsafe Windows child cwd was accepted")
+
+
+def test_windows_child_cwd_policy_records_short_layout() -> None:
+    policy = bounded_probe._child_cwd_policy(
+        Path("C:/r6"),
+        tag="a",
+        label="adapter-checkpoint-30",
+        task_ids=["quixbugs-depth-first-search"],
+        platform_name="nt",
+    )
+
+    assert policy["passed"] is True
+    assert policy["predicted_paths"][0]["characters"] <= 248

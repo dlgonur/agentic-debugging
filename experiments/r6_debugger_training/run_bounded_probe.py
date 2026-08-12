@@ -22,6 +22,8 @@ REPO_ROOT = THIS_FILE.parents[2]
 EVALUATOR = THIS_FILE.with_name("evaluate_debugger.py")
 TELEMETRY = THIS_FILE.with_name("gpu_telemetry.py")
 ALLOCATOR_POLICY = "backend:cudaMallocAsync"
+WINDOWS_CHILD_CWD_MAX_CHARS = 248
+WORKSPACE_NAME_TEMPLATE = "task_workspace_" + ("0" * 32)
 
 
 def _utc_now() -> str:
@@ -104,6 +106,60 @@ def _evaluator_environment() -> tuple[dict[str, str], dict[str, str]]:
     return environment, policy
 
 
+def _evaluation_label(adapter_path: str | None) -> str:
+    if adapter_path is None:
+        return "raw-base"
+    safe_name = re.sub(
+        r"[^A-Za-z0-9._-]", "_", Path(adapter_path).resolve().name
+    )
+    return f"adapter-{safe_name}"
+
+
+def _child_cwd_policy(
+    output_root: Path,
+    *,
+    tag: str,
+    label: str,
+    task_ids: list[str],
+    platform_name: str = os.name,
+) -> dict[str, Any]:
+    predicted = []
+    for task_id in task_ids:
+        path = (
+            output_root
+            / tag
+            / label
+            / task_id
+            / f"case-{task_id}"
+            / WORKSPACE_NAME_TEMPLATE
+        )
+        predicted.append({
+            "task_id": task_id,
+            "path": str(path),
+            "characters": len(str(path)),
+        })
+    limit = WINDOWS_CHILD_CWD_MAX_CHARS if platform_name == "nt" else None
+    violations = (
+        [item for item in predicted if item["characters"] > limit]
+        if limit is not None
+        else []
+    )
+    if violations:
+        longest = max(violations, key=lambda item: item["characters"])
+        raise RuntimeError(
+            "predicted Windows task/PDB child cwd is too long for reliable "
+            f"CreateProcess: {longest['characters']} > {limit} characters; "
+            "choose a shorter --output-dir and/or --tag"
+        )
+    return {
+        "platform": platform_name,
+        "windows_max_characters": limit,
+        "workspace_name_template": WORKSPACE_NAME_TEMPLATE,
+        "predicted_paths": predicted,
+        "passed": True,
+    }
+
+
 def _telemetry_summary(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {"rows": 0, "error": "telemetry file missing"}
@@ -175,6 +231,16 @@ def main() -> int:
         )
     git_commit = _run_git("rev-parse", "HEAD")
     output_root = Path(args.output_dir).resolve()
+    label = _evaluation_label(args.adapter_path)
+    try:
+        child_cwd_policy = _child_cwd_policy(
+            output_root,
+            tag=args.tag,
+            label=label,
+            task_ids=args.task,
+        )
+    except RuntimeError as exc:
+        parser.error(str(exc))
     tag_root = output_root / args.tag
     if tag_root.exists() and any(tag_root.iterdir()):
         parser.error(f"tag output already exists and is not empty: {tag_root}")
@@ -224,6 +290,7 @@ def main() -> int:
         "tasks": args.task,
         "gpu_mode": args.gpu_mode,
         "cuda_device_index": args.cuda_device_index,
+        "child_cwd_policy": child_cwd_policy,
         "environment": {
             "PYTORCH_CUDA_ALLOC_CONF": ALLOCATOR_POLICY,
             "python_command": python_command_policy,

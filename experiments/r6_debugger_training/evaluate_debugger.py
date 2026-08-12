@@ -372,6 +372,38 @@ def _aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _strict_scientific_pass(
+    rows: list[dict[str, Any]],
+    selected_tasks: list[str],
+) -> bool:
+    """Require one ordered, fully resolved debugger/verifier row per task."""
+    return bool(selected_tasks) and [row.get("task_id") for row in rows] == list(
+        selected_tasks
+    ) and all(
+        not row.get("error")
+        and row.get("per_task_pass") is True
+        and row.get("verifier_status") == "COMPLETED"
+        and row.get("verifier_outcome") == "RESOLVED"
+        for row in rows
+    )
+
+
+def _final_run_status(
+    rows: list[dict[str, Any]],
+    selected_tasks: list[str],
+    *,
+    suite: str,
+    anti_leakage: dict[str, Any],
+) -> str:
+    if any(row.get("error") for row in rows):
+        return "complete_with_errors"
+    if not _strict_scientific_pass(rows, selected_tasks):
+        return "complete_target_not_met"
+    if suite == "curated-holdout" and anti_leakage.get("passed") is not True:
+        return "complete_target_not_met"
+    return "complete"
+
+
 def _holdout_anti_leakage(
     run_dir: Path,
     *,
@@ -422,6 +454,9 @@ def _build_report(
     error: Optional[dict[str, str]] = None,
 ) -> dict[str, Any]:
     aggregate = _aggregate(rows)
+    aggregate["strict_scientific_pass"] = _strict_scientific_pass(
+        rows, selected_tasks
+    )
     if suite == "curated-holdout":
         audit = anti_leakage or {
             "passed": False,
@@ -430,14 +465,7 @@ def _build_report(
         primary_target = bool(
             len(selected_tasks) == len(CURATED_HOLDOUT_IDS)
             and selected_tasks == list(CURATED_HOLDOUT_IDS)
-            and len(rows) == len(CURATED_HOLDOUT_IDS)
-            and all(
-                not row.get("error")
-                and row.get("per_task_pass") is True
-                and row.get("verifier_status") == "COMPLETED"
-                and row.get("verifier_outcome") == "RESOLVED"
-                for row in rows
-            )
+            and aggregate["strict_scientific_pass"]
         )
         leakage_findings = audit.get("leakage_findings_total")
         aggregate.update({
@@ -816,11 +844,11 @@ def main() -> int:
         )
 
     anti_leakage = compute_anti_leakage()
-    run_status = (
-        "complete_with_errors"
-        if any(row.get("error") for row in rows)
-        or (args.suite == "curated-holdout" and anti_leakage.get("passed") is not True)
-        else "complete"
+    run_status = _final_run_status(
+        rows,
+        selected_tasks,
+        suite=args.suite,
+        anti_leakage=anti_leakage,
     )
     report = _build_report(
         status=run_status,
