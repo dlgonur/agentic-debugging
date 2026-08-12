@@ -194,6 +194,7 @@ class TelemetryRecord:
     system_prompt_sha256: str
     user_prompt_sha256: str
     user_prompt_summary: str
+    user_prompt_full: Optional[str] = None
     raw_response_text: str = NOT_AVAILABLE
     raw_response_status: str = "transport_failure"
     raw_response_bytes: Any = NOT_AVAILABLE
@@ -230,7 +231,7 @@ class TelemetryRecord:
             "model_call_index": self.model_call_index,
             "transport_attempt_index": self.transport_attempt_index,
             "controller_state": self.controller_state,
-            "request": {"system_prompt_sha256": self.system_prompt_sha256, "user_prompt_sha256": self.user_prompt_sha256, "user_prompt_summary": self.user_prompt_summary},
+            "request": {"system_prompt_sha256": self.system_prompt_sha256, "user_prompt_sha256": self.user_prompt_sha256, "user_prompt_summary": self.user_prompt_summary, "user_prompt_full": self.user_prompt_full},
             "raw_response_text": self.raw_response_text,
             "raw_response_status": self.raw_response_status,
             "raw_response_bytes": self.raw_response_bytes,
@@ -439,7 +440,7 @@ class R5DebuggerBridgeAdapter:
             except Exception as exc:
                 raw_text = NOT_AVAILABLE; raw_status = "transport_failure"; raw_bytes = NOT_AVAILABLE; transport_error_cat = type(exc).__name__; usage = _extract_usage(None); response = None  # type: ignore
             req_ms = int((time.monotonic() - req_start) * 1000)
-            record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=attempt + 1, controller_state=state.value, system_prompt_sha256=sys_hash, user_prompt_sha256=user_hash, user_prompt_summary=_bound_text(user_prompt, 1000), raw_response_text=raw_text if raw_status == "decoded" else NOT_AVAILABLE, raw_response_status=raw_status, raw_response_bytes=raw_bytes, transport_error_category=transport_error_cat, parse_status="not_attempted", prompt_tokens=usage.get("prompt_tokens", NOT_RECORDED), completion_tokens=usage.get("completion_tokens", NOT_RECORDED), total_tokens=usage.get("total_tokens", NOT_RECORDED), provider_reported=usage.get("provider_reported", False), request_duration_ms=req_ms, prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
+            record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=attempt + 1, controller_state=state.value, system_prompt_sha256=sys_hash, user_prompt_sha256=user_hash, user_prompt_summary=_bound_text(user_prompt, 1000), user_prompt_full=user_prompt, raw_response_text=raw_text if raw_status == "decoded" else NOT_AVAILABLE, raw_response_status=raw_status, raw_response_bytes=raw_bytes, transport_error_category=transport_error_cat, parse_status="not_attempted", prompt_tokens=usage.get("prompt_tokens", NOT_RECORDED), completion_tokens=usage.get("completion_tokens", NOT_RECORDED), total_tokens=usage.get("total_tokens", NOT_RECORDED), provider_reported=usage.get("provider_reported", False), request_duration_ms=req_ms, prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
             self._telemetry.append(record)
             if raw_status == "transport_failure":
                 if attempt < self._max_retries:
@@ -664,7 +665,7 @@ class ScriptedBridgeAdapter:
         if state.value == "Patch":
             patch_stage = bridge.R3PatchStage.RETRY if self._patch_attempted else bridge.R3PatchStage.NEEDS_FIRST_REPAIR
         user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=None, debugger=debugger_ctx, patch_stage=patch_stage)
-        record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=1, controller_state=state.value, system_prompt_sha256=_sha256(self._system_prompt), user_prompt_sha256=_sha256(user_prompt), user_prompt_summary=_bound_text(user_prompt, 1000), raw_response_text=raw_text, raw_response_status="decoded", raw_response_bytes=len(raw_text.encode("utf-8")), parse_status="not_attempted", prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
+        record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=1, controller_state=state.value, system_prompt_sha256=_sha256(self._system_prompt), user_prompt_sha256=_sha256(user_prompt), user_prompt_summary=_bound_text(user_prompt, 1000), user_prompt_full=user_prompt, raw_response_text=raw_text, raw_response_status="decoded", raw_response_bytes=len(raw_text.encode("utf-8")), parse_status="not_attempted", prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
         self._telemetry.append(record)
         try:
             parse_text, fence_unwrap = bridge.unwrap_single_fence(raw_text)

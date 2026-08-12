@@ -495,24 +495,26 @@ def _compute_gate_r5_chain(
     if hash_c is None or not _next_telemetry_binds(str(obs_c.get("observation_id")), hash_c):
         return {"passed": False, "reason": "C: inspection observation not provenance-bound", "observation_id": obs_c.get("observation_id")}
 
-    # --- Step D: step OR next -> OK; either PAUSED in the original region
-    #     (normal progression) or a real TERMINAL outcome (exited/failed/
-    #     terminated) with real exit/error evidence (crash-on-step path) ---
+    # --- Step D: step OR next -> OK; either PAUSED in the target script
+    #     (normal progression; a real step may land beyond the original
+    #     region — e.g. the launcher — when the target's real control flow
+    #     goes there; that pause is only accepted when corroborated by the
+    #     real reproduction failure output) or a real TERMINAL outcome
+    #     (exited/failed/terminated) with real exit/error evidence ---
     obs_d = None
     terminal = False
+    step_outside_region = False
     for i in range(obs_idx, len(obs_list)):
         obs = obs_list[i]
         if obs.get("name") in ("step_pdb_session", "next_pdb_session") and obs.get("status") == "ok":
             payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
             if payload.get("state") == "paused":
-                if (
-                    payload.get("script") == expected_script
-                    and _in_original_region(payload, original_line_count)
-                ):
+                if payload.get("script") == expected_script:
                     fn = payload.get("function")
                     if type(fn) is str and fn:
                         obs_d = obs
                         terminal = False
+                        step_outside_region = not _in_original_region(payload, original_line_count)
                         obs_idx = i + 1
                         break
             elif payload.get("state") in ("exited", "failed", "terminated"):
@@ -532,6 +534,22 @@ def _compute_gate_r5_chain(
     hash_d = _render_hash(obs_d, expected_script=expected_script, original_line_count=original_line_count)
     if hash_d is None or not _next_telemetry_binds(str(obs_d.get("observation_id")), hash_d):
         return {"passed": False, "reason": "D: step/next observation not provenance-bound", "observation_id": obs_d.get("observation_id")}
+
+    def _has_real_failure_output() -> bool:
+        for obs in obs_list:
+            if obs.get("name") == "run_reproduction" and obs.get("status") == "ok":
+                payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
+                if payload.get("failure_reproduced") is True:
+                    failure_output = payload.get("failure_output")
+                    if type(failure_output) is str and failure_output:
+                        return True
+        return False
+
+    # A post-step pause outside the original production region (e.g. the
+    # appended launcher) is only accepted when the trajectory carries the
+    # REAL reproduction failure output as corroborating failure evidence.
+    if step_outside_region and not _has_real_failure_output():
+        return {"passed": False, "reason": "step/next pause outside the original region without real reproduction failure output", "G1": g1}
 
     # --- Terminal path: the target ended during the control action.  The
     #     diagnosis must be bound to the terminal step observation and the
@@ -577,6 +595,7 @@ def _compute_gate_r5_chain(
             "passed": True,
             "reason": "model authored break->stack G1->locals/print G1->step/next TERMINAL (real exit/error evidence + real reproduction failure output)->diagnosis, all OK, provenance-bound",
             "terminal_path": True,
+            "step_outside_region": False,
             "observation_ids": {
                 "break": obs_a_id,
                 "stack_G1": obs_b.get("observation_id"),
@@ -642,6 +661,7 @@ def _compute_gate_r5_chain(
         "passed": True,
         "reason": "model authored break->stack G1->locals/print G1->step/next PAUSED->stack G2>G1->diagnosis, all OK, original-region, provenance-bound",
         "terminal_path": False,
+        "step_outside_region": step_outside_region,
         "observation_ids": {
             "break": obs_a_id,
             "stack_G1": obs_b.get("observation_id"),
@@ -684,10 +704,11 @@ def _compute_gate_r5_patch(
     patch_telemetry = [r for r in telemetry if r.get("controller_state") == "Patch" and r.get("parse_result", {}).get("status") in ("accepted", "rejected")]
     if patch_telemetry:
         first_patch_prompt = patch_telemetry[0].get("request", {}).get("user_prompt_summary", "")
+        first_patch_prompt_full = patch_telemetry[0].get("request", {}).get("user_prompt_full", "")
         diag_ok = any(r.get("provenance", {}).get("rendered_diagnosis_sha256") for r in patch_telemetry)
         if not diag_ok:
             return {"passed": False, "reason": "diagnosis provenance sha not recorded on PATCH telemetry"}
-        if retained[:30] not in first_patch_prompt:
+        if retained[:30] not in first_patch_prompt and retained[:30] not in first_patch_prompt_full:
             return {"passed": False, "reason": "retained diagnosis not found in PATCH prompt", "retained_prefix": retained[:60]}
     # H+I: parsed candidate B present, normalized to C (metadata-only), C dispatched
     patch_attempts = getattr(inner_adapter, "patch_attempts", []) or []
@@ -1226,7 +1247,7 @@ def _first_causal_failure(evidence: dict[str, Any], task_id: str) -> str:
         if "step" in reason or "next" in reason:
             if "PAUSED" in reason or "post-step" in reason or "G2" in reason:
                 return "post-step pause"
-            if "terminal" in reason or "reproduction failure output" in reason:
+            if "terminal" in reason or "reproduction failure output" in reason or "outside the original region" in reason:
                 return "post-step pause"
             return "step/control"
         if "diagnosis" in reason:
@@ -1297,6 +1318,7 @@ def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str, contr
         "breakpoint_line": (break_rec or {}).get("translated_directive", {}).get("arguments", {}).get("breakpoint_line"),
         "G1": chain.get("G1"),
         "terminal_path": bool(chain.get("terminal_path")),
+        "step_outside_region": bool(chain.get("step_outside_region")),
         "inspection_command": (inspect_rec or {}).get("translated_directive", {}).get("action_name"),
         "inspection_type": (inspect_rec or {}).get("translated_directive", {}).get("action_name"),
         "step_next_command": (step_rec or {}).get("translated_directive", {}).get("action_name"),
@@ -1351,6 +1373,7 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
         "tasks_total": len(R5_TASKS),
         "debugger_chain_success": sum(1 for r in rows if r["G2"] is not None),
         "terminal_path_success": sum(1 for r in rows if r["terminal_path"]),
+        "step_outside_region_success": sum(1 for r in rows if r["step_outside_region"]),
         "inspection_success": sum(1 for r in rows if r["inspection_command"] is not None),
         "step_post_step_success": sum(1 for r in rows if r["G2"] is not None),
         "diagnosis_success": sum(1 for r in rows if r["diagnosis_present"]),
