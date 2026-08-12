@@ -459,14 +459,24 @@ class R5DebuggerBridgeAdapter:
                 if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
                     args = result.directive.arguments
                     if "whole_file_path" in args:
+                        file_content = args["whole_file_content"]
+                        # Deterministic single-fence unwrap INSIDE the file
+                        # content (the model wraps the replacement file in a
+                        # markdown fence; the fence is framing, not code).
+                        content_fence_unwrap: Optional[dict[str, Any]] = None
+                        unwrapped_content, content_fence = bridge.unwrap_single_fence(file_content)
+                        if content_fence is not None:
+                            file_content = unwrapped_content
+                            content_fence_unwrap = content_fence.to_mapping()
                         b_diff = serialize_whole_file_to_diff(
                             self._script_path, self._source_text,
-                            args["whole_file_path"], args["whole_file_content"],
+                            args["whole_file_path"], file_content,
                         )
                         whole_file_meta = {
                             "path": args["whole_file_path"],
                             "model_whole_file_sha256": _sha256(args["whole_file_content"]),
                             "generated_diff_sha256": _sha256(b_diff),
+                            "content_fence_unwrap": content_fence_unwrap,
                         }
                         result = bridge.BridgeResult(
                             command_token="file",
@@ -666,14 +676,21 @@ class ScriptedBridgeAdapter:
             if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
                 args = result.directive.arguments
                 if "whole_file_path" in args:
+                    file_content = args["whole_file_content"]
+                    content_fence_unwrap: Optional[dict[str, Any]] = None
+                    unwrapped_content, content_fence = bridge.unwrap_single_fence(file_content)
+                    if content_fence is not None:
+                        file_content = unwrapped_content
+                        content_fence_unwrap = content_fence.to_mapping()
                     b_diff = serialize_whole_file_to_diff(
                         self._script_path, self._source_text,
-                        args["whole_file_path"], args["whole_file_content"],
+                        args["whole_file_path"], file_content,
                     )
                     whole_file_meta = {
                         "path": args["whole_file_path"],
                         "model_whole_file_sha256": _sha256(args["whole_file_content"]),
                         "generated_diff_sha256": _sha256(b_diff),
+                        "content_fence_unwrap": content_fence_unwrap,
                     }
                     result = bridge.BridgeResult(
                         command_token="file",
