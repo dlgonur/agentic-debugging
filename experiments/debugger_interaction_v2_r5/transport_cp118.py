@@ -156,6 +156,9 @@ class LocalQwenPeftTransport:
             import torch
             from peft import PeftModel
             from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            from experiments.local_inference_perf.efficient_sdpa import (
+                register_efficient_sdpa,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "cp118 transport requires torch, transformers, peft, "
@@ -174,6 +177,13 @@ class LocalQwenPeftTransport:
                 "cp118 adapter declares a different base model: "
                 f"{declared_base!r}"
             )
+
+        # STABLE + PHYSICAL-VRAM-BOUND (R6 amendment): stock SDPA falls to the
+        # pathological MATH backend on this torch build (15.3 GiB peak on the
+        # long-context case); the validated repeat_kv EFFICIENT_ATTENTION path
+        # runs the fused kernels (7.2 GiB).  Registered fail-closed before the
+        # model load; the model loads with attn_implementation="efficient_sdpa".
+        register_efficient_sdpa()
 
         compute_dtype = (
             torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -196,6 +206,7 @@ class LocalQwenPeftTransport:
             device_map="auto",
             quantization_config=quantization,
             torch_dtype=compute_dtype,
+            attn_implementation="efficient_sdpa",
         )
         self.model = PeftModel.from_pretrained(
             base,

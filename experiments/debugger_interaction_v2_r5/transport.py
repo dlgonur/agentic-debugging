@@ -63,6 +63,9 @@ class LocalRawQwenTransport:
         try:
             import torch
             from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+            from experiments.local_inference_perf.efficient_sdpa import (
+                register_efficient_sdpa,
+            )
         except ImportError as exc:
             raise RuntimeError(
                 "RAW Qwen2.5 transport requires torch, transformers, "
@@ -71,6 +74,12 @@ class LocalRawQwenTransport:
 
         if not torch.cuda.is_available():
             raise RuntimeError("RAW Qwen2.5 transport requires a CUDA runtime")
+
+        # STABLE + PHYSICAL-VRAM-BOUND (R6 amendment): stock SDPA falls to the
+        # pathological MATH backend on this torch build; the validated
+        # repeat_kv EFFICIENT_ATTENTION path runs the fused kernels.  Fail-closed
+        # registration; the model loads with attn_implementation="efficient_sdpa".
+        register_efficient_sdpa()
 
         compute_dtype = (
             torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
@@ -93,6 +102,7 @@ class LocalRawQwenTransport:
             device_map="auto",
             quantization_config=quantization,
             torch_dtype=compute_dtype,
+            attn_implementation="efficient_sdpa",
         )
         self.model.eval()
         self.torch = torch
