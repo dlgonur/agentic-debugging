@@ -509,14 +509,21 @@ def _compute_gate_r5_chain(
         if obs.get("name") in ("step_pdb_session", "next_pdb_session") and obs.get("status") == "ok":
             payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
             if payload.get("state") == "paused":
-                if payload.get("script") == expected_script:
-                    fn = payload.get("function")
-                    if type(fn) is str and fn:
-                        obs_d = obs
-                        terminal = False
-                        step_outside_region = not _in_original_region(payload, original_line_count)
-                        obs_idx = i + 1
-                        break
+                fn = payload.get("function")
+                if type(fn) is str and fn:
+                    obs_d = obs
+                    terminal = False
+                    # R5.9: a real post-step pause may land anywhere the
+                    # target's real control flow goes — inside the original
+                    # production region (normal G2) or outside it (the
+                    # production frame unwound during a real
+                    # exception/failure; production-exception path).
+                    step_outside_region = not (
+                        payload.get("script") == expected_script
+                        and _in_original_region(payload, original_line_count)
+                    )
+                    obs_idx = i + 1
+                    break
             elif payload.get("state") in ("exited", "failed", "terminated"):
                 exit_code = payload.get("exit_code")
                 error = payload.get("error")
@@ -535,49 +542,34 @@ def _compute_gate_r5_chain(
     if hash_d is None or not _next_telemetry_binds(str(obs_d.get("observation_id")), hash_d):
         return {"passed": False, "reason": "D: step/next observation not provenance-bound", "observation_id": obs_d.get("observation_id")}
 
-    def _has_real_failure_output() -> bool:
+    def _sanitized_reproduction() -> Optional[str]:
+        """The SANITIZED reproduction diagnostic (never raw pytest output).
+
+        The payload ``failure_output`` is produced by the common
+        deterministic sanitizer; the raw bounded output lives in
+        ``failure_output_raw`` (audit-only) and is never a gate input.
+        """
         for obs in obs_list:
             if obs.get("name") == "run_reproduction" and obs.get("status") == "ok":
                 payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
                 if payload.get("failure_reproduced") is True:
                     failure_output = payload.get("failure_output")
                     if type(failure_output) is str and failure_output:
-                        return True
-        return False
+                        return failure_output
+        return None
 
-    # A post-step pause outside the original production region (e.g. the
-    # appended launcher) is only accepted when the trajectory carries the
-    # REAL reproduction failure output as corroborating failure evidence.
-    if step_outside_region and not _has_real_failure_output():
-        return {"passed": False, "reason": "step/next pause outside the original region without real reproduction failure output", "G1": g1}
-
-    # --- Terminal path: the target ended during the control action.  The
-    #     diagnosis must be bound to the terminal step observation and the
-    #     trajectory must carry the REAL reproduction failure output (a real
-    #     test diagnostic from the task's own reproduction command). ---
-    if terminal:
-        repro = None
-        for obs in obs_list:
-            if obs.get("name") == "run_reproduction" and obs.get("status") == "ok":
-                payload = obs.get("payload") if isinstance(obs.get("payload"), dict) else {}
-                if payload.get("failure_reproduced") is True:
-                    failure_output = payload.get("failure_output")
-                    if type(failure_output) is str and failure_output:
-                        repro = obs
-                        break
-        if repro is None:
-            return {"passed": False, "reason": "terminal step without real reproduction failure output", "G1": g1}
-        obs_terminal_id = str(obs_d.get("observation_id"))
+    def _diagnosis_after(obs_d_id: str) -> Optional[dict[str, Any]]:
+        """The first accepted non-empty diagnosis whose provenance binds it
+        to an OK observation that followed ``obs_d_id``."""
         later_ok_ids: set[str] = set()
-        found_terminal = False
+        found = False
         for obs in obs_list:
-            if obs.get("observation_id") == obs_terminal_id:
-                found_terminal = True
-            if found_terminal and obs.get("status") == "ok":
+            if obs.get("observation_id") == obs_d_id:
+                found = True
+            if found and obs.get("status") == "ok":
                 oid = obs.get("observation_id")
                 if isinstance(oid, str):
                     later_ok_ids.add(oid)
-        diagnosis_after_terminal = None
         for rec in telemetry:
             td = rec.get("translated_directive", {}) or {}
             pr = rec.get("parse_result", {}) or {}
@@ -587,14 +579,66 @@ def _compute_gate_r5_chain(
                     prov = rec.get("provenance", {}) or {}
                     prior = prov.get("prior_observation_id")
                     if isinstance(prior, str) and prior in later_ok_ids:
-                        diagnosis_after_terminal = rec
-                        break
+                        return rec
+        return None
+
+    # --- R5.9 PRODUCTION-EXCEPTION path: the step/next pause is OUTSIDE
+    #     the original production region — the real production frame unwound
+    #     during a real exception/failure (e.g. pytest caught the exception
+    #     and control returned to the appended launcher).  No original-region
+    #     G2 exists and none is claimed.  The diagnosis must be bound to the
+    #     step observation and the trajectory must carry the SANITIZED
+    #     reproduction diagnostic as corroborating failure evidence.  The
+    #     classification is mechanical: pause outside the production region +
+    #     sanitized reproduction evidence; no task-id special case. ---
+    if step_outside_region and not terminal:
+        repro_text = _sanitized_reproduction()
+        if repro_text is None:
+            return {"passed": False, "reason": "step/next pause outside the original region without sanitized reproduction diagnostic", "G1": g1}
+        production_exception = "production exception:" in repro_text
+        diagnosis_rec = _diagnosis_after(str(obs_d.get("observation_id")))
+        if diagnosis_rec is None:
+            return {"passed": False, "reason": "no diagnosis bound to the production-unwind step evidence", "G1": g1}
+        return {
+            "passed": True,
+            "reason": (
+                "model authored break->stack G1->locals/print G1->step/next "
+                "PAUSED outside the original production region (the "
+                "production frame unwound during a real "
+                f"exception/failure{' with a sanitized production exception' if production_exception else '; only the sanitized generic diagnostic is available'}"
+                ")->diagnosis, all OK, provenance-bound; no original-region "
+                "G2 exists and none is claimed"
+            ),
+            "terminal_path": False,
+            "production_exception_path": production_exception,
+            "step_outside_region": True,
+            "observation_ids": {
+                "break": obs_a_id,
+                "stack_G1": obs_b.get("observation_id"),
+                "inspection": obs_c.get("observation_id"),
+                "step": obs_d.get("observation_id"),
+            },
+            "G1": g1,
+            "G2": None,
+            "diagnosis_text": diagnosis_rec.get("translated_directive", {}).get("diagnosis_text", "")[:200],
+        }
+
+    # --- Terminal path: the target ended during the control action.  The
+    #     diagnosis must be bound to the terminal step observation and the
+    #     trajectory must carry the SANITIZED reproduction diagnostic. ---
+    if terminal:
+        repro_text = _sanitized_reproduction()
+        if repro_text is None:
+            return {"passed": False, "reason": "terminal step without sanitized reproduction diagnostic", "G1": g1}
+        obs_terminal_id = str(obs_d.get("observation_id"))
+        diagnosis_after_terminal = _diagnosis_after(obs_terminal_id)
         if diagnosis_after_terminal is None:
             return {"passed": False, "reason": "no diagnosis bound to terminal step evidence", "G1": g1}
         return {
             "passed": True,
-            "reason": "model authored break->stack G1->locals/print G1->step/next TERMINAL (real exit/error evidence + real reproduction failure output)->diagnosis, all OK, provenance-bound",
+            "reason": "model authored break->stack G1->locals/print G1->step/next TERMINAL (real exit/error evidence + sanitized reproduction diagnostic)->diagnosis, all OK, provenance-bound",
             "terminal_path": True,
+            "production_exception_path": "production exception:" in repro_text,
             "step_outside_region": False,
             "observation_ids": {
                 "break": obs_a_id,
@@ -661,6 +705,7 @@ def _compute_gate_r5_chain(
         "passed": True,
         "reason": "model authored break->stack G1->locals/print G1->step/next PAUSED->stack G2>G1->diagnosis, all OK, original-region, provenance-bound",
         "terminal_path": False,
+        "production_exception_path": False,
         "step_outside_region": step_outside_region,
         "observation_ids": {
             "break": obs_a_id,
@@ -794,7 +839,9 @@ def _bounded_verifier_detail(record: Any) -> str:
     return marker + raw[-(_VERIFIER_FEEDBACK_DETAIL_CHARS - len(marker)):]
 
 
-def _make_verifier_feedback() -> Callable[[Any, str], dict[str, Any]]:
+def _make_verifier_feedback(
+    script_path: str, original_line_count: int
+) -> Callable[[Any, str], dict[str, Any]]:
     """Build the real-verifier feedback callback for the tool layer.
 
     Every accepted candidate patch is evaluated by the independent
@@ -803,7 +850,15 @@ def _make_verifier_feedback() -> Callable[[Any, str], dict[str, Any]]:
     apply_patch observation.  This is the accepted real verifier — the same
     class of evidence a developer gets from running the tests — and it is
     never a fabricated or oracle-based signal.
+
+    R5.9: failing records are SANITIZED by the common deterministic
+    sanitizer before they can reach any prompt: only the record status and
+    a genuine production exception of the CANDIDATE are forwarded — never
+    node ids, test function names, test source, assertion expressions, or
+    hidden expected literals.
     """
+    from agentic_debugger.demo.sanitize import sanitize_verifier_failure_output
+
     def feedback(task: Any, diff: str) -> dict[str, Any]:
         evaluation = EvaluationVerifier(
             str(REPO_ROOT), workspace_parent=None
@@ -816,11 +871,13 @@ def _make_verifier_feedback() -> Callable[[Any, str], dict[str, Any]]:
             for record in records:
                 status = record.status.value if hasattr(record.status, "value") else str(record.status)
                 if status != "PASS":
+                    raw_detail = _bounded_verifier_detail(record)
                     failures.append({
-                        "node_id": record.node_id,
                         "kind": kind,
                         "status": status,
-                        "detail": _bounded_verifier_detail(record),
+                        "production_exception": sanitize_verifier_failure_output(
+                            raw_detail, script_path, original_line_count
+                        ),
                     })
         full_suite = evaluation.full_suite
         return {
@@ -882,14 +939,16 @@ def run_experiment(
     context = DemoToolContext(
         task=task, workspace=workspace, patch="", probe=r5_probe.probe,
         pdb_session_factory=pdb_session_factory,
-        verifier_feedback_fn=_make_verifier_feedback(),
+        verifier_feedback_fn=_make_verifier_feedback(
+            module_path, original_source_line_count
+        ),
     )
     registry = build_registry(
         context, pdb_policy=PdbPolicy.ALWAYS_ON,
         interactive_debugger_controls=True,
     )
 
-    stage_tracker = R5StageTracker()
+    stage_tracker = R5StageTracker(module_path, original_source_line_count)
     session_state_provider = make_r5_session_state_provider(context, lambda: stage_tracker.stage)
 
     inner_adapter = R5DebuggerBridgeAdapter(
@@ -1081,13 +1140,18 @@ def run_experiment(
         "cleanup": cleanup_record,
         "claims_boundary": (
             "R5 generalized debugger-informed patch treatment.  R5 PASS = "
-            "chain A-F (original-region, provenance-bound) + exact diagnosis "
+            "chain A-F (original-region, provenance-bound; the R5.9 "
+            "production-exception path truthfully reports G2=None when the "
+            "production frame unwound during a real exception/failure and "
+            "never claims an original-region G2) + exact diagnosis "
             "retained into bounded PATCH + model B diff applied via real "
             "PatchManager + independent EvaluationVerifier COMPLETED/RESOLVED "
             "with all task F2P/P2P PASS + full-suite consistency + syntax + "
-            "canonical unchanged + workspaces cleaned.  Administrative "
-            "PATCH->VALIDATE->DONE closeout is harness bookkeeping, not model "
-            "capability."
+            "canonical unchanged + workspaces cleaned + zero hidden-test "
+            "leakage in every actual prompt (sanitized diagnostics + "
+            "region-filtered stacks + fail-closed actual-prompt audit).  "
+            "Administrative PATCH->VALIDATE->DONE closeout is harness "
+            "bookkeeping, not model capability."
         ),
     }
 
@@ -1318,6 +1382,7 @@ def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str, contr
         "breakpoint_line": (break_rec or {}).get("translated_directive", {}).get("arguments", {}).get("breakpoint_line"),
         "G1": chain.get("G1"),
         "terminal_path": bool(chain.get("terminal_path")),
+        "production_exception_path": bool(chain.get("production_exception_path")),
         "step_outside_region": bool(chain.get("step_outside_region")),
         "inspection_command": (inspect_rec or {}).get("translated_directive", {}).get("action_name"),
         "inspection_type": (inspect_rec or {}).get("translated_directive", {}).get("action_name"),
@@ -1373,6 +1438,7 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
         "tasks_total": len(R5_TASKS),
         "debugger_chain_success": sum(1 for r in rows if r["G2"] is not None),
         "terminal_path_success": sum(1 for r in rows if r["terminal_path"]),
+        "production_exception_path_success": sum(1 for r in rows if r["production_exception_path"]),
         "step_outside_region_success": sum(1 for r in rows if r["step_outside_region"]),
         "inspection_success": sum(1 for r in rows if r["inspection_command"] is not None),
         "step_post_step_success": sum(1 for r in rows if r["G2"] is not None),
@@ -1400,6 +1466,16 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
         ) >= 2,
     }
 
+    # R5.9: fail-closed ACTUAL-PROMPT anti-leakage audit of every row.
+    # AUDIT-ONLY: reads the already-written evidence (exact prompts) against
+    # the forbidden content derived from the fixture evaluation assets;
+    # never runs during prompt construction.
+    from experiments.debugger_interaction_v2_r5.anti_leakage import audit_matrix_dir
+
+    anti_leakage = audit_matrix_dir(output_dir, CURATED_ROOT)
+    aggregate["leakage_findings"] = anti_leakage["leakage_findings_total"]
+    aggregate["clean_holdout_prompt_audit_passed"] = anti_leakage["passed"]
+
     matrix = {
         "schema_version": "debugger-interaction-v2-r5-matrix",
         "contract_sha256": contract_sha,
@@ -1410,12 +1486,15 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
         "rows": rows,
         "aggregate": aggregate,
         "per_task_evidence": per_task_evidence,
+        "anti_leakage": anti_leakage,
         "claims_boundary": (
             "Machine-readable R5 matrix.  A row is PASS only when the strict "
             "per-task gate (chain A-F original-region + retained diagnosis + "
             "PatchManager/verifier candidate identity + COMPLETED/RESOLVED + "
             "all F2P/P2P + full-suite + syntax + canonical unchanged + "
-            "cleaned) passes.  No row is hidden."
+            "cleaned) passes.  The anti_leakage section is the fail-closed "
+            "audit of every exact actual prompt (leakage_findings == [] "
+            "required).  No row is hidden."
         ),
     }
     (output_dir / "matrix.json").write_text(
@@ -1436,6 +1515,32 @@ def _aggregate_boundaries(rows: list[dict[str, Any]]) -> dict[str, int]:
 # ---------------------------------------------------------------------------
 # Main
 # ---------------------------------------------------------------------------
+
+
+def _run_anti_leakage_audit(output_dir: Path) -> int:
+    """Fail-closed ACTUAL-PROMPT anti-leakage audit of a matrix output dir.
+
+    AUDIT-ONLY: examines every exact ``telemetry[*].request.user_prompt_full``
+    in the already-written evidence files against the forbidden content
+    derived from the actual fixture evaluation assets.  Never runs during
+    prompt construction.  Writes ``anti-leakage.json`` next to the matrix
+    and exits 1 when any finding exists.
+    """
+    from experiments.debugger_interaction_v2_r5.anti_leakage import audit_matrix_dir
+
+    audit = audit_matrix_dir(output_dir, CURATED_ROOT)
+    out_path = output_dir / "anti-leakage.json"
+    out_path.write_text(
+        json.dumps(audit, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    print(json.dumps({
+        "status": "PASS" if audit["passed"] else "FAIL",
+        "scanned_prompt_count": audit["scanned_prompt_count"],
+        "leakage_findings_total": audit["leakage_findings_total"],
+        "audit_path": str(out_path),
+    }, indent=2, ensure_ascii=False))
+    return 0 if audit["passed"] else 1
 
 
 def _model_specs() -> dict[str, dict[str, Any]]:
@@ -1472,6 +1577,8 @@ def main() -> int:
     parser.add_argument("--validate-only", action="store_true")
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--measure-latency", action="store_true")
+    parser.add_argument("--audit-dir", type=str, default=None,
+                        help="fail-closed ACTUAL-PROMPT anti-leakage audit of a matrix output dir (writes anti-leakage.json; strictly post-run, never part of prompt construction)")
     parser.add_argument("--task", type=str, default=None,
                         help="run a single pre-registered task (affected-set rerun under a repaired revision)")
     parser.add_argument("--output-dir", type=str, default=None)
@@ -1480,8 +1587,11 @@ def main() -> int:
                         help="frozen model identity (raw7b = accepted RAW base; coder14b = escalation identity)")
     args = parser.parse_args()
 
-    if not (args.validate_only or args.run or args.measure_latency or args.task):
-        parser.error("select --validate-only, --measure-latency, --run, or --task")
+    if not (args.validate_only or args.run or args.measure_latency or args.task or args.audit_dir):
+        parser.error("select --validate-only, --measure-latency, --run, --task, or --audit-dir")
+
+    if args.audit_dir:
+        return _run_anti_leakage_audit(Path(args.audit_dir))
 
     specs = _model_specs()
     spec = specs[args.model]

@@ -152,6 +152,13 @@ class R2Stage(str, Enum):
     # code / error) plus the real reproduction failure output are the
     # diagnosis evidence; no second PAUSED pause can exist by construction.
     PAUSED_AFTER_TERMINAL_STEP = "paused_after_terminal_step"
+    # R5.9: the target PAUSED outside the production region after a
+    # step/next — the real production frame unwound during a real
+    # exception/failure (e.g. pytest caught the exception and control
+    # returned to the appended launcher).  The last real production frame
+    # and locals are retained; the SANITIZED production exception is
+    # attached; no fake original-region G2 exists or is claimed.
+    PAUSED_AFTER_PRODUCTION_EXCEPTION = "paused_after_production_exception"
     CONSUMED_OR_ENDED = "consumed_or_ended"
 
 
@@ -164,6 +171,7 @@ _R2_STAGE_COMMANDS: dict[R2Stage, frozenset[str]] = {
     R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK: frozenset({"stack", "failed"}),
     R2Stage.READY_FOR_DIAGNOSIS: frozenset({"diagnosis", "failed"}),
     R2Stage.PAUSED_AFTER_TERMINAL_STEP: frozenset({"diagnosis", "failed"}),
+    R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION: frozenset({"diagnosis", "failed"}),
     R2Stage.CONSUMED_OR_ENDED: frozenset({"diagnosis", "failed"}),
 }
 
@@ -213,7 +221,9 @@ def patch_diff_affordance(module_path: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# R5.2 mechanical crash summary from the real failure output (non-oracle)
+# R5.2 mechanical crash summary from the real failure output (non-oracle);
+# R5.9: derived by the common deterministic sanitizer so assertion content
+# and hidden-test material can never enter the summary (fail closed).
 # ---------------------------------------------------------------------------
 
 _CRASH_SUMMARY_LINE_RE = re.compile(
@@ -223,33 +233,65 @@ _EXCEPTION_LINE_RE = re.compile(r"^E\s+(.+)$")
 
 
 def crash_summary_from_failure_output(
-    failure_output: str, script_path: str
+    failure_output: str,
+    script_path: str,
+    original_line_count: Optional[int] = None,
 ) -> Optional[str]:
-    """Mechanically summarize the crash point from the REAL reproduction
-    output (pytest failure report): the last ``<script>:<line>: <ErrorType>``
-    summary line for the production script plus the last ``E ...`` exception
-    line.  Returns ``None`` (fail closed) when no such evidence exists."""
+    """Mechanically summarize the crash point from the SANITIZED
+    reproduction diagnostic.
+
+    The R5.9 sanitizer (``sanitize.extract_production_exception``) is the
+    single authority: it derives the last safe production exception report
+    (``<script>.py:<line>: <Class>`` plus the production-originated message)
+    and fails closed when only hidden-test content explains the failure.
+    Returns ``None`` when no safe production exception exists.
+
+    The regex fallback below never runs: it is retained only for callers
+    that pass a pre-sanitized diagnostic (the mechanical marker line) and
+    is itself restricted to the production script region.
+    """
+    from agentic_debugger.demo.sanitize import extract_production_exception
+
     if type(failure_output) is not str or not failure_output:
         return None
     if type(script_path) is not str or not script_path:
         return None
+    exception = extract_production_exception(
+        failure_output, script_path, original_line_count
+    )
+    if exception is not None:
+        return exception.full()
+    # Fail-closed fallback for a diagnostic that is already sanitized but
+    # carries only the generic statement: no crash point exists.
     normalized_script = script_path.replace("\\", "/")
     location: Optional[str] = None
-    exception_line: Optional[str] = None
     for line in failure_output.splitlines():
         stripped = line.strip()
         match = _CRASH_SUMMARY_LINE_RE.match(stripped)
         if match is not None:
             path = match.group(1).replace("\\", "/")
             if path.endswith(normalized_script) or normalized_script.endswith(path):
+                line_no = int(match.group(2))
+                if original_line_count is not None and not (
+                    1 <= line_no <= original_line_count
+                ):
+                    continue
                 location = (
-                    f"{match.group(1)}:{match.group(2)}: {match.group(3)}"
+                    f"{match.group(1)}:{line_no}: {match.group(3)}"
                 )
-        exception_match = _EXCEPTION_LINE_RE.match(stripped)
-        if exception_match is not None:
-            exception_line = exception_match.group(1).strip()
     if location is None:
         return None
+    exception_line: Optional[str] = None
+    for line in failure_output.splitlines():
+        stripped = line.strip()
+        exception_match = _EXCEPTION_LINE_RE.match(stripped)
+        if exception_match is not None:
+            body = exception_match.group(1).strip()
+            if body.lower().startswith("assert") or " assert " in body.lower():
+                continue
+            if body.startswith("AssertionError"):
+                continue
+            exception_line = body
     if exception_line:
         return f"{location} — {exception_line}"
     return location
@@ -377,6 +419,10 @@ def _r2_lifecycle_for_stage(stage: R2Stage) -> DebuggerLifecycle:
         return DebuggerLifecycle.CONSUMED_OR_ENDED
     if stage is R2Stage.PAUSED_AFTER_TERMINAL_STEP:
         # The target has ended; only the terminal observation remains.
+        return DebuggerLifecycle.CONSUMED_OR_ENDED
+    if stage is R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION:
+        # The production frame unwound during a real exception/failure; the
+        # session can no longer return to the production region.
         return DebuggerLifecycle.CONSUMED_OR_ENDED
     return DebuggerLifecycle.PAUSED
 
@@ -731,11 +777,13 @@ def parse(
                 f"diagnosis is not available in state {state.value}",
             )
         # Diagnosis is only legal in READY_FOR_DIAGNOSIS or the R5.2 terminal
-        # stage (r2_stage check already enforced the lifecycle mask above).
-        # Double-check stage if provided.
+        # stage or the R5.9 production-exception stage (r2_stage check
+        # already enforced the lifecycle mask above).  Double-check stage if
+        # provided.
         if r2_stage is not None and r2_stage not in (
             R2Stage.READY_FOR_DIAGNOSIS,
             R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+            R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
         ):
             raise BridgeParseError(
                 BridgeRejection.COMMAND_NOT_IN_LIFECYCLE,
@@ -1169,6 +1217,8 @@ def render_prompt(
     *,
     debugger: Optional[DebuggerContext] = None,
     patch_stage: Optional[R3PatchStage] = None,
+    observation_filter_scripts: Optional[frozenset[str]] = None,
+    observation_original_line_count: Optional[int] = None,
 ) -> str:
     if debugger is not None and debugger.r2_stage is not None:
         r2_stage = debugger.r2_stage
@@ -1203,7 +1253,11 @@ def render_prompt(
         commands = tuple(c for c in commands if c != "understand")
 
     commands_text = "\n".join(f"  - {c}" for c in commands)
-    obs_text = _render_observation(last_observation)
+    obs_text = _render_observation(
+        last_observation,
+        filter_scripts=observation_filter_scripts,
+        original_line_count=observation_original_line_count,
+    )
 
     parts = [
         f"Current phase: {state.value}",
@@ -1242,6 +1296,35 @@ def render_prompt(
                     "evidence below and the observed locals as terminal "
                     "runtime evidence, then record your diagnosis with "
                     "'diagnosis <text>'."
+                )
+                crash_summary = (
+                    debugger.runtime_slice.get("crash_summary")
+                    if debugger.runtime_slice else None
+                )
+                if type(crash_summary) is str and crash_summary:
+                    parts.append(f"Terminal failure evidence: {crash_summary}")
+                if debugger.runtime_slice:
+                    slice_lines = []
+                    for key in ("reproduction", "inspection", "step"):
+                        val = debugger.runtime_slice.get(key)
+                        if val:
+                            slice_lines.append(f"[{key}]\n{val}")
+                    if slice_lines:
+                        parts.append(
+                            "Correlated terminal runtime observations (bounded, from real debugger):\n"
+                            + "\n\n".join(slice_lines)
+                        )
+            elif eff_stage is R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION:
+                line_info = ""
+                if debugger.paused_line is not None and debugger.paused_function is not None:
+                    line_info = f" (was paused at line {debugger.paused_line} in function '{debugger.paused_function}')"
+                parts.append(
+                    f"Debugger: PDB session left the production region{line_info} "
+                    "— the last step/next unwound the production frame during "
+                    "a real exception/failure and no further production pause "
+                    "is possible.  Use the sanitized failure evidence below "
+                    "and the observed locals as terminal runtime evidence, "
+                    "then record your diagnosis with 'diagnosis <text>'."
                 )
                 crash_summary = (
                     debugger.runtime_slice.get("crash_summary")
@@ -1436,15 +1519,32 @@ def _render_observation(
     elif name in ("continue_pdb_session", "step_pdb_session", "next_pdb_session"):
         state_val = payload.get("state")
         if state_val == "paused":
-            lines.append(
-                f"  Paused at line {payload.get('line')} in "
-                f"'{payload.get('function')}'"
-            )
+            in_region = True
+            if filter_scripts is not None:
+                script = payload.get("script")
+                line = payload.get("line")
+                in_region = (
+                    script in filter_scripts
+                    and (
+                        original_line_count is None
+                        or (type(line) is int and 1 <= line <= original_line_count)
+                    )
+                )
+            if in_region:
+                lines.append(
+                    f"  Paused at line {payload.get('line')} in "
+                    f"'{payload.get('function')}'"
+                )
+            else:
+                lines.append(
+                    "  Paused outside the production region — the production "
+                    "frame unwound during the last control action"
+                )
         elif state_val == "exited":
             lines.append(f"  Execution exited (exit_code={payload.get('exit_code')})")
             lines.append(
-                "  Terminal: no further pause is available; use the real "
-                "reproduction failure output and the observed locals to "
+                "  Terminal: no further pause is available; use the sanitized "
+                "reproduction diagnostic and the observed locals to "
                 "determine the crash point."
             )
         elif state_val == "failed":
@@ -1453,8 +1553,8 @@ def _render_observation(
                 f"  Execution failed: {error if error else 'unknown target error'}"
             )
             lines.append(
-                "  Terminal: no further pause is available; use the real "
-                "reproduction failure output and the observed locals to "
+                "  Terminal: no further pause is available; use the sanitized "
+                "reproduction diagnostic and the observed locals to "
                 "determine the crash point."
             )
         else:
@@ -1472,7 +1572,7 @@ def _render_observation(
         )
         failure_output = payload.get("failure_output")
         if type(failure_output) is str and failure_output:
-            lines.append("  Real failure output (from the reproduction run):")
+            lines.append("  Real failure diagnostic (sanitized, from the reproduction run):")
             for failure_line in failure_output.splitlines():
                 lines.append(f"    {failure_line}")
     elif name == "get_source_window":
@@ -1516,14 +1616,26 @@ def _render_observation(
                 if failures:
                     lines.append("  Failing checks:")
                     for failure in failures[:3]:
-                        lines.append(
-                            f"    [{failure.get('kind')}] {failure.get('node_id')} "
-                            f"({failure.get('status')})"
-                        )
-                        detail = failure.get("detail")
-                        if type(detail) is str and detail:
-                            for detail_line in detail.splitlines()[-14:]:
-                                lines.append(f"      {detail_line}")
+                        # Sanitized entries carry status + production
+                        # exception only — never node ids, test names, test
+                        # source, or assertion content.
+                        kind = failure.get("kind", "?")
+                        status = failure.get("status", "?")
+                        exc = failure.get("production_exception")
+                        if type(exc) is str and exc:
+                            lines.append(
+                                f"    [{kind}] {status}"
+                            )
+                            lines.append(
+                                "      Candidate runtime exception:"
+                            )
+                            for exc_line in exc.splitlines():
+                                lines.append(f"        {exc_line}")
+                        else:
+                            lines.append(
+                                f"    [{kind}] {status} "
+                                "(no sanitized production exception available)"
+                            )
     elif name == "syntax_check":
         lines.append(f"  all_passed={payload.get('all_passed')}")
     elif name == "run_regression_tests":

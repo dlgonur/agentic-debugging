@@ -334,10 +334,84 @@ class TestTerminalStage:
         assert "Execution exited (exit_code=1)" in prompt
 
 
+class TestProductionExceptionStage:
+    """R5.9: when the real post-step pause is OUTSIDE the production region
+    (the production frame unwound during a real exception/failure), the
+    state machine classifies the production-exception path: diagnosis is
+    allowed directly, no fake original-region G2 stack is offered, and the
+    sanitized production exception is attached."""
+
+    def test_production_exception_stage_allows_diagnosis(self):
+        assert r5_bridge.visible_commands_r2(
+            ControllerState.RUNTIME_EVIDENCE,
+            r5_bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
+        ) == ("diagnosis", "failed")
+
+    def test_production_exception_stage_forbids_stack(self):
+        import pytest as _pytest
+
+        with _pytest.raises(r5_bridge.BridgeParseError) as excinfo:
+            r5_bridge.parse(
+                "stack",
+                ControllerState.RUNTIME_EVIDENCE,
+                r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
+            )
+        assert excinfo.value.category is r5_bridge.BridgeRejection.COMMAND_NOT_IN_LIFECYCLE
+
+    def test_production_exception_stage_allows_diagnosis(self):
+        result = r5_bridge.parse(
+            "diagnosis the frame unwound",
+            ControllerState.RUNTIME_EVIDENCE,
+            r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
+        )
+        assert result.is_diagnosis is True
+
+    def test_production_exception_prompt_truthful(self):
+        prompt = r5_bridge.render_prompt(
+            ControllerState.RUNTIME_EVIDENCE, None, "Task: t",
+            debugger=r5_bridge.DebuggerContext(
+                script_path="display_name.py",
+                source_text="def f():\n    pass\n",
+                eligible_lines=(2,),
+                lifecycle=r5_bridge.DebuggerLifecycle.CONSUMED_OR_ENDED,
+                r2_stage=r5_bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
+                paused_line=2,
+                paused_function="format_display_name",
+                runtime_slice={
+                    "crash_summary": (
+                        "display_name.py:2: AttributeError: 'NoneType' "
+                        "object has no attribute 'strip'"
+                    ),
+                    "reproduction": (
+                        "[run_reproduction] status=ok\n"
+                        "  Real failure diagnostic (sanitized, from the "
+                        "reproduction run):\n"
+                        "    baseline failure reproduced\n"
+                        "    production exception:\n"
+                        "      display_name.py:2: AttributeError\n"
+                    ),
+                    "inspection": "[get_frame_locals] status=ok\n  name = None",
+                },
+            ),
+        )
+        assert "left the production region" in prompt
+        assert "unwound the production frame" in prompt
+        assert "diagnosis <text>" in prompt
+        assert (
+            "Terminal failure evidence: display_name.py:2: AttributeError: "
+            "'NoneType' object has no attribute 'strip'" in prompt
+        )
+        assert "name = None" in prompt
+        # The launcher frame is never named and no G2 stack is offered.
+        assert "_r5_failing_execution" not in prompt
+        assert "pause_generation=2" not in prompt
+
+
 class TestRealFailureEvidenceRendering:
-    """R5.2: the bounded real reproduction failure output (a real test
-    diagnostic from the task's own reproduction command — explicitly
-    permitted by the goal's non-cheating rules) is rendered to the model."""
+    """R5.2/R5.9: the SANITIZED reproduction diagnostic (common
+    deterministic sanitizer output; never raw pytest output) and the
+    SANITIZED verifier feedback (production exception only) are rendered to
+    the model."""
 
     def test_reproduction_failure_output_rendered(self):
         obs = _observation(
@@ -347,13 +421,21 @@ class TestRealFailureEvidenceRendering:
                 "exit_code": 1,
                 "passed": False,
                 "failure_reproduced": True,
-                "failure_output": "E AttributeError: 'NoneType' object has no attribute 'strip'",
+                "failure_output": (
+                    "baseline failure reproduced\n"
+                    "production exception:\n"
+                    "  display_name.py:2: AttributeError\n"
+                    "  AttributeError: 'NoneType' object has no attribute 'strip'\n"
+                ),
             },
         )
         rendered = r5_bridge._render_observation(obs)
         assert "failure_reproduced=True" in rendered
-        assert "Real failure output" in rendered
-        assert "AttributeError" in rendered
+        assert "Real failure diagnostic (sanitized" in rendered
+        assert "AttributeError: 'NoneType' object has no attribute 'strip'" in rendered
+        # Hidden-test content never renders.
+        assert "test_missing" not in rendered
+        assert "assert format" not in rendered
 
     def test_reproduction_without_failure_output_renders_plain(self):
         obs = _observation(
@@ -367,7 +449,7 @@ class TestRealFailureEvidenceRendering:
             },
         )
         rendered = r5_bridge._render_observation(obs)
-        assert "Real failure output" not in rendered
+        assert "Real failure diagnostic" not in rendered
 
     def test_apply_patch_verifier_feedback_rendered(self):
         obs = _observation(
@@ -388,9 +470,11 @@ class TestRealFailureEvidenceRendering:
                     "failures": [
                         {
                             "kind": "f2p",
-                            "node_id": "tests/test_price.py::test_x",
                             "status": "FAIL",
-                            "detail": "E TypeError: _format_price() takes 1 positional argument but 2 were given",
+                            "production_exception": (
+                                "price.py:3: TypeError: _format_price() "
+                                "takes 1 positional argument but 2 were given"
+                            ),
                         }
                     ],
                 },
@@ -400,6 +484,71 @@ class TestRealFailureEvidenceRendering:
         assert "Real verifier (independent EvaluationVerifier)" in rendered
         assert "outcome=REGRESSION" in rendered
         assert "TypeError: _format_price() takes 1 positional argument" in rendered
+        # Node ids / test names never render.
+        assert "test_price.py::" not in rendered
+        assert "node_id" not in rendered
+
+    def test_apply_patch_verifier_failure_without_exception_renders_plain(self):
+        obs = _observation(
+            "apply_patch",
+            {
+                "applied": True,
+                "changed_files": ["price.py"],
+                "verifier_feedback": {
+                    "status": "COMPLETED",
+                    "outcome": "REGRESSION",
+                    "f2p_total": 1,
+                    "f2p_passed": 0,
+                    "p2p_total": 2,
+                    "p2p_passed": 0,
+                    "full_suite": "FAIL",
+                    "syntax": True,
+                    "failures": [
+                        {"kind": "p2p", "status": "FAIL", "production_exception": None}
+                    ],
+                },
+            },
+        )
+        rendered = r5_bridge._render_observation(obs)
+        assert "[p2p] FAIL" in rendered
+        assert "no sanitized production exception available" in rendered
+
+    def test_step_pause_outside_region_renders_unwind_not_launcher(self):
+        obs = _observation(
+            "step_pdb_session",
+            {
+                "state": "paused",
+                "script": "display_name.py",
+                "line": 29,
+                "function": "_r5_failing_execution",
+            },
+        )
+        rendered = r5_bridge._render_observation(
+            obs,
+            filter_scripts=frozenset({"display_name.py"}),
+            original_line_count=5,
+        )
+        assert "_r5_failing_execution" not in rendered
+        assert "Paused outside the production region" in rendered
+        assert "unwound" in rendered
+
+    def test_step_pause_inside_region_renders_location(self):
+        obs = _observation(
+            "step_pdb_session",
+            {
+                "state": "paused",
+                "script": "display_name.py",
+                "line": 3,
+                "function": "format_display_name",
+            },
+        )
+        rendered = r5_bridge._render_observation(
+            obs,
+            filter_scripts=frozenset({"display_name.py"}),
+            original_line_count=5,
+        )
+        assert "Paused at line 3 in 'format_display_name'" in rendered
+        assert "outside" not in rendered
 
 
 class TestFinalPromptAntiLeakage:

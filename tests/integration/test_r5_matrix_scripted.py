@@ -104,7 +104,7 @@ def _run(task_id, commands, tmp_path, verifier_feedback_fn=None):
     )
     registry = build_registry(context, pdb_policy=PdbPolicy.ALWAYS_ON, interactive_debugger_controls=True)
 
-    tracker = R5StageTracker()
+    tracker = R5StageTracker(module_path, line_count)
     provider = make_r5_session_state_provider(context, lambda: tracker.stage)
     adapter = ScriptedBridgeAdapter(
         steps=commands, model_name="scripted-r5",
@@ -240,12 +240,14 @@ class TestR5MatrixScripted:
     def test_none_handling_terminal_path_resolved(self, tmp_path):
         """curated-none-handling-001: the failing execution crashes on the
         first executable production line (None.strip()).  A real pause exists
-        (break/stack/locals at G1); step/next crashes the target, so no
-        post-step production pause (G2) can exist.  R5.2 terminal runtime
-        progression preserves the real terminal observation (exited) plus the
-        real reproduction failure output, allows diagnosis from that evidence,
-        and reaches a real verifier RESOLVED — the structural boundary is
-        removed by a common treatment, not by a per-task special case."""
+        (break/stack/locals at G1); step/next unwinds the production frame
+        (real exception/failure), so no post-step production pause (G2) can
+        exist.  R5.2/R5.9 terminal/production-exception runtime progression
+        preserves the real terminal observation or the sanitized production
+        exception, allows diagnosis from that evidence, and reaches a real
+        verifier RESOLVED — the structural boundary is removed by a common
+        treatment, not by a per-task special case.  The gate truthfully
+        reports G2=None (no original-region G2 is claimed)."""
         task_id = "curated-none-handling-001"
         module_path = task_target_module_path(load_task(str(CURATED_ROOT / task_id / "task.json")))
         diff = _reference_diff(task_id, module_path)
@@ -257,9 +259,12 @@ class TestR5MatrixScripted:
         out = _run(task_id, commands, tmp_path)
         chain = out["chain"]
         assert chain["passed"] is True, chain
-        assert chain.get("terminal_path") is True, chain
+        # Truthful classification: either a real TERMINAL step outcome or
+        # the R5.9 production-exception path (pause outside the production
+        # region after the frame unwound).  Never a fake original-region G2.
+        assert chain.get("terminal_path") is True or chain.get("production_exception_path") is True, chain
         assert chain.get("G1") is not None
-        assert chain.get("G2") is None
+        assert chain.get("G2") is None, "no original-region G2 exists for the crash-on-step bug class"
         assert out["candidate"] is not None
         assert out["verifier"]["executed"] is True
         assert out["verifier"]["status"] == "COMPLETED"

@@ -93,6 +93,12 @@ def make_r5_session_state_provider(context: Any, get_r2_stage: Callable[[], R2St
         # status query (which would report exited) must not mask it.
         if stage is R2Stage.PAUSED_AFTER_TERMINAL_STEP:
             return SessionState(lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=stage)
+        if stage is R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION:
+            # R5.9: the production frame unwound during a real
+            # exception/failure and the pause is outside the production
+            # region; the worker status query reports paused, which must
+            # not mask the tracker's production-exception classification.
+            return SessionState(lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=stage)
         if stage in (R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK, R2Stage.READY_FOR_DIAGNOSIS):
             return SessionState(lifecycle=DebuggerLifecycle.PAUSED, r2_stage=stage)
         try:
@@ -253,13 +259,37 @@ def _is_ok(observation: Optional[Observation]) -> bool:
 
 
 class R5StageTracker:
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        script_path: str = "",
+        original_line_count: int = 0,
+    ) -> None:
         self._stage = R2Stage.NOT_STARTED
         self._last_processed_id: Optional[str] = None
+        self._script_path = script_path
+        self._original_line_count = original_line_count
 
     @property
     def stage(self) -> R2Stage:
         return self._stage
+
+    def _is_production_region(self, payload: dict) -> bool:
+        """True when the pause sits inside the original production region."""
+        script = payload.get("script")
+        line = payload.get("line")
+        if self._script_path and script != self._script_path:
+            return False
+        if self._original_line_count and not (
+            type(line) is int and 1 <= line <= self._original_line_count
+        ):
+            return False
+        if not self._script_path:
+            # No production boundary metadata (legacy callers): the raw
+            # payload region cannot be verified — fail closed to the
+            # production-exception classification only when the payload
+            # itself is outside any production script.
+            return type(line) is int and line >= 1
+        return True
 
     def update_from_observation(self, obs: Optional[Observation]) -> None:
         if obs is None or not _is_ok(obs):
@@ -278,7 +308,15 @@ class R5StageTracker:
         elif self._stage is R2Stage.PAUSED_NEEDS_INSPECTION and name in ("get_frame_locals", "safe_eval_expression"):
             self._stage = R2Stage.PAUSED_NEEDS_STEP; advanced = True
         elif self._stage is R2Stage.PAUSED_NEEDS_STEP and name in ("step_pdb_session", "next_pdb_session") and state_val == "paused":
-            self._stage = R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK; advanced = True
+            if self._is_production_region(payload):
+                self._stage = R2Stage.PAUSED_AFTER_STEP_NEEDS_STACK; advanced = True
+            else:
+                # R5.9: the pause is OUTSIDE the original production region
+                # — the production frame unwound during a real
+                # exception/failure.  No original-region G2 exists; the
+                # production-exception path retains the last real production
+                # frame/locals and attaches the sanitized exception.
+                self._stage = R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION; advanced = True
         elif self._stage is R2Stage.PAUSED_NEEDS_STEP and name in ("step_pdb_session", "next_pdb_session") and state_val in ("exited", "failed", "terminated"):
             # R5.2 terminal runtime progression: the target ended during the
             # control action (crash-on-step bug class).  Real terminal
@@ -363,7 +401,8 @@ class R5DebuggerBridgeAdapter:
                 if type(failure_output) is str and failure_output:
                     self._runtime_slice["reproduction"] = self._render_observation(obs)
                     summary = bridge.crash_summary_from_failure_output(
-                        failure_output, self._script_path
+                        failure_output, self._script_path,
+                        self._original_line_count,
                     )
                     if summary:
                         self._runtime_slice["crash_summary"] = summary
@@ -403,12 +442,15 @@ class R5DebuggerBridgeAdapter:
         prior_obs_id = last_obs.observation_id if last_obs is not None else None
         prior_obs_sha = _sha256(_canonical_json(last_obs.to_mapping())) if last_obs is not None else None
         session_state = self._session_state_provider()
-        if session_state.lifecycle is DebuggerLifecycle.PAUSED or session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP:
+        if session_state.lifecycle is DebuggerLifecycle.PAUSED or session_state.r2_stage in (
+            bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+            bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
+        ):
             session_state = SessionState(lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=self._last_paused_line, paused_function=self._last_paused_function, status_diagnostic=session_state.status_diagnostic)
         if state.value == "Patch" and self._retained_diagnosis is not None:
             debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=R2Stage.CONSUMED_OR_ENDED, retained_diagnosis=self._retained_diagnosis, runtime_slice=dict(self._runtime_slice) if self._runtime_slice else None)
         else:
-            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function, runtime_slice=dict(self._runtime_slice) if (session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP and self._runtime_slice) else None)
+            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function, runtime_slice=dict(self._runtime_slice) if (session_state.r2_stage in (bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP, bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION) and self._runtime_slice) else None)
         feedback: Optional[str] = None
         # R3.1: PATCH progression — first PATCH turn is NEEDS_FIRST_REPAIR
         patch_stage: Optional[bridge.R3PatchStage] = None
@@ -418,7 +460,7 @@ class R5DebuggerBridgeAdapter:
             else:
                 patch_stage = bridge.R3PatchStage.NEEDS_FIRST_REPAIR
         for attempt in range(self._max_retries + 1):
-            user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=feedback, debugger=debugger_ctx, patch_stage=patch_stage)
+            user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=feedback, debugger=debugger_ctx, patch_stage=patch_stage, observation_filter_scripts=frozenset({self._script_path}), observation_original_line_count=self._original_line_count)
             sys_hash = _sha256(self._system_prompt)
             user_hash = _sha256(user_prompt)
             rendered_obs_sha = self._compute_rendered_obs_hash(last_obs)
@@ -575,6 +617,19 @@ class R5DebuggerBridgeAdapter:
         elif name in ("continue_pdb_session", "step_pdb_session", "next_pdb_session"):
             state_val = payload.get("state")
             if state_val == "paused":
+                # R5.9: a pause OUTSIDE the production region means the
+                # production frame unwound (real exception/failure) — retain
+                # the last real production frame location instead of the
+                # launcher/test frame so the production-exception stage can
+                # truthfully name where the target was last paused.
+                script = payload.get("script")
+                line = payload.get("line")
+                outside = (
+                    script != self._script_path
+                    or not (type(line) is int and 1 <= line <= self._original_line_count)
+                )
+                if outside and self._last_paused_line is not None:
+                    return
                 self._last_paused_line = payload.get("line"); self._last_paused_function = payload.get("function")
             elif state_val in ("exited", "failed", "terminated"):
                 # R5.2 terminal progression: retain the last paused location
@@ -654,17 +709,20 @@ class ScriptedBridgeAdapter:
         rendered_obs_sha = self._compute_rendered_obs_hash(last_obs)
         rendered_diag_sha = _sha256(self._retained_diagnosis) if self._retained_diagnosis else None
         session_state = self._session_state_provider()
-        if session_state.lifecycle is DebuggerLifecycle.PAUSED or session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP:
+        if session_state.lifecycle is DebuggerLifecycle.PAUSED or session_state.r2_stage in (
+            bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP,
+            bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION,
+        ):
             session_state = SessionState(lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=self._last_paused_line, paused_function=self._last_paused_function)
         if state.value == "Patch" and self._retained_diagnosis is not None:
             debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=DebuggerLifecycle.CONSUMED_OR_ENDED, r2_stage=R2Stage.CONSUMED_OR_ENDED, retained_diagnosis=self._retained_diagnosis, runtime_slice=dict(self._runtime_slice) if self._runtime_slice else None)
         else:
-            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function, runtime_slice=dict(self._runtime_slice) if (session_state.r2_stage is bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP and self._runtime_slice) else None)
+            debugger_ctx = DebuggerContext(script_path=self._script_path, source_text=self._source_text, eligible_lines=self._eligible_lines, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, paused_line=session_state.paused_line, paused_function=session_state.paused_function, runtime_slice=dict(self._runtime_slice) if (session_state.r2_stage in (bridge.R2Stage.PAUSED_AFTER_TERMINAL_STEP, bridge.R2Stage.PAUSED_AFTER_PRODUCTION_EXCEPTION) and self._runtime_slice) else None)
         # R3.1 PATCH stage
         patch_stage: Optional[bridge.R3PatchStage] = None
         if state.value == "Patch":
             patch_stage = bridge.R3PatchStage.RETRY if self._patch_attempted else bridge.R3PatchStage.NEEDS_FIRST_REPAIR
-        user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=None, debugger=debugger_ctx, patch_stage=patch_stage)
+        user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=None, debugger=debugger_ctx, patch_stage=patch_stage, observation_filter_scripts=frozenset({self._script_path}) if self._script_path else None, observation_original_line_count=self._original_line_count or None)
         record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=1, controller_state=state.value, system_prompt_sha256=_sha256(self._system_prompt), user_prompt_sha256=_sha256(user_prompt), user_prompt_summary=_bound_text(user_prompt, 1000), user_prompt_full=user_prompt, raw_response_text=raw_text, raw_response_status="decoded", raw_response_bytes=len(raw_text.encode("utf-8")), parse_status="not_attempted", prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
         self._telemetry.append(record)
         try:
@@ -755,7 +813,8 @@ class ScriptedBridgeAdapter:
                 if type(failure_output) is str and failure_output:
                     self._runtime_slice["reproduction"] = self._render_observation(obs)
                     summary = bridge.crash_summary_from_failure_output(
-                        failure_output, self._script_path
+                        failure_output, self._script_path,
+                        self._original_line_count,
                     )
                     if summary:
                         self._runtime_slice["crash_summary"] = summary
@@ -795,6 +854,19 @@ class ScriptedBridgeAdapter:
         elif name in ("continue_pdb_session", "step_pdb_session", "next_pdb_session"):
             state_val = payload.get("state")
             if state_val == "paused":
+                # R5.9: a pause OUTSIDE the production region means the
+                # production frame unwound (real exception/failure) — retain
+                # the last real production frame location instead of the
+                # launcher/test frame so the production-exception stage can
+                # truthfully name where the target was last paused.
+                script = payload.get("script")
+                line = payload.get("line")
+                outside = (
+                    script != self._script_path
+                    or not (type(line) is int and 1 <= line <= self._original_line_count)
+                )
+                if outside and self._last_paused_line is not None:
+                    return
                 self._last_paused_line = payload.get("line"); self._last_paused_function = payload.get("function")
             elif state_val in ("exited", "failed", "terminated"):
                 # R5.2 terminal progression: retain the last paused location

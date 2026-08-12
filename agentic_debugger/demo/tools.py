@@ -61,6 +61,10 @@ from agentic_debugger.demo.catalog import (
     probe_driver_source,
     resolve_probe_breakpoint,
 )
+from agentic_debugger.demo.sanitize import (
+    MAX_RAW_FAILURE_OUTPUT_CHARS,
+    sanitize_failure_output,
+)
 from agentic_debugger.evaluation.outcome_taxonomy import classify_outcome
 from agentic_debugger.evaluation.runner import bounded_error, normalize_output
 from agentic_debugger.evaluation.task_schema import DebugTask
@@ -101,11 +105,9 @@ def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
 #: Maximum characters of a bounded diagnostic retained for reporting.
 MAX_DIAGNOSTIC_CHARS = 400
 
-#: Maximum characters of real reproduction failure output surfaced to the
-#: model.  The output is the task's own failing-test run (a real test
-#: diagnostic); only its tail is kept (the traceback/failure summary is at
-#: the end of pytest output).
-MAX_FAILURE_OUTPUT_CHARS = 4000
+#: Maximum characters of the RAW reproduction failure output retained in
+#: the evidence payload (audit-only; never rendered into a model prompt).
+MAX_RAW_FAILURE_OUTPUT_CHARS = 4000
 
 #: Tail window of a failing-test record output fed back to the model after a
 #: real verifier run (the exception/assertion summary is at the end).
@@ -151,19 +153,62 @@ def _bounded_tail(text: str, maximum: int) -> str:
     return marker + text[-(maximum - len(marker)):]
 
 
-def reproduction_failure_output(result: Any, workspace_root: Optional[str]) -> str:
-    """Bounded, normalized real failure output of a test command.
+def task_target_module_path(task: DebugTask) -> str:
+    """Mechanically select the single writable production module.
 
-    ``result`` is a ``TestRunResult``.  The output is the raw stdout/stderr
-    of the executed command (path-normalized and duration-normalized), tail-
-    bounded for model consumption.  Empty when the command produced nothing.
+    Uses the public task constraint ``constraints.allowed_write_paths``:
+    exactly one writable ``.py`` path outside ``tests``.  Identical rule to
+    the R5 launcher (reported design choice; no oracle data).
+    """
+    allowed = list(task.constraints.allowed_write_paths)
+    candidates = [p for p in allowed if p.endswith(".py") and not p.startswith("tests/")]
+    if len(candidates) != 1:
+        raise DemoToolError(
+            "task must declare exactly one writable production .py path, "
+            f"got {sorted(allowed)!r}"
+        )
+    return candidates[0]
+
+
+def reproduction_failure_output(
+    result: Any,
+    workspace_root: Optional[str],
+    script_path: str,
+    original_line_count: int,
+) -> str:
+    """SANITIZED reproduction diagnostic of the executed test command.
+
+    ``result`` is a ``TestRunResult``.  The raw stdout/stderr of the
+    executed command is consumed by the common deterministic sanitizer
+    (``sanitize.sanitize_failure_output``), which derives the bounded
+    structured production diagnostic and never forwards hidden-test
+    content (test source, assertions, node ids, literals).  Empty when the
+    command produced nothing.
+    """
+    command = result.command_result
+    raw = (command.stdout or "") + "\n" + (command.stderr or "")
+    if not raw.strip():
+        return ""
+    diagnostic = sanitize_failure_output(
+        raw, workspace_root, script_path, original_line_count
+    )
+    return diagnostic.text
+
+
+def reproduction_failure_output_raw(
+    result: Any, workspace_root: Optional[str]
+) -> str:
+    """Bounded, normalized RAW failure output — evidence only.
+
+    Retained for auditability of the sanitizer's mechanical derivation;
+    never rendered into a model prompt.
     """
     command = result.command_result
     raw = (command.stdout or "") + "\n" + (command.stderr or "")
     if not raw.strip():
         return ""
     normalized = normalize_output(raw, workspace_root)
-    return _bounded_tail(normalized, MAX_FAILURE_OUTPUT_CHARS)
+    return _bounded_tail(normalized, MAX_RAW_FAILURE_OUTPUT_CHARS)
 
 
 def _validator(
@@ -447,6 +492,18 @@ def build_registry(
             raise ToolExecutionError("reproduction command could not be launched")
         node_id = task.tests.fail_to_pass[0]
         reproduced = bool(result.reproduction_match) and not result.passed
+        # Sanitized production diagnostic for the model (never hidden-test
+        # content) plus the bounded RAW output retained as evidence only.
+        module_path = task_target_module_path(task)
+        source_path = Path(context.workspace.root) / module_path
+        try:
+            original_line_count = len(
+                source_path.read_text(encoding="utf-8").splitlines()
+            )
+        except OSError:
+            raise ToolExecutionError(
+                "production module is missing from the disposable workspace"
+            ) from None
         payload: dict[str, Any] = {
             "phase": phase,
             "node_id": node_id,
@@ -454,11 +511,17 @@ def build_registry(
             "expected_exit_code": task.reproduction.expected_exit_code,
             "passed": bool(result.passed),
             "failure_reproduced": reproduced,
-            # Real failure output of the executed reproduction command
-            # (bounded, normalized).  This is a real test diagnostic from the
-            # task's own public reproduction; it never contains oracle or
-            # reference-repair content.
+            # Sanitized production diagnostic (common deterministic
+            # sanitizer): structured production exception or generic
+            # behavioral-failure statement.  Never hidden test source,
+            # assertions, node ids, or expected literals.
             "failure_output": reproduction_failure_output(
+                result, context.workspace.root, module_path,
+                original_line_count,
+            ) if not result.passed else "",
+            # Bounded RAW reproduction output — audit-only evidence, never
+            # rendered into any model prompt.
+            "failure_output_raw": reproduction_failure_output_raw(
                 result, context.workspace.root
             ) if not result.passed else "",
         }
