@@ -32,12 +32,16 @@ import hashlib
 import json
 import time
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from experiments.debugger_interaction_v2_r5.adapter import (
     ModelTransport,
     TransportError,
     TransportResponse,
+)
+from experiments.debugger_interaction_v2_r5.gpu_placement import (
+    audit_single_cuda_placement,
+    explicit_cuda_device_map,
 )
 
 # Frozen model identity — identical to the accepted RAW-7B treatment base.
@@ -50,6 +54,17 @@ GENERATION_CONFIG = {
     "max_new_tokens": 1024,
     "max_input_tokens": 32768,
 }
+
+LifecycleEvent = Optional[Callable[[str, dict[str, Any]], None]]
+
+
+def _emit_lifecycle(
+    callback: LifecycleEvent,
+    event: str,
+    **details: Any,
+) -> None:
+    if callback is not None:
+        callback(event, details)
 
 
 def adapter_tree_identity(adapter_path: Path) -> dict[str, Any]:
@@ -148,6 +163,8 @@ class LocalQwenPeftTransport:
         max_new_tokens: int = 1024,
         max_input_tokens: int = 32768,
         request_timeout_seconds: float = 60.0,
+        cuda_device_index: int = 0,
+        lifecycle_event: LifecycleEvent = None,
     ) -> None:
         if adapter_path is None:
             raise RuntimeError("cp118 transport requires adapter_path")
@@ -167,6 +184,22 @@ class LocalQwenPeftTransport:
 
         if not torch.cuda.is_available():
             raise RuntimeError("cp118 transport requires a CUDA runtime")
+        requested_device_map = explicit_cuda_device_map(cuda_device_index)
+        if cuda_device_index >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"CUDA device {cuda_device_index} is unavailable; "
+                f"device_count={torch.cuda.device_count()}"
+            )
+        torch.cuda.set_device(cuda_device_index)
+        _emit_lifecycle(
+            lifecycle_event,
+            "transport_init_start",
+            transport="LocalQwenPeftTransport",
+            base_repository=BASE_REPOSITORY,
+            base_revision=BASE_REVISION,
+            adapter_path=str(self._adapter_path),
+            requested_device_map=requested_device_map,
+        )
 
         adapter_config = json.loads(
             (self._adapter_path / "adapter_config.json").read_text(encoding="utf-8")
@@ -194,26 +227,64 @@ class LocalQwenPeftTransport:
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=compute_dtype,
         )
+        _emit_lifecycle(lifecycle_event, "tokenizer_load_start")
         self.tokenizer = AutoTokenizer.from_pretrained(
             BASE_REPOSITORY,
             revision=BASE_REVISION,
             trust_remote_code=False,
         )
+        _emit_lifecycle(lifecycle_event, "tokenizer_load_complete")
+        _emit_lifecycle(lifecycle_event, "base_model_load_start")
         base = AutoModelForCausalLM.from_pretrained(
             BASE_REPOSITORY,
             revision=BASE_REVISION,
             trust_remote_code=False,
-            device_map="auto",
+            device_map=requested_device_map,
             quantization_config=quantization,
             torch_dtype=compute_dtype,
             attn_implementation="efficient_sdpa",
         )
+        base_placement = audit_single_cuda_placement(
+            base, expected_device_index=cuda_device_index
+        )
+        _emit_lifecycle(
+            lifecycle_event,
+            "base_model_load_complete",
+            placement=base_placement,
+        )
+        _emit_lifecycle(lifecycle_event, "adapter_load_start")
         self.model = PeftModel.from_pretrained(
             base,
             str(self._adapter_path),
             is_trainable=False,
         )
         self.model.eval()
+        final_placement = audit_single_cuda_placement(
+            self.model, expected_device_index=cuda_device_index
+        )
+        self.placement_audit = {
+            "base": base_placement,
+            "final_peft_model": final_placement,
+            "runtime": {
+                "torch_version": str(torch.__version__),
+                "torch_cuda_version": str(torch.version.cuda),
+                "cuda_device_index": cuda_device_index,
+                "cuda_device_name": str(torch.cuda.get_device_name(cuda_device_index)),
+                "compute_dtype": str(compute_dtype),
+                "attention_implementation": "efficient_sdpa",
+                "quantization": "NF4 double-quant",
+            },
+        }
+        _emit_lifecycle(
+            lifecycle_event,
+            "adapter_load_complete",
+            placement=final_placement,
+        )
+        _emit_lifecycle(
+            lifecycle_event,
+            "transport_init_complete",
+            placement_audit=self.placement_audit,
+        )
         self.torch = torch
         self.max_new_tokens = max_new_tokens
         self.max_input_tokens = max_input_tokens

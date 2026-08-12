@@ -36,6 +36,17 @@ from agentic_debugger.agent.model_adapter import (
 from agentic_debugger.events.schema import Observation
 
 from experiments.debugger_interaction_v2_r5 import bridge
+
+LifecycleEvent = Optional[Callable[[str, dict[str, Any]], None]]
+
+
+def _emit_lifecycle(
+    callback: LifecycleEvent,
+    event: str,
+    **details: Any,
+) -> None:
+    if callback is not None:
+        callback(event, details)
 from experiments.debugger_interaction_v2_r5.serialization import (
     SerializationNormalizationError,
     normalize_hunk_counts,
@@ -329,12 +340,13 @@ class R5StageTracker:
 
 
 class R5DebuggerBridgeAdapter:
-    def __init__(self, transport: ModelTransport, model_name: str, task_description: str, *, script_path: str, source_text: str, eligible_lines: tuple[int, ...], original_line_count: int, session_state_provider: Callable[[], SessionState], stage_tracker: R5StageTracker, max_retries: int = 1, request_timeout_seconds: float = 60.0) -> None:
+    def __init__(self, transport: ModelTransport, model_name: str, task_description: str, *, script_path: str, source_text: str, eligible_lines: tuple[int, ...], original_line_count: int, session_state_provider: Callable[[], SessionState], stage_tracker: R5StageTracker, max_retries: int = 1, request_timeout_seconds: float = 60.0, lifecycle_event: LifecycleEvent = None) -> None:
         self._transport = transport
         self._model_name = model_name
         self._task_description = task_description
         self._max_retries = max_retries
         self._request_timeout = request_timeout_seconds
+        self._lifecycle_event = lifecycle_event
         self._telemetry: list[TelemetryRecord] = []
         self._post_debug_diagnoses: list[dict[str, Any]] = []
         self._script_path = script_path
@@ -470,6 +482,15 @@ class R5DebuggerBridgeAdapter:
             transport_error_cat: Optional[str] = None
             raw_bytes: Any
             usage: dict[str, Any]
+            _emit_lifecycle(
+                self._lifecycle_event,
+                "model_request_start",
+                model_call_index=snapshot.model_call_index,
+                transport_attempt_index=attempt + 1,
+                controller_state=state.value,
+                system_prompt_sha256=sys_hash,
+                user_prompt_sha256=user_hash,
+            )
             req_start = time.monotonic()
             try:
                 response = self._transport.request(system_prompt=self._system_prompt, user_prompt=user_prompt, timeout_seconds=self._request_timeout)
@@ -482,6 +503,22 @@ class R5DebuggerBridgeAdapter:
             except Exception as exc:
                 raw_text = NOT_AVAILABLE; raw_status = "transport_failure"; raw_bytes = NOT_AVAILABLE; transport_error_cat = type(exc).__name__; usage = _extract_usage(None); response = None  # type: ignore
             req_ms = int((time.monotonic() - req_start) * 1000)
+            _emit_lifecycle(
+                self._lifecycle_event,
+                "model_request_complete",
+                model_call_index=snapshot.model_call_index,
+                transport_attempt_index=attempt + 1,
+                controller_state=state.value,
+                status=raw_status,
+                transport_error_category=transport_error_cat,
+                request_duration_ms=req_ms,
+                raw_response_sha256=(
+                    _sha256(raw_text) if raw_status == "decoded" else None
+                ),
+                prompt_tokens=usage.get("prompt_tokens", NOT_RECORDED),
+                completion_tokens=usage.get("completion_tokens", NOT_RECORDED),
+                total_tokens=usage.get("total_tokens", NOT_RECORDED),
+            )
             record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=attempt + 1, controller_state=state.value, system_prompt_sha256=sys_hash, user_prompt_sha256=user_hash, user_prompt_summary=_bound_text(user_prompt, 1000), user_prompt_full=user_prompt, raw_response_text=raw_text if raw_status == "decoded" else NOT_AVAILABLE, raw_response_status=raw_status, raw_response_bytes=raw_bytes, transport_error_category=transport_error_cat, parse_status="not_attempted", prompt_tokens=usage.get("prompt_tokens", NOT_RECORDED), completion_tokens=usage.get("completion_tokens", NOT_RECORDED), total_tokens=usage.get("total_tokens", NOT_RECORDED), provider_reported=usage.get("provider_reported", False), request_duration_ms=req_ms, prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
             self._telemetry.append(record)
             if raw_status == "transport_failure":
@@ -547,6 +584,15 @@ class R5DebuggerBridgeAdapter:
             except bridge.BridgeParseError as exc:
                 parse_ms = int((time.monotonic() - parse_start) * 1000)
                 record.parse_status = "rejected"; record.rejection_category = exc.category.value; record.rejection_message = exc.detail; record.parse_duration_ms = parse_ms
+                _emit_lifecycle(
+                    self._lifecycle_event,
+                    "directive_rejected",
+                    model_call_index=snapshot.model_call_index,
+                    transport_attempt_index=attempt + 1,
+                    controller_state=state.value,
+                    rejection_category=exc.category.value,
+                    parse_duration_ms=parse_ms,
+                )
                 if attempt < self._max_retries:
                     feedback = f"{exc.category.value}: {exc.detail}"; continue
                 raise ModelAdapterError(f"bridge parse failed after {attempt + 1} attempts: {exc.category.value}: {exc.detail}") from exc
@@ -576,6 +622,18 @@ class R5DebuggerBridgeAdapter:
             elif hasattr(directive, "target_state"):
                 record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
             record.is_diagnosis = result.is_diagnosis; record.diagnosis_text = result.diagnosis_text
+            _emit_lifecycle(
+                self._lifecycle_event,
+                "directive_accepted",
+                model_call_index=snapshot.model_call_index,
+                transport_attempt_index=attempt + 1,
+                controller_state=state.value,
+                directive_kind=record.directive_kind,
+                action_name=record.action_name,
+                target_state=record.target_state,
+                command_token=record.command_token,
+                parse_duration_ms=parse_ms,
+            )
             # R3.1: first genuine PATCH repair attempt advances to RETRY
             if state.value == "Patch" and result.command_token == "patch" and not self._patch_attempted:
                 self._patch_attempted = True

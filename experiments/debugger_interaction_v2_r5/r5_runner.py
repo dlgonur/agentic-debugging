@@ -108,6 +108,17 @@ from experiments.debugger_interaction_v2_r5.phase_navigation import (
 CONTRACT_PATH = THIS_FILE.with_name("r5_contract.json")
 CURATED_ROOT = REPO_ROOT / "agentic_debugger" / "datasets" / "curated"
 
+LifecycleEvent = Optional[Callable[[str, dict[str, Any]], None]]
+
+
+def _emit_lifecycle(
+    callback: LifecycleEvent,
+    event: str,
+    **details: Any,
+) -> None:
+    if callback is not None:
+        callback(event, details)
+
 R5_SCHEMA_VERSION = "debugger-interaction-v2-r5"
 
 # Frozen pre-registered matrix order — do not reorder.
@@ -924,7 +935,9 @@ def _bounded_verifier_detail(record: Any) -> str:
 
 
 def _make_verifier_feedback(
-    script_path: str, original_line_count: int
+    script_path: str,
+    original_line_count: int,
+    lifecycle_event: LifecycleEvent = None,
 ) -> Callable[[Any, str], dict[str, Any]]:
     """Build the real-verifier feedback callback for the tool layer.
 
@@ -944,9 +957,40 @@ def _make_verifier_feedback(
     from agentic_debugger.demo.sanitize import sanitize_verifier_failure_output
 
     def feedback(task: Any, diff: str) -> dict[str, Any]:
-        evaluation = EvaluationVerifier(
-            str(REPO_ROOT), workspace_parent=None
-        ).evaluate(task, diff)
+        candidate_sha256 = hashlib.sha256(diff.encode("utf-8")).hexdigest()
+        _emit_lifecycle(
+            lifecycle_event,
+            "verifier_feedback_start",
+            candidate_sha256=candidate_sha256,
+        )
+        try:
+            evaluation = EvaluationVerifier(
+                str(REPO_ROOT), workspace_parent=None
+            ).evaluate(task, diff)
+        except BaseException as exc:  # noqa: BLE001 - log before caller bounds it
+            _emit_lifecycle(
+                lifecycle_event,
+                "verifier_feedback_error",
+                candidate_sha256=candidate_sha256,
+                error_type=type(exc).__name__,
+            )
+            raise
+        _emit_lifecycle(
+            lifecycle_event,
+            "verifier_feedback_complete",
+            candidate_sha256=candidate_sha256,
+            status=(
+                evaluation.status.value
+                if hasattr(evaluation.status, "value")
+                else str(evaluation.status)
+            ),
+            outcome=(
+                evaluation.outcome.value
+                if hasattr(evaluation.outcome, "value")
+                else str(evaluation.outcome)
+            ),
+            stop_reason=evaluation.stop_reason,
+        )
         failures: list[dict[str, Any]] = []
         for kind, records in (
             ("f2p", evaluation.post_patch_f2p),
@@ -977,7 +1021,7 @@ def _make_verifier_feedback(
             ),
             "syntax": evaluation.syntax.passed if evaluation.syntax else None,
             "failures": failures[:3],
-            "candidate_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
+            "candidate_sha256": candidate_sha256,
         }
     return feedback
 
@@ -989,7 +1033,20 @@ def run_experiment(
     *,
     task_id: str,
     pdb_session_factory: Callable[[TaskWorkspace], PdbSession],
+    lifecycle_event: LifecycleEvent = None,
 ) -> dict[str, Any]:
+    experiment_started = time.monotonic()
+    experiment_started_at = _utc_now()
+
+    def emit(event: str, details: dict[str, Any]) -> None:
+        _emit_lifecycle(
+            lifecycle_event,
+            event,
+            task_id=task_id,
+            **details,
+        )
+
+    emit("run_experiment_start", {})
     fixture_dir = CURATED_ROOT / task_id
     task = load_task(str(fixture_dir / "task.json"))
     task_desc = _build_task_description(task)
@@ -1009,6 +1066,7 @@ def run_experiment(
     case_dir.mkdir(parents=True, exist_ok=True)
 
     # --- THEN the disposable runtime copy with the neutral launcher ---
+    emit("probe_materialization_start", {"case_dir": str(case_dir)})
     r5_probe = prepare_r5_probe(
         fixture_dir, module_path, task.reproduction.argv, case_dir,
         original_source_sha256=original_source_sha256,
@@ -1016,15 +1074,24 @@ def run_experiment(
         eligible_lines=eligible_lines,
         task_id=task_id,
     )
+    emit(
+        "probe_materialization_complete",
+        {"probe_source_dir": str(r5_probe.source_dir)},
+    )
     if r5_probe.driver_start_line <= original_source_line_count:
         raise R5LauncherError("appended driver must start beyond the original source")
 
+    emit("task_workspace_create_start", {"parent_dir": str(case_dir)})
     workspace = TaskWorkspace(str(fixture_dir), parent_dir=str(case_dir))
+    emit(
+        "task_workspace_create_complete",
+        {"workspace_name": Path(workspace.root).name},
+    )
     context = DemoToolContext(
         task=task, workspace=workspace, patch="", probe=r5_probe.probe,
         pdb_session_factory=pdb_session_factory,
         verifier_feedback_fn=_make_verifier_feedback(
-            module_path, original_source_line_count
+            module_path, original_source_line_count, emit
         ),
     )
     registry = build_registry(
@@ -1070,6 +1137,7 @@ def run_experiment(
         stage_tracker=stage_tracker,
         max_retries=R5_BUDGETS["model_retries_per_logical_call_max"],
         request_timeout_seconds=R5_BUDGETS["model_request_timeout_seconds"],
+        lifecycle_event=emit,
     )
     adapter = R5PhaseNavigationAdapter(inner_adapter)
 
@@ -1085,6 +1153,7 @@ def run_experiment(
     )
 
     run_start = time.monotonic()
+    emit("controller_start", {})
     try:
         controller_result = controller.run(snapshot)
     except Exception as exc:
@@ -1093,6 +1162,15 @@ def run_experiment(
     else:
         controller_error = None
     run_duration_ms = int((time.monotonic() - run_start) * 1000)
+    emit(
+        "controller_complete",
+        {
+            "duration_ms": run_duration_ms,
+            "error_type": (
+                controller_error.split(":", 1)[0] if controller_error else None
+            ),
+        },
+    )
 
     events_jsonl = ""
     if controller_result is not None:
@@ -1116,6 +1194,13 @@ def run_experiment(
     verifier_result: Optional[dict[str, Any]] = None
     candidate_patch = context.candidate_patch if context.candidate_patch else None
     if candidate_patch:
+        final_candidate_sha256_for_log = hashlib.sha256(
+            candidate_patch.encode("utf-8")
+        ).hexdigest()
+        emit(
+            "final_verifier_start",
+            {"candidate_sha256": final_candidate_sha256_for_log},
+        )
         try:
             # Verifier workspace MUST be outside the repository tree: pytest's
             # rootdir discovery walks up from the workspace and would find the
@@ -1149,10 +1234,27 @@ def run_experiment(
                     evaluation.workspace.lifecycle.value if evaluation.workspace and hasattr(evaluation.workspace.lifecycle, "value") else None
                 ),
             }
+            emit(
+                "final_verifier_complete",
+                {
+                    "candidate_sha256": final_candidate_sha256_for_log,
+                    "status": verifier_result.get("status"),
+                    "outcome": verifier_result.get("outcome"),
+                    "stop_reason": verifier_result.get("stop_reason"),
+                },
+            )
         except Exception as exc:
             verifier_result = {"executed": True, "error": f"{type(exc).__name__}: {exc}"}
+            emit(
+                "final_verifier_error",
+                {
+                    "candidate_sha256": final_candidate_sha256_for_log,
+                    "error_type": type(exc).__name__,
+                },
+            )
     else:
         verifier_result = {"executed": False}
+        emit("final_verifier_skipped", {"reason": "no_candidate_patch"})
 
     gate_chain = _compute_gate_r5_chain(
         inner_adapter.telemetry,
@@ -1186,6 +1288,7 @@ def run_experiment(
 
     # Cleanup of task-owned state (best-effort, recorded).
     cleanup_record: dict[str, Any] = {"release_pdb": [], "workspace_cleanup": None}
+    emit("task_cleanup_start", {})
     try:
         cleanup_record["release_pdb"] = [
             str(exc) for exc in context.release_pdb()
@@ -1197,6 +1300,9 @@ def run_experiment(
         cleanup_record["workspace_cleanup"] = "cleaned"
     except Exception as exc:
         cleanup_record["workspace_cleanup"] = f"{type(exc).__name__}: {exc}"
+    emit("task_cleanup_complete", {"cleanup": cleanup_record})
+
+    total_duration_ms = int((time.monotonic() - experiment_started) * 1000)
 
     evidence: dict[str, Any] = {
         "schema_version": "debugger-interaction-v2-r5-evidence",
@@ -1245,6 +1351,11 @@ def run_experiment(
             "task_description": task_desc,
         },
         "cleanup": cleanup_record,
+        "runtime": {
+            "started_at": experiment_started_at,
+            "controller_duration_ms": run_duration_ms,
+            "total_duration_ms": total_duration_ms,
+        },
         "claims_boundary": (
             "R5 generalized debugger-informed patch treatment.  R5 PASS = "
             "chain A-F (original-region, provenance-bound; the R5.9 "
@@ -1263,9 +1374,17 @@ def run_experiment(
     }
 
     evidence_path = output_dir / "evidence.json"
+    emit(
+        "evidence_write_start",
+        {"path": str(evidence_path), "total_duration_ms": total_duration_ms},
+    )
     evidence_path.write_text(
         json.dumps(evidence, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
+    )
+    emit(
+        "evidence_write_complete",
+        {"path": str(evidence_path), "bytes": evidence_path.stat().st_size},
     )
     return evidence
 

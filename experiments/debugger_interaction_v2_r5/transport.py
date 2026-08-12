@@ -16,13 +16,17 @@ model/GPU dependency.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Callable, Optional
 
 from experiments.debugger_interaction_v2_r5.adapter import (
     ModelTransport,
     NOT_AVAILABLE,
     TransportError,
     TransportResponse,
+)
+from experiments.debugger_interaction_v2_r5.gpu_placement import (
+    audit_single_cuda_placement,
+    explicit_cuda_device_map,
 )
 
 # Frozen model identity (accepted R3 value).
@@ -35,6 +39,17 @@ GENERATION_CONFIG = {
     "max_new_tokens": 1024,
     "max_input_tokens": 32768,
 }
+
+LifecycleEvent = Optional[Callable[[str, dict[str, Any]], None]]
+
+
+def _emit_lifecycle(
+    callback: LifecycleEvent,
+    event: str,
+    **details: Any,
+) -> None:
+    if callback is not None:
+        callback(event, details)
 
 
 class LocalRawQwenTransport:
@@ -59,6 +74,8 @@ class LocalRawQwenTransport:
         max_new_tokens: int = 1024,
         max_input_tokens: int = 32768,
         request_timeout_seconds: float = 60.0,
+        cuda_device_index: int = 0,
+        lifecycle_event: LifecycleEvent = None,
     ) -> None:
         try:
             import torch
@@ -74,6 +91,21 @@ class LocalRawQwenTransport:
 
         if not torch.cuda.is_available():
             raise RuntimeError("RAW Qwen2.5 transport requires a CUDA runtime")
+        requested_device_map = explicit_cuda_device_map(cuda_device_index)
+        if cuda_device_index >= torch.cuda.device_count():
+            raise RuntimeError(
+                f"CUDA device {cuda_device_index} is unavailable; "
+                f"device_count={torch.cuda.device_count()}"
+            )
+        torch.cuda.set_device(cuda_device_index)
+        _emit_lifecycle(
+            lifecycle_event,
+            "transport_init_start",
+            transport="LocalRawQwenTransport",
+            base_repository=BASE_REPOSITORY,
+            base_revision=BASE_REVISION,
+            requested_device_map=requested_device_map,
+        )
 
         # STABLE + PHYSICAL-VRAM-BOUND (R6 amendment): stock SDPA falls to the
         # pathological MATH backend on this torch build; the validated
@@ -90,21 +122,49 @@ class LocalRawQwenTransport:
             bnb_4bit_use_double_quant=True,
             bnb_4bit_compute_dtype=compute_dtype,
         )
+        _emit_lifecycle(lifecycle_event, "tokenizer_load_start")
         self.tokenizer = AutoTokenizer.from_pretrained(
             BASE_REPOSITORY,
             revision=BASE_REVISION,
             trust_remote_code=False,
         )
+        _emit_lifecycle(lifecycle_event, "tokenizer_load_complete")
+        _emit_lifecycle(lifecycle_event, "base_model_load_start")
         self.model = AutoModelForCausalLM.from_pretrained(
             BASE_REPOSITORY,
             revision=BASE_REVISION,
             trust_remote_code=False,
-            device_map="auto",
+            device_map=requested_device_map,
             quantization_config=quantization,
             torch_dtype=compute_dtype,
             attn_implementation="efficient_sdpa",
         )
         self.model.eval()
+        placement = audit_single_cuda_placement(
+            self.model, expected_device_index=cuda_device_index
+        )
+        self.placement_audit = {
+            "final_model": placement,
+            "runtime": {
+                "torch_version": str(torch.__version__),
+                "torch_cuda_version": str(torch.version.cuda),
+                "cuda_device_index": cuda_device_index,
+                "cuda_device_name": str(torch.cuda.get_device_name(cuda_device_index)),
+                "compute_dtype": str(compute_dtype),
+                "attention_implementation": "efficient_sdpa",
+                "quantization": "NF4 double-quant",
+            },
+        }
+        _emit_lifecycle(
+            lifecycle_event,
+            "base_model_load_complete",
+            placement=placement,
+        )
+        _emit_lifecycle(
+            lifecycle_event,
+            "transport_init_complete",
+            placement_audit=self.placement_audit,
+        )
         self.torch = torch
         self.max_new_tokens = max_new_tokens
         self.max_input_tokens = max_input_tokens

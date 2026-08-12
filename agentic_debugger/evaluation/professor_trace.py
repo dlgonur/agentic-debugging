@@ -37,18 +37,8 @@ from typing import Any, Optional
 SCHEMA_VERSION = "professor_debug_trace_v1"
 SCHEMA_FILE = "professor_debug_trace_schema_v1.json"
 
-_REQUIRED_TRACE_FIELDS = {
-    "schema_version",
-    "task_id",
-    "model",
-    "treatment",
-    "failure_reproduction",
-    "debugger_trace",
-    "error_localization",
-    "diagnosis",
-    "repair_attempts",
-    "final_verification",
-}
+_SCHEMA_PATH = Path(__file__).with_name(SCHEMA_FILE)
+_SCHEMA_CACHE: Optional[dict[str, Any]] = None
 
 
 def _sha256(text: str) -> str:
@@ -298,29 +288,115 @@ def build_trace(evidence: dict[str, Any], model_identity: dict[str, Any]) -> dic
 
 
 def validate_trace(trace: dict[str, Any]) -> None:
-    """Strict schema validation — fail closed on any violation."""
-    missing = _REQUIRED_TRACE_FIELDS - set(trace.keys())
-    if missing:
-        raise ValueError(f"trace missing required fields: {sorted(missing)}")
-    if trace["schema_version"] != SCHEMA_VERSION:
-        raise ValueError("schema_version mismatch")
-    if not isinstance(trace.get("debugger_trace"), list):
-        raise ValueError("debugger_trace must be a list")
-    if not isinstance(trace.get("repair_attempts"), list):
-        raise ValueError("repair_attempts must be a list")
-    for key in ("model", "treatment", "failure_reproduction",
-                "error_localization", "diagnosis", "final_verification"):
-        if not isinstance(trace.get(key), dict):
-            raise ValueError(f"{key} must be a mapping")
-    for entry in trace["debugger_trace"]:
-        if not isinstance(entry, dict):
-            raise ValueError("debugger_trace entries must be mappings")
-        if "turn" not in entry or "phase" not in entry or "status" not in entry:
-            raise ValueError("debugger_trace entries require turn/phase/status")
-    localization = trace["error_localization"]
-    if localization.get("production_file") is not None:
-        if not isinstance(localization["production_file"], str):
-            raise ValueError("error_localization.production_file must be a string")
+    """Validate against the checked-in JSON Schema without a new dependency.
+
+    The schema intentionally uses a small, stable Draft 2020-12 subset
+    (``type``, ``required``, ``properties``, ``items``, ``const``, ``enum``,
+    ``minLength``, and ``minimum``).  The local evaluator below implements
+    that complete subset, so validation is against the schema file itself
+    rather than a second hand-maintained approximation.
+    """
+
+    global _SCHEMA_CACHE
+    if _SCHEMA_CACHE is None:
+        try:
+            loaded = json.loads(_SCHEMA_PATH.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValueError(f"professor trace schema is unreadable: {exc}") from exc
+        if not isinstance(loaded, dict):
+            raise ValueError("professor trace schema root must be a mapping")
+        _SCHEMA_CACHE = loaded
+    _validate_json_schema_subset(trace, _SCHEMA_CACHE, path="$trace")
+
+
+def _matches_json_type(value: Any, type_name: str) -> bool:
+    if type_name == "null":
+        return value is None
+    if type_name == "object":
+        return isinstance(value, dict)
+    if type_name == "array":
+        return isinstance(value, list)
+    if type_name == "string":
+        return isinstance(value, str)
+    if type_name == "boolean":
+        return isinstance(value, bool)
+    if type_name == "integer":
+        return isinstance(value, int) and not isinstance(value, bool)
+    if type_name == "number":
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    raise ValueError(f"unsupported JSON Schema type: {type_name!r}")
+
+
+def _validate_json_schema_subset(
+    value: Any,
+    schema: dict[str, Any],
+    *,
+    path: str,
+) -> None:
+    schema_type = schema.get("type")
+    if schema_type is not None:
+        allowed_types = schema_type if isinstance(schema_type, list) else [schema_type]
+        if not allowed_types or not all(isinstance(item, str) for item in allowed_types):
+            raise ValueError(f"{path}: schema type must be a string or string list")
+        if not any(_matches_json_type(value, item) for item in allowed_types):
+            raise ValueError(
+                f"{path}: value does not match JSON type {allowed_types!r}"
+            )
+
+    if "const" in schema and value != schema["const"]:
+        raise ValueError(f"{path}: value does not match const {schema['const']!r}")
+    if "enum" in schema:
+        enum = schema["enum"]
+        if not isinstance(enum, list) or value not in enum:
+            raise ValueError(f"{path}: value is not in enum {enum!r}")
+
+    if isinstance(value, str) and "minLength" in schema:
+        minimum_length = schema["minLength"]
+        if not isinstance(minimum_length, int) or isinstance(minimum_length, bool):
+            raise ValueError(f"{path}: schema minLength must be an integer")
+        if len(value) < minimum_length:
+            raise ValueError(f"{path}: string is shorter than minLength")
+
+    if (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and "minimum" in schema
+    ):
+        minimum = schema["minimum"]
+        if not isinstance(minimum, (int, float)) or isinstance(minimum, bool):
+            raise ValueError(f"{path}: schema minimum must be numeric")
+        if value < minimum:
+            raise ValueError(f"{path}: number is below minimum {minimum}")
+
+    if isinstance(value, dict):
+        required = schema.get("required", [])
+        if not isinstance(required, list) or not all(
+            isinstance(item, str) for item in required
+        ):
+            raise ValueError(f"{path}: schema required must be a string list")
+        missing = [item for item in required if item not in value]
+        if missing:
+            raise ValueError(f"{path}: missing required fields {missing}")
+        properties = schema.get("properties", {})
+        if not isinstance(properties, dict):
+            raise ValueError(f"{path}: schema properties must be a mapping")
+        for name, child_schema in properties.items():
+            if name not in value:
+                continue
+            if not isinstance(child_schema, dict):
+                raise ValueError(f"{path}.{name}: child schema must be a mapping")
+            _validate_json_schema_subset(
+                value[name], child_schema, path=f"{path}.{name}"
+            )
+
+    if isinstance(value, list) and "items" in schema:
+        item_schema = schema["items"]
+        if not isinstance(item_schema, dict):
+            raise ValueError(f"{path}: schema items must be a mapping")
+        for index, item in enumerate(value):
+            _validate_json_schema_subset(
+                item, item_schema, path=f"{path}[{index}]"
+            )
 
 
 def build_index(traces: list[dict[str, Any]], trace_paths: dict[str, str]) -> dict[str, Any]:
