@@ -1,0 +1,48 @@
+{
+  "schema_version": "debugger-interaction-v2-r5",
+  "experiment_id": "debugger-interaction-v2-r6-trajectory-generation",
+  "description": "R6 — authentic execution-grounded debugger TRAJECTORY GENERATION over DISJOINT QuixBugs training tasks under the frozen r5.9 clean-holdout treatment (same system prompt template, sanitizer, production-exception path, region-filtered observations, budgets, whole-file repair representation, verifier-feedback loop).  The transport is a SCRIPTED perfect-protocol stand-in (model_condition = SCRIPTED_TRAJECTORY); these runs are TRAINING DATA, never model-produced results.  The five R6 curated holdouts are never part of this data.",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "model_role": "scripted",
+    "adapter_applied": false,
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    }
+  },
+  "tasks": [],
+  "budgets": {
+    "task_max_patch_attempts": 4,
+    "task_max_test_runs": 5,
+    "task_max_pdb_observations": 8,
+    "debugger_session_starts_max": 1,
+    "debugger_observation_or_control_actions_max": 8,
+    "debugger_session_stops_max": 1,
+    "controller_steps_max": 32,
+    "model_requests_max": 34,
+    "model_retries_per_logical_call_max": 1,
+    "model_phase_seconds_max": 600,
+    "model_request_timeout_seconds": 60,
+    "pdb_request_timeout_seconds": 60,
+    "debugger_accepted_actions_max": 10
+  },
+  "timeout_derivation": {
+    "rule": "ONE common pdb_request_timeout_seconds frozen at 60 s (the accepted live-condition r5.1 measurement); reused unchanged for the R6 trajectory generation."
+  },
+  "interface_revision": "r5.9",
+  "treatment": {
+    "debugger_entrypoint": "target script = task's single writable production path (constraints.allowed_write_paths); disposable fixture copy receives one neutral cwd-safe guarded pytest launcher generated mechanically from task.reproduction.argv; the SCRIPTED transport authors break <n> among original-source eligible lines (harness-selected from the gold changed region for training tasks).",
+    "stack_rendering": "model-facing stack rendering filtered to frames with script == production path and 1 <= line <= original_source_line_count in EVERY prompt block; raw payload evidence complete.",
+    "model_context": "title + description from agent_visible_mapping; original production source; mechanical eligible breakpoint lines; real debugger/tool observations (production-region filtered); SANITIZED reproduction diagnostic; SANITIZED verifier failure records. No test source, no assertion/literal content, no node ids, no oracle, no reference repair.",
+    "state_machine": "accepted R5.9 staged machine: reproduce -> break -> stack -> locals -> step/next -> EITHER stack G2>G1 OR real terminal outcome OR production-exception path -> diagnosis -> bounded PATCH (whole-file 'file' representation) -> PatchManager -> administrative closeout -> EvaluationVerifier.",
+    "patch_serialization": "whole-file repair representation: the transport authors the complete corrected file content; the deterministic layer generates the unified diff (difflib, recorded+hashed), then normalizes it.  PatchManager and EvaluationVerifier receive C only.",
+    "budget": "one common budget (see budgets); no per-task prompt tuning."
+  },
+  "source_baseline": {
+    "note": "R6 training data generation; descends from the R6 branch state containing the r5.9 clean-holdout treatment."
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "built_tasks": 29,
+  "failed_tasks": [
+    "bitcount",
+    "find_first_in_sorted",
+    "knapsack",
+    "levenshtein",
+    "minimum_spanning_tree",
+    "next_permutation",
+    "shortest_path_lengths",
+    "shortest_paths",
+    "sqrt",
+    "topological_ordering",
+    "wrap"
+  ],
+  "split": {
+    "train": [
+      "quixbugs-breadth-first-search",
+      "quixbugs-max-sublist-sum",
+      "quixbugs-longest-common-subsequence",
+      "quixbugs-sieve",
+      "quixbugs-shunting-yard",
+      "quixbugs-possible-change",
+      "quixbugs-subsequences",
+      "quixbugs-detect-cycle",
+      "quixbugs-kheapsort",
+      "quixbugs-bucketsort",
+      "quixbugs-lcs-length",
+      "quixbugs-get-factors",
+      "quixbugs-to-base",
+      "quixbugs-gcd",
+      "quixbugs-lis",
+      "quixbugs-hanoi",
+      "quixbugs-is-valid-parenthesization",
+      "quixbugs-next-palindrome",
+      "quixbugs-pascal",
+      "quixbugs-mergesort",
+      "quixbugs-powerset"
+    ],
+    "validation": [
+      "quixbugs-depth-first-search",
+      "quixbugs-quicksort",
+      "quixbugs-flatten",
+      "quixbugs-find-in-sorted",
+      "quixbugs-rpn-eval",
+      "quixbugs-shortest-path-length",
+      "quixbugs-reverse-linked-list",
+      "quixbugs-kth"
+    ]
+  },
+  "split_manifest": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\experiments\\r6_debugger_training\\split_manifest.json",
+  "fixture_root": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\agentic_debugger\\datasets\\curated"
+}

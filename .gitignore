@@ -43,3 +43,11 @@ operator/
 
 # Tool-local state (no project source or evidence; verified 2026-08-11)
 .opencode/
+
+# R6 generated training corpus (regenerable from the pinned QuixBugs revision
+# 4257f44b via experiments/r6_debugger_training/quixbugs_tasks.py; identities
+# pinned in experiments/r6_debugger_training/split_manifest.json)
+agentic_debugger/datasets/curated/quixbugs-*/
+experiments/r6_debugger_training/gold/
+experiments/r6_debugger_training/runs/
+experiments/r6_debugger_training/sft/

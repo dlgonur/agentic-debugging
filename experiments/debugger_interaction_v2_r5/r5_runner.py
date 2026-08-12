@@ -332,20 +332,30 @@ def _candidate_source_manifest() -> dict[str, str]:
 
 def _r5_run_identity(contract: dict[str, Any], adapter_path: Optional[str] = None) -> dict[str, Any]:
     model = contract["model"]
-    adapter_applied = model.get("adapter_applied") is True
+    if model.get("model_role"):
+        model_condition = "SCRIPTED_TRAJECTORY"
+        adapter_applied = False
+        adapter_label = None
+        adapter_identity = None
+    else:
+        adapter_applied = model.get("adapter_applied") is True
+        model_condition = "PEFT_ADAPTER" if adapter_applied else "RAW_BASE"
+        adapter_label = model.get("adapter_label")
+        adapter_identity = model.get("adapter") if adapter_applied else None
     return {
         "schema_version": "debugger-interaction-v2-r5-identity",
         "experiment_id": contract.get("experiment_id"),
         "source_commit_sha": _git_head(REPO_ROOT),
         "candidate_source_manifest": _candidate_source_manifest(),
         "experiment_contract_sha256": _contract_sha256(contract),
-        "model_condition": "PEFT_ADAPTER" if adapter_applied else "RAW_BASE",
+        "model_condition": model_condition,
+        "model_role": model.get("model_role"),
         "adapter_applied": adapter_applied,
-        "adapter_label": model.get("adapter_label"),
+        "adapter_label": adapter_label,
         "adapter_path": (
             str(Path(adapter_path).resolve()) if adapter_path is not None else None
         ),
-        "adapter_identity": model.get("adapter") if adapter_applied else None,
+        "adapter_identity": adapter_identity,
         "base_repository": model["base_repository"],
         "base_revision": model["base_revision"],
         "rag_enabled": False,
@@ -1026,7 +1036,16 @@ def run_experiment(
     session_state_provider = make_r5_session_state_provider(context, lambda: stage_tracker.stage)
 
     contract_model = contract["model"]
-    if contract_model.get("adapter_applied") is True:
+    if contract_model.get("model_role"):
+        # R6 training-trajectory generation: the transport is a scripted
+        # perfect-protocol stand-in, never a real model; the run identity
+        # must never be mistaken for a model-produced result.
+        model_name = (
+            f"{contract_model['base_repository']}"
+            f"+{contract_model['base_revision'][:7]}"
+            f"+{contract_model['model_role']}-R5"
+        )
+    elif contract_model.get("adapter_applied") is True:
         adapter_label = contract_model.get("adapter_label") or "peft"
         model_name = (
             f"{contract_model['base_repository']}"

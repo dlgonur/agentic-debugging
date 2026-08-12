@@ -1,0 +1,279 @@
+{
+  "schema_version": "r6-debugger-sft-split-v1",
+  "seed": "r6-debugger-sft-split-2026-08-12-v1",
+  "validation_task_count": 8,
+  "quixbugs_revision": "4257f44b0ff1181dedaedee6a447e133219fcebf",
+  "quix40_manifest": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\experiments\\raw-pilot-v1.1\\state\\quix40-v1\\pilot_manifest_frozen_v1.jsonl",
+  "holdout_excluded": [
+    "curated-caller-callee-005",
+    "curated-mutation-alias-004",
+    "curated-none-handling-001",
+    "curated-off-by-one-002",
+    "curated-wrong-branch-003"
+  ],
+  "train_tasks": [
+    {
+      "task_id": "quixbugs-breadth-first-search",
+      "algo": "breadth_first_search",
+      "source_sha256": "24e7a1ad2916acaa1759c388cccce1b9ce812cb27997e36fe8287082b29d0873",
+      "gold_diff_sha256": "cad8c0255d3208ae4bd51673deca5f2d2e012169b6c15deff61ec6a32b8267bd",
+      "f2p_count": 1,
+      "p2p_count": 4,
+      "reproduction_node": "tests/test_breadth_first_search.py::test3"
+    },
+    {
+      "task_id": "quixbugs-max-sublist-sum",
+      "algo": "max_sublist_sum",
+      "source_sha256": "aab26d9f3984f177adcff110fe72de97e54c5f85ad476c38e49c949a873d85b5",
+      "gold_diff_sha256": "cb2a0ad3bd70c4a84908480d88acefa97f7fb1c53cfef5f2e427aebdb28c40ce",
+      "f2p_count": 4,
+      "p2p_count": 2,
+      "reproduction_node": "tests/test_max_sublist_sum.py::test_max_sublist_sum[input_data0-5]"
+    },
+    {
+      "task_id": "quixbugs-longest-common-subsequence",
+      "algo": "longest_common_subsequence",
+      "source_sha256": "93215319e44f895561f14567dd6098e2b8fc04497d4d71f5c21c9267fc2a02da",
+      "gold_diff_sha256": "dfca37a177042ab389674ff4ffdc1d4763893560793de6fa123a6d7a48e7dac6",
+      "f2p_count": 4,
+      "p2p_count": 6,
+      "reproduction_node": "tests/test_longest_common_subsequence.py::test_longest_common_subsequence[input_data3-tsitest]"
+    },
+    {
+      "task_id": "quixbugs-sieve",
+      "algo": "sieve",
+      "source_sha256": "577f762267c71617107ca3ec8d509012a7d6b692fb94432f943cd5b694ad5ffc",
+      "gold_diff_sha256": "62b25b4f586e3f75635fef55c7a7186c51bf75c0b9a2283e9cc6e6d9d0797af5",
+      "f2p_count": 5,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_sieve.py::test_sieve[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-shunting-yard",
+      "algo": "shunting_yard",
+      "source_sha256": "b010f04bbfc6158888d97498cc8e0adb323b9f8285fbf5b908c7d4c8c48cfb68",
+      "gold_diff_sha256": "bde5ffa94af12a1c77e2015b8c45239dc2e990bdaf07e8b0fa834dd34ce9ed55",
+      "f2p_count": 4,
+      "p2p_count": 2,
+      "reproduction_node": "tests/test_shunting_yard.py::test_shunting_yard[input_data2-expected2]"
+    },
+    {
+      "task_id": "quixbugs-possible-change",
+      "algo": "possible_change",
+      "source_sha256": "e21854dbb1a8f299bab639e71797a14989ab6bd6b700665a2056c48a70154917",
+      "gold_diff_sha256": "6f42165ff9ed561ddbe6ffd5ac1f1427305fae27d93eb9aa716386a3f30be34f",
+      "f2p_count": 9,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_possible_change.py::test_possible_change[input_data1-4]"
+    },
+    {
+      "task_id": "quixbugs-subsequences",
+      "algo": "subsequences",
+      "source_sha256": "0566273a521b768c0f9d8ba33d95bc7a10447b654327ad0d3460500245bef7c3",
+      "gold_diff_sha256": "9eabe5dc013014dece8af40d89e83b3c32155449e5560b7ce3cc0273835f423a",
+      "f2p_count": 10,
+      "p2p_count": 2,
+      "reproduction_node": "tests/test_subsequences.py::test_subsequences[input_data0-expected0]"
+    },
+    {
+      "task_id": "quixbugs-detect-cycle",
+      "algo": "detect_cycle",
+      "source_sha256": "0f3f0f1a5160f1fca66f164de1a73d884bb83d45fea702c46512bcac520bc1ba",
+      "gold_diff_sha256": "52aa9da65ac33603c812a3ecb0bd09c912f5695b76db8c7bb203a6c7be08f145",
+      "f2p_count": 1,
+      "p2p_count": 5,
+      "reproduction_node": "tests/test_detect_cycle.py::test4"
+    },
+    {
+      "task_id": "quixbugs-kheapsort",
+      "algo": "kheapsort",
+      "source_sha256": "0cabf3d462d941ec01f261f2d794d960ab8ba497c42140cedbc3c872f772cea8",
+      "gold_diff_sha256": "c4defcdd35c2ca8140c1a1b9916044c699c2f4fc1a56e06701adcc7b832e38f9",
+      "f2p_count": 3,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_kheapsort.py::test_kheapsort[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-bucketsort",
+      "algo": "bucketsort",
+      "source_sha256": "1cc4197c2ee524ec8dd3a45c0e943acf31fa429cb8b179195334f51ff939b9fd",
+      "gold_diff_sha256": "6b9f78f27ee7df1c9565a9289fe1c4004b3e8f08080543f4d25d3a473ac3ce58",
+      "f2p_count": 6,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_bucketsort.py::test_bucketsort[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-lcs-length",
+      "algo": "lcs_length",
+      "source_sha256": "ab35b03aa24601348e41e39b70514c9837d5d029009862c0b1d9c90e09b9f532",
+      "gold_diff_sha256": "bb13e69abe1b1b0244352aec7b2735ef472d865a554aaef2dea8cf0460e1f3a7",
+      "f2p_count": 8,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_lcs_length.py::test_lcs_length[input_data0-2]"
+    },
+    {
+      "task_id": "quixbugs-get-factors",
+      "algo": "get_factors",
+      "source_sha256": "7eff7ef2adbb266142cf20e8fa64b05b16ec7e1536a20fa10f036091b1d3290d",
+      "gold_diff_sha256": "5b6fce1fb7f096793ba434de1c6017b047b35313d3d62a72523a5b32ad5df83d",
+      "f2p_count": 10,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_get_factors.py::test_get_factors[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-to-base",
+      "algo": "to_base",
+      "source_sha256": "e6f2d42474e4e641f08d2e6d5c0e8c8bf8a540e79aaaf1ab903031c163193744",
+      "gold_diff_sha256": "ed1e096839bc200483cae1cfdcb795db5b555c70284d749f5b76404c972c3eb0",
+      "f2p_count": 7,
+      "p2p_count": 3,
+      "reproduction_node": "tests/test_to_base.py::test_to_base[input_data3-1F]"
+    },
+    {
+      "task_id": "quixbugs-gcd",
+      "algo": "gcd",
+      "source_sha256": "d68e155c2af40d787f617f03c596005edabee3d9e33626b9185d83650895636f",
+      "gold_diff_sha256": "88f8697816abbc0bf0147bc6a5f2d50e25d40f91b58ddaf767d8e3dcbbc400d7",
+      "f2p_count": 5,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_gcd.py::test_gcd[input_data1-13]"
+    },
+    {
+      "task_id": "quixbugs-lis",
+      "algo": "lis",
+      "source_sha256": "fe9e751f62674299be95f5026c30c778ec331eb449caaa9a13f6b2908e44a016",
+      "gold_diff_sha256": "5ed91f67a1947c0f3aafbc3f3a821e26891f2d733fa8513afd05135f9460444a",
+      "f2p_count": 4,
+      "p2p_count": 8,
+      "reproduction_node": "tests/test_lis.py::test_lis[input_data8-3]"
+    },
+    {
+      "task_id": "quixbugs-hanoi",
+      "algo": "hanoi",
+      "source_sha256": "edd1ceeb79b556a6d15e3bc21f625c5776b46c10f94a754531d39a6f7e120f9e",
+      "gold_diff_sha256": "ef3a8c4f749b48f10c4dfd39d157dc56e574726a1bfae74b5fdd6f124bedd20d",
+      "f2p_count": 7,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_hanoi.py::test_hanoi[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-is-valid-parenthesization",
+      "algo": "is_valid_parenthesization",
+      "source_sha256": "2340cddfce49b055a5a7a70c3341351bf130702512278bafaed5d5b345d0ba60",
+      "gold_diff_sha256": "7e2ad5a08fd22a77620a4f3896cb764da1917494737f4a376699a57bec8c4157",
+      "f2p_count": 1,
+      "p2p_count": 2,
+      "reproduction_node": "tests/test_is_valid_parenthesization.py::test_is_valid_parenthesization[input_data2-False]"
+    },
+    {
+      "task_id": "quixbugs-next-palindrome",
+      "algo": "next_palindrome",
+      "source_sha256": "e383f403abe2f85fff232871f691b560d5aadd6cccbfbbf205d25099abe734ce",
+      "gold_diff_sha256": "b60f09ff5a8cdb6f5df0ffb6faa64e6bb9e93feb490f192efb936e942ec6834e",
+      "f2p_count": 1,
+      "p2p_count": 4,
+      "reproduction_node": "tests/test_next_palindrome.py::test_next_palindrome[input_data4-expected4]"
+    },
+    {
+      "task_id": "quixbugs-pascal",
+      "algo": "pascal",
+      "source_sha256": "4445ef075a5f987d005bba5587c58f4697a90675be09171af2ca4009f64824a1",
+      "gold_diff_sha256": "0e082b00c682251849ba88c101b1987400f8587501bcf59d16343b3f984e7618",
+      "f2p_count": 4,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_pascal.py::test_pascal[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-mergesort",
+      "algo": "mergesort",
+      "source_sha256": "9e1911f1da8b7535c52d19f73d32238e72066b859a853c09cbd2644214f79d61",
+      "gold_diff_sha256": "5defbe742d154fabdf03d3a82dacaff06ce86825dd64f87d764e52e99bb37f25",
+      "f2p_count": 13,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_mergesort.py::test_mergesort[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-powerset",
+      "algo": "powerset",
+      "source_sha256": "3e3deb045ed61fbe82725cd7e7b0fb4d00f411f87f0f91358109ec0204c61ae9",
+      "gold_diff_sha256": "9e2f46d5534c1db12306a1d6056d84da8ef67d9a0357eb1112136e05e7d38ece",
+      "f2p_count": 4,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_powerset.py::test_powerset[input_data0-expected0]"
+    }
+  ],
+  "validation_tasks": [
+    {
+      "task_id": "quixbugs-depth-first-search",
+      "algo": "depth_first_search",
+      "source_sha256": "9d603dfef6b5b2697c6017428aea5c56b5728edfe4aabf4028927b75224b2c0e",
+      "gold_diff_sha256": "726073766b3bd1cbb641d63def729dddb498ad58979b31a3ee2a1a30125a1c6f",
+      "f2p_count": 1,
+      "p2p_count": 4,
+      "reproduction_node": "tests/test_depth_first_search.py::test5"
+    },
+    {
+      "task_id": "quixbugs-quicksort",
+      "algo": "quicksort",
+      "source_sha256": "4bc023d77dcdaeaaf5b284a03eecf0f73765ff216efecadd1d5ed78382ac89a3",
+      "gold_diff_sha256": "2e532d9f9c3f01a39f892b876336835dae35e1d57e9facac1f0459b47f9c2de7",
+      "f2p_count": 1,
+      "p2p_count": 12,
+      "reproduction_node": "tests/test_quicksort.py::test_quicksort[input_data1-expected1]"
+    },
+    {
+      "task_id": "quixbugs-flatten",
+      "algo": "flatten",
+      "source_sha256": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+      "gold_diff_sha256": "b8bd5ac1c970d155906ec28153f74892fba136177528490e0730ba86de389945",
+      "f2p_count": 6,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_flatten.py::test_flatten[input_data0-expected0]"
+    },
+    {
+      "task_id": "quixbugs-find-in-sorted",
+      "algo": "find_in_sorted",
+      "source_sha256": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+      "gold_diff_sha256": "d0e5fb69d62ca237b7892d1f40a68cd2bd1caec15e88d2476812201fd713a6da",
+      "f2p_count": 2,
+      "p2p_count": 5,
+      "reproduction_node": "tests/test_find_in_sorted.py::test_find_in_sorted[input_data1--1]"
+    },
+    {
+      "task_id": "quixbugs-rpn-eval",
+      "algo": "rpn_eval",
+      "source_sha256": "4a473b1beaa9eb8155fcb079917e390d0584d8ebdfc6d6d8c88069609854194a",
+      "gold_diff_sha256": "3c5ebc18e14ae2936127eb8c6d2b6f77c6cbfcd7439c251a4a0b7ff86145e4bf",
+      "f2p_count": 3,
+      "p2p_count": 3,
+      "reproduction_node": "tests/test_rpn_eval.py::test_rpn_eval[input_data0-4.0]"
+    },
+    {
+      "task_id": "quixbugs-shortest-path-length",
+      "algo": "shortest_path_length",
+      "source_sha256": "7dfc112f10e97ef4023f0d0eacec6c4659d1775fb9125826c4379e78c41dc46f",
+      "gold_diff_sha256": "522e55e53bb5c8b602bbaea5a9a055b53c4a3cd7ba17c4b0809c78814de0a5e6",
+      "f2p_count": 2,
+      "p2p_count": 2,
+      "reproduction_node": "tests/test_shortest_path_length.py::test1"
+    },
+    {
+      "task_id": "quixbugs-reverse-linked-list",
+      "algo": "reverse_linked_list",
+      "source_sha256": "472b29daff20c0a6ec316b841a7aeca577eef6aad81c65bb44d63ef121cfbab0",
+      "gold_diff_sha256": "2f8747c6a69c4b8c93d13b00e1a445fb6a023189d8f465e035c527a0689f6586",
+      "f2p_count": 2,
+      "p2p_count": 1,
+      "reproduction_node": "tests/test_reverse_linked_list.py::test1"
+    },
+    {
+      "task_id": "quixbugs-kth",
+      "algo": "kth",
+      "source_sha256": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+      "gold_diff_sha256": "6ea1343f08ec4dea6e005e00f955700e58014d90aebff83095a4b213ba209f5e",
+      "f2p_count": 4,
+      "p2p_count": 3,
+      "reproduction_node": "tests/test_kth.py::test_kth[input_data0-5]"
+    }
+  ]
+}
