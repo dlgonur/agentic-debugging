@@ -326,11 +326,13 @@ def _subtract_legitimate_evidence(
     prompt: str,
     source_lines: tuple[str, ...],
     module_path: Optional[str] = None,
+    legitimate_texts: tuple[str, ...] = (),
 ) -> str:
-    """Remove the model's LEGITIMATE production evidence before checking
-    source-derived needles: the rendered original source lines, real stack
-    frame lines, real pause lines, and the production module path (source
-    headers, patch affordance).  Everything remaining in the prompt is
+    """Remove the model's LEGITIMATE evidence before checking source-derived
+    needles: the rendered original source lines, real stack frame lines,
+    real pause lines, the production module path (source headers, patch
+    affordance), and MODEL-AUTHORED text rendered back into later prompts
+    (the retained diagnosis).  Everything remaining in the prompt is
     material the model should never have received."""
     reduced = prompt
     for line in source_lines:
@@ -340,6 +342,9 @@ def _subtract_legitimate_evidence(
     reduced = _PAUSE_LINE_RE.sub("", reduced)
     if module_path:
         reduced = reduced.replace(module_path, "")
+    for text in sorted(legitimate_texts, key=len, reverse=True):
+        if text and text in reduced:
+            reduced = reduced.replace(text, "")
     return reduced
 
 
@@ -376,12 +381,13 @@ def scan_prompt(
     *,
     prompt_index: int = 0,
     controller_state: str = "?",
+    legitimate_texts: tuple[str, ...] = (),
 ) -> list[LeakageFinding]:
     """Scan ONE exact actual user prompt against the forbidden content.
 
     Fail-closed mechanical matching: any forbidden needle present in the
-    actual prompt (outside the legitimately shown production source) is a
-    finding.
+    actual prompt (outside the legitimately shown production source,
+    debugger evidence, and model-authored text) is a finding.
     """
     findings: list[LeakageFinding] = []
     if type(prompt) is not str or not prompt:
@@ -395,11 +401,33 @@ def scan_prompt(
                 prompt,
                 forbidden.production_source_lines,
                 forbidden.production_module_path,
+                legitimate_texts,
             )
         finder = _needle_finder(needle)
         if finder.search(haystack) is not None:
             findings.append(LeakageFinding(prompt_index, controller_state, kind, needle[:200]))
     return findings
+
+
+def _evidence_diagnosis_texts(evidence: dict[str, Any]) -> tuple[str, ...]:
+    """Model-authored diagnosis texts retained into later prompts.
+
+    The diagnosis is the model's OWN output rendered back at PATCH time —
+    legitimate context, never hidden-test material (any content in it
+    originated from the model's already-audited inputs).  Subtracting it
+    cannot hide a leak.
+    """
+    texts: list[str] = []
+    for record in evidence.get("telemetry") or []:
+        if type(record) is not dict:
+            continue
+        directive = record.get("translated_directive") or {}
+        if directive.get("is_diagnosis") is not True:
+            continue
+        text = directive.get("diagnosis_text")
+        if type(text) is str and text.strip():
+            texts.append(text)
+    return tuple(texts)
 
 
 def scan_evidence(
@@ -409,6 +437,7 @@ def scan_evidence(
     """Scan every exact live ``telemetry[*].request.user_prompt_full`` in
     one evidence document."""
     findings: list[LeakageFinding] = []
+    legitimate_texts = _evidence_diagnosis_texts(evidence)
     telemetry = evidence.get("telemetry") or []
     for index, record in enumerate(telemetry):
         if type(record) is not dict:
@@ -423,6 +452,7 @@ def scan_evidence(
                 forbidden,
                 prompt_index=index,
                 controller_state=str(record.get("controller_state", "?")),
+                legitimate_texts=legitimate_texts,
             )
         )
     return findings

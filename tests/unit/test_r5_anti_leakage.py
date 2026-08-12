@@ -28,6 +28,7 @@ from experiments.debugger_interaction_v2_r5.anti_leakage import (
     audit_evidence_dict,
     audit_evidence_file,
     derive_forbidden_content,
+    scan_evidence,
     scan_prompt,
 )
 
@@ -242,3 +243,35 @@ class TestCleanPromptsPassAudit:
             "target behavior\n"
         )
         assert scan_prompt(prompt, forbidden) == []
+
+    def test_model_authored_diagnosis_rendered_back_is_not_finding(self):
+        """The model's OWN diagnosis (which legitimately names the
+        production function it observed) is rendered back into the PATCH
+        prompt; it is model-authored evidence, never hidden-test content."""
+        forbidden = _forbidden("curated-none-handling-001")
+        evidence = {
+            "telemetry": [
+                {
+                    "controller_state": "Patch",
+                    "request": {
+                        "user_prompt_full": (
+                            "Your diagnosis (from debugger evidence):\n"
+                            "The function `format_display_name` encountered "
+                            "an `AttributeError` because the variable `name` "
+                            "was `None` when the `strip()` method was called "
+                            "on it.\n"
+                        )
+                    },
+                    "translated_directive": {
+                        "is_diagnosis": True,
+                        "diagnosis_text": (
+                            "The function `format_display_name` encountered "
+                            "an `AttributeError` because the variable `name` "
+                            "was `None` when the `strip()` method was called "
+                            "on it."
+                        ),
+                    },
+                }
+            ]
+        }
+        assert scan_evidence(evidence, forbidden) == []
