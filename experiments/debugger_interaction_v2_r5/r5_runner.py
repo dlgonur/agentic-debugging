@@ -246,7 +246,15 @@ def _validate_contract(contract: dict[str, Any], *, repo: str, revision: str, ge
 
 
 def _candidate_source_manifest() -> dict[str, str]:
+    """SHA-256 manifest of every source file that materially affects an R5
+    run, derived from the actual R5 execution graph (runner imports and the
+    modules they reach).  R5.9 closeout: includes the common deterministic
+    sanitizer (controls model-facing runtime/verifier diagnostics) and the
+    fail-closed actual-prompt anti-leakage auditor (clean-holdout
+    acceptance authority), plus the controller/model-adapter/state-machine
+    and task runner/workspace/task-schema surfaces the run depends on."""
     relative_paths = (
+        # -- R5 experiment package ----------------------------------------
         "experiments/debugger_interaction_v2_r5/bridge.py",
         "experiments/debugger_interaction_v2_r5/adapter.py",
         "experiments/debugger_interaction_v2_r5/transport.py",
@@ -254,16 +262,42 @@ def _candidate_source_manifest() -> dict[str, str]:
         "experiments/debugger_interaction_v2_r5/phase_navigation.py",
         "experiments/debugger_interaction_v2_r5/serialization.py",
         "experiments/debugger_interaction_v2_r5/launcher.py",
+        "experiments/debugger_interaction_v2_r5/anti_leakage.py",
         "experiments/debugger_interaction_v2_r5/r5_runner.py",
         "experiments/debugger_interaction_v2_r5/r5_contract.json",
         "experiments/debugger_interaction_v2_r5/r5_contract_14b.json",
-        "agentic_debugger/runtime/patcher.py",
-        "agentic_debugger/evaluation/verifier.py",
-        "agentic_debugger/evaluation/runner.py",
+        # -- controller / adapter / state machine surface -----------------
+        "agentic_debugger/agent/controller.py",
+        "agentic_debugger/agent/controller_policy.py",
+        "agentic_debugger/agent/model_adapter.py",
+        "agentic_debugger/agent/state_machine.py",
+        "agentic_debugger/agent/trajectory.py",
         "agentic_debugger/agent/tool_registry.py",
+        # -- task / evaluation surface ------------------------------------
+        "agentic_debugger/evaluation/task_schema.py",
+        "agentic_debugger/evaluation/runner.py",
+        "agentic_debugger/evaluation/verifier.py",
+        "agentic_debugger/evaluation/outcome_taxonomy.py",
+        # -- events / trajectory surface ----------------------------------
+        "agentic_debugger/events/schema.py",
+        "agentic_debugger/events/logger.py",
+        # -- demo tool + sanitizer surface --------------------------------
         "agentic_debugger/demo/tools.py",
+        "agentic_debugger/demo/sanitize.py",
+        "agentic_debugger/demo/catalog.py",
+        # -- runtime / task runner / workspace surface --------------------
+        "agentic_debugger/runtime/patcher.py",
         "agentic_debugger/runtime/pdb_session.py",
         "agentic_debugger/runtime/pdb_worker.py",
+        "agentic_debugger/runtime/pdb_protocol.py",
+        "agentic_debugger/runtime/test_runner.py",
+        "agentic_debugger/runtime/command_runner.py",
+        "agentic_debugger/runtime/execution.py",
+        "agentic_debugger/runtime/exceptions.py",
+        "agentic_debugger/runtime/workspace.py",
+        # -- registered tool surface (source window / search) -------------
+        "agentic_debugger/skills/file_skills.py",
+        "agentic_debugger/skills/search_skills.py",
     )
     manifest: dict[str, str] = {}
     for relative in relative_paths:
@@ -293,10 +327,23 @@ def _r5_run_identity(contract: dict[str, Any]) -> dict[str, Any]:
         "system_prompt_template_sha256": _sha256(SYSTEM_PROMPT_TEMPLATE),
         "interface_revision": contract.get("interface_revision"),
         "interface_description": (
-            "R5 generalized debugger-informed repair: reproduce -> break -> "
-            "stack G1 -> locals/print -> step/next -> stack G2>G1 -> diagnosis "
-            "-> patch -> verifier; neutral cwd-safe pytest launcher; "
-            "original-source-region breakpoint/stack filtering; no test "
+            "R5.9 clean-holdout generalized debugger-informed repair: "
+            "reproduce -> break -> stack G1 -> locals/print -> step/next -> "
+            "EITHER stack G2>G1 inside the original production region "
+            "(normal path) OR the R5.9 production-exception path "
+            "(production frame unwound during a real exception/failure; "
+            "G2=None; sanitized production exception attached; no fake "
+            "original-region G2 claimed) -> diagnosis -> patch -> verifier.  "
+            "Common deterministic sanitizer for the reproduction diagnostic "
+            "and the verifier-feedback failing records (production exception "
+            "frames only; hidden test source/assertions/literals/node ids/"
+            "test names never forwarded; fail closed to a generic behavioral "
+            "statement).  Region-filtered model-facing observations; "
+            "whole-file and unified-diff repair representations with "
+            "deterministic serialization; real verifier-feedback repair "
+            "loop; fail-closed ACTUAL-PROMPT anti-leakage audit "
+            "(leakage_findings == [] required).  Neutral cwd-safe pytest "
+            "launcher; original-source-region breakpoint derivation; no test "
             "metadata in prompts; bounded PATCH checkpoint; metadata-only "
             "B->C normalization."
         ),
@@ -1406,6 +1453,23 @@ def _matrix_row(evidence: dict[str, Any], task_id: str, contract_sha: str, contr
     }
 
 
+def _clean_holdout_5_of_5(
+    primary_target_5_of_5: bool,
+    prompt_audit_passed: bool,
+    leakage_findings: int,
+) -> bool:
+    """The explicit fail-closed clean-holdout authority (R5.9 closeout).
+
+    CLEAN 5/5 holds ONLY when every row passes its strict per-task gate AND
+    the fail-closed actual-prompt anti-leakage audit is empty.
+    """
+    return bool(
+        primary_target_5_of_5
+        and prompt_audit_passed
+        and leakage_findings == 0
+    )
+
+
 def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory: Callable[[], Any]) -> dict[str, Any]:
     output_dir.mkdir(parents=True, exist_ok=True)
     contract_sha = _contract_sha256(contract)
@@ -1475,6 +1539,14 @@ def run_matrix(contract: dict[str, Any], output_dir: Path, *, transport_factory:
     anti_leakage = audit_matrix_dir(output_dir, CURATED_ROOT)
     aggregate["leakage_findings"] = anti_leakage["leakage_findings_total"]
     aggregate["clean_holdout_prompt_audit_passed"] = anti_leakage["passed"]
+    # R5.9 closeout: the explicit fail-closed clean-holdout authority.  The
+    # scientific result is CLEAN 5/5 ONLY when every row passes its strict
+    # per-task gate AND the actual-prompt audit is empty.
+    aggregate["clean_holdout_5_of_5"] = _clean_holdout_5_of_5(
+        aggregate.get("primary_target_5_of_5"),
+        aggregate.get("clean_holdout_prompt_audit_passed"),
+        aggregate.get("leakage_findings"),
+    )
 
     matrix = {
         "schema_version": "debugger-interaction-v2-r5-matrix",

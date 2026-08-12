@@ -26,7 +26,6 @@ if str(REPO_ROOT) not in sys.path:
 from experiments.debugger_interaction_v2_r5.anti_leakage import (
     ForbiddenContent,
     audit_evidence_dict,
-    audit_evidence_file,
     derive_forbidden_content,
     scan_evidence,
     scan_prompt,
@@ -42,10 +41,16 @@ R5_TASKS = (
     "curated-caller-callee-005",
 )
 
-OLD_R57_BASE = (
-    REPO_ROOT
-    / "experiments/debugger_interaction_v2_r5/runs/R5.7-MATRIX-14B-FINAL-2026-08-11"
-)
+# Tracked, self-contained regression fixture: decisive OLD r5.7 leaked
+# prompt excerpts embedded from the preserved (untracked) r5.7 live matrix.
+# A fresh Git checkout must run the regression from tracked content only.
+OLD_R57_FIXTURE_DIR = REPO_ROOT / "tests" / "fixtures" / "old_r57_leakage"
+
+
+def _old_r57_fixture(task_id: str) -> dict:
+    path = OLD_R57_FIXTURE_DIR / f"{task_id}.json"
+    assert path.is_file(), f"missing tracked old-r5.7 fixture {path}"
+    return json.loads(path.read_text(encoding="utf-8"))
 
 
 def _forbidden(task_id: str) -> ForbiddenContent:
@@ -157,28 +162,31 @@ class TestScanPrompt:
 
 
 class TestOldR57EvidenceFailsAudit:
-    """THE regression test: the old leaking r5.7 matrix must FAIL the new
+    """THE regression test: the old leaking r5.7 prompt forms must FAIL the
     fail-closed actual-prompt audit, with the exact leak forms FirstMate
-    found in the live prompts."""
+    found in the live prompts.
+
+    Self-contained: the decisive leaked prompt excerpts are embedded in the
+    TRACKED fixture ``tests/fixtures/old_r57_leakage/`` (extracted from the
+    preserved, untracked r5.7 live matrix), so a fresh Git checkout tests
+    the regression without any gitignored run directories.
+    """
 
     @pytest.mark.parametrize("task_id", R5_TASKS)
     def test_old_r57_evidence_fails(self, task_id):
-        evidence_path = OLD_R57_BASE / task_id / "evidence.json"
-        assert evidence_path.is_file(), f"missing old evidence {evidence_path}"
-        audit = audit_evidence_file(evidence_path, task_id, CURATED_ROOT / task_id)
+        fixture = _old_r57_fixture(task_id)
+        audit = audit_evidence_dict(fixture, task_id, CURATED_ROOT / task_id)
         assert audit["scanned_prompt_count"] > 0
         assert audit["leakage_findings"], (
-            f"old r5.7 {task_id} prompts must fail the audit"
+            f"old r5.7 {task_id} prompt excerpts must fail the audit"
         )
         assert audit["passed"] is False
 
     def test_old_001_contains_firstmate_exact_leak_forms(self):
-        evidence_path = OLD_R57_BASE / "curated-none-handling-001" / "evidence.json"
-        evidence = json.loads(evidence_path.read_text(encoding="utf-8"))
-        forbidden = _forbidden("curated-none-handling-001")
+        fixture = _old_r57_fixture("curated-none-handling-001")
         all_prompts = "\n".join(
             (rec.get("request") or {}).get("user_prompt_full") or ""
-            for rec in evidence.get("telemetry") or []
+            for rec in fixture.get("telemetry") or []
             if type(rec) is dict
         )
         # The exact leaked forms FirstMate quoted from the live prompts.
@@ -191,12 +199,19 @@ class TestOldR57EvidenceFailsAudit:
     def test_all_five_old_rows_combined_fail(self):
         total = 0
         for task_id in R5_TASKS:
-            evidence_path = OLD_R57_BASE / task_id / "evidence.json"
-            audit = audit_evidence_file(
-                evidence_path, task_id, CURATED_ROOT / task_id
+            audit = audit_evidence_dict(
+                _old_r57_fixture(task_id), task_id, CURATED_ROOT / task_id
             )
             total += len(audit["leakage_findings"])
         assert total > 0
+
+    def test_fixture_does_not_depend_on_untracked_run_directories(self):
+        """The tracked fixture is the only source of the old leaked prompts:
+        the regression must run from a fresh Git checkout."""
+        for task_id in R5_TASKS:
+            fixture = _old_r57_fixture(task_id)
+            assert fixture.get("schema_version") == "old-r5.7-leaked-prompt-excerpts-v1"
+            assert len(fixture.get("telemetry") or []) >= 3
 
 
 class TestCleanPromptsPassAudit:

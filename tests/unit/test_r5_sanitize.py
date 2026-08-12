@@ -32,7 +32,7 @@ _________________ test_missing_display_name_returns_fallback __________________
     def test_missing_display_name_returns_fallback() -> None:
 >       assert format_display_name(None) == "Anonymous"
 
-tests\\test_display_name.py:5: 
+tests\\test_display_name.py:5:
 _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _
 
 name = None

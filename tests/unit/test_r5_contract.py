@@ -74,3 +74,23 @@ class TestContract:
         c1 = _load_contract()
         c2 = _load_contract()
         assert _contract_sha256(c1) == _contract_sha256(c2)
+
+
+class TestCleanHoldoutAuthority:
+    """R5.9 closeout: the explicit fail-closed clean-holdout aggregate.
+
+    CLEAN 5/5 holds ONLY when every row passes its strict per-task gate AND
+    the fail-closed actual-prompt anti-leakage audit is empty."""
+
+    def test_clean_holdout_5_of_5_true_only_when_all_conditions_hold(self):
+        from experiments.debugger_interaction_v2_r5.r5_runner import (
+            _clean_holdout_5_of_5,
+        )
+
+        assert _clean_holdout_5_of_5(True, True, 0) is True
+        # Any single violation fails the authority.
+        assert _clean_holdout_5_of_5(False, True, 0) is False
+        assert _clean_holdout_5_of_5(True, False, 0) is False
+        assert _clean_holdout_5_of_5(True, True, 1) is False
+        assert _clean_holdout_5_of_5(True, True, None) is False
+        assert _clean_holdout_5_of_5(None, True, 0) is False
