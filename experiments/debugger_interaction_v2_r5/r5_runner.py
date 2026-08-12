@@ -1171,6 +1171,8 @@ def run_experiment(
             ),
         },
     )
+    if context.tool_errors:
+        emit("tool_errors_observed", {"tool_errors": context.tool_errors})
 
     events_jsonl = ""
     if controller_result is not None:
@@ -1351,6 +1353,7 @@ def run_experiment(
             "task_description": task_desc,
         },
         "cleanup": cleanup_record,
+        "tool_errors": context.tool_errors,
         "runtime": {
             "started_at": experiment_started_at,
             "controller_duration_ms": run_duration_ms,

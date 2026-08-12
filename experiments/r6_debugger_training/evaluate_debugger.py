@@ -16,6 +16,7 @@ import json
 import os
 import platform
 import re
+import shutil
 import subprocess
 import sys
 import threading
@@ -278,6 +279,25 @@ def _git_commit() -> str:
     if result.returncode != 0:
         raise RuntimeError("cannot resolve the evaluator Git commit")
     return result.stdout.strip()
+
+
+def _require_child_python_matches_runtime() -> str:
+    resolved = shutil.which("python")
+    if resolved is None:
+        raise RuntimeError("task subprocess command 'python' is not resolvable")
+    try:
+        matches = os.path.samefile(resolved, sys.executable)
+    except OSError:
+        matches = (
+            os.path.normcase(os.path.abspath(resolved))
+            == os.path.normcase(os.path.abspath(sys.executable))
+        )
+    if not matches:
+        raise RuntimeError(
+            "task subprocess 'python' does not match the evaluator runtime: "
+            f"{resolved!r} != {sys.executable!r}"
+        )
+    return str(Path(resolved).resolve())
 
 
 def _row_metrics(evidence: dict[str, Any]) -> dict[str, int]:
@@ -576,6 +596,10 @@ def main() -> int:
         contract["model"].pop("adapter_label", None)
     contract_sha = _contract_sha256(contract)
     pdb_timeout = float(contract["budgets"]["pdb_request_timeout_seconds"])
+    try:
+        child_python = _require_child_python_matches_runtime()
+    except RuntimeError as exc:
+        parser.error(str(exc))
 
     adapter_identity: Optional[dict[str, Any]] = None
     if args.adapter_path is not None:
@@ -608,6 +632,7 @@ def main() -> int:
             "git_commit": git_commit,
             "python_version": platform.python_version(),
             "python_executable": sys.executable,
+            "child_python_command": child_python,
             "tag": tag,
             "stage": args.stage,
             "label": label,
