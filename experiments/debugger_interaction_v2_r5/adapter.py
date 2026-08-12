@@ -418,7 +418,7 @@ class R5DebuggerBridgeAdapter:
             else:
                 patch_stage = bridge.R3PatchStage.NEEDS_FIRST_REPAIR
         for attempt in range(self._max_retries + 1):
-            user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=feedback, debugger=debugger_ctx, patch_stage=patch_stage, observation_filter_scripts=frozenset({self._script_path}), observation_original_line_count=self._original_line_count)
+            user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=feedback, debugger=debugger_ctx, patch_stage=patch_stage)
             sys_hash = _sha256(self._system_prompt)
             user_hash = _sha256(user_prompt)
             rendered_obs_sha = self._compute_rendered_obs_hash(last_obs)
@@ -664,7 +664,7 @@ class ScriptedBridgeAdapter:
         patch_stage: Optional[bridge.R3PatchStage] = None
         if state.value == "Patch":
             patch_stage = bridge.R3PatchStage.RETRY if self._patch_attempted else bridge.R3PatchStage.NEEDS_FIRST_REPAIR
-        user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=None, debugger=debugger_ctx, patch_stage=patch_stage, observation_filter_scripts=frozenset({self._script_path}) if self._script_path else None, observation_original_line_count=self._original_line_count or None)
+        user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=None, debugger=debugger_ctx, patch_stage=patch_stage)
         record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=1, controller_state=state.value, system_prompt_sha256=_sha256(self._system_prompt), user_prompt_sha256=_sha256(user_prompt), user_prompt_summary=_bound_text(user_prompt, 1000), user_prompt_full=user_prompt, raw_response_text=raw_text, raw_response_status="decoded", raw_response_bytes=len(raw_text.encode("utf-8")), parse_status="not_attempted", prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
         self._telemetry.append(record)
         try:
