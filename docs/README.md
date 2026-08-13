@@ -10,11 +10,13 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `final-report.md` | Technical report snapshot through S8 (2026-08-11); R1–R6 synchronization pending |
+| `project-closeout.md` | Current reviewer/handoff status document (2026-08-13, R1-R6 state) |
+| `final-report.md` | Current technical report through 2026-08-13 (R1-R6 phase; S8/S9 snapshot archived) |
 | `project-tracker.md` | Current execution tracker |
 | `instructor-todo.md` | Instructor's original 27-item task list (byte-identical) |
 
-Repository-level status: root `README.md`; roadmap `TODO.md`.
+Repository-level status: root `README.md`; roadmap `TODO.md`. The historical
+2026-08-11 S9 closeout is archived at `archive/status/project-closeout-2026-08-11.md`.
 
 ## architecture/
 
@@ -49,6 +51,10 @@ debugging review, debugging approach comparison.
 Historical snapshots, kept intact:
 
 - `reports/final-report-v1.md` — first technical report (2026-07-31).
+- `reports/final-report-2026-08-11.md` — exact 2026-08-11 S8/S9 report
+  snapshot (byte-identical to the pre-R1-R6 `docs/final-report.md` blob).
+- `status/project-closeout-2026-08-11.md` — the 2026-08-11 S9 project
+  closeout (moved from the repository root; content unchanged).
 - `status/instructor-status-map.md` — per-item status map snapshot.
 - `status/repo-reconciliation-2026-08-07.md` — repository status reconciliation.
 

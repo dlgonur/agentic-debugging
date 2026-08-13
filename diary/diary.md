@@ -3247,3 +3247,164 @@ closeout branch `closeout/s9-final-reproducibility-v1`, S8 baseline
   S9 BUILD sırasında hiçbir commit/push/merge yapılmadı; S9 commit SHA'sı
   Main FirstMate acceptance sonrası final Git operator tarafından
   raporlanacak (önden icat edilmedi).
+---
+
+## 12 Agustus 2026 - R5 clean-holdout closeout ve R6 debugger-oriented fine-tuning kampi
+
+Bu entry, Git commit timestamp'lari ve frozen run timestamp'larindan
+kaynaklanmistir; calisma saati, saat detayi veya SHA icat edilmemistir.
+
+### 1. R5.0-R5.8 - generalized debugger repair matrix iterasyonlari
+
+R5 generalize debugger repair matrix'i R4 sonrasi basladi (`f78d098`,
+2026-08-11 23:53) ve 12 Agustos gunu boyunca iteratif treatment duzeltmeleri
+ile surdu: `848eefb` (R5.2 terminal debugging path + fence unwrap + real
+verifier feedback loop, 00:44), `9bd8136` (terminal crash summary, 00:57),
+`1d7e319` (whole-file repair representation + deterministic diff
+serialization, 01:21), `e3202b4` (model identity escalation to
+Qwen2.5-Coder-14B, r5.4, 01:38), `905dec8` (fence-in-content unwrap, r5.5,
+03:03), `fc02c08` (verifier-RESOLVED closeout, r5.6, 03:36),
+`bac0355` (r5.7 gate + full prompt retention, 03:50), `89b412e`
+(r5.8 stack filter exploration, 04:03), `1138fce`/`40ecd7b` (r5.8
+exploration revert, 07:52) ve `f8c112f` (r5.7 contract restore, 07:53).
+
+r5.7 matrix 5/5 verifier-RESOLVED'e ulasti ancak FirstMate'in exact live
+prompt incelemesi PATCH prompt'larinda hidden-test leakage tespit etti; bu
+sonuc DISQUALIFIED olarak korundu (historical upper-bound evidence).
+
+### 2. R5.9 - clean-holdout treatment ve kabul edilen 5/5 sonuc
+
+`e568b16` (11:02) R5.9 clean-holdout treatment'i getirdi: tek ortak
+deterministik sanitizer (`agentic_debugger/demo/sanitize.py`), truthful
+production-exception path (G2=None), region-filtered observations ve
+fail-closed ACTUAL-PROMPT anti-leakage audit. `eeff17e` (11:10) audit'in
+model-authored diagnosis metnini ve legit pause/frame/affordance
+render'larini dogru sekilde cikarmasini duzeltti. `54828db` (12:19) R5.9
+reproducibility closeout: tracked old-r5.7 leakage fixture'lari ve explicit
+clean-holdout authority.
+
+R5.9 clean matrix (`R5.9-MATRIX-14B-CLEAN-FINAL-2026-08-12`) 08:26-08:35
+UTC arasinda calisti (evidence.json timestamp'lari): Qwen2.5-Coder-14B-
+Instruct BASE (`aedcc2d`, adapter_applied=false) bes curated bug'un
+tamamini cozdu: **5/5 RESOLVED**, 41 prompt tarandi, **0 leakage finding**,
+`clean_holdout_prompt_audit_passed=true`. R5 base-14B sonucudur;
+fine-tuning kaynakli iyilesme iddiasi degildir.
+
+### 3. R6 - matched cp118 matrix harness ve SFT pipeline
+
+`31f8393` (12:57) matched cp118 matrix harness'i (project-fine-tuned
+adapter'i frozen r5.9 clean-holdout treatment altinda test eden harness)
+getirdi. `10b8028` (14:34) R6 debugger-oriented SFT pipeline'i getirdi:
+QuixBugs task builder, scripted trajectory generation, training/eval
+scriptleri. `e605aa1` (14:36) `professor_debug_trace_v1` exporter'i
+getirdi (structured debugger traces).
+
+R6 SFT verisi pinned QuixBugs revision `4257f44b0ff1181dedaedee6a447e133219fcebf`
+uzerinden uretildi: 29/40 usable fixture, 21 TRAIN / 8 VALIDATION split,
+164 train / 61 validation SFT pair (`sft_manifest.json`; token dagilimi
+p50=832, p90=1607, p95=1761, max=2415 - `training_provenance.json`).
+Bes curated final holdout task'i split'ten yapisal olarak disarida tutuldu.
+
+### 4. R6 QLoRA training ve platform-safety duzenlemeleri
+
+SFT kosulari: `a162ccd` (18:40) STABLE + PHYSICAL-VRAM-BOUND training
+config; `732b6d5` (18:50) tum r5 transport'lari validated efficient-SDPA
+backend'e bagladı (fail-closed). Training run'lari (lokal makinede):
+`r6-sft-debugger-v1` 15:40:19Z'de basladi, `v2` 16:08:34Z'de basladi,
+`v3` 21:41:00Z'de basladi ve 22:09:24Z'de tamamlandi (3 epoch, 48 step;
+checkpoint-30 step-30'daki checkpoint). Disjoint SFT validation loss:
+cp10 ~ 0.342 (v2 run), cp20 0.3063855767250061, cp30 0.2981497347354889
+(trainer_state kayitlari).
+
+`488ca6f` (20:19) interrupted run sonrasi evaluator pipeline checkpoint'i
+kaydetti; `54bef8c` (21:12) persistent evaluation + safe GPU execution
+path; `52720f4` (21:21) evaluator subprocess'lerini exact Python runtime'a
+bagladi; `79c614d` (21:35) unsafe evaluator run'larinda fail-closed
+davranisi getirdi.
+
+Gun icinde ikinci R6 hard power-off yasandi (20:01 lokal civari; iki kesintili
+guc kaybinin ikincisi). Olay korelasyonu lokal/untracked bir notta kayitli
+(`experiments/r6_debugger_training/CRASH_CORRELATION_2026-08-12.md`):
+PDB worker/target startup sirasinda power loss; kesin donanim kok nedeni
+tespit edilmedi; VRAM tuketimi iddiasi yok.
+
+### Sonuc / Bir Sonraki Adim
+
+R5.9 clean base-14B holdout 5/5 kabul edildi; R6 debugger-oriented SFT
+training tamamlandi. Bir sonraki adim: checkpoint selection (yalnizca disjoint
+validation uzerinden) ve 8-task disjoint validation evaluasyonu.
+
+---
+
+## 13 Agustus 2026 - R6 8/8 disjoint validation, final holdout hardware stop, professor traces ve docs closeout
+
+Bu entry, Git commit timestamp'lari ve frozen run timestamp'larindan
+kaynaklanmistir.
+
+### 1. R6 disjoint validation - 8/8 RESOLVED ve checkpoint selection
+
+Checkpoint selection 2026-08-13 05:55:26 +03:00'te frozen edildi
+(`runs/frozen/ancillary/checkpoint_selection.json`): yalnizca disjoint
+QuixBugs validation kullanildi (`holdout_used_for_checkpoint_selection=false`);
+**checkpoint-30** secildi (adapter model SHA256 `7ef5d70a...`, config
+SHA256 `92ddf91e...`; final five-task holdout selection icin
+kullanilmadi).
+
+Disjoint validation stage'lari (frozen eval report'lar; git_commit
+`79c614d`, tag `v3c30-r68-*`):
+- Stage A (02:39:09-02:41:00Z): quixbugs-depth-first-search, 1/1 RESOLVED,
+  12 model call, 7,588 token, 84,342 ms;
+- Stage B (02:41:21-02:45:10Z): quicksort + flatten, 2/2 RESOLVED, 24 call,
+  14,830 token, 203,406 ms;
+- Stage C (02:45:34-02:55:14Z): find-in-sorted, rpn-eval,
+  shortest-path-length, reverse-linked-list, kth, 5/5 RESOLVED, 61 call,
+  42,365 token, 553,954 ms.
+
+Toplam: **8/8 RESOLVED, 97 model call, 64,783 token, 841,702 ms, zero row
+errors** - project-fine-tuned Qwen2.5-Coder-7B, gercek debugger/tool
+yurutmesi ve bagimsiz verifier ile. Matched-base kiyaslama yok; kausal
+fine-tuning iyilesmesi iddia edilmedi.
+
+### 2. Final five-task holdout - INCOMPLETE_HARDWARE_STOP
+
+Holdout 02:56:16Z'de basladi ve 02:59:58Z'de lokal hardware hard power-off
+ile kesildi (`holdout_report.json`, `run_status: in_progress`). Tamamlanan
+iki row: `curated-none-handling-001` RESOLVED (F2P 1/1, P2P 2/2, strict
+pass) ve `curated-off-by-one-002` BREAKING_RESOLVED (F2P 1/1, P2P 1/2,
+strict failure - bagimsiz verifier gorusilen repair'i reddetti).
+`curated-wrong-branch-003` model request sirasinda kesildi;
+`curated-mutation-alias-004` ve `curated-caller-callee-005` hic
+baslamadi. Durum: **INCOMPLETE_HARDWARE_STOP** - 2/5 veya 1/5 sayilmaz, 5-task
+benchmark tamamlanmamis sayilmaz. Anti-leakage: iki tamamlanmis task'in 18
+prompt'inda 0 finding; uc task tamamlanmadigi icin final-holdout leakage=0
+tesis edilmedi. Event 41 stili tekrarlanan power-off'lar; kesin donanim kok
+nedeni yok; VRAM tuketimi iddiasi yok; closeout icin ek sustained lokal GPU
+kampanyasi yurutulmedi.
+
+### 3. Evidence preservation ve professor trace deliverable
+
+`4610785` (09:22) R6 implementation/evidence'i korudu: frozen evidence
+capsule (`experiments/r6_debugger_training/runs/frozen/` +
+`capsule_manifest.json`), bounded execution tooling, remote-fallback
+paketleme hazirligi (`prepare_remote_package.py`; lokal/untracked
+`REMOTE_EXECUTION.md` kontrat notu). `c9afe37` (12:44) professor-facing
+debugger JSON traces'i fresh-clone reproducible frozen evidence ile birlikte
+getirdi: **10 trace** (8 successful R6 disjoint-validation + 2
+partial-final-holdout), `professor_debug_trace_v1` schema,
+`professor_safe_audit.json` (10 dokuman, 0 finding, passed=true), SHA
+manifest 10 trace'in tamamiyla eslesiyor, deterministik ve pristine
+fresh-checkout regeneration gosterildi. R5 referansi final professor trace
+setinden cikarildi.
+
+### 4. Dokumantasyon yapisi ve bu closeout
+
+`34cce32` (15:20) dokumantasyonu yeniden organize etti (docs/ yapisi,
+kebab-case isimler, archive taşımaları). Bu task (R1-R6-DOCS-CLOSEOUT-V1)
+icerisinde: 2026-08-11 final report'un birebir snapshot'i
+`docs/archive/reports/final-report-2026-08-11.md` olarak arsivlendi,
+2026-08-11 closeout `docs/archive/status/project-closeout-2026-08-11.md`
+olarak tasindi, guncel durum dokumani `docs/project-closeout.md` olusturuldu,
+`docs/final-report.md` 2026-08-13'e guncellendi; README, TODO,
+project-tracker ve docs/README senkronize edildi. Commit/push/merge
+yapilmadi; FirstMate review ACCEPTED olarak tamamlandi, kalan adimlar Git
+commit/push ve main entegrasyonu.

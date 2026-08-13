@@ -1,38 +1,20 @@
-# Agentic Debugging Internship — Final Technical Report
+# Agentic Debugging Internship — Final Technical Report v2
 
-**Date:** 2026-08-13 (v2 historical snapshot 2026-08-11; this revision
-reconciles the current R1-R6 state through 2026-08-13)
-**Branch:** `docs/r1-r6-current-closeout-v1`
-**Baseline HEAD:** `34cce329b5e6e7cf42531d8e609774c7608b67cb` (docs structure
-baseline; the R1-R6 milestones and their commits are listed in §23)
+**Date:** 2026-08-11
+**Branch:** `docs/s8-final-report-diary-v1`
+**Baseline HEAD:** `677992f` (S7 literature closeout)
 **Author's role:** internship project — single-controller-agent architecture,
 Python/PDB-first prototype
 
-This report is the current technical report. It preserves the accepted
-historical engineering and S8/S9 narrative (sections 1–21 are the
-2026-08-11 report content, qualified where they were true only at that
-snapshot) and adds the post-S9 R1-R6 phase (sections 22–23). The 2026-08-11
-S8/S9 snapshot is archived verbatim at
-`docs/archive/reports/final-report-2026-08-11.md`; the 2026-07-31 v1
-snapshot remains at `docs/archive/reports/final-report-v1.md`.
+This report synthesizes the project's accepted evidence through S7 into a
+final academic narrative. It supersedes `docs/archive/reports/final-report-v1.md` (the
+2026-07-31 QuixBugs gold-baseline snapshot, preserved as a historical
+document). Every material experimental claim traces to a frozen run artifact
+or to the S5 canonical comparison; external literature claims cite the S7
+closeout with evidence tiers marked.
 
-Every material experimental claim traces to a frozen run artifact, a tracked
-contract, or a committed canonical carrier; external literature claims cite
-the S7 closeout with evidence tiers marked. Provenance tiers are defined and
-applied in §21–22; local/untracked sources are never silently promoted to
-clean-checkout reproducibility.
-
-**Current status (2026-08-13):** the R1-R6 phase superseded the earlier
-bounded-negative overall conclusion. A real model now participates in a
-multi-turn runtime-debugging loop under the repaired interface (R1-R2),
-debugger-informed repair reaches the independent verifier (R3), a
-model-generated regression test is verified (R4), the BASE-14B clean holdout
-is 5/5 (R5.9), and the project-fine-tuned 7B debugger is 8/8 on the frozen
-task-disjoint QuixBugs validation (R6). The stronger R6 final five-task
-curated holdout is **INCOMPLETE_HARDWARE_STOP** (hardware power-off; not
-claimed complete, not counted as a score). The professor-facing structured
-JSON trace deliverable is complete. See §22 for the full R1-R6 record and
-§21 for the historical S8/S9 closeout preserved as of 2026-08-11.
+No new model run, retraining, debugger experiment, RAG change, or web
+research was performed for this report. S8 is synthesis of accepted evidence.
 
 ---
 
@@ -59,27 +41,20 @@ executable verification.
 The original research objective sought successful real-model participation in
 a dynamic debugger loop: a real model obtaining a successful non-error PDB
 observation, interpreting it, and producing a debugger-informed patch that
-reaches the independent verifier. **At the 2026-08-11 S8/S9 snapshot the
-project had not achieved that positive behavior** — neither the RAW nor the
-cp118 model condition produced a successful non-error debugger observation or
-a debugger-informed patch (Section 13). That bounded-negative conclusion is
-**historical**: the later R1-R6 phase (sections 22–23), executed under the
-repaired debugger interface, achieved exactly this chain (R1 breakpoint/stack
-→ R2 multi-turn loop → R3 debugger-informed repair reaching the independent
-verifier → R4 model-generated regression test, and beyond to the R5/R6
-holdouts).
+reaches the independent verifier. **The project did not achieve that positive
+behavior** — neither the RAW nor the cp118 model condition produced a
+successful non-error debugger observation or a debugger-informed patch
+(Section 13).
 
-The accepted S8/S9 completion criterion permitted scientifically honest
-closeout with the bounded, well-instrumented negative result, provided
-professor deliverables are reproducible and all claims are evidence-backed.
-The project therefore closed the S8/S9 stage not on the positive trajectory —
-which had not occurred by then — but on an honest bounded-negative debugger
-result, a verifier-backed evaluation platform, a definitive RAW-vs-cp118
-transfer comparison, and a literature-aligned architecture defense. The
-central contribution was then infrastructure, evaluation methodology, and
-the bounded-negative debugger result (Section 20); the current contribution
-extends to positive real-model dynamic debugging and project-fine-tuned
-validation (Section 22).
+The accepted final completion criterion permits scientifically honest closeout
+with the bounded, well-instrumented negative result, provided professor
+deliverables are reproducible and all claims are evidence-backed. The project
+therefore closes out not on the positive trajectory — which did not occur —
+but on an honest bounded-negative debugger result, a verifier-backed
+evaluation platform, a definitive RAW-vs-cp118 transfer comparison, and a
+literature-aligned architecture defense. The central contribution includes
+infrastructure, evaluation methodology, and the bounded-negative debugger
+result (Section 20).
 
 ---
 
@@ -104,15 +79,8 @@ validation (Section 22).
    single-agent + deterministic-controller design?**
 
 Questions 1–4 are answered by the project's accepted experimental evidence
-(Sections 6–13, 22). Question 5 is answered by the S7 literature closeout
+(Sections 6–13). Question 5 is answered by the S7 literature closeout
 (Sections 3, 17, 19).
-
-At the S8/S9 snapshot, the accepted answer to Q1 was a bounded negative for
-the then-tested interface (Section 13). The R1-R6 phase (Section 22) answers
-Q1 positively under the repaired debugger interface, and answers Q2's
-debugger side with the debugger-oriented R6 fine-tuning campaign — while
-keeping the historical cp118 localized-repair negative transfer (Section 8)
-and the "no matched-base causal fine-tuning claim" boundary explicit.
 
 ---
 
@@ -209,30 +177,14 @@ The frozen model revision is
 
 ## 5. Dataset selection — training vs evaluation
 
-A central distinction must be maintained across the project's history:
+A central distinction must be maintained: **SWE-rebench V2 is the
+training/post-training dataset; QuixBugs and the curated fixtures are the
+evaluation/experiment data.** The model was not trained on the QuixBugs
+evaluation cohort.
 
-- **SWE-rebench V2** is the training/post-training dataset for the historical
-  cp118 localized-repair SFT campaign.
-- **QuixBugs (pinned `4257f44b0ff1181dedaedee6a447e133219fcebf`)** is the
-  evaluation/experiment cohort for the RAW/cp118/R5/R6 evaluation work, and —
-  from 2026-08-12 — the **training source for the R6 debugger-oriented SFT
-  campaign** (a frozen QuixBugs-derived 21-train / 8-validation split). The
-  earlier global statement "QuixBugs was never used for training" was true
-  at the 2026-08-11 S8/S9 snapshot (cp118 was SWE-rebench V2 only) and is no
-  longer globally true after R6; the corrected distinction is:
-  - historical cp118 localized-repair SFT: **SWE-rebench V2**;
-  - R6 debugger-oriented trajectory SFT: **frozen QuixBugs-derived 21-train /
-    8-validation split**;
-  - the five curated final holdout tasks: **protected from R6
-    training/validation** (structurally excluded from the split).
-- The five in-repo curated pytest fixtures remain the architecture smoke
-  gate and the R5/R6 final-holdout task set; they were never used for
-  training.
+### 5.1 Training data — SWE-rebench V2
 
-### 5.1 Training data — SWE-rebench V2 (historical cp118 campaign)
-
-The primary SFT dataset for the historical cp118 campaign is **SWE-rebench
-V2**. The accepted filtered corpus
+The primary SFT dataset is **SWE-rebench V2**. The accepted filtered corpus
 (master plan §2.3; `experiments/swe_rebench_v2_corpus/b14_package_v2/
 B14_PACKAGE_MANIFEST.json`):
 
@@ -251,38 +203,19 @@ B14_PACKAGE_MANIFEST.json`):
 The 40-task QuixBugs Python cohort (`experiments/raw-pilot-v1.1/state/
 quix40-v1/pilot_manifest_frozen_v1.jsonl`) is the controlled
 screening/evaluation cohort used for the RAW baseline, the cp118 definitive
-comparison, and the S4 RAG treatment. It is not part of the cp118 training
-split.
+comparison, and the S4 RAG treatment. It is not part of the training split.
 
 The five in-repo curated pytest fixtures (`agentic_debugger/datasets/curated/`)
-are architecture smoke gates used by the demo, golden trajectories, the
-real-model debugger experiments (D1 used `curated-off-by-one-002`), and the
-R5/R6 holdouts. They are synthetic and small; they are not external-benchmark
-evidence and were never used for training.
+are architecture smoke gates used by the demo, golden trajectories, and the
+real-model debugger experiments (D1 used `curated-off-by-one-002`). They are
+synthetic and small; they are not external-benchmark evidence and were never
+used for training.
 
 BugsInPy was selected as the primary external dataset by research merit but
 remains **license-blocked** for execution (Section 18). SWE-bench Lite/
 Verified was deferred for harness cost (Docker, ~120 GB storage, 16 GB RAM,
 8 CPUs per the official guide). Defects4J is out of scope (Java/JVM, outside
 the Python/PDB track).
-
-### 5.3 R6 training data — debugger-oriented trajectory SFT (2026-08-12)
-
-The R6 campaign built a debugger-trajectory SFT dataset from the pinned
-QuixBugs revision `4257f44b0ff1181dedaedee6a447e133219fcebf`
-(`experiments/r6_debugger_training/`; split manifest, build summary, SFT
-manifest and JSONL files tracked). Accepted fixture construction: **29 / 40
-usable debugger-training fixtures** (11 tasks failed construction and are
-listed in `build_summary.json`). Frozen split: **21 TRAIN / 8 VALIDATION**
-(`split_manifest.json`). SFT pairs: **164 train / 61 validation**
-(`sft/sft_manifest.json`). Token statistics (measured SFT distribution,
-`training_provenance.json`): p50 ≈ 832, p75 ≈ 1073, p90 ≈ 1607, p95 ≈ 1761,
-max 2415. The five curated final holdout tasks
-(`curated-none-handling-001`, `curated-off-by-one-002`,
-`curated-wrong-branch-003`, `curated-mutation-alias-004`,
-`curated-caller-callee-005`) are structurally excluded from the split
-(`holdout_excluded`) and were protected from R6 training and checkpoint
-selection.
 
 Provenance discipline (pinned revision, recorded license, environment
 fingerprint, fail-closed preflight) was applied to every external artifact.
@@ -593,14 +526,11 @@ not prove the **model** can use the debugger — that is a separate question
 
 ---
 
-## 13. Real-model debugger experiments (historical D1/S2, superseded)
+## 13. Real-model debugger experiments
 
 Two real-model debugger experiments were run (S5 axis 4): D1 (RAW) and S2
 (cp118), both on the same frozen D1 runtime-entry treatment using
-`curated-off-by-one-002`. **These results are the historical 2026-08-10/11
-state under the then-current interface. The repaired-interface R1-R6
-experiments (Section 22) superseded this negative outcome; this section is
-preserved because the earlier failures must not be erased.**
+`curated-off-by-one-002`.
 
 ### 13.1 D1 — RAW debugger interaction
 
@@ -688,19 +618,9 @@ The accepted interpretation (S5, preserved verbatim):
 
 Both conditions each produced exactly one model-authored PDB command. Neither
 obtained a successful non-error observation nor a second accepted command.
-This was, at the time, a **bounded negative result**, not "no evidence." The
-infrastructure can return debugger observations to the model; at the S8/S9
-snapshot, real-model interpretation of a successful debugger observation had
-not been demonstrated.
-
-**Superseded:** the R1-R6 phase (Section 22) demonstrated exactly that chain
-under the repaired interface — the interface confounds identified from
-D1/S2 (command affordances, staged PAUSED progression, diagnosis retention,
-bounded patch checkpoint, verifier authority) were removed, after which a
-real model obtained successful non-error PDB observations (R1), completed a
-multi-turn loop with diagnosis (R2), and reached verifier RESOLVED via a
-debugger-informed semantic patch (R3). D1/S2 remain frozen historical
-evidence and are not rewritten.
+This is a **bounded negative result**, not "no evidence." The infrastructure
+can return debugger observations to the model, but real-model interpretation
+of a successful debugger observation has not been demonstrated.
 
 ---
 
@@ -715,29 +635,22 @@ assesses each against accepted evidence with eight columns kept separate.
 
 | TODO | Plumbing/backend | Deterministic evidence | Positive real-model success | Bounded negative result |
 |---|---|---|---|---|
-| #23 — Fine-tuned model generates debugger commands and interprets output | YES | YES | **YES (R1-R6, §22)** | YES (historical D1/S2) |
-| #24 — Breakpoint / variables / stack / step interaction | YES | YES | **YES (R2 multi-turn loop, §22)** | YES (historical D1/S2) |
-| #25 — Debugger → patch → tests/verifier | YES | YES | **YES (R3/R5/R6 verifier RESOLVED, §22)** | YES (historical D1/S2) |
+| #23 — Fine-tuned model generates debugger commands and interprets output | YES | YES | **NO** | YES |
+| #24 — Breakpoint / variables / stack / step interaction | YES | YES | **NO** | YES |
+| #25 — Debugger → patch → tests/verifier | YES | YES | **NO** | YES |
 
 **Engineering capability:** all three TODOs have backend + deterministic
 plumbing. The PDB backend supports the full grammar; deterministic/scripted
 trajectories exercise it; the golden reachability capture records 2 successful
 PDB observations.
 
-**Positive real-model end-to-end: achieved in the R1-R6 phase (§22).** Under
-the repaired interface, a real model authored a valid breakpoint that paused
-a real PDB session (R1), completed a multi-turn breakpoint→stack→locals→
-step/next→post-step stack→diagnosis chain (R2), produced a debugger-informed
-semantic patch that reached the independent verifier (R3, with the
-serialization-normalization qualifier), authored a regression test verified
-against buggy and fixed workspaces (R4), resolved the clean base-14B holdout
-5/5 (R5), and the project-fine-tuned 7B model resolved 8/8 on the disjoint
-validation (R6). TODO #23–25 are therefore positive at the current date; the
-S8/S9 snapshot verdict (NO for positive real-model success) is historical.
+**Positive real-model end-to-end: NOT achieved for any of #23/#24/#25.** No
+real model interpreted a successful non-error PDB observation. No
+real-model successful breakpoint→state→step/locals/stack sequence occurred.
+No debugger-informed real-model patch reached the verifier.
 
-**Bounded negative (historical):** D1 (RAW) and S2 (cp118) each produced one
-model-authored PDB command and zero successful observations under the old
-interface. Preserved as frozen evidence; superseded by R1-R6.
+**Bounded negative: present for all three.** Both D1 (RAW) and S2 (cp118)
+each produced one model-authored PDB command and zero successful observations.
 
 **Boundary clauses (apply to every row):**
 - Deterministic PDB backend tests are not evidence the model used the
@@ -747,8 +660,7 @@ interface. Preserved as frozen evidence; superseded by R1-R6.
 - The static QuixBugs gcd verifier RESOLVED does not demonstrate debugger use.
 - "Engineering capability exists" must not be read as positive model-behavior
   evidence.
-- No negative finding is converted into success; historical negatives stay
-  negative.
+- No negative finding is converted into success.
 
 ### Static real-provider success (not debugger success)
 
@@ -873,12 +785,11 @@ provenance is never promoted.
 
 ## 17. Discussion
 
-### 17.1 Interpreting the negative debugger result (historical)
+### 17.1 Interpreting the negative debugger result
 
-At the S8/S9 snapshot, the project's two tested model policies (RAW and
-cp118) had not demonstrated the learned interaction competence required to
-reach usable runtime evidence **under the then-current interface**. This
-outcome was consistent with the current literature (S7 §8):
+The project's two tested model policies (RAW and cp118) did not demonstrate
+the learned interaction competence required to reach usable runtime evidence.
+This outcome is consistent with the current literature (S7 §8):
 
 - Runtime information is valuable, but stateful debugger use is a distinct
   agent capability shaped by model strength, interface abstraction, and
@@ -889,16 +800,9 @@ outcome was consistent with the current literature (S7 §8):
 - Ordinary localized-repair SFT should not be assumed to produce debugger
   competence automatically (SWE-Gym, Open-SWE-Traces).
 
-The RAW/cp118 result was **negative evidence about emergent debugger
-interaction under the tested model/checkpoint/scaffold combination**, not
-negative evidence about the value of debugging information itself. This
-interpretation is now historically bounded: the repaired-interface R1-R6
-phase (Section 22) demonstrated that the interaction failure was
-interface/scaffold-dependent and that interface repairs plus
-debugger-oriented trajectory supervision (R6) close the loop that D1/S2 could
-not. The literature predictions that interface abstraction and
-trajectory-specific training matter (rather than raw debugger exposure) are
-corroborated by that outcome.
+The RAW/cp118 result should be treated as **negative evidence about emergent
+debugger interaction under the tested model/checkpoint/scaffold combination**,
+not negative evidence about the value of debugging information itself.
 
 ### 17.2 Architecture defense
 
@@ -916,8 +820,7 @@ performance. But that evidence does not establish multi-agent orchestration as
 necessary for debugger-informed repair, and comparisons are frequently
 confounded by additional inference and scaffolding.
 
-The accepted closeout statement (S7 bottom line, valid at the S8/S9
-snapshot):
+The accepted closeout statement (S7 bottom line):
 
 > The project successfully built the deterministic machinery required for real
 > stateful debugging, but its two tested model policies did not demonstrate
@@ -932,26 +835,13 @@ snapshot):
 > evidence-backed next steps, while multi-agent orchestration is a secondary
 > controlled ablation rather than a missing prerequisite.
 
-The R1-R6 phase (Section 22) implemented exactly those evidence-backed next
-steps — repaired state-aware interface abstractions and debugger-oriented
-trajectory post-training — and the resulting positive R1-R6 results
-supersede the "did not demonstrate" clause of the S8/S9 statement without
-changing the architecture defense.
-
 ---
 
 ## 18. Limitations
 
-1. **No real model successfully used the debugger (historical, S8/S9).**
-   At the 2026-08-11 snapshot, neither RAW nor cp118 obtained a successful
-   non-error PDB observation or completed an iterative debugger loop under
-   the then-current interface, so debugger effectiveness was not measured.
-   This is superseded by the R1-R6 phase (§22): real models now obtain
-   successful debugger observations, complete multi-turn loops, and reach
-   verifier RESOLVED under the repaired interface. The current limitations
-   that remain are the incomplete R6 final holdout
-   (INCOMPLETE_HARDWARE_STOP, §22.6) and the absence of a matched-base R6
-   ablation for causal fine-tuning claims.
+1. **No real model successfully used the debugger.** Neither RAW nor cp118
+   obtained a successful non-error PDB observation or completed an iterative
+   debugger loop. Debugger effectiveness was not measured.
 
 2. **Bounded negative, not broad failure.** The debugger result is from one
    curated task under one frozen treatment per condition. It does not support
@@ -1001,33 +891,26 @@ changing the architecture defense.
 
 ## 19. Future work
 
-Ranked by evidence backing (S7 §9, S5 remaining-gaps §2); statuses updated
-through 2026-08-13:
+Ranked by evidence backing (S7 §9, S5 remaining-gaps §2):
 
-1. **Debugger-specific trajectory post-training — DONE for the 7B campaign
-   (R6, §22.4); the previously open call for this direction was implemented
-   and produced the 8/8 disjoint validation.** SWE-Gym and Open-SWE-Traces
-   show that actual agent trajectories can train tool-using behavior; NExT
-   required explicit execution-state training. R6 built exactly that
+1. **Debugger-specific trajectory post-training — highest priority.** SWE-Gym
+   and Open-SWE-Traces show that actual agent trajectories can train
+   tool-using behavior; NExT required explicit execution-state training. A
    debugger-specific trajectory corpus (breakpoint → observation →
-   step/locals → updated diagnosis → patch) from frozen QuixBugs tasks and
-   fine-tuned the project 7B model. Remaining: a matched-base R6 ablation is
-   still absent, so causal fine-tuning improvement is not claimed.
+   step/locals → updated diagnosis → patch) is the most direct path to the
+   missing competence.
 
 2. **Stronger base-model rerun under the identical controller — high
    priority.** The current base (Qwen2.5-Coder-7B) is a 7B-class model. A
    stronger base model under the same deterministic controller and typed-tool
    interface would test whether the interaction failure is model-capacity-
-   dependent. (R5 already provides the base-14B evidence on the curated
-   holdout treatment; a 14B + R6-style debugger SFT combination is a natural
-   next step.)
+   dependent.
 
 3. **Higher-level/state-aware debugger interface ablation — high priority.**
    ADI/FramePilot's agent-oriented dynamic interface outperformed
-   conventional PDB. The R1-R6 repaired interface (staged PAUSED
-   progression, production-region filtering, sanitized diagnostics) is the
-   project's implementation of this direction; a controlled ablation against
-   the raw-interface D1/S2 treatment is the appropriate measurement.
+   conventional PDB. A state-aware interface abstraction (modeled legal
+   transitions, middleware-enforced validity) on top of the existing PDB
+   backend is directly evidence-backed.
 
 4. **Execution-feedback RL / process training — medium-high priority.**
    SWE-TRACE and SWE-Master support process-reward and execution-feedback
@@ -1065,81 +948,54 @@ containment upgrade required before any BugsInPy execution.
 This project delivers a verifier-backed, fail-closed, single-controller
 agentic debugging platform with a real PDB integration, a replay-verified
 event/trajectory system, an explicitly-authorized real-model live evaluation
-harness, a licensed infra-validated external-dataset path (QuixBugs), a
-QLoRA SFT pipeline (historical SWE-rebench V2 localized-repair campaign, and
-the R6 debugger-oriented QuixBugs-derived campaign), a definitive RAW-vs-cp118
-executable-repair comparison, a controlled DPO investigation, a partial
-cp118+RAG treatment, a canonical eight-axis controlled comparison (S5), a
-professor-facing evidence presentation (S6), a focused literature closeout
-(S7), the repaired-interface R1-R4 real-model debugger milestones, the clean
-R5 base-14B holdout, the R6 debugger-oriented fine-tuning campaign with its
-8/8 disjoint validation, and the complete professor-facing structured JSON
-trace deliverable.
+harness, a licensed infra-validated external-dataset path (QuixBugs, eight
+tasks, 100% gold-patch pass rate), a QLoRA SFT pipeline trained on SWE-rebench
+V2, a definitive RAW-vs-cp118 executable-repair comparison, a controlled DPO
+investigation, a partial cp118+RAG treatment, a canonical eight-axis
+controlled comparison (S5), a professor-facing evidence presentation (S6),
+and a focused literature closeout (S7).
 
 The primary scientific findings are:
 
 1. **Localized-repair QLoRA SFT did not transfer to executable repair on the
-   held-out QuixBugs cohort (historical).** cp118 produced 0/40 applicable
-   patches and 0/40 resolved tasks, vs RAW's 20/40 apply and 5/40 resolved.
-   This is a formulation-specific negative transfer (output-policy
-   degeneration, over-generation, scope explosion), not a general claim that
-   fine-tuning is harmful. It does not apply to the R6 debugger-oriented
-   campaign, which used a different dataset, formulation, and interface.
+   held-out QuixBugs cohort.** cp118 produced 0/40 applicable patches and
+   0/40 resolved tasks, vs RAW's 20/40 apply and 5/40 resolved. This is a
+   formulation-specific negative transfer (output-policy degeneration,
+   over-generation, scope explosion), not a general claim that fine-tuning is
+   harmful.
 
-2. **Neither RAW nor cp118 demonstrated a successful debugger loop under the
-   old interface (historical).** Both authored one PDB command that ended in
-   error/rejection with zero successful observations. This bounded negative
-   was superseded by the repaired-interface R1-R6 phase: a real model paused a
-   real PDB session (R1), completed a multi-turn breakpoint→stack→locals→
-   step→diagnosis loop (R2), reached the independent verifier RESOLVED with a
-   debugger-informed semantic patch (R3, count-only serialization
-   normalization qualifier), and authored a regression test verified on buggy
-   and fixed workspaces (R4).
+2. **Neither RAW nor cp118 demonstrated a successful debugger loop.** Both
+   authored one PDB command that ended in error/rejection with zero successful
+   observations. This is a bounded negative result, consistent with the
+   literature finding that stateful debugger use is a distinct agent
+   capability not produced automatically by localized-repair SFT.
 
-3. **R5 — clean generalized base-14B holdout.** Qwen2.5-Coder-14B-Instruct
-   BASE resolved 5/5 curated bugs under the final sanitized r5.9 treatment
-   with 0 leakage findings across 41 audited prompts. The r5.7 5/5 was
-   disqualified for hidden-test leakage in PATCH prompts and is preserved as
-   historical upper-bound evidence. R5 does not prove fine-tuning caused an
-   improvement.
-
-4. **R6 — debugger-oriented project fine-tuning.** The project-fine-tuned
-   Qwen2.5-Coder-7B debugger achieved **8/8 RESOLVED on a frozen,
-   task-disjoint QuixBugs validation set** using real debugger/tool execution
-   and independent verification (97 model calls, 64,783 tokens, 841,702 ms,
-   zero row errors). The stronger five-task curated final holdout is
-   **INCOMPLETE_HARDWARE_STOP** — two completed rows (RESOLVED and
-   BREAKING_RESOLVED) plus three interrupted/unstarted tasks; it is not a
-   completed 5-task result. No matched-base R6 ablation exists, so causal
-   fine-tuning improvement is not claimed.
-
-5. **DPO is not justified** given the available data (DPO 21/30 vs baseline
+3. **DPO is not justified** given the available data (DPO 21/30 vs baseline
    27/30 and matched SFT 27/30).
 
-6. **RAG treatment remains NOT_EVALUATED** (10/40 partial, compute-constrained,
+4. **RAG treatment remains NOT_EVALUATED** (10/40 partial, compute-constrained,
    no success/failure claim).
 
-7. **The single-agent + deterministic-controller + typed-tool architecture is
+5. **The single-agent + deterministic-controller + typed-tool architecture is
    a defensible controlled experimental baseline**, aligned with — not
-   contradicted by — the strongest recent literature evidence; the R1-R6
-   positive results were achieved without changing that architecture.
+   contradicted by — the strongest recent literature evidence.
 
-The project's central contribution evolved from infrastructure, evaluation
-methodology, and an honest bounded-negative experimental result into
-**positive real-model dynamic debugging plus project-fine-tuned validation,
-with the professor-facing trace deliverable complete**. The final five-task
-tuned-model holdout remains incomplete due to local hardware power-offs; the
-old negative experiments are preserved, not rewritten; and main integration
-of the documentation candidate is the remaining operational step.
+The project's central contribution is **infrastructure, evaluation
+methodology, and an honest bounded-negative experimental result**, not a
+claim about debugging performance or PDB effectiveness. The negative debugger
+result is itself scientifically informative: it demonstrates that the gap
+between having a debugger backend and having a model that can use it is real,
+and it points to the specific future directions (trajectory training,
+state-aware interfaces, stronger base models) that the literature identifies
+as most promising.
 
 ---
 
-## 21. Provenance appendix (historical S8/S9 evidence)
+## 21. Provenance appendix
 
-This appendix maps each load-bearing S8/S9 conclusion to its scientific source
-and provenance tier. The original audit was verified by direct Git audit
-(`git ls-files --error-unmatch`) at HEAD `677992f`; the current report's
-R1-R6 carriers are listed in §22.9/§23. Provenance tiers:
+This appendix maps each load-bearing conclusion to its scientific source and
+provenance tier, verified by direct Git audit (`git ls-files --error-unmatch`)
+at HEAD `677992f`. Provenance tiers:
 
 - `frozen_in_repo` — tracked in Git AND present in HEAD tree AND clean-checkout
   reproducible as a scientific source.
@@ -1279,312 +1135,7 @@ where their content has been verified to contain the exact claim.
 
 ---
 
-*This report is synthesis of accepted project evidence through 2026-08-13.
-The 2026-08-11 S8/S9 snapshot is archived verbatim at
-`docs/archive/reports/final-report-2026-08-11.md` (blob
-`0dcd54773505f9a4797b6bf49ac3780552b85740`); the 2026-07-31 snapshot is at
-`docs/archive/reports/final-report-v1.md`. The 2026-08-11 closeout is
-archived at `docs/archive/status/project-closeout-2026-08-11.md`; the current
-handoff status is `docs/project-closeout.md`.*
-
----
-
-## 22. Post-S9 phase — R1-R6 real-model debugger milestones, R5 holdout, R6 fine-tuning (2026-08-11 → 2026-08-13)
-
-After the S9 bounded-negative closeout, the project reopened on the two
-evidence-backed directions the closeout itself identified: repaired
-state-aware debugger interface abstractions and debugger-oriented trajectory
-post-training. This section records the R1-R6 phase. Every claim is stated to
-the level supported by frozen evidence; the independent verifier is the
-correctness authority throughout.
-
-### 22.1 R1 — real debugger entry (commit `c842d69`, 2026-08-11)
-
-Accepted positive capability (frozen evidence
-`experiments/debugger_interaction_v2_r1/runs/run-2-live-2026-08-11/evidence.json`):
-
-- the real model authored a valid breakpoint command;
-- the real PDB session actually paused (`gate_r1.passed=true`,
-  `first_command=start_pdb_session`, observation `observation-000000003`,
-  line 2, function `recent_window`);
-- subsequent real-model interaction obtained a real stack observation.
-
-This is real-model evidence — it is not collapsed into deterministic/mock
-backend evidence. The r1.1 evidence records `gate_r1` passed with the exact
-observation bound into the next request.
-
-### 22.2 R2 — multi-turn real-model dynamic debugging (commit `97cc7fe`, 2026-08-11)
-
-Accepted real-model sequence (frozen evidence
-`experiments/debugger_interaction_v2_r2/runs/run-r2-live-2026-08-11/evidence.json`,
-`gate_r2.passed=true` with observation ids):
-
-1. `break` — accepted, real PDB PAUSED (observation-000000003);
-2. `stack` — G1 (observation-000000004);
-3. `locals` — frame inspection (observation-000000005);
-4. `step`/`next` — progression (observation-000000006);
-5. `stack` — post-step G2 > G1 (observation-000000007);
-6. `diagnosis` — model-authored diagnosis retained verbatim.
-
-This is positive evidence that a real model could participate in a multi-turn
-runtime-debugging loop under the repaired interface/controller (staged PAUSED
-progression, production-region filtering). The run itself ended on
-`model_call_limit` with no patch — R2 demonstrates the dynamic loop, not the
-repair.
-
-### 22.3 R3 — debugger evidence → repair → verifier (commit `f2291df`, 2026-08-11)
-
-Accepted chain (frozen evidence
-`experiments/debugger_interaction_v2_r3/runs/run-r3-2-live-2026-08-11/evidence-corrected.json`):
-
-- real debugger evidence (break → stack G1 → locals → next → stack G2);
-- model diagnosis (retained verbatim, `diagnosis_provenance` bound to
-  observation-000000007);
-- model semantic patch (`model_patch_raw`, B, SHA256 `831b1c2b…`);
-- PatchManager application;
-- independent EvaluationVerifier `COMPLETED / RESOLVED` (F2P 1/1, P2P 2/2,
-  full suite + syntax, canonical unchanged, cleaned) on candidate C
-  (`8c051faa…`).
-
-**MANDATORY QUALIFIER:** the raw semantic patch contained a unified-diff
-hunk-count metadata error (`@@ -7,7 +7,7 @@` declared counts that did not
-match the 6-line hunk body). A deterministic COUNT-ONLY serialization
-normalization (metadata-only; paths, starts, body lines, ordering, and
-`\ No newline` markers preserved; semantic body fingerprint unchanged) was
-required before PatchManager/verifier accepted the candidate. The
-normalization did not change repair semantics, but the raw serialized patch
-did not apply perfectly as authored — this distinction remains explicit
-(`model_patch_raw` vs `model_patch_serialization_normalized`, both SHA256
-recorded).
-
-### 22.4 R4 — model-generated regression test (commit `372d51f1a35e071c677391c9970f7b552bb276f2`, 2026-08-11)
-
-Accepted result (frozen evidence
-`experiments/model_generated_test_probe_r4/runs/run-r4-1-live-2026-08-11/evidence.json`,
-`r4_pass=true`):
-
-- the model authored a regression test T on its first and only attempt;
-- the exact same frozen T (SHA256 `5503b93e…`, T_raw/T_parsed/T_written
-  identities recorded) **FAILS** on the buggy workspace;
-- the exact same T **PASSES** on the accepted R3 fixed workspace;
-- the independent verifier remains `COMPLETED / RESOLVED` (F2P 1/1, P2P 2/2,
-  workspace CLEANED, canonical fixture unchanged).
-
-This is positive model-generated-test evidence. It measures test generation
-only; the independent verifier over the frozen F2P/P2P contract remains the
-correctness authority.
-
-### 22.5 R5 — clean generalized holdout, BASE 14B (r5.0→r5.9, 2026-08-11/12)
-
-**This distinction is critical: the successful R5 model is
-Qwen2.5-Coder-14B-Instruct BASE (adapter_applied=false, base revision
-`aedcc2d42b622764e023cf882b6652e646b95671`), not the project fine-tuned 7B.**
-
-- **R5.2/R5.3 (RAW 7B):** the frozen treatment (terminal progression, fence
-  unwrap, whole-file repair representation, real verifier-feedback loop,
-  context fuzz) was proven mechanically; the RAW 7B model repeatedly authored
-  semantically wrong repairs (0/5). Preserved as historical baseline.
-- **R5.4-R5.6 (14B):** model-identity escalation to 14B; every authored
-  repair was semantically correct; r5.5 fixed fence-in-content unwrap; r5.6
-  added verifier-RESOLVED closeout (r5.5 was 4/5 with a post-RESOLVED
-  greedy-decoding regression on 005).
-- **R5.7 (14B): reached 5/5 but DISQUALIFIED** — hidden-test content leaked
-  into PATCH prompts (raw pytest failure output and failing-verifier-record
-  tails were forwarded to the model). Preserved as historical upper-bound
-  evidence; tracked regression fixture
-  `tests/fixtures/old_r57_leakage/` proves the old prompts fail the accepted
-  anti-leakage auditor (102 findings across the five task classes).
-- **R5.9 (14B BASE, clean holdout):** ONE COMMON DETERMINISTIC SANITIZER
-  (`agentic_debugger/demo/sanitize.py`) + truthful production-exception path
-  (G2=None when the production frame unwound) + region-filtered observations
-  + fail-closed ACTUAL-PROMPT anti-leakage audit.
-
-**Accepted clean result:** 5/5 RESOLVED on the five curated bugs
-(`curated-none-handling-001`, `curated-off-by-one-002`,
-`curated-wrong-branch-003`, `curated-mutation-alias-004`,
-`curated-caller-callee-005`) under the r5.9 treatment
-(`experiments/debugger_interaction_v2_r5/runs/R5.9-MATRIX-14B-CLEAN-FINAL-2026-08-12/matrix.json`:
-per-row verifier RESOLVED, `end_to_end_resolved=5/5`,
-`clean_holdout_prompt_audit_passed=true`, `leakage_findings=0`,
-**41 audited prompts, 0 findings**).
-
-R5 proves a clean base-14B debugger/repair holdout result under the final
-sanitized treatment. It does **not** prove that fine-tuning caused an
-improvement.
-
-### 22.6 R6 — debugger-oriented project fine-tuning (2026-08-12/13)
-
-**Historical cp118 (documented separately, unchanged):** base
-Qwen2.5-Coder-7B-Instruct; training on the SWE-rebench V2 localized-repair
-formulation; result on Quix40: 0/40 apply, 0/40 RESOLVED; it did not teach
-debugger trajectories; a formulation-specific negative transfer result. It is
-not erased or reinterpreted.
-
-**R6 is a DIFFERENT debugger-oriented fine-tuning campaign:**
-
-- Training source: QuixBugs pinned revision
-  `4257f44b0ff1181dedaedee6a447e133219fcebf`.
-- Accepted fixture construction: 29/40 usable debugger-training fixtures
-  (`build_summary.json`); frozen split 21 TRAIN / 8 VALIDATION
-  (`split_manifest.json`); SFT pairs 164 train / 61 validation
-  (`sft/sft_manifest.json`).
-- Token statistics: p50 ≈ 832, p90 ≈ 1607, p95 ≈ 1761, max 2415
-  (`training_provenance.json`, measured SFT distribution).
-- Training: QLoRA, `Qwen/Qwen2.5-Coder-7B-Instruct` base revision
-  `c03e6d358207e414f1eca0bb1891e29f1db0e242`, 3 epochs (48 steps in the
-  accepted v3 run; checkpoint-30 is the step-30 checkpoint), completion-only
-  loss, physical-VRAM-bound STABLE config.
-- Validation loss (disjoint SFT validation): cp10 ≈ 0.342
-  (0.34222882986068726, v2 run), cp20 ≈ 0.30639
-  (0.3063855767250061), cp30 = 0.2981497 (0.2981497347354889) — from the
-  trainer_state records of the tracked run directories.
-- Selected: **checkpoint-30** — adapter model SHA256
-  `7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd`,
-  adapter config SHA256
-  `92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e`
-  (verified on disk and in `runs/frozen/ancillary/checkpoint_selection.json`
-  and `docs/professor_traces/source_evidence_manifest.json`).
-- **Checkpoint selection did NOT use the final five-task holdout**
-  (`holdout_used_for_checkpoint_selection=false`, frozen selection record).
-
-**R6 disjoint validation — primary tuned-model positive:** frozen
-task-disjoint validation (treatment contract SHA256
-`5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78`),
-real debugger/tool execution, independent verification, stages:
-
-| Stage | Tasks | Result |
-|---|---|---|
-| A | quixbugs-depth-first-search | 1/1 RESOLVED |
-| B | quixbugs-quicksort, quixbugs-flatten | 2/2 RESOLVED |
-| C | quixbugs-find-in-sorted, quixbugs-rpn-eval, quixbugs-shortest-path-length, quixbugs-reverse-linked-list, quixbugs-kth | 5/5 RESOLVED |
-| **Aggregate** | **8 tasks** | **8/8 RESOLVED; 97 model calls; 64,783 tokens; 841,702 ms; zero row errors** |
-
-Per-stage aggregates: A 12 calls/7,588 tokens/84,342 ms; B 24 calls/14,830
-tokens/203,406 ms; C 61 calls/42,365 tokens/553,954 ms
-(`runs/frozen/ancillary/stage_{a,b,c}_report.json`); every task shows
-debugger entry, accepted breakpoint, runtime inspection, diagnosis, patch
-application, and independent verifier RESOLVED.
-
-**Canonical wording (current claim):** "The project-fine-tuned
-Qwen2.5-Coder-7B debugger achieved 8/8 RESOLVED on a frozen, task-disjoint
-QuixBugs validation set using real debugger/tool execution and independent
-verification."
-
-**Non-claims:** fine-tuning is NOT claimed to have causally improved over a
-matched base; there is NO proper matched-base R6 ablation; R6 is NOT directly
-comparable to R5 as a causal ablation (different model identity, dataset,
-and treatment); R6's final five-task holdout is NOT complete.
-
-**R6 final five-task holdout — INCOMPLETE_HARDWARE_STOP:** the stronger
-tuned-model final holdout was interrupted by repeated local hardware hard
-power-offs. Completed rows
-(`runs/frozen/final_holdout_partial/` + `holdout_report.json`):
-
-- `curated-none-handling-001` — **RESOLVED**, F2P 1/1, P2P 2/2, strict pass;
-- `curated-off-by-one-002` — **BREAKING_RESOLVED**, F2P 1/1, P2P 1/2, strict
-  failure (the independent verifier rejected an apparently useful repair;
-  preserved honestly);
-- `curated-wrong-branch-003` — interrupted during a model request;
-- `curated-mutation-alias-004` — not started;
-- `curated-caller-callee-005` — not started.
-
-**Correct interpretation: INCOMPLETE_HARDWARE_STOP.** Not 2/5, not 1/5, not a
-failed 5-task benchmark — three tasks never produced outcomes. Anti-leakage:
-0 findings across 18 prompts from the two completed tasks, but final
-five-task holdout leakage=0 was NOT established (three tasks never
-completed). Hardware: repeated hard power-off / Event 41 style interruption
-occurred during sustained local workload; no definitive hardware root cause
-was established; no VRAM-exhaustion claim; no additional sustained local GPU
-campaign was pursued for closeout.
-
-### 22.7 Professor structured JSON traces — COMPLETE
-
-Professor-facing trace deliverable is complete
-(`docs/professor_traces/`; export commit `c9afe377db3f53229755532751b485fc2a13a4e7`):
-
-- exactly **10 professor traces** — 8 successful R6 disjoint-validation
-  traces (`r6_validation/`) + 2 partial-final-holdout traces
-  (`r6_holdout_partial/`);
-- R5 reference removed from the final professor trace set;
-- `professor_debug_trace_v1` schema (tracked);
-- professor-safe audit: 10 documents, 0 findings, `passed=true`
-  (`professor_safe_audit.json`);
-- trace SHA manifest matches all 10 traces (`trace_sha_manifest.json`;
-  hashes verified against the working tree);
-- deterministic regeneration demonstrated
-  (`python -m agentic_debugger.evaluation.professor_trace_r6
-  --output-dir docs/professor_traces`) and pristine tracked-only /
-  fresh-checkout regeneration demonstrated (frozen evidence capsule
-  `experiments/r6_debugger_training/runs/frozen/` + `capsule_manifest.json`);
-- hidden tests/oracles/chain-of-thought are not exposed in the professor
-  traces (fail-closed leakage audit over every exported document).
-
-### 22.8 Claim hierarchy (current)
-
-1. Historical engineering foundation (pre-S5 infrastructure, Tasks 1-10B).
-2. Historical cp118 localized-repair negative transfer (§8).
-3. Historical D1/S2 real-model debugger failures under the old interface (§13).
-4. R1-R4 repaired-interface positive milestones (§22.1-22.4).
-5. R5 base-14B clean 5/5 holdout (§22.5).
-6. R6 project-fine-tuned 7B 8/8 disjoint validation (§22.6).
-7. R6 stronger final five-task holdout incomplete due hardware (§22.6).
-8. Professor structured trace deliverable complete (§22.7).
-
-Earlier failures are not erased because later work succeeded; the scientific
-story is progression, not revisionism.
-
-### 22.9 R1-R6 provenance summary
-
-| Claim | Scientific source | Tier |
-|---|---|---|
-| R1 breakpoint → real pause → stack | `experiments/debugger_interaction_v2_r1/runs/run-2-live-2026-08-11/evidence.json` | local_untracked_accepted (evidence.json on disk, SHA256-bound; commit `c842d69` tracked) |
-| R2 multi-turn chain + diagnosis | `experiments/debugger_interaction_v2_r2/runs/run-r2-live-2026-08-11/evidence.json` | local_untracked_accepted (commit `97cc7fe` tracked) |
-| R3 debugger-informed repair → verifier RESOLVED, B→C normalization | `experiments/debugger_interaction_v2_r3/runs/run-r3-2-live-2026-08-11/evidence-corrected.json` + `model_patch_serialization_normalized.patch` + `tests/fixtures/r31_model_patch_raw.patch` | local_untracked_accepted (run); frozen_in_repo (fixture; commit `f2291df`) |
-| R4 generated test T fails buggy / passes fixed / verifier RESOLVED | `experiments/model_generated_test_probe_r4/runs/run-r4-1-live-2026-08-11/evidence.json` + `r4_contract.json` | local_untracked_accepted (run); frozen_in_repo (contract; commit `372d51f`) |
-| R5.9 5/5 RESOLVED, 41 prompts, 0 findings | `experiments/debugger_interaction_v2_r5/runs/R5.9-MATRIX-14B-CLEAN-FINAL-2026-08-12/matrix.json` (local untracked run tree) + tracked `r5_contract_14b.json`, `experiments/debugger_interaction_v2_r5/` source, `tests/fixtures/old_r57_leakage/` | local_untracked_accepted (run); frozen_in_repo (contracts/source/fixtures; commits `e568b16`/`eeff17e`/`54828db`) |
-| R5.7 disqualified / leakage regression | `tests/fixtures/old_r57_leakage/` + `tests/unit/test_r5_anti_leakage.py` | frozen_in_repo |
-| R6 dataset/split/SFT facts | `experiments/r6_debugger_training/{split_manifest,build_summary,sft/sft_manifest}.json` + `training_provenance.json` | frozen_in_repo (commits `10b8028`, `4610785`) |
-| R6 training run + losses | `experiments/r6_debugger_training/runs/r6-sft-debugger-v{1,2,3}/trainer/checkpoint-{10,20,30,40,48}/trainer_state.json` + `training_provenance.json` | local_untracked_accepted (run trees gitignored except frozen capsule); values carried by `runs/frozen/ancillary/checkpoint_selection.json` (frozen_in_repo) |
-| R6 checkpoint-30 identity | `runs/frozen/ancillary/checkpoint_selection.json`, `docs/professor_traces/source_evidence_manifest.json` | frozen_in_repo (SHA256 verified on disk) |
-| R6 8/8 validation aggregates | `runs/frozen/ancillary/stage_{a,b,c}_report.json`, `checkpoint_selection.json` | frozen_in_repo |
-| R6 holdout partial rows + 18 prompts/0 findings | `runs/frozen/ancillary/holdout_report.json`, `runs/frozen/final_holdout_partial/*/evidence.json` | frozen_in_repo |
-| Professor traces/audit/manifests | `docs/professor_traces/*` | frozen_in_repo (commit `c9afe37`; hashes verified) |
-
-R5/R6 run trees contain large local raw evidence (gitignored by design); the
-tracked frozen capsule and manifests are the clean-checkout carriers, and
-the accepted aggregates are stated to the level the frozen records support.
-
----
-
-## 23. Git milestone map (R1-R6) and reference reconciliation
-
-### 23.1 Milestones
-
-| Milestone | Commit | Date |
-|---|---|---|
-| R1 — real-model PDB breakpoint checkpoint | `c842d69` | 2026-08-11 |
-| R2 — multi-turn real-model PDB debugging | `97cc7fe` | 2026-08-11 |
-| R3 — debugger-informed real-model repair | `f2291df` | 2026-08-11 |
-| R4 — model-generated regression test | `372d51f1a35e071c677391c9970f7b552bb276f2` | 2026-08-11 |
-| R5.0-R5.8 — generalized matrix + treatment iterations | `f78d098`…`f8c112f` | 2026-08-11/12 |
-| R5.9 clean-holdout treatment + anti-leakage | `e568b16`, `eeff17e` | 2026-08-12 |
-| R5 reproducibility closeout | `54828db1d5dec4e95105f1c1d07ba5dd7518060c` | 2026-08-12 |
-| R6 matched cp118 matrix harness | `31f8393` | 2026-08-12 |
-| R6 SFT pipeline + trace exporter | `10b8028`, `e605aa1` | 2026-08-12 |
-| R6 stable/physical-VRAM training + evaluator safety | `a162ccd`…`79c614d` | 2026-08-12 |
-| R6 preserved implementation/evidence | `4610785713832daaba6aa133374506a2d200391a` | 2026-08-13 |
-| Professor trace deliverable | `c9afe377db3f53229755532751b485fc2a13a4e7` | 2026-08-13 |
-| Docs structure baseline | `34cce329b5e6e7cf42531d8e609774c7608b67cb` | 2026-08-13 |
-
-### 23.2 Reference / path reconciliation
-
-The DOCS-STRUCTURE-V1 reorganisation (`34cce32`) renamed many paths. Active
-references in this report use current docs paths; the historical
-`Agentic_Debugging_Project_Closeout_2026-08-11.md` is archived unchanged at
-`docs/archive/status/project-closeout-2026-08-11.md` (git mv; internal
-old-path strings are historical statements and were not rewritten). The old
-root closeout path and `docs/FINAL_TECHNICAL_REPORT_V2.md` survive only in
-frozen snapshots (historical intentional). Current entry points:
-`docs/project-closeout.md` (current status), `docs/final-report.md` (this
-report), `docs/project-tracker.md` (tracker), `README.md`, `TODO.md`,
-`diary/diary.md`.
+*This report is synthesis of accepted project evidence through S7 (HEAD
+`677992f`). No new experiments were run. See `docs/archive/reports/final-report-v1.md`
+for the 2026-07-31 QuixBugs gold-baseline snapshot preserved as a historical
+document.*

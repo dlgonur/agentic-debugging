@@ -2,16 +2,24 @@
 
 Research and prototype workspace for an agentic debugging system.
 
-**Final project status (2026-08-11):** the internship project is **COMPLETE**
-and closes on the accepted bounded-negative path (S9 final closeout). The
-single canonical authority for final project status and fresh-reviewer
-handoff is `Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage
-table S0–S9, professor-TODO reconciliation, reproducibility audit, evidence
-paths, explicit non-claims, and Git integration instructions). Final
-deliverables: `docs/final-report.md` (S8) and `diary/diary.md`
-(complete through 2026-08-11). No positive real-model dynamic debugger
-trajectory is claimed; the project closes on honestly established bounded
-negative evidence for the debugger-loop treatment.
+**Current project status (2026-08-13):** the R1-R6 phase superseded the
+2026-08-11 S9 bounded-negative closeout (which remains historical, archived
+at `docs/archive/status/project-closeout-2026-08-11.md`). Current state:
+positive real-model dynamic debugging established under the repaired
+debugger interface (R1 breakpoint/stack, R2 multi-turn loop, R3
+debugger-informed repair reaching the independent verifier, R4
+model-generated regression test); R5 clean base-14B holdout 5/5; the
+project-fine-tuned 7B debugger 8/8 RESOLVED on the frozen task-disjoint
+QuixBugs validation; professor structured JSON trace deliverable complete
+(`docs/professor_traces/`, 10 documents). The stronger R6 final five-task
+curated holdout is **INCOMPLETE_HARDWARE_STOP** (local hardware power-offs;
+not claimed complete). No matched-base fine-tuning ablation exists. The
+single canonical authority for current status is
+`docs/project-closeout.md`; the full technical report is
+`docs/final-report.md`; the diary is complete through 2026-08-13. FirstMate
+review of the documentation candidate: ACCEPTED (2026-08-13). Remaining:
+Git commit/push of the documentation candidate (Final Git operator) and
+eventual integration to main.
 
 Historical status (2026-08-07): tracked history through `1e680b1`
 contains the literature syntheses, bounded post-mortem PDB implementation,

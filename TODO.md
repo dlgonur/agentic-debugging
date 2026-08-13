@@ -2,9 +2,49 @@
 
 ## Durum notu
 
-**2026-08-11 final closeout:** Proje kabul edilen bounded-negative yol üzerinde
+**2026-08-13 current status (R1-R6 closeout):** The 2026-08-11 S9
+bounded-negative closeout is **historical** and is preserved verbatim at
+`docs/archive/status/project-closeout-2026-08-11.md`. The R1-R6 phase
+superseded the overall conclusion. Current canonical status authority:
+`docs/project-closeout.md`; full technical report: `docs/final-report.md`.
+
+DONE:
+- real-model PDB interaction (R1, `c842d69`);
+- multi-turn debugger use (R2, `97cc7fe`);
+- debugger evidence → diagnosis → patch → verifier (R3, `f2291df`);
+- model-generated regression test (R4, `372d51f`);
+- R5 clean base-14B holdout 5/5 with 0 leakage findings across 41 audited
+  prompts (r5.9; r5.7 5/5 disqualified for hidden-test leakage in PATCH
+  prompts, preserved as historical evidence);
+- project-fine-tuned debugger positive validation 8/8 on the frozen
+  task-disjoint QuixBugs validation (R6, checkpoint-30; adapter hashes
+  recorded; no matched-base causal fine-tuning claim);
+- professor structured traces complete (10 documents,
+  `docs/professor_traces/`, `c9afe37`).
+
+INCOMPLETE / CLOSED BOUNDARY:
+- stronger R6 tuned-model final five-task curated holdout: status =
+  **INCOMPLETE_HARDWARE_STOP** (repeated local hardware power-offs;
+  curated-none-handling-001 RESOLVED, curated-off-by-one-002
+  BREAKING_RESOLVED, three tasks never produced outcomes). Not 2/5, not
+  1/5, not a failed benchmark; final-holdout leakage=0 not established.
+  Do not schedule a sustained local rerun in current scope.
+
+Remaining project closeout work after this documentation task:
+1. FirstMate review of the candidate
+   (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) — **ACCEPTED**
+   (2026-08-13);
+2. Git commit/push of the documentation candidate (Final Git operator);
+3. eventual integration to main.
+
+DPO (CLOSED / NOT JUSTIFIED), RAG correctness (S4 PARTIAL / NOT_EVALUATED)
+and BugsInPy execution (license-gated) remain closed and are not reopened
+merely because historical TODOs mention them.
+
+**2026-08-11 final closeout (historical):** Proje kabul edilen bounded-negative yol üzerinde
 **COMPLETE** olarak kapanmıştır (S9 final closeout). Tek canonical final
-status/handoff otoritesi: `Agentic_Debugging_Project_Closeout_2026-08-11.md`.
+status/handoff otoritesi: `Agentic_Debugging_Project_Closeout_2026-08-11.md` (archived:
+`docs/archive/status/project-closeout-2026-08-11.md`).
 S8 deliverables tamamlandı: `docs/final-report.md` ve
 `diary/diary.md` (2026-08-11'e kadar, S9 subsection dahil). S7 literature
 closeout DONE (20 çalışma, `677992f`). Professor TODO #23/#24/#25 =
@@ -199,7 +239,7 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 - [ ] Fine-tuned modeli RAG sistemiyle birleştir. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — frozen cp118+RAG treatment 10/40 geçerli pair üretti (frozen manifest sırasının ilk 10'u), kampanya compute fezibility nedeniyle durduruldu; primary correctness **NOT_EVALUATED**; RAG success/failure iddiası yok. Aktif gelecek görevi değildir.)
 - [x] Modelin kullanacağı dosya okuma, kod arama, test çalıştırma ve patch uygulama araçlarını geliştir. (Tamamlandı — deterministic file-read/code-search/test-run/patch-apply tools; bkz. docs/project-tracker.md Task 2-3.)
 - [x] Debugging agentini oluştur. (Tamamlandı — controller state machine ve Task 9 uçtan uca demonstration; bkz. docs/project-tracker.md.)
-- [ ] Modelin hata konumunu bulmasını, root cause belirlemesini ve patch üretmesini sağla. (PARTIAL — static real-provider model→patch→verifier QuixBugs gcd'de verifier RESOLVED'a ulaştı (F2P 5/5, P2P 1/1); full dynamic debugger-informed chain gerçek modelle elde edilmedi — bounded negative.)
+- [x] Modelin hata konumunu bulmasını, root cause belirlemesini ve patch üretmesini sağla. (PARTIAL → DONE (R1-R6 phase, 2026-08-11/13) — repaired interface altında gerçek model: R1 breakpoint/stack, R2 multi-turn dynamic loop + diagnosis, R3 debugger-informed patch → independent verifier RESOLVED, R4 model-generated regression test; R5 base-14B 5/5 clean holdout; R6 fine-tuned 7B 8/8 disjoint validation. Historical bounded-negative (D1/S2, 2026-08-10/11) korunur; static-only gcd RESOLVED da korunur.)
 
 ## Phase 5 — Preference Optimization
 
@@ -210,9 +250,9 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 ## Phase 6 — Debugger Adapter
 
 - [x] PDB, GDB veya LLDB için bir debugger adapter geliştir. (Tamamlandı — instructor maddesindeki “veya” seçeneği PDB ile karşılandı; accepted Python/PDB-first scope, Task 4A-4D ve post-mortem PDB `e92634e`. GDB/LLDB kapsam dışıdır.)
-- [ ] Fine-tuned modelin debugger komutları üretmesini ve çıktıları yorumlamasını sağla. (**CLOSED — BOUNDED NEGATIVE** 2026-08-11 — engineering capability YES; deterministic engineering evidence YES; positive real-model success NO (D1 `break 20` → tool error, S2 `continue` → rejected, 0 successful observations); bounded-negative evidence YES. Yeni deney yetkilendirmesi değildir; bkz. S5 coverage matrix.)
-- [ ] Modelin breakpoint koymasını, değişkenleri incelemesini, stack trace okumasını ve adım adım debug yapmasını sağla. (**CLOSED — BOUNDED NEGATIVE** 2026-08-11 — engineering/deterministic capability YES; positive real-model sequence NO; bounded-negative evidence YES. İki model koşulunda da başarılı breakpoint→observation→step/locals dizisi yoktur.)
-- [ ] Modelin debugger etkileşiminden sonra patch üretmesini ve testlerle doğrulamasını sağla. (**CLOSED — BOUNDED NEGATIVE** 2026-08-11 — static model→patch→verifier YES (gcd, non-debugger); debugger-informed real-model patch→verifier NO; bounded-negative evidence YES.)
+- [x] Fine-tuned modelin debugger komutları üretmesini ve çıktıları yorumlamasını sağla. (**DONE** — 2026-08-11/13 R1-R6 phase: repaired interface altında gerçek model geçerli breakpoint yazdı, gerçek PDB session paused oldu ve stack/locals gözlemleri elde edildi (R1/R2); R6 fine-tuned 7B 8/8 disjoint validation'da debugger komutları üretip yorumladı. Historical: 2026-08-11'de **CLOSED — BOUNDED NEGATIVE** (D1 `break 20` → tool error, S2 `continue` → rejected, 0 successful observations) — bu sonuç korunur, superseded.))
+- [x] Modelin breakpoint koymasını, değişkenleri incelemesini, stack trace okumasını ve adım adım debug yapmasını sağla. (**DONE** — 2026-08-11/13: R2'de gerçek model breakpoint→stack G1→locals→step/next→post-step stack G2→diagnosis zincirini tamamladı (`97cc7fe`, gate_r2 passed). Historical 2026-08-11 bounded-negative korunur.)
+- [x] Modelin debugger etkileşiminden sonra patch üretmesini ve testlerle doğrulamasını sağla. (**DONE** — 2026-08-11/13: R3 debugger evidence→diagnosis→semantic patch→PatchManager→independent verifier RESOLVED (`f2291df`; raw patch hunk-count metadata error'ı COUNT-ONLY serialization normalization ile — qualifier korunur); R4 model-generated regression test; R5 5/5; R6 8/8.)
 
 ## Phase 7 — Evaluation and Final Report
 

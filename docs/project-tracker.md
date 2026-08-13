@@ -14,7 +14,7 @@ Rules:
 
 ## 0. Daily Requirement
 
-- [x] 0.1 Write a one-page internship diary entry for each workday. (Completed through 2026-08-11 — consolidated `diary/diary.md`, including the S9 closeout subsection appended to the 2026-08-11 entry; chronology sourced from Git commit / frozen run timestamps.)
+- [x] 0.1 Write a one-page internship diary entry for each workday. (Completed through 2026-08-13 — consolidated `diary/diary.md`, including the R1-R6 phase entries appended to the 2026-08-12/2026-08-13 entries; chronology sourced from Git commit / frozen run timestamps.)
 
 ### 0.1 Subtasks / Log
 
@@ -227,19 +227,47 @@ Rules:
 
 ---
 
-## Current Focus — Final closeout (2026-08-11)
+## Current Focus — R1-R6 documentation closeout (2026-08-13)
 
-**Final project status (2026-08-11):** the project is **COMPLETE** and closes
-on the accepted bounded-negative path (S9). The single canonical authority for
-final project status and fresh-reviewer handoff is
-`Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage table S0–S9,
-professor-TODO reconciliation, reproducibility audit, evidence paths, explicit
-non-claims, Git integration instructions). Final deliverables:
-`docs/final-report.md` (S8) and `diary/diary.md` (through
-2026-08-11). No positive real-model dynamic debugger trajectory is claimed;
-TODO #23–25 are CLOSED — BOUNDED NEGATIVE, S4 is CLOSED — PARTIAL /
-COMPUTE-CONSTRAINED (primary correctness NOT_EVALUATED). The historical focus
-entries below are dated 2026-08-02/03 snapshots and are not current state.
+**Current project status (2026-08-13):** the S8/S9 bounded-negative closeout
+is **historical**; the R1-R6 phase superseded the overall conclusion while
+preserving the old experiments and negative results. The single canonical
+authority for current project status and fresh-reviewer handoff is
+`docs/project-closeout.md`; the 2026-08-11 closeout is archived unchanged at
+`docs/archive/status/project-closeout-2026-08-11.md`; the full technical
+report through 2026-08-13 is `docs/final-report.md` (§22).
+
+Status summary:
+
+DONE:
+- real-model PDB interaction (R1, `c842d69`);
+- multi-turn debugger use (R2, `97cc7fe`);
+- debugger evidence → diagnosis → patch → verifier (R3, `f2291df`);
+- model-generated regression test (R4, `372d51f`);
+- R5 clean base-14B holdout 5/5 (r5.9, `e568b16`/`eeff17e`/`54828db`);
+- project-fine-tuned debugger positive validation 8/8 (R6, `4610785`);
+- professor structured traces (10 documents, `c9afe37`).
+
+INCOMPLETE / CLOSED BOUNDARY:
+- stronger R6 tuned-model final five-task holdout — status =
+  **INCOMPLETE_HARDWARE_STOP** (curated-none-handling-001 RESOLVED;
+  curated-off-by-one-002 BREAKING_RESOLVED; three tasks never produced
+  outcomes after repeated local hardware power-offs). Not 2/5, not 1/5, not a
+  failed benchmark. No sustained local rerun is scheduled in current scope.
+
+Remaining project closeout work after this task:
+- FirstMate review (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) —
+  **ACCEPTED** (2026-08-13);
+- Git commit/push of the documentation candidate (Final Git operator);
+- eventual integration to main.
+
+Closed historical boundaries (not reopened): DPO (CLOSED / NOT JUSTIFIED),
+RAG correctness campaign (S4 PARTIAL / NOT_EVALUATED), BugsInPy execution
+(license-gated), cp118 (historical negative transfer), D1/S2 debugger
+failures (historical; superseded by R1-R6).
+
+The historical focus entries below are dated 2026-08-02/03/11 snapshots and
+are not current state.
 
 ### QuixBugs paired-pilot v2 live runner (2026-08-02)
 
@@ -1091,10 +1119,19 @@ made.
 
 ## Last Updated
 
+2026-08-13 (R1-R6 documentation closeout: current status reconciled through
+the R1-R6 phase — real-model debugger milestones, R5 clean base-14B holdout,
+R6 fine-tuned 8/8 disjoint validation, professor structured traces complete,
+R6 final five-task holdout INCOMPLETE_HARDWARE_STOP; canonical current status
+document `docs/project-closeout.md`; 2026-08-11 closeout archived at
+`docs/archive/status/project-closeout-2026-08-11.md`)
+
 2026-08-11 (S9 final closeout: reproducibility audit, status/TODO
 reconciliation, bounded deterministic validation, canonical closeout artifact
-`Agentic_Debugging_Project_Closeout_2026-08-11.md`; project closes on the
-accepted bounded-negative path)
+`Agentic_Debugging_Project_Closeout_2026-08-11.md` [archived:
+`docs/archive/status/project-closeout-2026-08-11.md`]; project closes on the
+accepted bounded-negative path — **historical snapshot; superseded by the
+R1-R6 phase**)
 
 2026-08-07 (repository reconciliation, root-cause explanation metric,
 post-mortem trajectory persistence, and full-suite forwarder-cache repair)
