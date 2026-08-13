@@ -50,6 +50,7 @@ class ScriptedTrajectoryTransport:
         breakpoint_line: int,
         diagnosis_text: str,
         corrected_source: str,
+        rejected_source: Optional[str] = None,
     ) -> None:
         if not module_path or not module_path.endswith(".py"):
             raise ValueError(f"invalid module path: {module_path!r}")
@@ -63,6 +64,8 @@ class ScriptedTrajectoryTransport:
         self.breakpoint_line = breakpoint_line
         self.diagnosis_text = diagnosis_text
         self.corrected_source = corrected_source
+        self.rejected_source = rejected_source
+        self.patch_requests = 0
 
     def _directive(self, user_prompt: str) -> str:
         phase_match = _PHASE_RE.search(user_prompt)
@@ -91,7 +94,11 @@ class ScriptedTrajectoryTransport:
 
         if phase == "Patch":
             if "file" in commands:
-                return f"file {self.module_path}\n{self.corrected_source}"
+                self.patch_requests += 1
+                source = self.corrected_source
+                if self.patch_requests == 1 and self.rejected_source is not None:
+                    source = self.rejected_source
+                return f"file {self.module_path}\n{source}"
             if "patch" in commands:
                 raise ValueError(
                     "scripted transport requires the 'file' representation"

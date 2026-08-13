@@ -25,6 +25,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import random
 import sys
 import time
@@ -58,6 +59,19 @@ TRAIN_CONFIG: dict[str, Any] = {
              "completion_only_loss": True},
     "seed": 20260812,
 }
+
+
+def _append_lifecycle(run_dir: Path, event: str, **fields: Any) -> None:
+    record = {
+        "timestamp_utc": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        "event": event,
+        **fields,
+    }
+    path = run_dir / "training_lifecycle.jsonl"
+    with path.open("a", encoding="utf-8", newline="\n") as stream:
+        stream.write(json.dumps(record, ensure_ascii=False, allow_nan=False) + "\n")
+        stream.flush()
+        os.fsync(stream.fileno())
 
 
 @dataclass(frozen=True)
@@ -143,6 +157,12 @@ def main() -> int:
     parser.add_argument("--max-length", type=int, default=1792)
     parser.add_argument("--save-steps", type=int, default=10)
     parser.add_argument("--save-total-limit", type=int, default=4)
+    parser.add_argument(
+        "--sft-dir",
+        type=Path,
+        default=THIS_FILE.parent / "sft",
+        help="directory containing the exact SFT JSONL and manifest",
+    )
     parser.add_argument("--preview", action="store_true",
                         help="materialize the run dir + provenance WITHOUT loading the model")
     parser.add_argument("--preflight-steps", type=int, default=0,
@@ -152,15 +172,23 @@ def main() -> int:
     args = parser.parse_args()
 
     run_id = args.run_id or f"r6-sft-{time.strftime('%Y%m%d-%H%M%S')}"
-    sft_dir = THIS_FILE.parent / "sft"
+    sft_dir = args.sft_dir.resolve()
     output_root = THIS_FILE.parent / "runs"
     run_dir = build_training_run(
         run_id, output_root, sft_dir,
         epochs=args.epochs, max_length=args.max_length,
         save_steps=args.save_steps, save_total_limit=args.save_total_limit,
     )
+    _append_lifecycle(
+        run_dir,
+        "run_created",
+        python_executable=str(Path(sys.executable).resolve()),
+        python_version=sys.version,
+        sft_dir=str(sft_dir),
+    )
     print(f"run dir: {run_dir}")
     if args.preview:
+        _append_lifecycle(run_dir, "preview_complete")
         return 0
 
     import torch
@@ -196,9 +224,10 @@ def main() -> int:
     tokenizer = AutoTokenizer.from_pretrained(
         BASE_REPOSITORY, revision=BASE_REVISION, trust_remote_code=False,
     )
+    _append_lifecycle(run_dir, "model_load_started")
     model = AutoModelForCausalLM.from_pretrained(
         BASE_REPOSITORY, revision=BASE_REVISION, trust_remote_code=False,
-        device_map="auto", quantization_config=quantization,
+        device_map={"": 0}, quantization_config=quantization,
         torch_dtype=compute_dtype,
         attn_implementation="efficient_sdpa",
     )
@@ -219,6 +248,22 @@ def main() -> int:
             f"model placement offloaded {len(offloaded)} modules off GPU: "
             f"{sorted(str(k) for k in offloaded)[:5]}... — refusing unsafe placement"
         )
+    placement_audit = {
+        "passed": True,
+        "cuda_available": torch.cuda.is_available(),
+        "cuda_device_count": torch.cuda.device_count(),
+        "cuda_device_index": 0,
+        "cuda_device_name": torch.cuda.get_device_name(0),
+        "hf_device_map": {str(key): str(value) for key, value in hf_device_map.items()},
+        "offloaded_modules": offloaded,
+        "attention_implementation": "efficient_sdpa",
+        "quantization": "NF4 4-bit double-quant",
+    }
+    (run_dir / "placement_audit.json").write_text(
+        json.dumps(placement_audit, indent=2, ensure_ascii=False, allow_nan=False),
+        encoding="utf-8",
+    )
+    _append_lifecycle(run_dir, "model_load_completed", placement_passed=True)
     # Minimal QLoRA preparation (STABLE + PHYSICAL-VRAM-BOUND amendment):
     # the standard peft ``prepare_model_for_kbit_training`` additionally
     # casts every non-4bit parameter (embeddings + lm_head, ~2.1 GB on this
@@ -272,7 +317,7 @@ def main() -> int:
         "use_cache": False,
         "quantization": "NF4 double-quant, bf16 compute",
         "optimizer": TRAIN_CONFIG["optimizer"]["optim"],
-        "placement": "device_map=auto with GPU-only assertion (no CPU/disk spill)",
+        "placement": "explicit device_map={'': 0} with GPU-only assertion",
         "max_length": args.max_length,
         "measured_wddm_dedicated_peak_gib": 11.49,
         "measured_wddm_headroom_gib": 0.74,
@@ -346,6 +391,13 @@ def main() -> int:
             json.dumps(provenance, indent=2, ensure_ascii=False, allow_nan=False),
             encoding="utf-8",
         )
+    _append_lifecycle(
+        run_dir,
+        "tokenization_completed",
+        train_records=len(train_records),
+        validation_records=len(validation_records),
+        dropped_examples=len(dropped),
+    )
 
     class Collator:
         def __call__(self, features):
@@ -406,16 +458,26 @@ def main() -> int:
     )
 
     if args.preflight_steps > 0:
-        return _run_memory_preflight(
+        _append_lifecycle(run_dir, "preflight_started", steps=args.preflight_steps)
+        result = _run_memory_preflight(
             trainer, run_dir, model, args.preflight_steps,
             sdpa_registration=sdpa_registration,
             train_examples=len(train_records),
             validation_examples=len(validation_records),
             dropped=dropped,
         )
+        _append_lifecycle(run_dir, "preflight_completed", exit_code=result)
+        return result
 
+    _append_lifecycle(run_dir, "training_started")
     trainer.train()
+    _append_lifecycle(run_dir, "training_completed")
     eval_results = trainer.evaluate()
+    _append_lifecycle(
+        run_dir,
+        "final_evaluation_completed",
+        eval_loss=eval_results.get("eval_loss"),
+    )
     print(json.dumps({"final_eval": eval_results}, indent=2, ensure_ascii=False))
     return 0
 

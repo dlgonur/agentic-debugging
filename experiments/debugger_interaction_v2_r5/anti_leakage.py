@@ -228,11 +228,16 @@ def derive_forbidden_content(task_id: str, fixture_dir: Path) -> ForbiddenConten
             module_path = name
             break
 
-    # The source-derived needles may legitimately appear INSIDE the
-    # production source (function definitions, anchors that are source
-    # lines); the scanner subtracts production source lines before checking
-    # them.  Repair NEW snippets (the fixed code) never appear legitimately.
-    reference_snippets: list[str] = [repair.new_snippet]
+    # A repair snippet is only an oracle needle when it adds text absent from
+    # the original program.  Some repairs reduce an expression to an
+    # identifier already present in the original source and real PDB locals;
+    # that identifier carries no reference-repair information.
+    original_source_text = "\n".join(production_source_lines)
+    reference_snippets: list[str] = (
+        [repair.new_snippet]
+        if repair.new_snippet not in original_source_text
+        else []
+    )
 
     # Expected literals: drop needles shorter than 3 characters (too weak to
     # be evidence) and needles that appear in the PUBLIC task title or

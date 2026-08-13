@@ -20,6 +20,7 @@ normalization (B -> C) are identical to the accepted R3 adapter.
 
 from __future__ import annotations
 
+import ast
 import difflib
 import hashlib
 import json
@@ -141,6 +142,20 @@ def _sha256(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+def _python_ast_sha256(source_text: str) -> Optional[str]:
+    """Hash executable Python structure while ignoring formatting/comments.
+
+    Invalid candidates deliberately return ``None``: syntax handling remains
+    the independent verifier's responsibility, and no semantic identity is
+    inferred from a tree that Python cannot parse.
+    """
+    try:
+        tree = ast.parse(source_text)
+    except (SyntaxError, ValueError, TypeError):
+        return None
+    return _sha256(ast.dump(tree, annotate_fields=True, include_attributes=False))
+
+
 def serialize_whole_file_to_diff(
     script_path: str,
     original_source: str,
@@ -201,6 +216,34 @@ def _extract_usage(usage: Optional[dict[str, Any]]) -> dict[str, Any]:
         val = usage.get(key)
         result[key] = val if type(val) is int and val >= 0 else NOT_RECORDED
     return result
+
+
+def _requires_causal_diff_retry(
+    observation: Optional[Observation],
+) -> bool:
+    """Use a diff-only retry only for a sanitized candidate exception.
+
+    Syntax failures and verifier outcomes without a production exception keep
+    the whole-file recovery path.  The decision reads only the already
+    sanitized verifier feedback exposed by the existing observation contract.
+    """
+    if observation is None or observation.name != "apply_patch":
+        return False
+    payload = observation.payload
+    if type(payload) is not dict:
+        return False
+    feedback = payload.get("verifier_feedback")
+    if type(feedback) is not dict:
+        return False
+    failures = feedback.get("failures")
+    if type(failures) is not list:
+        return False
+    return any(
+        type(failure) is dict
+        and type(failure.get("production_exception")) is str
+        and bool(failure.get("production_exception"))
+        for failure in failures
+    )
 
 
 @dataclass
@@ -468,7 +511,11 @@ class R5DebuggerBridgeAdapter:
         patch_stage: Optional[bridge.R3PatchStage] = None
         if state.value == "Patch":
             if self._patch_attempted:
-                patch_stage = bridge.R3PatchStage.RETRY
+                patch_stage = (
+                    bridge.R3PatchStage.CAUSAL_RETRY_DIFF_ONLY
+                    if _requires_causal_diff_retry(last_obs)
+                    else bridge.R3PatchStage.RETRY
+                )
             else:
                 patch_stage = bridge.R3PatchStage.NEEDS_FIRST_REPAIR
         for attempt in range(self._max_retries + 1):
@@ -532,10 +579,20 @@ class R5DebuggerBridgeAdapter:
                     fence_unwrap.to_mapping() if fence_unwrap is not None else None
                 )
                 result = bridge.parse(parse_text, state, last_obs, lifecycle=session_state.lifecycle, r2_stage=session_state.r2_stage, patch_stage=patch_stage)
+                if result.command_token == "break":
+                    breakpoint_line = result.directive.arguments.get("breakpoint_line")
+                    if breakpoint_line not in self._eligible_lines:
+                        eligible = ", ".join(str(line) for line in self._eligible_lines)
+                        raise bridge.BridgeParseError(
+                            bridge.BridgeRejection.BREAKPOINT_NOT_PREFLIGHTED,
+                            f"breakpoint_line {breakpoint_line} was not proven reachable "
+                            f"by the bounded public-reproduction preflight; use one of: {eligible}",
+                        )
                 # R5.2 whole-file representation: mechanically serialize the
                 # model-authored complete file content into the unified diff
                 # that is actually applied (recorded; semantics untouched).
                 whole_file_meta: Optional[dict[str, Any]] = None
+                semantic_candidate_sha256: Optional[str] = None
                 if hasattr(result.directive, "name") and getattr(result.directive.name, "value", None) == "apply_patch":
                     args = result.directive.arguments
                     if "whole_file_path" in args:
@@ -548,6 +605,34 @@ class R5DebuggerBridgeAdapter:
                         if content_fence is not None:
                             file_content = unwrapped_content
                             content_fence_unwrap = content_fence.to_mapping()
+                        unwrapped_module, trailing_module = (
+                            bridge.unwrap_trailing_python_module(
+                                file_content, self._source_text
+                            )
+                        )
+                        trailing_module_unwrap: Optional[dict[str, Any]] = None
+                        if trailing_module is not None:
+                            file_content = unwrapped_module
+                            trailing_module_unwrap = trailing_module.to_mapping()
+                        if trailing_module is None:
+                            trimmed_content, truncated_copy = (
+                                bridge.trim_truncated_trailing_module_copy(
+                                    file_content, self._source_text
+                                )
+                            )
+                            if truncated_copy is not None:
+                                file_content = trimmed_content
+                                trailing_module_unwrap = truncated_copy.to_mapping()
+                        restored_content, import_restore = (
+                            bridge.restore_omitted_original_imports(
+                                file_content, self._source_text
+                            )
+                        )
+                        original_import_restore: Optional[dict[str, Any]] = None
+                        if import_restore is not None:
+                            file_content = restored_content
+                            original_import_restore = import_restore.to_mapping()
+                        semantic_candidate_sha256 = _python_ast_sha256(file_content)
                         b_diff = serialize_whole_file_to_diff(
                             self._script_path, self._source_text,
                             args["whole_file_path"], file_content,
@@ -555,8 +640,11 @@ class R5DebuggerBridgeAdapter:
                         whole_file_meta = {
                             "path": args["whole_file_path"],
                             "model_whole_file_sha256": _sha256(args["whole_file_content"]),
+                            "python_ast_sha256": semantic_candidate_sha256,
                             "generated_diff_sha256": _sha256(b_diff),
                             "content_fence_unwrap": content_fence_unwrap,
+                            "trailing_module_unwrap": trailing_module_unwrap,
+                            "original_import_restore": original_import_restore,
                         }
                         result = bridge.BridgeResult(
                             command_token="file",
@@ -581,6 +669,39 @@ class R5DebuggerBridgeAdapter:
                         is_diagnosis=result.is_diagnosis,
                         diagnosis_text=result.diagnosis_text,
                     )
+                    candidate_sha256 = norm_record.model_patch_serialization_normalized_sha256
+                    prior_candidate_hashes = {
+                        attempt_record.get("model_patch_serialization_normalized_sha256")
+                        for attempt_record in self._patch_attempts
+                    }
+                    if candidate_sha256 in prior_candidate_hashes:
+                        raise bridge.BridgeParseError(
+                            bridge.BridgeRejection.DUPLICATE_PATCH,
+                            "candidate exactly duplicates a previously dispatched "
+                            "verifier-rejected patch; emit a materially different "
+                            "repair or 'failed'",
+                        )
+                    prior_semantic_hashes = {
+                        attempt_record.get("python_ast_sha256")
+                        for attempt_record in self._patch_attempts
+                        if attempt_record.get("python_ast_sha256") is not None
+                    }
+                    if (
+                        semantic_candidate_sha256 is not None
+                        and semantic_candidate_sha256 in prior_semantic_hashes
+                    ):
+                        raise bridge.BridgeParseError(
+                            bridge.BridgeRejection.DUPLICATE_PATCH,
+                            "whole-file candidate has the same executable Python AST "
+                            "as a previously dispatched verifier-rejected patch; "
+                            "formatting, comments, or blank lines are not a materially "
+                            "different repair. Follow the hard causal constraint in the "
+                            "sanitized verifier feedback: eliminate the reported "
+                            "exception path, including its explicit raise and controlling "
+                            "conditional when present. Do not merely substitute another "
+                            "construction or copy expression. Emit a materially different "
+                            "repair or 'failed'",
+                        )
             except bridge.BridgeParseError as exc:
                 parse_ms = int((time.monotonic() - parse_start) * 1000)
                 record.parse_status = "rejected"; record.rejection_category = exc.category.value; record.rejection_message = exc.detail; record.parse_duration_ms = parse_ms
@@ -605,20 +726,21 @@ class R5DebuggerBridgeAdapter:
                 if record.action_name == "apply_patch":
                     record.model_patch_raw_sha256 = norm_record.model_patch_raw_sha256
                     record.model_patch_serialization_normalized_sha256 = norm_record.model_patch_serialization_normalized_sha256
-                    attempt: dict[str, Any] = {
+                    patch_attempt_record: dict[str, Any] = {
                         "model_call_index": snapshot.model_call_index,
                         "raw_model_response_sha256": _sha256(raw_text) if raw_text != NOT_AVAILABLE else None,
                         "model_patch_raw_sha256": norm_record.model_patch_raw_sha256,
                         "model_patch_serialization_normalized_sha256": norm_record.model_patch_serialization_normalized_sha256,
+                        "python_ast_sha256": semantic_candidate_sha256,
                         "normalization": norm_record.to_mapping(),
                         "fence_unwrap": record.fence_unwrap,
                     }
                     if whole_file_meta is not None:
-                        attempt["representation"] = "whole_file"
-                        attempt["whole_file"] = whole_file_meta
+                        patch_attempt_record["representation"] = "whole_file"
+                        patch_attempt_record["whole_file"] = whole_file_meta
                     else:
-                        attempt["representation"] = "unified_diff"
-                    self._patch_attempts.append(attempt)
+                        patch_attempt_record["representation"] = "unified_diff"
+                    self._patch_attempts.append(patch_attempt_record)
             elif hasattr(directive, "target_state"):
                 record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
             record.is_diagnosis = result.is_diagnosis; record.diagnosis_text = result.diagnosis_text
@@ -635,7 +757,7 @@ class R5DebuggerBridgeAdapter:
                 parse_duration_ms=parse_ms,
             )
             # R3.1: first genuine PATCH repair attempt advances to RETRY
-            if state.value == "Patch" and result.command_token == "patch" and not self._patch_attempted:
+            if state.value == "Patch" and result.command_token in ("patch", "file") and not self._patch_attempted:
                 self._patch_attempted = True
             if result.is_diagnosis and result.diagnosis_text:
                 if self._retained_diagnosis is None:
@@ -779,7 +901,14 @@ class ScriptedBridgeAdapter:
         # R3.1 PATCH stage
         patch_stage: Optional[bridge.R3PatchStage] = None
         if state.value == "Patch":
-            patch_stage = bridge.R3PatchStage.RETRY if self._patch_attempted else bridge.R3PatchStage.NEEDS_FIRST_REPAIR
+            if self._patch_attempted:
+                patch_stage = (
+                    bridge.R3PatchStage.CAUSAL_RETRY_DIFF_ONLY
+                    if _requires_causal_diff_retry(last_obs)
+                    else bridge.R3PatchStage.RETRY
+                )
+            else:
+                patch_stage = bridge.R3PatchStage.NEEDS_FIRST_REPAIR
         user_prompt = bridge.render_prompt(state=state, last_observation=last_obs, task_description=self._task_description, feedback=None, debugger=debugger_ctx, patch_stage=patch_stage, observation_filter_scripts=frozenset({self._script_path}) if self._script_path else None, observation_original_line_count=self._original_line_count or None)
         record = TelemetryRecord(model_call_index=snapshot.model_call_index, transport_attempt_index=1, controller_state=state.value, system_prompt_sha256=_sha256(self._system_prompt), user_prompt_sha256=_sha256(user_prompt), user_prompt_summary=_bound_text(user_prompt, 1000), user_prompt_full=user_prompt, raw_response_text=raw_text, raw_response_status="decoded", raw_response_bytes=len(raw_text.encode("utf-8")), parse_status="not_attempted", prior_observation_id=prior_obs_id, prior_observation_sha256=prior_obs_sha, rendered_observation_sha256=rendered_obs_sha, rendered_diagnosis_sha256=rendered_diag_sha)
         self._telemetry.append(record)
@@ -799,6 +928,33 @@ class ScriptedBridgeAdapter:
                     if content_fence is not None:
                         file_content = unwrapped_content
                         content_fence_unwrap = content_fence.to_mapping()
+                    unwrapped_module, trailing_module = (
+                        bridge.unwrap_trailing_python_module(
+                            file_content, self._source_text
+                        )
+                    )
+                    trailing_module_unwrap: Optional[dict[str, Any]] = None
+                    if trailing_module is not None:
+                        file_content = unwrapped_module
+                        trailing_module_unwrap = trailing_module.to_mapping()
+                    if trailing_module is None:
+                        trimmed_content, truncated_copy = (
+                            bridge.trim_truncated_trailing_module_copy(
+                                file_content, self._source_text
+                            )
+                        )
+                        if truncated_copy is not None:
+                            file_content = trimmed_content
+                            trailing_module_unwrap = truncated_copy.to_mapping()
+                    restored_content, import_restore = (
+                        bridge.restore_omitted_original_imports(
+                            file_content, self._source_text
+                        )
+                    )
+                    original_import_restore: Optional[dict[str, Any]] = None
+                    if import_restore is not None:
+                        file_content = restored_content
+                        original_import_restore = import_restore.to_mapping()
                     b_diff = serialize_whole_file_to_diff(
                         self._script_path, self._source_text,
                         args["whole_file_path"], file_content,
@@ -808,6 +964,8 @@ class ScriptedBridgeAdapter:
                         "model_whole_file_sha256": _sha256(args["whole_file_content"]),
                         "generated_diff_sha256": _sha256(b_diff),
                         "content_fence_unwrap": content_fence_unwrap,
+                        "trailing_module_unwrap": trailing_module_unwrap,
+                        "original_import_restore": original_import_restore,
                     }
                     result = bridge.BridgeResult(
                         command_token="file",
@@ -849,7 +1007,7 @@ class ScriptedBridgeAdapter:
         elif hasattr(directive, "target_state"):
             record.directive_kind = "transition"; record.target_state = directive.target_state.value; record.directive_reason = directive.reason
         record.is_diagnosis = result.is_diagnosis; record.diagnosis_text = result.diagnosis_text
-        if state.value == "Patch" and result.command_token == "patch" and not self._patch_attempted:
+        if state.value == "Patch" and result.command_token in ("patch", "file") and not self._patch_attempted:
             self._patch_attempted = True
         if result.is_diagnosis and result.diagnosis_text:
             if self._retained_diagnosis is None:

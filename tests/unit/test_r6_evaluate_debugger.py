@@ -7,6 +7,23 @@ from pathlib import Path
 from experiments.r6_debugger_training import evaluate_debugger as evaluator
 
 
+def _execution_identity(commit: str = "a" * 40) -> dict:
+    return {
+        "schema_version": evaluator.EXECUTION_IDENTITY_SCHEMA,
+        "identity_kind": "clean_commit",
+        "execution_id": f"commit-{commit}",
+        "base_head": commit,
+        "confirmations": {
+            "tracked_changes_exactly_allowlisted": True,
+            "unrelated_tracked_changes_present": False,
+            "untracked_execution_critical_source_consumed": False,
+            "git_diff_check_passed": True,
+        },
+        "reconstruction": {"passed": True},
+        "source_manifest": {"files": [], "sha256": "0" * 64},
+    }
+
+
 def test_lifecycle_log_is_crash_durable_jsonl(tmp_path: Path) -> None:
     path = tmp_path / "lifecycle.jsonl"
     recorder = evaluator.CrashDurableLifecycleLog(path)
@@ -109,6 +126,7 @@ def test_clean_holdout_aggregate_requires_five_strict_rows_and_zero_leakage(
         base_only=False,
         contract_sha="c" * 64,
         git_commit="g" * 40,
+        execution_identity=_execution_identity("g" * 40),
         selected_tasks=list(evaluator.CURATED_HOLDOUT_IDS),
         suite="curated-holdout",
         anti_leakage={
@@ -264,6 +282,10 @@ def test_same_transport_is_resident_across_stage_b_without_per_task_cuda_release
         lambda: sys.executable,
     )
     output = tmp_path / "output"
+    execution_identity_path = tmp_path / "execution_identity.json"
+    execution_identity_path.write_text(
+        json.dumps(_execution_identity()), encoding="utf-8"
+    )
     monkeypatch.setattr(
         sys,
         "argv",
@@ -281,6 +303,8 @@ def test_same_transport_is_resident_across_stage_b_without_per_task_cuda_release
             "B",
             "--tag",
             "stage-b-test",
+            "--execution-identity",
+            str(execution_identity_path),
         ],
     )
 

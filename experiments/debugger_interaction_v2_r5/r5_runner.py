@@ -1026,6 +1026,101 @@ def _make_verifier_feedback(
     return feedback
 
 
+def _preflight_reachable_breakpoint(
+    *,
+    probe_source_dir: Path,
+    parent_dir: Path,
+    module_path: str,
+    eligible_lines: tuple[int, ...],
+    pdb_session_factory: Callable[[TaskWorkspace], PdbSession],
+    emit: Callable[[str, dict[str, Any]], None],
+) -> tuple[tuple[int, ...], dict[str, Any]]:
+    """Retain the first source-ordered line reached by the real reproduction.
+
+    Candidates are tried individually in fresh disposable PDB sessions and the
+    search stops at the first pause.  This obeys the protocol's breakpoint-list
+    bound, makes the ordering explicit, and exposes no verifier, oracle,
+    reference repair, or hidden test content.
+    """
+    emit(
+        "breakpoint_reachability_start",
+        {
+            "module_path": module_path,
+            "structural_candidate_count": len(eligible_lines),
+            "structural_candidates_sha256": _sha256(
+                ",".join(str(line) for line in eligible_lines)
+            ),
+        },
+    )
+    attempts: list[dict[str, Any]] = []
+    selected: Optional[tuple[int, str]] = None
+    for candidate in eligible_lines:
+        workspace = TaskWorkspace(
+            str(probe_source_dir), parent_dir=str(parent_dir)
+        )
+        session: Optional[PdbSession] = None
+        cleanup_errors: list[str] = []
+        try:
+            session = pdb_session_factory(workspace)
+            session.start()
+            result = session.start_paused_target(module_path, [candidate])
+        finally:
+            if session is not None:
+                try:
+                    session.stop()
+                except Exception as exc:  # pragma: no cover - defensive evidence
+                    cleanup_errors.append(
+                        f"session.stop: {type(exc).__name__}: {exc}"
+                    )
+            try:
+                workspace.cleanup()
+            except Exception as exc:  # pragma: no cover - defensive evidence
+                cleanup_errors.append(
+                    f"workspace.cleanup: {type(exc).__name__}: {exc}"
+                )
+        if cleanup_errors:
+            raise R5LauncherError(
+                "breakpoint reachability preflight cleanup failed: "
+                + "; ".join(cleanup_errors)
+            )
+        line = result.get("line")
+        function = result.get("function")
+        paused = (
+            result.get("state") == "paused"
+            and line == candidate
+            and type(function) is str
+            and function not in ("", "<module>")
+        )
+        attempts.append({
+            "candidate": candidate,
+            "state": result.get("state"),
+            "line": line,
+            "function": function,
+            "paused_in_function": paused,
+        })
+        if paused:
+            selected = (candidate, function)
+            break
+    if selected is None:
+        raise R5LauncherError(
+            "real reproduction did not reach any function-scoped structural "
+            f"breakpoint candidate after {len(attempts)} bounded attempt(s)"
+        )
+    line, function = selected
+    audit = {
+        "method": "source_ordered_individual_real_reproduction",
+        "structural_candidates": list(eligible_lines),
+        "attempts": attempts,
+        "selected_lines": [line],
+        "selected_function": function,
+        "state": result.get("state"),
+        "cleanup": "cleaned",
+        "oracle_or_verifier_consulted": False,
+    }
+    emit("breakpoint_reachability_complete", audit)
+    return (line,), audit
+
+
 def run_experiment(
     contract: dict[str, Any],
     transport: Any,
@@ -1056,10 +1151,13 @@ def run_experiment(
     original_source = (fixture_dir / module_path).read_text(encoding="utf-8")
     original_source_sha256 = hashlib.sha256(original_source.encode("utf-8")).hexdigest()
     original_source_line_count = len(original_source.splitlines())
-    eligible_lines = breakpoint_eligible_lines(original_source)
-    if not eligible_lines:
+    structural_eligible_lines = breakpoint_eligible_lines(original_source)
+    if not structural_eligible_lines:
         raise R5LauncherError("no mechanically eligible breakpoint lines in original source")
-    if any(l < 1 or l > original_source_line_count for l in eligible_lines):
+    if any(
+        line < 1 or line > original_source_line_count
+        for line in structural_eligible_lines
+    ):
         raise R5LauncherError("eligible breakpoint line escapes the original source region")
 
     case_dir = output_dir / f"case-{task_id}"
@@ -1071,7 +1169,7 @@ def run_experiment(
         fixture_dir, module_path, task.reproduction.argv, case_dir,
         original_source_sha256=original_source_sha256,
         original_source_line_count=original_source_line_count,
-        eligible_lines=eligible_lines,
+        eligible_lines=structural_eligible_lines,
         task_id=task_id,
     )
     emit(
@@ -1080,6 +1178,24 @@ def run_experiment(
     )
     if r5_probe.driver_start_line <= original_source_line_count:
         raise R5LauncherError("appended driver must start beyond the original source")
+
+    if contract.get("model", {}).get("model_role"):
+        eligible_lines = structural_eligible_lines
+        breakpoint_reachability = {
+            "method": "not_applied_to_scripted_training_transport",
+            "structural_candidates": list(structural_eligible_lines),
+            "selected_lines": list(structural_eligible_lines),
+            "oracle_or_verifier_consulted": False,
+        }
+    else:
+        eligible_lines, breakpoint_reachability = _preflight_reachable_breakpoint(
+            probe_source_dir=r5_probe.source_dir,
+            parent_dir=case_dir,
+            module_path=module_path,
+            eligible_lines=structural_eligible_lines,
+            pdb_session_factory=pdb_session_factory,
+            emit=emit,
+        )
 
     emit("task_workspace_create_start", {"parent_dir": str(case_dir)})
     workspace = TaskWorkspace(str(fixture_dir), parent_dir=str(case_dir))
@@ -1316,6 +1432,8 @@ def run_experiment(
             "original_source_sha256": original_source_sha256,
             "original_source_line_count": original_source_line_count,
             "eligible_breakpoint_lines": list(eligible_lines),
+            "structural_breakpoint_lines": list(structural_eligible_lines),
+            "breakpoint_reachability": breakpoint_reachability,
             "runtime_appended_driver_start_line": r5_probe.driver_start_line,
             "launcher_sha256": _sha256(
                 build_r5_launcher_source(task.reproduction.argv)

@@ -147,7 +147,13 @@ def find_pausing_breakpoint(
     return None, None
 
 
-def build_transport(task_id: str, algo: str, module_path: str) -> ScriptedTrajectoryTransport:
+def build_transport(
+    task_id: str,
+    algo: str,
+    module_path: str,
+    *,
+    feedback_recovery: bool = False,
+) -> ScriptedTrajectoryTransport:
     task = load_task(str(CURATED_ROOT / task_id / "task.json"))
     fixture_dir = CURATED_ROOT / task_id
     original_source = (fixture_dir / module_path).read_text(encoding="utf-8")
@@ -170,6 +176,12 @@ def build_transport(task_id: str, algo: str, module_path: str) -> ScriptedTrajec
             breakpoint_line=line,
             diagnosis_text=diagnosis_for(algo),
             corrected_source=corrected_source,
+            rejected_source=(
+                original_source.rstrip("\n")
+                + "\n\n# R6 recovery candidate: behavior intentionally unchanged.\n"
+                if feedback_recovery
+                else None
+            ),
         ),
         {"breakpoint_line": line, "changed_lines": changed,
          "pause_function": (pause or {}).get("function"),
@@ -183,8 +195,15 @@ def run_trajectory(
     algo: str,
     module_path: str,
     output_dir: Path,
+    *,
+    feedback_recovery: bool = False,
 ) -> dict[str, Any]:
-    task, transport, bp_meta = build_transport(task_id, algo, module_path)
+    task, transport, bp_meta = build_transport(
+        task_id,
+        algo,
+        module_path,
+        feedback_recovery=feedback_recovery,
+    )
     pdb_timeout = contract["budgets"]["pdb_request_timeout_seconds"]
 
     def session_factory(workspace: TaskWorkspace) -> PdbSession:
@@ -215,15 +234,21 @@ def main() -> int:
                         help="trajectory output root (default experiments/r6_debugger_training/runs/trajectories-v1)")
     parser.add_argument("--algo", type=str, default=None,
                         help="single algorithm (debugging aid)")
+    parser.add_argument(
+        "--feedback-recovery",
+        action="store_true",
+        help="generate train-split trajectories with one rejected candidate before repair",
+    )
     args = parser.parse_args()
 
     if not SPLIT_MANIFEST.is_file():
         print(f"split manifest missing: {SPLIT_MANIFEST} — run quixbugs_tasks.py first")
         return 1
     split = json.loads(SPLIT_MANIFEST.read_text(encoding="utf-8"))
-    entries = [
-        (e["task_id"], e["algo"]) for e in split["train_tasks"] + split["validation_tasks"]
-    ]
+    source_entries = split["train_tasks"] if args.feedback_recovery else (
+        split["train_tasks"] + split["validation_tasks"]
+    )
+    entries = [(e["task_id"], e["algo"]) for e in source_entries]
     if args.algo:
         entries = [e for e in entries if e[1] == args.algo]
         if not entries:
@@ -244,11 +269,29 @@ def main() -> int:
         case_output.mkdir(parents=True, exist_ok=True)
         try:
             evidence = run_trajectory(
-                contract, task_id, algo, f"{algo}.py", case_output
+                contract,
+                task_id,
+                algo,
+                f"{algo}.py",
+                case_output,
+                feedback_recovery=args.feedback_recovery,
             )
             gate = evidence.get("gate_results", {}).get("gate_patch") or {}
             verifier = evidence.get("verifier") or {}
-            ok = bool(gate.get("passed")) and verifier.get("outcome") == "RESOLVED"
+            verifier_history = evidence.get("verifier_feedback_history") or []
+            recovery_valid = (
+                not args.feedback_recovery
+                or (
+                    len(verifier_history) >= 2
+                    and verifier_history[0].get("outcome") != "RESOLVED"
+                    and verifier_history[-1].get("outcome") == "RESOLVED"
+                )
+            )
+            ok = (
+                bool(gate.get("passed"))
+                and verifier.get("outcome") == "RESOLVED"
+                and recovery_valid
+            )
             results[task_id] = {
                 "algo": algo,
                 "success": ok,
@@ -278,6 +321,8 @@ def main() -> int:
         "results": results,
         "success_count": sum(1 for r in results.values() if r.get("success")),
         "total_count": len(results),
+        "feedback_recovery": args.feedback_recovery,
+        "split_scope": "train" if args.feedback_recovery else "train+validation",
     }
     (output_root / "generation_summary.json").write_text(
         json.dumps(summary, indent=2, ensure_ascii=False, allow_nan=False),

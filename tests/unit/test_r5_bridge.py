@@ -25,6 +25,7 @@ from agentic_debugger.evaluation.runner import load_task
 from agentic_debugger.events.schema import Observation
 
 from experiments.debugger_interaction_v2_r5 import bridge as r5_bridge
+from experiments.debugger_interaction_v2_r5 import r5_runner
 from experiments.debugger_interaction_v2_r5.adapter import (
     R5DebuggerBridgeAdapter,
     R5StageTracker,
@@ -140,6 +141,337 @@ class TestR5AdapterCoupling:
             r3_bridge.SYSTEM_PROMPT.encode("utf-8")
         ).hexdigest()
 
+    def test_whole_file_patch_keeps_transport_attempt_index_in_lifecycle(self):
+        script_path = "display_name.py"
+        source_text = (
+            CURATED_ROOT / "curated-none-handling-001" / script_path
+        ).read_text(encoding="utf-8")
+        replacement = source_text.replace(
+            "normalized_name = name.strip()",
+            'normalized_name = name.strip() if name is not None else ""',
+        )
+        transport = _RecordingTransport((f"file {script_path}\n{replacement}",))
+        tracker = R5StageTracker()
+        provider = make_r5_session_state_provider(
+            type(
+                "C",
+                (),
+                {"pdb_session": None, "pdb_session_started": False},
+            )(),
+            lambda: tracker.stage,
+        )
+        lifecycle = []
+        adapter = R5DebuggerBridgeAdapter(
+            transport=transport,
+            model_name="r5-test",
+            task_description="Title: t\nDescription: d",
+            script_path=script_path,
+            source_text=source_text,
+            eligible_lines=(1, 2, 3, 4, 5),
+            original_line_count=len(source_text.splitlines()),
+            session_state_provider=provider,
+            stage_tracker=tracker,
+            lifecycle_event=lambda event, details: lifecycle.append((event, details)),
+        )
+
+        directive = adapter.next_directive(_snapshot(ControllerState.PATCH))
+
+        assert directive.name.value == "apply_patch"
+        assert directive.arguments["patch"].startswith(f"--- a/{script_path}\n")
+        assert [event for event, _details in lifecycle] == [
+            "model_request_start",
+            "model_request_complete",
+            "directive_accepted",
+        ]
+        assert lifecycle[-1][1]["transport_attempt_index"] == 1
+        assert adapter.patch_attempts[-1]["representation"] == "whole_file"
+        assert adapter.patch_attempted is True
+
+    def test_whole_file_repair_advances_retry_to_unified_diff_only(self):
+        script_path = "display_name.py"
+        source_text = (
+            CURATED_ROOT / "curated-none-handling-001" / script_path
+        ).read_text(encoding="utf-8")
+        replacement = source_text.replace(
+            "normalized_name = name.strip()",
+            'normalized_name = name.strip() if name is not None else ""',
+        )
+        retry_diff = (
+            "patch\n"
+            "--- a/display_name.py\n"
+            "+++ b/display_name.py\n"
+            "@@ -3,3 +3,3 @@\n"
+            "     if not normalized_name:\n"
+            "         return \"Anonymous\"\n"
+            "-    return normalized_name.title()\n"
+            "+    return normalized_name\n"
+        )
+        transport = _RecordingTransport((
+            f"file {script_path}\n{replacement}",
+            retry_diff,
+        ))
+        tracker = R5StageTracker()
+        provider = make_r5_session_state_provider(
+            type("C", (), {"pdb_session": None, "pdb_session_started": False})(),
+            lambda: tracker.stage,
+        )
+        adapter = R5DebuggerBridgeAdapter(
+            transport=transport,
+            model_name="r5-test",
+            task_description="Title: t\nDescription: d",
+            script_path=script_path,
+            source_text=source_text,
+            eligible_lines=(1, 2, 3, 4, 5),
+            original_line_count=len(source_text.splitlines()),
+            session_state_provider=provider,
+            stage_tracker=tracker,
+        )
+
+        first = adapter.next_directive(_snapshot(ControllerState.PATCH))
+        exception_feedback = _observation(
+            "apply_patch",
+            {
+                "verifier_feedback": {
+                    "status": "COMPLETED",
+                    "outcome": "REGRESSION",
+                    "failures": [
+                        {
+                            "kind": "f2p",
+                            "status": "FAIL",
+                            "production_exception": "module.py:6: RuntimeError: boom",
+                        }
+                    ],
+                }
+            },
+        )
+        second = adapter.next_directive(
+            _snapshot(ControllerState.PATCH, exception_feedback)
+        )
+
+        assert first.name.value == second.name.value == "apply_patch"
+        assert "Available commands:\n  - file\n  - patch" in transport.user_prompts[0]
+        assert "Available commands:\n  - failed\n  - patch" in transport.user_prompts[1]
+        assert "emit a unified diff only" in transport.user_prompts[1]
+        assert "do not emit another 'file' replacement" in transport.user_prompts[1]
+        assert adapter.patch_attempts[1]["representation"] == "unified_diff"
+
+    def test_syntax_failure_retry_keeps_whole_file_recovery(self):
+        script_path = "display_name.py"
+        source_text = (
+            CURATED_ROOT / "curated-none-handling-001" / script_path
+        ).read_text(encoding="utf-8")
+        invalid = source_text + '\n"""\n'
+        recovered = source_text.replace(
+            "normalized_name = name.strip()",
+            'normalized_name = name.strip() if name is not None else ""',
+        )
+        transport = _RecordingTransport((
+            f"file {script_path}\n{invalid}",
+            f"file {script_path}\n{recovered}",
+        ))
+        tracker = R5StageTracker()
+        provider = make_r5_session_state_provider(
+            type("C", (), {"pdb_session": None, "pdb_session_started": False})(),
+            lambda: tracker.stage,
+        )
+        adapter = R5DebuggerBridgeAdapter(
+            transport=transport,
+            model_name="r5-test",
+            task_description="Title: t\nDescription: d",
+            script_path=script_path,
+            source_text=source_text,
+            eligible_lines=(1, 2, 3, 4, 5),
+            original_line_count=len(source_text.splitlines()),
+            session_state_provider=provider,
+            stage_tracker=tracker,
+        )
+        adapter.next_directive(_snapshot(ControllerState.PATCH))
+        syntax_feedback = _observation(
+            "apply_patch",
+            {
+                "verifier_feedback": {
+                    "status": "SYNTAX_FAILED",
+                    "outcome": "None",
+                    "failures": [],
+                }
+            },
+        )
+
+        second = adapter.next_directive(
+            _snapshot(ControllerState.PATCH, syntax_feedback)
+        )
+
+        assert second.name.value == "apply_patch"
+        assert "Available commands:\n  - failed\n  - file\n  - patch" in transport.user_prompts[1]
+        assert "emit a unified diff only" not in transport.user_prompts[1]
+        assert adapter.patch_attempts[1]["representation"] == "whole_file"
+
+    def test_breakpoint_must_match_preflight_proven_line(self):
+        script_path = "display_name.py"
+        source_text = (
+            CURATED_ROOT / "curated-none-handling-001" / script_path
+        ).read_text(encoding="utf-8")
+        transport = _RecordingTransport(("break 5", "break 2"))
+        tracker = R5StageTracker()
+        provider = make_r5_session_state_provider(
+            type(
+                "C",
+                (),
+                {"pdb_session": None, "pdb_session_started": False},
+            )(),
+            lambda: tracker.stage,
+        )
+        adapter = R5DebuggerBridgeAdapter(
+            transport=transport,
+            model_name="r5-test",
+            task_description="Title: t\nDescription: d",
+            script_path=script_path,
+            source_text=source_text,
+            eligible_lines=(2,),
+            original_line_count=len(source_text.splitlines()),
+            session_state_provider=provider,
+            stage_tracker=tracker,
+            max_retries=1,
+        )
+
+        directive = adapter.next_directive(_snapshot(ControllerState.RUNTIME_EVIDENCE))
+
+        assert directive.arguments == {"breakpoint_line": 2}
+        assert [record["parse_result"]["status"] for record in adapter.telemetry] == [
+            "rejected",
+            "accepted",
+        ]
+        assert (
+            adapter.telemetry[0]["parse_result"]["rejection_category"]
+            == "breakpoint_not_preflighted"
+        )
+        assert "use one of: 2" in transport.user_prompts[1]
+
+    def test_duplicate_verifier_rejected_patch_requires_material_change(self):
+        script_path = "display_name.py"
+        source_text = (
+            CURATED_ROOT / "curated-none-handling-001" / script_path
+        ).read_text(encoding="utf-8")
+        first_candidate = source_text.replace(
+            "return normalized_name",
+            "return normalized_name.upper()",
+        )
+        second_candidate = source_text.replace(
+            "normalized_name = name.strip()",
+            'normalized_name = name.strip() if name is not None else ""',
+        )
+        transport = _RecordingTransport((
+            f"file {script_path}\n{first_candidate}",
+            f"file {script_path}\n{first_candidate}",
+            f"file {script_path}\n{second_candidate}",
+        ))
+        tracker = R5StageTracker()
+        provider = make_r5_session_state_provider(
+            type(
+                "C",
+                (),
+                {"pdb_session": None, "pdb_session_started": False},
+            )(),
+            lambda: tracker.stage,
+        )
+        adapter = R5DebuggerBridgeAdapter(
+            transport=transport,
+            model_name="r5-test",
+            task_description="Title: t\nDescription: d",
+            script_path=script_path,
+            source_text=source_text,
+            eligible_lines=(2,),
+            original_line_count=len(source_text.splitlines()),
+            session_state_provider=provider,
+            stage_tracker=tracker,
+            max_retries=1,
+        )
+
+        first = adapter.next_directive(_snapshot(ControllerState.PATCH))
+        assert adapter.patch_attempted is True
+        # Isolate the semantic-duplicate guard from the separate retry-stage
+        # contract, which intentionally exposes only unified diffs.
+        adapter._patch_attempted = False
+        second = adapter.next_directive(_snapshot(ControllerState.PATCH))
+
+        assert first.arguments["patch"] != second.arguments["patch"]
+        assert len(adapter.patch_attempts) == 2
+        assert [record["parse_result"]["status"] for record in adapter.telemetry] == [
+            "accepted",
+            "rejected",
+            "accepted",
+        ]
+        assert (
+            adapter.telemetry[1]["parse_result"]["rejection_category"]
+            == "duplicate_patch"
+        )
+        assert "materially different repair" in transport.user_prompts[2]
+
+    def test_whitespace_variant_of_rejected_whole_file_is_semantic_duplicate(self):
+        script_path = "display_name.py"
+        source_text = (
+            CURATED_ROOT / "curated-none-handling-001" / script_path
+        ).read_text(encoding="utf-8")
+        first_candidate = source_text.replace(
+            "return normalized_name",
+            "return normalized_name.upper()",
+        )
+        formatting_only_variant = "\n" + first_candidate
+        materially_different = source_text.replace(
+            "normalized_name = name.strip()",
+            'normalized_name = name.strip() if name is not None else ""',
+        )
+        transport = _RecordingTransport((
+            f"file {script_path}\n{first_candidate}",
+            f"file {script_path}\n{formatting_only_variant}",
+            f"file {script_path}\n{materially_different}",
+        ))
+        tracker = R5StageTracker()
+        provider = make_r5_session_state_provider(
+            type(
+                "C",
+                (object,),
+                {"pdb_session": None, "pdb_session_started": False},
+            )(),
+            lambda: tracker.stage,
+        )
+        adapter = R5DebuggerBridgeAdapter(
+            transport=transport,
+            model_name="r5-test",
+            task_description="Title: t\nDescription: d",
+            script_path=script_path,
+            source_text=source_text,
+            eligible_lines=(2,),
+            original_line_count=len(source_text.splitlines()),
+            session_state_provider=provider,
+            stage_tracker=tracker,
+            max_retries=1,
+        )
+
+        first = adapter.next_directive(_snapshot(ControllerState.PATCH))
+        assert adapter.patch_attempted is True
+        # Isolate the semantic-duplicate guard from the separate retry-stage
+        # contract, which intentionally exposes only unified diffs.
+        adapter._patch_attempted = False
+        second = adapter.next_directive(_snapshot(ControllerState.PATCH))
+
+        assert first.arguments["patch"] != second.arguments["patch"]
+        assert len(adapter.patch_attempts) == 2
+        assert adapter.patch_attempts[0]["python_ast_sha256"]
+        assert (
+            adapter.patch_attempts[0]["python_ast_sha256"]
+            != adapter.patch_attempts[1]["python_ast_sha256"]
+        )
+        assert [record["parse_result"]["status"] for record in adapter.telemetry] == [
+            "accepted",
+            "rejected",
+            "accepted",
+        ]
+        assert "same executable Python AST" in transport.user_prompts[2]
+        assert "blank lines are not a materially different repair" in transport.user_prompts[2]
+        assert "explicit raise and controlling conditional" in transport.user_prompts[2]
+        assert first_candidate not in transport.user_prompts[2]
+
 
 class TestStackRegionFiltering:
     FRAMES = [
@@ -252,6 +584,219 @@ class TestFenceUnwrap:
         assert result.command_token == "patch"
         assert result.directive.arguments["patch"].startswith("--- a/display_name.py")
 
+
+class TestTrailingPythonModuleUnwrap:
+    ORIGINAL = (
+        "def search(node):\n"
+        "    return node\n\n"
+        '"""Public documentation."""\n'
+    )
+    CORRECTED = (
+        "def search(node):\n"
+        "    return node is not None\n"
+    )
+
+    def test_unwraps_original_module_plus_model_authored_alternative(self):
+        outer = (
+            "def search(node):\n"
+            "    return node\n\n"
+            '"""\n'
+            + self.CORRECTED
+            + '"""\n'
+        )
+
+        unwrapped, record = r5_bridge.unwrap_trailing_python_module(
+            outer, self.ORIGINAL
+        )
+
+        assert unwrapped == self.CORRECTED
+        assert record is not None and record.unwrapped is True
+        assert record.shape == "original_module_plus_trailing_python_string"
+
+    def test_normal_documentation_string_is_not_unwrapped(self):
+        unwrapped, record = r5_bridge.unwrap_trailing_python_module(
+            self.ORIGINAL, self.ORIGINAL
+        )
+        assert unwrapped == self.ORIGINAL
+        assert record is None
+
+    def test_outer_program_change_fails_closed(self):
+        outer = (
+            "def search(node):\n"
+            "    return 999\n\n"
+            '"""\n'
+            + self.CORRECTED
+            + '"""\n'
+        )
+        unwrapped, record = r5_bridge.unwrap_trailing_python_module(
+            outer, self.ORIGINAL
+        )
+        assert unwrapped == outer
+        assert record is None
+
+    def test_inner_program_with_different_symbols_fails_closed(self):
+        outer = (
+            "def search(node):\n"
+            "    return node\n\n"
+            '"""\n'
+            "def unrelated(node):\n"
+            "    return True\n"
+            '"""\n'
+        )
+        unwrapped, record = r5_bridge.unwrap_trailing_python_module(
+            outer, self.ORIGINAL
+        )
+        assert unwrapped == outer
+        assert record is None
+
+    def test_trims_changed_module_before_truncated_quoted_stale_copy(self):
+        truncated = (
+            self.CORRECTED
+            + '\n"""\n'
+            + "def search(node):\n"
+            + "    return no"
+        )
+
+        normalized, record = r5_bridge.trim_truncated_trailing_module_copy(
+            truncated, self.ORIGINAL
+        )
+
+        assert normalized == self.CORRECTED
+        assert record is not None and record.unwrapped is True
+        assert record.shape == "changed_module_plus_truncated_quoted_stale_copy"
+
+    def test_truncated_quote_without_restarted_definition_fails_closed(self):
+        truncated = self.CORRECTED + '\n"""\nplain unfinished text'
+        normalized, record = r5_bridge.trim_truncated_trailing_module_copy(
+            truncated, self.ORIGINAL
+        )
+        assert normalized == truncated
+        assert record is None
+
+    def test_truncated_copy_with_missing_definition_fails_closed(self):
+        original = self.ORIGINAL + "\ndef helper():\n    return 1\n"
+        truncated = self.CORRECTED + '\n"""\ndef search(node):\n'
+        normalized, record = r5_bridge.trim_truncated_trailing_module_copy(
+            truncated, original
+        )
+        assert normalized == truncated
+        assert record is None
+
+    def test_unchanged_prefix_before_truncated_copy_fails_closed(self):
+        truncated = self.ORIGINAL + '\n"""\ndef search(node):\n'
+        normalized, record = r5_bridge.trim_truncated_trailing_module_copy(
+            truncated, self.ORIGINAL
+        )
+        assert normalized == truncated
+        assert record is None
+
+
+class TestOriginalImportRestore:
+    ORIGINAL = (
+        "from heapq import *\n\n"
+        "def solve(items):\n"
+        "    heappush(items, 1)\n"
+        "    return 0\n"
+    )
+
+    def test_restores_omitted_import_for_materially_changed_module(self):
+        candidate = (
+            "def solve(items):\n"
+            "    heappush(items, 1)\n"
+            "    return len(items)\n"
+        )
+        normalized, record = r5_bridge.restore_omitted_original_imports(
+            candidate, self.ORIGINAL
+        )
+        assert normalized.startswith("from heapq import *\n\n")
+        assert record is not None and record.restored is True
+        assert record.shape == "valid_changed_module_with_all_original_imports_omitted"
+
+    def test_candidate_with_import_is_unchanged(self):
+        candidate = self.ORIGINAL.replace("return 0", "return len(items)")
+        normalized, record = r5_bridge.restore_omitted_original_imports(
+            candidate, self.ORIGINAL
+        )
+        assert normalized == candidate
+        assert record is None
+
+    def test_unchanged_candidate_fails_closed(self):
+        candidate = self.ORIGINAL.split("\n\n", 1)[1]
+        normalized, record = r5_bridge.restore_omitted_original_imports(
+            candidate, self.ORIGINAL
+        )
+        assert normalized == candidate
+        assert record is None
+
+    def test_different_definition_set_fails_closed(self):
+        candidate = "def unrelated(items):\n    return len(items)\n"
+        normalized, record = r5_bridge.restore_omitted_original_imports(
+            candidate, self.ORIGINAL
+        )
+        assert normalized == candidate
+        assert record is None
+
+
+def test_breakpoint_eligible_lines_exclude_module_scope_docstrings() -> None:
+    source = (
+        "def quicksort(arr):\n"
+        "    if not arr:\n"
+        "        return []\n"
+        "    return arr\n\n"
+        '"""Module documentation.\nMore text.\n"""\n'
+    )
+
+    eligible = r5_bridge.breakpoint_eligible_lines(source)
+
+    assert eligible
+    assert set(eligible) <= {2, 3, 4}
+    assert 6 not in eligible
+
+
+def test_reachability_preflight_advertises_only_real_paused_line(tmp_path: Path) -> None:
+    probe = tmp_path / "probe"
+    probe.mkdir()
+    (probe / "target.py").write_text("def target():\n    return 1\n", encoding="utf-8")
+    calls: list[object] = []
+
+    results = iter([
+        {"state": "exited", "line": None, "function": None},
+        {"state": "paused", "line": 7, "function": "target"},
+    ])
+
+    class FakeSession:
+        def start(self) -> None:
+            calls.append("start")
+
+        def start_paused_target(self, script, lines):
+            calls.append((script, lines))
+            return next(results)
+
+        def stop(self) -> None:
+            calls.append("stop")
+
+    events: list[tuple[str, dict]] = []
+    selected, audit = r5_runner._preflight_reachable_breakpoint(
+        probe_source_dir=probe,
+        parent_dir=tmp_path,
+        module_path="target.py",
+        eligible_lines=(3, 7, 9),
+        pdb_session_factory=lambda _workspace: FakeSession(),
+        emit=lambda event, details: events.append((event, details)),
+    )
+
+    assert selected == (7,)
+    assert audit["selected_function"] == "target"
+    assert audit["oracle_or_verifier_consulted"] is False
+    assert calls == [
+        "start", ("target.py", [3]), "stop",
+        "start", ("target.py", [7]), "stop",
+    ]
+    assert [attempt["candidate"] for attempt in audit["attempts"]] == [3, 7]
+    assert [event for event, _ in events] == [
+        "breakpoint_reachability_start",
+        "breakpoint_reachability_complete",
+    ]
 
 class TestTerminalStage:
     """R5.2 terminal runtime progression: crash-on-step evidence allows
@@ -484,6 +1029,11 @@ class TestRealFailureEvidenceRendering:
         assert "Real verifier (independent EvaluationVerifier)" in rendered
         assert "outcome=REGRESSION" in rendered
         assert "TypeError: _format_price() takes 1 positional argument" in rendered
+        assert "must eliminate the exact reported exception" in rendered
+        assert "guards that enforce the superseded invariant" in rendered
+        assert "HARD CAUSAL CONSTRAINT" in rendered
+        assert "remove or revise that raise and its controlling conditional" in rendered
+        assert "Do not only replace one construction or copy expression" in rendered
         # Node ids / test names never render.
         assert "test_price.py::" not in rendered
         assert "node_id" not in rendered
@@ -512,6 +1062,33 @@ class TestRealFailureEvidenceRendering:
         rendered = r5_bridge._render_observation(obs)
         assert "[p2p] FAIL" in rendered
         assert "no sanitized production exception available" in rendered
+        assert "candidate regressed previously passing behavior" in rendered
+
+    def test_no_op_verifier_feedback_requires_causal_semantic_retry(self):
+        obs = _observation(
+            "apply_patch",
+            {
+                "applied": True,
+                "changed_files": ["branch.py"],
+                "verifier_feedback": {
+                    "status": "COMPLETED",
+                    "outcome": "NO_OP",
+                    "f2p_total": 1,
+                    "f2p_passed": 0,
+                    "p2p_total": 3,
+                    "p2p_passed": 3,
+                    "full_suite": "FAIL",
+                    "syntax": True,
+                    "failures": [
+                        {"kind": "f2p", "status": "FAIL", "production_exception": None}
+                    ],
+                },
+            },
+        )
+        rendered = r5_bridge._render_observation(obs)
+        assert "candidate preserved the reproduced failure" in rendered
+        assert "more-specific predicates before broader ones" in rendered
+        assert "test_" not in rendered
 
     def test_step_pause_outside_region_renders_unwind_not_launcher(self):
         obs = _observation(

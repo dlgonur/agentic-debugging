@@ -148,6 +148,13 @@ class TestScanPrompt:
         prompt = "  name = None\n  normalized_name = 'unnamed'\n"
         assert scan_prompt(prompt, forbidden) == []
 
+    def test_repair_identifier_already_in_original_source_is_not_forbidden(self):
+        """A repair token already visible in source/locals is not an oracle."""
+        forbidden = _forbidden("curated-off-by-one-002")
+        assert "end_index" not in forbidden.reference_repair_snippets
+        prompt = "[get_frame_locals] status=ok\n  end_index = 4\n"
+        assert scan_prompt(prompt, forbidden) == []
+
     def test_legitimate_short_word_in_description_not_finding(self):
         """003's public description contains the word 'employee'; the
         expected-literal needle for it is excluded at derivation time."""

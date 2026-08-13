@@ -64,6 +64,8 @@ class BridgeRejection(str, Enum):
     COMMAND_NOT_IN_STATE = "command_not_in_state"
     ILLEGAL_TRANSITION = "illegal_transition"
     COMMAND_NOT_IN_LIFECYCLE = "command_not_in_lifecycle"
+    BREAKPOINT_NOT_PREFLIGHTED = "breakpoint_not_preflighted"
+    DUPLICATE_PATCH = "duplicate_patch"
 
 
 class BridgeParseError(Exception):
@@ -184,16 +186,18 @@ class R3PatchStage(str, Enum):
 
     NEEDS_FIRST_REPAIR = "patch_needs_first_repair"  # only `patch`/`file`
     RETRY = "patch_retry"                            # patch | file | failed
+    CAUSAL_RETRY_DIFF_ONLY = "patch_causal_retry_diff_only"  # patch | failed
 
 
 # R3.1 per-stage commands in ControllerState.PATCH.
 _R3_PATCH_STAGE_COMMANDS: dict[R3PatchStage, frozenset[str]] = {
     R3PatchStage.NEEDS_FIRST_REPAIR: frozenset({"patch", "file"}),
     R3PatchStage.RETRY: frozenset({"patch", "file", "failed"}),
+    R3PatchStage.CAUSAL_RETRY_DIFF_ONLY: frozenset({"patch", "failed"}),
 }
 
 
-def patch_diff_affordance(module_path: str) -> str:
+def patch_diff_affordance(module_path: str, *, retry: bool = False) -> str:
     """Local repair affordance shown immediately before final output
     instruction.
 
@@ -203,6 +207,19 @@ def patch_diff_affordance(module_path: str) -> str:
     remains available as an alternative.  Both name the per-task writable
     production path (public task data); no oracle or test metadata involved.
     """
+    if retry:
+        return (
+            "Required retry response now — emit a unified diff only. The prior "
+            "whole-file repair was already independently verified and rejected; "
+            "do not emit another 'file' replacement:\n"
+            "patch\n"
+            f"--- a/{module_path}\n"
+            f"+++ b/{module_path}\n"
+            "@@ ...\n"
+            " <context>\n"
+            "-<old line>\n"
+            "+<new line>"
+        )
     return (
         "Required response now — produce your best minimal repair using the "
         "source, debugger observations, and your diagnosis above.  PREFERRED "
@@ -412,6 +429,321 @@ def unwrap_single_fence(raw_text: str) -> tuple[str, Optional[FenceUnwrapRecord]
     )
 
 
+@dataclass(frozen=True)
+class TrailingModuleUnwrapRecord:
+    """Audit record for one model-authored Python module embedded as a string."""
+
+    unwrapped: bool
+    shape: str
+    original_sha256: str
+    content_sha256: str
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "unwrapped": self.unwrapped,
+            "shape": self.shape,
+            "original_sha256": self.original_sha256,
+            "content_sha256": self.content_sha256,
+        }
+
+
+@dataclass(frozen=True)
+class OriginalImportRestoreRecord:
+    restored: bool
+    shape: str
+    imported_names: tuple[str, ...]
+    original_sha256: str
+    content_sha256: str
+
+    def to_mapping(self) -> dict[str, object]:
+        return {
+            "restored": self.restored,
+            "shape": self.shape,
+            "imported_names": list(self.imported_names),
+            "original_sha256": self.original_sha256,
+            "content_sha256": self.content_sha256,
+        }
+
+
+def restore_omitted_original_imports(
+    file_content: str,
+    original_source: str,
+) -> tuple[str, Optional[OriginalImportRestoreRecord]]:
+    """Restore unchanged top-level imports omitted from a whole-file repair.
+
+    This source-only transform applies only when the valid candidate contains
+    no imports, retains exactly the original top-level definitions, materially
+    changes the non-documentation program, and loads a name bound by an
+    original import.  Exact original import source segments are prepended.
+    """
+    import ast
+    import hashlib as _hashlib
+
+    if type(file_content) is not str or type(original_source) is not str:
+        return file_content, None
+    try:
+        candidate = ast.parse(file_content)
+        original = ast.parse(original_source)
+    except (SyntaxError, ValueError, TypeError):
+        return file_content, None
+    import_types = (ast.Import, ast.ImportFrom)
+    if any(isinstance(node, import_types) for node in candidate.body):
+        return file_content, None
+    imports = [node for node in original.body if isinstance(node, import_types)]
+    if not imports:
+        return file_content, None
+    definition_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+    def _definitions(module: ast.Module) -> set[str]:
+        return {
+            node.name for node in module.body if isinstance(node, definition_types)
+        }
+
+    if not _definitions(original) or _definitions(candidate) != _definitions(original):
+        return file_content, None
+
+    def _program(module: ast.Module) -> ast.Module:
+        return ast.Module(
+            body=[
+                node
+                for node in module.body
+                if not isinstance(node, import_types)
+                and not (
+                    isinstance(node, ast.Expr)
+                    and isinstance(node.value, ast.Constant)
+                    and type(node.value.value) is str
+                )
+            ],
+            type_ignores=[],
+        )
+
+    if ast.dump(_program(candidate), include_attributes=False) == ast.dump(
+        _program(original), include_attributes=False
+    ):
+        return file_content, None
+
+    imported_names: set[str] = set()
+    wildcard_import = False
+    for node in imports:
+        for alias in node.names:
+            if alias.name == "*":
+                wildcard_import = True
+            else:
+                imported_names.add(alias.asname or alias.name.split(".", 1)[0])
+    loaded_names = {
+        node.id
+        for node in ast.walk(candidate)
+        if isinstance(node, ast.Name) and isinstance(node.ctx, ast.Load)
+    }
+    if not wildcard_import and not (imported_names & loaded_names):
+        return file_content, None
+    if wildcard_import and not loaded_names:
+        return file_content, None
+
+    segments = [ast.get_source_segment(original_source, node) for node in imports]
+    if any(type(segment) is not str or not segment.strip() for segment in segments):
+        return file_content, None
+    import_text = "\n".join(segment.strip() for segment in segments) + "\n\n"
+    normalized = import_text + file_content.lstrip("\n")
+    try:
+        ast.parse(normalized)
+    except (SyntaxError, ValueError, TypeError):
+        return file_content, None
+    recorded_names = tuple(sorted(imported_names))
+    if wildcard_import:
+        recorded_names += ("*",)
+    return normalized, OriginalImportRestoreRecord(
+        restored=True,
+        shape="valid_changed_module_with_all_original_imports_omitted",
+        imported_names=recorded_names,
+        original_sha256=_hashlib.sha256(file_content.encode("utf-8")).hexdigest(),
+        content_sha256=_hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+    )
+
+
+def unwrap_trailing_python_module(
+    file_content: str,
+    original_source: str,
+) -> tuple[str, Optional[TrailingModuleUnwrapRecord]]:
+    """Unwrap one complete replacement module accidentally emitted as a
+    trailing Python string.
+
+    The transform is deliberately narrow and source-only: the outer module
+    must reproduce the original production AST (ignoring top-level string
+    expressions such as documentation), its final statement must be a string
+    containing a valid Python module with the same top-level function/class
+    names, and the inner module must materially differ from the original.
+    No task metadata, verifier result, reference repair, or hidden test is
+    consulted.
+    """
+    import ast
+    import hashlib as _hashlib
+
+    if type(file_content) is not str or type(original_source) is not str:
+        return file_content, None
+    try:
+        outer = ast.parse(file_content)
+        original = ast.parse(original_source)
+    except (SyntaxError, ValueError, TypeError):
+        return file_content, None
+    if not outer.body:
+        return file_content, None
+    trailing = outer.body[-1]
+    if not (
+        isinstance(trailing, ast.Expr)
+        and isinstance(trailing.value, ast.Constant)
+        and type(trailing.value.value) is str
+        and trailing.value.value.strip()
+    ):
+        return file_content, None
+
+    def _without_strings(statements):
+        return [
+            statement
+            for statement in statements
+            if not (
+                isinstance(statement, ast.Expr)
+                and isinstance(statement.value, ast.Constant)
+                and type(statement.value.value) is str
+            )
+        ]
+
+    outer_program = ast.Module(body=_without_strings(outer.body[:-1]), type_ignores=[])
+    original_program = ast.Module(body=_without_strings(original.body), type_ignores=[])
+    if ast.dump(outer_program, include_attributes=False) != ast.dump(
+        original_program, include_attributes=False
+    ):
+        return file_content, None
+
+    inner_text = trailing.value.value
+    try:
+        inner = ast.parse(inner_text)
+    except (SyntaxError, ValueError, TypeError):
+        return file_content, None
+    inner_program = ast.Module(body=_without_strings(inner.body), type_ignores=[])
+    if not inner_program.body:
+        return file_content, None
+
+    def _definitions(module):
+        return {
+            statement.name
+            for statement in module.body
+            if isinstance(statement, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+        }
+
+    original_definitions = _definitions(original_program)
+    if not original_definitions or _definitions(inner_program) != original_definitions:
+        return file_content, None
+    if ast.dump(inner_program, include_attributes=False) == ast.dump(
+        original_program, include_attributes=False
+    ):
+        return file_content, None
+
+    normalized = inner_text.strip("\n") + "\n"
+    return normalized, TrailingModuleUnwrapRecord(
+        unwrapped=True,
+        shape="original_module_plus_trailing_python_string",
+        original_sha256=_hashlib.sha256(file_content.encode("utf-8")).hexdigest(),
+        content_sha256=_hashlib.sha256(normalized.encode("utf-8")).hexdigest(),
+    )
+
+
+def trim_truncated_trailing_module_copy(
+    file_content: str,
+    original_source: str,
+) -> tuple[str, Optional[TrailingModuleUnwrapRecord]]:
+    """Remove a token-truncated, quoted stale module copy after a valid repair.
+
+    This is intentionally narrower than general syntax recovery.  The input
+    must be invalid solely in a trailing top-level triple-quoted region; the
+    prefix before that region must be a valid, materially changed Python
+    module with exactly the original top-level function/class names; and the
+    truncated quoted suffix must visibly restart one of those definitions.
+    The transform uses only the original production source and model output.
+    """
+    import ast
+    import hashlib as _hashlib
+
+    if type(file_content) is not str or type(original_source) is not str:
+        return file_content, None
+    try:
+        ast.parse(file_content)
+    except SyntaxError as exc:
+        if "unterminated triple-quoted string literal" not in str(exc):
+            return file_content, None
+    except (ValueError, TypeError):
+        return file_content, None
+    else:
+        return file_content, None
+
+    try:
+        original = ast.parse(original_source)
+    except (SyntaxError, ValueError, TypeError):
+        return file_content, None
+
+    definition_types = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+    def _definitions(module: ast.Module) -> set[str]:
+        return {
+            statement.name
+            for statement in module.body
+            if isinstance(statement, definition_types)
+        }
+
+    def _without_strings(module: ast.Module) -> ast.Module:
+        return ast.Module(
+            body=[
+                statement
+                for statement in module.body
+                if not (
+                    isinstance(statement, ast.Expr)
+                    and isinstance(statement.value, ast.Constant)
+                    and type(statement.value.value) is str
+                )
+            ],
+            type_ignores=[],
+        )
+
+    original_program = _without_strings(original)
+    original_definitions = _definitions(original_program)
+    if not original_definitions:
+        return file_content, None
+
+    delimiter = re.compile(r"(?m)^(?:\"\"\"|''')\s*$")
+    matches = list(delimiter.finditer(file_content))
+    for match in reversed(matches):
+        prefix_text = file_content[:match.start()].rstrip() + "\n"
+        suffix_text = file_content[match.end():]
+        if not any(
+            re.search(
+                rf"(?m)^\s*(?:async\s+def|def|class)\s+{re.escape(name)}\b",
+                suffix_text,
+            )
+            for name in original_definitions
+        ):
+            continue
+        try:
+            prefix = ast.parse(prefix_text)
+        except (SyntaxError, ValueError, TypeError):
+            continue
+        prefix_program = _without_strings(prefix)
+        if _definitions(prefix_program) != original_definitions:
+            continue
+        if ast.dump(prefix_program, include_attributes=False) == ast.dump(
+            original_program, include_attributes=False
+        ):
+            continue
+        return prefix_text, TrailingModuleUnwrapRecord(
+            unwrapped=True,
+            shape="changed_module_plus_truncated_quoted_stale_copy",
+            original_sha256=_hashlib.sha256(
+                file_content.encode("utf-8")
+            ).hexdigest(),
+            content_sha256=_hashlib.sha256(prefix_text.encode("utf-8")).hexdigest(),
+        )
+    return file_content, None
+
+
 def _r2_lifecycle_for_stage(stage: R2Stage) -> DebuggerLifecycle:
     if stage is R2Stage.NOT_STARTED:
         return DebuggerLifecycle.NOT_STARTED
@@ -520,22 +852,27 @@ def _collect_traceable_lines(source: str) -> frozenset[int]:
     return frozenset(traceable)
 
 
-def _module_def_lines(source: str) -> frozenset[int]:
+def _function_body_lines(source: str) -> frozenset[int]:
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return frozenset()
     lines: set[int] = set()
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            lines.add(node.lineno)
+    definitions: set[int] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            definitions.add(node.lineno)
+            end_line = getattr(node, "end_lineno", None)
+            if type(end_line) is int and end_line > node.lineno:
+                lines.update(range(node.lineno + 1, end_line + 1))
+    lines.difference_update(definitions)
     return frozenset(lines)
 
 
 def breakpoint_eligible_lines(source: str) -> tuple[int, ...]:
     traceable = _collect_traceable_lines(source)
-    defs = _module_def_lines(source)
-    return tuple(sorted(traceable - defs))
+    function_lines = _function_body_lines(source)
+    return tuple(sorted(traceable & function_lines))
 
 
 def format_source_with_lines(
@@ -1423,7 +1760,13 @@ def render_prompt(
     if state is ControllerState.PATCH:
         # R3.1 local diff affordance — concise, non-oracle, right before output
         module_path = debugger.script_path if debugger is not None else ""
-        parts.append("\n" + patch_diff_affordance(module_path or "target.py"))
+        parts.append(
+            "\n"
+            + patch_diff_affordance(
+                module_path or "target.py",
+                retry=patch_stage is R3PatchStage.CAUSAL_RETRY_DIFF_ONLY,
+            )
+        )
     parts.append(
         "\nEmit exactly one command from the available list above. "
         "Do not emit prose, markdown, or JSON."
@@ -1636,6 +1979,54 @@ def _render_observation(
                                 f"    [{kind}] {status} "
                                 "(no sanitized production exception available)"
                             )
+                outcome = feedback.get("outcome")
+                f2p_total = feedback.get("f2p_total")
+                f2p_passed = feedback.get("f2p_passed")
+                p2p_total = feedback.get("p2p_total")
+                p2p_passed = feedback.get("p2p_passed")
+                production_exception_present = any(
+                    type(failure) is dict
+                    and type(failure.get("production_exception")) is str
+                    and bool(failure.get("production_exception"))
+                    for failure in failures
+                )
+                if outcome == "NO_OP" and (
+                    type(f2p_total) is int
+                    and type(f2p_passed) is int
+                    and f2p_passed < f2p_total
+                ):
+                    lines.append(
+                        "  Retry guidance (derived only from verifier outcome): "
+                        "the candidate preserved the reproduced failure. Re-read "
+                        "the task description and original source, materially "
+                        "change the failing input's code path, and preserve passing "
+                        "checks. If predicates overlap, retain the case-distinguishing "
+                        "logic and evaluate more-specific predicates before broader ones."
+                    )
+                elif production_exception_present:
+                    lines.append(
+                        "  Retry guidance (derived only from the sanitized candidate "
+                        "exception): the next candidate must eliminate the exact "
+                        "reported exception and remain internally consistent. When a "
+                        "repair changes identity, state, or control flow, revise or "
+                        "remove guards that enforce the superseded invariant. HARD "
+                        "CAUSAL CONSTRAINT: if an explicit raise in the candidate emits "
+                        "the reported exception, the next candidate must remove or "
+                        "revise that raise and its controlling conditional. Do not only "
+                        "replace one construction or copy expression while preserving "
+                        "the exception path."
+                    )
+                elif (
+                    type(p2p_total) is int
+                    and type(p2p_passed) is int
+                    and p2p_passed < p2p_total
+                ):
+                    lines.append(
+                        "  Retry guidance (derived only from verifier outcome): the "
+                        "candidate regressed previously passing behavior. Narrow the "
+                        "repair to the reproduced failing path and preserve the public "
+                        "contract exercised by passing checks."
+                    )
     elif name == "syntax_check":
         lines.append(f"  all_passed={payload.get('all_passed')}")
     elif name == "run_regression_tests":
@@ -1681,6 +2072,9 @@ __all__ = [
     "patch_diff_affordance",
     "render_prompt",
     "unwrap_single_fence",
+    "unwrap_trailing_python_module",
+    "trim_truncated_trailing_module_copy",
+    "restore_omitted_original_imports",
     "visible_commands",
     "visible_commands_r2",
 ]

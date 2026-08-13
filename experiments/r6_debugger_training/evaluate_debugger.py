@@ -58,6 +58,7 @@ SPLIT_MANIFEST = EXPERIMENT_DIR / "split_manifest.json"
 EVAL_CONTRACT = EXPERIMENT_DIR / "r6_eval_contract.json"
 REPORT_SCHEMA = "r6-debugger-eval-v2"
 LIFECYCLE_SCHEMA = "r6-evaluator-lifecycle-v1"
+EXECUTION_IDENTITY_SCHEMA = "r6-working-tree-execution-identity-v1"
 PLACEMENT_FILENAME = "placement_audit.json"
 LIFECYCLE_FILENAME = "lifecycle.jsonl"
 CURATED_HOLDOUT_IDS = (
@@ -281,6 +282,53 @@ def _git_commit() -> str:
     return result.stdout.strip()
 
 
+def _load_execution_identity(path: Path, *, git_commit: str) -> dict[str, Any]:
+    try:
+        identity = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"cannot read execution identity: {exc}") from exc
+    if not isinstance(identity, dict):
+        raise RuntimeError("execution identity must be a JSON object")
+    if identity.get("schema_version") != EXECUTION_IDENTITY_SCHEMA:
+        raise RuntimeError("execution identity schema is not supported")
+    if identity.get("base_head") != git_commit:
+        raise RuntimeError("execution identity BASE_HEAD does not match evaluator HEAD")
+    if identity.get("identity_kind") not in (
+        "clean_commit",
+        "working_tree_snapshot",
+    ):
+        raise RuntimeError("execution identity kind is invalid")
+    if not isinstance(identity.get("execution_id"), str):
+        raise RuntimeError("execution identity id is missing")
+    confirmations = identity.get("confirmations")
+    if not isinstance(confirmations, dict) or any(
+        confirmations.get(key) is not expected
+        for key, expected in (
+            ("tracked_changes_exactly_allowlisted", True),
+            ("unrelated_tracked_changes_present", False),
+            ("untracked_execution_critical_source_consumed", False),
+            ("git_diff_check_passed", True),
+        )
+    ):
+        raise RuntimeError("execution identity confirmations did not pass")
+    reconstruction = identity.get("reconstruction")
+    if not isinstance(reconstruction, dict) or reconstruction.get("passed") is not True:
+        raise RuntimeError("execution identity reconstruction proof did not pass")
+    source_manifest = identity.get("source_manifest")
+    if (
+        not isinstance(source_manifest, dict)
+        or not isinstance(source_manifest.get("files"), list)
+        or not re.fullmatch(r"[0-9a-f]{64}", str(source_manifest.get("sha256")))
+    ):
+        raise RuntimeError("execution identity source manifest is invalid")
+    if identity["identity_kind"] == "working_tree_snapshot":
+        if not re.fullmatch(
+            r"[0-9a-f]{64}", str(identity.get("candidate_patch_sha256"))
+        ) or not identity.get("changed_files"):
+            raise RuntimeError("working-tree snapshot patch identity is invalid")
+    return identity
+
+
 def _require_child_python_matches_runtime() -> str:
     resolved = shutil.which("python")
     if resolved is None:
@@ -444,6 +492,7 @@ def _build_report(
     base_only: bool,
     contract_sha: str,
     git_commit: str,
+    execution_identity: dict[str, Any],
     selected_tasks: list[str],
     suite: str,
     anti_leakage: Optional[dict[str, Any]],
@@ -485,6 +534,7 @@ def _build_report(
         "started_at": started_at,
         "updated_at": _utc_now(),
         "git_commit": git_commit,
+        "execution_identity": execution_identity,
         "tag": tag,
         "stage": stage,
         "label": label,
@@ -584,6 +634,7 @@ def main() -> int:
         help="unique run tag (used as an output subdirectory)",
     )
     parser.add_argument("--cuda-device-index", type=int, default=0)
+    parser.add_argument("--execution-identity", type=str, required=True)
     args = parser.parse_args()
 
     if args.base_only == (args.adapter_path is not None):
@@ -653,11 +704,20 @@ def main() -> int:
     recorder = CrashDurableLifecycleLog(lifecycle_path)
     started_at = _utc_now()
     git_commit = _git_commit()
+    try:
+        execution_identity = _load_execution_identity(
+            Path(args.execution_identity).resolve(), git_commit=git_commit
+        )
+    except RuntimeError as exc:
+        recorder.close()
+        parser.error(str(exc))
     selected_tasks = [entry["task_id"] for entry in selected_entries]
     recorder(
         "evaluator_start",
         {
             "git_commit": git_commit,
+            "execution_id": execution_identity["execution_id"],
+            "execution_identity_kind": execution_identity["identity_kind"],
             "python_version": platform.python_version(),
             "python_executable": sys.executable,
             "child_python_command": child_python,
@@ -708,6 +768,7 @@ def main() -> int:
             base_only=args.base_only,
             contract_sha=contract_sha,
             git_commit=git_commit,
+            execution_identity=execution_identity,
             selected_tasks=selected_tasks,
             suite=args.suite,
             anti_leakage=None,
@@ -829,6 +890,7 @@ def main() -> int:
             base_only=args.base_only,
             contract_sha=contract_sha,
             git_commit=git_commit,
+            execution_identity=execution_identity,
             selected_tasks=selected_tasks,
             suite=args.suite,
             anti_leakage=anti_leakage,
@@ -860,6 +922,7 @@ def main() -> int:
         base_only=args.base_only,
         contract_sha=contract_sha,
         git_commit=git_commit,
+        execution_identity=execution_identity,
         selected_tasks=selected_tasks,
         suite=args.suite,
         anti_leakage=anti_leakage,

@@ -88,6 +88,18 @@ def extract_turns(evidence: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def main() -> int:
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Build R6 debugger SFT data")
+    parser.add_argument("--trajectory-root", type=Path, default=TRAJECTORY_ROOT)
+    parser.add_argument("--feedback-trajectory-root", type=Path, default=None)
+    parser.add_argument("--output-dir", type=Path, default=SFT_OUTPUT_DIR)
+    parser.add_argument("--breakpoint-repeat", type=int, default=1)
+    parser.add_argument("--patch-repeat", type=int, default=1)
+    args = parser.parse_args()
+    if args.breakpoint_repeat < 1 or args.patch_repeat < 1:
+        parser.error("phase repeat counts must be >= 1")
+
     if not SPLIT_MANIFEST.is_file():
         print(f"split manifest missing: {SPLIT_MANIFEST}")
         return 1
@@ -98,7 +110,9 @@ def main() -> int:
         print("split overlap — aborting")
         return 1
 
-    gen_summary_path = TRAJECTORY_ROOT / "generation_summary.json"
+    trajectory_root = args.trajectory_root.resolve()
+    output_dir = args.output_dir.resolve()
+    gen_summary_path = trajectory_root / "generation_summary.json"
     if not gen_summary_path.is_file():
         print(f"generation summary missing: {gen_summary_path}")
         return 1
@@ -109,7 +123,7 @@ def main() -> int:
     }
     print(f"successful trajectories: {len(successful)}/{len(results)}")
 
-    SFT_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    output_dir.mkdir(parents=True, exist_ok=True)
     train_rows: list[dict[str, Any]] = []
     validation_rows: list[dict[str, Any]] = []
     per_task_counts: dict[str, dict[str, int]] = {}
@@ -118,7 +132,7 @@ def main() -> int:
         if task_id in CURATED_HOLDOUT_IDS:
             raise RuntimeError(f"holdout task present in training data: {task_id}")
         evidence = json.loads(
-            (TRAJECTORY_ROOT / task_id / "evidence.json").read_text(encoding="utf-8")
+            (trajectory_root / task_id / "evidence.json").read_text(encoding="utf-8")
         )
         turns = extract_turns(evidence)
         if task_id in train_ids:
@@ -128,14 +142,20 @@ def main() -> int:
         else:
             raise RuntimeError(f"task {task_id} is in neither split")
         for turn in turns:
-            rows.append({
-                "task_id": task_id,
-                "algo": result["algo"],
-                "controller_state": turn["controller_state"],
-                "system_prompt": turn["system_prompt"],
-                "user_prompt": turn["user_prompt"],
-                "completion": turn["completion"],
-            })
+            repeat = 1
+            if task_id in train_ids and turn["completion"].startswith("break "):
+                repeat = args.breakpoint_repeat
+            elif task_id in train_ids and turn["controller_state"] == "Patch":
+                repeat = args.patch_repeat
+            for _ in range(repeat):
+                rows.append({
+                    "task_id": task_id,
+                    "algo": result["algo"],
+                    "controller_state": turn["controller_state"],
+                    "system_prompt": turn["system_prompt"],
+                    "user_prompt": turn["user_prompt"],
+                    "completion": turn["completion"],
+                })
         per_task_counts[task_id] = {
             "turns": len(turns),
             "algo": result["algo"],
@@ -146,8 +166,46 @@ def main() -> int:
             for row in rows:
                 fh.write(json.dumps(row, ensure_ascii=False, allow_nan=False) + "\n")
 
-    train_path = SFT_OUTPUT_DIR / "sft_train.jsonl"
-    validation_path = SFT_OUTPUT_DIR / "sft_validation.jsonl"
+    recovery_examples = 0
+    feedback_root = args.feedback_trajectory_root
+    if feedback_root is not None:
+        feedback_root = feedback_root.resolve()
+        feedback_summary = json.loads(
+            (feedback_root / "generation_summary.json").read_text(encoding="utf-8")
+        )
+        feedback_results = feedback_summary.get("results") or {}
+        if set(feedback_results) != train_ids:
+            raise RuntimeError(
+                "feedback recovery trajectories must exactly cover the train split"
+            )
+        if feedback_summary.get("feedback_recovery") is not True:
+            raise RuntimeError("feedback trajectories are not recovery-mode evidence")
+        for task_id in sorted(train_ids):
+            if (feedback_results[task_id] or {}).get("success") is not True:
+                raise RuntimeError(f"{task_id}: feedback recovery trajectory failed")
+            evidence = json.loads(
+                (feedback_root / task_id / "evidence.json").read_text(encoding="utf-8")
+            )
+            patch_turns = [
+                turn
+                for turn in extract_turns(evidence)
+                if turn["controller_state"] == "Patch"
+            ]
+            if len(patch_turns) < 2:
+                raise RuntimeError(f"{task_id}: no verifier-feedback recovery turn")
+            recovery = patch_turns[-1]
+            train_rows.append({
+                "task_id": task_id,
+                "algo": feedback_results[task_id]["algo"],
+                "controller_state": recovery["controller_state"],
+                "system_prompt": recovery["system_prompt"],
+                "user_prompt": recovery["user_prompt"],
+                "completion": recovery["completion"],
+            })
+            recovery_examples += 1
+
+    train_path = output_dir / "sft_train.jsonl"
+    validation_path = output_dir / "sft_validation.jsonl"
     _write(train_path, train_rows)
     _write(validation_path, validation_rows)
 
@@ -192,7 +250,8 @@ def main() -> int:
         "schema_version": SCHEMA_VERSION,
         "split_seed": SPLIT_SEED,
         "split_manifest": str(SPLIT_MANIFEST),
-        "trajectory_root": str(TRAJECTORY_ROOT),
+        "trajectory_root": str(trajectory_root),
+        "feedback_trajectory_root": str(feedback_root) if feedback_root else None,
         "train_examples": len(train_rows),
         "validation_examples": len(validation_rows),
         "train_tasks": sorted(train_ids & set(per_task_counts)),
@@ -200,6 +259,11 @@ def main() -> int:
         "per_task_turn_counts": {k: v for k, v in sorted(per_task_counts.items())},
         "token_statistics": token_stats,
         "holdout_excluded": sorted(CURATED_HOLDOUT_IDS),
+        "phase_balancing": {
+            "breakpoint_repeat": args.breakpoint_repeat,
+            "patch_repeat": args.patch_repeat,
+            "feedback_recovery_examples": recovery_examples,
+        },
         "model_visible_fields": [
             "task title/description (agent_visible_mapping)",
             "original production source",
@@ -216,7 +280,7 @@ def main() -> int:
             "hidden test content",
         ],
     }
-    (SFT_OUTPUT_DIR / "sft_manifest.json").write_text(
+    (output_dir / "sft_manifest.json").write_text(
         json.dumps(manifest, indent=2, ensure_ascii=False, allow_nan=False),
         encoding="utf-8",
     )

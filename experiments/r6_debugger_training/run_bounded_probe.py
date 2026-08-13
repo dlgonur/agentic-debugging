@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import hashlib
 import importlib.metadata
 import json
 import os
@@ -12,9 +13,10 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 THIS_FILE = Path(__file__).resolve()
@@ -24,6 +26,14 @@ TELEMETRY = THIS_FILE.with_name("gpu_telemetry.py")
 ALLOCATOR_POLICY = "backend:cudaMallocAsync"
 WINDOWS_CHILD_CWD_MAX_CHARS = 248
 WORKSPACE_NAME_TEMPLATE = "task_workspace_" + ("0" * 32)
+EXPECTED_R6_BRANCH = "goal/r6-finetuned-debugger-codex-v2"
+EXECUTION_IDENTITY_SCHEMA = "r6-working-tree-execution-identity-v1"
+EXECUTION_CRITICAL_ROOTS = (
+    "agentic_debugger/",
+    "experiments/debugger_interaction_v2_r5/",
+    "experiments/r6_debugger_training/",
+)
+EXECUTION_CRITICAL_SUFFIXES = (".py", ".json", ".toml")
 
 
 def _utc_now() -> str:
@@ -31,17 +41,428 @@ def _utc_now() -> str:
 
 
 def _run_git(*args: str) -> str:
+    return _run_git_bytes(*args).decode("utf-8", errors="strict").strip()
+
+
+def _run_git_bytes(*args: str) -> bytes:
     result = subprocess.run(
         ["git", *args],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        timeout=10,
+        check=False,
+    )
+    if result.returncode != 0:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(f"git {' '.join(args)} failed: {stderr}")
+    return result.stdout
+
+
+def _sha256_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while block := stream.read(1024 * 1024):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _nul_paths(payload: bytes) -> list[str]:
+    return [
+        item.decode("utf-8", errors="strict")
+        for item in payload.split(b"\0")
+        if item
+    ]
+
+
+def _normalize_repo_path(value: str) -> str:
+    normalized = value.replace("\\", "/")
+    path = PurePosixPath(normalized)
+    if path.is_absolute() or not path.parts or ".." in path.parts:
+        raise RuntimeError(f"snapshot allowlist path must be repository-relative: {value!r}")
+    return path.as_posix()
+
+
+def _is_execution_critical(path: str) -> bool:
+    return path.endswith(EXECUTION_CRITICAL_SUFFIXES) and path.startswith(
+        EXECUTION_CRITICAL_ROOTS
+    )
+
+
+def _repo_file_identity(relative: str) -> dict[str, Any]:
+    path = REPO_ROOT / Path(relative)
+    if not path.is_file():
+        raise RuntimeError(
+            "working-tree snapshots do not permit missing or deleted files: "
+            f"{relative}"
+        )
+    return {
+        "path": relative,
+        "bytes": path.stat().st_size,
+        "sha256": _sha256_file(path),
+    }
+
+
+def _source_manifest(extra_files: list[str] | None = None) -> dict[str, Any]:
+    tracked = _nul_paths(
+        _run_git_bytes(
+            "ls-files",
+            "-z",
+            "--",
+            *(root.rstrip("/") for root in EXECUTION_CRITICAL_ROOTS),
+        )
+    )
+    paths = sorted(
+        set(tracked)
+        | {
+            path
+            for path in (extra_files or [])
+            if _is_execution_critical(path)
+        }
+    )
+    files = [
+        _repo_file_identity(path)
+        for path in paths
+        if _is_execution_critical(path)
+    ]
+    canonical = json.dumps(
+        files, sort_keys=True, separators=(",", ":"), ensure_ascii=False
+    ).encode("utf-8")
+    return {
+        "scope": {
+            "tracked_roots": list(EXECUTION_CRITICAL_ROOTS),
+            "suffixes": list(EXECUTION_CRITICAL_SUFFIXES),
+        },
+        "file_count": len(files),
+        "files": files,
+        "sha256": _sha256_bytes(canonical),
+    }
+
+
+def _verify_patch_reconstruction(
+    base_head: str,
+    patch: bytes,
+    changed_files: list[dict[str, Any]],
+    tracked_changed_paths: list[str],
+) -> dict[str, Any]:
+    with tempfile.TemporaryDirectory(prefix="r6-snapshot-reconstruct-") as raw_root:
+        root = Path(raw_root)
+        for relative in tracked_changed_paths:
+            destination = root / Path(relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(_run_git_bytes("show", f"{base_head}:{relative}"))
+        patch_path = root / "candidate.patch"
+        patch_path.write_bytes(patch)
+        for arguments in (
+            (
+                "git", "-c", "core.autocrlf=false", "apply",
+                "--check", "--binary", str(patch_path),
+            ),
+            (
+                "git", "-c", "core.autocrlf=false", "apply",
+                "--binary", str(patch_path),
+            ),
+        ):
+            result = subprocess.run(
+                arguments,
+                cwd=root,
+                capture_output=True,
+                text=True,
+                timeout=20,
+                check=False,
+            )
+            if result.returncode != 0:
+                raise RuntimeError(
+                    "candidate.patch cannot reconstruct the working tree from "
+                    f"BASE_HEAD: {result.stderr.strip()}"
+                )
+        for identity in changed_files:
+            reconstructed = root / Path(identity["path"])
+            if not reconstructed.is_file():
+                raise RuntimeError(
+                    f"reconstructed file is missing: {identity['path']}"
+                )
+            actual = _sha256_file(reconstructed)
+            if actual != identity["sha256"]:
+                raise RuntimeError(
+                    "reconstructed source hash mismatch for "
+                    f"{identity['path']}: {actual} != {identity['sha256']}"
+                )
+    return {
+        "passed": True,
+        "method": "materialize changed files from BASE_HEAD; "
+        "git -c core.autocrlf=false apply --check; git apply --binary; "
+        "verify every changed-file SHA256",
+        "verified_file_count": len(changed_files),
+    }
+
+
+def _complete_binary_patch(
+    base_head: str,
+    tracked_changed_paths: list[str],
+    captured_untracked_paths: list[str],
+) -> bytes:
+    all_paths = sorted([*tracked_changed_paths, *captured_untracked_paths])
+    with tempfile.TemporaryDirectory(prefix="r6-snapshot-patch-") as raw_root:
+        root = Path(raw_root)
+
+        def run(*arguments: str, accepted_codes: tuple[int, ...] = (0,)) -> bytes:
+            result = subprocess.run(
+                ["git", "-c", "core.autocrlf=false", *arguments],
+                cwd=root,
+                capture_output=True,
+                timeout=20,
+                check=False,
+            )
+            if result.returncode not in accepted_codes:
+                stderr = result.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(
+                    f"snapshot patch git {' '.join(arguments)} failed: {stderr}"
+                )
+            return result.stdout
+
+        run("init", "--quiet")
+        attributes = root / ".gitattributes"
+        attributes.write_text("* binary\n", encoding="utf-8", newline="\n")
+        for relative in tracked_changed_paths:
+            destination = root / Path(relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(_run_git_bytes("show", f"{base_head}:{relative}"))
+        run("add", "--", ".gitattributes", *tracked_changed_paths)
+        run(
+            "-c", "user.name=R6 Snapshot",
+            "-c", "user.email=r6-snapshot@example.invalid",
+            "commit", "--quiet", "-m", "snapshot base",
+        )
+        for relative in all_paths:
+            destination = root / Path(relative)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes((REPO_ROOT / Path(relative)).read_bytes())
+        run("add", "--", *all_paths)
+        result = subprocess.run(
+            [
+                "git",
+                "-c", "core.autocrlf=false",
+                "diff",
+                "--cached",
+                "--binary",
+                "HEAD",
+                "--",
+                *all_paths,
+            ],
+            cwd=root,
+            capture_output=True,
+            timeout=20,
+            check=False,
+        )
+    if result.returncode != 0 or not result.stdout:
+        stderr = result.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(
+            f"cannot create deterministic complete binary patch: {stderr}"
+        )
+    if result.stdout.count(b"GIT binary patch") != len(all_paths):
+        raise RuntimeError(
+            "complete candidate patch does not contain one byte-exact binary "
+            "delta per captured file"
+        )
+    return result.stdout
+
+
+def _build_execution_identity(
+    allowlisted_files: list[str],
+    allowlisted_untracked_files: list[str] | None = None,
+) -> tuple[dict[str, Any], bytes]:
+    branch = _run_git("branch", "--show-current")
+    if branch != EXPECTED_R6_BRANCH:
+        raise RuntimeError(
+            f"bounded R6 execution requires branch {EXPECTED_R6_BRANCH!r}, "
+            f"found {branch!r}"
+        )
+    base_head = _run_git("rev-parse", "HEAD")
+    diff_check = subprocess.run(
+        ["git", "diff", "--check", "HEAD"],
         cwd=REPO_ROOT,
         capture_output=True,
         text=True,
         timeout=10,
         check=False,
     )
-    if result.returncode != 0:
-        raise RuntimeError(f"git {' '.join(args)} failed")
-    return result.stdout.strip()
+    if diff_check.returncode != 0:
+        raise RuntimeError(f"git diff --check HEAD failed: {diff_check.stdout.strip()}")
+
+    changed_paths = sorted(
+        _nul_paths(
+            _run_git_bytes(
+                "diff", "--name-only", "--diff-filter=ACDMRTUXB", "-z", "HEAD"
+            )
+        )
+    )
+    allowlist = sorted({_normalize_repo_path(path) for path in allowlisted_files})
+    if changed_paths != allowlist:
+        unexpected = sorted(set(changed_paths) - set(allowlist))
+        missing = sorted(set(allowlist) - set(changed_paths))
+        raise RuntimeError(
+            "tracked changes must exactly equal the validated snapshot allowlist; "
+            f"unexpected={unexpected}, missing={missing}"
+        )
+
+    untracked = sorted(
+        _nul_paths(
+            _run_git_bytes(
+                "ls-files",
+                "--others",
+                "--exclude-standard",
+                "-z",
+                "--",
+                *(root.rstrip("/") for root in EXECUTION_CRITICAL_ROOTS),
+            )
+        )
+    )
+    captured_untracked = sorted({
+        _normalize_repo_path(path) for path in (allowlisted_untracked_files or [])
+    })
+    missing_untracked = sorted(set(captured_untracked) - set(untracked))
+    if missing_untracked:
+        raise RuntimeError(
+            "snapshot untracked allowlist contains files that are not untracked: "
+            f"{missing_untracked}"
+        )
+    untracked_critical = sorted(
+        path
+        for path in untracked
+        if _is_execution_critical(path) and path not in captured_untracked
+    )
+    if untracked_critical:
+        raise RuntimeError(
+            "untracked execution-critical source/config is forbidden: "
+            f"{untracked_critical}"
+        )
+    uncaptured_untracked_noncritical = sorted(set(untracked) - set(captured_untracked))
+    uncaptured_payload = "\0".join(uncaptured_untracked_noncritical).encode("utf-8")
+    uncaptured_summary = {
+        "audited_roots": list(EXECUTION_CRITICAL_ROOTS),
+        "count": len(uncaptured_untracked_noncritical),
+        "paths_sha256": _sha256_bytes(uncaptured_payload),
+    }
+
+    source_manifest = _source_manifest(captured_untracked)
+    if not changed_paths and not captured_untracked:
+        identity = {
+            "schema_version": EXECUTION_IDENTITY_SCHEMA,
+            "identity_kind": "clean_commit",
+            "execution_id": f"commit-{base_head}",
+            "branch": branch,
+            "base_head": base_head,
+            "candidate_patch_sha256": None,
+            "changed_files": [],
+            "tracked_changed_files": [],
+            "captured_untracked_files": [],
+            "uncaptured_untracked_noncritical_files": (
+                uncaptured_summary
+            ),
+            "changed_file_identities": [],
+            "source_manifest": source_manifest,
+            "confirmations": {
+                "tracked_worktree_clean": True,
+                "tracked_changes_exactly_allowlisted": True,
+                "unrelated_tracked_changes_present": False,
+                "untracked_execution_critical_source_consumed": False,
+                "git_diff_check_passed": True,
+            },
+            "reconstruction": {
+                "passed": True,
+                "method": "checkout exact commit",
+            },
+        }
+        return identity, b""
+
+    tracked_patch = _run_git_bytes("diff", "--binary", "HEAD")
+    if changed_paths and not tracked_patch:
+        raise RuntimeError("tracked snapshot produced an empty git diff --binary HEAD")
+    patch = _complete_binary_patch(base_head, changed_paths, captured_untracked)
+    if not patch:
+        raise RuntimeError("working-tree snapshot produced an empty candidate.patch")
+    all_changed_paths = sorted([*changed_paths, *captured_untracked])
+    changed_file_identities = [
+        _repo_file_identity(path) for path in all_changed_paths
+    ]
+    patch_sha = _sha256_bytes(patch)
+    reconstruction = _verify_patch_reconstruction(
+        base_head, patch, changed_file_identities, changed_paths
+    )
+    identity = {
+        "schema_version": EXECUTION_IDENTITY_SCHEMA,
+        "identity_kind": "working_tree_snapshot",
+        "execution_id": f"wt-{base_head[:12]}-{patch_sha[:20]}",
+        "branch": branch,
+        "base_head": base_head,
+        "candidate_patch_sha256": patch_sha,
+        "git_diff_binary_head_sha256": _sha256_bytes(tracked_patch),
+        "git_diff_binary_head_bytes": len(tracked_patch),
+        "changed_files": all_changed_paths,
+        "tracked_changed_files": changed_paths,
+        "captured_untracked_files": captured_untracked,
+        "uncaptured_untracked_noncritical_files": uncaptured_summary,
+        "changed_file_identities": changed_file_identities,
+        "source_manifest": source_manifest,
+        "confirmations": {
+            "tracked_worktree_clean": False,
+            "tracked_changes_exactly_allowlisted": True,
+            "unrelated_tracked_changes_present": False,
+            "untracked_execution_critical_source_consumed": False,
+            "git_diff_check_passed": True,
+        },
+        "reconstruction": reconstruction,
+    }
+    return identity, patch
+
+
+def _write_or_verify(path: Path, payload: bytes) -> None:
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != payload:
+            raise RuntimeError(f"snapshot artifact collision: {path}")
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("xb") as stream:
+        stream.write(payload)
+        stream.flush()
+        os.fsync(stream.fileno())
+
+
+def _persist_execution_identity(
+    identity: dict[str, Any],
+    patch: bytes,
+) -> dict[str, str]:
+    snapshot_root = (
+        REPO_ROOT
+        / "operator"
+        / "r6-execution-snapshots"
+        / identity["execution_id"]
+    )
+    identity_path = snapshot_root / "execution_identity.json"
+    identity_payload = (
+        json.dumps(identity, indent=2, ensure_ascii=False, allow_nan=False) + "\n"
+    ).encode("utf-8")
+    _write_or_verify(identity_path, identity_payload)
+    artifacts = {"execution_identity": str(identity_path)}
+    if identity["identity_kind"] == "working_tree_snapshot":
+        patch_path = snapshot_root / "candidate.patch"
+        _write_or_verify(patch_path, patch)
+        if _sha256_file(patch_path) != identity["candidate_patch_sha256"]:
+            raise RuntimeError("persisted candidate.patch SHA256 mismatch")
+        artifacts["candidate_patch"] = str(patch_path)
+        tracked_patch_path = snapshot_root / "git-diff-binary-head.patch"
+        tracked_patch = _run_git_bytes("diff", "--binary", "HEAD")
+        _write_or_verify(tracked_patch_path, tracked_patch)
+        if _sha256_file(tracked_patch_path) != identity[
+            "git_diff_binary_head_sha256"
+        ]:
+            raise RuntimeError("persisted git diff --binary HEAD SHA256 mismatch")
+        artifacts["git_diff_binary_head"] = str(tracked_patch_path)
+    return artifacts
 
 
 def _atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -210,6 +631,32 @@ def main() -> int:
         default="unknown",
     )
     parser.add_argument("--telemetry-interval", type=float, default=1.0)
+    parser.add_argument(
+        "--snapshot-allow-file",
+        action="append",
+        default=[],
+        help=(
+            "repeat for every validated tracked change; must exactly match "
+            "git diff HEAD"
+        ),
+    )
+    parser.add_argument(
+        "--snapshot-allow-untracked-file",
+        action="append",
+        default=[],
+        help=(
+            "repeat for each validated untracked source/config addition that "
+            "must be embedded in candidate.patch"
+        ),
+    )
+    parser.add_argument(
+        "--expected-execution-id",
+        help="fail closed unless the reconstructed execution identity matches",
+    )
+    parser.add_argument(
+        "--expected-source-manifest-sha256",
+        help="fail closed unless every execution-critical source hash matches",
+    )
     args = parser.parse_args()
 
     if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]{0,79}", args.tag):
@@ -223,13 +670,36 @@ def main() -> int:
     if len(set(args.task)) != len(args.task):
         parser.error("--task values must be unique")
 
-    tracked_status = _run_git("status", "--short", "--untracked-files=no")
-    if tracked_status:
-        parser.error(
-            "bounded GPU probes require a clean tracked worktree; commit the "
-            "coherent local checkpoint first"
+    try:
+        execution_identity, candidate_patch = _build_execution_identity(
+            args.snapshot_allow_file,
+            args.snapshot_allow_untracked_file,
         )
-    git_commit = _run_git("rev-parse", "HEAD")
+        if (
+            args.expected_execution_id
+            and execution_identity["execution_id"] != args.expected_execution_id
+        ):
+            raise RuntimeError(
+                "execution identity mismatch: "
+                f"{execution_identity['execution_id']} != "
+                f"{args.expected_execution_id}"
+            )
+        if (
+            args.expected_source_manifest_sha256
+            and execution_identity["source_manifest"]["sha256"]
+            != args.expected_source_manifest_sha256
+        ):
+            raise RuntimeError(
+                "execution-critical source manifest mismatch: "
+                f"{execution_identity['source_manifest']['sha256']} != "
+                f"{args.expected_source_manifest_sha256}"
+            )
+        execution_artifacts = _persist_execution_identity(
+            execution_identity, candidate_patch
+        )
+    except RuntimeError as exc:
+        parser.error(str(exc))
+    git_commit = execution_identity["base_head"]
     output_root = Path(args.output_dir).resolve()
     label = _evaluation_label(args.adapter_path)
     try:
@@ -246,6 +716,8 @@ def main() -> int:
         parser.error(f"tag output already exists and is not empty: {tag_root}")
     tag_root.mkdir(parents=True, exist_ok=True)
 
+    execution_identity_path = tag_root / "execution_identity.json"
+    _atomic_json(execution_identity_path, execution_identity)
     telemetry_path = tag_root / "gpu_telemetry.csv"
     telemetry_stop_path = tag_root / "telemetry.stop"
     telemetry_stdout_path = tag_root / "telemetry.stdout.log"
@@ -262,6 +734,7 @@ def main() -> int:
         "--stage", args.stage,
         "--suite", args.suite,
         "--cuda-device-index", str(args.cuda_device_index),
+        "--execution-identity", str(execution_identity_path),
     ]
     if args.adapter_path:
         evaluator_command.extend(["--adapter-path", str(Path(args.adapter_path).resolve())])
@@ -279,10 +752,12 @@ def main() -> int:
     ]
     environment, python_command_policy = _evaluator_environment()
     manifest: dict[str, Any] = {
-        "schema_version": "r6-bounded-probe-v1",
+        "schema_version": "r6-bounded-probe-v2",
         "status": "starting",
         "created_at": _utc_now(),
         "git_commit": git_commit,
+        "execution_identity": execution_identity,
+        "execution_identity_artifacts": execution_artifacts,
         "python_executable": sys.executable,
         "versions": _versions(),
         "stage": args.stage,
