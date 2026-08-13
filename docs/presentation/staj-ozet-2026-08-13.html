@@ -1,0 +1,1118 @@
+<!doctype html>
+<html lang="tr">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Agentic Debugging — Süreç Özeti</title>
+  <style>
+    :root {
+      --bg: #090c13;
+      --surface: #111722;
+      --surface-2: #171f2d;
+      --surface-3: #0d121b;
+      --stroke: rgba(160, 180, 220, 0.16);
+      --stroke-strong: rgba(160, 180, 220, 0.30);
+      --text: #f4f7ff;
+      --muted: #99a6bf;
+      --muted-2: #6f7d97;
+      --accent: #57dfc3;
+      --accent-2: #8f7cff;
+      --danger: #ff7b8b;
+      --warning: #f4c96b;
+      --radius: 20px;
+      --shadow: 0 12px 32px rgba(0,0,0,.22);
+    }
+
+    * { box-sizing: border-box; }
+
+    html {
+      scroll-behavior: smooth;
+      background: var(--bg);
+    }
+
+    body {
+      margin: 0;
+      color: var(--text);
+      background:
+        radial-gradient(900px 420px at 82% -8%, rgba(87, 223, 195, .07), transparent 70%),
+        radial-gradient(700px 360px at 12% 2%, rgba(143, 124, 255, .06), transparent 72%),
+        var(--bg);
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
+    }
+
+    a { color: inherit; text-decoration: none; }
+
+    button, summary { font: inherit; }
+
+    a:focus-visible,
+    summary:focus-visible {
+      outline: 2px solid var(--accent);
+      outline-offset: 3px;
+      border-radius: 8px;
+    }
+
+    .shell {
+      width: min(calc(100% - 32px), 1240px);
+      margin-inline: auto;
+      padding-block: 16px 64px;
+    }
+
+    .topbar {
+      position: sticky;
+      top: 10px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 20px;
+      min-height: 52px;
+      padding: 10px 14px;
+      margin-bottom: 18px;
+      border: 1px solid var(--stroke);
+      border-radius: 16px;
+      background: rgba(17, 23, 34, .93);
+      box-shadow: 0 8px 24px rgba(0,0,0,.16);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: 760;
+      letter-spacing: -.02em;
+    }
+
+    .brand-mark {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 5px rgba(87,223,195,.10);
+    }
+
+    nav {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    nav a {
+      padding: 8px 10px;
+      color: var(--muted);
+      border-radius: 10px;
+      transition: color 160ms ease, background 160ms ease;
+    }
+
+    nav a:hover {
+      color: var(--text);
+      background: rgba(255,255,255,.045);
+    }
+
+    .section {
+      margin-top: 22px;
+      padding: clamp(22px, 4vw, 38px);
+      border: 1px solid var(--stroke);
+      border-radius: 24px;
+      background: linear-gradient(180deg, rgba(23,31,45,.82), rgba(17,23,34,.94));
+      content-visibility: auto;
+      contain-intrinsic-size: 680px;
+    }
+
+    .hero {
+      display: grid;
+      grid-template-columns: minmax(0, 1.3fr) minmax(280px, .7fr);
+      gap: 26px;
+      align-items: stretch;
+      min-height: 430px;
+    }
+
+    .hero-copy {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      padding: clamp(8px, 2vw, 16px);
+    }
+
+    .eyebrow {
+      margin: 0 0 12px;
+      color: var(--accent);
+      font-size: .78rem;
+      font-weight: 800;
+      letter-spacing: .15em;
+      text-transform: uppercase;
+    }
+
+    h1, h2, h3, p { margin-top: 0; }
+
+    h1 {
+      max-width: 820px;
+      margin-bottom: 18px;
+      font-size: clamp(2.8rem, 7vw, 6.2rem);
+      line-height: .95;
+      letter-spacing: -.065em;
+      font-weight: 850;
+    }
+
+    h2 {
+      margin-bottom: 10px;
+      font-size: clamp(1.8rem, 3.8vw, 3rem);
+      line-height: 1;
+      letter-spacing: -.045em;
+    }
+
+    h3 {
+      margin-bottom: 7px;
+      font-size: 1.02rem;
+      line-height: 1.2;
+      letter-spacing: -.015em;
+    }
+
+    p {
+      color: var(--muted);
+      font-size: .98rem;
+    }
+
+    .hero-copy > p:last-child {
+      max-width: 720px;
+      margin-bottom: 0;
+      font-size: 1.08rem;
+    }
+
+    .hero-result {
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      padding: 26px;
+      border: 1px solid rgba(87,223,195,.28);
+      border-radius: 22px;
+      background:
+        linear-gradient(145deg, rgba(87,223,195,.08), rgba(143,124,255,.055)),
+        var(--surface-3);
+      box-shadow: var(--shadow);
+    }
+
+    .result-label {
+      color: var(--muted);
+      font-size: .82rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+
+    .result-number {
+      margin: 18px 0 6px;
+      color: var(--accent);
+      font-size: clamp(4rem, 9vw, 7.5rem);
+      font-weight: 900;
+      line-height: .9;
+      letter-spacing: -.07em;
+    }
+
+    .result-title {
+      font-size: 1.15rem;
+      font-weight: 760;
+    }
+
+    .result-note {
+      margin: 16px 0 0;
+      color: var(--muted);
+      font-size: .88rem;
+    }
+
+    .metric-grid,
+    .milestone-grid,
+    .lesson-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 12px;
+      margin-top: 22px;
+    }
+
+    .card {
+      position: relative;
+      overflow: hidden;
+      border: 1px solid var(--stroke);
+      border-radius: 18px;
+      background: var(--surface);
+      transition:
+        transform 180ms ease,
+        border-color 180ms ease,
+        box-shadow 180ms ease;
+    }
+
+    .interactive-card::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      pointer-events: none;
+      opacity: 0;
+      background:
+        radial-gradient(
+          240px circle at var(--x, 50%) var(--y, 50%),
+          rgba(87,223,195,.11),
+          transparent 70%
+        );
+      transition: opacity 180ms ease;
+    }
+
+    .interactive-card:hover {
+      transform: translateY(-4px);
+      border-color: var(--stroke-strong);
+      box-shadow: 0 16px 36px rgba(0,0,0,.24);
+    }
+
+    .interactive-card:hover::before { opacity: 1; }
+
+    .metric {
+      min-height: 150px;
+      padding: 20px;
+    }
+
+    .metric-value {
+      display: block;
+      margin-bottom: 8px;
+      color: var(--text);
+      font-size: clamp(2rem, 5vw, 3.2rem);
+      font-weight: 860;
+      line-height: 1;
+      letter-spacing: -.045em;
+    }
+
+    .metric-value.accent { color: var(--accent); }
+    .metric-value.warning { color: var(--warning); }
+    .metric-value.danger { color: var(--danger); }
+
+    .metric-label {
+      display: block;
+      font-weight: 720;
+      margin-bottom: 5px;
+    }
+
+    .metric p {
+      margin: 0;
+      font-size: .86rem;
+    }
+
+    .section-head {
+      display: flex;
+      align-items: end;
+      justify-content: space-between;
+      gap: 18px;
+      margin-bottom: 22px;
+    }
+
+    .section-head p {
+      max-width: 560px;
+      margin-bottom: 2px;
+      text-align: right;
+    }
+
+    .timeline {
+      display: grid;
+      gap: 10px;
+      counter-reset: stage;
+    }
+
+    .stage {
+      counter-increment: stage;
+      display: grid;
+      grid-template-columns: 54px minmax(150px, .34fr) minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      padding: 16px;
+      border: 1px solid var(--stroke);
+      border-radius: 16px;
+      background: rgba(9,12,19,.35);
+    }
+
+    .stage::before {
+      content: counter(stage, decimal-leading-zero);
+      display: grid;
+      place-items: center;
+      width: 40px;
+      height: 40px;
+      border-radius: 12px;
+      color: var(--accent);
+      background: rgba(87,223,195,.08);
+      border: 1px solid rgba(87,223,195,.18);
+      font-weight: 850;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .stage-title {
+      font-weight: 760;
+      letter-spacing: -.015em;
+    }
+
+    .stage-copy {
+      margin: 0;
+      font-size: .9rem;
+    }
+
+    .stage-state {
+      white-space: nowrap;
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 760;
+      letter-spacing: .04em;
+      text-transform: uppercase;
+    }
+
+    .stage-state.ok { color: var(--accent); }
+    .stage-state.warn { color: var(--warning); }
+
+
+    .chart-note {
+      margin: 16px 0 0;
+      color: var(--muted-2);
+      font-size: .8rem;
+    }
+
+    .milestone-grid {
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+    }
+
+    .milestone {
+      min-height: 190px;
+      padding: 20px;
+    }
+
+    .milestone-id {
+      display: inline-block;
+      margin-bottom: 26px;
+      color: var(--accent);
+      font-size: .8rem;
+      font-weight: 850;
+      letter-spacing: .12em;
+    }
+
+    .milestone p { margin-bottom: 0; font-size: .88rem; }
+
+    .training-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(300px, .82fr);
+      gap: 22px;
+    }
+
+    .split-card {
+      padding: 22px;
+    }
+
+    .split {
+      display: grid;
+      grid-template-columns: 21fr 8fr;
+      gap: 6px;
+      height: 54px;
+      margin: 20px 0 12px;
+    }
+
+    .split > div {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      min-width: 0;
+      border-radius: 12px;
+      font-weight: 850;
+    }
+
+    .split .train {
+      color: #061511;
+      background: var(--accent);
+    }
+
+    .split .val {
+      color: #0f0a1c;
+      background: var(--accent-2);
+    }
+
+    .mini-grid {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    .mini {
+      padding: 14px;
+      border: 1px solid var(--stroke);
+      border-radius: 14px;
+      background: rgba(255,255,255,.025);
+    }
+
+    .mini strong {
+      display: block;
+      margin-bottom: 3px;
+      font-size: 1.35rem;
+    }
+
+    .mini span { color: var(--muted); font-size: .8rem; }
+
+    .flow {
+      display: grid;
+      gap: 8px;
+    }
+
+    .flow-step {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 12px 14px;
+      border: 1px solid var(--stroke);
+      border-radius: 13px;
+      background: rgba(255,255,255,.025);
+      color: var(--muted);
+      font-size: .88rem;
+    }
+
+    .flow-dot {
+      width: 8px;
+      height: 8px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: var(--accent);
+    }
+
+    .final-holdout {
+      display: grid;
+      grid-template-columns: 2fr 1fr 3fr;
+      gap: 7px;
+      height: 72px;
+      margin-top: 18px;
+    }
+
+    .holdout-part {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 8px;
+      text-align: center;
+      border-radius: 14px;
+      font-weight: 800;
+      font-size: .82rem;
+    }
+
+    .holdout-good { background: rgba(87,223,195,.22); color: var(--accent); border: 1px solid rgba(87,223,195,.25); }
+    .holdout-partial { background: rgba(244,201,107,.16); color: var(--warning); border: 1px solid rgba(244,201,107,.22); }
+    .holdout-stop { background: rgba(255,123,139,.11); color: #ffadb7; border: 1px solid rgba(255,123,139,.18); }
+
+    .lesson-grid {
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+    }
+
+    .lesson {
+      min-height: 175px;
+      padding: 20px;
+    }
+
+    .lesson-number {
+      display: block;
+      margin-bottom: 14px;
+      color: var(--accent-2);
+      font-weight: 850;
+      font-size: .8rem;
+      letter-spacing: .12em;
+    }
+
+    .lesson p { margin: 0; font-size: .88rem; }
+
+    details {
+      border: 1px solid var(--stroke);
+      border-radius: 16px;
+      background: rgba(9,12,19,.32);
+      overflow: hidden;
+    }
+
+    summary {
+      cursor: pointer;
+      list-style: none;
+      padding: 17px 18px;
+      font-weight: 760;
+    }
+
+    summary::-webkit-details-marker { display: none; }
+
+    summary::after {
+      content: "+";
+      float: right;
+      color: var(--accent);
+      font-size: 1.2rem;
+      line-height: 1;
+    }
+
+    details[open] summary::after { content: "–"; }
+
+    .details-body {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0,1fr));
+      gap: 12px;
+      padding: 0 18px 18px;
+    }
+
+    .details-body div {
+      padding: 14px;
+      border-top: 1px solid var(--stroke);
+    }
+
+    .details-body strong {
+      display: block;
+      margin-bottom: 4px;
+      font-size: .9rem;
+    }
+
+    .details-body span {
+      color: var(--muted);
+      font-size: .82rem;
+    }
+
+    .footer {
+      display: flex;
+      justify-content: space-between;
+      gap: 18px;
+      padding: 28px 6px 0;
+      color: var(--muted-2);
+      font-size: .8rem;
+    }
+
+    .reveal {
+      opacity: 0;
+      transform: translateY(14px);
+      transition:
+        opacity 520ms ease,
+        transform 520ms cubic-bezier(.2,.8,.2,1);
+    }
+
+    .reveal.is-visible {
+      opacity: 1;
+      transform: none;
+    }
+
+    @media (max-width: 980px) {
+      .hero,
+      .training-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .metric-grid,
+      .milestone-grid,
+      .lesson-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
+      .stage {
+        grid-template-columns: 48px minmax(0,1fr) auto;
+      }
+
+      .stage-copy {
+        grid-column: 2 / -1;
+      }
+    }
+
+    @media (max-width: 720px) {
+      .shell {
+        width: min(calc(100% - 20px), 1240px);
+        padding-bottom: 38px;
+      }
+
+      .topbar {
+        top: 6px;
+        align-items: flex-start;
+      }
+
+      nav a:nth-child(n+3) { display: none; }
+
+      .section {
+        padding: 20px;
+        border-radius: 20px;
+      }
+
+      .hero { min-height: unset; }
+
+      h1 { font-size: clamp(2.5rem, 15vw, 4.6rem); }
+
+      .section-head {
+        display: block;
+      }
+
+      .section-head p {
+        text-align: left;
+        margin-top: 8px;
+      }
+
+      .metric-grid,
+      .milestone-grid,
+      .lesson-grid,
+      .details-body {
+        grid-template-columns: 1fr;
+      }
+
+
+      .stage {
+        grid-template-columns: 42px minmax(0,1fr);
+      }
+
+      .stage-state {
+        grid-column: 2;
+      }
+
+      .stage-copy {
+        grid-column: 2;
+      }
+
+      .final-holdout {
+        grid-template-columns: 1fr;
+        height: auto;
+      }
+
+      .holdout-part { min-height: 48px; }
+
+      .footer { display: block; }
+    }
+
+    @media (hover: none) {
+      .interactive-card::before { display: none; }
+      .interactive-card:hover {
+        transform: none;
+        box-shadow: none;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      *,
+      *::before,
+      *::after {
+        scroll-behavior: auto !important;
+        animation-duration: .001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: .001ms !important;
+      }
+
+      .interactive-card::before { display: none; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="shell">
+    <header class="topbar" aria-label="Sayfa üst menüsü">
+      <a class="brand" href="#ust">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <span>Agentic Debugging</span>
+      </a>
+      <nav aria-label="Bölümler">
+        <a href="#surec">Süreç</a>
+        <a href="#sonuclar">Sonuçlar</a>
+        <a href="#sinirlar">Sınırlar</a>
+      </nav>
+    </header>
+
+    <main id="ust">
+      <section class="section hero reveal">
+        <div class="hero-copy">
+          <p class="eyebrow">Proje özeti · 2026</p>
+          <h1>Doğrudan patch üretiminden dinamik debugging’e</h1>
+          <p>
+            Gerçek PDB kullanan, runtime kanıt toplayan, patch üreten ve sonucu bağımsız verifier ile doğrulayan bir agentic debugging sistemi geliştirdim.
+          </p>
+        </div>
+
+        <aside class="hero-result">
+          <div>
+            <span class="result-label">R6 validation</span>
+            <div class="result-number">8/8</div>
+            <div class="result-title">RESOLVED</div>
+          </div>
+          <p class="result-note">
+            Fine-tuned Qwen2.5-Coder-7B, eğitimden ayrı tutulan QuixBugs validation görevlerinin tamamını gerçek debugger ve bağımsız verifier ile çözdü.
+          </p>
+        </aside>
+      </section>
+
+      <section class="metric-grid reveal" aria-label="Temel metrikler">
+        <article class="card metric interactive-card">
+          <span class="metric-value">5/40</span>
+          <span class="metric-label">RAW baseline</span>
+          <p>Proje verisiyle eğitilmemiş 7B modelin doğrulanmış repair sonucu.</p>
+        </article>
+
+        <article class="card metric interactive-card">
+          <span class="metric-value danger">0/40</span>
+          <span class="metric-label">İlk fine-tune</span>
+          <p>SWE-rebench cp118, aynı değerlendirmede RAW baseline’ın gerisine düştü.</p>
+        </article>
+
+        <article class="card metric interactive-card">
+          <span class="metric-value accent">5/5</span>
+          <span class="metric-label">R5 temiz holdout</span>
+          <p>Base 14B ile temiz koşuda; denetlenen 41 prompt’ta leakage bulunmadı.</p>
+        </article>
+
+        <article class="card metric interactive-card">
+          <span class="metric-value accent">10</span>
+          <span class="metric-label">JSON trace</span>
+          <p>8 validation ve 2 final holdout koşusundan yeniden üretilebilir kayıt.</p>
+        </article>
+      </section>
+
+      <section id="surec" class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Kronoloji</p>
+            <h2>Süreç nasıl ilerledi?</h2>
+          </div>
+          <p>Önce altyapıyı kurdum, ardından RAW baseline’ı ölçtüm; eğitim ve genelleme deneylerini bunun üzerine yürüttüm.</p>
+        </div>
+
+        <div class="timeline">
+          <div class="stage">
+            <div class="stage-title">Debugger altyapısı</div>
+            <p class="stage-copy">PDB backend, controller, PatchManager ve bağımsız verifier hattını kurdum.</p>
+            <span class="stage-state ok">Altyapı</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">RAW baseline</div>
+            <p class="stage-copy">Qwen2.5-Coder-7B’yi 40 görevde değerlendirdim; 5 görev RESOLVED oldu.</p>
+            <span class="stage-state ok">Baseline</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">İlk QLoRA</div>
+            <p class="stage-copy">SWE-rebench V2 üzerinde doğrudan bug → patch hedefiyle QLoRA eğitimi yaptım.</p>
+            <span class="stage-state warn">Bug → patch</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">Negative transfer</div>
+            <p class="stage-copy">cp118 0/40 RESOLVED kaldı; eğitim hedefinin debugger davranışıyla uyuşmadığı ortaya çıktı.</p>
+            <span class="stage-state warn">Neg. transfer</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">R1–R4</div>
+            <p class="stage-copy">Gerçek debugger kullanımı, runtime evidence, diagnosis, patch ve regression test zincirini adım adım doğruladım.</p>
+            <span class="stage-state ok">Uçtan uca</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">R5</div>
+            <p class="stage-copy">İlk 5/5 sonucu hidden-test leakage nedeniyle diskalifiye ettim; temiz koşuda yeniden 5/5 elde ettim.</p>
+            <span class="stage-state ok">Temiz tekrar</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">Yeni eğitim</div>
+            <p class="stage-copy">Eğitimi debugger action, observation, diagnosis, patch ve verifier adımlarını içeren trajectory verisine göre yeniden tasarladım.</p>
+            <span class="stage-state ok">Trajectory</span>
+          </div>
+
+          <div class="stage">
+            <div class="stage-title">R6 validation</div>
+            <p class="stage-copy">Fine-tuned 7B model, eğitimden ayrı tutulan 8 validation görevinin tamamını RESOLVED etti.</p>
+            <span class="stage-state ok">8/8</span>
+          </div>
+        </div>
+      </section>
+
+      <section id="sonuclar" class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Deney sonuçları</p>
+            <h2>Her aşama farklı bir soruyu yanıtladı</h2>
+          </div>
+          <p>RAW, cp118, R5 ve R6 aynı görev kümesinde koşulmadı; bu nedenle sonuçları tek bir model sıralaması olarak yorumlamıyorum.</p>
+        </div>
+
+        <div class="lesson-grid">
+          <article class="card lesson interactive-card">
+            <span class="lesson-number">01</span>
+            <h3>İlk fine-tune geriye gitti</h3>
+            <p>RAW model 5/40 iken cp118 aynı 40 görevde 0/40 RESOLVED oldu; bu sonuç negative transfer bulgusunu destekledi.</p>
+          </article>
+
+          <article class="card lesson interactive-card">
+            <span class="lesson-number">02</span>
+            <h3>R5 mimariyi sınadı</h3>
+            <p>Base 14B ile temiz holdout’ta alınan 5/5, debugger/controller/verifier hattının güçlü model kapasitesiyle genellenebildiğini gösterdi.</p>
+          </article>
+
+          <article class="card lesson interactive-card">
+            <span class="lesson-number">03</span>
+            <h3>R6 yeni eğitim hedefini sınadı</h3>
+            <p>Debugger-oriented fine-tuned 7B, ayrı validation setinde 8/8 RESOLVED oldu; matched-base ablation olmadığı için nedensel üstünlük iddia etmiyorum.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">R1–R4</p>
+            <h2>Debugger zinciri adım adım doğrulandı</h2>
+          </div>
+          <p>Her aşamada tek bir yeteneği doğrulayarak zinciri kontrollü biçimde genişlettim.</p>
+        </div>
+
+        <div class="milestone-grid">
+          <article class="card milestone interactive-card">
+            <span class="milestone-id">R1</span>
+            <h3>Gerçek PDB</h3>
+            <p>Model breakpoint seçti; program gerçek noktada durdu ve ardından model stack bilgisini istedi.</p>
+          </article>
+
+          <article class="card milestone interactive-card">
+            <span class="milestone-id">R2</span>
+            <h3>Runtime evidence</h3>
+            <p>Model stack, locals ve next adımlarıyla runtime evidence topladı ve diagnosis üretti.</p>
+          </article>
+
+          <article class="card milestone interactive-card">
+            <span class="milestone-id">R3</span>
+            <h3>Patch + verifier</h3>
+            <p>Modelin semantik repair’i PatchManager üzerinden uygulandı ve bağımsız verifier RESOLVED sonucunu doğruladı.</p>
+          </article>
+
+          <article class="card milestone interactive-card">
+            <span class="milestone-id">R4</span>
+            <h3>Regression test</h3>
+            <p>Model regression test üretti; test buggy workspace’te FAIL, düzeltilmiş workspace’te PASS verdi.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="egitim" class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">R6 eğitimi</p>
+            <h2>Bu kez yalnızca patch değil, debugging süreci de öğretildi</h2>
+          </div>
+          <p>QuixBugs tabanlı trajectory verisini gerçek debugger akışındaki ara kararları içerecek şekilde hazırladım.</p>
+        </div>
+
+        <div class="training-layout">
+          <article class="card split-card interactive-card">
+            <h3>Sabitlenmiş görev ayrımı</h3>
+            <div class="split" aria-label="21 eğitim ve 8 validation görevi">
+              <div class="train">21 TRAIN</div>
+              <div class="val">8 VAL</div>
+            </div>
+
+            <div class="mini-grid">
+              <div class="mini">
+                <strong>164</strong>
+                <span>Eğitim çifti</span>
+              </div>
+              <div class="mini">
+                <strong>61</strong>
+                <span>Validation çifti</span>
+              </div>
+              <div class="mini">
+                <strong>3</strong>
+                <span>Epoch</span>
+              </div>
+              <div class="mini">
+                <strong>48</strong>
+                <span>Toplam optimization step</span>
+              </div>
+            </div>
+          </article>
+
+          <article class="card split-card interactive-card">
+            <h3>Öğretilen akış</h3>
+            <div class="flow">
+              <div class="flow-step"><span class="flow-dot"></span>Debugger eylemini seç</div>
+              <div class="flow-step"><span class="flow-dot"></span>Runtime gözlemini incele</div>
+              <div class="flow-step"><span class="flow-dot"></span>Stack ve locals bilgisini yorumla</div>
+              <div class="flow-step"><span class="flow-dot"></span>Diagnosis üret</div>
+              <div class="flow-step"><span class="flow-dot"></span>Patch üret, verifier ile doğrula</div>
+            </div>
+            <p class="chart-note">Validation sonucu checkpoint-30’u öne çıkardı; eğitim toplam 48 optimization step sürdü.</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">R6 çalışma yükü</p>
+            <h2>8 görevde çok turlu gerçek agent loop</h2>
+          </div>
+          <p>R6 sonucu tek atımlık code generation değil, çok turlu debugger etkileşimiyle elde edildi.</p>
+        </div>
+
+        <div class="metric-grid">
+          <article class="card metric interactive-card">
+            <span class="metric-value accent">97</span>
+            <span class="metric-label">Model çağrısı</span>
+            <p>Sekiz validation görevi boyunca yapılan toplam çağrı.</p>
+          </article>
+          <article class="card metric interactive-card">
+            <span class="metric-value">64.783</span>
+            <span class="metric-label">Token</span>
+            <p>Agent loop boyunca kaydedilen toplam model trafiği.</p>
+          </article>
+          <article class="card metric interactive-card">
+            <span class="metric-value">841,7 sn</span>
+            <span class="metric-label">Yürütüm süresi</span>
+            <p>Sekiz görevin toplam çalışma süresi.</p>
+          </article>
+          <article class="card metric interactive-card">
+            <span class="metric-value accent">8</span>
+            <span class="metric-label">Validation görevi</span>
+            <p>Her görevde debugger, diagnosis, patch ve verifier adımları yürütüldü.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="sinirlar" class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Bilimsel sınırlar</p>
+            <h2>Sonuçların geçerlilik sınırları</h2>
+          </div>
+          <p>Sonuçları, deney kapsamının izin verdiği sınırlar içinde yorumluyorum.</p>
+        </div>
+
+        <div class="lesson-grid">
+          <article class="card lesson interactive-card">
+            <span class="lesson-number">01</span>
+            <h3>R5 fine-tuning sonucu değil</h3>
+            <p>5/5 sonuç, proje verisiyle eğitilmemiş base Qwen2.5-Coder-14B ile alındı.</p>
+          </article>
+
+          <article class="card lesson interactive-card">
+            <span class="lesson-number">02</span>
+            <h3>Matched-base ablation eksik</h3>
+            <p>R6’daki 8 validation görevi aynı koşullarda base 7B ile tamamlanmadı; fine-tuning etkisini sayısal olarak izole etmiyorum.</p>
+          </article>
+
+          <article class="card lesson interactive-card">
+            <span class="lesson-number">03</span>
+            <h3>Final holdout tamamlanmadı</h3>
+            <p>Tekrarlayan hard power-off nedeniyle üç görev bitirilemedi ve tam 5-task başarı oranı raporlanmadı.</p>
+          </article>
+        </div>
+
+        <div class="final-holdout" aria-label="Final holdout durumu">
+          <div class="holdout-part holdout-good">1 görev · strict PASS</div>
+          <div class="holdout-part holdout-partial">1 görev · BREAKING_RESOLVED</div>
+          <div class="holdout-part holdout-stop">3 görev · donanım nedeniyle tamamlanmadı</div>
+        </div>
+      </section>
+
+      <section class="section reveal">
+        <div class="section-head">
+          <div>
+            <p class="eyebrow">Kanıt ve yeniden üretim</p>
+            <h2>Sonuçları yeniden üretilebilir kanıtlarla destekledim</h2>
+          </div>
+          <p>Debugger trace’leri, leakage denetimi ve source-evidence kayıtlarını aynı doğrulama hattında tuttum.</p>
+        </div>
+
+        <div class="metric-grid">
+          <article class="card metric interactive-card">
+            <span class="metric-value accent">10/10</span>
+            <span class="metric-label">Trace geçerli</span>
+            <p>Tüm JSON trace’ler şema doğrulamasını geçti.</p>
+          </article>
+          <article class="card metric interactive-card">
+            <span class="metric-value accent">0</span>
+            <span class="metric-label">İçerik denetimi</span>
+            <p>10 trace’in final içerik denetiminde sorun kalmadı.</p>
+          </article>
+          <article class="card metric interactive-card">
+            <span class="metric-value accent">0</span>
+            <span class="metric-label">Leakage</span>
+            <p>Temiz değerlendirme kanıtlarında sızıntı bulunmadı.</p>
+          </article>
+          <article class="card metric interactive-card">
+            <span class="metric-value accent">=</span>
+            <span class="metric-label">Byte-identical</span>
+            <p>Temiz repository checkout’undan yeniden üretimde trace ve manifest çıktıları aynı kaldı.</p>
+          </article>
+        </div>
+
+        <div style="margin-top:14px">
+          <details>
+            <summary>Metodoloji özeti</summary>
+            <div class="details-body">
+              <div>
+                <strong>Başarı kriteri</strong>
+                <span>Patch gerçek workspace’e uygulanmalı ve bağımsız verifier sonucu doğrulamalı.</span>
+              </div>
+              <div>
+                <strong>Leakage politikası</strong>
+                <span>Hidden-test bilgisi prompt’a sızarsa sonuç geçersiz sayılır.</span>
+              </div>
+              <div>
+                <strong>Kanıt standardı</strong>
+                <span>Runtime trace, patch, verifier sonucu ve source-evidence ilişkisi birlikte tutulur.</span>
+              </div>
+            </div>
+          </details>
+        </div>
+      </section>
+
+      <section class="section reveal">
+        <p class="eyebrow">Ana çıkarım</p>
+        <h2>Eğitim hedefi, beklenen debugger davranışıyla uyumlu olmalı</h2>
+        <p style="max-width:760px;margin-bottom:0">
+          İlk bug → patch fine-tune’u negative transfer üretti. Debugger-oriented trajectory eğitimi güçlü bir validation sonucu verdi; matched-base ablation eksik olduğu için bu farkı yalnızca fine-tuning’e bağlamıyorum.
+        </p>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <span>Agentic Debugging · Teknik süreç özeti</span>
+      <span>13 Ağustos 2026</span>
+    </footer>
+  </div>
+
+  <script>
+    (() => {
+      const revealItems = document.querySelectorAll(".reveal");
+
+      if ("IntersectionObserver" in window) {
+        const observer = new IntersectionObserver((entries) => {
+          for (const entry of entries) {
+            if (!entry.isIntersecting) continue;
+            entry.target.classList.add("is-visible");
+            observer.unobserve(entry.target);
+          }
+        }, { threshold: 0.12 });
+
+        revealItems.forEach((item) => observer.observe(item));
+      } else {
+        revealItems.forEach((item) => item.classList.add("is-visible"));
+      }
+
+      const cards = document.querySelectorAll(".interactive-card");
+      cards.forEach((card) => {
+        let frame = null;
+
+        card.addEventListener("pointermove", (event) => {
+          if (frame) return;
+
+          frame = requestAnimationFrame(() => {
+            const rect = card.getBoundingClientRect();
+            card.style.setProperty("--x", `${event.clientX - rect.left}px`);
+            card.style.setProperty("--y", `${event.clientY - rect.top}px`);
+            frame = null;
+          });
+        });
+
+        card.addEventListener("pointerleave", () => {
+          if (frame) {
+            cancelAnimationFrame(frame);
+            frame = null;
+          }
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
