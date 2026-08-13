@@ -1,0 +1,270 @@
+{
+  "schema_version": "professor_debug_trace_v1",
+  "task_id": "curated-off-by-one-002",
+  "bug_category": null,
+  "evidence_scope": "final_holdout_partial",
+  "debugger_path": "normal-G2",
+  "model": {
+    "base": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "fine_tuned_checkpoint": "checkpoint-30",
+    "adapter_identity_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "training_provenance": "Project SFT/QLoRA fine-tuning of the debugger (train_qlora.py, run_bounded_training.py) over the disjoint QuixBugs training split; selected by disjoint validation only (holdout_used_for_selection=false)."
+  },
+  "treatment": {
+    "revision": "r6.8",
+    "contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+    "system_prompt_template_sha256": "6e2d1c07e57babab7781c6d707d60b04f4165f80d05b9c5411bbf9e4df87b6c0"
+  },
+  "run_provenance": {
+    "source_commit_sha": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+    "evidence_schema": "debugger-interaction-v2-r5-evidence",
+    "selected_adapter_path": "experiments/r6_debugger_training/runs/r6-sft-debugger-v3/trainer/checkpoint-30",
+    "adapter_model_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "adapter_config_sha256": "92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e",
+    "evaluator_python_version": "3.10.1",
+    "controller_final_state": "Failed",
+    "controller_stop_reason": "model_error",
+    "model_calls": 12,
+    "diagnosis_provenance": {
+      "model_call_index": 8,
+      "prior_observation_id": "observation-000000007",
+      "rendered_observation_sha256": "f53b12a91424afca46e27fb65d2b79d1da9ac9387a7afee94786e77c1ea6c7f7",
+      "G1": 1,
+      "G2": 2,
+      "diagnosis_text_sha256": "95555b0dfa02f58f9e5dd6a2096a896142ebce7af15f2eae24ef8c0d0912e9dd"
+    }
+  },
+  "failure_reproduction": {
+    "reproduced": true,
+    "sanitized_summary": "baseline behavioral check failed after executing the target behavior"
+  },
+  "debugger_lifecycle": {
+    "entered": true,
+    "terminal_path": false,
+    "production_exception_path": false,
+    "step_outside_region": false,
+    "pause_generations": {
+      "G1": 1,
+      "G2": 2
+    },
+    "gate_passed": true,
+    "gate_reason": "model authored break->stack G1->locals/print G1->step/next PAUSED->stack G2>G1->diagnosis, all OK, original-region, provenance-bound",
+    "tool_observations": [
+      "run_reproduction",
+      "start_pdb_session",
+      "get_stack_summary",
+      "get_frame_locals",
+      "next_pdb_session",
+      "get_stack_summary",
+      "apply_patch",
+      "apply_patch"
+    ]
+  },
+  "debugger_trace": [
+    {
+      "turn": 1,
+      "phase": "Reproduce",
+      "model_command": "reproduce",
+      "status": "accepted",
+      "tool_action": "run_reproduction"
+    },
+    {
+      "turn": 2,
+      "phase": "RuntimeEvidence",
+      "model_command": "break 2",
+      "status": "accepted",
+      "tool_action": "start_pdb_session",
+      "production_file": null,
+      "function": null,
+      "line": null
+    },
+    {
+      "turn": 3,
+      "phase": "RuntimeEvidence",
+      "model_command": "stack",
+      "status": "accepted",
+      "tool_action": "get_stack_summary",
+      "production_file": "recent_window.py",
+      "function": "recent_window",
+      "line": 2,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 4,
+      "phase": "RuntimeEvidence",
+      "model_command": "locals",
+      "status": "accepted",
+      "tool_action": "get_frame_locals",
+      "production_file": "recent_window.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 1,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "recent_window",
+          "file": "recent_window.py",
+          "line": 2,
+          "is_current": true
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "phase": "RuntimeEvidence",
+      "model_command": "next",
+      "status": "accepted",
+      "tool_action": "next_pdb_session",
+      "production_file": null,
+      "function": null,
+      "line": null,
+      "pause_generation": 1,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 6,
+      "phase": "RuntimeEvidence",
+      "model_command": "stack",
+      "status": "accepted",
+      "tool_action": "get_stack_summary",
+      "production_file": "recent_window.py",
+      "function": "recent_window",
+      "line": 3,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 7,
+      "phase": "RuntimeEvidence",
+      "model_command": "diagnosis diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+      "status": "accepted",
+      "tool_action": "diagnosis",
+      "diagnosis_text": "diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+      "production_file": "recent_window.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 2,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "recent_window",
+          "file": "recent_window.py",
+          "line": 3,
+          "is_current": true
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "phase": "Patch",
+      "model_command": "file recent_window.py",
+      "status": "accepted",
+      "tool_action": "apply_patch",
+      "production_file": "recent_window.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 2,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "recent_window",
+          "file": "recent_window.py",
+          "line": 3,
+          "is_current": true
+        }
+      ]
+    },
+    {
+      "turn": 9,
+      "phase": "Patch",
+      "model_command": "file recent_window.py",
+      "status": "accepted",
+      "tool_action": "apply_patch",
+      "production_file": null,
+      "function": null,
+      "line": null
+    },
+    {
+      "turn": 10,
+      "phase": "Patch",
+      "model_command": "file recent_window.py",
+      "status": "rejected",
+      "production_file": null,
+      "function": null,
+      "line": null
+    },
+    {
+      "turn": 11,
+      "phase": "Patch",
+      "model_command": "file recent_window.py",
+      "status": "rejected",
+      "production_file": null,
+      "function": null,
+      "line": null
+    }
+  ],
+  "error_localization": {
+    "production_file": "recent_window.py",
+    "function": "recent_window",
+    "line_or_region": 2,
+    "evidence_basis": [
+      {
+        "observation": "start_pdb_session",
+        "observation_id": "observation-000000003",
+        "function": "recent_window",
+        "line": 2
+      },
+      {
+        "observation": "next_pdb_session",
+        "observation_id": "observation-000000006",
+        "function": "recent_window",
+        "line": 3
+      }
+    ],
+    "pause_generation": 1
+  },
+  "diagnosis": {
+    "model_authored": true,
+    "text": "diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows."
+  },
+  "repair_attempts": [
+    {
+      "attempt": 1,
+      "representation": "whole-file",
+      "model_patch_raw_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+      "model_patch_serialization_normalized_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+      "verifier_outcome": "NO_OP",
+      "verifier_status": "COMPLETED"
+    },
+    {
+      "attempt": 2,
+      "representation": "whole-file",
+      "model_patch_raw_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+      "model_patch_serialization_normalized_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+      "verifier_outcome": "BREAKING_RESOLVED",
+      "verifier_status": "COMPLETED"
+    }
+  ],
+  "serialization_normalization": {
+    "required": true,
+    "note": "normalization output SHA == PatchManager input SHA == verifier input SHA == final_candidate_sha256",
+    "verifier_input_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+    "patchmanager_input_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c"
+  },
+  "final_verification": {
+    "outcome": "BREAKING_RESOLVED",
+    "verifier_status": "COMPLETED",
+    "f2p": "1/1",
+    "p2p": "1/2",
+    "full_suite": false,
+    "syntax_passed": true,
+    "canonical_fixture_unchanged": true,
+    "workspace_lifecycle": "CLEANED",
+    "candidate_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c"
+  },
+  "workspace_cleanup": {
+    "release_pdb": [],
+    "workspace_cleanup": "cleaned"
+  },
+  "claims_boundary": "Derived deterministically from the real accepted R6 final-execution evidence (checkpoint-30, treatment contract 5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78).  No hidden test source, hidden test node id, oracle field, chain-of-thought, or fabricated localization is included; the debugger path distinguishes the production-exception path (G2=None) from the normal G2 path exactly as the accepted gate classified it."
+}

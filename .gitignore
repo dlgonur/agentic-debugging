@@ -49,5 +49,26 @@ operator/
 # pinned in experiments/r6_debugger_training/split_manifest.json)
 agentic_debugger/datasets/curated/quixbugs-*/
 experiments/r6_debugger_training/gold/
-experiments/r6_debugger_training/runs/
+# R6 local run trees are ignored, EXCEPT the tracked frozen evidence
+# capsule (regeneration source for docs/professor_traces).  The generic
+# "runs/" rule above excludes this directory, so the capsule subtree is
+# re-included explicitly: re-include the dir, exclude its contents, then
+# negate the capsule paths.
+!experiments/r6_debugger_training/runs/
+experiments/r6_debugger_training/runs/*
+!experiments/r6_debugger_training/runs/frozen/
+experiments/r6_debugger_training/runs/frozen/*
+!experiments/r6_debugger_training/runs/frozen/capsule_manifest.json
+!experiments/r6_debugger_training/runs/frozen/validation/
+experiments/r6_debugger_training/runs/frozen/validation/*
+!experiments/r6_debugger_training/runs/frozen/validation/**/
+!experiments/r6_debugger_training/runs/frozen/validation/**/evidence.json
+!experiments/r6_debugger_training/runs/frozen/final_holdout_partial/
+experiments/r6_debugger_training/runs/frozen/final_holdout_partial/*
+!experiments/r6_debugger_training/runs/frozen/final_holdout_partial/**/
+!experiments/r6_debugger_training/runs/frozen/final_holdout_partial/**/evidence.json
+!experiments/r6_debugger_training/runs/frozen/ancillary/
+!experiments/r6_debugger_training/runs/frozen/ancillary/*.json
+!experiments/r6_debugger_training/runs/frozen/quixbugs_audit_needles/
+!experiments/r6_debugger_training/runs/frozen/quixbugs_audit_needles/*.json
 experiments/r6_debugger_training/sft/

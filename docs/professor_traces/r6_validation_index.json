@@ -1,0 +1,266 @@
+{
+  "schema_version": "professor_debug_trace_v1_index",
+  "generated_from_source_commit": "4610785713832daaba6aa133374506a2d200391a",
+  "evidence_scope": "validation",
+  "trace_count": 8,
+  "traces": [
+    {
+      "task_id": "quixbugs-depth-first-search",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "depth_first_search.py",
+        "function": "depth_first_search",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "depth_first_search",
+            "line": 2
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "depth_first_search",
+            "line": 4
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-depth-first-search.json",
+      "trace_sha256": "fcbb8dd2647981791622d74cf86f70d263b8acf2f7911f02cd9a9fc64d92094b"
+    },
+    {
+      "task_id": "quixbugs-find-in-sorted",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "find_in_sorted.py",
+        "function": "binsearch",
+        "line_or_region": 3,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "binsearch",
+            "line": 3
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "binsearch",
+            "line": 5
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-find-in-sorted.json",
+      "trace_sha256": "df15f74baeea1bdc12927b3a56d1cdc5573eb193807896ff5b2811cc9d6e60f3"
+    },
+    {
+      "task_id": "quixbugs-flatten",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "flatten.py",
+        "function": "flatten",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "flatten",
+            "line": 2
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "flatten",
+            "line": 3
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-flatten.json",
+      "trace_sha256": "c95b230f3aa49596655d6441c511cec0c4253515311f6e9359122a38d829e330"
+    },
+    {
+      "task_id": "quixbugs-kth",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "kth.py",
+        "function": "kth",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "kth",
+            "line": 2
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "kth",
+            "line": 3
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-kth.json",
+      "trace_sha256": "03fb11b3b9f8fcbd5f030d12d09eecfeaa834b1835b5f04647814fb00ba5d419"
+    },
+    {
+      "task_id": "quixbugs-quicksort",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "quicksort.py",
+        "function": "quicksort",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "quicksort",
+            "line": 2
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "quicksort",
+            "line": 5
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-quicksort.json",
+      "trace_sha256": "35df7dc5605632abc7a5422432da5d2ef4abcf879b41ee3b60c516aeb09dd7fd"
+    },
+    {
+      "task_id": "quixbugs-reverse-linked-list",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "reverse_linked_list.py",
+        "function": "reverse_linked_list",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "reverse_linked_list",
+            "line": 2
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "reverse_linked_list",
+            "line": 3
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-reverse-linked-list.json",
+      "trace_sha256": "09257d386dcc62c7b25ca60f843d879c40a6185b4b16215d59bb8a304d3ed2a4"
+    },
+    {
+      "task_id": "quixbugs-rpn-eval",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "rpn_eval.py",
+        "function": "op",
+        "line_or_region": 4,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "op",
+            "line": 4
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "op",
+            "line": 9
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 8,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-rpn-eval.json",
+      "trace_sha256": "4f8351a2fabb3d0adac133a1b1f64cc7473e1d640f8d87232ac1a8a6b5f52f2a"
+    },
+    {
+      "task_id": "quixbugs-shortest-path-length",
+      "bug_category": null,
+      "evidence_scope": "validation",
+      "error_localization": {
+        "production_file": "shortest_path_length.py",
+        "function": "shortest_path_length",
+        "line_or_region": 4,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "shortest_path_length",
+            "line": 4
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "shortest_path_length",
+            "line": 5
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 9,
+      "repair_attempts": 2,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_validation/professor_debug_trace_quixbugs-shortest-path-length.json",
+      "trace_sha256": "88c52b81a5fbd12347fab9761c4fb91d4e335737a7cb7669ddb282f2c63a40d1"
+    }
+  ],
+  "selected_fine_tuned_checkpoint": "checkpoint-30",
+  "base_model_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+  "validation_cohort_identity": {
+    "treatment_contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+    "adapter_model_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd"
+  },
+  "validation_result": "8/8 RESOLVED",
+  "holdout_used_for_checkpoint_selection": false,
+  "final_holdout_status": "INCOMPLETE_HARDWARE_STOP",
+  "distinct_scopes": "The 8 validation traces in r6_validation/ are the completed contamination-safe disjoint validation cohort.  The two partial final-holdout traces in r6_holdout_partial/ are a SEPARATE, hardware-interrupted scope and are not part of this success set."
+}

@@ -1,0 +1,233 @@
+{
+  "schema_version": "professor_debug_trace_v1",
+  "task_id": "quixbugs-depth-first-search",
+  "bug_category": null,
+  "evidence_scope": "validation",
+  "debugger_path": "normal-G2",
+  "model": {
+    "base": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "fine_tuned_checkpoint": "checkpoint-30",
+    "adapter_identity_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "training_provenance": "Project SFT/QLoRA fine-tuning of the debugger (train_qlora.py, run_bounded_training.py) over the disjoint QuixBugs training split; selected by disjoint validation only (holdout_used_for_selection=false)."
+  },
+  "treatment": {
+    "revision": "r6.8",
+    "contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+    "system_prompt_template_sha256": "6e2d1c07e57babab7781c6d707d60b04f4165f80d05b9c5411bbf9e4df87b6c0"
+  },
+  "run_provenance": {
+    "source_commit_sha": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+    "evidence_schema": "debugger-interaction-v2-r5-evidence",
+    "selected_adapter_path": "experiments/r6_debugger_training/runs/r6-sft-debugger-v3/trainer/checkpoint-30",
+    "adapter_model_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "adapter_config_sha256": "92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e",
+    "evaluator_python_version": "3.10.1",
+    "controller_final_state": "Done",
+    "controller_stop_reason": "done",
+    "model_calls": 12,
+    "diagnosis_provenance": {
+      "model_call_index": 8,
+      "prior_observation_id": "observation-000000007",
+      "rendered_observation_sha256": "4bea585fd9fc506c58362aabe2681ef91786f0aec529c42f85c1f3feb97ee085",
+      "G1": 1,
+      "G2": 2,
+      "diagnosis_text_sha256": "8d61854cd3f68c830a938e2a40c0f8fff2d3f58c9b0cd832ed47b82abc1646e6"
+    }
+  },
+  "failure_reproduction": {
+    "reproduced": true,
+    "sanitized_summary": "baseline behavioral check failed after executing the target behavior"
+  },
+  "debugger_lifecycle": {
+    "entered": true,
+    "terminal_path": false,
+    "production_exception_path": false,
+    "step_outside_region": false,
+    "pause_generations": {
+      "G1": 1,
+      "G2": 2
+    },
+    "gate_passed": true,
+    "gate_reason": "model authored break->stack G1->locals/print G1->step/next PAUSED->stack G2>G1->diagnosis, all OK, original-region, provenance-bound",
+    "tool_observations": [
+      "run_reproduction",
+      "start_pdb_session",
+      "get_stack_summary",
+      "get_frame_locals",
+      "next_pdb_session",
+      "get_stack_summary",
+      "apply_patch"
+    ]
+  },
+  "debugger_trace": [
+    {
+      "turn": 1,
+      "phase": "Reproduce",
+      "model_command": "reproduce",
+      "status": "accepted",
+      "tool_action": "run_reproduction"
+    },
+    {
+      "turn": 2,
+      "phase": "RuntimeEvidence",
+      "model_command": "break 2",
+      "status": "accepted",
+      "tool_action": "start_pdb_session",
+      "production_file": null,
+      "function": null,
+      "line": null
+    },
+    {
+      "turn": 3,
+      "phase": "RuntimeEvidence",
+      "model_command": "stack",
+      "status": "accepted",
+      "tool_action": "get_stack_summary",
+      "production_file": "depth_first_search.py",
+      "function": "depth_first_search",
+      "line": 2,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 4,
+      "phase": "RuntimeEvidence",
+      "model_command": "locals",
+      "status": "accepted",
+      "tool_action": "get_frame_locals",
+      "production_file": "depth_first_search.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 1,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "depth_first_search",
+          "file": "depth_first_search.py",
+          "line": 2,
+          "is_current": true
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "phase": "RuntimeEvidence",
+      "model_command": "next",
+      "status": "accepted",
+      "tool_action": "next_pdb_session",
+      "production_file": null,
+      "function": null,
+      "line": null,
+      "pause_generation": 1,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 6,
+      "phase": "RuntimeEvidence",
+      "model_command": "stack",
+      "status": "accepted",
+      "tool_action": "get_stack_summary",
+      "production_file": "depth_first_search.py",
+      "function": "depth_first_search",
+      "line": 4,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 7,
+      "phase": "RuntimeEvidence",
+      "model_command": "diagnosis diagnosis depth_first_search recurses on the parent instead of the child when backtracking, so the returned path is incorrect.",
+      "status": "accepted",
+      "tool_action": "diagnosis",
+      "diagnosis_text": "diagnosis depth_first_search recurses on the parent instead of the child when backtracking, so the returned path is incorrect.",
+      "production_file": "depth_first_search.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 2,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "depth_first_search",
+          "file": "depth_first_search.py",
+          "line": 4,
+          "is_current": true
+        }
+      ]
+    },
+    {
+      "turn": 8,
+      "phase": "Patch",
+      "model_command": "file depth_first_search.py",
+      "status": "accepted",
+      "tool_action": "apply_patch",
+      "production_file": "depth_first_search.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 2,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "depth_first_search",
+          "file": "depth_first_search.py",
+          "line": 4,
+          "is_current": true
+        }
+      ]
+    }
+  ],
+  "error_localization": {
+    "production_file": "depth_first_search.py",
+    "function": "depth_first_search",
+    "line_or_region": 2,
+    "evidence_basis": [
+      {
+        "observation": "start_pdb_session",
+        "observation_id": "observation-000000003",
+        "function": "depth_first_search",
+        "line": 2
+      },
+      {
+        "observation": "next_pdb_session",
+        "observation_id": "observation-000000006",
+        "function": "depth_first_search",
+        "line": 4
+      }
+    ],
+    "pause_generation": 1
+  },
+  "diagnosis": {
+    "model_authored": true,
+    "text": "diagnosis depth_first_search recurses on the parent instead of the child when backtracking, so the returned path is incorrect."
+  },
+  "repair_attempts": [
+    {
+      "attempt": 1,
+      "representation": "whole-file",
+      "model_patch_raw_sha256": "9265eb5cb1dc38528eb8ab3bee014ec6718ba22c2f42057f5a127566b15b7894",
+      "model_patch_serialization_normalized_sha256": "9265eb5cb1dc38528eb8ab3bee014ec6718ba22c2f42057f5a127566b15b7894",
+      "verifier_outcome": "RESOLVED",
+      "verifier_status": "COMPLETED"
+    }
+  ],
+  "serialization_normalization": {
+    "required": true,
+    "note": "normalization output SHA == PatchManager input SHA == verifier input SHA == final_candidate_sha256",
+    "verifier_input_sha256": "9265eb5cb1dc38528eb8ab3bee014ec6718ba22c2f42057f5a127566b15b7894",
+    "patchmanager_input_sha256": "9265eb5cb1dc38528eb8ab3bee014ec6718ba22c2f42057f5a127566b15b7894"
+  },
+  "final_verification": {
+    "outcome": "RESOLVED",
+    "verifier_status": "COMPLETED",
+    "f2p": "1/1",
+    "p2p": "4/4",
+    "full_suite": "PASS",
+    "syntax_passed": true,
+    "canonical_fixture_unchanged": true,
+    "workspace_lifecycle": "CLEANED",
+    "candidate_sha256": "9265eb5cb1dc38528eb8ab3bee014ec6718ba22c2f42057f5a127566b15b7894"
+  },
+  "workspace_cleanup": {
+    "release_pdb": [],
+    "workspace_cleanup": "cleaned"
+  },
+  "claims_boundary": "Derived deterministically from the real accepted R6 final-execution evidence (checkpoint-30, treatment contract 5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78).  No hidden test source, hidden test node id, oracle field, chain-of-thought, or fabricated localization is included; the debugger path distinguishes the production-exception path (G2=None) from the normal G2 path exactly as the accepted gate classified it."
+}

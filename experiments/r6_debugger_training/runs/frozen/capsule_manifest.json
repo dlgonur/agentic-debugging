@@ -1,0 +1,270 @@
+{
+  "schema_version": "r6-frozen-evidence-capsule-v1",
+  "description": "Minimum tracked frozen evidence for deterministic regeneration of docs/professor_traces from a pristine checkout.  Raw evidence identity (SHA256) is preserved; protected model-prompt / answer-bearing fields are cleared (see cleared_fields).",
+  "source_identity": {
+    "review_package": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP",
+    "live_run_root": "C:\\tmp\\r6-bounded"
+  },
+  "evidence": {
+    "validation:quixbugs-depth-first-search": {
+      "logical_identity": "validation/stage-a/quixbugs-depth-first-search",
+      "task_id": "quixbugs-depth-first-search",
+      "scope": "validation",
+      "raw_sha256": "fc019e272d1bb4f14c1251c394b3759fc97b99963bde561a2652980424114cdf",
+      "capsule_sha256": "74e6d741bb3dd3ee6ab071f968009b01b322f5f5a583ed70e330ff8d46f7819a",
+      "capsule_bytes": 62644,
+      "raw_bytes": 81882,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-a-7c9881\\adapter-checkpoint-30\\quixbugs-depth-first-search\\evidence.json",
+      "capsule_path": "validation/quixbugs-depth-first-search/evidence.json"
+    },
+    "validation:quixbugs-find-in-sorted": {
+      "logical_identity": "validation/stage-c/quixbugs-find-in-sorted",
+      "task_id": "quixbugs-find-in-sorted",
+      "scope": "validation",
+      "raw_sha256": "5ae6fe53700780b6dadd3412c56304ac870379a18cfc25e85fbf937582d650b6",
+      "capsule_sha256": "e3a01bc8a688e7d0f28b78bf34b3320759dfa2ca536158ce3bf3f187f8213cba",
+      "capsule_bytes": 64458,
+      "raw_bytes": 83781,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-find-in-sorted\\evidence.json",
+      "capsule_path": "validation/quixbugs-find-in-sorted/evidence.json"
+    },
+    "validation:quixbugs-flatten": {
+      "logical_identity": "validation/stage-b/quixbugs-flatten",
+      "task_id": "quixbugs-flatten",
+      "scope": "validation",
+      "raw_sha256": "a5f0d4bb26ad8bc60e3ad60a921820fe32d87f2eac92807568b8b924a4537778",
+      "capsule_sha256": "2d698e1ed09c29ff7f1ef757026621ed765bc9aa199479d0d47e9a142fa900e2",
+      "capsule_bytes": 61528,
+      "raw_bytes": 78877,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-b-7c9881\\adapter-checkpoint-30\\quixbugs-flatten\\evidence.json",
+      "capsule_path": "validation/quixbugs-flatten/evidence.json"
+    },
+    "validation:quixbugs-kth": {
+      "logical_identity": "validation/stage-c/quixbugs-kth",
+      "task_id": "quixbugs-kth",
+      "scope": "validation",
+      "raw_sha256": "49c89a8d933c6406f6f80bd22004e3edb16ac615bb46dff203e5fc040a9b901c",
+      "capsule_sha256": "51a9a1e4eaa2ebfa1bebab6c57b959555e0f9ac4a93472850d25a795786836ce",
+      "capsule_bytes": 62320,
+      "raw_bytes": 80602,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-kth\\evidence.json",
+      "capsule_path": "validation/quixbugs-kth/evidence.json"
+    },
+    "validation:quixbugs-quicksort": {
+      "logical_identity": "validation/stage-b/quixbugs-quicksort",
+      "task_id": "quixbugs-quicksort",
+      "scope": "validation",
+      "raw_sha256": "b2247b182154ee6f7d46a17dc7574b8fe70e0b100f151cbb1cd5eb591809380d",
+      "capsule_sha256": "eb0a2b29c1bb981e1195f51ff44cac3a5969fb982c2ddb01bc593aae30a6f609",
+      "capsule_bytes": 64681,
+      "raw_bytes": 81569,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-b-7c9881\\adapter-checkpoint-30\\quixbugs-quicksort\\evidence.json",
+      "capsule_path": "validation/quixbugs-quicksort/evidence.json"
+    },
+    "validation:quixbugs-reverse-linked-list": {
+      "logical_identity": "validation/stage-c/quixbugs-reverse-linked-list",
+      "task_id": "quixbugs-reverse-linked-list",
+      "scope": "validation",
+      "raw_sha256": "8530f95043f7ca0c5e70e83506420c4131e2441a0cbc3896a3d6b492266df47a",
+      "capsule_sha256": "4b388054d5dbf2eb6835bee2b6d2f91d77f19e338391ed73b64615a9b7ae91da",
+      "capsule_bytes": 61125,
+      "raw_bytes": 78814,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-reverse-linked-list\\evidence.json",
+      "capsule_path": "validation/quixbugs-reverse-linked-list/evidence.json"
+    },
+    "validation:quixbugs-rpn-eval": {
+      "logical_identity": "validation/stage-c/quixbugs-rpn-eval",
+      "task_id": "quixbugs-rpn-eval",
+      "scope": "validation",
+      "raw_sha256": "69f1ec0025d4988eab772676ca9e1973bb11c8a49f4748b3f540e8340665e3ee",
+      "capsule_sha256": "9338c91dd415630ad4569a8fa6ff960beca5898f4ed47b299f1139284b8e952d",
+      "capsule_bytes": 63179,
+      "raw_bytes": 82613,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-rpn-eval\\evidence.json",
+      "capsule_path": "validation/quixbugs-rpn-eval/evidence.json"
+    },
+    "validation:quixbugs-shortest-path-length": {
+      "logical_identity": "validation/stage-c/quixbugs-shortest-path-length",
+      "task_id": "quixbugs-shortest-path-length",
+      "scope": "validation",
+      "raw_sha256": "84d01973a08961971b896c245c223ee0bfb9c58db2dd613bf0e2ebd83d52c239",
+      "capsule_sha256": "76e53516e443a2a00fbb57fd053cb6348b88b46d54f0d25588f5ec9718991576",
+      "capsule_bytes": 83632,
+      "raw_bytes": 113238,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-shortest-path-length\\evidence.json",
+      "capsule_path": "validation/quixbugs-shortest-path-length/evidence.json"
+    },
+    "final_holdout_partial:curated-none-handling-001": {
+      "logical_identity": "final_holdout_partial/curated-none-handling-001",
+      "task_id": "curated-none-handling-001",
+      "scope": "final_holdout_partial",
+      "raw_sha256": "ff01c714d1736da4eaf6c97194e42d3af043e84b4a18ab0563cbe62443566109",
+      "capsule_sha256": "fb19683f663b498614758b1e4d0233d3deb190bc6ade5af0c7d3c964e6cae3dc",
+      "capsule_bytes": 56162,
+      "raw_bytes": 71914,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\interrupted-holdout\\completed-evidence\\curated-none-handling-001.json",
+      "capsule_path": "final_holdout_partial/curated-none-handling-001/evidence.json"
+    },
+    "final_holdout_partial:curated-off-by-one-002": {
+      "logical_identity": "final_holdout_partial/curated-off-by-one-002",
+      "task_id": "curated-off-by-one-002",
+      "scope": "final_holdout_partial",
+      "raw_sha256": "27cae9d4e1d8f292483898c1b525287f8f155796c620e78434ad31d774eb746d",
+      "capsule_sha256": "77f985da2759e20a6cef10117b436e6e9528936078d9c70aeb580213d2dca878",
+      "capsule_bytes": 72277,
+      "raw_bytes": 102716,
+      "cleared_fields": [
+        "telemetry/*/request",
+        "telemetry/*/translated_directive/arguments",
+        "trajectory_jsonl/*/observation.payload.failure_output_raw",
+        "trajectory_jsonl/*/observation.payload.node_id"
+      ],
+      "capture_source": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\interrupted-holdout\\completed-evidence\\curated-off-by-one-002.json",
+      "capsule_path": "final_holdout_partial/curated-off-by-one-002/evidence.json"
+    }
+  },
+  "ancillary": {
+    "checkpoint_selection": {
+      "logical_identity": "ancillary/checkpoint_selection",
+      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\selection\\checkpoint-selection.json",
+      "sha256": "f966ddee6dad353e9f2887be4a70ed4036abef0b479d80fc2d806ec2b79b9ee4",
+      "bytes": 4133
+    },
+    "stage_a_report": {
+      "logical_identity": "ancillary/stage_a_report",
+      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\validation\\stage-a\\eval_report.json",
+      "sha256": "3fdfd517dd379d2fdb9f74820ceaf444b4b129103477b37baf18506336905967",
+      "bytes": 38655
+    },
+    "stage_b_report": {
+      "logical_identity": "ancillary/stage_b_report",
+      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\validation\\stage-b\\eval_report.json",
+      "sha256": "677ab79a7513a8a00cc50f66ba9bc37e36416f458b71fce7edcf19969f03baa7",
+      "bytes": 40123
+    },
+    "stage_c_report": {
+      "logical_identity": "ancillary/stage_c_report",
+      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\validation\\stage-c\\eval_report.json",
+      "sha256": "f7e24be432675b94ebea6167f37a41ddcfcde276c21e891bc7ebf603c6311d85",
+      "bytes": 44676
+    },
+    "holdout_report": {
+      "logical_identity": "ancillary/holdout_report",
+      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\interrupted-holdout\\eval_report.json",
+      "sha256": "ee77c88b0a44ddc8da1056a9efff13079735fabc83f08b42b32bb6f3c65d1f00",
+      "bytes": 41003
+    }
+  },
+  "audit_needles": {
+    "quixbugs-depth-first-search": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-depth-first-search",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "9d603dfef6b5b2697c6017428aea5c56b5728edfe4aabf4028927b75224b2c0e",
+      "gold_diff_sha256": "726073766b3bd1cbb641d63def729dddb498ad58979b31a3ee2a1a30125a1c6f",
+      "needle_sha256": "0699b7ff8e6d05b871bda123a0c10c2eee42c784263449276d518cd87c55f0b7"
+    },
+    "quixbugs-find-in-sorted": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-find-in-sorted",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "b640b4bcb1b2c0f7875de8f13df191f4e61ddf7e6fbdcfc42d477ec60885d3c7",
+      "gold_diff_sha256": "d0e5fb69d62ca237b7892d1f40a68cd2bd1caec15e88d2476812201fd713a6da",
+      "needle_sha256": "58c4e9a6a0924b66bbf0f4ad4b742a0fe8c1b9f4726cb5606fb486b303fcfd3a"
+    },
+    "quixbugs-flatten": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-flatten",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "5023275fe603f1ebade0027073c3d116274d405069ea350076f220f10ff451e2",
+      "gold_diff_sha256": "b8bd5ac1c970d155906ec28153f74892fba136177528490e0730ba86de389945",
+      "needle_sha256": "531bd766457fb7555429a22afd05a34e70d92c021be812f5fb235686e94d8bcd"
+    },
+    "quixbugs-kth": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-kth",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "505b7d8079de35173a8371dc40e6064d12f597441e1e7c49b782ed3892c37e7b",
+      "gold_diff_sha256": "6ea1343f08ec4dea6e005e00f955700e58014d90aebff83095a4b213ba209f5e",
+      "needle_sha256": "117d59ab7d500f01b1cc2def12a8b8437d5013a8ebddbec73a13718f05799a00"
+    },
+    "quixbugs-quicksort": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-quicksort",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "4bc023d77dcdaeaaf5b284a03eecf0f73765ff216efecadd1d5ed78382ac89a3",
+      "gold_diff_sha256": "2e532d9f9c3f01a39f892b876336835dae35e1d57e9facac1f0459b47f9c2de7",
+      "needle_sha256": "ae8c209dce1d598e0a1c780a8ace87466afd634767373ecd96575fd89c54fc1c"
+    },
+    "quixbugs-reverse-linked-list": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-reverse-linked-list",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "472b29daff20c0a6ec316b841a7aeca577eef6aad81c65bb44d63ef121cfbab0",
+      "gold_diff_sha256": "2f8747c6a69c4b8c93d13b00e1a445fb6a023189d8f465e035c527a0689f6586",
+      "needle_sha256": "a0118dc3d0c27655fa427740b558dbb6a414a954a22cb206afcdd8e9425dcebe"
+    },
+    "quixbugs-rpn-eval": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-rpn-eval",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "4a473b1beaa9eb8155fcb079917e390d0584d8ebdfc6d6d8c88069609854194a",
+      "gold_diff_sha256": "3c5ebc18e14ae2936127eb8c6d2b6f77c6cbfcd7439c251a4a0b7ff86145e4bf",
+      "needle_sha256": "4c3503bfa41caf8f6539d401b2bf36c783ddb2b744549eccb0dcb7f58baab85b"
+    },
+    "quixbugs-shortest-path-length": {
+      "logical_identity": "quixbugs_audit_needles/quixbugs-shortest-path-length",
+      "schema_version": "r6-quixbugs-audit-needles-v2",
+      "source_pin_sha256": "7dfc112f10e97ef4023f0d0eacec6c4659d1775fb9125826c4379e78c41dc46f",
+      "gold_diff_sha256": "522e55e53bb5c8b602bbaea5a9a055b53c4a3cd7ba17c4b0809c78814de0a5e6",
+      "needle_sha256": "cbfcecced0acb231fa30b5135ea105108b1655bbf837f443b74f9bb71860ccf1"
+    }
+  }
+}

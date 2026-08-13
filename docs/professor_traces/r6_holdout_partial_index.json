@@ -1,0 +1,71 @@
+{
+  "schema_version": "professor_debug_trace_v1_index",
+  "generated_from_source_commit": "4610785713832daaba6aa133374506a2d200391a",
+  "evidence_scope": "final_holdout_partial",
+  "trace_count": 2,
+  "traces": [
+    {
+      "task_id": "curated-none-handling-001",
+      "bug_category": null,
+      "evidence_scope": "final_holdout_partial",
+      "error_localization": {
+        "production_file": "display_name.py",
+        "function": "format_display_name",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "format_display_name",
+            "line": 2
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "production-exception",
+      "model_turns": 7,
+      "repair_attempts": 1,
+      "verifier_outcome": "RESOLVED",
+      "trace_path": "r6_holdout_partial/professor_debug_trace_curated-none-handling-001.json",
+      "trace_sha256": "064332d0785dfa0bacea0bdd86634002fb6fdb243d2d15485fe122b9043b687d"
+    },
+    {
+      "task_id": "curated-off-by-one-002",
+      "bug_category": null,
+      "evidence_scope": "final_holdout_partial",
+      "error_localization": {
+        "production_file": "recent_window.py",
+        "function": "recent_window",
+        "line_or_region": 2,
+        "evidence_basis": [
+          {
+            "observation": "start_pdb_session",
+            "observation_id": "observation-000000003",
+            "function": "recent_window",
+            "line": 2
+          },
+          {
+            "observation": "next_pdb_session",
+            "observation_id": "observation-000000006",
+            "function": "recent_window",
+            "line": 3
+          }
+        ],
+        "pause_generation": 1
+      },
+      "debugger_path": "normal-G2",
+      "model_turns": 11,
+      "repair_attempts": 2,
+      "verifier_outcome": "BREAKING_RESOLVED",
+      "trace_path": "r6_holdout_partial/professor_debug_trace_curated-off-by-one-002.json",
+      "trace_sha256": "d1f5cf47b40a51d4badb390c420594949b3f774f8193535ff1727caa590da936"
+    }
+  ],
+  "final_holdout_status": "INCOMPLETE_HARDWARE_STOP",
+  "incomplete_tasks": {
+    "curated-wrong-branch-003": "interrupted during a model request (host power loss)",
+    "curated-mutation-alias-004": "not started (host power loss)",
+    "curated-caller-callee-005": "not started (host power loss)"
+  },
+  "breaking_resolved_row": "curated-off-by-one-002: fail-to-pass repaired (1/1), pass-to-pass regression remains (1/2); accepted verifier outcome BREAKING_RESOLVED != RESOLVED — the independent verifier rejected an apparently useful repair."
+}

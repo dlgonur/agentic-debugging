@@ -1,0 +1,91 @@
+{
+  "schema_version": "r6-quixbugs-audit-needles-v2",
+  "task_id": "quixbugs-rpn-eval",
+  "derivation": "Mechanically derived from the tracked split_manifest-pinned fixture source + hidden tests + oracle fields + gold repair diff (accepted anti_leakage derivation rules, AUDIT ONLY).",
+  "source_pin_sha256": "4a473b1beaa9eb8155fcb079917e390d0584d8ebdfc6d6d8c88069609854194a",
+  "gold_diff_sha256": "3c5ebc18e14ae2936127eb8c6d2b6f77c6cbfcd7439c251a4a0b7ff86145e4bf",
+  "forbidden_content": {
+    "task_id": "quixbugs-rpn-eval",
+    "f2p_node_ids": [
+      "tests/test_rpn_eval.py::test_rpn_eval[input_data0-4.0]",
+      "tests/test_rpn_eval.py::test_rpn_eval[input_data2-8.0]",
+      "tests/test_rpn_eval.py::test_rpn_eval[input_data5-14.0]"
+    ],
+    "p2p_node_ids": [
+      "tests/test_rpn_eval.py::test_rpn_eval[input_data1-4.0]",
+      "tests/test_rpn_eval.py::test_rpn_eval[input_data3-14.0]",
+      "tests/test_rpn_eval.py::test_rpn_eval[input_data4-23.0]"
+    ],
+    "hidden_test_filenames": [
+      "tests/test_rpn_eval.py"
+    ],
+    "hidden_test_function_names": [
+      "test_rpn_eval"
+    ],
+    "hidden_test_source_lines": [
+      "import pytest",
+      "from rpn_eval import rpn_eval",
+      "import json as _r6_json",
+      "from pathlib import Path as _r6_path",
+      "testdata = [_r6_json.loads(_r6_line) for _r6_line in (_r6_path(__file__).resolve().parent.parent / \"testdata\" / \"rpn_eval.json\").read_text(encoding=\"utf-8\").splitlines() if _r6_line.strip()]",
+      "@pytest.mark.parametrize(\"input_data,expected\", testdata)",
+      "def test_rpn_eval(input_data, expected):",
+      "assert rpn_eval(*input_data) == expected"
+    ],
+    "assertion_source_lines": [
+      "assert rpn_eval(*input_data) == expected"
+    ],
+    "expected_literals": [],
+    "oracle_root_cause_summary": "The rpn_eval function produces an incorrect result for some inputs (QuixBugs gold-repair delta).",
+    "oracle_runtime_evidence_hint": "The paused production frame exposes the function arguments and local state at the failure.",
+    "oracle_bug_category": "quixbugs-rpn_eval",
+    "oracle_target_symbols": [
+      "rpn_eval"
+    ],
+    "reference_repair_snippets": [
+      "op(token, b, a)",
+      "}[symbol](b, a)",
+      "stack = Stack()",
+      "stack.push(token)",
+      "stack.push("
+    ],
+    "runtime_probe_call_sources": [],
+    "runtime_probe_anchors": [],
+    "runtime_probe_focus_functions": [],
+    "production_source_lines": [
+      "def rpn_eval(tokens):",
+      "def op(symbol, a, b):",
+      "return {",
+      "'+': lambda a, b: a + b,",
+      "'-': lambda a, b: a - b,",
+      "'*': lambda a, b: a * b,",
+      "'/': lambda a, b: a / b",
+      "}[symbol](a, b)",
+      "stack = []",
+      "for token in tokens:",
+      "if isinstance(token, float):",
+      "stack.append(token)",
+      "else:",
+      "a = stack.pop()",
+      "b = stack.pop()",
+      "stack.append(",
+      "op(token, a, b)",
+      ")",
+      "return stack.pop()",
+      "\"\"\"",
+      "Reverse Polish Notation",
+      "Four-function calculator with input given in Reverse Polish Notation (RPN).",
+      "Input:",
+      "A list of values and operators encoded as floats and strings",
+      "Precondition:",
+      "all(",
+      "isinstance(token, float) or token in ('+', '-', '*', '/') for token in tokens",
+      ")",
+      "Example:",
+      ">>> rpn_eval([3.0, 5.0, '+', 2.0, '/'])",
+      "4.0",
+      "\"\"\""
+    ],
+    "production_module_path": "rpn_eval.py"
+  }
+}

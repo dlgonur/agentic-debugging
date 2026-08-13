@@ -1,0 +1,79 @@
+{
+  "schema_version": "professor_trace_source_evidence_manifest_v1",
+  "generated_from_source_commit": "4610785713832daaba6aa133374506a2d200391a",
+  "evidence_scope": "r6-frozen-accepted-evidence",
+  "treatment_contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+  "selected_checkpoint": "checkpoint-30",
+  "adapter_model_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+  "adapter_config_sha256": "92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e",
+  "evidence_source": "tracked frozen evidence capsule experiments/r6_debugger_training/runs/frozen (raw evidence SHA256 identities; machine-local capture paths are intentionally not exported)",
+  "evidence": {
+    "validation:quixbugs-depth-first-search": {
+      "logical_identity": "validation/stage-a/quixbugs-depth-first-search",
+      "raw_evidence_sha256": "fc019e272d1bb4f14c1251c394b3759fc97b99963bde561a2652980424114cdf"
+    },
+    "validation:quixbugs-find-in-sorted": {
+      "logical_identity": "validation/stage-c/quixbugs-find-in-sorted",
+      "raw_evidence_sha256": "5ae6fe53700780b6dadd3412c56304ac870379a18cfc25e85fbf937582d650b6"
+    },
+    "validation:quixbugs-flatten": {
+      "logical_identity": "validation/stage-b/quixbugs-flatten",
+      "raw_evidence_sha256": "a5f0d4bb26ad8bc60e3ad60a921820fe32d87f2eac92807568b8b924a4537778"
+    },
+    "validation:quixbugs-kth": {
+      "logical_identity": "validation/stage-c/quixbugs-kth",
+      "raw_evidence_sha256": "49c89a8d933c6406f6f80bd22004e3edb16ac615bb46dff203e5fc040a9b901c"
+    },
+    "validation:quixbugs-quicksort": {
+      "logical_identity": "validation/stage-b/quixbugs-quicksort",
+      "raw_evidence_sha256": "b2247b182154ee6f7d46a17dc7574b8fe70e0b100f151cbb1cd5eb591809380d"
+    },
+    "validation:quixbugs-reverse-linked-list": {
+      "logical_identity": "validation/stage-c/quixbugs-reverse-linked-list",
+      "raw_evidence_sha256": "8530f95043f7ca0c5e70e83506420c4131e2441a0cbc3896a3d6b492266df47a"
+    },
+    "validation:quixbugs-rpn-eval": {
+      "logical_identity": "validation/stage-c/quixbugs-rpn-eval",
+      "raw_evidence_sha256": "69f1ec0025d4988eab772676ca9e1973bb11c8a49f4748b3f540e8340665e3ee"
+    },
+    "validation:quixbugs-shortest-path-length": {
+      "logical_identity": "validation/stage-c/quixbugs-shortest-path-length",
+      "raw_evidence_sha256": "84d01973a08961971b896c245c223ee0bfb9c58db2dd613bf0e2ebd83d52c239"
+    },
+    "final_holdout_partial:curated-none-handling-001": {
+      "logical_identity": "final_holdout_partial/curated-none-handling-001",
+      "raw_evidence_sha256": "ff01c714d1736da4eaf6c97194e42d3af043e84b4a18ab0563cbe62443566109"
+    },
+    "final_holdout_partial:curated-off-by-one-002": {
+      "logical_identity": "final_holdout_partial/curated-off-by-one-002",
+      "raw_evidence_sha256": "27cae9d4e1d8f292483898c1b525287f8f155796c620e78434ad31d774eb746d"
+    }
+  },
+  "ancillary": {
+    "checkpoint_selection": {
+      "logical_identity": "ancillary/checkpoint_selection",
+      "sha256": "f966ddee6dad353e9f2887be4a70ed4036abef0b479d80fc2d806ec2b79b9ee4"
+    },
+    "holdout_report": {
+      "logical_identity": "ancillary/holdout_report",
+      "sha256": "ee77c88b0a44ddc8da1056a9efff13079735fabc83f08b42b32bb6f3c65d1f00"
+    },
+    "stage_a_report": {
+      "logical_identity": "ancillary/stage_a_report",
+      "sha256": "3fdfd517dd379d2fdb9f74820ceaf444b4b129103477b37baf18506336905967"
+    },
+    "stage_b_report": {
+      "logical_identity": "ancillary/stage_b_report",
+      "sha256": "677ab79a7513a8a00cc50f66ba9bc37e36416f458b71fce7edcf19969f03baa7"
+    },
+    "stage_c_report": {
+      "logical_identity": "ancillary/stage_c_report",
+      "sha256": "f7e24be432675b94ebea6167f37a41ddcfcde276c21e891bc7ebf603c6311d85"
+    }
+  },
+  "holdout_status_authority": {
+    "logical_identity": "ancillary/holdout_report",
+    "run_status": "in_progress",
+    "sha256": "ee77c88b0a44ddc8da1056a9efff13079735fabc83f08b42b32bb6f3c65d1f00"
+  }
+}

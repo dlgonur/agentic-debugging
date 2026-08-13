@@ -1,0 +1,197 @@
+{
+  "schema_version": "professor_debug_trace_v1",
+  "task_id": "curated-none-handling-001",
+  "bug_category": null,
+  "evidence_scope": "final_holdout_partial",
+  "debugger_path": "production-exception",
+  "model": {
+    "base": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "fine_tuned_checkpoint": "checkpoint-30",
+    "adapter_identity_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "training_provenance": "Project SFT/QLoRA fine-tuning of the debugger (train_qlora.py, run_bounded_training.py) over the disjoint QuixBugs training split; selected by disjoint validation only (holdout_used_for_selection=false)."
+  },
+  "treatment": {
+    "revision": "r6.8",
+    "contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+    "system_prompt_template_sha256": "6e2d1c07e57babab7781c6d707d60b04f4165f80d05b9c5411bbf9e4df87b6c0"
+  },
+  "run_provenance": {
+    "source_commit_sha": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+    "evidence_schema": "debugger-interaction-v2-r5-evidence",
+    "selected_adapter_path": "experiments/r6_debugger_training/runs/r6-sft-debugger-v3/trainer/checkpoint-30",
+    "adapter_model_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "adapter_config_sha256": "92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e",
+    "evaluator_python_version": "3.10.1",
+    "controller_final_state": "Done",
+    "controller_stop_reason": "done",
+    "model_calls": 11,
+    "diagnosis_provenance": {
+      "model_call_index": 7,
+      "prior_observation_id": "observation-000000006",
+      "rendered_observation_sha256": "fe7f2341fe5727c33572b168c59bffe06a8200fa42b4d6d68b88301d459c2e3b",
+      "G1": 1,
+      "G2": null,
+      "diagnosis_text_sha256": "530660b0fceb02a24cfe392398dd7bfce12380170bae1b116c4510fe5dc2389c"
+    }
+  },
+  "failure_reproduction": {
+    "reproduced": true,
+    "sanitized_summary": "baseline failure reproduced\nproduction exception:\n  display_name.py:2: AttributeError\n  AttributeError: 'NoneType' object has no attribute 'strip'\n"
+  },
+  "debugger_lifecycle": {
+    "entered": true,
+    "terminal_path": true,
+    "production_exception_path": true,
+    "step_outside_region": false,
+    "pause_generations": {
+      "G1": 1,
+      "G2": null
+    },
+    "gate_passed": true,
+    "gate_reason": "model authored break->stack G1->locals/print G1->step/next TERMINAL (real exit/error evidence + sanitized reproduction diagnostic)->diagnosis, all OK, provenance-bound",
+    "tool_observations": [
+      "run_reproduction",
+      "start_pdb_session",
+      "get_stack_summary",
+      "get_frame_locals",
+      "next_pdb_session",
+      "apply_patch"
+    ]
+  },
+  "debugger_trace": [
+    {
+      "turn": 1,
+      "phase": "Reproduce",
+      "model_command": "reproduce",
+      "status": "accepted",
+      "tool_action": "run_reproduction"
+    },
+    {
+      "turn": 2,
+      "phase": "RuntimeEvidence",
+      "model_command": "break 2",
+      "status": "accepted",
+      "tool_action": "start_pdb_session",
+      "production_file": null,
+      "function": null,
+      "line": null
+    },
+    {
+      "turn": 3,
+      "phase": "RuntimeEvidence",
+      "model_command": "stack",
+      "status": "accepted",
+      "tool_action": "get_stack_summary",
+      "production_file": "display_name.py",
+      "function": "format_display_name",
+      "line": 2,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 4,
+      "phase": "RuntimeEvidence",
+      "model_command": "locals",
+      "status": "accepted",
+      "tool_action": "get_frame_locals",
+      "production_file": "display_name.py",
+      "function": null,
+      "line": null,
+      "pause_generation": 1,
+      "runtime_state": "paused",
+      "frames": [
+        {
+          "function": "format_display_name",
+          "file": "display_name.py",
+          "line": 2,
+          "is_current": true
+        }
+      ]
+    },
+    {
+      "turn": 5,
+      "phase": "RuntimeEvidence",
+      "model_command": "next",
+      "status": "accepted",
+      "tool_action": "next_pdb_session",
+      "production_file": null,
+      "function": null,
+      "line": null,
+      "pause_generation": 1,
+      "runtime_state": "paused"
+    },
+    {
+      "turn": 6,
+      "phase": "RuntimeEvidence",
+      "model_command": "diagnosis diagnosis format_display_name does not check whether the input name is None before calling strip(), so it crashes when given a missing name instead of returning the empty string.",
+      "status": "accepted",
+      "tool_action": "diagnosis",
+      "diagnosis_text": "diagnosis format_display_name does not check whether the input name is None before calling strip(), so it crashes when given a missing name instead of returning the empty string.",
+      "production_file": "display_name.py",
+      "function": null,
+      "line": null,
+      "runtime_state": "exited"
+    },
+    {
+      "turn": 7,
+      "phase": "Patch",
+      "model_command": "file display_name.py",
+      "status": "accepted",
+      "tool_action": "apply_patch",
+      "production_file": "display_name.py",
+      "function": null,
+      "line": null,
+      "runtime_state": "exited"
+    }
+  ],
+  "error_localization": {
+    "production_file": "display_name.py",
+    "function": "format_display_name",
+    "line_or_region": 2,
+    "evidence_basis": [
+      {
+        "observation": "start_pdb_session",
+        "observation_id": "observation-000000003",
+        "function": "format_display_name",
+        "line": 2
+      }
+    ],
+    "pause_generation": 1
+  },
+  "diagnosis": {
+    "model_authored": true,
+    "text": "diagnosis format_display_name does not check whether the input name is None before calling strip(), so it crashes when given a missing name instead of returning the empty string."
+  },
+  "repair_attempts": [
+    {
+      "attempt": 1,
+      "representation": "whole-file",
+      "model_patch_raw_sha256": "d62784b1cb1da15e4ab8db5281c5c36c5a72291a4e2d3c90b5e423c787c3f15b",
+      "model_patch_serialization_normalized_sha256": "d62784b1cb1da15e4ab8db5281c5c36c5a72291a4e2d3c90b5e423c787c3f15b",
+      "verifier_outcome": "RESOLVED",
+      "verifier_status": "COMPLETED"
+    }
+  ],
+  "serialization_normalization": {
+    "required": true,
+    "note": "normalization output SHA == PatchManager input SHA == verifier input SHA == final_candidate_sha256",
+    "verifier_input_sha256": "d62784b1cb1da15e4ab8db5281c5c36c5a72291a4e2d3c90b5e423c787c3f15b",
+    "patchmanager_input_sha256": "d62784b1cb1da15e4ab8db5281c5c36c5a72291a4e2d3c90b5e423c787c3f15b"
+  },
+  "final_verification": {
+    "outcome": "RESOLVED",
+    "verifier_status": "COMPLETED",
+    "f2p": "1/1",
+    "p2p": "2/2",
+    "full_suite": "PASS",
+    "syntax_passed": true,
+    "canonical_fixture_unchanged": true,
+    "workspace_lifecycle": "CLEANED",
+    "candidate_sha256": "d62784b1cb1da15e4ab8db5281c5c36c5a72291a4e2d3c90b5e423c787c3f15b"
+  },
+  "workspace_cleanup": {
+    "release_pdb": [],
+    "workspace_cleanup": "cleaned"
+  },
+  "claims_boundary": "Derived deterministically from the real accepted R6 final-execution evidence (checkpoint-30, treatment contract 5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78).  No hidden test source, hidden test node id, oracle field, chain-of-thought, or fabricated localization is included; the debugger path distinguishes the production-exception path (G2=None) from the normal G2 path exactly as the accepted gate classified it."
+}

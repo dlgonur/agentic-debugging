@@ -1,0 +1,90 @@
+{
+  "schema_version": "r6-checkpoint-selection-v2",
+  "frozen_at_local": "2026-08-13T05:55:26+03:00",
+  "selection_authority": "disjoint QuixBugs validation only",
+  "execution_identity": {
+    "identity_kind": "working_tree_snapshot",
+    "execution_id": "wt-79c614d34e83-7c9881882d403197659a",
+    "branch": "goal/r6-finetuned-debugger-codex-v2",
+    "base_head": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+    "candidate_patch_sha256": "7c9881882d403197659ad342948e5674788cc6605d3aeb5918989b1e6d1cc80a",
+    "source_manifest_sha256": "8562aa1022227f10ba6b28b6762ac586f32dc6c86d8670e109ece1a2471770ad",
+    "reconstruction_passed": true
+  },
+  "candidate_comparison": {
+    "checkpoint-20": {
+      "path": "experiments/r6_debugger_training/runs/r6-sft-debugger-v3/trainer/checkpoint-20",
+      "last_available_disjoint_sft_eval_loss": 0.3063855767250061,
+      "global_step": 20
+    },
+    "checkpoint-30": {
+      "path": "experiments/r6_debugger_training/runs/r6-sft-debugger-v3/trainer/checkpoint-30",
+      "last_available_disjoint_sft_eval_loss": 0.2981497347354889,
+      "global_step": 30,
+      "project_validation_gate": {
+        "tasks": 8,
+        "resolved": 8,
+        "strict_scientific_pass": true,
+        "rows_with_errors": 0,
+        "model_calls": 97,
+        "tokens": 64783,
+        "task_runtime_ms": 841702,
+        "debugger_entries": 8,
+        "accepted_breakpoints": 8,
+        "diagnoses": 8,
+        "patches_applied": 8,
+        "model_loads": 3,
+        "evidence": [
+          "C:/tmp/r6-bounded/v3c30-r68-a-7c9881/adapter-checkpoint-30/eval_report.json",
+          "C:/tmp/r6-bounded/v3c30-r68-b-7c9881/adapter-checkpoint-30/eval_report.json",
+          "C:/tmp/r6-bounded/v3c30-r68-c-7c9881/adapter-checkpoint-30/eval_report.json"
+        ]
+      }
+    }
+  },
+  "selected_checkpoint": {
+    "label": "checkpoint-30",
+    "path": "experiments/r6_debugger_training/runs/r6-sft-debugger-v3/trainer/checkpoint-30",
+    "adapter_model_sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd",
+    "adapter_config_sha256": "92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e",
+    "selection_rule": "select only from disjoint validation; require the strict project debugger-to-verifier gate; maximize verifier RESOLVED; use disjoint SFT validation loss only as a secondary signal",
+    "reason": "Checkpoint-30 reached the maximum possible project validation score (8/8 RESOLVED) under the exact final snapshot and also has the lower available disjoint SFT validation loss. The holdout was not inspected or executed for this selection."
+  },
+  "frozen_policy": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "python_executable": "C:\\Users\\benya\\AppData\\Local\\Programs\\Python\\Python310\\python.exe",
+    "python_version": "3.10.1",
+    "cuda_device_index": 0,
+    "device_map": {"": 0},
+    "placement_policy": "explicit-single-cuda-v1",
+    "quantization": "NF4 double-quant",
+    "compute_dtype": "torch.bfloat16",
+    "attention_implementation": "efficient_sdpa",
+    "persistent_model_loads": 1,
+    "model_release": "process exit only",
+    "per_task_model_reload": false,
+    "per_task_gc_collect": false,
+    "per_task_torch_cuda_empty_cache": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    },
+    "treatment_hash": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+    "eval_contract_sha256": "c44508995f23c5f7bb73396be5d95e6faf2cf9a06b9c77e5a25ce837c436db09",
+    "split_manifest_sha256": "b62a602724fe76d9da5e326380a6c5f00bc93a7981057db8568449057c98e195",
+    "professor_trace_schema_sha256": "738725b9b7573e421b61885628029e207002b1bfe3bb3bae89f9ccfc1c4cdfc4",
+    "gpu_mode": "ultimate",
+    "platform_profile": "Manual 85 W",
+    "telemetry_interval_seconds": 1.0
+  },
+  "validation_telemetry_peaks": {
+    "temperature_c": 92.0,
+    "power_w": 92.22,
+    "dedicated_vram_mib": 7361.0,
+    "shared_gpu_mib": 696.5
+  },
+  "holdout_used_for_selection": false,
+  "frozen": true
+}

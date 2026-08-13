@@ -1,0 +1,1135 @@
+{
+  "schema_version": "r6-debugger-eval-v2",
+  "run_status": "complete",
+  "started_at": "2026-08-13T02:45:34.473+00:00",
+  "updated_at": "2026-08-13T02:55:14.624+00:00",
+  "git_commit": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+  "execution_identity": {
+    "schema_version": "r6-working-tree-execution-identity-v1",
+    "identity_kind": "working_tree_snapshot",
+    "execution_id": "wt-79c614d34e83-7c9881882d403197659a",
+    "branch": "goal/r6-finetuned-debugger-codex-v2",
+    "base_head": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+    "candidate_patch_sha256": "7c9881882d403197659ad342948e5674788cc6605d3aeb5918989b1e6d1cc80a",
+    "git_diff_binary_head_sha256": "84209dfebf49c0f14f9b1c2e1ca3933a6cf892e38a49fff2760164f59eb25ee2",
+    "git_diff_binary_head_bytes": 135145,
+    "changed_files": [
+      "experiments/debugger_interaction_v2_r5/adapter.py",
+      "experiments/debugger_interaction_v2_r5/anti_leakage.py",
+      "experiments/debugger_interaction_v2_r5/bridge.py",
+      "experiments/debugger_interaction_v2_r5/gpu_placement.py",
+      "experiments/debugger_interaction_v2_r5/r5_runner.py",
+      "experiments/r6_debugger_training/build_sft_dataset.py",
+      "experiments/r6_debugger_training/evaluate_debugger.py",
+      "experiments/r6_debugger_training/generate_trajectories.py",
+      "experiments/r6_debugger_training/prepare_remote_package.py",
+      "experiments/r6_debugger_training/r6_eval_contract.json",
+      "experiments/r6_debugger_training/run_bounded_probe.py",
+      "experiments/r6_debugger_training/run_bounded_training.py",
+      "experiments/r6_debugger_training/scripted_transport.py",
+      "experiments/r6_debugger_training/train_qlora.py",
+      "tests/unit/test_r5_anti_leakage.py",
+      "tests/unit/test_r5_bridge.py",
+      "tests/unit/test_r6_evaluate_debugger.py",
+      "tests/unit/test_r6_remote_package.py"
+    ],
+    "tracked_changed_files": [
+      "experiments/debugger_interaction_v2_r5/adapter.py",
+      "experiments/debugger_interaction_v2_r5/anti_leakage.py",
+      "experiments/debugger_interaction_v2_r5/bridge.py",
+      "experiments/debugger_interaction_v2_r5/r5_runner.py",
+      "experiments/r6_debugger_training/build_sft_dataset.py",
+      "experiments/r6_debugger_training/evaluate_debugger.py",
+      "experiments/r6_debugger_training/generate_trajectories.py",
+      "experiments/r6_debugger_training/r6_eval_contract.json",
+      "experiments/r6_debugger_training/run_bounded_probe.py",
+      "experiments/r6_debugger_training/scripted_transport.py",
+      "experiments/r6_debugger_training/train_qlora.py",
+      "tests/unit/test_r5_anti_leakage.py",
+      "tests/unit/test_r5_bridge.py",
+      "tests/unit/test_r6_evaluate_debugger.py",
+      "tests/unit/test_r6_remote_package.py"
+    ],
+    "captured_untracked_files": [
+      "experiments/debugger_interaction_v2_r5/gpu_placement.py",
+      "experiments/r6_debugger_training/prepare_remote_package.py",
+      "experiments/r6_debugger_training/run_bounded_training.py"
+    ],
+    "uncaptured_untracked_noncritical_files": {
+      "audited_roots": [
+        "agentic_debugger/",
+        "experiments/debugger_interaction_v2_r5/",
+        "experiments/r6_debugger_training/"
+      ],
+      "count": 2,
+      "paths_sha256": "2636114fdbbfe3087ee75db8edb653fabe879962db590037a6fb473aec000f8d"
+    },
+    "changed_file_identities": [
+      {
+        "path": "experiments/debugger_interaction_v2_r5/adapter.py",
+        "bytes": 63971,
+        "sha256": "461f7f345019f0a57581203bed5cf3e6ba29d3145953fd8bc1ac10976538246e"
+      },
+      {
+        "path": "experiments/debugger_interaction_v2_r5/anti_leakage.py",
+        "bytes": 21534,
+        "sha256": "f856754fd1ca9ef012d0097cf83a81c5e1a71e7cfcec9064b5cb669d738e362c"
+      },
+      {
+        "path": "experiments/debugger_interaction_v2_r5/bridge.py",
+        "bytes": 87271,
+        "sha256": "a2766860759e5df33efebb3ec068bfe7a1aaa5176f587bfe94d6b2c8f8d3875f"
+      },
+      {
+        "path": "experiments/debugger_interaction_v2_r5/gpu_placement.py",
+        "bytes": 4477,
+        "sha256": "d6e7978bdd3d8caef956f7462e8dda9bffd069b4061b6512a25020ff0931ac16"
+      },
+      {
+        "path": "experiments/debugger_interaction_v2_r5/r5_runner.py",
+        "bytes": 98255,
+        "sha256": "e4f293e8606d0b360ca5d53e8816f7c6a5c8cdfa146a3395da84e4ef3985f05a"
+      },
+      {
+        "path": "experiments/r6_debugger_training/build_sft_dataset.py",
+        "bytes": 12595,
+        "sha256": "5cea4dd3a7ce1efc98633db9fd8a29704093cbca2fbc248a8ebc2ad57c08d481"
+      },
+      {
+        "path": "experiments/r6_debugger_training/evaluate_debugger.py",
+        "bytes": 36671,
+        "sha256": "82eb994404a91b81016ceb8e5a4f7dcb67521e3f0de6bb4a93d743e6dd0a3677"
+      },
+      {
+        "path": "experiments/r6_debugger_training/generate_trajectories.py",
+        "bytes": 12793,
+        "sha256": "8e720cdada219df472bb68f1b0479baf613e2c0b53d197be95a46c45ed351ff5"
+      },
+      {
+        "path": "experiments/r6_debugger_training/prepare_remote_package.py",
+        "bytes": 16958,
+        "sha256": "c6bf6f9842f40567780fd77fe79d5dca7dce42e6eb4b20e27cc7e99d04fbad42"
+      },
+      {
+        "path": "experiments/r6_debugger_training/r6_eval_contract.json",
+        "bytes": 6154,
+        "sha256": "c44508995f23c5f7bb73396be5d95e6faf2cf9a06b9c77e5a25ce837c436db09"
+      },
+      {
+        "path": "experiments/r6_debugger_training/run_bounded_probe.py",
+        "bytes": 31575,
+        "sha256": "fbfaa441aff6440820ac46bd9bd5df562f1932eb2785c37a10504ed6a140da80"
+      },
+      {
+        "path": "experiments/r6_debugger_training/run_bounded_training.py",
+        "bytes": 9646,
+        "sha256": "3502f91c3fafeac1da8c185a7e73033715e8fdbd054f99efc821258f34a8179e"
+      },
+      {
+        "path": "experiments/r6_debugger_training/scripted_transport.py",
+        "bytes": 4657,
+        "sha256": "93cd8d6420e2a4063cfb7f5d553dead5e6bb8c4721e16b5f13d8bdb3a6334613"
+      },
+      {
+        "path": "experiments/r6_debugger_training/train_qlora.py",
+        "bytes": 25789,
+        "sha256": "81b4c62b99fb6d03204bcf6f1245a251e4fe0f8f586d5ab87b128f481f6d3d15"
+      },
+      {
+        "path": "tests/unit/test_r5_anti_leakage.py",
+        "bytes": 13205,
+        "sha256": "528e21c500f95a0d13b275403a1b40bb2c10ea3e14e7656b2146babf3a13e876"
+      },
+      {
+        "path": "tests/unit/test_r5_bridge.py",
+        "bytes": 50932,
+        "sha256": "84c087ae6c8738457c442109fa14d05cb636cd86658e08f75750e998d614d35e"
+      },
+      {
+        "path": "tests/unit/test_r6_evaluate_debugger.py",
+        "bytes": 11685,
+        "sha256": "e8aa248b3d7a1886e11edda637a571b5cb963d8db3a9d5a3f1e616b3f5d3888e"
+      },
+      {
+        "path": "tests/unit/test_r6_remote_package.py",
+        "bytes": 8246,
+        "sha256": "915f7376e7138b053d12f8f58edb394ed1d94dc046088b694acadf17c7e9ab49"
+      }
+    ],
+    "source_manifest": {
+      "scope": {
+        "tracked_roots": [
+          "agentic_debugger/",
+          "experiments/debugger_interaction_v2_r5/",
+          "experiments/r6_debugger_training/"
+        ],
+        "suffixes": [
+          ".py",
+          ".json",
+          ".toml"
+        ]
+      },
+      "file_count": 127,
+      "files": [
+        {
+          "path": "agentic_debugger/__init__.py",
+          "bytes": 230,
+          "sha256": "44d83657313eb93e9bb74b9638ea2ba44b51f084f3455e48e1459499b9b79a1d"
+        },
+        {
+          "path": "agentic_debugger/agent/__init__.py",
+          "bytes": 0,
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        {
+          "path": "agentic_debugger/agent/controller.py",
+          "bytes": 50172,
+          "sha256": "ee041255a115e05d94cc75401fa98f9103d8ff01e4a5e6ecd33e0a4d965b7f92"
+        },
+        {
+          "path": "agentic_debugger/agent/controller_policy.py",
+          "bytes": 24008,
+          "sha256": "0edf53b8cba9ff516c67cda998a85795b9ab6788313d34b94c298bdad7c601ee"
+        },
+        {
+          "path": "agentic_debugger/agent/model_adapter.py",
+          "bytes": 26508,
+          "sha256": "70de6c1b31ae7cc268220afbb425ca251f1a24df4bf4fb98bf0f10bc58c6e1f0"
+        },
+        {
+          "path": "agentic_debugger/agent/state_machine.py",
+          "bytes": 1416,
+          "sha256": "7481b9039f86c716d43c8ea5f67cb293329028498b094ab41379046106860d1f"
+        },
+        {
+          "path": "agentic_debugger/agent/tool_registry.py",
+          "bytes": 21330,
+          "sha256": "4704b01ebc38498ce1fe59a517bb39d9f151d9feedc77a7463cb8da2ec60c3db"
+        },
+        {
+          "path": "agentic_debugger/agent/trajectory.py",
+          "bytes": 4928,
+          "sha256": "db9e3db89bd32cb311dcb292b502c5dbd5c0cb08e4dc588f3c8d28745f3361aa"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/__init__.py",
+          "bytes": 1619,
+          "sha256": "a3b10e6bad1841a8ca61940ed383086083cb794973603ac6c767aebfe2f08110"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/adapter.py",
+          "bytes": 54955,
+          "sha256": "c4b7873bf736e3d54d592e38f252040ce5cc3eb386ece26c401d0059784b5755"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/metadata_preflight.py",
+          "bytes": 34416,
+          "sha256": "9c826cbc7e62375f19c6632c6814e64f5a08ec1240c2781a52f3797d6341cb12"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/preflight_cli.py",
+          "bytes": 1550,
+          "sha256": "684842a2e2dd1ef5decb2595f9cc3da46c8d540338190172867ad1a86d0fe697"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/smoke.py",
+          "bytes": 1878,
+          "sha256": "999a9da8ee8fa4b139e01ee5d604dbe79fa2b538cbe257afc2541fb1f223ce7c"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/wsl.py",
+          "bytes": 30802,
+          "sha256": "3b02ec182f5f556029d853f40568dcba85bd4d50456905963696b5f49b2d1cda"
+        },
+        {
+          "path": "agentic_debugger/bugsinpy/wsl_preparation.py",
+          "bytes": 2530,
+          "sha256": "d831b43ddfb70ff9621ab4b81d830bb0b8e861731924a2eeac279a02bb52238f"
+        },
+        {
+          "path": "agentic_debugger/comparison/__init__.py",
+          "bytes": 1123,
+          "sha256": "f540e6f07c78ae25c98d80d1d2b32d674e7f1c68378f13e8a3ff4a78dd2414ac"
+        },
+        {
+          "path": "agentic_debugger/comparison/__main__.py",
+          "bytes": 218,
+          "sha256": "a1173a23dfda1e4574a56d56a8b1a3aeda239c4867b48c46c335c54f7c747843"
+        },
+        {
+          "path": "agentic_debugger/comparison/cli.py",
+          "bytes": 14705,
+          "sha256": "68a10516652d6be1b09e2d4da25860ebe7143f1c0f41f2b068a72f1de97b98c8"
+        },
+        {
+          "path": "agentic_debugger/comparison/import_schema.py",
+          "bytes": 28278,
+          "sha256": "58a5006af80db9e6a5da67d538054a7a5d7d2bf84f08173f6ec540d2d93a9427"
+        },
+        {
+          "path": "agentic_debugger/comparison/json_bounds.py",
+          "bytes": 3872,
+          "sha256": "2e8cda539ca5b7d1e4e34ed97df9e4f242081359eec0095aa08ea2d57c449e57"
+        },
+        {
+          "path": "agentic_debugger/comparison/metrics.py",
+          "bytes": 18282,
+          "sha256": "0e01a13021b2fa3adda3ea068db1bcbad18a7e0f009ee87b1dbc3b71e5b65d6f"
+        },
+        {
+          "path": "agentic_debugger/comparison/native.py",
+          "bytes": 16583,
+          "sha256": "6e3c0987eab6cfcf917c6d604094ba454b5e41b034a18dec2bd71a5216b4d9e9"
+        },
+        {
+          "path": "agentic_debugger/comparison/report.py",
+          "bytes": 10911,
+          "sha256": "fbccafd5a7604660bdaca0db390cc8d10490cbd6f459fdf18cbb7e1b0027d80e"
+        },
+        {
+          "path": "agentic_debugger/comparison/runner.py",
+          "bytes": 14496,
+          "sha256": "3e29f9625ceb0913897a2df3be35bcdd5758185146507507aa73705c535ce94b"
+        },
+        {
+          "path": "agentic_debugger/comparison/schema.py",
+          "bytes": 31042,
+          "sha256": "961a37181da66a6b4685d2ca92815b7deca9e37fefa729b847f3499f7f51baa2"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-caller-callee-005/price.py",
+          "bytes": 462,
+          "sha256": "453b5f5152c9ad50e704581033a75f6d611de96edfadd04630aa621cdbcb68c6"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-caller-callee-005/task.json",
+          "bytes": 1848,
+          "sha256": "17e4f129287b1162fe8cfd8fe3734c26166cc21420c0cfc89446f78c0a400f90"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-caller-callee-005/tests/test_price.py",
+          "bytes": 379,
+          "sha256": "58714231791c36974949001ad8884558df46c5f9be24c1aeae95d9578dc6dd39"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-mutation-alias-004/labels.py",
+          "bytes": 339,
+          "sha256": "2b55a8ec24da993707fd33910ae7f08dac9e942f5f04b17905cd3092b6dac01c"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-mutation-alias-004/task.json",
+          "bytes": 1785,
+          "sha256": "10dffeeb6f6e64813840c8d64153ffdb10e74882ef8a75e585a07245a618902a"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-mutation-alias-004/tests/test_labels.py",
+          "bytes": 532,
+          "sha256": "fa2ded10ec18bdb37ad348a089bb13f72107ab42a4124a14dd7730fb89ea01c3"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-none-handling-001/display_name.py",
+          "bytes": 180,
+          "sha256": "b756684d38ecb1c91f4787886877c3a6106362767000fe7e45f2991036f53356"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-none-handling-001/task.json",
+          "bytes": 1785,
+          "sha256": "cc83b250af160dd1e7d3520fbf3213166a44ebdffaf02d9228942612f4f6962e"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-none-handling-001/tests/test_display_name.py",
+          "bytes": 406,
+          "sha256": "68c3c14f9b46329c67be1e2d32ecdfd15772abb3c480dffe519e7f66a709c843"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-off-by-one-002/recent_window.py",
+          "bytes": 480,
+          "sha256": "76dca3e034deaadb5e9a70146aa6261fb68ed728c25a7a1db5c28e20d65469a6"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-off-by-one-002/task.json",
+          "bytes": 1860,
+          "sha256": "bca66a9a8d0c8c4d8a85bd7a8dff3e754edfbeea0f33413f8f805a243128eb3a"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-off-by-one-002/tests/test_recent_window.py",
+          "bytes": 414,
+          "sha256": "1cf3152e95a2b8cf881a85d1cba426ea5b8ccf51d41023b16090f313b1b0fdb3"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-wrong-branch-003/access_branch.py",
+          "bytes": 397,
+          "sha256": "fe28e48f911fdb0535ae0c270449c85f40ee828a0d08c6e0e54f7cc00375080c"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-wrong-branch-003/task.json",
+          "bytes": 1921,
+          "sha256": "0b57e1ddd41d5e6c09df19040956356f467e13d42b0eeda5fc58fe81dd6f9c39"
+        },
+        {
+          "path": "agentic_debugger/datasets/curated/curated-wrong-branch-003/tests/test_access_branch.py",
+          "bytes": 512,
+          "sha256": "ffefa9e654067a714d3f356eba8cf3a7880fade45f59fc031590f8f4308ff7d4"
+        },
+        {
+          "path": "agentic_debugger/demo/__init__.py",
+          "bytes": 1844,
+          "sha256": "cf0f2bd1a0e3b5907cabe121668aebca108aff8200dc421914e51a84f4b4fb79"
+        },
+        {
+          "path": "agentic_debugger/demo/__main__.py",
+          "bytes": 206,
+          "sha256": "e108321abca7230819e663a0f4fa7144cb438837424212f4c2fbe5537cc0c70c"
+        },
+        {
+          "path": "agentic_debugger/demo/catalog.py",
+          "bytes": 17515,
+          "sha256": "b416520ecbf100c237fa8ba8681c4228365c2e2ad8d93586b603b6b207a89981"
+        },
+        {
+          "path": "agentic_debugger/demo/cli.py",
+          "bytes": 10415,
+          "sha256": "9195e8b6ce4442f42a118b6133c8c85a9c1089647334796f3dd0c4988a91718b"
+        },
+        {
+          "path": "agentic_debugger/demo/isolation.py",
+          "bytes": 6758,
+          "sha256": "0af8b8a64e6c9202e31b7343dd4c0f12ebdb1f6688ff90fd8a6b1aa9d1a24c24"
+        },
+        {
+          "path": "agentic_debugger/demo/model.py",
+          "bytes": 21371,
+          "sha256": "09bd8f85d6efbd17250bbf065815fc484e38f90111e93a542870a66fde32b0fc"
+        },
+        {
+          "path": "agentic_debugger/demo/policies.py",
+          "bytes": 2204,
+          "sha256": "08b8f583b3cb7611d227af682345bed3afc2f04fdabacc912e192915e9bddf8c"
+        },
+        {
+          "path": "agentic_debugger/demo/report.py",
+          "bytes": 20188,
+          "sha256": "ee73dc0bd8652151cd931efc9607d28bf54019bd0bdf673bafe727d29cdec42d"
+        },
+        {
+          "path": "agentic_debugger/demo/runner.py",
+          "bytes": 44841,
+          "sha256": "56ff412c71fa8dad4d98b9adff271c8586975024c12dfc76b8ac310bd49e02d0"
+        },
+        {
+          "path": "agentic_debugger/demo/sanitize.py",
+          "bytes": 9822,
+          "sha256": "f23885949a1247abfcb8ffb7988668d3de8c7ba0d01918de8c660ec02a5c4d3f"
+        },
+        {
+          "path": "agentic_debugger/demo/tools.py",
+          "bytes": 45167,
+          "sha256": "838323f3b3596a69db8761b26417871006fc9eb41c786a0308a4ee6bab3121a1"
+        },
+        {
+          "path": "agentic_debugger/evaluation/__init__.py",
+          "bytes": 435,
+          "sha256": "8eef5b63665253fd1928e42abf68a1c35e7b1e7468a09a9b8b1d52b468f9de1a"
+        },
+        {
+          "path": "agentic_debugger/evaluation/evaluator.py",
+          "bytes": 1183,
+          "sha256": "d3061837a9ceb2e1ba6d7a49f7744184df146a9745a6cde1e8263601b58babb8"
+        },
+        {
+          "path": "agentic_debugger/evaluation/live.py",
+          "bytes": 98306,
+          "sha256": "4775d799b6cbdd025cd9ade3c1b162797ccd34047115b65e705ab2cfb14a30d2"
+        },
+        {
+          "path": "agentic_debugger/evaluation/live_cli.py",
+          "bytes": 4077,
+          "sha256": "d6075617228a8421dd13a46fc7418574c0aea2b1c48d3c8d01859f4d911f1efc"
+        },
+        {
+          "path": "agentic_debugger/evaluation/live_quixbugs.py",
+          "bytes": 26548,
+          "sha256": "1f7cbd95fd557c7214e605ff7c0697b90e57a4154ee1f73ecb12b8d5550e9dc8"
+        },
+        {
+          "path": "agentic_debugger/evaluation/outcome_taxonomy.py",
+          "bytes": 1667,
+          "sha256": "a9325be8c764726391920e2b8aa83012330b27c04536ac49d34eff04ec12002e"
+        },
+        {
+          "path": "agentic_debugger/evaluation/professor_debug_trace_schema_v1.json",
+          "bytes": 5911,
+          "sha256": "738725b9b7573e421b61885628029e207002b1bfe3bb3bae89f9ccfc1c4cdfc4"
+        },
+        {
+          "path": "agentic_debugger/evaluation/professor_trace.py",
+          "bytes": 20740,
+          "sha256": "86c415399720d9aa728445292adbb4a4b24aa28319960ab20ac1b98a75995e39"
+        },
+        {
+          "path": "agentic_debugger/evaluation/root_cause_metric.py",
+          "bytes": 24057,
+          "sha256": "3bdf59f91ad181a4d1a468936d10d3b4911f2a3cfaeb3fd53115249e1407b391"
+        },
+        {
+          "path": "agentic_debugger/evaluation/runner.py",
+          "bytes": 32519,
+          "sha256": "9311fc8f3cc286517c097e3b4b2ccf44171b2102ba5b5574648eb05d2c79cd32"
+        },
+        {
+          "path": "agentic_debugger/evaluation/task_schema.py",
+          "bytes": 22070,
+          "sha256": "ba37eb41aa1641fc4bd265b45c0a0abe114cc836bc34198275c4354518737bd9"
+        },
+        {
+          "path": "agentic_debugger/evaluation/verifier.py",
+          "bytes": 31735,
+          "sha256": "d4a5334785eb88a286ea8302d1d618201e3f7baa064f6667bcc5c876a68d9cb3"
+        },
+        {
+          "path": "agentic_debugger/events/__init__.py",
+          "bytes": 788,
+          "sha256": "48b881cf258f78e8fdf7efc65e80b38d7451337489906f430b7e8cd4245c7631"
+        },
+        {
+          "path": "agentic_debugger/events/golden.py",
+          "bytes": 20186,
+          "sha256": "abf295524b5e518ed2fd20d63b5408d8e68ae649fdebb5f14fee87789220e32a"
+        },
+        {
+          "path": "agentic_debugger/events/logger.py",
+          "bytes": 3824,
+          "sha256": "809225640755b13ca0fdf737f12c968165a0705622d53bd6a24e7d47c526595a"
+        },
+        {
+          "path": "agentic_debugger/events/replay.py",
+          "bytes": 26921,
+          "sha256": "954c9fbf8022540d1aa9386abe012c9db32247699e7a47326faea0a86ac572ea"
+        },
+        {
+          "path": "agentic_debugger/events/schema.py",
+          "bytes": 15719,
+          "sha256": "7f16655eb86de1ed9fedb11a18552819da24f3e488d2b4a94ad41f25c1c0e730"
+        },
+        {
+          "path": "agentic_debugger/preference/__init__.py",
+          "bytes": 842,
+          "sha256": "cad53c1b7b4877cc0a058aaa1ae49c38fbe0f7b97317a2eb50fd211b8078b06c"
+        },
+        {
+          "path": "agentic_debugger/preference/exporter.py",
+          "bytes": 12917,
+          "sha256": "90948cc4e65267010420ffd216e2413605e16f57dab3d0de0901687f10392e06"
+        },
+        {
+          "path": "agentic_debugger/preference/leakage.py",
+          "bytes": 3175,
+          "sha256": "c6577e1a8ddf62957ab091eaa13ec5a4c2f0b0bc42071e17b6eab17e14460c12"
+        },
+        {
+          "path": "agentic_debugger/preference/schema.py",
+          "bytes": 14132,
+          "sha256": "f04d0e8248922dda98de15c7e628bb1e12fe44c7b8be5a55c30253d158be2445"
+        },
+        {
+          "path": "agentic_debugger/quixbugs/__init__.py",
+          "bytes": 1025,
+          "sha256": "65fa43a32fcd918204c2fd79dd397e802ab6221cc7be561b391ca8fb92358fab"
+        },
+        {
+          "path": "agentic_debugger/quixbugs/adapter.py",
+          "bytes": 44407,
+          "sha256": "b38d19fbffc97b50385513c99ce4044b2edb4d6827e2b97317847515b7148adc"
+        },
+        {
+          "path": "agentic_debugger/quixbugs/contained_pdb.py",
+          "bytes": 62778,
+          "sha256": "fe0589974304ad4403f3819f024d0b560bf1ca361d18d08b6f4f236695c06320"
+        },
+        {
+          "path": "agentic_debugger/quixbugs/smoke.py",
+          "bytes": 1472,
+          "sha256": "cc73d44ec61d7c3b77a0ac23a4915e9002ca8b024bd65b9f812ea63d3af2aba6"
+        },
+        {
+          "path": "agentic_debugger/rag/__init__.py",
+          "bytes": 1603,
+          "sha256": "c81f2f131892c6eeed244adf4d8605e626d23b77e77193848d1d094f6de663ec"
+        },
+        {
+          "path": "agentic_debugger/rag/chunking.py",
+          "bytes": 8265,
+          "sha256": "f5356255564a492ba4a1ca7b1f9693da0c1afaeda694b2a3e1c94304b9add85f"
+        },
+        {
+          "path": "agentic_debugger/rag/context.py",
+          "bytes": 10989,
+          "sha256": "ddb6255f3a1158d2cab280e29988e6b12494e386a930ef8eabdbfe2e16127feb"
+        },
+        {
+          "path": "agentic_debugger/rag/corpus.py",
+          "bytes": 15535,
+          "sha256": "c1cc01eeda77d8f722aa72ebda758abea4e044dff2721445874cd126e4ecc02b"
+        },
+        {
+          "path": "agentic_debugger/rag/indexer.py",
+          "bytes": 6996,
+          "sha256": "6dcaf2cf36a94d9257e8ad506c99a73d7cf172b1d53d63ab45106de7bee0c62c"
+        },
+        {
+          "path": "agentic_debugger/rag/retrieval.py",
+          "bytes": 8192,
+          "sha256": "742a2514bca9037d1356de51787a2003e292c0b0719bf2532d2965f25170a077"
+        },
+        {
+          "path": "agentic_debugger/rag/schema.py",
+          "bytes": 33512,
+          "sha256": "b47e96849e5795c18b8eb0346770a9fb08788d8cac68e7d3a04112ab4c3b2ba4"
+        },
+        {
+          "path": "agentic_debugger/runtime/__init__.py",
+          "bytes": 2304,
+          "sha256": "a4cc0a286fb7ebb8ab49cbd66cc4920a6a72c5be552d727360dc5935bce5b954"
+        },
+        {
+          "path": "agentic_debugger/runtime/command_runner.py",
+          "bytes": 11732,
+          "sha256": "e04fdd3be24b0fff174ff4e1c10733d8ca5c3668ab837cce83ce8d7ec192423a"
+        },
+        {
+          "path": "agentic_debugger/runtime/exceptions.py",
+          "bytes": 1846,
+          "sha256": "9793535228c0c196f51634746833f802b09104a5d52247c4dc8f1b1495531ab5"
+        },
+        {
+          "path": "agentic_debugger/runtime/execution.py",
+          "bytes": 11058,
+          "sha256": "c3f61c56714fce057279d6548d7314ff1acdb10c743f240267cd9309301d77fc"
+        },
+        {
+          "path": "agentic_debugger/runtime/patcher.py",
+          "bytes": 40736,
+          "sha256": "4e4e5e5f8be036760a5efa1b3544faecb6d14514fb646c57400b354907382095"
+        },
+        {
+          "path": "agentic_debugger/runtime/pdb_protocol.py",
+          "bytes": 13652,
+          "sha256": "9a76e0ea42a2a8947a011f214b9cf8ac6414c34745a55a139714ea79cabbd030"
+        },
+        {
+          "path": "agentic_debugger/runtime/pdb_session.py",
+          "bytes": 113277,
+          "sha256": "5b17f8fcbe59bd2a832f48f414031b5c32aa9ca55b268e7dc7e836d6f995ce64"
+        },
+        {
+          "path": "agentic_debugger/runtime/pdb_worker.py",
+          "bytes": 152251,
+          "sha256": "04aa2d1c550fe9a939b86b2fbda73d5515c8785217560dd7755ba731563c85f2"
+        },
+        {
+          "path": "agentic_debugger/runtime/test_runner.py",
+          "bytes": 5001,
+          "sha256": "b7a5335bde74177bdfc9f9e888aef8489f411b84fe19fc5130815cb11e7a4831"
+        },
+        {
+          "path": "agentic_debugger/runtime/workspace.py",
+          "bytes": 7791,
+          "sha256": "13472b9f84ccf6f0eabb01daf48903c3573952ef8b4b3f2517f35f4748e0c1b7"
+        },
+        {
+          "path": "agentic_debugger/skills/__init__.py",
+          "bytes": 624,
+          "sha256": "b98c685de8cba3bbe18e265a495a387476ec22a07f3c9ba9b3e8e6feb89787c9"
+        },
+        {
+          "path": "agentic_debugger/skills/file_skills.py",
+          "bytes": 6007,
+          "sha256": "47528429e19e366cf711cdbed1616b331d3805789f5d29d485186d6e96d5b872"
+        },
+        {
+          "path": "agentic_debugger/skills/search_skills.py",
+          "bytes": 15218,
+          "sha256": "032686b188438dc10caa1b5dadcc95150bb6634f75d75e10f64a3a98c413c484"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/__init__.py",
+          "bytes": 818,
+          "sha256": "5037347ab7638c2b42edbddb0bcceb72d6ef657856f7a8677d48b03ed0ebed70"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/adapter.py",
+          "bytes": 63971,
+          "sha256": "461f7f345019f0a57581203bed5cf3e6ba29d3145953fd8bc1ac10976538246e"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/anti_leakage.py",
+          "bytes": 21534,
+          "sha256": "f856754fd1ca9ef012d0097cf83a81c5e1a71e7cfcec9064b5cb669d738e362c"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/bridge.py",
+          "bytes": 87271,
+          "sha256": "a2766860759e5df33efebb3ec068bfe7a1aaa5176f587bfe94d6b2c8f8d3875f"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/gpu_placement.py",
+          "bytes": 4477,
+          "sha256": "d6e7978bdd3d8caef956f7462e8dda9bffd069b4061b6512a25020ff0931ac16"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/launcher.py",
+          "bytes": 8033,
+          "sha256": "31bc6a7cdaee6c5d42a0a2a1d3e57998a64868baccd15485546aa744bb715877"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/phase_navigation.py",
+          "bytes": 8257,
+          "sha256": "bef21a13d1b594bfd2570d09dfc00b1d90c48681c28ba7affb628594754f6c4f"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/r5_contract.json",
+          "bytes": 10243,
+          "sha256": "33e2dca25fa5e9a53379b7b0179851db3dbbb8d08735294b99b66286ae7318f0"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/r5_contract_14b.json",
+          "bytes": 18136,
+          "sha256": "176148ce1d92ae972c21438f38aa8ed0788fa0a5f0e8e7396a57e083d313cdda"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/r5_contract_cp118.json",
+          "bytes": 20445,
+          "sha256": "37ea238405e3bb0839ff904f765d21b4e0811f5972ef7d5a065177a5a7abe6b7"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/r5_runner.py",
+          "bytes": 98255,
+          "sha256": "e4f293e8606d0b360ca5d53e8816f7c6a5c8cdfa146a3395da84e4ef3985f05a"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/serialization.py",
+          "bytes": 9929,
+          "sha256": "c9f8a73ad749d21b81c59075abb6ff46b9e3151bbeb0de3af8b40d847967b0c7"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/transport.py",
+          "bytes": 10875,
+          "sha256": "7409a7def3e27eb9c4e31cf9ebf4258002ede19abe55ba66eac45ef830f35906"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/transport_14b.py",
+          "bytes": 6842,
+          "sha256": "9edce8db7f205ba5bd8866a7a12676b2e14b21e5764341b5ec59c203a2d31ba2"
+        },
+        {
+          "path": "experiments/debugger_interaction_v2_r5/transport_cp118.py",
+          "bytes": 14973,
+          "sha256": "ffe5a0286d1ddd448e3e95a9a1bc011fa1d2a7ab0384f76881decd4f69076de4"
+        },
+        {
+          "path": "experiments/r6_debugger_training/__init__.py",
+          "bytes": 370,
+          "sha256": "704c29c2e49179f2b50a5a558ee37e4239131542c165cff6b6b5c1f011bbb0a2"
+        },
+        {
+          "path": "experiments/r6_debugger_training/build_sft_dataset.py",
+          "bytes": 12595,
+          "sha256": "5cea4dd3a7ce1efc98633db9fd8a29704093cbca2fbc248a8ebc2ad57c08d481"
+        },
+        {
+          "path": "experiments/r6_debugger_training/build_summary.json",
+          "bytes": 1555,
+          "sha256": "9f138a4801383b32bda1d2290efcb5c19d49487bbd36109715b91822d2c729f0"
+        },
+        {
+          "path": "experiments/r6_debugger_training/diagnoses.py",
+          "bytes": 8547,
+          "sha256": "1c923152f380d673dc0cbfc5b800e7ba6dc96652cd563bada48868fe75982705"
+        },
+        {
+          "path": "experiments/r6_debugger_training/evaluate_debugger.py",
+          "bytes": 36671,
+          "sha256": "82eb994404a91b81016ceb8e5a4f7dcb67521e3f0de6bb4a93d743e6dd0a3677"
+        },
+        {
+          "path": "experiments/r6_debugger_training/generate_trajectories.py",
+          "bytes": 12793,
+          "sha256": "8e720cdada219df472bb68f1b0479baf613e2c0b53d197be95a46c45ed351ff5"
+        },
+        {
+          "path": "experiments/r6_debugger_training/gpu_telemetry.py",
+          "bytes": 8176,
+          "sha256": "7394ca467e2bce9aa6d2616e7a47121d5869f3fdf1e4ef9512edd0e6759afc6a"
+        },
+        {
+          "path": "experiments/r6_debugger_training/prepare_remote_package.py",
+          "bytes": 16958,
+          "sha256": "c6bf6f9842f40567780fd77fe79d5dca7dce42e6eb4b20e27cc7e99d04fbad42"
+        },
+        {
+          "path": "experiments/r6_debugger_training/quixbugs_tasks.py",
+          "bytes": 26097,
+          "sha256": "1fb082df8d8cc94337d73b234404993815194ba451ccb9e18993957909798331"
+        },
+        {
+          "path": "experiments/r6_debugger_training/r6_eval_contract.json",
+          "bytes": 6154,
+          "sha256": "c44508995f23c5f7bb73396be5d95e6faf2cf9a06b9c77e5a25ce837c436db09"
+        },
+        {
+          "path": "experiments/r6_debugger_training/r6_train_contract.json",
+          "bytes": 3568,
+          "sha256": "74c1b50558aeb837c51741b73ba16be107af616a6876d031689739810fc2d8c6"
+        },
+        {
+          "path": "experiments/r6_debugger_training/run_bounded_probe.py",
+          "bytes": 31575,
+          "sha256": "fbfaa441aff6440820ac46bd9bd5df562f1932eb2785c37a10504ed6a140da80"
+        },
+        {
+          "path": "experiments/r6_debugger_training/run_bounded_training.py",
+          "bytes": 9646,
+          "sha256": "3502f91c3fafeac1da8c185a7e73033715e8fdbd054f99efc821258f34a8179e"
+        },
+        {
+          "path": "experiments/r6_debugger_training/scripted_transport.py",
+          "bytes": 4657,
+          "sha256": "93cd8d6420e2a4063cfb7f5d553dead5e6bb8c4721e16b5f13d8bdb3a6334613"
+        },
+        {
+          "path": "experiments/r6_debugger_training/split_manifest.json",
+          "bytes": 12515,
+          "sha256": "b62a602724fe76d9da5e326380a6c5f00bc93a7981057db8568449057c98e195"
+        },
+        {
+          "path": "experiments/r6_debugger_training/train_qlora.py",
+          "bytes": 25789,
+          "sha256": "81b4c62b99fb6d03204bcf6f1245a251e4fe0f8f586d5ab87b128f481f6d3d15"
+        }
+      ],
+      "sha256": "8562aa1022227f10ba6b28b6762ac586f32dc6c86d8670e109ece1a2471770ad"
+    },
+    "confirmations": {
+      "tracked_worktree_clean": false,
+      "tracked_changes_exactly_allowlisted": true,
+      "unrelated_tracked_changes_present": false,
+      "untracked_execution_critical_source_consumed": false,
+      "git_diff_check_passed": true
+    },
+    "reconstruction": {
+      "passed": true,
+      "method": "materialize changed files from BASE_HEAD; git -c core.autocrlf=false apply --check; git apply --binary; verify every changed-file SHA256",
+      "verified_file_count": 18
+    }
+  },
+  "tag": "v3c30-r68-c-7c9881",
+  "stage": "C",
+  "label": "adapter-checkpoint-30",
+  "model": {
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "adapter_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\experiments\\r6_debugger_training\\runs\\r6-sft-debugger-v3\\trainer\\checkpoint-30",
+    "adapter_identity": {
+      "resolved_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\experiments\\r6_debugger_training\\runs\\r6-sft-debugger-v3\\trainer\\checkpoint-30",
+      "inference_tree_sha256": "6e877840dad3b9cc9ccb4bdd3347f9664e04c7b8c39f90d96b351172c94db82f",
+      "files": [
+        {
+          "path": "adapter_config.json",
+          "bytes": 1106,
+          "sha256": "92ddf91e67b116a6730792722d6ee93dffeaac152901cd954389615e50cbd44e"
+        },
+        {
+          "path": "adapter_model.safetensors",
+          "bytes": 161533192,
+          "sha256": "7ef5d70ab8691ea02f005ec567901932e08fb94b28ebbfab5b175a94ebb492bd"
+        }
+      ]
+    },
+    "base_only": false
+  },
+  "contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+  "selected_tasks": [
+    "quixbugs-find-in-sorted",
+    "quixbugs-rpn-eval",
+    "quixbugs-shortest-path-length",
+    "quixbugs-reverse-linked-list",
+    "quixbugs-kth"
+  ],
+  "suite": "validation",
+  "anti_leakage": {
+    "status": "not_applicable",
+    "reason": "checkpoint selection uses the disjoint QuixBugs validation suite"
+  },
+  "execution_policy": {
+    "model_loads": 1,
+    "model_residency": "one process; resident across every selected task",
+    "model_release": "process exit only",
+    "per_task_gc_collect": false,
+    "per_task_torch_cuda_empty_cache": false,
+    "implicit_device_map_auto": false,
+    "implicit_cpu_or_disk_dispatch": false,
+    "attention_implementation": "efficient_sdpa"
+  },
+  "placement_audit": {
+    "base": {
+      "policy_version": "explicit-single-cuda-v1",
+      "expected_device": "cuda:0",
+      "requested_device_map": {
+        "": 0
+      },
+      "resolved_module_device_map": {
+        "": "cuda:0"
+      },
+      "parameter_tensor_devices": {
+        "cuda:0": 339
+      },
+      "parameter_tensor_count": 339,
+      "buffer_tensor_devices": {
+        "cuda:0": 1
+      },
+      "buffer_tensor_count": 1,
+      "cpu_modules": [],
+      "disk_modules": [],
+      "meta_tensors": 0,
+      "passed": true
+    },
+    "final_peft_model": {
+      "policy_version": "explicit-single-cuda-v1",
+      "expected_device": "cuda:0",
+      "requested_device_map": {
+        "": 0
+      },
+      "resolved_module_device_map": {
+        "": "cuda:0"
+      },
+      "parameter_tensor_devices": {
+        "cuda:0": 731
+      },
+      "parameter_tensor_count": 731,
+      "buffer_tensor_devices": {
+        "cuda:0": 1
+      },
+      "buffer_tensor_count": 1,
+      "cpu_modules": [],
+      "disk_modules": [],
+      "meta_tensors": 0,
+      "passed": true
+    },
+    "runtime": {
+      "torch_version": "2.10.0.dev20251124+cu128",
+      "torch_cuda_version": "12.8",
+      "cuda_device_index": 0,
+      "cuda_device_name": "NVIDIA GeForce RTX 5070 Ti Laptop GPU",
+      "compute_dtype": "torch.bfloat16",
+      "attention_implementation": "efficient_sdpa",
+      "quantization": "NF4 double-quant"
+    }
+  },
+  "lifecycle_log": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\lifecycle.jsonl",
+  "rows": [
+    {
+      "task_id": "quixbugs-find-in-sorted",
+      "bug_category": "quixbugs-find_in_sorted",
+      "model_identity": "Qwen/Qwen2.5-Coder-7B-Instruct@c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "treatment_hash": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+      "system_prompt_sha256": "1056c49e0a0d2e4d29ce248b198933410ccd07f7810c018c32148a02c26a3365",
+      "reproduction_success": true,
+      "breakpoint_line": 3,
+      "G1": 1,
+      "terminal_path": false,
+      "production_exception_path": false,
+      "step_outside_region": false,
+      "inspection_command": "get_frame_locals",
+      "inspection_type": "get_frame_locals",
+      "step_next_command": "next_pdb_session",
+      "G2": 2,
+      "diagnosis_present": true,
+      "B_sha": "d427b1fa11466a678594e54bc0fcd37bf1ffa1e0d8fbba5376e563756b5877f5",
+      "normalization_required": false,
+      "C_sha": "d427b1fa11466a678594e54bc0fcd37bf1ffa1e0d8fbba5376e563756b5877f5",
+      "patch_applied": true,
+      "verifier_status": "COMPLETED",
+      "verifier_outcome": "RESOLVED",
+      "f2p": "2/2",
+      "p2p": "5/5",
+      "full_suite": true,
+      "first_causal_failure": "none",
+      "per_task_pass": true,
+      "controller_final_state": "Done",
+      "controller_stop_reason": "done",
+      "model_calls": 12,
+      "prompt_tokens": 7663,
+      "completion_tokens": 231,
+      "total_tokens": 7894,
+      "model_request_runtime_ms": 42765,
+      "task_runtime_ms": 100469
+    },
+    {
+      "task_id": "quixbugs-rpn-eval",
+      "bug_category": "quixbugs-rpn_eval",
+      "model_identity": "Qwen/Qwen2.5-Coder-7B-Instruct@c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "treatment_hash": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+      "system_prompt_sha256": "69542a7f9e5d4533a52dcf9e5f00860d39b21a328509dd54b01213be7449dd5a",
+      "reproduction_success": true,
+      "breakpoint_line": 4,
+      "G1": 1,
+      "terminal_path": false,
+      "production_exception_path": false,
+      "step_outside_region": false,
+      "inspection_command": "get_frame_locals",
+      "inspection_type": "get_frame_locals",
+      "step_next_command": "next_pdb_session",
+      "G2": 2,
+      "diagnosis_present": true,
+      "B_sha": "40e9021ee06dd4136a5e91eca0360b8e876a6ce39a3991bf7e1318fb105a13c2",
+      "normalization_required": false,
+      "C_sha": "40e9021ee06dd4136a5e91eca0360b8e876a6ce39a3991bf7e1318fb105a13c2",
+      "patch_applied": true,
+      "verifier_status": "COMPLETED",
+      "verifier_outcome": "RESOLVED",
+      "f2p": "3/3",
+      "p2p": "3/3",
+      "full_suite": true,
+      "first_causal_failure": "none",
+      "per_task_pass": true,
+      "controller_final_state": "Done",
+      "controller_stop_reason": "done",
+      "model_calls": 12,
+      "prompt_tokens": 7851,
+      "completion_tokens": 314,
+      "total_tokens": 8165,
+      "model_request_runtime_ms": 54947,
+      "task_runtime_ms": 107625
+    },
+    {
+      "task_id": "quixbugs-shortest-path-length",
+      "bug_category": "quixbugs-shortest_path_length",
+      "model_identity": "Qwen/Qwen2.5-Coder-7B-Instruct@c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "treatment_hash": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+      "system_prompt_sha256": "972ae1125466f6c8b294f7bf5558012fdd3ae52c7f8bd7af694700cd15200d2c",
+      "reproduction_success": true,
+      "breakpoint_line": 4,
+      "G1": 1,
+      "terminal_path": false,
+      "production_exception_path": false,
+      "step_outside_region": false,
+      "inspection_command": "get_frame_locals",
+      "inspection_type": "get_frame_locals",
+      "step_next_command": "next_pdb_session",
+      "G2": 2,
+      "diagnosis_present": true,
+      "B_sha": "4b0116731158c75ce092f17d9d48a1b9f34f151550d3abef32b38bef44b3ae52",
+      "normalization_required": false,
+      "C_sha": "4b0116731158c75ce092f17d9d48a1b9f34f151550d3abef32b38bef44b3ae52",
+      "patch_applied": true,
+      "verifier_status": "COMPLETED",
+      "verifier_outcome": "RESOLVED",
+      "f2p": "2/2",
+      "p2p": "2/2",
+      "full_suite": true,
+      "first_causal_failure": "none",
+      "per_task_pass": true,
+      "controller_final_state": "Done",
+      "controller_stop_reason": "done",
+      "model_calls": 13,
+      "prompt_tokens": 10336,
+      "completion_tokens": 765,
+      "total_tokens": 11101,
+      "model_request_runtime_ms": 131432,
+      "task_runtime_ms": 182125
+    },
+    {
+      "task_id": "quixbugs-reverse-linked-list",
+      "bug_category": "quixbugs-reverse_linked_list",
+      "model_identity": "Qwen/Qwen2.5-Coder-7B-Instruct@c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "treatment_hash": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+      "system_prompt_sha256": "935dc2b64e1a4fdb7888361592065042ae7eac9b73b1e5529955851bb70899ac",
+      "reproduction_success": true,
+      "breakpoint_line": 2,
+      "G1": 1,
+      "terminal_path": false,
+      "production_exception_path": false,
+      "step_outside_region": false,
+      "inspection_command": "get_frame_locals",
+      "inspection_type": "get_frame_locals",
+      "step_next_command": "next_pdb_session",
+      "G2": 2,
+      "diagnosis_present": true,
+      "B_sha": "3b76037e70d4bac91f1be594f8dc0ef6d4acd6372858ae6699cc00c46c24760b",
+      "normalization_required": false,
+      "C_sha": "3b76037e70d4bac91f1be594f8dc0ef6d4acd6372858ae6699cc00c46c24760b",
+      "patch_applied": true,
+      "verifier_status": "COMPLETED",
+      "verifier_outcome": "RESOLVED",
+      "f2p": "2/2",
+      "p2p": "1/1",
+      "full_suite": true,
+      "first_causal_failure": "none",
+      "per_task_pass": true,
+      "controller_final_state": "Done",
+      "controller_stop_reason": "done",
+      "model_calls": 12,
+      "prompt_tokens": 7319,
+      "completion_tokens": 98,
+      "total_tokens": 7417,
+      "model_request_runtime_ms": 18855,
+      "task_runtime_ms": 56250
+    },
+    {
+      "task_id": "quixbugs-kth",
+      "bug_category": "quixbugs-kth",
+      "model_identity": "Qwen/Qwen2.5-Coder-7B-Instruct@c03e6d358207e414f1eca0bb1891e29f1db0e242",
+      "treatment_hash": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+      "system_prompt_sha256": "728b1d95571d814704f240c30103997d98743ae488d3515067b453b9a3feb3d8",
+      "reproduction_success": true,
+      "breakpoint_line": 2,
+      "G1": 1,
+      "terminal_path": false,
+      "production_exception_path": false,
+      "step_outside_region": false,
+      "inspection_command": "get_frame_locals",
+      "inspection_type": "get_frame_locals",
+      "step_next_command": "next_pdb_session",
+      "G2": 2,
+      "diagnosis_present": true,
+      "B_sha": "89da104a2524740d2f39a354de123817152ef934cc8320c7b4e8eb47dcc107b5",
+      "normalization_required": false,
+      "C_sha": "89da104a2524740d2f39a354de123817152ef934cc8320c7b4e8eb47dcc107b5",
+      "patch_applied": true,
+      "verifier_status": "COMPLETED",
+      "verifier_outcome": "RESOLVED",
+      "f2p": "4/4",
+      "p2p": "3/3",
+      "full_suite": true,
+      "first_causal_failure": "none",
+      "per_task_pass": true,
+      "controller_final_state": "Done",
+      "controller_stop_reason": "done",
+      "model_calls": 12,
+      "prompt_tokens": 7516,
+      "completion_tokens": 272,
+      "total_tokens": 7788,
+      "model_request_runtime_ms": 49245,
+      "task_runtime_ms": 107485
+    }
+  ],
+  "aggregate": {
+    "tasks_total": 5,
+    "rows_with_errors": 0,
+    "verifier_resolved": 5,
+    "debugger_entry": 5,
+    "accepted_breakpoint": 5,
+    "inspection": 5,
+    "step_next": 5,
+    "diagnosis": 5,
+    "patch_produced": 5,
+    "patch_applied": 5,
+    "model_calls_total": 61,
+    "prompt_tokens_total": 40685,
+    "completion_tokens_total": 1680,
+    "tokens_total": 42365,
+    "model_request_runtime_ms_total": 297244,
+    "task_runtime_ms_total": 553954,
+    "strict_scientific_pass": true
+  }
+}

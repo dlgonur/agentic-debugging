@@ -1,0 +1,876 @@
+{
+  "schema_version": "debugger-interaction-v2-r5-evidence",
+  "run_identity": {
+    "schema_version": "debugger-interaction-v2-r5-identity",
+    "experiment_id": "debugger-interaction-v2-r6-model-evaluation",
+    "source_commit_sha": "79c614d34e83ce1eb2c4ad6c330644f33e1bbcfe",
+    "candidate_source_manifest": {
+      "agentic_debugger/agent/controller.py": "ee041255a115e05d94cc75401fa98f9103d8ff01e4a5e6ecd33e0a4d965b7f92",
+      "agentic_debugger/agent/controller_policy.py": "0edf53b8cba9ff516c67cda998a85795b9ab6788313d34b94c298bdad7c601ee",
+      "agentic_debugger/agent/model_adapter.py": "70de6c1b31ae7cc268220afbb425ca251f1a24df4bf4fb98bf0f10bc58c6e1f0",
+      "agentic_debugger/agent/state_machine.py": "7481b9039f86c716d43c8ea5f67cb293329028498b094ab41379046106860d1f",
+      "agentic_debugger/agent/tool_registry.py": "4704b01ebc38498ce1fe59a517bb39d9f151d9feedc77a7463cb8da2ec60c3db",
+      "agentic_debugger/agent/trajectory.py": "db9e3db89bd32cb311dcb292b502c5dbd5c0cb08e4dc588f3c8d28745f3361aa",
+      "agentic_debugger/demo/catalog.py": "b416520ecbf100c237fa8ba8681c4228365c2e2ad8d93586b603b6b207a89981",
+      "agentic_debugger/demo/sanitize.py": "f23885949a1247abfcb8ffb7988668d3de8c7ba0d01918de8c660ec02a5c4d3f",
+      "agentic_debugger/demo/tools.py": "838323f3b3596a69db8761b26417871006fc9eb41c786a0308a4ee6bab3121a1",
+      "agentic_debugger/evaluation/outcome_taxonomy.py": "a9325be8c764726391920e2b8aa83012330b27c04536ac49d34eff04ec12002e",
+      "agentic_debugger/evaluation/runner.py": "9311fc8f3cc286517c097e3b4b2ccf44171b2102ba5b5574648eb05d2c79cd32",
+      "agentic_debugger/evaluation/task_schema.py": "ba37eb41aa1641fc4bd265b45c0a0abe114cc836bc34198275c4354518737bd9",
+      "agentic_debugger/evaluation/verifier.py": "d4a5334785eb88a286ea8302d1d618201e3f7baa064f6667bcc5c876a68d9cb3",
+      "agentic_debugger/events/logger.py": "809225640755b13ca0fdf737f12c968165a0705622d53bd6a24e7d47c526595a",
+      "agentic_debugger/events/schema.py": "7f16655eb86de1ed9fedb11a18552819da24f3e488d2b4a94ad41f25c1c0e730",
+      "agentic_debugger/runtime/command_runner.py": "e04fdd3be24b0fff174ff4e1c10733d8ca5c3668ab837cce83ce8d7ec192423a",
+      "agentic_debugger/runtime/exceptions.py": "9793535228c0c196f51634746833f802b09104a5d52247c4dc8f1b1495531ab5",
+      "agentic_debugger/runtime/execution.py": "c3f61c56714fce057279d6548d7314ff1acdb10c743f240267cd9309301d77fc",
+      "agentic_debugger/runtime/patcher.py": "4e4e5e5f8be036760a5efa1b3544faecb6d14514fb646c57400b354907382095",
+      "agentic_debugger/runtime/pdb_protocol.py": "9a76e0ea42a2a8947a011f214b9cf8ac6414c34745a55a139714ea79cabbd030",
+      "agentic_debugger/runtime/pdb_session.py": "5b17f8fcbe59bd2a832f48f414031b5c32aa9ca55b268e7dc7e836d6f995ce64",
+      "agentic_debugger/runtime/pdb_worker.py": "04aa2d1c550fe9a939b86b2fbda73d5515c8785217560dd7755ba731563c85f2",
+      "agentic_debugger/runtime/test_runner.py": "b7a5335bde74177bdfc9f9e888aef8489f411b84fe19fc5130815cb11e7a4831",
+      "agentic_debugger/runtime/workspace.py": "13472b9f84ccf6f0eabb01daf48903c3573952ef8b4b3f2517f35f4748e0c1b7",
+      "agentic_debugger/skills/file_skills.py": "47528429e19e366cf711cdbed1616b331d3805789f5d29d485186d6e96d5b872",
+      "agentic_debugger/skills/search_skills.py": "032686b188438dc10caa1b5dadcc95150bb6634f75d75e10f64a3a98c413c484",
+      "experiments/debugger_interaction_v2_r5/adapter.py": "461f7f345019f0a57581203bed5cf3e6ba29d3145953fd8bc1ac10976538246e",
+      "experiments/debugger_interaction_v2_r5/anti_leakage.py": "f856754fd1ca9ef012d0097cf83a81c5e1a71e7cfcec9064b5cb669d738e362c",
+      "experiments/debugger_interaction_v2_r5/bridge.py": "a2766860759e5df33efebb3ec068bfe7a1aaa5176f587bfe94d6b2c8f8d3875f",
+      "experiments/debugger_interaction_v2_r5/launcher.py": "31bc6a7cdaee6c5d42a0a2a1d3e57998a64868baccd15485546aa744bb715877",
+      "experiments/debugger_interaction_v2_r5/phase_navigation.py": "bef21a13d1b594bfd2570d09dfc00b1d90c48681c28ba7affb628594754f6c4f",
+      "experiments/debugger_interaction_v2_r5/r5_contract.json": "33e2dca25fa5e9a53379b7b0179851db3dbbb8d08735294b99b66286ae7318f0",
+      "experiments/debugger_interaction_v2_r5/r5_contract_14b.json": "176148ce1d92ae972c21438f38aa8ed0788fa0a5f0e8e7396a57e083d313cdda",
+      "experiments/debugger_interaction_v2_r5/r5_contract_cp118.json": "37ea238405e3bb0839ff904f765d21b4e0811f5972ef7d5a065177a5a7abe6b7",
+      "experiments/debugger_interaction_v2_r5/r5_runner.py": "e4f293e8606d0b360ca5d53e8816f7c6a5c8cdfa146a3395da84e4ef3985f05a",
+      "experiments/debugger_interaction_v2_r5/serialization.py": "c9f8a73ad749d21b81c59075abb6ff46b9e3151bbeb0de3af8b40d847967b0c7",
+      "experiments/debugger_interaction_v2_r5/transport.py": "7409a7def3e27eb9c4e31cf9ebf4258002ede19abe55ba66eac45ef830f35906",
+      "experiments/debugger_interaction_v2_r5/transport_14b.py": "9edce8db7f205ba5bd8866a7a12676b2e14b21e5764341b5ec59c203a2d31ba2",
+      "experiments/debugger_interaction_v2_r5/transport_cp118.py": "ffe5a0286d1ddd448e3e95a9a1bc011fa1d2a7ab0384f76881decd4f69076de4"
+    },
+    "experiment_contract_sha256": "5e56165d9b08d24836874711caef306f062f5d36dc4cdbb020d97e7370ca8e78",
+    "model_condition": "PEFT_ADAPTER",
+    "model_role": null,
+    "adapter_applied": true,
+    "adapter_label": "r6-tuned",
+    "adapter_path": null,
+    "adapter_identity": null,
+    "base_repository": "Qwen/Qwen2.5-Coder-7B-Instruct",
+    "base_revision": "c03e6d358207e414f1eca0bb1891e29f1db0e242",
+    "rag_enabled": false,
+    "generation": {
+      "do_sample": false,
+      "max_new_tokens": 1024,
+      "max_input_tokens": 32768
+    },
+    "tasks": [],
+    "system_prompt_template_sha256": "6e2d1c07e57babab7781c6d707d60b04f4165f80d05b9c5411bbf9e4df87b6c0",
+    "interface_revision": "r6.8",
+    "interface_description": "R5.9 clean-holdout generalized debugger-informed repair: reproduce -> break -> stack G1 -> locals/print -> step/next -> EITHER stack G2>G1 inside the original production region (normal path) OR the R5.9 production-exception path (production frame unwound during a real exception/failure; G2=None; sanitized production exception attached; no fake original-region G2 claimed) -> diagnosis -> patch -> verifier.  Common deterministic sanitizer for the reproduction diagnostic and the verifier-feedback failing records (production exception frames only; hidden test source/assertions/literals/node ids/test names never forwarded; fail closed to a generic behavioral statement).  Region-filtered model-facing observations; whole-file and unified-diff repair representations with deterministic serialization; real verifier-feedback repair loop; fail-closed ACTUAL-PROMPT anti-leakage audit (leakage_findings == [] required).  Neutral cwd-safe pytest launcher; original-source-region breakpoint derivation; no test metadata in prompts; bounded PATCH checkpoint; metadata-only B->C normalization.",
+    "budgets": {
+      "task_max_patch_attempts": 4,
+      "task_max_test_runs": 5,
+      "task_max_pdb_observations": 8,
+      "debugger_session_starts_max": 1,
+      "debugger_observation_or_control_actions_max": 8,
+      "debugger_session_stops_max": 1,
+      "controller_steps_max": 32,
+      "model_requests_max": 34,
+      "model_retries_per_logical_call_max": 1,
+      "model_phase_seconds_max": 600,
+      "model_request_timeout_seconds": 60,
+      "pdb_request_timeout_seconds": 60,
+      "debugger_accepted_actions_max": 10
+    },
+    "timeout_derivation": {
+      "rule": "ONE common pdb_request_timeout_seconds frozen at 60 s (the accepted live-condition r5.1 measurement); reused unchanged for the R6 trajectory generation."
+    },
+    "runtime_python": {
+      "executable": "C:\\Users\\benya\\AppData\\Local\\Programs\\Python\\Python310\\python.exe",
+      "version": "3.10.1"
+    }
+  },
+  "task": {
+    "task_id": "curated-off-by-one-002",
+    "bug_category": "boundary / off-by-one",
+    "module_path": "recent_window.py",
+    "original_source_sha256": "24cba358fff88b1c896320ba8bf8514e36416882ebd48a4bb042326fb4a7ea02",
+    "original_source_line_count": 12,
+    "eligible_breakpoint_lines": [
+      2
+    ],
+    "structural_breakpoint_lines": [
+      2,
+      3,
+      4,
+      5,
+      7,
+      8,
+      9,
+      10,
+      12
+    ],
+    "breakpoint_reachability": {
+      "method": "source_ordered_individual_real_reproduction",
+      "structural_candidates": [
+        2,
+        3,
+        4,
+        5,
+        7,
+        8,
+        9,
+        10,
+        12
+      ],
+      "attempts": [
+        {
+          "candidate": 2,
+          "state": "paused",
+          "line": 2,
+          "function": "recent_window",
+          "paused_in_function": true
+        }
+      ],
+      "selected_lines": [
+        2
+      ],
+      "selected_function": "recent_window",
+      "state": "paused",
+      "cleanup": "cleaned",
+      "oracle_or_verifier_consulted": false
+    },
+    "runtime_appended_driver_start_line": 13,
+    "launcher_sha256": "8c389f50d50ed5d101b6d2a497d945c72365cf1e03972f133204fa5177b6e5fb",
+    "f2p_count": 1,
+    "p2p_count": 2
+  },
+  "controller_result": {
+    "final_state": "Failed",
+    "stop_reason": "model_error",
+    "model_calls": 12,
+    "steps_count": 12
+  },
+  "telemetry": [
+    {
+      "model_call_index": 0,
+      "transport_attempt_index": 1,
+      "controller_state": "Reproduce",
+      "raw_response_text": "reproduce",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 9,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "reproduce",
+        "normalized_command": "reproduce baseline",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "run_reproduction",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": null,
+        "prior_observation_sha256": null,
+        "rendered_observation_sha256": null,
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 734,
+        "completion_tokens": 3,
+        "total_tokens": 737,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 718,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 3,
+      "transport_attempt_index": 1,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "break 2",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 7,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "break",
+        "normalized_command": "break 2",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "start_pdb_session",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000000",
+        "prior_observation_sha256": "4abc6e650d4937b1d27a31079c232c17c5c3819ad2cef20d5ce96518c8b7af7d",
+        "rendered_observation_sha256": "d48034a09f9b867468c4cf1fb7e186f6e3d38c585887115db6d361f5a9c24d13",
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 1006,
+        "completion_tokens": 4,
+        "total_tokens": 1010,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 1094,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 4,
+      "transport_attempt_index": 1,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "stack",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 5,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "stack",
+        "normalized_command": "stack",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "get_stack_summary",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000003",
+        "prior_observation_sha256": "b8539357eef44c1c206304c4ec678a9d498e31b27629622a6d4b8a0bed564c04",
+        "rendered_observation_sha256": "167565c281b164b7e18d7071eb4cd3313dba9b5b49f6e1efe747b0870293b769",
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 792,
+        "completion_tokens": 2,
+        "total_tokens": 794,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 593,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 5,
+      "transport_attempt_index": 1,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "locals",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 6,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "locals",
+        "normalized_command": "locals frame=0 gen=1",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "get_frame_locals",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000004",
+        "prior_observation_sha256": "c4a821789451d753fa1fe11a2c1f1ebe87375557f14c3f35c58d3c7b1b941a70",
+        "rendered_observation_sha256": "8d65ddab1fb4b032f6dfd46ef488da09c4fa5b0cf33a0878f4808fb4337e4ad8",
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 817,
+        "completion_tokens": 2,
+        "total_tokens": 819,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 625,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 6,
+      "transport_attempt_index": 1,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "next",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 4,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "next",
+        "normalized_command": "next",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "next_pdb_session",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000005",
+        "prior_observation_sha256": "0ea3bb46bc4bcc11670611cd3f02c0f167a0eb17ce5a3d0e47a1bf7664dc2fc6",
+        "rendered_observation_sha256": "8df3d4950039a65e153bd4ac081fd886971b54aca0693567ee669827ce09de1e",
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 786,
+        "completion_tokens": 2,
+        "total_tokens": 788,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 655,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 7,
+      "transport_attempt_index": 1,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "stack",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 5,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "stack",
+        "normalized_command": "stack",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "get_stack_summary",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000006",
+        "prior_observation_sha256": "0c8a68fefbd1f998d9e6429f6b1a2fdb88052b94edf85e1ba219b1d518194773",
+        "rendered_observation_sha256": "107413c6eaff143ac8645948a4c02a8bead62adec9a441953a8b11be31521b95",
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 783,
+        "completion_tokens": 2,
+        "total_tokens": 785,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 625,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 8,
+      "transport_attempt_index": 1,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "diagnosis diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 115,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "diagnosis",
+        "normalized_command": "diagnosis diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "transition",
+        "action_name": null,
+        "target_state": "Patch",
+        "reason": "diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+        "is_diagnosis": true,
+        "diagnosis_text": "diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows."
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000007",
+        "prior_observation_sha256": "c1d0879779d799130d6a13bde4ad0dbd720a273fa95d39afe02f33c0d852cb2f",
+        "rendered_observation_sha256": "f53b12a91424afca46e27fb65d2b79d1da9ac9387a7afee94786e77c1ea6c7f7",
+        "rendered_diagnosis_sha256": null
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 809,
+        "completion_tokens": 20,
+        "total_tokens": 829,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 3922,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 9,
+      "transport_attempt_index": 1,
+      "controller_state": "Patch",
+      "raw_response_text": "file recent_window.py\n\ndef recent_window(values: list[int], size: int) -> list[int]:\n    sequence_length = len(values)\n    requested_size = size\n    if requested_size <= 0 or sequence_length == 0:\n        return []\n\n    start_index = max(sequence_length - requested_size, 0)\n    end_index = sequence_length\n    calculated_indexes = list(\n        range(start_index, end_index - (1 if requested_size == sequence_length else 0))\n    )\n    return [values[index] for index in calculated_indexes]",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 490,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "file",
+        "normalized_command": "file recent_window.py",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "apply_patch",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000007",
+        "prior_observation_sha256": "c1d0879779d799130d6a13bde4ad0dbd720a273fa95d39afe02f33c0d852cb2f",
+        "rendered_observation_sha256": "f53b12a91424afca46e27fb65d2b79d1da9ac9387a7afee94786e77c1ea6c7f7",
+        "rendered_diagnosis_sha256": "95555b0dfa02f58f9e5dd6a2096a896142ebce7af15f2eae24ef8c0d0912e9dd"
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 1319,
+        "completion_tokens": 113,
+        "total_tokens": 1432,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 19235,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 10,
+      "transport_attempt_index": 1,
+      "controller_state": "Patch",
+      "raw_response_text": "file recent_window.py\n\ndef recent_window(values: list[int], size: int) -> list[int]:\n    sequence_length = len(values)\n    requested_size = size\n    if requested_size <= 0 or sequence_length == 0:\n        return []\n\n    start_index = max(sequence_length - requested_size, 0)\n    end_index = sequence_length\n    calculated_indexes = list(\n        range(start_index, end_index - (1 if requested_size != sequence_length else 0))\n    )\n    return [values[index] for index in calculated_indexes]",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 490,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "accepted",
+        "command_token": "file",
+        "normalized_command": "file recent_window.py",
+        "rejection_category": null,
+        "rejection_message": null
+      },
+      "translated_directive": {
+        "kind": "action",
+        "action_name": "apply_patch",
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000009",
+        "prior_observation_sha256": "a57fdc1ac26012961c417eeab70db91fd9946734e8e4077565273ffa1d5f0e43",
+        "rendered_observation_sha256": "b42f4a637622402ead972cfd86a27d39f99be195f7ea369b7a429dbbb1ba72fa",
+        "rendered_diagnosis_sha256": "95555b0dfa02f58f9e5dd6a2096a896142ebce7af15f2eae24ef8c0d0912e9dd"
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 1404,
+        "completion_tokens": 113,
+        "total_tokens": 1517,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 20562,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 11,
+      "transport_attempt_index": 1,
+      "controller_state": "Patch",
+      "raw_response_text": "file recent_window.py\n\ndef recent_window(values: list[int], size: int) -> list[int]:\n    sequence_length = len(values)\n    requested_size = size\n    if requested_size <= 0 or sequence_length == 0:\n        return []\n\n    start_index = max(sequence_length - requested_size, 0)\n    end_index = sequence_length\n    calculated_indexes = list(\n        range(start_index, end_index - (1 if requested_size == sequence_length else 0))\n    )\n    return [values[index] for index in calculated_indexes]",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 490,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "rejected",
+        "command_token": null,
+        "normalized_command": null,
+        "rejection_category": "duplicate_patch",
+        "rejection_message": "candidate exactly duplicates a previously dispatched verifier-rejected patch; emit a materially different repair or 'failed'"
+      },
+      "translated_directive": {
+        "kind": null,
+        "action_name": null,
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000010",
+        "prior_observation_sha256": "10382935813afcef8568c05d1edc998e2bf3215348432f553853bc39324f1301",
+        "rendered_observation_sha256": "89fc417c1357284e8030e00da7732a6ebcda2fa28381da6bc5e9a6369bfdeba1",
+        "rendered_diagnosis_sha256": "95555b0dfa02f58f9e5dd6a2096a896142ebce7af15f2eae24ef8c0d0912e9dd"
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 1383,
+        "completion_tokens": 113,
+        "total_tokens": 1496,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 19844,
+        "parse_duration_ms": 0
+      }
+    },
+    {
+      "model_call_index": 11,
+      "transport_attempt_index": 2,
+      "controller_state": "Patch",
+      "raw_response_text": "file recent_window.py\n\ndef recent_window(values: list[int], size: int) -> list[int]:\n    sequence_length = len(values)\n    requested_size = size\n    if requested_size <= 0 or sequence_length == 0:\n        return []\n\n    start_index = max(sequence_length - requested_size, 0)\n    end_index = sequence_length\n    calculated_indexes = list(\n        range(start_index, end_index - (1 if requested_size != sequence_length else 0))\n    )\n    return [values[index] for index in calculated_indexes]",
+      "raw_response_status": "decoded",
+      "raw_response_bytes": 490,
+      "transport_error_category": null,
+      "parse_result": {
+        "status": "rejected",
+        "command_token": null,
+        "normalized_command": null,
+        "rejection_category": "duplicate_patch",
+        "rejection_message": "candidate exactly duplicates a previously dispatched verifier-rejected patch; emit a materially different repair or 'failed'"
+      },
+      "translated_directive": {
+        "kind": null,
+        "action_name": null,
+        "target_state": null,
+        "reason": null,
+        "is_diagnosis": false,
+        "diagnosis_text": null
+      },
+      "provenance": {
+        "prior_observation_id": "observation-000000010",
+        "prior_observation_sha256": "10382935813afcef8568c05d1edc998e2bf3215348432f553853bc39324f1301",
+        "rendered_observation_sha256": "89fc417c1357284e8030e00da7732a6ebcda2fa28381da6bc5e9a6369bfdeba1",
+        "rendered_diagnosis_sha256": "95555b0dfa02f58f9e5dd6a2096a896142ebce7af15f2eae24ef8c0d0912e9dd"
+      },
+      "fence_unwrap": null,
+      "usage": {
+        "prompt_tokens": 1411,
+        "completion_tokens": 113,
+        "total_tokens": 1524,
+        "provider_reported": true
+      },
+      "timing": {
+        "request_duration_ms": 20110,
+        "parse_duration_ms": 0
+      }
+    }
+  ],
+  "post_debug_diagnoses": [
+    {
+      "text": "diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+      "model_call_index": 8,
+      "controller_state": "RuntimeEvidence",
+      "raw_response_text": "diagnosis diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.",
+      "provenance": "model-authored, bound to model_call_index 8"
+    }
+  ],
+  "trajectory_jsonl": "{\"event_id\": \"event-000000000\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 0}, \"directive_kind\": \"action\", \"model_call_index\": 0, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 0, \"state\": \"Reproduce\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000001\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"run_reproduction\", \"payload\": {\"action\": {\"action_id\": \"action-000000000\", \"arguments\": {\"phase\": \"baseline\"}, \"name\": \"run_reproduction\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"Reproduce\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 1, \"state\": \"Reproduce\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000002\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"run_reproduction\", \"payload\": {\"observation\": {\"action_id\": \"action-000000000\", \"name\": \"run_reproduction\", \"observation_id\": \"observation-000000000\", \"payload\": {\"dispatch_reason\": \"ok\", \"exit_code\": 1, \"expected_exit_code\": 1, \"failure_output\": \"baseline behavioral check failed after executing the target behavior\", \"failure_reproduced\": true, \"passed\": false, \"phase\": \"baseline\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"baseline reproduction executed\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 2, \"state\": \"Reproduce\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000003\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"transition\", \"model_call_index\": 1, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 3, \"state\": \"Reproduce\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000004\", \"event_type\": \"transition\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"state_transition\", \"payload\": {\"reason\": \"R5 administrative phase navigation: REPRODUCE->UNDERSTAND after verified baseline reproduction\", \"source_state\": \"Reproduce\", \"target_state\": \"Understand\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 4, \"state\": \"Understand\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000005\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"transition\", \"model_call_index\": 2, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 5, \"state\": \"Understand\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000006\", \"event_type\": \"transition\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"state_transition\", \"payload\": {\"reason\": \"R5 administrative phase navigation: UNDERSTAND->RUNTIME_EVIDENCE (forced runtime-entry diagnostic)\", \"source_state\": \"Understand\", \"target_state\": \"RuntimeEvidence\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 6, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000007\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 3, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 7, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000008\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"start_pdb_session\", \"payload\": {\"action\": {\"action_id\": \"action-000000003\", \"arguments\": {\"breakpoint_line\": 2}, \"name\": \"start_pdb_session\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 8, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000009\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"start_pdb_session\", \"payload\": {\"observation\": {\"action_id\": \"action-000000003\", \"name\": \"start_pdb_session\", \"observation_id\": \"observation-000000003\", \"payload\": {\"breakpoint_line\": 2, \"dispatch_reason\": \"ok\", \"function\": \"recent_window\", \"line\": 2, \"script\": \"recent_window.py\", \"state\": \"paused\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"runtime probe paused at the declared breakpoint\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 9, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000010\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 1, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 0, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 4, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 10, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000011\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"get_stack_summary\", \"payload\": {\"action\": {\"action_id\": \"action-000000004\", \"arguments\": {}, \"name\": \"get_stack_summary\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 11, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000012\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"get_stack_summary\", \"payload\": {\"observation\": {\"action_id\": \"action-000000004\", \"name\": \"get_stack_summary\", \"observation_id\": \"observation-000000004\", \"payload\": {\"dispatch_reason\": \"ok\", \"frames\": [{\"frame_id\": 0, \"function\": \"recent_window\", \"is_current\": true, \"line\": 2, \"script\": \"recent_window.py\"}, {\"frame_id\": 1, \"function\": \"test_full_length_window_includes_every_value\", \"is_current\": false, \"line\": 6, \"script\": \"tests/test_recent_window.py\"}, {\"frame_id\": 2, \"function\": \"_r5_failing_execution\", \"is_current\": false, \"line\": 34, \"script\": \"recent_window.py\"}, {\"frame_id\": 3, \"function\": \"<module>\", \"is_current\": false, \"line\": 39, \"script\": \"recent_window.py\"}], \"pause_generation\": 1, \"script\": \"recent_window.py\", \"state\": \"paused\", \"total_frames\": 4, \"truncated\": false}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"bounded stack summary collected\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 12, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000013\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 2, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 1, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 5, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 13, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000014\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"get_frame_locals\", \"payload\": {\"action\": {\"action_id\": \"action-000000005\", \"arguments\": {\"frame_id\": 0, \"pause_generation\": 1}, \"name\": \"get_frame_locals\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 14, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000015\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"get_frame_locals\", \"payload\": {\"observation\": {\"action_id\": \"action-000000005\", \"name\": \"get_frame_locals\", \"observation_id\": \"observation-000000005\", \"payload\": {\"dispatch_reason\": \"ok\", \"frame_id\": 0, \"locals\": [{\"name\": \"size\", \"value\": {\"entries\": [], \"items\": [], \"kind\": \"int\", \"size\": 3, \"special\": null, \"truncated\": false, \"type\": \"builtins.int\", \"value\": 4}}, {\"name\": \"values\", \"value\": {\"entries\": [], \"items\": [{\"entries\": [], \"items\": [], \"kind\": \"int\", \"size\": 4, \"special\": null, \"truncated\": false, \"type\": \"builtins.int\", \"value\": 10}, {\"entries\": [], \"items\": [], \"kind\": \"int\", \"size\": 5, \"special\": null, \"truncated\": false, \"type\": \"builtins.int\", \"value\": 20}, {\"entries\": [], \"items\": [], \"kind\": \"int\", \"size\": 5, \"special\": null, \"truncated\": false, \"type\": \"builtins.int\", \"value\": 30}, {\"entries\": [], \"items\": [], \"kind\": \"int\", \"size\": 6, \"special\": null, \"truncated\": false, \"type\": \"builtins.int\", \"value\": 40}], \"kind\": \"list\", \"size\": 4, \"special\": null, \"truncated\": false, \"type\": \"builtins.list\", \"value\": null}}], \"pause_generation\": 1, \"state\": \"paused\", \"total_count\": 2, \"truncated\": false}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"bounded frame locals collected\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 15, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000016\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 3, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 2, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 6, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 16, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000017\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"next_pdb_session\", \"payload\": {\"action\": {\"action_id\": \"action-000000006\", \"arguments\": {}, \"name\": \"next_pdb_session\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 17, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000018\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"next_pdb_session\", \"payload\": {\"observation\": {\"action_id\": \"action-000000006\", \"name\": \"next_pdb_session\", \"observation_id\": \"observation-000000006\", \"payload\": {\"dispatch_reason\": \"ok\", \"function\": \"recent_window\", \"line\": 3, \"script\": \"recent_window.py\", \"state\": \"paused\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"debugger execution control completed: next_pdb_session\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 18, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000019\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 3, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 7, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 19, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000020\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"get_stack_summary\", \"payload\": {\"action\": {\"action_id\": \"action-000000007\", \"arguments\": {}, \"name\": \"get_stack_summary\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 20, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000021\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"get_stack_summary\", \"payload\": {\"observation\": {\"action_id\": \"action-000000007\", \"name\": \"get_stack_summary\", \"observation_id\": \"observation-000000007\", \"payload\": {\"dispatch_reason\": \"ok\", \"frames\": [{\"frame_id\": 0, \"function\": \"recent_window\", \"is_current\": true, \"line\": 3, \"script\": \"recent_window.py\"}, {\"frame_id\": 1, \"function\": \"test_full_length_window_includes_every_value\", \"is_current\": false, \"line\": 6, \"script\": \"tests/test_recent_window.py\"}, {\"frame_id\": 2, \"function\": \"_r5_failing_execution\", \"is_current\": false, \"line\": 34, \"script\": \"recent_window.py\"}, {\"frame_id\": 3, \"function\": \"<module>\", \"is_current\": false, \"line\": 39, \"script\": \"recent_window.py\"}], \"pause_generation\": 2, \"script\": \"recent_window.py\", \"state\": \"paused\", \"total_frames\": 4, \"truncated\": false}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"bounded stack summary collected\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 21, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000022\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 0, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"transition\", \"model_call_index\": 8, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 22, \"state\": \"RuntimeEvidence\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000023\", \"event_type\": \"transition\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"state_transition\", \"payload\": {\"reason\": \"diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows.\", \"source_state\": \"RuntimeEvidence\", \"target_state\": \"Patch\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 23, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000024\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 1, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 0, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 9, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 24, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000025\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"apply_patch\", \"payload\": {\"action\": {\"action_id\": \"action-000000009\", \"arguments\": {\"patch\": \"--- a/recent_window.py\\n+++ b/recent_window.py\\n@@ -1,3 +1,4 @@\\n+\\n def recent_window(values: list[int], size: int) -> list[int]:\\n     sequence_length = len(values)\\n     requested_size = size\\n\"}, \"name\": \"apply_patch\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 25, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000026\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"apply_patch\", \"payload\": {\"observation\": {\"action_id\": \"action-000000009\", \"name\": \"apply_patch\", \"observation_id\": \"observation-000000009\", \"payload\": {\"after_sha256\": {\"recent_window.py\": \"44fb824ca819cfcb84c3287a1bfcf903ad17935c5248b75863aa5b7bc2c54a51\"}, \"applied\": true, \"changed_files\": [\"recent_window.py\"], \"dispatch_reason\": \"ok\", \"hunk_adjustments\": [], \"hunk_count\": 1, \"patch_sha256\": \"03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517\", \"reverted_previous\": false, \"verifier_feedback\": {\"candidate_sha256\": \"03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517\", \"f2p_passed\": 0, \"f2p_total\": 1, \"failures\": [{\"kind\": \"f2p\", \"production_exception\": null, \"status\": \"FAIL\"}], \"full_suite\": \"FAIL\", \"outcome\": \"NO_OP\", \"p2p_passed\": 2, \"p2p_total\": 2, \"status\": \"COMPLETED\", \"stop_reason\": \"completed\", \"syntax\": true}}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"candidate patch applied to the disposable workspace\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 26, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000027\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 2, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 1, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": \"action\", \"model_call_index\": 10, \"stop_reason\": null}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 27, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000028\", \"event_type\": \"action\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"apply_patch\", \"payload\": {\"action\": {\"action_id\": \"action-000000010\", \"arguments\": {\"patch\": \"--- a/recent_window.py\\n+++ b/recent_window.py\\n@@ -1,3 +1,4 @@\\n+\\n def recent_window(values: list[int], size: int) -> list[int]:\\n     sequence_length = len(values)\\n     requested_size = size\\n@@ -7,6 +8,6 @@\\n     start_index = max(sequence_length - requested_size, 0)\\n     end_index = sequence_length\\n     calculated_indexes = list(\\n-        range(start_index, end_index - (1 if requested_size == sequence_length else 0))\\n+        range(start_index, end_index - (1 if requested_size != sequence_length else 0))\\n     )\\n     return [values[index] for index in calculated_indexes]\\n\"}, \"name\": \"apply_patch\", \"run_id\": \"r5-curated-off-by-one-002\", \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\"}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 28, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000029\", \"event_type\": \"observation\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"apply_patch\", \"payload\": {\"observation\": {\"action_id\": \"action-000000010\", \"name\": \"apply_patch\", \"observation_id\": \"observation-000000010\", \"payload\": {\"after_sha256\": {\"recent_window.py\": \"5fc8e57fb0e4328be31ae9f13bbf36202d11faeee89fd59e4817cf12bbb532cf\"}, \"applied\": true, \"changed_files\": [\"recent_window.py\"], \"dispatch_reason\": \"ok\", \"hunk_adjustments\": [], \"hunk_count\": 2, \"patch_sha256\": \"49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c\", \"reverted_previous\": true, \"verifier_feedback\": {\"candidate_sha256\": \"49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c\", \"f2p_passed\": 1, \"f2p_total\": 1, \"failures\": [{\"kind\": \"p2p\", \"production_exception\": null, \"status\": \"FAIL\"}], \"full_suite\": \"FAIL\", \"outcome\": \"BREAKING_RESOLVED\", \"p2p_passed\": 1, \"p2p_total\": 2, \"status\": \"COMPLETED\", \"stop_reason\": \"completed\", \"syntax\": true}}, \"run_id\": \"r5-curated-off-by-one-002\", \"status\": \"ok\", \"summary\": \"candidate patch applied to the disposable workspace\", \"task_id\": \"curated-off-by-one-002\", \"truncated\": false}}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 29, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000030\", \"event_type\": \"decision\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"controller_decision\", \"payload\": {\"budget_after\": {\"patch_attempts\": 2, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"budget_before\": {\"patch_attempts\": 2, \"pdb_observations\": 4, \"source_observations\": 0, \"test_runs\": 1}, \"directive_kind\": null, \"model_call_index\": 11, \"stop_reason\": \"model_error\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 30, \"state\": \"Patch\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000031\", \"event_type\": \"transition\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"state_transition\", \"payload\": {\"reason\": \"model_error\", \"source_state\": \"Patch\", \"target_state\": \"Failed\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 31, \"state\": \"Failed\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}\n{\"event_id\": \"event-000000032\", \"event_type\": \"final\", \"metadata\": {\"cost\": null, \"duration_ms\": 121000, \"model\": \"Qwen/Qwen2.5-Coder-7B-Instruct+c03e6d3+r6-tuned-R5\", \"tokens\": null, \"tool_version\": \"debugger-interaction-v2-r5\"}, \"name\": \"run_finished\", \"payload\": {\"final_state\": \"Failed\", \"model_calls\": 12, \"stop_reason\": \"model_error\"}, \"run_id\": \"r5-curated-off-by-one-002\", \"schema_version\": \"1.0\", \"sequence\": 32, \"state\": \"Failed\", \"task_id\": \"curated-off-by-one-002\", \"timestamp\": \"2026-08-13T02:59:44.626002+00:00\"}",
+  "verifier": {
+    "executed": true,
+    "candidate_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+    "status": "COMPLETED",
+    "outcome": "BREAKING_RESOLVED",
+    "stop_reason": "completed",
+    "f2p_records": [
+      {
+        "node_id": "tests/test_recent_window.py::test_full_length_window_includes_every_value",
+        "status": "PASS"
+      }
+    ],
+    "p2p_records": [
+      {
+        "node_id": "tests/test_recent_window.py::test_smaller_window_returns_recent_values",
+        "status": "FAIL"
+      },
+      {
+        "node_id": "tests/test_recent_window.py::test_zero_window_is_empty",
+        "status": "PASS"
+      }
+    ],
+    "f2p_total": 1,
+    "f2p_passed": 1,
+    "p2p_total": 2,
+    "p2p_passed": 1,
+    "full_suite_consistent": false,
+    "syntax_passed": true,
+    "patch_applied": true,
+    "canonical_fixture_unchanged": true,
+    "workspace_lifecycle": "CLEANED"
+  },
+  "candidate_patch": "--- a/recent_window.py\n+++ b/recent_window.py\n@@ -1,3 +1,4 @@\n+\n def recent_window(values: list[int], size: int) -> list[int]:\n     sequence_length = len(values)\n     requested_size = size\n@@ -7,6 +8,6 @@\n     start_index = max(sequence_length - requested_size, 0)\n     end_index = sequence_length\n     calculated_indexes = list(\n-        range(start_index, end_index - (1 if requested_size == sequence_length else 0))\n+        range(start_index, end_index - (1 if requested_size != sequence_length else 0))\n     )\n     return [values[index] for index in calculated_indexes]\n",
+  "patch_identity": {
+    "note": "A=raw_model_response, B=model_patch_raw (bridge-parsed diff), C=model_patch_serialization_normalized (metadata-only hunk-count normalization). PatchManager and EvaluationVerifier receive C only.",
+    "attempts": [
+      {
+        "model_call_index": 9,
+        "raw_model_response_sha256": "eafd6cb1f27136cf88d8d116e87a028b2e6c106e2fad50b656f7dc4779db884e",
+        "model_patch_raw_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+        "model_patch_serialization_normalized_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+        "python_ast_sha256": "be2216765007215811e7a9c7f1bcd3872ba53c8d7bc2f26b88f5a61a71bf4a82",
+        "normalization": {
+          "model_patch_raw_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+          "model_patch_serialization_normalized_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+          "changed_headers": [],
+          "header_fields_changed": 0,
+          "semantic_body_fingerprint_raw": "262d47b402bf1e1641f6322f057d1853e90c3143fec76f28555de6415ee7b590",
+          "semantic_body_fingerprint_normalized": "262d47b402bf1e1641f6322f057d1853e90c3143fec76f28555de6415ee7b590",
+          "fingerprint_equal": true,
+          "paths_and_starts_unchanged": true
+        },
+        "fence_unwrap": null,
+        "representation": "whole_file",
+        "whole_file": {
+          "path": "recent_window.py",
+          "model_whole_file_sha256": "d5dc537f371dd1f7624b418c891f2745138a55b6d3c926ccbd03661c222708e3",
+          "python_ast_sha256": "be2216765007215811e7a9c7f1bcd3872ba53c8d7bc2f26b88f5a61a71bf4a82",
+          "generated_diff_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+          "content_fence_unwrap": null,
+          "trailing_module_unwrap": null,
+          "original_import_restore": null
+        }
+      },
+      {
+        "model_call_index": 10,
+        "raw_model_response_sha256": "2ff606639fced3df9f005405f6a09bbdce612a21378f7a7925e692c0c009e2f4",
+        "model_patch_raw_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+        "model_patch_serialization_normalized_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+        "python_ast_sha256": "0b514cc9631368203f1e5222ab50bbf5dde2c8de4627a83b2fe0e84bfb395b93",
+        "normalization": {
+          "model_patch_raw_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+          "model_patch_serialization_normalized_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+          "changed_headers": [],
+          "header_fields_changed": 0,
+          "semantic_body_fingerprint_raw": "5f5b87324bebf9da7d7bd80644e129da2eea5581f2c1005608d9bc60c38d6c34",
+          "semantic_body_fingerprint_normalized": "5f5b87324bebf9da7d7bd80644e129da2eea5581f2c1005608d9bc60c38d6c34",
+          "fingerprint_equal": true,
+          "paths_and_starts_unchanged": true
+        },
+        "fence_unwrap": null,
+        "representation": "whole_file",
+        "whole_file": {
+          "path": "recent_window.py",
+          "model_whole_file_sha256": "e89a2ae454ec0364d1a6703a77ad93c1d0e540d35b7a751fefe8eaab68f8faf6",
+          "python_ast_sha256": "0b514cc9631368203f1e5222ab50bbf5dde2c8de4627a83b2fe0e84bfb395b93",
+          "generated_diff_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+          "content_fence_unwrap": null,
+          "trailing_module_unwrap": null,
+          "original_import_restore": null
+        }
+      }
+    ],
+    "final_candidate_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c"
+  },
+  "serialization_normalization": {
+    "attempts": [
+      {
+        "model_call_index": 9,
+        "raw_model_response_sha256": "eafd6cb1f27136cf88d8d116e87a028b2e6c106e2fad50b656f7dc4779db884e",
+        "model_patch_raw_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+        "model_patch_serialization_normalized_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+        "python_ast_sha256": "be2216765007215811e7a9c7f1bcd3872ba53c8d7bc2f26b88f5a61a71bf4a82",
+        "normalization": {
+          "model_patch_raw_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+          "model_patch_serialization_normalized_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+          "changed_headers": [],
+          "header_fields_changed": 0,
+          "semantic_body_fingerprint_raw": "262d47b402bf1e1641f6322f057d1853e90c3143fec76f28555de6415ee7b590",
+          "semantic_body_fingerprint_normalized": "262d47b402bf1e1641f6322f057d1853e90c3143fec76f28555de6415ee7b590",
+          "fingerprint_equal": true,
+          "paths_and_starts_unchanged": true
+        },
+        "fence_unwrap": null,
+        "representation": "whole_file",
+        "whole_file": {
+          "path": "recent_window.py",
+          "model_whole_file_sha256": "d5dc537f371dd1f7624b418c891f2745138a55b6d3c926ccbd03661c222708e3",
+          "python_ast_sha256": "be2216765007215811e7a9c7f1bcd3872ba53c8d7bc2f26b88f5a61a71bf4a82",
+          "generated_diff_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517",
+          "content_fence_unwrap": null,
+          "trailing_module_unwrap": null,
+          "original_import_restore": null
+        }
+      },
+      {
+        "model_call_index": 10,
+        "raw_model_response_sha256": "2ff606639fced3df9f005405f6a09bbdce612a21378f7a7925e692c0c009e2f4",
+        "model_patch_raw_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+        "model_patch_serialization_normalized_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+        "python_ast_sha256": "0b514cc9631368203f1e5222ab50bbf5dde2c8de4627a83b2fe0e84bfb395b93",
+        "normalization": {
+          "model_patch_raw_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+          "model_patch_serialization_normalized_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+          "changed_headers": [],
+          "header_fields_changed": 0,
+          "semantic_body_fingerprint_raw": "5f5b87324bebf9da7d7bd80644e129da2eea5581f2c1005608d9bc60c38d6c34",
+          "semantic_body_fingerprint_normalized": "5f5b87324bebf9da7d7bd80644e129da2eea5581f2c1005608d9bc60c38d6c34",
+          "fingerprint_equal": true,
+          "paths_and_starts_unchanged": true
+        },
+        "fence_unwrap": null,
+        "representation": "whole_file",
+        "whole_file": {
+          "path": "recent_window.py",
+          "model_whole_file_sha256": "e89a2ae454ec0364d1a6703a77ad93c1d0e540d35b7a751fefe8eaab68f8faf6",
+          "python_ast_sha256": "0b514cc9631368203f1e5222ab50bbf5dde2c8de4627a83b2fe0e84bfb395b93",
+          "generated_diff_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+          "content_fence_unwrap": null,
+          "trailing_module_unwrap": null,
+          "original_import_restore": null
+        }
+      }
+    ],
+    "verifier_input_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+    "patchmanager_input_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c",
+    "note": "normalization output SHA == PatchManager input SHA == verifier input SHA == final_candidate_sha256"
+  },
+  "diagnosis_provenance": {
+    "model_call_index": 8,
+    "prior_observation_id": "observation-000000007",
+    "rendered_observation_sha256": "f53b12a91424afca46e27fb65d2b79d1da9ac9387a7afee94786e77c1ea6c7f7",
+    "G1": 1,
+    "G2": 2,
+    "diagnosis_text_sha256": "95555b0dfa02f58f9e5dd6a2096a896142ebce7af15f2eae24ef8c0d0912e9dd"
+  },
+  "runtime_slice": {
+    "reproduction": "[run_reproduction] status=ok\n  phase=baseline exit_code=1 passed=False failure_reproduced=True\n  Real failure diagnostic (sanitized, from the reproduction run):\n    baseline behavioral check failed after executing the target behavior",
+    "stack_G1": "[get_stack_summary] status=ok\n  pause_generation=1\n  * frame_id=0 recent_window line=2 script=recent_window.py\n  (stack rendering filtered to the target production region; 1 frame(s) shown of 4 raw)",
+    "inspection": "[get_frame_locals] status=ok\n  size = 4\n  values = <builtins.list len=4>",
+    "step": "[next_pdb_session] status=ok\n  Paused at line 3 in 'recent_window'",
+    "stack_G2": "[get_stack_summary] status=ok\n  pause_generation=2\n  * frame_id=0 recent_window line=3 script=recent_window.py\n  (stack rendering filtered to the target production region; 1 frame(s) shown of 4 raw)"
+  },
+  "verifier_feedback_history": [
+    {
+      "status": "COMPLETED",
+      "outcome": "NO_OP",
+      "stop_reason": "completed",
+      "f2p_total": 1,
+      "f2p_passed": 0,
+      "p2p_total": 2,
+      "p2p_passed": 2,
+      "full_suite": "FAIL",
+      "syntax": true,
+      "failures": [
+        {
+          "kind": "f2p",
+          "status": "FAIL",
+          "production_exception": null
+        }
+      ],
+      "candidate_sha256": "03613578a879b06f6304222b5cf71c4cd4bef22bd33a540a2ca0f83a3d6e7517"
+    },
+    {
+      "status": "COMPLETED",
+      "outcome": "BREAKING_RESOLVED",
+      "stop_reason": "completed",
+      "f2p_total": 1,
+      "f2p_passed": 1,
+      "p2p_total": 2,
+      "p2p_passed": 1,
+      "full_suite": "FAIL",
+      "syntax": true,
+      "failures": [
+        {
+          "kind": "p2p",
+          "status": "FAIL",
+          "production_exception": null
+        }
+      ],
+      "candidate_sha256": "49482d6fd849eeaca7e3e034143a7096eef056d3f9635cd2674aceb81970095c"
+    }
+  ],
+  "budget_limits": {
+    "max_patch_attempts": 4,
+    "max_test_runs": 5,
+    "max_pdb_observations": 8
+  },
+  "gate_results": {
+    "gate_chain": {
+      "passed": true,
+      "reason": "model authored break->stack G1->locals/print G1->step/next PAUSED->stack G2>G1->diagnosis, all OK, original-region, provenance-bound",
+      "terminal_path": false,
+      "production_exception_path": false,
+      "step_outside_region": false,
+      "observation_ids": {
+        "break": "observation-000000003",
+        "stack_G1": "observation-000000004",
+        "inspection": "observation-000000005",
+        "step": "observation-000000006",
+        "stack_G2": "observation-000000007"
+      },
+      "G1": 1,
+      "G2": 2,
+      "diagnosis_text": "diagnosis sequence_window returns the correct value for the boundary window but not for ordinary windows."
+    },
+    "gate_patch": {
+      "passed": false,
+      "reason": "verifier outcome not RESOLVED",
+      "outcome": "BREAKING_RESOLVED"
+    }
+  },
+  "interface_info": {
+    "script_path": "recent_window.py",
+    "eligible_lines": [
+      2
+    ],
+    "system_prompt_sha256": "24bbf27e71565d910b17119c38ac5102a861cfc5dddbfb0891ccd27b45c379dc",
+    "system_prompt_template_sha256": "6e2d1c07e57babab7781c6d707d60b04f4165f80d05b9c5411bbf9e4df87b6c0",
+    "task_description": "Title: Return the complete recent window\nDescription: A deterministic sequence-window helper should return the requested recent values at the exact boundary as well as for ordinary windows."
+  },
+  "cleanup": {
+    "release_pdb": [],
+    "workspace_cleanup": "cleaned"
+  },
+  "tool_errors": [],
+  "runtime": {
+    "started_at": "2026-08-13T02:57:39.093991+00:00",
+    "controller_duration_ms": 121000,
+    "total_duration_ms": 139187
+  },
+  "claims_boundary": "R5 generalized debugger-informed patch treatment.  R5 PASS = chain A-F (original-region, provenance-bound; the R5.9 production-exception path truthfully reports G2=None when the production frame unwound during a real exception/failure and never claims an original-region G2) + exact diagnosis retained into bounded PATCH + model B diff applied via real PatchManager + independent EvaluationVerifier COMPLETED/RESOLVED with all task F2P/P2P PASS + full-suite consistency + syntax + canonical unchanged + workspaces cleaned + zero hidden-test leakage in every actual prompt (sanitized diagnostics + region-filtered stacks + fail-closed actual-prompt audit).  Administrative PATCH->VALIDATE->DONE closeout is harness bookkeeping, not model capability."
+}

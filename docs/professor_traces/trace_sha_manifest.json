@@ -1,0 +1,16 @@
+{
+  "schema_version": "professor_trace_sha_manifest_v1",
+  "generated_from_source_commit": "4610785713832daaba6aa133374506a2d200391a",
+  "traces": {
+    "validation:quixbugs-depth-first-search": "021ca2fee866b0bb83303924a3dcf5574e9f358c5953924df23e424f1ed11bf8",
+    "validation:quixbugs-find-in-sorted": "932fb38d1679de74438ef0d4cc3ce4ab909d94c216818c4beb82e69d983937c3",
+    "validation:quixbugs-flatten": "1993bf0eac8ba17be9ba151ca50c5d2e7e8e8c922212f7a671fd2d3f356fc67f",
+    "validation:quixbugs-kth": "a555bd85600e7bfbdbb6746985a96e2df543e37bfdcab09d2a0442281c7fc3f4",
+    "validation:quixbugs-quicksort": "2f5fcd75de595d893d3e567fa5209656dba132979600d4698c24e5329ecf6d75",
+    "validation:quixbugs-reverse-linked-list": "08fcd01caf0fee353896020e532689e017f6ffa58f34926fe966371dc14f5366",
+    "validation:quixbugs-rpn-eval": "56ce026f35d86ba87c47a796aa7582ecde2d73b5a310f60a70bc06a7176836b5",
+    "validation:quixbugs-shortest-path-length": "cc25e48382f5e150611094391c37a34f24f2ea14d16f4f575c251f3e48417d93",
+    "final_holdout_partial:curated-none-handling-001": "18cbe4183c41a5e441a8ecd43fd5bc6f6a9ce00d128fa3834eb451ab3d889459",
+    "final_holdout_partial:curated-off-by-one-002": "15e231f37ee7f9b1c744dd4f14ad642773d34ed8aed5c7e682cb7507ba076e3c"
+  }
+}

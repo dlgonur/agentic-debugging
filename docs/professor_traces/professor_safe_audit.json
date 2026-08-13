@@ -1,0 +1,70 @@
+{
+  "schema_version": "professor_trace_leakage_audit_v1",
+  "generated_from_source_commit": "4610785713832daaba6aa133374506a2d200391a",
+  "audit_authority": "experiments.debugger_interaction_v2_r5.anti_leakage (accepted actual-output scanner; fail closed)",
+  "scanned_documents": 10,
+  "total_findings": 0,
+  "passed": true,
+  "per_document": {
+    "validation:quixbugs-depth-first-search": {
+      "task_id": "quixbugs-depth-first-search",
+      "scanned_chars": 6921,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-find-in-sorted": {
+      "task_id": "quixbugs-find-in-sorted",
+      "scanned_chars": 7051,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-flatten": {
+      "task_id": "quixbugs-flatten",
+      "scanned_chars": 6664,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-kth": {
+      "task_id": "quixbugs-kth",
+      "scanned_chars": 6776,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-quicksort": {
+      "task_id": "quixbugs-quicksort",
+      "scanned_chars": 6923,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-reverse-linked-list": {
+      "task_id": "quixbugs-reverse-linked-list",
+      "scanned_chars": 6967,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-rpn-eval": {
+      "task_id": "quixbugs-rpn-eval",
+      "scanned_chars": 6959,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "validation:quixbugs-shortest-path-length": {
+      "task_id": "quixbugs-shortest-path-length",
+      "scanned_chars": 7637,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "final_holdout_partial:curated-none-handling-001": {
+      "task_id": "curated-none-handling-001",
+      "scanned_chars": 6524,
+      "leakage_findings": [],
+      "passed": true
+    },
+    "final_holdout_partial:curated-off-by-one-002": {
+      "task_id": "curated-off-by-one-002",
+      "scanned_chars": 7621,
+      "leakage_findings": [],
+      "passed": true
+    }
+  }
+}
