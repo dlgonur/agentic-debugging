@@ -20,9 +20,11 @@ Repository-level status: root `README.md`; roadmap `TODO.md`. The historical
 
 ## architecture/
 
-Accepted architecture and infrastructure designs: MVP implementation plan,
-PDB trajectory post-mortem integration, verifier forwarder/cache repair,
-root-cause explanation metric, preference exporter, repository RAG.
+Accepted architecture and infrastructure designs. The current active application
+architecture is `architecture/local-application-v1.md`; existing records include
+the MVP implementation plan, PDB trajectory post-mortem integration, verifier
+forwarder/cache repair, root-cause explanation metric, preference exporter, and
+repository RAG.
 
 ## evaluation/
 

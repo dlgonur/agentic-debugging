@@ -2,6 +2,17 @@
 
 ## Durum notu
 
+**2026-08-13 Local Application V1 — ACTIVE / IMPLEMENTATION NOT STARTED.**  
+Authoritative architecture and phased plan: `docs/architecture/local-application-v1.md`.  
+Current next milestone: **Task 1 — Establish application contracts**. The accepted V1
+roadmap contains eight ordered main tasks through configured command-model execution
+and hardening. Existing R1-R6 scientific results, frozen evidence, and the sustained
+local-GPU hardware stop remain unchanged; this application phase does not authorize
+training, final-holdout reruns, or sustained local GPU campaigns.
+
+- [ ] **Local Application V1** — execute the accepted phased roadmap in
+  `docs/architecture/local-application-v1.md` (current milestone: Task 1 of 8).
+
 **2026-08-13 current status (R1-R6 closeout):** The 2026-08-11 S9
 bounded-negative closeout is **historical** and is preserved verbatim at
 `docs/archive/status/project-closeout-2026-08-11.md`. The R1-R6 phase
