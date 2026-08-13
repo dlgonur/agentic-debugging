@@ -31,7 +31,7 @@ Rules:
 - [x] 1.1 Research debugging, automated debugging, fault localization, and program repair. (Bounded reviewed survey accepted at `3c23b6e`; unresolved claims are excluded rather than asserted.)
 - [x] 1.2 Study LLM-based debugging work. (Bounded reviewed synthesis accepted at `3c23b6e`; additional frontier reading remains optional follow-up.)
 - [ ] 1.3 Study agentic debugging, tool-using agents, and multi-agent debugging.
-- [x] 1.4 Compare traditional debugging, LLM-based debugging, and agentic debugging. (`docs/DEBUGGING_APPROACH_COMPARISON_V1.md`, accepted at `3c23b6e`.)
+- [x] 1.4 Compare traditional debugging, LLM-based debugging, and agentic debugging. (`docs/research/debugging-approaches.md`, accepted at `3c23b6e`.)
 - [x] 1.5 Study SWE-Agent, OpenHands, AutoCodeRover, Agentless, and ChatDBG. (All five have dedicated reviewed notes; capability matrix v1 is tracked. This aligns the parent with completed subtasks 1.5.1–1.5.6 and instructor item 5.)
 
 ### 1.1 Subtasks / Log
@@ -59,7 +59,7 @@ Rules:
 - [x] 1.2.1 Read LDB / Debug Like a Human.
 - [ ] 1.2.2 Read Self-Debugging.
 - [ ] 1.2.3 Read DebugBench.
-- [x] 1.2.4 Summarize how LLM debugging differs from static code repair. (`docs/LLM_BASED_DEBUGGING_LITERATURE_REVIEW_V1.md` §5 records the evidence acquisition, hypothesis revision, causal target, tool, validation, and data distinctions.)
+- [x] 1.2.4 Summarize how LLM debugging differs from static code repair. (`docs/research/llm-debugging.md` §5 records the evidence acquisition, hypothesis revision, causal target, tool, validation, and data distinctions.)
 
 ### 1.3 Subtasks / Log
 
@@ -126,7 +126,7 @@ Rules:
 
 ## 4. Phase 4 — RAG and Agent Tools
 
-- [x] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages. (Completed 2026-08-06 — deterministic repository-native lexical RAG v1, `agentic_debugger/rag/`: fixture-scoped default + declared corpus-root/repo mode; source/test/issue/failure documents; safe task/issue projection with unit-tested oracle exclusion; explicit exclusion rules; `repository-index-v1`/`retrieval-result-v1` strict artifacts; revision binding; documented bounds; fail-closed. Infrastructure completion only; no RAG performance claim. See `docs/REPOSITORY_RAG_V1.md`, `docs/RAG_COMPARISON_DECISION_V2.md`.)
+- [x] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages. (Completed 2026-08-06 — deterministic repository-native lexical RAG v1, `agentic_debugger/rag/`: fixture-scoped default + declared corpus-root/repo mode; source/test/issue/failure documents; safe task/issue projection with unit-tested oracle exclusion; explicit exclusion rules; `repository-index-v1`/`retrieval-result-v1` strict artifacts; revision binding; documented bounds; fail-closed. Infrastructure completion only; no RAG performance claim. See `docs/architecture/repository-rag.md`, `docs/evaluation/rag-comparison.md`.)
 - [ ] 4.2 Combine fine-tuned model with RAG. (Partial 2026-08-06 — optional `rag_context` injection ready at the demo/model-adapter and `LiveModelAdapter` boundaries (additive; default request/case byte-identity proven; 20 KB public-request bound enforced pre-transport). Real fine-tuned generation import + verified combination remains open.)
 - [x] 4.3 Develop file-read, code-search, test-run, and patch-apply tools.
 - [x] 4.4 Create the debugging agent.
@@ -171,9 +171,9 @@ Rules:
 
 ## 5. Phase 5 — Preference Optimization
 
-- [ ] 5.1 Create preference dataset from successful and failed debugging outputs. (Partial 2026-08-06 — exporter v1 infrastructure complete and deterministic demo-scale pairs produced from verifier evidence; production corpus awaits real attempts. See `docs/PREFERENCE_EXPORTER_V1.md`.)
+- [ ] 5.1 Create preference dataset from successful and failed debugging outputs. (Partial 2026-08-06 — exporter v1 infrastructure complete and deterministic demo-scale pairs produced from verifier evidence; production corpus awaits real attempts. See `docs/architecture/preference-export.md`.)
 - [ ] 5.2 Apply DPO or an appropriate RLHF method.
-- [ ] 5.3 Compare base model, fine-tuned model, RAG-supported model, and agentic system. (Partial 2026-08-06 — comparison harness v1 complete (imported `generation-artifact-v1` + native agentic conditions; normalized `comparison-v1` metrics; JSON/CSV/Markdown; aggregates; delta vs baseline; see `docs/COMPARISON_HARNESS_V1.md`); real base-versus-tuned comparison awaits real imported generations. Synthetic `offline-deterministic-demo` identities are not model performance.)
+- [ ] 5.3 Compare base model, fine-tuned model, RAG-supported model, and agentic system. (Partial 2026-08-06 — comparison harness v1 complete (imported `generation-artifact-v1` + native agentic conditions; normalized `comparison-v1` metrics; JSON/CSV/Markdown; aggregates; delta vs baseline; see `docs/evaluation/comparison-harness.md`); real base-versus-tuned comparison awaits real imported generations. Synthetic `offline-deterministic-demo` identities are not model performance.)
 
 ### 5.x Subtasks / Log
 
@@ -195,7 +195,7 @@ Rules:
 
 - [x] 6.1.1 Start with PDB only.
 - [x] 6.1.2 Define PDB command schema.
-- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı ve main history'ye entegre: `f7ba129`..`e92634e`; bounded, side-effect-safe `run_post_mortem` protocol/worker/session operation; 107 unique focused tests. 2026-08-07 follow-up: existing `get_failure_trace` action üzerinden PDB-observation budget'ına bağlı ToolResult/controller Observation/RunEvent/replay/semantic-projection yolu ve cleanup kanıtı eklendi; bkz. `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`.)
+- [x] 6.1.3 Implement post-mortem PDB entry for failing Python script/test. (Tamamlandı ve main history'ye entegre: `f7ba129`..`e92634e`; bounded, side-effect-safe `run_post_mortem` protocol/worker/session operation; 107 unique focused tests. 2026-08-07 follow-up: existing `get_failure_trace` action üzerinden PDB-observation budget'ına bağlı ToolResult/controller Observation/RunEvent/replay/semantic-projection yolu ve cleanup kanıtı eklendi; bkz. `docs/architecture/pdb-trajectory.md`.)
 - [x] 6.2.1 Serialize debugger outputs into model-readable structured text.
 - [x] 6.3.1 Support stack inspection.
 - [x] 6.3.2 Support local variable inspection.
@@ -208,22 +208,22 @@ Rules:
 
 ## 7. Phase 7 — Evaluation and Final Report
 
-- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Metrics are defined — see 7.1.1-7.1.5 — and the comparison harness now derives them (`comparison-v1`: failure categories, aggregates, delta, cost/tokens, retrieval, replay, cleanup; see `docs/COMPARISON_HARNESS_V1.md`), but no real model has been evaluated against an external dataset yet, so there is no cross-dataset model result to report against these metrics.)
+- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Metrics are defined — see 7.1.1-7.1.5 — and the comparison harness now derives them (`comparison-v1`: failure categories, aggregates, delta, cost/tokens, retrieval, replay, cleanup; see `docs/evaluation/comparison-harness.md`), but no real model has been evaluated against an external dataset yet, so there is no cross-dataset model result to report against these metrics.)
 - [x] 7.2 Prepare a working agentic debugging demo and technical report. (Demo Guide v1 and Final Technical Report v1 completed and accepted 2026-07-31 — infrastructure/evaluation-platform demo and report, explicitly not a model-debugging-performance demo; see below.)
 
 ### 7.x Subtasks / Log
 
 - [x] 7.1.1 Define localization metric (`CORRECT_TARGET_SYMBOL` and related localization outcomes).
-- [x] 7.1.2 Define root-cause explanation metric. (Completed 2026-08-07 — strict `root-cause-assessment-v1` / `root-cause-rubric-v1`; three explicit causal dimensions, contradiction and evidence binding, derived closed outcomes, content identity, bounds/tamper rejection, explicit missingness and denominators, additive validated `comparison-v1` provenance integration with aggregates/deltas/CSV. No lexical-oracle scoring and no live-model performance claim. See `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`.)
+- [x] 7.1.2 Define root-cause explanation metric. (Completed 2026-08-07 — strict `root-cause-assessment-v1` / `root-cause-rubric-v1`; three explicit causal dimensions, contradiction and evidence binding, derived closed outcomes, content identity, bounds/tamper rejection, explicit missingness and denominators, additive validated `comparison-v1` provenance integration with aggregates/deltas/CSV. No lexical-oracle scoring and no live-model performance claim. See `docs/architecture/root-cause-metric.md`.)
 - [x] 7.1.3 Define patch correctness metric (verifier outcome, fail-to-pass, pass-to-pass, and full-suite consistency).
 - [x] 7.1.4 Define cost/runtime metric (transport timing and provider-reported usage/cost metadata with qualification).
 - [x] 7.1.5 Define debugger-action metric (PDB openings, observations, action counts, and policy restrictions).
 - [x] 7.1.6 Comparison-harness metric derivation v1 (2026-08-06): normalized failure-category vocabulary, per-condition aggregates, baseline delta, CSV projection.
 - [x] 7.2.1 Prepare demo scenario (Task 9 deterministic five-task, two-policy demonstration).
-- [x] 7.2.2 Prepare final technical report outline. (Superseded by the completed Final Technical Report v1 — `docs/FINAL_TECHNICAL_REPORT_V1.md`.)
-- [x] 7.2.3 Model, RAG, Fine-Tuning and DPO Decision Gate v1 — `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`. PROCEED (narrow) on model-access strategy, NO-GO-FOR-NOW on RAG, DEFER on SFT, NO-GO-FOR-NOW on DPO; eight QuixBugs tasks judged sufficient for infrastructure validation only, not model selection, training, or generalization claims.
-- [x] 7.2.4 Final Technical Report v1 — `docs/FINAL_TECHNICAL_REPORT_V1.md`. Documentation-only synthesis of architecture, dataset/provenance, boundaries, BugsInPy/QuixBugs findings, exact results and their limits, and future work.
-- [x] 7.2.5 Demo Guide v1 — `docs/DEMO_GUIDE_V1.md`. Reuses existing entry points only (Task 9 demo, `scripts/quixbugs_live_smoke.py`, `scripts/quixbugs_eight_task_baseline.py`); no parallel demo framework. The Task 9 demo command was re-verified live on this checkout; the QuixBugs WSL entry points were verified by source/CLI inspection only (not re-executed, per instruction not to re-run accepted benchmarks).
+- [x] 7.2.2 Prepare final technical report outline. (Superseded by the completed Final Technical Report v1 — `docs/archive/reports/final-report-v1.md`.)
+- [x] 7.2.3 Model, RAG, Fine-Tuning and DPO Decision Gate v1 — `docs/evaluation/model-rag-sft-dpo.md`. PROCEED (narrow) on model-access strategy, NO-GO-FOR-NOW on RAG, DEFER on SFT, NO-GO-FOR-NOW on DPO; eight QuixBugs tasks judged sufficient for infrastructure validation only, not model selection, training, or generalization claims.
+- [x] 7.2.4 Final Technical Report v1 — `docs/archive/reports/final-report-v1.md`. Documentation-only synthesis of architecture, dataset/provenance, boundaries, BugsInPy/QuixBugs findings, exact results and their limits, and future work.
+- [x] 7.2.5 Demo Guide v1 — `docs/demo/guide.md`. Reuses existing entry points only (Task 9 demo, `scripts/quixbugs_live_smoke.py`, `scripts/quixbugs_eight_task_baseline.py`); no parallel demo framework. The Task 9 demo command was re-verified live on this checkout; the QuixBugs WSL entry points were verified by source/CLI inspection only (not re-executed, per instruction not to re-run accepted benchmarks).
 
 ---
 
@@ -235,7 +235,7 @@ final project status and fresh-reviewer handoff is
 `Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage table S0–S9,
 professor-TODO reconciliation, reproducibility audit, evidence paths, explicit
 non-claims, Git integration instructions). Final deliverables:
-`docs/FINAL_TECHNICAL_REPORT_V2.md` (S8) and `diary/diary.md` (through
+`docs/final-report.md` (S8) and `diary/diary.md` (through
 2026-08-11). No positive real-model dynamic debugger trajectory is claimed;
 TODO #23–25 are CLOSED — BOUNDED NEGATIVE, S4 is CLOSED — PARTIAL /
 COMPUTE-CONSTRAINED (primary correctness NOT_EVALUATED). The historical focus
@@ -251,8 +251,8 @@ entries below are dated 2026-08-02/03 snapshots and are not current state.
   the accepted paired-pilot entry point (`preflight`, `template`, `live` with
   `--preflight-only`). Implementation:
   `scripts/quixbugs_live_runner_v2.py`; operator docs:
-  `docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md` and
-  `docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`; non-authorizing schema
+  `docs/datasets/quixbugs/pilot-v2-runner.md` and
+  `docs/datasets/quixbugs/pilot-v2-authorization.md`; non-authorizing schema
   reference: `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`
   (rejected by the validator; real authorizations belong outside tracked
   source in the ignored `operator/` location).
@@ -633,7 +633,7 @@ Current state (2026-07-31):
   and `agentic_debugger/bugsinpy/{adapter,wsl,wsl_preparation,smoke}.py` are
   tracked and tested.
 - The BugsInPy licensing and redistribution gate v1 is now the current BLOCKED
-  authority (`docs/BUGSINPY_LICENSE_GATE_V1.md` and
+  authority (`docs/datasets/bugsinpy/license-gate.md` and
   `research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json`): dataset verdict BLOCKED,
   formal license status UNKNOWN, redistribution BLOCKED, private local
   research-use UNKNOWN, operational execution gate BLOCKED, all eight task
@@ -681,7 +681,7 @@ Current state (2026-07-31):
 - [historical] 2026-07-31: Model, RAG, Fine-Tuning and DPO Decision Gate v1
   and Final Technical Report and Demo Package v1 were complete and accepted,
   documentation-only, baseline `2236775`. Decision Gate v1
-  (`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) reaffirmed RAG NO-GO-FOR-NOW,
+  (`docs/evaluation/model-rag-sft-dpo.md`) reaffirmed RAG NO-GO-FOR-NOW,
   SFT DEFER, and DPO NO-GO-FOR-NOW from Dataset and Evaluation Decision v1,
   added PROCEED (narrow) on future model-access strategy (one real-dataset
   single-task static-baseline live case as the smallest credible next
@@ -689,8 +689,8 @@ Current state (2026-07-31):
   expansion), and recorded that the eight-task QuixBugs gold baseline is
   sufficient for infrastructure validation only — not model selection,
   training, or generalization claims. Final Technical Report v1
-  (`docs/FINAL_TECHNICAL_REPORT_V1.md`) and Demo Guide v1
-  (`docs/DEMO_GUIDE_V1.md`) synthesized the full project to date; the Demo
+  (`docs/archive/reports/final-report-v1.md`) and Demo Guide v1
+  (`docs/demo/guide.md`) synthesized the full project to date; the Demo
   Guide reused only existing entry points (no parallel demo framework) and its
   Task 9 command was re-verified live on this checkout. No model, RAG,
   training, PDB, or paid API ran during that campaign; the accepted QuixBugs
@@ -827,7 +827,7 @@ does not evaluate a model or PDB.
   the full run; WSL `runs/` directory holds only the persistent `selftest/`
   scaffold, confirming every disposable per-task workspace was removed.
 - Final verdict: **ACCEPT CANDIDATE — EIGHT-TASK BASELINE COMPLETE**. See
-  `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md` and
+  `docs/datasets/quixbugs/baseline-8-task.md` and
   `_ai-review/quixbugs-eight-task-baseline-v1/` for full evidence.
 
 ### Resource-Limited QuixBugs Fallback Real Smoke v1
@@ -875,7 +875,7 @@ instead — infrastructure validation only, no model/PDB/broader campaign.
   P2P 1/1, full suite 2/2, canonical fixture unchanged, workspace `CLEANED`.
   Disposable workspace removed; persistent source/venv/cache retained.
 - Final verdict: **ACCEPT CANDIDATE — REAL SMOKE PASSED**. See
-  `docs/QUIXBUGS_SMOKE_USAGE_V1.md` and
+  `docs/datasets/quixbugs/smoke-guide.md` and
   `_ai-review/quixbugs-resource-limited-smoke-v1/` for full evidence.
 
 ### Model, RAG, Fine-Tuning and DPO Decision Gate v1 + Final Technical Report and Demo Package v1
@@ -885,7 +885,7 @@ Documentation-only campaign, baseline `2236775`, branch
 updates README/TODO/this tracker/diary; adds no runtime source code and
 runs no model, provider, OpenCode, RAG, training, PDB, or paid API.
 
-- `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`: explicit PROCEED/DEFER/
+- `docs/evaluation/model-rag-sft-dpo.md`: explicit PROCEED/DEFER/
   NO-GO-FOR-NOW verdicts for future model-access strategy (PROCEED, narrow),
   repository RAG (NO-GO-FOR-NOW), SFT (DEFER), DPO/preference optimization
   (NO-GO-FOR-NOW), and whether the eight QuixBugs tasks are sufficient for
@@ -894,14 +894,14 @@ runs no model, provider, OpenCode, RAG, training, PDB, or paid API.
   (one QuixBugs task, static-baseline policy, free-tier model, through the
   protocol-1.3 harness) and trigger conditions for each decision, without
   authorizing that experiment to run in this campaign.
-- `docs/FINAL_TECHNICAL_REPORT_V1.md`: a stand-alone technical report
+- `docs/archive/reports/final-report-v1.md`: a stand-alone technical report
   covering the research question, architecture/execution lifecycle,
   dataset/provenance decisions, sandbox/resource/Git/credential/fail-closed
   boundaries, BugsInPy license-block findings, the QuixBugs fallback and
   eight-task methodology, exact results and their explicit non-claims,
   model/RAG/SFT/DPO decisions, limitations, validity threats,
   reproducibility, future work, and final contribution.
-- `docs/DEMO_GUIDE_V1.md`: reuses only existing entry points — the Task 9
+- `docs/demo/guide.md`: reuses only existing entry points — the Task 9
   offline demo (`python -m agentic_debugger.demo`), the one-task QuixBugs
   smoke (`scripts/quixbugs_live_smoke.py`), and the eight-task baseline
   (`scripts/quixbugs_eight_task_baseline.py --skip-excluded`). No parallel
@@ -970,7 +970,7 @@ bounded public GitHub tree metadata and individual license/notice files.
   acquisition while the operational gate is BLOCKED and require both resolved
   private-use/redistribution terms and explicit Onur approval before a future
   gate change.
-- Full report: docs/BUGSINPY_LICENSE_GATE_V1.md. Evidence package:
+- Full report: docs/datasets/bugsinpy/license-gate.md. Evidence package:
   _ai-review/bugsinpy-license-gate-v1/.
 - A bounded material repair closed the validator's fail-open gaps without
   changing any verdict: the offline validator now requires manifest dataset
@@ -1110,10 +1110,10 @@ cache identities agree; the production wrapper and provider gates are
 unchanged. Validation: affected surface 156 passed; post-fix full suite 3733
 passed / 3 skipped; the sole tuple-return collection warning was subsequently
 removed and final collection is 3735 tests without warnings. See
-`docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md`,
-`docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`,
-`docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`, and
-`docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
+`docs/archive/status/repo-reconciliation-2026-08-07.md`,
+`docs/architecture/root-cause-metric.md`,
+`docs/architecture/pdb-trajectory.md`, and
+`docs/architecture/verifier-cache.md`.
 
 2026-08-06 (Friday main-repo completion hardening: ledger time provenance, transport teardown race, known wrapper/transport test failures, post-mortem PDB entry; final bounds-v2 marker-reservation repair and durable Friday documentation wording)
 
@@ -1161,7 +1161,7 @@ and presentation runs from clean `main == origin/main`:
   is deterministic, bounded, JSON-serializable protocol evidence. The
   historical limitation recorded here was closed on 2026-08-07 through the
   existing `get_failure_trace` controller/tool/event/replay path; see
-  `docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. Offline-capable; no provider/network;
+  `docs/architecture/pdb-trajectory.md`. Offline-capable; no provider/network;
   successful exit produces no post-mortem; tracebackless failure fails closed
   through the real worker branch (authoritative `PdbResponse`, success=false,
   empty result, bounded error, lifecycle `failed`); one-execution-per-session
@@ -1253,7 +1253,7 @@ made during the coding-agent build phase.
 This 2026-08-06 diagnosis is historical. The 2026-08-07 follow-up proved the
 shared per-PID compiled-forwarder output path was the actual order-dependent
 cause, repaired it without changing production transport gates, and produced
-a green full suite. See `docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
+a green full suite. See `docs/architecture/verifier-cache.md`.
 
 Earlier history:
 
@@ -1524,7 +1524,7 @@ the selected entry fingerprint and compares it with the authorization-bound
 expected fingerprint before any model process may run. The materialized
 artifacts work with the existing zero-provider-process route-preflight-only
 command (PowerShell example in
-docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md).
+docs/datasets/quixbugs/opencode-adapter.md).
 
 Tests added: deterministic catalog-entry fingerprinting; exact selected-entry
 matching; malformed, duplicate, inactive, missing-variant, and historical

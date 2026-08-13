@@ -65,7 +65,7 @@ validated `root-cause-assessment-v1` record in attempt provenance. Aggregates,
 deltas, and CSV expose assessment coverage, explicit missingness, closed
 outcomes, and correct rates. Patch success and lexical similarity to hidden
 oracle text are never treated as root-cause correctness. See
-`docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md`.
+`docs/architecture/root-cause-metric.md`.
 
 ## 5. Report outputs
 

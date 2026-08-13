@@ -9,7 +9,7 @@ controller, tool registry, runtime and verifier; the only difference is the
 
 ``PdbPolicy.ALWAYS_ON`` and ``PdbPolicy.AFTER_FAILED_PATCH`` remain implemented
 in the policy module but are deliberately outside the Task 9 demonstration set;
-see ``docs/DEMO_TASK9.md`` for the deferral rationale.
+see ``docs/demo/task-9.md`` for the deferral rationale.
 """
 
 from __future__ import annotations

@@ -11,7 +11,7 @@ It is a planning artifact only. It does not authorize source-code implementation
 Primary source documents:
 
 - `TODO.md`
-- `docs/PROJECT_TRACKER.md`
+- `docs/project-tracker.md`
 - `research/synthesis/pdb_debugger_agent_mvp_rationale.md`
 - `research/synthesis/tier2_mvp_architecture_update.md`
 

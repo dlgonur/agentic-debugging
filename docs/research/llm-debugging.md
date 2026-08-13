@@ -41,9 +41,9 @@ semantic correctness.
 | Self-Debugging | No tracked primary-paper note, source manifest entry, or paper path found; the tracker marks it unread | Cannot establish method, results, or limitation from the repository | Missing; no factual study claims made |
 | DebugBench | No tracked primary-paper note, source manifest entry, or paper path found; the tracker marks it unread | Cannot establish method, results, or limitation from the repository | Missing; no factual study claims made |
 
-The absence decisions are consistent with `docs/PROJECT_TRACKER.md` Phase 1.2
+The absence decisions are consistent with `docs/project-tracker.md` Phase 1.2
 and the corresponding item discussion in
-`docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md`. They are not claims that
+`docs/archive/status/instructor-status-map.md`. They are not claims that
 the studies do not exist outside this repository. They mean only that this
 review cannot responsibly summarize them from the permitted local evidence.
 
@@ -399,7 +399,7 @@ fingerprinting; those gaps limit broad claims.
 
 Self-Debugging and DebugBench cannot be reviewed honestly from this checkout.
 The precise gap is the absence of a tracked primary-paper note or source record,
-combined with explicit unread status in `docs/PROJECT_TRACKER.md`. Required
+combined with explicit unread status in `docs/project-tracker.md`. Required
 next evidence is a locally recorded, source-grounded note for each study that
 separates method, context, execution feedback, validation, reported findings,
 and limitations. No tracker or checklist status is changed by this document.
@@ -421,12 +421,12 @@ to findings. See `research/reports/synthesis/claims_to_verify_v1.md`.
 | `research/notes/2023_swe_bench_notes.md` | Benchmark task formulation, F2P/P2P oracle, retrieval, results, execution feedback, and limits |
 | `research/papers/TIER1_LOCAL_MANIFEST.md` | Tier 1 source identities and local-paper availability policy |
 | `research/papers/TIER2_LOCAL_MANIFEST.md` | Tier 2 source identities and local-paper availability policy |
-| `docs/PROJECT_TRACKER.md` | Explicit read/unread status for LLM-debugging studies, including missing Self-Debugging and DebugBench work |
-| `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` | Conservative instructor-item status and evidence gaps |
+| `docs/project-tracker.md` | Explicit read/unread status for LLM-debugging studies, including missing Self-Debugging and DebugBench work |
+| `docs/archive/status/instructor-status-map.md` | Conservative instructor-item status and evidence gaps |
 | `research/synthesis/pdb_debugger_agent_mvp_rationale.md` | Static/dynamic taxonomy, PDB rationale, APR distinction, and proposed experiment policies |
 | `research/synthesis/tier2_mvp_architecture_update.md` | Controller, typed tools, event stream, PDB, verifier, and metric implications |
-| `docs/FINAL_TECHNICAL_REPORT_V1.md` | Current architecture, verifier authority, reproducibility and claim boundaries |
-| `docs/DATASET_EVALUATION_DECISION_V1.md` | F2P/P2P mapping, localization/RCA metric gaps, and external-evaluation limitations |
+| `docs/archive/reports/final-report-v1.md` | Current architecture, verifier authority, reproducibility and claim boundaries |
+| `docs/datasets/selection.md` | F2P/P2P mapping, localization/RCA metric gaps, and external-evaluation limitations |
 | `research/reports/synthesis/claims_to_verify_v1.md` | Claims intentionally left unresolved |
 
 The evidence index is a review aid. It does not claim completion of the

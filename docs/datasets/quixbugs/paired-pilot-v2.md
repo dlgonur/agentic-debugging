@@ -2,7 +2,7 @@
 
 This document freezes the second bounded paired static-versus-PDB feasibility
 pilot contract before any live case. It is derived from the accepted v1
-preregistration (`docs/QUIXBUGS_PAIRED_PILOT_V1.md`) against accepted baseline
+preregistration (`docs/datasets/quixbugs/paired-pilot-v1.md`) against accepted baseline
 `18e067f24c337e7215139373edc699a347cf2127`. Everything in v1 that is not
 strictly changed by the new subscription route is carried over unchanged:
 the three selected tasks, the six-case order, the controller budgets, protocol

@@ -9,6 +9,20 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 MANIFEST = REPO / "docs" / "FRIDAY_DELIVERY_MANIFEST_V1.md"
 
+# The Friday delivery manifest is a frozen historical record: its pinned rows
+# name the delivery-time paths. Several pinned files were later relocated by
+# the docs taxonomy rework (DOCS-STRUCTURE-V1) with byte-identical content.
+# This map resolves the historical manifest path to the current location so
+# the pinned SHA-256 rows stay verifiable; the manifest itself is unchanged.
+LEGACY_PATH_MAP = {
+    "docs/INSTRUCTOR_AGENTIC_DEBUGGING_TODO.md": "docs/instructor-todo.md",
+    "docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md": "docs/archive/status/instructor-status-map.md",
+    "docs/FINAL_TECHNICAL_REPORT_V1.md": "docs/archive/reports/final-report-v1.md",
+    "docs/DEMO_GUIDE_V1.md": "docs/demo/guide.md",
+    "docs/DEMO_TASK9.md": "docs/demo/task-9.md",
+    "docs/PROJECT_TRACKER.md": "docs/project-tracker.md",
+}
+
 
 def parse_rows(text: str) -> list[tuple[str, str, str]]:
     """Parse markdown table rows: | path | role | sha256 |"""
@@ -47,7 +61,7 @@ def main() -> int:
     print(f"Verifying {len(rows)} pinned rows against working-tree files")
     print("=" * 80)
     for path_str, role, expected in rows:
-        target = REPO / path_str
+        target = REPO / LEGACY_PATH_MAP.get(path_str, path_str)
         if not target.is_file():
             print(f"MISMATCH  {path_str}\n  expected: {expected}\n  actual:   FILE NOT FOUND")
             failures += 1

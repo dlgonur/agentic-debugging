@@ -6,7 +6,7 @@ This repository is a Python/PDB-first research prototype for debugger-assisted s
 
 Its accepted core is a single controller agent with typed deterministic tools, bounded PDB interaction, disposable workspaces, unified-diff patching, event trajectories, and an independent verifier. The project also contains dataset adapters, QuixBugs evaluation infrastructure, live-model transport and campaign tooling, research material, internship documentation, and future model-training work.
 
-The active roadmap lives in `TODO.md` and `docs/PROJECT_TRACKER.md`. This file defines stable repository rules; it does not freeze the current task priority.
+The active roadmap lives in `TODO.md` and `docs/project-tracker.md`. This file defines stable repository rules; it does not freeze the current task priority.
 
 ## 2. Roles and handoff
 
@@ -33,7 +33,7 @@ Before planning or editing, read:
 2. the current task prompt;
 3. the source and tests directly related to the task;
 4. `README.md` for project status and entry points;
-5. `TODO.md` and `docs/PROJECT_TRACKER.md` when the task concerns roadmap or project status;
+5. `TODO.md` and `docs/project-tracker.md` when the task concerns roadmap or project status;
 6. `CURRENT_AGENT_ROSTER.md` and the relevant operator contract before any provider or model execution;
 7. the relevant design or operator guide under `docs/` for dataset, live-runner, transport, containment, or experiment work.
 

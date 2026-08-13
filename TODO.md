@@ -5,7 +5,7 @@
 **2026-08-11 final closeout:** Proje kabul edilen bounded-negative yol üzerinde
 **COMPLETE** olarak kapanmıştır (S9 final closeout). Tek canonical final
 status/handoff otoritesi: `Agentic_Debugging_Project_Closeout_2026-08-11.md`.
-S8 deliverables tamamlandı: `docs/FINAL_TECHNICAL_REPORT_V2.md` ve
+S8 deliverables tamamlandı: `docs/final-report.md` ve
 `diary/diary.md` (2026-08-11'e kadar, S9 subsection dahil). S7 literature
 closeout DONE (20 çalışma, `677992f`). Professor TODO #23/#24/#25 =
 **CLOSED — BOUNDED NEGATIVE** (engineering capability YES, positive real-model
@@ -16,7 +16,7 @@ değildir. Aşağıdaki 2026-08-07 notları tarihsel statü kayıtlarıdır.
 
 **2026-08-07 reconciliation:** Current status is reconciled against reachable
 history at `1e680b1` in
-`docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md`. This corrects stale
+`docs/archive/status/repo-reconciliation-2026-08-07.md`. This corrects stale
 pre-merge claims about the literature syntheses (`3c23b6e`), post-mortem PDB
 work (`f7ba129`..`e92634e`), and RAG/comparison/preference infrastructure
 (`1e680b1`). External QLoRA state is recorded but not modified.
@@ -25,8 +25,8 @@ work (`f7ba129`..`e92634e`), and RAG/comparison/preference infrastructure
 root-cause explanation assessment/aggregation contract, and bounded
 post-mortem PDB evidence now uses the existing `get_failure_trace` controller
 action and canonical event/replay path. See
-`docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md` and
-`docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. These are infrastructure
+`docs/architecture/root-cause-metric.md` and
+`docs/architecture/pdb-trajectory.md`. These are infrastructure
 completions, not live-model performance evidence.
 
 **2026-08-07 full-suite follow-up:** The historical 32-node synthetic
@@ -34,7 +34,7 @@ OpenCode wrapper failure family is repaired. Its actual cause was a
 test-only compiled-forwarder cache collision across distinct target scripts,
 not generic OS resource pressure. The post-fix full suite completed with
 3733 passed and 3 skipped; see
-`docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`. Production provider and route
+`docs/architecture/verifier-cache.md`. Production provider and route
 gates were not changed.
 
 Aşağıdaki faz listesi, stajın orijinal geniş araştırma/ürün planını temsil eder.
@@ -54,9 +54,9 @@ repair'i ile tamamlanmış ve kabul edilmiştir. Task 10B-R5'in accepted source/
 
 
 
-- **2026-08-06 — Repair 1: RAG/comparison/preference contract hardening (offline).** Aynı branch üzerinde tek kapsamlı contract-hardening geçişi (yeni mimari yok): (1) candidate patch artık `raw_output`'a sıkı şekilde bağlı — `patch_extraction` exact/substring sözleşmesi, load'da yeniden inşa + substring/SHA-256 eşitliği + offset sınırları; ilgisiz geçen patch, bir-byte değişiklik ve raw-output dışı offset'ler reddedilir; (2) attempt `role` ayrımı — `evaluation` (birincil; (task,condition) başına en fazla bir) vs `preference-fixture` (yardımcı; primary aggregate/delta'lara asla girmez; eski sentetik `base 0.50 vs tuned 1.00` sonucu yapısal olarak imkânsız, regresyon testi ile); (3) RAG index/retrieval/RagContext artifact'ları build ve load'da her identity alanını yeniden hesaplayıp doğrular (index_id, corpus_digest, chunk id, query/retrieval id, selection bytes, document/chunk caps; tampering testleri); (4) free-form JSON payload'lar recursive bounds ile doğrulanır (nested NaN/Infinity schema load'da reddedilir); (5) imported-attempt: `EvaluationInputError` branch'inde `UnboundLocalError` imkânsız, kategori ayrımı (NO_PATCH/PATCH_INVALID/PATCH_NOT_APPLIED/SYNTAX_FAILED/VERIFIER_FAILED), response 64 KiB marker-inclusive bound (2/3/4-byte UTF-8 sınır testleri), artifact telemetry (runtime/memory/cost/tokens) ve external provider/network telemetry ayrı taşınır; `memory_bytes` normalize metrik/CSV'de; (6) preference: pair identity response/patch/verifier-evidence hash'lerini bağlar ve load'da yeniden hesaplanır; contamination tam yanıt üzerinde (storage cutoff öncesi) kontrol edilir; audit tam anahtar seti; (7) chunking: symbol dışı satırlar (docstring/import/constant/kod arası/trailing) deterministik gap chunk'larla korunur — tam satır kapsamı kanıtlandı; (8) demo/live boundary'leri yalnızca doğrulanmış `RagContext` kabul eder. Demo sonucu: 4 primary condition × 2 task; condition başına tam 2 primary attempt (base ek olarak 2 labeled auxiliary preference-fixture); resolved 2/2 rate 1.0 her condition'da (sentetik tuned üstünlüğü yok, delta 0); replay-valid 4/4; cleanup cleaned 10/10; canonical fixture değişmedi; local provider/network 0/0; external telemetry ayrı; 4 verifier-backed preference pair. Testler: yeni suite 188 passed (rag 92, comparison 40, live-request, preference, integration 4) + etkilenen yüzeyler 707 passed; compileall exit 0; `git diff --check` temiz. Karar kaydı `docs/RAG_COMPARISON_DECISION_V2.md` §5. Hiçbir provider, live campaign, WSL, BugsInPy, QLoRA, DPO/RLHF çalıştırılmadı; commit/merge/push yapılmadı.
-- **2026-08-06 — Friday RAG/comparison/preference engineering sprint (offline, infrastructure-only).** `goal/friday-rag-comparison-v1` branch'inde baseline `e92634e3` üzerinde: (1) deterministik repository-native lexical RAG (`agentic_debugger/rag/`; fixture-scoped default + declared corpus-root modu; source/test/issue/failure dokümanları; oracle-projeksiyon dışlama testleri; explicit exclusion kuralları; `repository-index-v1` + `retrieval-result-v1` strict artifact'ları; revision binding; budget'lar; fail-closed); (2) opsiyonel RAG context enjeksiyonu (demo/model-adapter ve `LiveModelAdapter` additive `rag_context` seam'leri; default request/case byte-identity kanıtlı; 20 KB public-request bound pre-transport fail-closed; frozen QuixBugs runner değişmedi); (3) unified comparison harness (`agentic_debugger/comparison/`; strict `generation-artifact-v1` import + native agentic mod; normalized `comparison-v1` metrikler; JSON/CSV/Markdown + aggregates + baseline delta; CLI `build-index|retrieve|import-attempt|compare|export-preferences|demo`; unique output roots); (4) preference-pair exporter (`agentic_debugger/preference/`; ordered verifier-backed rules; `preference-pair-v1`; held-out + oracle-answer contamination + duplicate/same-response/no-evidence guard'ları; JSONL + audit; DPO/RLHF yok). Deterministik iki-task demo: index/retrieval/provenance, imported base+tuned (sentetik `offline-deterministic-demo` kimlikler) + non-repair fixture (verdict verifier-decided), native agentic + RAG-agentic same-patch parity, 4-condition rapor, preference pairs; replay-valid, CLEANED, canonical fixture değişmedi, 0 provider / 0 network; deterministik view iki koşu arası byte-identical (timing hariç). Testler: yeni rag/comparison/preference unit + integration suite'leri ve etkilenen yüzeyler (demo 289, live/verifier/patcher/workspace/search 418) geçti; compileall exit 0; `git diff --check` temiz. Karar kaydı: `docs/RAG_COMPARISON_DECISION_V2.md` — v1 decision gate'in RAG NO-GO'su yalnızca bu yetkilendirilmiş offline altyapı kapsamı için supersede edildi; fine-tuned+RAG performansı, gerçek base-versus-tuned karşılaştırması, production preference corpus ve DPO/RLHF hâlâ açık. Instructor TODO: RAG sistemi (Phase 4 RAG item, tracker 4.1) kanıtla kapatıldı; fine-tuned+RAG birleştirme, gerçek dört-condition karşılaştırma ve production preference corpusu partial/open kaldı (sentetik kimlikler model performansı iddiası değildir). Hiçbir provider, live campaign, WSL, BugsInPy, QLoRA, DPO/RLHF çalıştırılmadı; commit/merge/push yapılmadı.
-- **2026-08-05 — Friday professor delivery bundle (offline, documentation + rehearsal only).** Kabul edilmiş kaynak baseline `456f0e9` (kabul edilmiş sunum plan/deck/cue delivery commit'i); kampanya altyapısı `0abb588` ile, V4 identity düzeltmesi `fc7c85b` ile kabul edildi. `docs/FRIDAY_DELIVERY_MANIFEST_V1.md` (manifest, evidence index, exact commands, fallbacks), `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md` (final preflight/rehearsal checklist), `docs/FRIDAY_STATUS_HANDOFF_V1.md` (status handoff + post-Friday batches B1–B7); plan/deck/cue sheet v1.2; README, tracker (Last Updated), DEMO_TASK9 (`--list-tasks` `--output-dir` requirement), report section order, ve diary 2026-08-05 entry güncellendi. Bu bundle, `456f0e9` üzerine FirstMate review'i sırasında inşa edilen commit edilmemiş bir adaydır; entegrasyon commit'i henüz bilinmiyor. Taze single-task demo provası çalıştırıldı ve doğrulandı (exit 0; 2 case; RESOLVED 2/2; F2P 2/2; P2P 4/4; 0 provider/0 network; workspace CLEANED). Hiçbir instructor TODO maddesi işaretlenmedi; hiçbir provider/kampanya/WSL/eğitim/benchmark çalıştırılmadı; FirstMate entegrasyonundan önceki coding-agent build/prova fazında commit yapılmadı.
+- **2026-08-06 — Repair 1: RAG/comparison/preference contract hardening (offline).** Aynı branch üzerinde tek kapsamlı contract-hardening geçişi (yeni mimari yok): (1) candidate patch artık `raw_output`'a sıkı şekilde bağlı — `patch_extraction` exact/substring sözleşmesi, load'da yeniden inşa + substring/SHA-256 eşitliği + offset sınırları; ilgisiz geçen patch, bir-byte değişiklik ve raw-output dışı offset'ler reddedilir; (2) attempt `role` ayrımı — `evaluation` (birincil; (task,condition) başına en fazla bir) vs `preference-fixture` (yardımcı; primary aggregate/delta'lara asla girmez; eski sentetik `base 0.50 vs tuned 1.00` sonucu yapısal olarak imkânsız, regresyon testi ile); (3) RAG index/retrieval/RagContext artifact'ları build ve load'da her identity alanını yeniden hesaplayıp doğrular (index_id, corpus_digest, chunk id, query/retrieval id, selection bytes, document/chunk caps; tampering testleri); (4) free-form JSON payload'lar recursive bounds ile doğrulanır (nested NaN/Infinity schema load'da reddedilir); (5) imported-attempt: `EvaluationInputError` branch'inde `UnboundLocalError` imkânsız, kategori ayrımı (NO_PATCH/PATCH_INVALID/PATCH_NOT_APPLIED/SYNTAX_FAILED/VERIFIER_FAILED), response 64 KiB marker-inclusive bound (2/3/4-byte UTF-8 sınır testleri), artifact telemetry (runtime/memory/cost/tokens) ve external provider/network telemetry ayrı taşınır; `memory_bytes` normalize metrik/CSV'de; (6) preference: pair identity response/patch/verifier-evidence hash'lerini bağlar ve load'da yeniden hesaplanır; contamination tam yanıt üzerinde (storage cutoff öncesi) kontrol edilir; audit tam anahtar seti; (7) chunking: symbol dışı satırlar (docstring/import/constant/kod arası/trailing) deterministik gap chunk'larla korunur — tam satır kapsamı kanıtlandı; (8) demo/live boundary'leri yalnızca doğrulanmış `RagContext` kabul eder. Demo sonucu: 4 primary condition × 2 task; condition başına tam 2 primary attempt (base ek olarak 2 labeled auxiliary preference-fixture); resolved 2/2 rate 1.0 her condition'da (sentetik tuned üstünlüğü yok, delta 0); replay-valid 4/4; cleanup cleaned 10/10; canonical fixture değişmedi; local provider/network 0/0; external telemetry ayrı; 4 verifier-backed preference pair. Testler: yeni suite 188 passed (rag 92, comparison 40, live-request, preference, integration 4) + etkilenen yüzeyler 707 passed; compileall exit 0; `git diff --check` temiz. Karar kaydı `docs/evaluation/rag-comparison.md` §5. Hiçbir provider, live campaign, WSL, BugsInPy, QLoRA, DPO/RLHF çalıştırılmadı; commit/merge/push yapılmadı.
+- **2026-08-06 — Friday RAG/comparison/preference engineering sprint (offline, infrastructure-only).** `goal/friday-rag-comparison-v1` branch'inde baseline `e92634e3` üzerinde: (1) deterministik repository-native lexical RAG (`agentic_debugger/rag/`; fixture-scoped default + declared corpus-root modu; source/test/issue/failure dokümanları; oracle-projeksiyon dışlama testleri; explicit exclusion kuralları; `repository-index-v1` + `retrieval-result-v1` strict artifact'ları; revision binding; budget'lar; fail-closed); (2) opsiyonel RAG context enjeksiyonu (demo/model-adapter ve `LiveModelAdapter` additive `rag_context` seam'leri; default request/case byte-identity kanıtlı; 20 KB public-request bound pre-transport fail-closed; frozen QuixBugs runner değişmedi); (3) unified comparison harness (`agentic_debugger/comparison/`; strict `generation-artifact-v1` import + native agentic mod; normalized `comparison-v1` metrikler; JSON/CSV/Markdown + aggregates + baseline delta; CLI `build-index|retrieve|import-attempt|compare|export-preferences|demo`; unique output roots); (4) preference-pair exporter (`agentic_debugger/preference/`; ordered verifier-backed rules; `preference-pair-v1`; held-out + oracle-answer contamination + duplicate/same-response/no-evidence guard'ları; JSONL + audit; DPO/RLHF yok). Deterministik iki-task demo: index/retrieval/provenance, imported base+tuned (sentetik `offline-deterministic-demo` kimlikler) + non-repair fixture (verdict verifier-decided), native agentic + RAG-agentic same-patch parity, 4-condition rapor, preference pairs; replay-valid, CLEANED, canonical fixture değişmedi, 0 provider / 0 network; deterministik view iki koşu arası byte-identical (timing hariç). Testler: yeni rag/comparison/preference unit + integration suite'leri ve etkilenen yüzeyler (demo 289, live/verifier/patcher/workspace/search 418) geçti; compileall exit 0; `git diff --check` temiz. Karar kaydı: `docs/evaluation/rag-comparison.md` — v1 decision gate'in RAG NO-GO'su yalnızca bu yetkilendirilmiş offline altyapı kapsamı için supersede edildi; fine-tuned+RAG performansı, gerçek base-versus-tuned karşılaştırması, production preference corpus ve DPO/RLHF hâlâ açık. Instructor TODO: RAG sistemi (Phase 4 RAG item, tracker 4.1) kanıtla kapatıldı; fine-tuned+RAG birleştirme, gerçek dört-condition karşılaştırma ve production preference corpusu partial/open kaldı (sentetik kimlikler model performansı iddiası değildir). Hiçbir provider, live campaign, WSL, BugsInPy, QLoRA, DPO/RLHF çalıştırılmadı; commit/merge/push yapılmadı.
+- **2026-08-05 — Friday professor delivery bundle (offline, documentation + rehearsal only).** Kabul edilmiş kaynak baseline `456f0e9` (kabul edilmiş sunum plan/deck/cue delivery commit'i); kampanya altyapısı `0abb588` ile, V4 identity düzeltmesi `fc7c85b` ile kabul edildi. `docs/FRIDAY_DELIVERY_MANIFEST_V1.md` (manifest, evidence index, exact commands, fallbacks), `docs/FRIDAY_PREFLIGHT_CHECKLIST_V1.md` (final preflight/rehearsal checklist), `docs/FRIDAY_STATUS_HANDOFF_V1.md` (status handoff + post-Friday batches B1–B7); plan/deck/cue sheet v1.2; README, tracker (Last Updated), docs/demo/task-9.md (`--list-tasks` `--output-dir` requirement), report section order, ve diary 2026-08-05 entry güncellendi. Bu bundle, `456f0e9` üzerine FirstMate review'i sırasında inşa edilen commit edilmemiş bir adaydır; entegrasyon commit'i henüz bilinmiyor. Taze single-task demo provası çalıştırıldı ve doğrulandı (exit 0; 2 case; RESOLVED 2/2; F2P 2/2; P2P 4/4; 0 provider/0 network; workspace CLEANED). Hiçbir instructor TODO maddesi işaretlenmedi; hiçbir provider/kampanya/WSL/eğitim/benchmark çalıştırılmadı; FirstMate entegrasyonundan önceki coding-agent build/prova fazında commit yapılmadı.
 
 - Model kullanımı açıkça yetkilendirilmiş görevlerde varsayılan implementation
   route'u, operator'ün OpenCode Go aboneliği üzerinden DeepSeek V4 Flash'tır.
@@ -113,8 +113,8 @@ edilen baseline, başarılı route gate'i ve açıkça yapılandırılmış prov
 transport + case runner gerektirir; bu görevde hiçbiri yoktur, bu yüzden
 yalnızca synthetic transport'lar, geçici fixture'lar ve deterministik test
 double'ları kullanıldı, provider çağrı sayacı sıfır kanıtlandı. Dokümanlar:
-`docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md` ve
-`docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md`; non-authorizing şema
+`docs/datasets/quixbugs/pilot-v2-authorization.md` ve
+`docs/datasets/quixbugs/pilot-v2-runner.md`; non-authorizing şema
 referansı `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`
 (validator tarafından reddedilir; gerçek authorization'lar tracked dışı
 `operator/` dizininde yaşar). Ayrı ve gelecekteki görev: gerçek operator
@@ -132,25 +132,25 @@ legal-directive recovery gözlendi. Bu küçük, fixture-specific sonuç causal 
 etkinliği, policy üstünlüğü veya genel model güvenilirliği kanıtı değildir.
 
 Maddeler aşağıda `[x]` ile işaretlenmiş ve neye dayandığı not edilmiştir; tam
-kanıt kaydı için `docs/PROJECT_TRACKER.md`'e bakınız. BugsInPy execution hâlâ
+kanıt kaydı için `docs/project-tracker.md`'e bakınız. BugsInPy execution hâlâ
 license gate nedeniyle bloke; bu blok kaldırılmadı, sadece bekletiliyor.
 Bu blok nedeniyle dar kapsamlı bir QuixBugs (Python `gcd`) fallback
 resource-limited real no-model smoke tamamlandı ve kabul edildi:
 pinned revision `4257f44b0ff1181dedaedee6a447e133219fcebf`, verdict
-`ACCEPT CANDIDATE — REAL SMOKE PASSED`; bkz. `docs/QUIXBUGS_SMOKE_USAGE_V1.md`.
+`ACCEPT CANDIDATE — REAL SMOKE PASSED`; bkz. `docs/datasets/quixbugs/smoke-guide.md`.
 Bu tek-task smoke, aynı pinned revision üzerinde sekiz-task no-model gold
 baseline'a genişletildi (`gcd`, `bucketsort`, `find_in_sorted`, `flatten`,
 `kth`, `hanoi`, `is_valid_parenthesization`, `kheapsort`): 8/8 seçilen task
 çözüldü (gold patch uçtan uca doğrulandı), verdict
 `ACCEPT CANDIDATE — EIGHT-TASK BASELINE COMPLETE`; bkz.
-`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`. İkisi de sadece altyapıyı
+`docs/datasets/quixbugs/baseline-8-task.md`. İkisi de sadece altyapıyı
 doğrular; model, PDB veya geniş benchmark kampanyası
 çalıştırılmadı.
 
 2026-07-31 tarihinde, Model/RAG/Fine-Tuning/DPO Decision Gate v1
-(`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) ve Final Technical Report
-and Demo Package v1 (`docs/FINAL_TECHNICAL_REPORT_V1.md`,
-`docs/DEMO_GUIDE_V1.md`) documentation-only olarak tamamlandı ve kabul
+(`docs/evaluation/model-rag-sft-dpo.md`) ve Final Technical Report
+and Demo Package v1 (`docs/archive/reports/final-report-v1.md`,
+`docs/demo/guide.md`) documentation-only olarak tamamlandı ve kabul
 edildi (baseline `2236775`). Decision Gate; future model-access strategy
 için PROCEED (dar kapsamlı — mevcut free-tier route üzerinde tek QuixBugs
 task'ı, sadece static-baseline policy), repository RAG için NO-GO-FOR-NOW,
@@ -173,17 +173,17 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 1 — Literature Review
 
-- [x] Debugging, automated debugging, fault localization ve program repair konularında literatür taraması yap. (Tamamlandı 2026-08-05 — `docs/AUTOMATED_DEBUGGING_LITERATURE_SURVEY_V1.md`, commit `3c23b6e`; doğrulanmamış iddialar kapsam dışı bırakıldı.)
-- [x] LLM-based debugging çalışmalarını incele. (Tamamlandı 2026-08-05 — `docs/LLM_BASED_DEBUGGING_LITERATURE_REVIEW_V1.md`, commit `3c23b6e`; ek frontier okuma gelecek iş olabilir fakat tamamlanmış bounded review'ı geçersiz kılmaz.)
+- [x] Debugging, automated debugging, fault localization ve program repair konularında literatür taraması yap. (Tamamlandı 2026-08-05 — `docs/research/automated-debugging.md`, commit `3c23b6e`; doğrulanmamış iddialar kapsam dışı bırakıldı.)
+- [x] LLM-based debugging çalışmalarını incele. (Tamamlandı 2026-08-05 — `docs/research/llm-debugging.md`, commit `3c23b6e`; ek frontier okuma gelecek iş olabilir fakat tamamlanmış bounded review'ı geçersiz kılmaz.)
 - [x] Agentic debugging, tool-using agents ve multi-agent debugging çalışmalarını incele. (Tamamlandı 2026-08-11 — S7 focused literature closeout, 20 çalışma, `677992f`; evidence tier'ları korundu; bkz. `research/literature/agentic_debugging_literature_closeout_2026-08-11.md`.)
-- [x] Geleneksel debugging, LLM-based debugging ve agentic debugging yaklaşımlarını karşılaştır. (Tamamlandı 2026-08-05 — `docs/DEBUGGING_APPROACH_COMPARISON_V1.md`, commit `3c23b6e`.)
+- [x] Geleneksel debugging, LLM-based debugging ve agentic debugging yaklaşımlarını karşılaştır. (Tamamlandı 2026-08-05 — `docs/research/debugging-approaches.md`, commit `3c23b6e`.)
 - [x] SWE-Agent, OpenHands, AutoCodeRover, Agentless ve ChatDBG gibi sistemleri incele. (Tamamlandı — reviewed notes + system capability matrix.)
 
 ## Phase 2 — Dataset Research
 
 - [x] Hugging Face ve açık kaynak platformlarda debugging ve bug-fix veri setlerini araştır. (Dataset and Evaluation Decision v1.)
 - [x] SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J ve QuixBugs veri setlerini karşılaştır. (Dataset and Evaluation Decision v1.)
-- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (Final karar: **SWE-rebench V2 = birincil authentic SFT / post-training veri seti**; **QuixBugs = kontrollü değerlendirme kohortu ve SFT eğitiminin tamamen dışında**; **BugsInPy = dataset araştırması sırasında değerlendirilen tarihsel aday, final birincil SFT kaynağı değil**. Sequencing decisions recorded in Dataset and Evaluation Decision v1; BugsInPy execution license-gated; QuixBugs gcd resource-limited real no-model smoke completed and accepted — bkz. docs/QUIXBUGS_SMOKE_USAGE_V1.md.)
+- [x] Fine-tuning, RAG ve değerlendirme için uygun veri setlerini seç. (Final karar: **SWE-rebench V2 = birincil authentic SFT / post-training veri seti**; **QuixBugs = kontrollü değerlendirme kohortu ve SFT eğitiminin tamamen dışında**; **BugsInPy = dataset araştırması sırasında değerlendirilen tarihsel aday, final birincil SFT kaynağı değil**. Sequencing decisions recorded in Dataset and Evaluation Decision v1; BugsInPy execution license-gated; QuixBugs gcd resource-limited real no-model smoke completed and accepted — bkz. docs/datasets/quixbugs/smoke-guide.md.)
 - [x] Veri setlerini analiz et ve eğitim/test ayrımını hazırla. (Tamamlandı — SWE-rebench V2: 1,594 görev / 347 repo; frozen split 1,000 train / 150 validation / 444 unused; repo-overlap 0; seed `20260808`; ≤32K no-truncation view 940/135. QuixBugs SFT dışında tutuldu.)
 
 ## Phase 3 — Model and Fine-tuning
@@ -195,10 +195,10 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 
 ## Phase 4 — RAG and Agent Tools
 
-- [x] Repository kodları, testler, issue açıklamaları ve hata mesajları için RAG sistemi kur. (Tamamlandı 2026-08-06 — deterministik repository-native lexical RAG v1: fixture-scoped default + declared corpus-root modu; source/test/issue/failure dokümanları; oracle-projeksiyon dışlama; explicit exclusion kuralları; `repository-index-v1`/`retrieval-result-v1` strict artifact'ları; revision binding; budget'lar; fail-closed. Bu bir altyapı tamamlamasıdır; RAG'ın model performansına katkısı iddia edilmez. bkz. docs/REPOSITORY_RAG_V1.md, docs/RAG_COMPARISON_DECISION_V2.md.)
+- [x] Repository kodları, testler, issue açıklamaları ve hata mesajları için RAG sistemi kur. (Tamamlandı 2026-08-06 — deterministik repository-native lexical RAG v1: fixture-scoped default + declared corpus-root modu; source/test/issue/failure dokümanları; oracle-projeksiyon dışlama; explicit exclusion kuralları; `repository-index-v1`/`retrieval-result-v1` strict artifact'ları; revision binding; budget'lar; fail-closed. Bu bir altyapı tamamlamasıdır; RAG'ın model performansına katkısı iddia edilmez. bkz. docs/architecture/repository-rag.md, docs/evaluation/rag-comparison.md.)
 - [ ] Fine-tuned modeli RAG sistemiyle birleştir. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — frozen cp118+RAG treatment 10/40 geçerli pair üretti (frozen manifest sırasının ilk 10'u), kampanya compute fezibility nedeniyle durduruldu; primary correctness **NOT_EVALUATED**; RAG success/failure iddiası yok. Aktif gelecek görevi değildir.)
-- [x] Modelin kullanacağı dosya okuma, kod arama, test çalıştırma ve patch uygulama araçlarını geliştir. (Tamamlandı — deterministic file-read/code-search/test-run/patch-apply tools; bkz. docs/PROJECT_TRACKER.md Task 2-3.)
-- [x] Debugging agentini oluştur. (Tamamlandı — controller state machine ve Task 9 uçtan uca demonstration; bkz. docs/PROJECT_TRACKER.md.)
+- [x] Modelin kullanacağı dosya okuma, kod arama, test çalıştırma ve patch uygulama araçlarını geliştir. (Tamamlandı — deterministic file-read/code-search/test-run/patch-apply tools; bkz. docs/project-tracker.md Task 2-3.)
+- [x] Debugging agentini oluştur. (Tamamlandı — controller state machine ve Task 9 uçtan uca demonstration; bkz. docs/project-tracker.md.)
 - [ ] Modelin hata konumunu bulmasını, root cause belirlemesini ve patch üretmesini sağla. (PARTIAL — static real-provider model→patch→verifier QuixBugs gcd'de verifier RESOLVED'a ulaştı (F2P 5/5, P2P 1/1); full dynamic debugger-informed chain gerçek modelle elde edilmedi — bounded negative.)
 
 ## Phase 5 — Preference Optimization
@@ -217,7 +217,7 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 ## Phase 7 — Evaluation and Final Report
 
 - [x] Sonuçları başarı oranı, localization accuracy, root-cause explanation, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Tamamlandı S5 üzerinden — 8 eksenli canonical comparison ledger; eksik değerler `NOT_RECORDED` / `NOT_EVALUATED` olarak explicit; root-cause assessment contract + comparison harness; hiçbir eksik değer sıfıra çevrilmedi.)
-- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı — Final Technical Report **V2** (`docs/FINAL_TECHNICAL_REPORT_V2.md`, S8) + V1 (2026-07-31) historical; deterministic offline demo + S6 professor-facing bounded-negative evidence presentation (`presentation/s6-real-debugging-evidence/`). Bu bir altyapı/evaluation-platform demosudur, model debugging performance demosu değildir.)
+- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı — Final Technical Report **V2** (`docs/final-report.md`, S8) + V1 (2026-07-31) historical; deterministic offline demo + S6 professor-facing bounded-negative evidence presentation (`presentation/s6-real-debugging-evidence/`). Bu bir altyapı/evaluation-platform demosudur, model debugging performance demosu değildir.)
 
 ### Live-runner material repair (2026-08-02, runner-only)
 
@@ -349,7 +349,7 @@ isaretlenmez: operator authorization, gercek route preflight, gercek OpenCode
 Go execution, six-case live campaign, empirical evaluation, model
 performance, PDB effectiveness, RAG, SFT, DPO. Tarihsel OpenCode Zen
 kayitlari degismeden historical kaldi. Dokuman:
-`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`.
+`docs/datasets/quixbugs/opencode-adapter.md`.
 
 ### OpenCode Go execution adapter v1 - wrapper repair (2026-08-03, adapter-only)
 
@@ -454,7 +454,7 @@ secili entry fingerprint'ini bagimsizca yeniden hesaplar ve herhangi bir model
 process calismadan once authorization-bound expected fingerprint ile
 karsilastirir. Uretilen artifact'ler mevcut sifir-provider-process
 `route-preflight-only` komutuyla calisir (PowerShell ornegi:
-`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`). Testler eklendi:
+`docs/datasets/quixbugs/opencode-adapter.md`). Testler eklendi:
 deterministik fingerprinting, exact selected-entry matching, malformed/
 duplicate/inactive/missing-variant/historical-free-route reddi, route evidence
 schema uretimi, authorization/config cross-binding, dirty-Git ve

@@ -60,11 +60,11 @@ execution.
 ## Reference
 
 - `research/quixbugs/PAIRED_PILOT_V4.json` — next six-case live manifest
-- `docs/QUIXBUGS_PAIRED_PILOT_V2.md` — retained v2 derivation and route contract
-- `docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md` — v2/v3/v4 operator sequence
-- `docs/QUIXBUGS_PAIRED_PILOT_V1.md` — retained v1 authority (historical
+- `docs/datasets/quixbugs/paired-pilot-v2.md` — retained v2 derivation and route contract
+- `docs/datasets/quixbugs/opencode-adapter.md` — v2/v3/v4 operator sequence
+- `docs/datasets/quixbugs/paired-pilot-v1.md` — retained v1 authority (historical
   OpenCode Zen zero-price route)
-- `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` — model-access strategy
+- `docs/evaluation/model-rag-sft-dpo.md` — model-access strategy
   decisions (historical; free-tier PROCEED predates the OpenCode Go
   subscription route)
-- `docs/PROJECT_TRACKER.md` — project execution tracker
+- `docs/project-tracker.md` — project execution tracker

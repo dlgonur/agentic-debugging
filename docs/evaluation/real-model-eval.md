@@ -232,4 +232,4 @@ one policy is superior. Because neither PDB-enabled case opened PDB, the
 matrix still does not measure PDB effectiveness. The historical OpenCode Go
 baseline and the later OpenCode Zen free-model matrix must not be pooled as
 one provider population. Exact evidence hashes, accounting totals, and
-qualified conclusions are recorded in `docs/PROJECT_TRACKER.md`.
+qualified conclusions are recorded in `docs/project-tracker.md`.

@@ -18,7 +18,7 @@ does not create a parallel evaluation framework.
 ## Runner lifecycle
 
 1. **Authorization boundary** — the artifact is validated strictly against the
-   selected v2/v3 manifest (see `docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`).
+   selected v2/v3 manifest (see `docs/datasets/quixbugs/pilot-v2-authorization.md`).
    Rejection produces a `REJECTED` campaign record with zero provider activity.
 2. **Repository baseline check** — the current Git HEAD must equal the accepted
    baseline `28ec7754336fc53f21ebbae8a851b33e26714932`; otherwise `REJECTED`.

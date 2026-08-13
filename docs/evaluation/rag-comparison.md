@@ -3,7 +3,7 @@
 **Date:** 2026-08-06
 **Branch:** `goal/friday-rag-comparison-v1`
 **Baseline:** `e92634e3dc016276d22ab9b9197adf4b28abbeb1`
-**Supersedes (partially):** `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`
+**Supersedes (partially):** `docs/evaluation/model-rag-sft-dpo.md`
 (2026-07-31) — RAG decision line only.
 
 ## 1. Status of the v1 decision gate
@@ -51,8 +51,8 @@ Focused unit + integration tests and the deterministic two-task demo
 (`python -m agentic_debugger.comparison demo`) record: zero provider and
 zero network attempts, replay validity, cleanup, canonical fixture
 immutability, byte-stable deterministic views, and verifier-decided outcomes
-for correct and non-repair attempts. See `docs/REPOSITORY_RAG_V1.md`,
-`docs/COMPARISON_HARNESS_V1.md`, `docs/PREFERENCE_EXPORTER_V1.md`.
+for correct and non-repair attempts. See `docs/architecture/repository-rag.md`,
+`docs/evaluation/comparison-harness.md`, `docs/architecture/preference-export.md`.
 
 ## 5. Repair 1 (2026-08-06) — contract hardening
 

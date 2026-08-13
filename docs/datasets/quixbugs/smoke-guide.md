@@ -1,7 +1,7 @@
 # QuixBugs Resource-Limited Smoke Usage v1
 
-BugsInPy execution remains license-gated (see `docs/BUGSINPY_ADAPTER_USAGE_V1.md`
-and `docs/BUGSINPY_PILOT_READINESS_V1.md`). This is a narrow fallback: it
+BugsInPy execution remains license-gated (see `docs/datasets/bugsinpy/adapter-usage.md`
+and `docs/datasets/bugsinpy/pilot-readiness.md`). This is a narrow fallback: it
 implements the smallest QuixBugs-specific layer needed to run one genuine,
 real, no-model smoke — Python `gcd` only — through the existing runtime,
 evaluation, and workspace contracts, extended with a live-self-tested

@@ -10,8 +10,8 @@ downloaded or executed.
 ## How this gate was produced
 
 This document is engineering judgment applied to live repository evidence
-(source, tests, docs, manifests, diary, `docs/PROJECT_TRACKER.md`, and
-`docs/DATASET_EVALUATION_DECISION_V1.md`), not new experimentation. It
+(source, tests, docs, manifests, diary, `docs/project-tracker.md`, and
+`docs/datasets/selection.md`), not new experimentation. It
 supersedes none of the accepted prior evidence; it re-reads that evidence in
 light of the eight-task QuixBugs gold baseline (`2236775`) that did not exist
 when Dataset and Evaluation Decision v1 was written, and adds the
@@ -48,23 +48,23 @@ Dataset and Evaluation Decision v1 took for its RAG/SFT/DPO lines).
      in the accepted Task 9 demonstration. It is not a model at all — it
      returns catalog-fixed outputs — so it cannot inform model-access
      strategy.
-  2. A **real-model live harness**, Task 10A (`docs/REAL_MODEL_EVALUATION_TASK10A.md`)
+  2. A **real-model live harness**, Task 10A (`docs/evaluation/real-model-eval.md`)
      plus Task 10B-R1/R3/R5 contract repairs, culminating in wire protocol
      `1.3` at commit `63fa27cc4d30490b9770ead3ce14b4b6d3ddf222`. This harness
      is offline-by-default and requires dual explicit live-access
      authorization; it has never been executed from inside this repository's
      automated tests or CI — only via private operator tooling outside the
-     tracked source (`docs/PROJECT_TRACKER.md`, "Current Focus" section).
+     tracked source (`docs/project-tracker.md`, "Current Focus" section).
 - The only live evidence of route 2 actually talking to a model is the
   four-case OpenCode Zen descriptive matrix: provider `opencode`, model
   `deepseek-v4-flash-free`, variant `max`, fixture
   `curated-none-handling-001`. Static policy resolved 2/2 cases;
   PDB-on-uncertainty resolved 0/2, and **PDB opened in 0 of 2 PDB-enabled
-  cases** (`docs/PROJECT_TRACKER.md`). That matrix predates protocol `1.3`
+  cases** (`docs/project-tracker.md`). That matrix predates protocol `1.3`
   (Task 10B-R5) and used a free, non-paid provider route.
 - No real model has ever been evaluated against QuixBugs or BugsInPy. Every
   QuixBugs result to date, including the eight-task baseline, is a
-  gold-patch (no-model) run (`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`).
+  gold-patch (no-model) run (`docs/datasets/quixbugs/baseline-8-task.md`).
 
 ### Reasoning
 
@@ -73,7 +73,7 @@ Two open questions are more urgent than which model or provider to use next:
 1. **Does the repaired protocol-1.3 contract actually let PDB open live?**
    The only live PDB-enabled evidence (protocol 1.2, pre-R5) shows 0/2
    opens, both terminating `invalid_model_response` before PDB. R5 fixed
-   concrete contract gaps that plausibly caused this (`docs/PROJECT_TRACKER.md`,
+   concrete contract gaps that plausibly caused this (`docs/project-tracker.md`,
    Task 10B-R4/R5 entries), but that fix has **never been observed live**.
 2. **Does the harness work end-to-end against a real (non-curated) dataset?**
    Every live case to date used the curated fixture set. QuixBugs is licensed
@@ -140,10 +140,10 @@ cross-checked against everything produced since:
   diversity, success/failure balance, or protocol currency — those four
   cases predate protocol 1.3).
 - The Task 9 "golden trajectories" are scripted, not model-generated
-  (`docs/DEMO_TASK9.md` Section 4: "There is no model in the loop"); they
+  (`docs/demo/task-9.md` Section 4: "There is no model in the loop"); they
   cannot serve as SFT training examples of model behavior.
 - The eight-task QuixBugs baseline contains **zero** model trajectories —
-  every candidate patch is the literal upstream diff (`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`).
+  every candidate patch is the literal upstream diff (`docs/datasets/quixbugs/baseline-8-task.md`).
 - No instruction-response schema for debugger trajectories has been drafted
   (`TODO.md` Phase 3, all unchecked).
 
@@ -184,12 +184,12 @@ traces it to evidence.
 
 | Claim | Verdict | Evidence |
 |---|---|---|
-| Sufficient to validate dataset adapter, resource-limited sandbox, and verifier infrastructure | **Yes** | 8/8 tasks reached `COMPLETED`/`RESOLVED`; 49/49 collected nodes passed post-patch; every canonical fixture hash was unchanged; every workspace was `CLEANED` (`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`). |
-| Sufficient for model selection (choosing which model to use going forward) | **No** | Zero models were run. Every "candidate patch" is the literal upstream gold diff generated via `difflib`, not model output (`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`, "Selected eight tasks"). A model-selection decision requires model output to compare, which does not exist here. |
+| Sufficient to validate dataset adapter, resource-limited sandbox, and verifier infrastructure | **Yes** | 8/8 tasks reached `COMPLETED`/`RESOLVED`; 49/49 collected nodes passed post-patch; every canonical fixture hash was unchanged; every workspace was `CLEANED` (`docs/datasets/quixbugs/baseline-8-task.md`). |
+| Sufficient for model selection (choosing which model to use going forward) | **No** | Zero models were run. Every "candidate patch" is the literal upstream gold diff generated via `difflib`, not model output (`docs/datasets/quixbugs/baseline-8-task.md`, "Selected eight tasks"). A model-selection decision requires model output to compare, which does not exist here. |
 | Sufficient for training (SFT or DPO) | **No** | Same reason: no model trajectories were produced. Eight gold-patch runs contribute nothing to a training corpus, which needs model attempts, not oracle diffs. |
-| Sufficient for a generalization claim about repository-scale debugging | **No** | QuixBugs tasks are single-file, one-line-defect algorithm programs by design (`docs/DATASET_EVALUATION_DECISION_V1.md` Section 2: "QuixBugs is intentionally small algorithm repair"). Eight such tasks from one dataset family cannot support a claim about real, multi-file repository debugging; that was BugsInPy's role, and BugsInPy remains license-blocked. |
+| Sufficient for a generalization claim about repository-scale debugging | **No** | QuixBugs tasks are single-file, one-line-defect algorithm programs by design (`docs/datasets/selection.md` Section 2: "QuixBugs is intentionally small algorithm repair"). Eight such tasks from one dataset family cannot support a claim about real, multi-file repository debugging; that was BugsInPy's role, and BugsInPy remains license-blocked. |
 
-The accepted verdict wording in `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`
+The accepted verdict wording in `docs/datasets/quixbugs/baseline-8-task.md`
 ("this campaign validates dataset eligibility, gold patches, verifier
 behavior, runtime stability, and evidence quality — it does not evaluate a
 model or PDB") already states this. This decision gate's contribution is
@@ -261,7 +261,7 @@ authorization. The current campaign runs no model, per its own constraints.
 | SFT | A real-model trajectory corpus of tens-to-low-hundreds of cases, spanning resolved and unresolved outcomes on a current protocol version, exists and an instruction-response schema is drafted and reviewed. |
 | DPO | An SFT baseline exists **and** a reviewed, paired preference dataset (chosen/rejected trajectories, same task, same protocol) exists at meaningful scale. |
 | Eight-task QuixBugs sufficiency | Not applicable — no trigger is defined to expand the no-model QuixBugs campaign further; effort should go to Section 6 instead. |
-| BugsInPy unblock (context for RAG/generalization) | The dataset root license and every selected project's license/notice terms are reviewed and recorded, **and** an OS/container-level containment boundary beyond the current trusted-local WSL/Bubblewrap+`prlimit` boundary is implemented and self-tested (`docs/BUGSINPY_PILOT_READINESS_V1.md`, "Checks required before any task execution"). |
+| BugsInPy unblock (context for RAG/generalization) | The dataset root license and every selected project's license/notice terms are reviewed and recorded, **and** an OS/container-level containment boundary beyond the current trusted-local WSL/Bubblewrap+`prlimit` boundary is implemented and self-tested (`docs/datasets/bugsinpy/pilot-readiness.md`, "Checks required before any task execution"). |
 
 ## 8. What this gate does not do
 

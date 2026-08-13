@@ -128,9 +128,9 @@ review and Onur's manual execution.
 3. Use `live-wire` only with those exact artifacts, the explicit v3 manifest,
    a QuixBugs environment artifact, the task-bound facts provider, and the
    explicit live confirmation flag. The complete command sequence is in
-   `docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`.
+   `docs/datasets/quixbugs/opencode-adapter.md`.
 
-See `docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md` for the full runner
+See `docs/datasets/quixbugs/pilot-v2-runner.md` for the full runner
 lifecycle.
 
 ## Execution-commit binding (material repair)

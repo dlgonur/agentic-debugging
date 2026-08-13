@@ -33,7 +33,7 @@ The proposed tasks are:
 ## Licensing conclusion
 
 The exact-revision project review is recorded in
-docs/BUGSINPY_LICENSE_GATE_V1.md. FastAPI and thefuck are MIT,
+docs/datasets/bugsinpy/license-gate.md. FastAPI and thefuck are MIT,
 HTTPie is BSD-3-Clause with an AUTHORS.rst attribution record, and tqdm is
 mixed file-scoped MIT/MPL-2.0. Each project is
 CLEAR_WITH_CONDITIONS, subject to notice preservation, exact revision

@@ -561,9 +561,9 @@ stronger research claim could be made.
 | `research/papers/TIER1_LOCAL_MANIFEST.md` | Tier 1 source identities and ignored-PDF policy |
 | `research/papers/TIER2_LOCAL_MANIFEST.md` | Tier 2 source identities and ignored-PDF policy |
 | `research/reports/synthesis/claims_to_verify_v1.md` | Unresolved claims preserved in the appendix |
-| `docs/DATASET_EVALUATION_DECISION_V1.md` | Evaluation contract, metric gaps, containment and external-task limitations |
-| `docs/FINAL_TECHNICAL_REPORT_V1.md` | Current architecture, verifier authority, boundaries, and interpretation limits |
-| `docs/INSTRUCTOR_AGENTIC_DEBUGGING_STATUS_MAP.md` | Conservative literature-item status and missing work |
+| `docs/datasets/selection.md` | Evaluation contract, metric gaps, containment and external-task limitations |
+| `docs/archive/reports/final-report-v1.md` | Current architecture, verifier authority, boundaries, and interpretation limits |
+| `docs/archive/status/instructor-status-map.md` | Conservative literature-item status and missing work |
 
 The index identifies the evidence used. It does not assert that all literature
 claims have been independently reverified or that the instructor item is fully

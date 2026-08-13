@@ -1,7 +1,7 @@
 # QuixBugs Eight-Task Gold Baseline v1
 
 Expands the accepted resource-limited `gcd` smoke (see
-`docs/QUIXBUGS_SMOKE_USAGE_V1.md`) into a reproducible eight-task no-model
+`docs/datasets/quixbugs/smoke-guide.md`) into a reproducible eight-task no-model
 baseline on the same pinned QuixBugs revision, reusing the same adapter, WSL
 runner, resource profile, environment, source checkout, patch lifecycle, and
 `EvaluationVerifier` unmodified in behavior. **This campaign validates dataset
@@ -54,7 +54,7 @@ so historical compliance with the candidate cap is unproven. For future runs,
 only static file/metadata inspection may occur outside the resource-limited
 runner. Candidates were then **formally executed** one at a
 time through the generalized adapter + resource-limited WSL verifier
-pipeline (the pipeline described in `docs/QUIXBUGS_SMOKE_USAGE_V1.md`) until
+pipeline (the pipeline described in `docs/datasets/quixbugs/smoke-guide.md`) until
 7 additional eligible tasks joined the already-accepted `gcd`:
 
 | Order | Algorithm | Formal result |

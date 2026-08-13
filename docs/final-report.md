@@ -7,7 +7,7 @@
 Python/PDB-first prototype
 
 This report synthesizes the project's accepted evidence through S7 into a
-final academic narrative. It supersedes `FINAL_TECHNICAL_REPORT_V1.md` (the
+final academic narrative. It supersedes `docs/archive/reports/final-report-v1.md` (the
 2026-07-31 QuixBugs gold-baseline snapshot, preserved as a historical
 document). Every material experimental claim traces to a frozen run artifact
 or to the S5 canonical comparison; external literature claims cite the S7
@@ -372,7 +372,7 @@ about fine-tuning.
 ## 9. Preference / DPO investigation
 
 A historical controlled DPO experiment exists (S5 axis 2, auxiliary; master
-plan §2.6; `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`).
+plan §2.6; `docs/evaluation/model-rag-sft-dpo.md`).
 
 | Condition | RESOLVED |
 |---|---|
@@ -388,7 +388,7 @@ data to justify a new DPO campaign.
 
 This result is auxiliary and is not collapsed into the primary repair score.
 It is `master_plan_prose_only` in provenance — the exact 27/30, 27/30, 21/30
-values are not in the tracked `MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` but are
+values are not in the tracked `docs/evaluation/model-rag-sft-dpo.md` but are
 carried by the tracked S5 ledger and the tracked 2026-08-10 master plan §2.6.
 No in-repo frozen result file exists. It is not reopened unless Main FirstMate
 explicitly authorizes it based on new evidence.
@@ -399,7 +399,7 @@ explicitly authorizes it based on new evidence.
 
 ### RAG architecture
 
-The repository RAG system (master plan §2.7; `docs/REPOSITORY_RAG_V1.md`)
+The repository RAG system (master plan §2.7; `docs/architecture/repository-rag.md`)
 implements: deterministic bounded lexical repository retrieval;
 source/test/safe issue/failure provenance; answer-bearing/oracle exclusions;
 bounded context budgets; model-adapter integration; default-OFF behavior.
@@ -665,7 +665,7 @@ each produced one model-authored PDB command and zero successful observations.
 ### Static real-provider success (not debugger success)
 
 A real-provider static QuixBugs gcd path reached verifier-confirmed RESOLVED
-(F2P 5/5, P2P 1/1, full suite 6/6; `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`,
+(F2P 5/5, P2P 1/1, full suite 6/6; `docs/datasets/quixbugs/baseline-8-task.md`,
 `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json`). This demonstrates the
 **real model → patch → verifier** static path. It does **not** demonstrate
 debugger use — the debugger was not used in that path. It is kept as a
@@ -1030,7 +1030,7 @@ when the tracked artifact has been verified to contain the exact claim.
 | S4: 10/40, NOT_EVALUATED, 5/10 truncation | `PARTIAL_RUN_RECORD.json`, `run-identity.json` (local); `s4_contract.json` (tracked) | local_untracked_accepted (run records); frozen_in_repo (contract) | run records no; contract yes | run records no; contract yes | `s5_comparison_ledger.json` + `s5_provenance_source_map.md` | yes |
 | D1: `break 20` → tool_error, 0 obs, Gate B/C FAIL, 17,686 tokens | `experiments/debugger_interaction_v2_d1/runs/.../evidence.json` (SHA256 `c7a405cc...`) | local_untracked_accepted | no | no | `s5_professor_todo_coverage_matrix.json/.md` + `s5_comparison_ledger.json` | yes |
 | S2: `continue` → rejected, 0 obs, Gate B/C FAIL | untracked S5 master plan §S2 | master_plan_prose_only | no | no | `s5_professor_todo_coverage_matrix.json/.md` + `s5_comparison_ledger.json` | yes |
-| Static gcd: F2P 5/5, P2P 1/1, RESOLVED | `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`, `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json` | frozen_in_repo | yes | yes | — (source is tracked) | — |
+| Static gcd: F2P 5/5, P2P 1/1, RESOLVED | `docs/datasets/quixbugs/baseline-8-task.md`, `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json` | frozen_in_repo | yes | yes | — (source is tracked) | — |
 | S1-P original live: 957 tokens, NOT RESOLVED | `AI_REVIEW/s1p_.../live-run-1/evidence.json` (source commit `c47be60e...`) | local_untracked_accepted | no | no | `s5_comparison_ledger.json` + `s5_controlled_comparison_report.md` | yes |
 | S1-P post-hoc: RESOLVED F2P 1/1 P2P 2/2 | untracked S5 master plan §S1-P (source commit `9e1b9dc9...`, ref valid) | master_plan_prose_only | no | no | `s5_comparison_ledger.json` + `s5_controlled_comparison_report.md` | yes |
 | SDPA: 301.399→3.562s, ~84.6× | `_ai-review/perf-cp118-efficient-sdpa-v1/` (local); source impl `experiments/local_inference_perf/` @ `10bdfa91...` (untracked branch) | local_untracked_accepted | no | no | `s5_comparison_ledger.json` + `s5_controlled_comparison_report.md` | yes |
@@ -1082,10 +1082,10 @@ The following load-bearing sources were verified by `git ls-files
 | `analysis/s5_final_controlled_comparison/*` (6 files) | **yes** | frozen_in_repo |
 | `presentation/s6-real-debugging-evidence/*` (2 files) | **yes** | frozen_in_repo |
 | `research/literature/agentic_debugging_literature_closeout_2026-08-11.md` | **yes** | frozen_in_repo |
-| `docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md` | **yes** | frozen_in_repo |
+| `docs/datasets/quixbugs/baseline-8-task.md` | **yes** | frozen_in_repo |
 | `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json` | **yes** | frozen_in_repo |
 | `tests/golden_trajectories/data/quixbugs-gcd-pdb-reachability-captured-result.json` | **yes** | frozen_in_repo |
-| `docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` | **yes** | frozen_in_repo (does NOT contain DPO 27/30/21/30 values) |
+| `docs/evaluation/model-rag-sft-dpo.md` | **yes** | frozen_in_repo (does NOT contain DPO 27/30/21/30 values) |
 
 No source is labeled `frozen_in_repo` unless it is tracked in HEAD. No source
 with `tracked=no` or `clean_checkout_available=no` is labeled `frozen_in_repo`.
@@ -1115,7 +1115,7 @@ where their content has been verified to contain the exact claim.
    clean-checkout carrier. The tracked 2026-08-10 master plan carries the same
    dataset/training/metric aggregates and serves as the clean-checkout carrier
    for those facts.
-9. The tracked `MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md` does NOT contain the
+9. The tracked `docs/evaluation/model-rag-sft-dpo.md` does NOT contain the
    DPO 27/30/21/30 values; those are carried by the tracked S5 ledger and the
    tracked 2026-08-10 master plan.
 
@@ -1136,6 +1136,6 @@ where their content has been verified to contain the exact claim.
 ---
 
 *This report is synthesis of accepted project evidence through S7 (HEAD
-`677992f`). No new experiments were run. See `FINAL_TECHNICAL_REPORT_V1.md`
+`677992f`). No new experiments were run. See `docs/archive/reports/final-report-v1.md`
 for the 2026-07-31 QuixBugs gold-baseline snapshot preserved as a historical
 document.*

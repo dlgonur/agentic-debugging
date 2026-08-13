@@ -8,7 +8,7 @@ single canonical authority for final project status and fresh-reviewer
 handoff is `Agentic_Debugging_Project_Closeout_2026-08-11.md` (final stage
 table S0–S9, professor-TODO reconciliation, reproducibility audit, evidence
 paths, explicit non-claims, and Git integration instructions). Final
-deliverables: `docs/FINAL_TECHNICAL_REPORT_V2.md` (S8) and `diary/diary.md`
+deliverables: `docs/final-report.md` (S8) and `diary/diary.md`
 (complete through 2026-08-11). No positive real-model dynamic debugger
 trajectory is claimed; the project closes on honestly established bounded
 negative evidence for the debugger-loop treatment.
@@ -16,7 +16,7 @@ negative evidence for the debugger-loop treatment.
 Historical status (2026-08-07): tracked history through `1e680b1`
 contains the literature syntheses, bounded post-mortem PDB implementation,
 repository RAG, unified comparison harness, and preference-pair exporter.
-See `docs/REPOSITORY_STATUS_RECONCILIATION_2026-08-07.md` for the
+See `docs/archive/status/repo-reconciliation-2026-08-07.md` for the
 claim-by-claim correction of older snapshot text. External QLoRA work remains
 outside this main-repository reconciliation.
 
@@ -24,8 +24,8 @@ Two 2026-08-07 local follow-ups close the remaining metric/persistence gaps:
 `root-cause-assessment-v1` supplies explicit independent root-cause scoring,
 and the existing `get_failure_trace` action now records bounded post-mortem
 PDB evidence through ToolResult, controller observation, canonical events,
-replay, and cleanup. See `docs/ROOT_CAUSE_EXPLANATION_METRIC_V1.md` and
-`docs/POST_MORTEM_TRAJECTORY_INTEGRATION_V1.md`. Neither is a live-model
+replay, and cleanup. See `docs/architecture/root-cause-metric.md` and
+`docs/architecture/pdb-trajectory.md`. Neither is a live-model
 performance claim.
 
 The same completion pass also resolves the previously recorded 32-node
@@ -34,7 +34,7 @@ forwarder cache whose distinct target keys shared one per-PID output path,
 not generic OS resource pressure. Target-specific unique build directories
 restore hermetic ordering; the post-fix full suite completed with 3733
 passed and 3 skipped. See
-`docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md` for the diagnosis and exact
+`docs/architecture/verifier-cache.md` for the diagnosis and exact
 validation boundary.
 
 The project investigates the path from traditional debugging, fault localization, automated program repair, LLM-based debugging, and repository-level software engineering agents toward interactive debugger-assisted agents.
@@ -66,7 +66,7 @@ Deterministic, provider-free engineering sprint on
 - **Repository-native RAG** (`agentic_debugger/rag/`) — stdlib-only lexical
   index (`repository-index-v1`) and retrieval (`retrieval-result-v1`) over
   source, tests, safe task/issue projections and captured failure output;
-  revision-bound, budgeted, fail-closed. See `docs/REPOSITORY_RAG_V1.md`.
+  revision-bound, budgeted, fail-closed. See `docs/architecture/repository-rag.md`.
 - **Optional RAG context injection** — additive `rag_context` at the
   demo/model-adapter and live-adapter boundaries; off by default; default
   requests byte-identical; 20 KB public-request bound enforced. No model
@@ -80,9 +80,9 @@ Deterministic, provider-free engineering sprint on
 - **Preference-pair exporter** (`agentic_debugger/preference/`) — ordered
   verifier-backed rules, strict `preference-pair-v1` pairs (JSONL) plus
   audit; held-out and oracle-contamination guards; DPO/RLHF is out of scope
-  for this sprint. See `docs/PREFERENCE_EXPORTER_V1.md`.
+  for this sprint. See `docs/architecture/preference-export.md`.
 
-Decision scope: `docs/RAG_COMPARISON_DECISION_V2.md` supersedes the v1 gate's
+Decision scope: `docs/evaluation/rag-comparison.md` supersedes the v1 gate's
 RAG `NO-GO-FOR-NOW` only for this authorized offline infrastructure scope.
 Imported base/tuned demo identities are labeled `offline-deterministic-demo`
 and are infrastructure evidence, not model performance.
@@ -118,7 +118,7 @@ repetitions; the PDB-on-uncertainty policy resolved neither repetition and
 terminated with underlying reason `invalid_model_response` before PDB opened.
 Corrective-feedback recovery occurred in 4 of 6 observed feedback episodes.
 This small, fixture-specific matrix does not establish causal PDB
-effectiveness or general model reliability; see `docs/PROJECT_TRACKER.md`.
+effectiveness or general model reliability; see `docs/project-tracker.md`.
 It is a historical record of the earlier OpenCode Zen free-tier route and is
 not the current implementation route.
 
@@ -135,10 +135,10 @@ additional models, research agents, MCP, benchmarks, or paid services unless
 the current task explicitly authorizes them.
 
 The QuixBugs paired pilot has three versioned manifests. v1
-(`docs/QUIXBUGS_PAIRED_PILOT_V1.md`,
+(`docs/datasets/quixbugs/paired-pilot-v1.md`,
 `research/quixbugs/PAIRED_PILOT_V1.json`) froze the three-task, six-case
 static-versus-PDB feasibility design on the historical OpenCode Zen
-zero-price route. v2 (`docs/QUIXBUGS_PAIRED_PILOT_V2.md`,
+zero-price route. v2 (`docs/datasets/quixbugs/paired-pilot-v2.md`,
 `research/quixbugs/PAIRED_PILOT_V2.json`) is the derived contract against
 accepted baseline `18e067f24c337e7215139373edc699a347cf2127`: the same tasks,
 six-case order, budgets, protocol 1.3, qualification contract, and
@@ -199,7 +199,7 @@ adapter requires, before the real campaign, a real operator authorization
 artifact, exact runtime route evidence passing preflight, the adapter's
 accepted commit bound in that authorization, the operator-supplied QuixBugs
 execution environment, and the operator's explicit authorization. See
-`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`. Not started and not
+`docs/datasets/quixbugs/opencode-adapter.md`. Not started and not
 marked complete: operator authorization, real route preflight, real OpenCode
 Go execution, the six-case live campaign, empirical evaluation, model
 performance, PDB effectiveness, RAG, SFT, and DPO; historical OpenCode Zen
@@ -337,7 +337,7 @@ recomputes the selected entry fingerprint and compares it with the
 authorization-bound expected fingerprint before any model process may run.
 The materialized artifacts work with the existing zero-provider-process
 `route-preflight-only` command (PowerShell example in
-`docs/QUIXBUGS_OPENCODE_GO_EXECUTION_ADAPTER_V1.md`). Tests were added for
+`docs/datasets/quixbugs/opencode-adapter.md`). Tests were added for
 deterministic fingerprinting, exact selected-entry matching, malformed/
 duplicate/inactive/missing-variant/historical-free-route rejection, route
 evidence schema production, authorization/config cross-binding, dirty-Git and
@@ -438,7 +438,7 @@ effectiveness, RAG, SFT, and DPO.
 The QuixBugs paired-pilot v2 live-runner infrastructure is implemented and
 validated (runner-only, accepted baseline `28ec7754336fc53f21ebbae8a851b33e26714932`):
 a strict versioned authorization contract
-(`docs/QUIXBUGS_PAIRED_PILOT_V2_AUTHORIZATION_V1.md`; non-authorizing schema
+(`docs/datasets/quixbugs/pilot-v2-authorization.md`; non-authorizing schema
 reference `research/quixbugs/PAIRED_PILOT_V2_AUTHORIZATION_TEMPLATE.json`,
 rejected by the validator; real authorizations live outside tracked source in
 the ignored `operator/` location), a mandatory pre-provider route gate that
@@ -477,7 +477,7 @@ verified execution commit, a successful route gate, and an explicitly
 configured provider transport and case runner. This task used only synthetic
 transports, temporary fixtures, and deterministic test doubles, with zero
 provider calls proven by counter. Operator guide:
-`docs/QUIXBUGS_PAIRED_PILOT_V2_LIVE_RUNNER_V1.md`. The separate future task
+`docs/datasets/quixbugs/pilot-v2-runner.md`. The separate future task
 (real authorization + route evidence + transport/case runner) is not started;
 no live campaign or accepted benchmark was run.
 
@@ -487,14 +487,14 @@ the accepted WSL2/Bubblewrap infrastructure, extended with a
 live-self-tested `prlimit` CPU/memory/process-count profile: pinned revision
 `4257f44b0ff1181dedaedee6a447e133219fcebf`, verdict
 `ACCEPT CANDIDATE — REAL SMOKE PASSED`. See
-`docs/QUIXBUGS_SMOKE_USAGE_V1.md`. That single-task smoke has since been
+`docs/datasets/quixbugs/smoke-guide.md`. That single-task smoke has since been
 expanded into an eight-task no-model gold baseline on the same pinned
 revision (`gcd`, `bucketsort`, `find_in_sorted`, `flatten`, `kth`, `hanoi`,
 `is_valid_parenthesization`, `kheapsort`), reusing the same adapter, WSL
 runner, resource profile, and verifier: 8/8 selected tasks solved (gold
 patch verified end-to-end), verdict
 `ACCEPT CANDIDATE — EIGHT-TASK BASELINE COMPLETE`. See
-`docs/QUIXBUGS_EIGHT_TASK_BASELINE_V1.md`. Both validate infrastructure
+`docs/datasets/quixbugs/baseline-8-task.md`. Both validate infrastructure
 only — no model, PDB, or broader benchmark campaign was run; every "patch"
 applied is the literal upstream buggy→corrected diff, not a generated one.
 No external dataset execution or larger live policy comparison is justified
@@ -505,12 +505,12 @@ Dataset and Evaluation Decision v1 selects BugsInPy as the primary external
 dataset, QuixBugs Python as fallback, and the current five curated fixtures as
 the architecture smoke gate. RAG is NO-GO-FOR-NOW for a research comparison,
 SFT is DEFER, and DPO/preference optimization is NO-GO-FOR-NOW. See `TODO.md`
-and `docs/DATASET_EVALUATION_DECISION_V1.md`.
+and `docs/datasets/selection.md`.
 
 [Historical] The Model, RAG, Fine-Tuning and DPO Decision Gate v1
-(`docs/MODEL_RAG_SFT_DPO_DECISION_GATE_V1.md`) and the Final Technical Report
-and Demo Package v1 (`docs/FINAL_TECHNICAL_REPORT_V1.md`,
-`docs/DEMO_GUIDE_V1.md`) are complete and accepted as of 2026-07-31,
+(`docs/evaluation/model-rag-sft-dpo.md`) and the Final Technical Report
+and Demo Package v1 (`docs/archive/reports/final-report-v1.md`,
+`docs/demo/guide.md`) are complete and accepted as of 2026-07-31,
 documentation-only, from baseline `2236775`. The Decision Gate reaffirms RAG
 NO-GO-FOR-NOW, SFT DEFER, and DPO NO-GO-FOR-NOW, and at the time added
 PROCEED (narrow) on future model-access strategy — the smallest credible next
@@ -738,7 +738,7 @@ live campaign, WSL, BugsInPy, QLoRA, or held-out execution:
   still classified as an OS-resource-pressure flake. The 2026-08-07
   full-suite repair supersedes that diagnosis with the proven test-only
   target-cache collision described in
-  `docs/FULL_SUITE_FORWARDER_CACHE_REPAIR_V1.md`.
+  `docs/architecture/verifier-cache.md`.
 - Repaired (deterministic) — known wrapper/transport test failures (4 test
   defects + 2 env-gated): all 6 are repaired; the two env-gated preflight
   tests are now hermetic (no real OpenCode install required).
@@ -780,7 +780,7 @@ live campaign, WSL, BugsInPy, QLoRA, or held-out execution:
   `tests/unit/test_pdb_post_mortem.py` (AST definition count = unique name
   count = pytest collected count). The tracked TODO
   6.1.3 subtask status is determined by its actual acceptance contract (see
-  `docs/PROJECT_TRACKER.md`).
+  `docs/project-tracker.md`).
 
 Accepted validation: focused suites pass (live-runner 286; wrapper+transport
 100 in isolation; transport-factory+case-runner 55 in both orders; V4
