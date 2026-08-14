@@ -1,7 +1,7 @@
 # Agentic Debugging Local Application V1 — Architecture and Implementation Plan
 
 **Document type:** Active architecture and phased implementation plan  
-**Status:** Active implementation baseline; Task 1 accepted, Task 2 next  
+**Status:** Active implementation baseline; Tasks 1–2 accepted, Task 3 next
 **Repository:** `agentic-debugging-internship`  
 **Repository state inspected:** `main` at `e5ebe2680238624d7020ac9270918b4601848a83`, clean working tree and empty stash before this document was added  
 **Scope:** A professional local application surface over the existing Agentic Debugging system  
@@ -1023,14 +1023,18 @@ No GPU, model download, or external provider is required for normal application 
 
 **Why second:** This validates the hardest observability boundary before UI investment while keeping the accepted scientific event contract isolated.
 
-**Expected areas:** Controller, application event adapter/journal, focused tests.
+**Expected areas:** Controller, controller-native observation contract, application event adapter, focused tests.
 
 **Key work:**
 
-- optional observer with no-op default;
-- cancellation checkpoint between controller steps;
-- application-event adapter from accepted controller step/results;
+- optional typed observer with no-op default and explicit run/task identity;
+- controller-native observations at authoritative execution boundaries;
+- application-event adapter that emits validated controller-owned `SessionEvent` prefixes;
 - unchanged post-run canonical projection through the existing public path.
+
+Cancellation checkpoints are intentionally deferred to Task 3 so cancellation is
+introduced together with the worker/process boundary, cooperative token, subprocess
+termination, and cleanup verification rather than as a partial controller-only contract.
 
 **Acceptance criteria:**
 

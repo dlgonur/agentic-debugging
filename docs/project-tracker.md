@@ -26,9 +26,22 @@ Rules:
   `RunEvent`, trajectory/replay-golden, demo, Textual, GPU, or campaign behavior
   changed. The known local `test_demo_catalog` failure remains environmental:
   gitignored QuixBugs materializations expand the locally discovered catalog.
-- [ ] **Task 2 — Add incremental controller observability** — NEXT.
-  Follow `docs/architecture/local-application-v1.md`; preserve canonical
-  `RunEvent` 1.0 and post-run scientific trajectory behavior.
+- [x] **Task 2 — Add incremental controller observability** — ACCEPTED (2026-08-14).
+  Added a typed controller-native observer seam plus the application-side
+  controller-to-`SessionEvent` prefix adapter. Every native observation carries
+  explicit run/task identity; replay-only source kinds are rejected by the live
+  adapter; directive acceptance is distinct from subsequent tool success; and
+  observer `Exception`s cannot alter controller decisions/results. Cancellation
+  remains intentionally deferred to Task 3. Acceptance evidence includes
+  **73/73** focused observer/adapter tests and **464/464** directly affected
+  application/controller compatibility tests after the repair pass. Previously
+  exercised golden, trajectory/replay, demo/live, R1–R3, and QuixBugs controller
+  gates remained compatible; known baseline-local failures were independently
+  reported as pre-existing. Canonical `RunEvent` 1.0 and post-run trajectory
+  generation remain unchanged.
+- [ ] **Task 3 — Build the cancellable worker boundary** — NEXT.
+  Implement cancellation coherently with worker/process supervision, subprocess
+  termination, cleanup verification, and crash-durable session lifecycle.
 
 ## 0. Daily Requirement
 

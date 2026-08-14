@@ -2,19 +2,21 @@
 
 ## Durum notu
 
-**2026-08-14 Local Application V1 — ACTIVE / TASK 1 ACCEPTED.**
+**2026-08-14 Local Application V1 — ACTIVE / TASKS 1–2 ACCEPTED.**
 Authoritative architecture and phased plan: `docs/architecture/local-application-v1.md`.
-Completed: **Task 1 — Establish application contracts**. Accepted result:
-`agentic_debugger.application` now defines the UI-independent session, event,
-source, lifecycle, and presentation contracts without changing the scientific
-execution core. Current next milestone: **Task 2 — Add incremental controller
-observability**. Existing R1-R6 scientific results, frozen evidence, and the
-sustained local-GPU hardware stop remain unchanged; this application phase does
-not authorize training, final-holdout reruns, or sustained local GPU campaigns.
+Completed: **Task 1 — Establish application contracts** and **Task 2 — Add
+incremental controller observability**. The controller now exposes an optional,
+typed, controller-native observation seam with unchanged no-observer behavior,
+and the application layer can adapt controller-owned facts into validated
+`SessionEvent` prefixes without taking ownership of cleanup or terminal session
+lifecycle. Current next milestone: **Task 3 — Build the cancellable worker
+boundary**. Existing R1-R6 scientific results, frozen evidence, and the sustained
+local-GPU hardware stop remain unchanged; this application phase does not
+authorize training, final-holdout reruns, or sustained local GPU campaigns.
 
 - [ ] **Local Application V1** — execute the accepted phased roadmap in
-  `docs/architecture/local-application-v1.md` (Task 1 accepted; current milestone:
-  Task 2 of 8).
+  `docs/architecture/local-application-v1.md` (Tasks 1–2 accepted; current
+  milestone: Task 3 of 8).
 
 **2026-08-13 current status (R1-R6 closeout):** The 2026-08-11 S9
 bounded-negative closeout is **historical** and is preserved verbatim at

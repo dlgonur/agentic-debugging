@@ -34,6 +34,12 @@ from agentic_debugger.agent.model_adapter import (
     TransitionDirective,
     directive_kind,
 )
+from agentic_debugger.agent.observer import (
+    ControllerObservation,
+    ControllerObservationKind,
+    ControllerObserver,
+    NoopControllerObserver,
+)
 from agentic_debugger.agent.state_machine import ControllerState, is_transition_allowed
 from agentic_debugger.agent.tool_registry import (
     ToolDispatchReason,
@@ -333,6 +339,16 @@ def _resolve_model_method(adapter: object) -> Callable[..., object]:
         _input("model_adapter")
     if not inspect.isfunction(method) or not callable(method):
         _input("model_adapter")
+    return method
+
+
+def _resolve_observer_notify(observer: object) -> Callable[..., None]:
+    try:
+        method = inspect.getattr_static(type(observer), "notify")
+    except (AttributeError, TypeError):
+        _input("observer")
+    if not inspect.isfunction(method) or not callable(method):
+        _input("observer")
     return method
 
 
@@ -810,9 +826,11 @@ class DeterministicController:
     registry: ToolRegistry
     model_adapter: object
     config: ControllerRunConfig = field(default_factory=ControllerRunConfig)
+    observer: ControllerObserver = field(default_factory=NoopControllerObserver, compare=False)
     _canonical_registry: ToolRegistry = field(init=False, repr=False, compare=False)
     _model_method: Callable[..., object] = field(init=False, repr=False, compare=False)
     _canonical_max_model_calls: int = field(init=False, repr=False, compare=False)
+    _canonical_observer: ControllerObserver = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         canonical_registry = _canonicalize_registry(self.registry)
@@ -823,10 +841,12 @@ class DeterministicController:
             _input("config")
         canonical_config = ControllerRunConfig(max_model_calls)
         method = _resolve_model_method(self.model_adapter)
+        _resolve_observer_notify(self.observer)
         object.__setattr__(self, "config", canonical_config)
         object.__setattr__(self, "_canonical_registry", canonical_registry)
         object.__setattr__(self, "_model_method", method)
         object.__setattr__(self, "_canonical_max_model_calls", max_model_calls)
+        object.__setattr__(self, "_canonical_observer", self.observer)
 
     def _validate_controller(self) -> None:
         if type(self.registry) is not ToolRegistry:
@@ -837,6 +857,8 @@ class DeterministicController:
             _invariant("max_model_calls")
         if not inspect.isfunction(self._model_method) or not callable(self._model_method):
             _invariant("model_method")
+        if not callable(getattr(self._canonical_observer, "notify", None)):
+            _invariant("observer")
 
     def run(self, initial_snapshot: ControllerSnapshot) -> ControllerRunResult:
         self._validate_controller()
@@ -855,14 +877,48 @@ class DeterministicController:
         last_observation = snapshot.last_observation
         steps: list[ControllerStepResult] = []
         model_calls = 0
+        last_request_index = model_call_index
+
+        def _emit(kind: ControllerObservationKind, **details: object) -> None:
+            """Fire one detached observation; observer failure never alters
+            a controller decision, step, budget, stop reason, or result.
+
+            Ordinary ``Exception`` failures (including observation
+            construction) are bounded and swallowed; ``BaseException``
+            (``KeyboardInterrupt``/``SystemExit``) propagates."""
+            try:
+                observation = ControllerObservation(
+                    kind=kind, run_id=run_id, task_id=task_id, **details
+                )
+                self._canonical_observer.notify(observation)
+            except Exception:
+                pass
+
+        _emit(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=snapshot.model_call_index,
+            state_before=initial_state,
+        )
 
         if state is ControllerState.DONE:
+            _emit(
+                ControllerObservationKind.TERMINAL,
+                model_call_index=snapshot.model_call_index,
+                state_after=ControllerState.DONE,
+                stop_reason=ControllerStopReason.DONE.value,
+            )
             return ControllerRunResult(
                 run_id, task_id, initial_state, ControllerState.DONE,
                 ControllerStopReason.DONE, 0, (), budget_state, hypotheses,
                 last_observation,
             )
         if state is ControllerState.FAILED:
+            _emit(
+                ControllerObservationKind.TERMINAL,
+                model_call_index=snapshot.model_call_index,
+                state_after=ControllerState.FAILED,
+                stop_reason=ControllerStopReason.FAILED.value,
+            )
             return ControllerRunResult(
                 run_id, task_id, initial_state, ControllerState.FAILED,
                 ControllerStopReason.FAILED, 0, (), budget_state, hypotheses,
@@ -870,6 +926,12 @@ class DeterministicController:
             )
 
         def result(stop_reason: ControllerStopReason, final_state: ControllerState) -> ControllerRunResult:
+            _emit(
+                ControllerObservationKind.TERMINAL,
+                model_call_index=last_request_index,
+                state_after=final_state,
+                stop_reason=stop_reason.value,
+            )
             return ControllerRunResult(
                 run_id, task_id, initial_state, final_state, stop_reason,
                 model_calls, tuple(steps), budget_state, hypotheses,
@@ -887,11 +949,18 @@ class DeterministicController:
             before_state = state if state_before is None else state_before
             before_budget = budget_state if budget_before is None else budget_before
             before_hypotheses = hypotheses if hypotheses_before is None else hypotheses_before
+            step_model_call_index = (model_call_index if step_model_call_index is None and kind is None
+                                     else (model_call_index - 1 if step_model_call_index is None
+                                           else step_model_call_index))
             state = _failure_state(before_state)
+            _emit(
+                ControllerObservationKind.STATE_TRANSITION,
+                model_call_index=step_model_call_index,
+                state_before=before_state,
+                state_after=state,
+            )
             steps.append(ControllerStepResult(
-                model_call_index=(model_call_index if step_model_call_index is None and kind is None
-                                  else (model_call_index - 1 if step_model_call_index is None
-                                        else step_model_call_index)),
+                model_call_index=step_model_call_index,
                 state_before=before_state,
                 state_after=state,
                 directive_kind=kind,
@@ -904,10 +973,26 @@ class DeterministicController:
                 hypotheses_after=hypotheses,
                 stop_reason=reason,
             ))
+            _emit(
+                ControllerObservationKind.STEP_COMPLETED,
+                model_call_index=step_model_call_index,
+                step_index=len(steps) - 1,
+                state_before=before_state,
+                state_after=state,
+                directive_kind=kind.value if kind is not None else None,
+                stop_reason=reason.value,
+            )
 
         while True:
             if model_calls >= max_calls:
+                before_state = state
                 state = _failure_state(state)
+                _emit(
+                    ControllerObservationKind.STATE_TRANSITION,
+                    model_call_index=last_request_index,
+                    state_before=before_state,
+                    state_after=state,
+                )
                 return result(ControllerStopReason.MODEL_CALL_LIMIT, state)
 
             state_before = state
@@ -933,40 +1018,76 @@ class DeterministicController:
             except Exception:
                 _invariant("snapshot")
             model_calls += 1
+            last_request_index = model_call_index
+            _emit(
+                ControllerObservationKind.MODEL_REQUEST_STARTED,
+                model_call_index=model_call_index,
+                state_before=state,
+            )
             try:
                 directive = self._model_method(self.model_adapter, call_snapshot)
             except ModelScriptExhaustedError:
+                _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                      model_call_index=model_call_index, state_before=state,
+                      request_status="error")
                 failure_step(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED)
                 return result(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED, state)
             except ModelScriptMismatchError:
+                _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                      model_call_index=model_call_index, state_before=state,
+                      request_status="error")
                 failure_step(ControllerStopReason.MODEL_SCRIPT_MISMATCH)
                 return result(ControllerStopReason.MODEL_SCRIPT_MISMATCH, state)
             except ModelAdapterError:
+                _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                      model_call_index=model_call_index, state_before=state,
+                      request_status="error")
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
             except Exception:
+                _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                      model_call_index=model_call_index, state_before=state,
+                      request_status="error")
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
             try:
                 kind, directive = _canonical_directive(directive)
             except Exception:
+                _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                      model_call_index=model_call_index, state_before=state,
+                      request_status="error")
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
             model_call_index += 1
+            _emit(
+                ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+                model_call_index=model_call_index - 1,
+                state_before=state_before,
+                request_status="ok",
+            )
             if kind is ModelDirectiveKind.ACTION:
                 action_directive = directive
                 record_action: Action | None = None
                 dispatch_action: Action | None = None
+                tool_started = False
                 try:
                     if not is_action_allowed(state, action_directive.name):
+                        _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
+                              model_call_index=model_call_index - 1, state_before=state_before,
+                              directive_kind=kind.value,
+                              rejection_category="state_action_not_allowed")
                         failure_step(ControllerStopReason.DIRECTIVE_REJECTED, kind=kind,
                                      state_before=state_before, budget_before=budget_before,
                                      hypotheses_before=hypotheses_before)
                         return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
                     budget_kind = budget_kind_for_action(action_directive.name)
                     if budget_kind is not None and _remaining(snapshot.budget_limits, budget_state, budget_kind) <= 0:
+                        _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
+                              model_call_index=model_call_index - 1, state_before=state_before,
+                              directive_kind=kind.value,
+                              rejection_category="budget_exhausted")
                         failure_step(ControllerStopReason.BUDGET_EXHAUSTED, kind=kind,
                                      state_before=state_before, budget_before=budget_before,
                                      hypotheses_before=hypotheses_before)
@@ -991,6 +1112,13 @@ class DeterministicController:
                     )
                     if type(record_action.arguments) is not dict or type(dispatch_action.arguments) is not dict:
                         _invariant("action")
+                    _emit(ControllerObservationKind.DIRECTIVE_ACCEPTED,
+                          model_call_index=model_call_index - 1, state_before=state_before,
+                          directive_kind=kind.value, tool_name=action_directive.name.value)
+                    _emit(ControllerObservationKind.TOOL_STARTED,
+                          model_call_index=model_call_index - 1, state_before=state_before,
+                          tool_name=action_directive.name.value)
+                    tool_started = True
                     observation_raw = ToolRegistry.dispatch(
                         self._canonical_registry,
                         dispatch_action,
@@ -1000,7 +1128,16 @@ class DeterministicController:
                     observation, reason = _canonical_observation(
                         observation_raw, record_action, observation_id
                     )
+                    _emit(ControllerObservationKind.TOOL_COMPLETED,
+                          model_call_index=model_call_index - 1, state_before=state_before,
+                          tool_name=action_directive.name.value,
+                          observation_status=observation.status)
                 except Exception:
+                    if tool_started:
+                        _emit(ControllerObservationKind.TOOL_COMPLETED,
+                              model_call_index=model_call_index - 1, state_before=state_before,
+                              tool_name=action_directive.name.value,
+                              observation_status=ObservationStatus.ERROR)
                     failure_step(ControllerStopReason.CONTROLLER_ERROR, kind=kind,
                                  action=record_action,
                                  state_before=state_before, budget_before=budget_before,
@@ -1022,20 +1159,38 @@ class DeterministicController:
                     hypotheses_before=hypotheses_before,
                     hypotheses_after=hypotheses,
                 ))
+                _emit(ControllerObservationKind.STEP_COMPLETED,
+                      model_call_index=model_call_index - 1,
+                      step_index=len(steps) - 1,
+                      state_before=state_before, state_after=state,
+                      directive_kind=kind.value)
             elif kind is ModelDirectiveKind.TRANSITION:
                 transition = directive
                 if not is_transition_allowed(state, transition.target_state):
+                    _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
+                          model_call_index=model_call_index - 1, state_before=state_before,
+                          directive_kind=kind.value,
+                          rejection_category="transition_not_allowed",
+                          transition_reason=transition.reason)
                     failure_step(ControllerStopReason.DIRECTIVE_REJECTED, kind=kind,
                                  transition_reason=transition.reason,
                                  state_before=state_before, budget_before=budget_before,
                                  hypotheses_before=hypotheses_before)
                     return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
+                _emit(ControllerObservationKind.DIRECTIVE_ACCEPTED,
+                      model_call_index=model_call_index - 1, state_before=state_before,
+                      directive_kind=kind.value, target_state=transition.target_state,
+                      transition_reason=transition.reason)
                 state = transition.target_state
                 stop = None
                 if state is ControllerState.DONE:
                     stop = ControllerStopReason.DONE
                 elif state is ControllerState.FAILED:
                     stop = ControllerStopReason.FAILED
+                _emit(ControllerObservationKind.STATE_TRANSITION,
+                      model_call_index=model_call_index - 1,
+                      state_before=state_before, state_after=state,
+                      transition_reason=transition.reason)
                 steps.append(ControllerStepResult(
                     model_call_index=model_call_index - 1,
                     state_before=state_before,
@@ -1050,6 +1205,13 @@ class DeterministicController:
                     hypotheses_after=hypotheses,
                     stop_reason=stop,
                 ))
+                _emit(ControllerObservationKind.STEP_COMPLETED,
+                      model_call_index=model_call_index - 1,
+                      step_index=len(steps) - 1,
+                      state_before=state_before, state_after=state,
+                      directive_kind=kind.value,
+                      transition_reason=transition.reason,
+                      stop_reason=stop.value if stop is not None else None)
                 if stop is not None:
                     return result(stop, state)
             else:
@@ -1059,6 +1221,10 @@ class DeterministicController:
                     ModelDirectiveKind.SET_HYPOTHESIS_STATUS: (ControllerState.UNDERSTAND, ControllerState.RUNTIME_EVIDENCE),
                 }
                 if state not in allowed_states[kind]:
+                    _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
+                          model_call_index=model_call_index - 1, state_before=state_before,
+                          directive_kind=kind.value,
+                          rejection_category="state_not_allowed")
                     failure_step(ControllerStopReason.DIRECTIVE_REJECTED, kind=kind,
                                  state_before=state_before, budget_before=budget_before,
                                  hypotheses_before=hypotheses_before)
@@ -1090,12 +1256,19 @@ class DeterministicController:
                             status_directive.status,
                         )
                 except ControllerPolicyError:
+                    _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
+                          model_call_index=model_call_index - 1, state_before=state_before,
+                          directive_kind=kind.value,
+                          rejection_category="policy_rejected")
                     failure_step(ControllerStopReason.DIRECTIVE_REJECTED, kind=kind,
                                  state_before=state_before, budget_before=budget_before,
                                  hypotheses_before=hypotheses_before)
                     return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
                 if type(hypotheses) is not HypothesisLedger:
                     _invariant("hypotheses")
+                _emit(ControllerObservationKind.DIRECTIVE_ACCEPTED,
+                      model_call_index=model_call_index - 1, state_before=state_before,
+                      directive_kind=kind.value)
                 steps.append(ControllerStepResult(
                     model_call_index=model_call_index - 1,
                     state_before=state_before,
@@ -1109,6 +1282,11 @@ class DeterministicController:
                     hypotheses_before=hypotheses_before,
                     hypotheses_after=hypotheses,
                 ))
+                _emit(ControllerObservationKind.STEP_COMPLETED,
+                      model_call_index=model_call_index - 1,
+                      step_index=len(steps) - 1,
+                      state_before=state_before, state_after=state,
+                      directive_kind=kind.value)
 
 
 __all__ = [
