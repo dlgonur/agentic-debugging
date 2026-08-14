@@ -10,8 +10,9 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.runtime.exceptions import (
     CommandExecutionError,
     CommandRequestError,
@@ -22,6 +23,7 @@ from agentic_debugger.runtime.workspace import TaskWorkspace
 _MAX_OUTPUT_CHARS = 20_000
 _TRUNCATION_MARKER = "\n... [output truncated] ...\n"
 _THREAD_JOIN_TIMEOUT = 5.0
+_POLL_INTERVAL_SECONDS = 0.1
 
 
 @dataclass(frozen=True)
@@ -140,6 +142,9 @@ class CommandRunner:
 
     Uses ``shell=False``, enforces timeouts, bounds output, and cleans up
     processes including descendant processes where the platform permits.
+    Children never inherit the parent's stdin (``DEVNULL``): a session
+    worker's protocol stdin must not be shared with a subprocess, and
+    non-interactive commands must observe EOF on stdin.
     """
 
     def __init__(self, workspace: TaskWorkspace, execution_context: Optional[VerifiedExecutionContext] = None) -> None:
@@ -151,9 +156,23 @@ class CommandRunner:
         argv: List[str],
         cwd: str,
         timeout_seconds: float,
+        *,
+        cancel_check: Optional[Callable[[], None]] = None,
     ) -> CommandResult:
+        """Execute ``argv`` bounded by ``timeout_seconds``.
+
+        ``cancel_check`` is an optional cooperative cancellation checkpoint:
+        when supplied it is polled while the child runs and must raise
+        :class:`CancellationError` to request cancellation.  Cancellation
+        terminates the child/process tree and re-raises the cancellation
+        signal; it never returns an ordinary failed result.  When
+        ``cancel_check`` is ``None`` behavior is unchanged (a single bounded
+        ``wait``).
+        """
         _validate_argv(argv)
         _validate_timeout(timeout_seconds)
+        if cancel_check is not None and not callable(cancel_check):
+            raise CommandRequestError("cancel_check must be callable or None")
 
         resolved_cwd = self._workspace.resolve_path(cwd, must_exist=True)
         if self._execution_context is not None:
@@ -180,6 +199,7 @@ class CommandRunner:
             proc = subprocess.Popen(
                 argv,
                 cwd=resolved_cwd,
+                stdin=subprocess.DEVNULL,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
@@ -197,7 +217,10 @@ class CommandRunner:
         )
 
         try:
-            proc.wait(timeout=timeout_seconds)
+            if cancel_check is None:
+                proc.wait(timeout=timeout_seconds)
+            else:
+                _wait_polling(proc, timeout_seconds, cancel_check)
         except subprocess.TimeoutExpired:
             timed_out = True
             _kill_process_tree(proc)
@@ -209,6 +232,9 @@ class CommandRunner:
                     proc.wait(timeout=2.0)
                 except subprocess.TimeoutExpired:
                     pass
+        except CancellationError:
+            _kill_process_tree(proc)
+            raise
         finally:
             deadline = time.monotonic() + _THREAD_JOIN_TIMEOUT
             for t in reader_threads:
@@ -355,6 +381,32 @@ def _wait_pid(proc: subprocess.Popen, timeout: float) -> None:
         pass
     except Exception:
         pass
+
+
+def _wait_polling(
+    proc: subprocess.Popen,
+    timeout_seconds: float,
+    cancel_check: Callable[[], None],
+) -> None:
+    """Poll ``cancel_check`` while waiting for ``proc`` to exit.
+
+    The manifest timeout is still honored exactly: once it expires a
+    ``TimeoutExpired`` is raised so the caller runs the normal timeout
+    termination path.  Cancellation (``CancellationError`` from the check)
+    propagates to the caller, which terminates the process tree and
+    re-raises.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while True:
+        cancel_check()
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise subprocess.TimeoutExpired(proc.args, timeout_seconds)
+        try:
+            proc.wait(timeout=min(_POLL_INTERVAL_SECONDS, remaining))
+            return
+        except subprocess.TimeoutExpired:
+            continue
 
 
 def _elapsed_ms(start: float) -> int:

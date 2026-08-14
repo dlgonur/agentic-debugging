@@ -14,6 +14,7 @@ from agentic_debugger.agent.controller_policy import (
     is_action_allowed,
 )
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.events.schema import (
     Action,
     Observation,
@@ -536,6 +537,8 @@ class ToolRegistry:
 
         try:
             result = spec.handler(action, validated_arguments)
+        except CancellationError:
+            raise
         except ToolRejectedError as exc:
             return _make_observation(
                 action,
@@ -579,6 +582,8 @@ class ToolRegistry:
 
         try:
             status, summary, truncated, payload = _finalize_success_result(result)
+        except CancellationError:
+            raise
         except Exception:
             return _make_observation(
                 action,

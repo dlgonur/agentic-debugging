@@ -1,7 +1,7 @@
 # Agentic Debugging Local Application V1 — Architecture and Implementation Plan
 
 **Document type:** Active architecture and phased implementation plan  
-**Status:** Active implementation baseline; Tasks 1–2 accepted, Task 3 next
+**Status:** Active implementation baseline; Tasks 1–3 accepted, Task 4 next
 **Repository:** `agentic-debugging-internship`  
 **Repository state inspected:** `main` at `e5ebe2680238624d7020ac9270918b4601848a83`, clean working tree and empty stash before this document was added  
 **Scope:** A professional local application surface over the existing Agentic Debugging system  
@@ -1051,32 +1051,39 @@ termination, and cleanup verification rather than as a partial controller-only c
 
 ### Task 3 — Build the cancellable worker boundary
 
-**Objective:** Isolate complete sessions and make termination/cleanup dependable.
+**Objective:** Isolate application execution behind a dependable cancellable worker/process boundary.
 
 **Why third:** Live UI must not run blocking controller/model/PDB operations on its event loop.
 
-**Expected areas:** Worker protocol, command runner, PDB lifecycle, workspace cleanup.
+**Accepted implementation areas:** Worker protocol, neutral cancellation contract, controller/runtime cancellation checkpoints, crash-durable session journal, process-tree supervision, and workspace cleanup.
 
-**Key work:**
+**Accepted implementation:**
 
-- dedicated worker process;
-- start/cancel/status protocol;
-- cooperative token;
-- graceful shutdown plus bounded process-tree termination;
-- cleanup verification;
-- crash-durable session lifecycle journal.
+- dedicated subprocess worker with a strict bounded local JSON-lines protocol;
+- neutral cancellation token/error propagated without creating a scientific controller stop reason;
+- cancellable `CommandRunner` polling with unchanged no-cancellation behavior;
+- worker-authoritative `SessionEvent` journal with flush/fsync durability and validated crash-prefix recovery;
+- sequence-only parent notifications; full event bodies remain journal-authoritative;
+- worker-owned disposable execution workspace created only after `session.started`;
+- honest pre-start cancel/timeout, startup failure, journal-fatal, crash/interruption, cleanup-failure, and cooperative-cancel semantics;
+- fail-closed Windows Job Object containment established before the suspended worker executes;
+- bounded forced escalation that terminates the worker and descendants, including the real PDB-worker topology;
+- production deterministic application-source wiring remains deferred to Task 7; Task 3 uses only a bounded non-product scenario harness to prove infrastructure.
 
 **Acceptance criteria:**
 
-- Cancelled deterministic sessions leave no PDB worker or disposable workspace.
-- Worker crash reopens as interrupted history.
-- UI/process separation is explicit and tested.
+- cooperative cancellation after execution starts reports `CANCELLED` only after verified cleanup;
+- pre-start cancellation/timeout leave no disposable work directory and do not fabricate a cleanup cycle;
+- forced Windows escalation leaves no Task-3 worker descendant alive and never claims cooperative `CANCELLED`;
+- crash, malformed/incomplete journal, and journal-write failure can never classify as successful completion;
+- valid Task-1 `SessionEvent` records, including large debugger-local payloads, survive journal persistence and parent catch-up;
+- no-cancellation controller/runtime behavior and canonical scientific trajectory semantics remain unchanged.
 
-**Validation:** Windows cancellation, timeout, crash, and cleanup tests.
+**Validation:** Windows cancellation, timeout, startup-failure, crash, journal, cleanup, real-descendant process-tree, and compatibility tests.
 
 **Dependencies:** Tasks 1–2.
 
-**Non-goals:** Guaranteed cooperative cancellation of in-process GPU inference.
+**Non-goals:** Production deterministic source wiring (Task 7), verifier-stage/debugger/patch observability (Task 4), history/indexing (Task 5), configured-model provider execution (Task 8), or guaranteed cooperative cancellation of in-process GPU inference.
 
 ### Task 4 — Expose patch, source, debugger, and verifier progress
 

@@ -39,9 +39,26 @@ Rules:
   gates remained compatible; known baseline-local failures were independently
   reported as pre-existing. Canonical `RunEvent` 1.0 and post-run trajectory
   generation remain unchanged.
-- [ ] **Task 3 — Build the cancellable worker boundary** — NEXT.
-  Implement cancellation coherently with worker/process supervision, subprocess
-  termination, cleanup verification, and crash-durable session lifecycle.
+- [x] **Task 3 — Build the cancellable worker boundary** — ACCEPTED (2026-08-14).
+  Added the isolated subprocess worker/supervisor boundary, neutral cancellation
+  token, controller/runtime cancellation propagation, crash-durable
+  `SessionEvent` journal, strict local worker protocol, verified disposable
+  workspace cleanup, and fail-closed Windows process-tree containment through a
+  kill-on-close Job Object. Full event bodies remain journal-authoritative while
+  worker notifications carry sequence information only. Startup, pre-start
+  cancel/timeout, journal-fatal, crash, cleanup-failure, cooperative cancel, and
+  forced-escalation paths are classified honestly. Final Windows Task-3
+  validation: **76 unit + 34 integration tests passed**, including real sleeping
+  child and real paused-PDB descendant forced-kill gates plus containment
+  create/assign/resume fail-closed gates. Directly affected Task-1/2, controller,
+  CommandRunner, events/replay/golden/PDB, and demo compatibility gates remained
+  green except the two known baseline-local demo-catalog failures caused by
+  gitignored QuixBugs copies. Production deterministic application-source wiring
+  remains intentionally deferred to Task 7.
+- [ ] **Task 4 — Expose patch, source, debugger, and verifier progress** — NEXT.
+  Add structured debugger/source/patch/verifier observability on top of the
+  accepted application contracts and worker boundary without changing verifier
+  correctness authority or canonical scientific event semantics.
 
 ## 0. Daily Requirement
 

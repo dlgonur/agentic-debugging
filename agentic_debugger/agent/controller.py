@@ -47,6 +47,7 @@ from agentic_debugger.agent.tool_registry import (
     ToolRegistryError,
     ToolSpec,
 )
+from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.events.schema import Action, Observation, ObservationStatus
 
 
@@ -860,8 +861,26 @@ class DeterministicController:
         if not callable(getattr(self._canonical_observer, "notify", None)):
             _invariant("observer")
 
-    def run(self, initial_snapshot: ControllerSnapshot) -> ControllerRunResult:
+    def run(
+        self,
+        initial_snapshot: ControllerSnapshot,
+        *,
+        cancel_check: Callable[[], None] | None = None,
+    ) -> ControllerRunResult:
+        """Execute one bounded controller run.
+
+        ``cancel_check`` is an optional cooperative cancellation checkpoint:
+        when supplied it is invoked only at coherent safe boundaries (loop
+        top, around the model request, before tool dispatch) and must raise
+        :class:`CancellationError` to request cancellation.  Cancellation
+        propagates explicitly and is never converted into a scientific stop
+        reason or a ``ControllerRunResult``; a cancelled run produces no
+        result, no terminal observation, and no canonical trajectory.  When
+        ``cancel_check`` is ``None`` behavior is unchanged.
+        """
         self._validate_controller()
+        if cancel_check is not None and not callable(cancel_check):
+            _input("cancel_check")
         snapshot = _canonicalize_initial_snapshot(initial_snapshot)
         max_calls = self._canonical_max_model_calls
         if snapshot.model_call_index + max_calls > MAX_CONTROLLER_MODEL_CALL_INDEX:
@@ -893,6 +912,16 @@ class DeterministicController:
                 self._canonical_observer.notify(observation)
             except Exception:
                 pass
+
+        def _check_cancelled() -> None:
+            """Honor cooperative cancellation at a safe boundary.
+
+            The check is a bare call: ``CancellationError`` (or any other
+            exception the caller's check raises) propagates and aborts the
+            run without fabricating a scientific outcome.
+            """
+            if cancel_check is not None:
+                cancel_check()
 
         _emit(
             ControllerObservationKind.RUN_STARTED,
@@ -984,6 +1013,7 @@ class DeterministicController:
             )
 
         while True:
+            _check_cancelled()
             if model_calls >= max_calls:
                 before_state = state
                 state = _failure_state(state)
@@ -1019,6 +1049,7 @@ class DeterministicController:
                 _invariant("snapshot")
             model_calls += 1
             last_request_index = model_call_index
+            _check_cancelled()
             _emit(
                 ControllerObservationKind.MODEL_REQUEST_STARTED,
                 model_call_index=model_call_index,
@@ -1026,6 +1057,8 @@ class DeterministicController:
             )
             try:
                 directive = self._model_method(self.model_adapter, call_snapshot)
+            except CancellationError:
+                raise
             except ModelScriptExhaustedError:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
@@ -1060,6 +1093,7 @@ class DeterministicController:
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
+            _check_cancelled()
             model_call_index += 1
             _emit(
                 ControllerObservationKind.MODEL_REQUEST_COMPLETED,
@@ -1068,6 +1102,7 @@ class DeterministicController:
                 request_status="ok",
             )
             if kind is ModelDirectiveKind.ACTION:
+                _check_cancelled()
                 action_directive = directive
                 record_action: Action | None = None
                 dispatch_action: Action | None = None
@@ -1132,6 +1167,8 @@ class DeterministicController:
                           model_call_index=model_call_index - 1, state_before=state_before,
                           tool_name=action_directive.name.value,
                           observation_status=observation.status)
+                except CancellationError:
+                    raise
                 except Exception:
                     if tool_started:
                         _emit(ControllerObservationKind.TOOL_COMPLETED,
