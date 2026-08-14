@@ -12,6 +12,24 @@ Rules:
 
 ---
 
+## Local Application V1
+
+- [x] **Task 1 — Establish application contracts** — ACCEPTED (2026-08-14).
+  Added the UI-independent `agentic_debugger.application` contract layer:
+  validated immutable session/event contracts, lifecycle and termination
+  semantics, live-vs-replay source boundaries, immutable presentation state,
+  fail-closed presentation identity/provenance, cleanup lifecycle validation,
+  and the stable contract reference
+  `docs/architecture/local-application-contracts-v1.md`.
+  Acceptance validation: 320 application-contract tests + 234 focused existing
+  regression tests = **554 passed**. No controller, verifier, PDB, canonical
+  `RunEvent`, trajectory/replay-golden, demo, Textual, GPU, or campaign behavior
+  changed. The known local `test_demo_catalog` failure remains environmental:
+  gitignored QuixBugs materializations expand the locally discovered catalog.
+- [ ] **Task 2 — Add incremental controller observability** — NEXT.
+  Follow `docs/architecture/local-application-v1.md`; preserve canonical
+  `RunEvent` 1.0 and post-run scientific trajectory behavior.
+
 ## 0. Daily Requirement
 
 - [x] 0.1 Write a one-page internship diary entry for each workday. (Completed through 2026-08-13 — consolidated `diary/diary.md`, including the R1-R6 phase entries appended to the 2026-08-12/2026-08-13 entries; chronology sourced from Git commit / frozen run timestamps.)
