@@ -83,6 +83,29 @@ EXIT_JOURNAL_FATAL = 3
 _MAX_DIAGNOSTICS = 64
 
 
+def run_worker_source(
+    name: str,
+    ctx: ScenarioContext,
+    params: Any,
+) -> None:
+    """Dispatch one worker execution source.
+
+    The internal Task-3 scenarios (``worker_scenarios``) remain the bounded
+    non-product boundary harness.  The one production deterministic source
+    (Task 7) is dispatched separately so the product's live execution never
+    uses a synthetic scenario mode.
+    """
+    from agentic_debugger.application.deterministic_source import (
+        DETERMINISTIC_SOURCE_NAME,
+        run_deterministic_session,
+    )
+
+    if name == DETERMINISTIC_SOURCE_NAME:
+        run_deterministic_session(ctx, params)
+        return
+    run_scenario(name, ctx, params)
+
+
 def _default_clock() -> str:
     return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
 
@@ -435,7 +458,7 @@ def run_worker(request: StartRequest) -> int:
             ) from exc
         coordinator.emit_status(SessionPhase.EXECUTING_TOOL)
         token.check()  # close the started -> scenario window
-        run_scenario(
+        run_worker_source(
             request.scenario,
             ScenarioContext(
                 work_dir=work_dir,
@@ -443,6 +466,7 @@ def run_worker(request: StartRequest) -> int:
                 journal=journal,
                 emitter=coordinator.emitter,
                 run_id=request.run_id,
+                session_dir=Path(request.journal_path).resolve().parent,
             ),
             request.scenario_params,
         )
@@ -540,6 +564,10 @@ def main() -> None:
     with a buffered-stdin fatal error.  All protocol writes and journal
     records are flushed per message, so a hard exit loses nothing.
     """
+    from agentic_debugger.application.deterministic_source import (
+        DETERMINISTIC_SOURCE_NAME,
+    )
+
     first_line = sys.stdin.buffer.readline(MAX_WORKER_LINE_BYTES + 1)
     if not first_line:
         _send(error_message("invalid_request", ["worker received no start message"]))
@@ -555,7 +583,10 @@ def main() -> None:
     except Exception as exc:
         _send(error_message("invalid_request", [_bounded_diagnostic(str(exc))]))
         os._exit(EXIT_STARTUP_ERROR)
-    if request.scenario not in SCENARIO_NAMES:
+    if (
+        request.scenario not in SCENARIO_NAMES
+        and request.scenario != DETERMINISTIC_SOURCE_NAME
+    ):
         _send(error_message("unknown_scenario", [request.scenario]))
         os._exit(EXIT_STARTUP_ERROR)
     os._exit(run_worker(request))

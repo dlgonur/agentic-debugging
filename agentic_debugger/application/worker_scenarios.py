@@ -73,6 +73,10 @@ class ScenarioContext:
     journal: Optional[SessionEventJournal] = None
     emitter: Optional[SessionEventEmitter] = None
     run_id: Optional[str] = None
+    #: Durable session directory (journal parent).  Production sources
+    #: persist app-owned artifacts here so they survive the disposable work
+    #: directory cleanup (Task 7).
+    session_dir: Optional[Path] = None
 
 
 def _require_int(params: Mapping[str, Any], key: str, minimum: int, maximum: int) -> int:
