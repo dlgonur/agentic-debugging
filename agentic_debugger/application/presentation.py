@@ -206,6 +206,24 @@ class TimelineEntry:
 
 
 @dataclass(frozen=True)
+class ModelProvenanceView:
+    """Safe recorded provenance of a configured command-model session.
+
+    Carries only the safe fields recorded by ``model.configured``: the
+    selected profile id, the safe configuration fingerprint, the display
+    label, and protocol/tool version metadata.  It never carries the
+    executable, argv, or environment values, and it never claims a provider
+    or model identity merely because a command was named that way.
+    """
+
+    profile_id: Optional[str] = None
+    config_fingerprint: Optional[str] = None
+    display_name: Optional[str] = None
+    protocol_version: Optional[str] = None
+    tool_version: Optional[str] = None
+
+
+@dataclass(frozen=True)
 class SessionViewState:
     """Immutable presentation state of one session or replay."""
 
@@ -224,6 +242,7 @@ class SessionViewState:
     diagnosis: Optional[DiagnosisView] = None
     sources: Tuple[SourceView, ...] = ()
     cleanup_verified: Optional[bool] = None
+    model_provenance: Optional[ModelProvenanceView] = None
     timeline: Tuple[TimelineEntry, ...] = ()
 
 
@@ -274,6 +293,8 @@ def summarize_event(event: SessionEvent) -> str:
         return f"directive accepted ({detail})"
     if kind is SessionEventKind.MODEL_DIRECTIVE_REJECTED:
         return f"directive rejected ({payload['rejection_category']})"
+    if kind is SessionEventKind.MODEL_CONFIGURED:
+        return f"model configured ({payload['profile_id']})"
     if kind is SessionEventKind.TOOL_STARTED:
         return f"tool {payload['tool_name']} started"
     if kind is SessionEventKind.TOOL_COMPLETED:
@@ -633,6 +654,21 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,
+        )
+
+    if kind is SessionEventKind.MODEL_CONFIGURED:
+        return replace(
+            state,
+            controller_phase=controller_phase,
+            run_id=run_id,
+            timeline=timeline,
+            model_provenance=ModelProvenanceView(
+                profile_id=payload.get("profile_id"),
+                config_fingerprint=payload.get("config_fingerprint"),
+                display_name=payload.get("display_name"),
+                protocol_version=payload.get("protocol_version"),
+                tool_version=payload.get("tool_version"),
+            ),
         )
 
     if kind is SessionEventKind.DEBUGGER_STARTED:

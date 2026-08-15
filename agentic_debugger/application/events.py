@@ -204,6 +204,7 @@ class SessionEventKind(str, Enum):
     MODEL_REQUEST_COMPLETED = "model.request_completed"
     MODEL_DIRECTIVE_ACCEPTED = "model.directive_accepted"
     MODEL_DIRECTIVE_REJECTED = "model.directive_rejected"
+    MODEL_CONFIGURED = "model.configured"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     DEBUGGER_STARTED = "debugger.started"
@@ -793,6 +794,46 @@ def _payload_controller_step(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
 
 
+def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """``model.configured``: safe configured command-model provenance.
+
+    Task-8 additive event: records only safe provenance (profile id,
+    configuration fingerprint, display label, protocol/tool version) after
+    ``session.started``.  It never carries the executable, argv,
+    environment overrides, or any credential-shaped value: history/replay
+    stores configuration provenance and a fingerprint, not a live
+    executable object.
+    """
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("model.configured payload must be a mapping")
+    required = {
+        "profile_id",
+        "config_fingerprint",
+        "display_name",
+        "protocol_version",
+        "tool_version",
+    }
+    _check_required(payload, required, "model.configured payload")
+    _check_no_unknown(payload, required, "model.configured payload")
+    return {
+        "profile_id": _bounded_text(
+            payload["profile_id"], "profile_id", MAX_IDENTIFIER_CHARS
+        ),
+        "config_fingerprint": _sha256_hex(
+            payload["config_fingerprint"], "config_fingerprint"
+        ),
+        "display_name": _bounded_text(
+            payload["display_name"], "display_name", MAX_SHORT_TEXT_CHARS
+        ),
+        "protocol_version": _bounded_text(
+            payload["protocol_version"], "protocol_version", MAX_SHORT_TEXT_CHARS
+        ),
+        "tool_version": _bounded_text(
+            payload["tool_version"], "tool_version", MAX_SHORT_TEXT_CHARS
+        ),
+    }
+
+
 def _payload_request_started(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.request_started payload must be a mapping")
@@ -1140,6 +1181,7 @@ _PAYLOAD_VALIDATORS: Dict[SessionEventKind, Any] = {
     SessionEventKind.MODEL_REQUEST_COMPLETED: _payload_request_completed,
     SessionEventKind.MODEL_DIRECTIVE_ACCEPTED: _payload_directive_accepted,
     SessionEventKind.MODEL_DIRECTIVE_REJECTED: _payload_directive_rejected,
+    SessionEventKind.MODEL_CONFIGURED: _payload_model_configured,
     SessionEventKind.TOOL_STARTED: lambda p: _payload_tool(p, "tool.started payload", completed=False),
     SessionEventKind.TOOL_COMPLETED: lambda p: _payload_tool(p, "tool.completed payload", completed=True),
     SessionEventKind.DEBUGGER_STARTED: _payload_debugger_started,

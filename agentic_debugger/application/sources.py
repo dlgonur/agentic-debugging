@@ -23,6 +23,7 @@ from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
 from agentic_debugger.application import ApplicationInputError
 from agentic_debugger.application.events import (
+    SessionTerminationReason,
     SourceKind,
     SessionEvent,
     contains_credential_shape,
@@ -30,10 +31,35 @@ from agentic_debugger.application.events import (
 
 __all__ = [
     "ExecutionSourceSpec",
+    "ModelExecutionError",
     "SessionEventSink",
     "SessionEventSource",
     "can_start_new_session",
 ]
+
+
+class ModelExecutionError(RuntimeError):
+    """A live execution source failed at the model-execution boundary.
+
+    Raised by the configured command-model source when the controller run
+    ended with a scientific failure that belongs to the model-execution
+    layer (transport/provider failure, directive exhaustion, controller
+    failure).  It carries the exact Task-1 termination reason so the worker
+    can classify the session terminal honestly (``model_error``,
+    ``directive_exhausted``, ``controller_failed``) instead of reporting an
+    orderly completion.  It is never raised for cancellation (the neutral
+    :class:`~agentic_debugger.cancellation.CancellationError` owns that
+    path) and never for scientific correctness: the independent verifier
+    remains the correctness authority.
+    """
+
+    def __init__(self, message: str, termination_reason: SessionTerminationReason) -> None:
+        if type(termination_reason) is not SessionTerminationReason:
+            raise ApplicationInputError(
+                "termination_reason must be a SessionTerminationReason"
+            )
+        super().__init__(message)
+        self.termination_reason = termination_reason
 
 _STARTABLE_KINDS = frozenset({SourceKind.OFFLINE_DEMO, SourceKind.CONFIGURED_MODEL})
 
