@@ -1,0 +1,147 @@
+/* Local Application V1 — one deliberate default theme (dark, developer-tool).
+
+   Layout rule: the workspace is a compact vertical stack (header / tabbed
+   panes / status bar) that stays navigable at 80x24 and uses the extra
+   space at larger sizes.  No hard-coded pane widths; tabs collapse the
+   domain panes instead of shrinking them to unreadable slivers.
+ */
+
+Screen {
+    background: #0d1117;
+    color: #c9d1d9;
+}
+
+/* -- home screen -------------------------------------------------------- */
+
+#home-title {
+    padding: 1 2 0 2;
+    text-style: bold;
+}
+
+#home-empty {
+    padding: 1 2;
+    margin: 1 2;
+    background: #161b22;
+    border: round #2c3a47;
+}
+
+#history-table {
+    margin: 0 1;
+    height: 1fr;
+}
+
+#history-table > .datatable--header {
+    background: #161b22;
+    color: #8b949e;
+    text-style: bold;
+}
+
+#history-table > .datatable--cursor {
+    background: #1f6feb;
+    color: #ffffff;
+}
+
+#home-hint {
+    padding: 0 2 1 2;
+    color: #8b949e;
+}
+
+/* -- start-session screen ----------------------------------------------- */
+
+#start-title {
+    padding: 1 2 0 2;
+}
+
+#start-error {
+    padding: 0 2;
+    color: #f85149;
+}
+
+#start-hint {
+    padding: 0 2 1 2;
+    color: #8b949e;
+}
+
+/* -- workspace ----------------------------------------------------------- */
+
+#status-header {
+    dock: top;
+    padding: 0 2;
+    background: #161b22;
+    color: #c9d1d9;
+    text-style: bold;
+    height: auto;
+}
+
+#pane-tabs {
+    margin: 0 1;
+    height: 1fr;
+}
+
+#pane-tabs ContentTabs {
+    background: #161b22;
+}
+
+#pane-tabs ContentTabs > Tab {
+    color: #8b949e;
+}
+
+#pane-tabs ContentTabs > Tab.--active {
+    color: #58a6ff;
+    text-style: bold;
+}
+
+#pane-tabs ContentTabs > Tab:focus {
+    color: #ffffff;
+}
+
+#pane-tabs ContentSwitcher {
+    background: #0d1117;
+    border: round #2c3a47;
+    padding: 0 1;
+}
+
+SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, ActivityPanel, TimelinePanel {
+    height: 1fr;
+    background: #0d1117;
+    color: #c9d1d9;
+}
+
+SourcePanel Static, DebuggerPanel Static, PatchPanel Static,
+VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
+    width: 1fr;
+}
+
+#replay-bar, #live-bar {
+    dock: bottom;
+    padding: 0 2;
+    background: #161b22;
+    color: #8b949e;
+    height: auto;
+}
+
+/* -- jump-to-sequence modal ---------------------------------------------- */
+
+#jump-title {
+    padding: 1 2 0 2;
+    text-style: bold;
+}
+
+#jump-hint {
+    padding: 0 2 1 2;
+    color: #8b949e;
+}
+
+#jump-input {
+    margin: 0 2;
+}
+
+/* -- shared focus language ------------------------------------------------ */
+
+Button:focus, Input:focus, Select:focus, DataTable:focus {
+    border: heavy #58a6ff;
+}
+
+Button {
+    margin: 1 2;
+}

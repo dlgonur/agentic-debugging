@@ -1,0 +1,442 @@
+"""Headless Textual tests for the Task 6 replay-first application.
+
+These tests drive the real ``LocalApplicationV1`` app through Textual's
+supported ``App.run_test()`` / Pilot headless facilities at representative
+terminal sizes.  Replay tests never spawn workers and never execute
+controller/PDB/patch/verifier code (one test proves that by replacing the
+domain entry points with failing stubs).  Live-session tests live in
+``test_ui_live.py``.
+"""
+
+from __future__ import annotations
+
+import asyncio
+from pathlib import Path
+
+import pytest
+
+textual = pytest.importorskip("textual")
+
+from agentic_debugger.application.history import HistoryClassification, HistoryStore
+from agentic_debugger.application.presentation import (
+    PresentationIdentity,
+    SessionViewState,
+    initial_session_view,
+    reduce_event,
+)
+from agentic_debugger.ui.app import LocalApplicationV1
+from agentic_debugger.ui.screens import HomeScreen, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.widgets import (
+    ActivityPanel,
+    DebuggerPanel,
+    PatchPanel,
+    ReplayBar,
+    SourcePanel,
+    StatusHeader,
+    TimelinePanel,
+    VerifierPanel,
+)
+
+from textual.widgets import DataTable, Static
+
+from ui_support import (
+    VALID_TASK_ID,
+    make_rich_stream,
+    populate_history,
+    renumber,
+    run_headless,
+)
+
+
+def table_text(table: DataTable) -> str:
+    """Plain text of every visible table cell (row-major)."""
+    lines = []
+    for row_index in range(table.row_count):
+        cells = []
+        for cell in table.get_row_at(row_index):
+            cells.append(cell.plain if hasattr(cell, "plain") else str(cell))
+        lines.append(" | ".join(cells))
+    return "\n".join(lines)
+
+
+def pane_text(workspace, selector: str) -> str:
+    """Plain text of a pane's inner Static (the pane is a scroller)."""
+    pane = workspace.query_one(selector)
+    static = pane.query_one(Static)
+    return static.render().plain if hasattr(static.render(), "plain") else str(static.render())
+
+
+def make_app(tmp_path: Path) -> LocalApplicationV1:
+    store = HistoryStore(tmp_path)
+    return LocalApplicationV1(history_store=store)
+
+
+async def open_first_row(pilot) -> None:
+    await pilot.press("enter")
+
+
+class TestBootAndHome:
+    def test_app_boots_to_home_screen(self, tmp_path):
+        async def scenario(pilot):
+            app = pilot.app
+            assert isinstance(app.screen, HomeScreen)
+            title = app.screen.query_one("#home-title")
+            assert "Local Application V1" in str(title.render())
+
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+
+    def test_empty_history_shows_empty_state(self, tmp_path):
+        async def scenario(pilot):
+            app = pilot.app
+            empty = app.screen.query_one("#home-empty")
+            assert empty.display is True
+            assert "No app-owned sessions" in str(empty.render())
+
+        run_headless(make_app(tmp_path), scenario)
+
+    def test_populated_history_lists_sessions(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.hist.rich")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            table = pilot.app.screen.query_one("#history-table")
+            row_count = table.row_count
+            assert row_count == 1
+            empty = pilot.app.screen.query_one("#home-empty")
+            assert empty.display is False
+            # session id and honest classification are visible
+            rendered = table_text(table)
+            assert "sess.hist.rich" in rendered
+            assert "complete" in rendered
+
+        run_headless(app, scenario)
+
+    def test_malformed_and_interrupted_history_presented_honestly(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.bad", corrupt=True)
+        populate_history(store, "sess.cut", interrupted=True)
+        populate_history(store, "sess.good")
+
+        async def scenario(pilot):
+            table = pilot.app.screen.query_one("#history-table")
+            rendered = table_text(table)
+            assert "malformed" in rendered
+            assert "interrupted" in rendered
+            assert "complete" in rendered
+            assert "malformed | sess.bad" in rendered
+            assert "interrupted | sess.cut" in rendered
+            assert "complete | sess.good" in rendered
+
+        run_headless(make_app(tmp_path), scenario)
+
+
+class TestOpenReplay:
+    def test_open_completed_session_renders_all_panes(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.rich")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            assert isinstance(workspace, WorkspaceScreen)
+            assert workspace.mode is WorkspaceMode.REPLAY
+            # header shows REPLAY identity and position
+            header = str(workspace.query_one("#status-header", StatusHeader).render())
+            assert "REPLAY" in header
+            assert "0/28 events" in header
+            # replay to the end so every recorded fact is in the view
+            await pilot.press("G")
+            # source pane renders recorded source with the execution line
+            source = pane_text(workspace, "#source-pane")
+            assert "recent_window.py" in source
+            assert "def recent_window" in source
+            assert "sha256" in source
+            # debugger pane: stack + locals + redaction marker
+            debugger = pane_text(workspace, "#debugger-pane")
+            assert "recent_window" in debugger
+            assert "redacted: credential-shaped local name" in debugger
+            # patch pane: applied attempt with patch text and the APPLIED!=FIXED note
+            patch = pane_text(workspace, "#patch-pane")
+            assert "APPLIED" in patch
+            assert "recent_window.py" in patch
+            assert "does not mean FIXED" in patch
+            # verifier pane: stages and final authority
+            verifier = pane_text(workspace, "#verifier-pane")
+            assert "COMPLETED" in verifier
+            assert "RESOLVED" in verifier
+            assert "1/1" in verifier
+            assert "correctness authority" in verifier
+            # activity + timeline panes render recorded events
+            activity = pane_text(workspace, "#activity-pane")
+            assert "controller transition" in activity
+            timeline = pane_text(workspace, "#timeline-pane")
+            assert "session succeeded" in timeline
+            assert "verifier completed" in timeline
+
+        run_headless(app, scenario)
+
+    def test_replay_position_tracks_navigation(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.nav")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            bar = workspace.query_one("#replay-bar", ReplayBar)
+            header = workspace.query_one("#status-header", StatusHeader)
+            assert "0/28" in str(bar.render())
+            # next events
+            await pilot.press("]")
+            assert "1/28" in str(bar.render())
+            await pilot.press("]")
+            await pilot.press("]")
+            assert "3/28" in str(bar.render())
+            # previous
+            await pilot.press("[")
+            assert "2/28" in str(bar.render())
+            # end and begin
+            await pilot.press("G")
+            assert "28/28" in str(bar.render())
+            header_text = str(header.render())
+            assert "succeeded" in header_text
+            assert "at end" in header_text
+            await pilot.press("g")
+            assert "0/28" in str(bar.render())
+            # phase navigation: effective boundaries are 0,2,3,15,18
+            await pilot.press("}")
+            assert "2/28" in str(bar.render())
+            await pilot.press("}")
+            assert "3/28" in str(bar.render())
+            await pilot.press("}")
+            assert "15/28" in str(bar.render())
+            await pilot.press("}")
+            assert "18/28" in str(bar.render())
+            await pilot.press("{")
+            assert "15/28" in str(bar.render())
+
+        run_headless(app, scenario)
+
+    def test_source_rendering_matches_current_execution_line(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.line")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            # No events reduced yet: no recorded source exists at the start.
+            source = pane_text(workspace, "#source-pane")
+            assert "NOT RECORDED" in source
+            # Reduce through the source snapshot (sequence 13 -> index 14):
+            # the recorded debugger location (line 25) is outside the
+            # recorded snapshot, so the pane shows the location marker
+            # rather than a fake highlight.
+            for _ in range(15):
+                await pilot.press("]")
+            source = pane_text(workspace, "#source-pane")
+            assert "recent_window.py" in source
+            assert "recent_window.py:25" in source
+
+        run_headless(app, scenario)
+
+    def test_interrupted_session_replays_recorded_prefix(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.cut", interrupted=True)
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            assert isinstance(workspace, WorkspaceScreen)
+            bar = workspace.query_one("#replay-bar", ReplayBar)
+            assert "events" in str(bar.render())
+            await pilot.press("G")
+            header = str(workspace.query_one("#status-header", StatusHeader).render())
+            # no terminal status is fabricated for the interrupted session
+            assert "succeeded" not in header
+            assert "interrupted" not in header
+
+        run_headless(app, scenario)
+
+    def test_malformed_session_cannot_be_opened(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.bad", corrupt=True)
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            assert isinstance(pilot.app.screen, HomeScreen)
+            assert isinstance(pilot.app.screen, HomeScreen)
+
+        run_headless(app, scenario)
+
+    def test_source_not_recorded_state(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        events = make_rich_stream("sess.replay.nosource")
+        events = renumber(
+            tuple(e for e in events if e.event_kind.value != "source.snapshot")
+        )
+        populate_history(store, "sess.replay.nosource", events=events)
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            await pilot.press("G")
+            source = pane_text(workspace, "#source-pane")
+            assert "NOT RECORDED" in source
+
+        run_headless(app, scenario)
+
+    def test_back_home_navigation(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.back")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            assert isinstance(pilot.app.screen, WorkspaceScreen)
+            await pilot.press("q")
+            assert isinstance(pilot.app.screen, HomeScreen)
+            # history still listed after returning home
+            table = pilot.app.screen.query_one("#history-table")
+            assert table.row_count == 1
+
+        run_headless(app, scenario)
+
+    def test_jump_to_sequence(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.jump")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            await pilot.press("j")
+            await pilot.press("1", "5")
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            bar = workspace.query_one("#replay-bar", ReplayBar)
+            assert "15/28" in str(bar.render())
+
+        run_headless(app, scenario)
+
+
+class TestTerminalSizes:
+    def test_all_supported_sizes_keep_primary_navigation(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.size")
+        for size in ((80, 24), (100, 30), (120, 40), (160, 50)):
+            app = LocalApplicationV1(history_store=store)
+
+            async def scenario(pilot, size=size):
+                # home -> open -> navigate -> switch tabs -> back home
+                await pilot.press("enter")
+                workspace = pilot.app.screen
+                assert isinstance(workspace, WorkspaceScreen)
+                await pilot.press("G")
+                await pilot.press("]", "[", "g")
+                # switch to the debugger tab and back
+                await pilot.press("tab", "tab")
+                await pilot.press("q")
+                assert isinstance(pilot.app.screen, HomeScreen)
+
+            run_headless(app, scenario, size=size)
+
+    def test_resize_while_replaying(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.resize")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            await pilot.press("]")
+            await pilot.resize_terminal(80, 24)
+            await pilot.pause()
+            await pilot.press("]")
+            await pilot.resize_terminal(160, 50)
+            await pilot.pause()
+            await pilot.press("G")
+            await pilot.resize_terminal(100, 30)
+            await pilot.pause()
+            await pilot.press("q")
+            assert isinstance(pilot.app.screen, HomeScreen)
+
+        run_headless(app, scenario)
+
+
+class TestReplayExecutesNothing:
+    def test_replay_never_invokes_executable_resources(self, tmp_path, monkeypatch):
+        import agentic_debugger.agent.controller
+        import agentic_debugger.evaluation.verifier
+        import agentic_debugger.runtime.pdb_session
+        import agentic_debugger.application.worker_process
+
+        def _forbidden(*args, **kwargs):
+            raise AssertionError("domain execution during replay")
+
+        monkeypatch.setattr(
+            agentic_debugger.agent.controller.DeterministicController, "run", _forbidden
+        )
+        monkeypatch.setattr(
+            agentic_debugger.evaluation.verifier.EvaluationVerifier, "evaluate", _forbidden
+        )
+        monkeypatch.setattr(
+            agentic_debugger.runtime.pdb_session.PdbSession, "start", _forbidden
+        )
+        monkeypatch.setattr(
+            agentic_debugger.application.worker_process.SessionWorkerProcess,
+            "start", _forbidden,
+        )
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.safe")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            await pilot.press("G")
+            await pilot.press("g")
+            for _ in range(30):
+                await pilot.press("]")
+            await pilot.press("[")
+            await pilot.press("q")
+            assert isinstance(pilot.app.screen, HomeScreen)
+
+        run_headless(app, scenario)
+
+
+class TestReplayPrefixParity:
+    def test_ui_replay_state_matches_pure_reducer_fold(self, tmp_path):
+        """The workspace's presentation at every cursor position equals the
+        pure fold of the recorded prefix (UI navigation cannot diverge)."""
+        store = HistoryStore(tmp_path)
+        events = make_rich_stream("sess.replay.parity")
+        populate_history(store, "sess.replay.parity", events=events)
+        app = LocalApplicationV1(history_store=store)
+        identity = PresentationIdentity(
+            task_id=VALID_TASK_ID,
+            source_kind=events[0].source_kind,
+            session_id="sess.replay.parity",
+        )
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            controller = workspace.controller
+            for step in range(controller.total_events):
+                await pilot.press("]")
+                expected = initial_session_view(identity)
+                for event in events[: controller.index]:
+                    expected = reduce_event(expected, event)
+                assert controller.view == expected
+            # backward walk keeps parity too
+            for _ in range(controller.total_events):
+                await pilot.press("[")
+                expected = initial_session_view(identity)
+                for event in events[: controller.index]:
+                    expected = reduce_event(expected, event)
+                assert controller.view == expected
+
+        run_headless(app, scenario)

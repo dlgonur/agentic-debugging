@@ -6,6 +6,10 @@ requires-python = ">=3.11"
 
 [project.optional-dependencies]
 test = ["pytest"]
+# Local Application V1 (Textual TUI).  The scientific core and existing CLI
+# paths never import this extra; the TUI is an optional application surface
+# (docs/architecture/local-application-v1.md section 5.1).
+app = ["textual>=8,<9"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
