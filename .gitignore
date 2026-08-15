@@ -72,3 +72,4 @@ experiments/r6_debugger_training/runs/frozen/final_holdout_partial/*
 !experiments/r6_debugger_training/runs/frozen/quixbugs_audit_needles/
 !experiments/r6_debugger_training/runs/frozen/quixbugs_audit_needles/*.json
 experiments/r6_debugger_training/sft/
+*.egg-info/
