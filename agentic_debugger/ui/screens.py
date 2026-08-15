@@ -86,12 +86,17 @@ def render_view_header(
     replay_position: Optional[str] = None,
     extra: Optional[str] = None,
 ) -> Text:
-    """One compact two-line header derived from the presentation view."""
+    """One compact two-line header derived from the presentation view.
+
+    Recorded values are appended as plain ``rich.text.Text`` (never parsed
+    as Rich markup), so session ids, task ids, run ids, paths, and status
+    text render literally; styling is supplied separately.
+    """
     head = Text()
-    head.append(f"[{mode_style}]{mode}[/] ", style="bold")
-    head.append(_markup_escape(view.session_id or "session-unbound"), style="bold")
-    head.append(f"  ·  task {_markup_escape(view.task_id)}")
-    head.append(f"  ·  {_markup_escape(view.source_kind.value)}")
+    head.append(f"{mode} ", style=mode_style)
+    head.append(view.session_id or "session-unbound", style="bold")
+    head.append(f"  ·  task {view.task_id}")
+    head.append(f"  ·  {view.source_kind.value}")
     head.append("\n")
     status_style = {
         SessionStatus.RUNNING: "bold blue",
@@ -112,7 +117,7 @@ def render_view_header(
         status_text += f" ({view.termination_reason.value})"
     head.append(status_text, style=status_style)
     if view.controller_phase is not None:
-        head.append(f"  ·  controller: {_markup_escape(view.controller_phase.value)}")
+        head.append(f"  ·  controller: {view.controller_phase.value}")
     verifier = ""
     if view.verifier_summary is not None:
         summary = view.verifier_summary
@@ -123,7 +128,7 @@ def render_view_header(
         verifier = "running"
     head.append(f"  ·  verifier: {verifier or '—'}")
     if view.run_id is not None:
-        head.append(f"  ·  run {_markup_escape(view.run_id)}")
+        head.append(f"  ·  run {view.run_id}")
     if replay_position is not None:
         head.append(f"  ·  {replay_position}")
     if extra is not None:
@@ -427,7 +432,14 @@ class WorkspaceScreen(Screen):
             yield LiveBar(id="live-bar")
 
     def on_mount(self) -> None:
-        self._render_all()
+        if self.mode is WorkspaceMode.LIVE:
+            # A live worker can surface its first events (or even its
+            # terminal/failure) before this screen finishes mounting.  The
+            # app-owned live state is authoritative, so catch up now; the
+            # panes render whatever terminal/failure fields already exist.
+            self.refresh_live()
+        else:
+            self._render_all()
 
     def on_unmount(self) -> None:
         self.app.detach_live_workspace(self)
@@ -465,6 +477,10 @@ class WorkspaceScreen(Screen):
             return
         self._live_terminal = result
         self._live_failure = registration_error
+        if not self.is_mounted:
+            # The terminal arrived before this screen finished mounting
+            # (fast worker); ``on_mount`` renders the recorded fields.
+            return
         self._render_all()
         if registration_error:
             self.notify(registration_error, severity="warning", title="History registration")
@@ -473,6 +489,9 @@ class WorkspaceScreen(Screen):
         if self.mode is not WorkspaceMode.LIVE:
             return
         self._live_failure = diagnostic
+        if not self.is_mounted:
+            # Same mount race as the terminal: ``on_mount`` renders it.
+            return
         self._render_all()
         self.notify(diagnostic, severity="error", title="Live session")
 
@@ -486,6 +505,10 @@ class WorkspaceScreen(Screen):
         return "REPLAY", "bold white on #238636"
 
     def _render_all(self) -> None:
+        if not self.query("#status-header"):
+            # Quit raced this screen's first mount (the app shut down before
+            # the panes were composed); there is nothing left to render.
+            return
         # Replay presentation always comes from the controller's reduced
         # view; the live path owns its own incremental view.
         view = (
@@ -547,7 +570,7 @@ class WorkspaceScreen(Screen):
             controller = self.controller
             bar.update(
                 f"[dim][bold]replay[/] {controller.index}/{controller.total_events} events"
-                f"   ·   [bold][[/] prev   [bold]][/] next   [bold]{{[/] prev phase   "
+                f"   ·   [bold]\\[[/] prev   [bold]][/] next   [bold]{{[/] prev phase   "
                 f"[bold]}}[/] next phase   [bold]g[/] begin   [bold]G[/] end   "
                 f"[bold]j[/] jump to seq   [bold]q[/] history[/]"
             )

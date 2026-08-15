@@ -49,6 +49,7 @@ from agentic_debugger.application.worker_process import SessionWorkerProcess
 from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
 from agentic_debugger.ui.screens import (
     HomeScreen,
+    StartSessionScreen,
     WorkspaceMode,
     WorkspaceScreen,
 )
@@ -296,7 +297,14 @@ class LocalApplicationV1(App):
         self._live_events = ()
         self._live_last_sequence = -1
         self._live_workspace = workspace
-        self.push_screen(workspace)
+        if isinstance(self.screen, StartSessionScreen):
+            # A successful launch replaces the start form on the stack so
+            # q/escape from the workspace returns to Home, never to the
+            # stale form.  The form is only replaced after all validation
+            # succeeded, so a rejected start still shows its error there.
+            self.switch_screen(workspace)
+        else:
+            self.push_screen(workspace)
         runner.start()
 
     def detach_live_workspace(self, workspace: WorkspaceScreen) -> None:
@@ -344,8 +352,14 @@ class LocalApplicationV1(App):
 
     def _live_terminal_ui(self, result: object, registration_error: Optional[str]) -> None:
         workspace = self._live_workspace
-        if workspace is not None and workspace.is_mounted:
+        if workspace is not None:
+            # The workspace records the terminal itself (its ``is_mounted``
+            # guard handles a fast worker that finished before the mount).
             workspace.show_live_terminal(result, registration_error)
+        # The terminal has been delivered: the runner is finished (its own
+        # supervision thread closes the worker right after this callback), so
+        # the app no longer considers it active and another session may start.
+        self._release_live_runner()
         home = self.screen
         if isinstance(home, HomeScreen):
             home.refresh_history()
@@ -358,10 +372,26 @@ class LocalApplicationV1(App):
 
     def _live_failure_ui(self, diagnostic: str) -> None:
         workspace = self._live_workspace
-        if workspace is not None and workspace.is_mounted:
+        if workspace is not None:
             workspace.show_live_failure(diagnostic)
         else:
             self.notify(diagnostic, severity="error", title="Live session")
+        # A startup/supervision failure is terminal for the runner: release
+        # ownership so a retry can start another session.  The runner's own
+        # supervision path performs the final worker handle close.
+        self._release_live_runner()
+
+    def _release_live_runner(self) -> None:
+        """Drop application ownership of a finished/failed live runner.
+
+        Only the runner's own supervision thread closes the worker, so this
+        never joins the runner thread from the event loop (that would
+        deadlock the terminal callback, which the driver thread is waiting
+        on).  The recorded presentation data (``live_view``/``live_events``)
+        stays available for reopening and replay parity.
+        """
+        self._live_runner = None
+        self._live_workspace = None
 
 
 __all__ = [

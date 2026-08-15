@@ -28,7 +28,7 @@ from agentic_debugger.application.presentation import (
     current_source,
 )
 
-_NOT_RECORDED = "[dim italic]NOT RECORDED[/]"
+_NOT_RECORDED = "NOT RECORDED"
 
 _ACTIVITY_FILTERS: tuple[tuple[str, str], ...] = (
     ("all", "all"),
@@ -132,17 +132,22 @@ _KIND_STYLE: dict[str, str] = {
 }
 
 
-def _escaped(value: Any) -> str:
-    """One safe markup fragment (brackets are escaped for Rich markup)."""
-    return str(value).replace("[", "\\[").replace("]", "\\]")
+def _append_section(text: Text, title: str) -> None:
+    """Append one section heading as plain text with its own style.
+
+    Recorded/derived text is always appended as plain ``rich.text.Text``;
+    styling is supplied separately and markup is never embedded in a
+    preconstructed ``Text`` object.
+    """
+    text.append("\n")
+    text.append(title, style="bold #8fb7d9")
+    text.append("\n")
 
 
-def _section(title: str) -> str:
-    return f"\n[bold #8fb7d9]{_escaped(title)}[/]\n"
-
-
-def _kv(key: str, value: str) -> str:
-    return f"[dim]{_escaped(key)}:[/] {value}\n"
+def _append_kv(text: Text, key: str, value: str) -> None:
+    """Append one ``key: value`` line; both parts stay plain text."""
+    text.append(f"{key}: ", style="dim")
+    text.append(f"{value}\n")
 
 
 def _stage_style(stage: PatchStage) -> str:
@@ -222,7 +227,7 @@ class SourcePanel(VerticalScroll):
         if not highlighted and debugger.script is not None:
             text.append(
                 f"\n(no execution-line marker: debugger is at "
-                f"{_escaped(debugger.script)}:{debugger.line or '?'})",
+                f"{debugger.script}:{debugger.line or '?'})",
                 style="dim",
             )
         return text
@@ -251,50 +256,56 @@ class DebuggerPanel(VerticalScroll):
             text.append("No debugger session was recorded.\n\n")
             text.append(_NOT_RECORDED, style="dim italic")
             return text
-        text.append(_section("Current location"))
-        text.append(_kv("script", _escaped(debugger.script) if debugger.script else "—"))
-        text.append(_kv("line", str(debugger.line) if debugger.line is not None else "—"))
-        text.append(_kv("function", _escaped(debugger.function) if debugger.function else "—"))
-        text.append(
-            _kv(
-                "pause generation",
-                str(debugger.pause_generation)
-                if debugger.pause_generation is not None
-                else "not recorded",
-            )
+        _append_section(text, "Current location")
+        _append_kv(text, "script", debugger.script if debugger.script else "—")
+        _append_kv(text, "line", str(debugger.line) if debugger.line is not None else "—")
+        _append_kv(
+            text,
+            "function",
+            debugger.function if debugger.function else "—",
         )
-        text.append(_section("Breakpoints"))
+        _append_kv(
+            text,
+            "pause generation",
+            str(debugger.pause_generation)
+            if debugger.pause_generation is not None
+            else "not recorded",
+        )
+        _append_section(text, "Breakpoints")
         if debugger.breakpoints:
             for item in debugger.breakpoints:
-                text.append(f"  • {_escaped(item)}\n")
+                text.append(f"  • {item}\n")
         else:
             text.append("  none recorded\n")
-        text.append(_section("Stack"))
+        _append_section(text, "Stack")
         if debugger.frames:
             for frame in debugger.frames:
                 marker = "▶ " if frame.is_current else "  "
                 line = (
-                    f"{marker}#{frame.index} {_escaped(frame.function)} — "
-                    f"{_escaped(frame.file)}:{frame.line}"
+                    f"{marker}#{frame.index} {frame.function} — "
+                    f"{frame.file}:{frame.line}"
                 )
                 text.append(line, style="bold" if frame.is_current else "default")
                 text.append("\n")
         else:
             text.append("  no stack recorded\n")
-        text.append(_section("Locals (current recorded frame)"))
+        _append_section(text, "Locals (current recorded frame)")
         if debugger.locals:
             for local in debugger.locals:
                 if "redacted" in local.summary:
-                    text.append(f"  {_escaped(local.name)} = ", style="yellow")
-                    text.append(_escaped(local.summary), style="bold red")
+                    text.append(f"  {local.name} = ", style="yellow")
+                    text.append(local.summary, style="bold red")
                     text.append("\n")
                 else:
-                    text.append(f"  {_escaped(local.name)} = {_escaped(local.summary)}\n")
+                    text.append(f"  {local.name} = {local.summary}\n")
         else:
             text.append("  no locals recorded\n")
         if debugger.pause_generation is None:
-            text.append("\n[dim]pause generation: not recorded (stale guard "
-                        "applies in stream order)[/]\n")
+            text.append(
+                "\npause generation: not recorded (stale guard "
+                "applies in stream order)\n",
+                style="dim",
+            )
         return text
 
 
@@ -331,15 +342,15 @@ class PatchPanel(VerticalScroll):
                 text.append(f"  sha256: {attempt.patch_sha256[:16]}…\n", style="dim")
             if attempt.changed_files:
                 text.append(
-                    f"  changed files: {', '.join(_escaped(f) for f in attempt.changed_files)}\n"
+                    f"  changed files: {', '.join(attempt.changed_files)}\n"
                 )
             if attempt.syntax_passed is not None:
                 text.append(f"  syntax passed: {attempt.syntax_passed}\n")
             if attempt.rejection_reason:
-                text.append(f"  rejection: {_escaped(attempt.rejection_reason)}\n", style="yellow")
+                text.append(f"  rejection: {attempt.rejection_reason}\n", style="yellow")
             if attempt.apply_failure_reason:
                 text.append(
-                    f"  apply failure: {_escaped(attempt.apply_failure_reason)}\n",
+                    f"  apply failure: {attempt.apply_failure_reason}\n",
                     style="red",
                 )
             if attempt.patch_text:
@@ -353,13 +364,13 @@ class PatchPanel(VerticalScroll):
                         style = "cyan"
                     else:
                         style = "dim"
-                    text.append(_escaped(line), style=style)
+                    text.append(line, style=style)
                     text.append("\n")
                 text.append("\n")
         text.append(
-            "\n[dim]Patch application only mutates the recorded workspace. "
+            "\nPatch application only mutates the recorded workspace. "
             "APPLIED does not mean FIXED — correctness is decided by the "
-            "independent verifier only.[/]\n",
+            "independent verifier only.\n",
             style="dim",
         )
         return text
@@ -384,7 +395,7 @@ class VerifierPanel(VerticalScroll):
     def _render_view(view: SessionViewState) -> Text:
         text = Text()
         if view.verifier_stages:
-            text.append(_section("Stages (progress only)"))
+            _append_section(text, "Stages (progress only)")
             for stage in view.verifier_stages:
                 style = {
                     "running": "blue",
@@ -405,18 +416,20 @@ class VerifierPanel(VerticalScroll):
             else:
                 text.append(_NOT_RECORDED, style="dim italic")
             return text
-        text.append(_section("Final verifier result (authoritative)"))
-        text.append(_kv("status", _escaped(summary.status) if summary.status else "—"))
-        text.append(
-            _kv("outcome", _escaped(summary.outcome.value) if summary.outcome else "—")
+        _append_section(text, "Final verifier result (authoritative)")
+        _append_kv(text, "status", summary.status if summary.status else "—")
+        _append_kv(
+            text,
+            "outcome",
+            summary.outcome.value if summary.outcome else "—",
         )
-        text.append(_kv("fail-to-pass", _counts(summary.f2p_passed, summary.f2p_total)))
-        text.append(_kv("pass-to-pass", _counts(summary.p2p_passed, summary.p2p_total)))
+        _append_kv(text, "fail-to-pass", _counts(summary.f2p_passed, summary.f2p_total))
+        _append_kv(text, "pass-to-pass", _counts(summary.p2p_passed, summary.p2p_total))
         if summary.workspace_cleaned is not None:
-            text.append(_kv("workspace cleaned", str(summary.workspace_cleaned)))
+            _append_kv(text, "workspace cleaned", str(summary.workspace_cleaned))
         text.append(
-            "\n[bold]The verifier result is the correctness authority.[/] "
-            "Application completion is operational only.",
+            "\nThe verifier result is the correctness authority. "
+            "Application completion is operational only.\n",
             style="dim",
         )
         return text
@@ -454,9 +467,11 @@ class ActivityPanel(VerticalScroll):
 
     def _render_view(self, view: SessionViewState) -> Text:
         text = Text()
+        text.append("Filter: ", style="dim")
+        text.append(self.filter, style="bold")
         text.append(
-            f"Filter: [bold]{self.filter}[/] "
-            f"({dict(_ACTIVITY_FILTERS)[self.filter]})  —  keys: 1..7 filter, 0 all\n",
+            f" ({dict(_ACTIVITY_FILTERS)[self.filter]})  —  keys: 1..7 "
+            "filter (1 = all)\n",
             style="dim",
         )
         text.append("─" * 40, style="dim")
@@ -473,7 +488,7 @@ class ActivityPanel(VerticalScroll):
         for entry in reversed(entries):
             style = _KIND_STYLE.get(entry.event_kind.value, "default")
             text.append(f"#{entry.sequence:<5} ", style="dim")
-            text.append(_escaped(entry.summary), style=style)
+            text.append(entry.summary, style=style)
             text.append("\n")
         return text
 
@@ -514,7 +529,7 @@ class TimelinePanel(VerticalScroll):
             marker = "» " if entry.sequence in self._boundaries else "  "
             style = _KIND_STYLE.get(entry.event_kind.value, "default")
             text.append(f"{marker}#{entry.sequence:<5} ", style="dim")
-            text.append(_escaped(entry.summary), style=style)
+            text.append(entry.summary, style=style)
             text.append("\n")
         return text
 

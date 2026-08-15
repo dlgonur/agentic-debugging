@@ -177,6 +177,36 @@ class TestOpenReplay:
 
         run_headless(app, scenario)
 
+    def test_no_rich_markup_leaks_into_rendered_panes(self, tmp_path):
+        """Every pane's ``Text.plain`` renders recorded facts, never style
+        tags: markup is only ever supplied separately (or through the
+        markup-aware Static API for trusted UI strings)."""
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.plain")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await pilot.press("enter")
+            workspace = pilot.app.screen
+            await pilot.press("G")
+            header = str(workspace.query_one("#status-header", StatusHeader).render())
+            for selector in (
+                "#source-pane",
+                "#debugger-pane",
+                "#patch-pane",
+                "#verifier-pane",
+                "#activity-pane",
+                "#timeline-pane",
+            ):
+                rendered = pane_text(workspace, selector)
+                for tag in ("[bold", "[dim", "[/", "[red", "[yellow", "[green", "\\["):
+                    assert tag not in rendered, f"{selector} leaked {tag!r}"
+            for tag in ("[bold", "[dim", "[/", "\\["):
+                assert tag not in header, f"header leaked {tag!r}"
+            assert "REPLAY" in header
+
+        run_headless(app, scenario)
+
     def test_replay_position_tracks_navigation(self, tmp_path):
         store = HistoryStore(tmp_path)
         populate_history(store, "sess.replay.nav")
@@ -188,6 +218,11 @@ class TestOpenReplay:
             bar = workspace.query_one("#replay-bar", ReplayBar)
             header = workspace.query_one("#status-header", StatusHeader)
             assert "0/28" in str(bar.render())
+            # The prev/next key hints render their literal bracket glyphs
+            # (no markup-escape artifacts like "[[/").
+            bar_text = str(bar.render())
+            assert "[ prev" in bar_text
+            assert "[[/" not in bar_text
             # next events
             await pilot.press("]")
             assert "1/28" in str(bar.render())

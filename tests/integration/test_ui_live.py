@@ -313,3 +313,129 @@ class TestStartSessionScreen:
             assert "cancelled" in live_bar_text(workspace) or "succeeded" in live_bar_text(workspace)
 
         run_headless(app, scenario, size=(100, 30))
+
+    def test_escape_before_launch_returns_to_home(self, tmp_path):
+        """Back/escape from StartSessionScreen before launching returns to
+        Home normally (the form is only replaced after a successful start)."""
+        app = make_app(tmp_path)
+
+        async def scenario(pilot):
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+                label="stage0-start-screen",
+            )
+            await pilot.press("escape")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+                label="stage1-home",
+            )
+
+        run_headless(app, scenario, size=(100, 30))
+
+    def test_launch_replaces_form_and_sequential_real_sessions(self, tmp_path):
+        """Blocker 2 + Blocker 1 through the REAL start UX.
+
+        Home -> n -> StartSessionScreen -> Start -> LIVE Workspace; after the
+        run finishes, q returns to Home (never to the stale start form), the
+        registered run is in history, and a second real session starts from
+        that same Home.  Both sessions get distinct ids.
+        """
+        from textual.widgets import Select
+
+        app = make_app(tmp_path)
+
+        async def scenario(pilot):
+            def open_start_form():
+                start_screen = pilot.app.screen
+                start_screen.query_one("#task-select", Select).value = TASK_ID
+                start_screen.query_one("#policy-select", Select).value = POLICY
+
+            # -- session 1: complete through the real start UX -------------
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+                label="stage0-start-screen",
+            )
+            open_start_form()
+            await pilot.click("#start-button")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen),
+                timeout_seconds=30.0,
+                label="stage1-workspace",
+            )
+            workspace1 = pilot.app.screen
+            assert workspace1.mode is WorkspaceMode.LIVE
+            # The launch replaced the start form: the stack below the
+            # workspace is Home, not StartSessionScreen.
+            assert isinstance(pilot.app._screen_stack[-2], HomeScreen)
+            await wait_live_terminal(pilot, workspace1)
+            assert "succeeded" in live_bar_text(workspace1)
+            session1_id = app.live_view.session_id
+            assert session1_id is not None
+            # q returns to Home (the app says "q returns to history").
+            await pilot.press("q")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+                label="stage2-home",
+            )
+            assert pilot.app.screen.__class__.__name__ == "HomeScreen"
+            # the completed run is registered in app-owned history
+            table = pilot.app.screen.query_one("#history-table")
+            assert table.row_count == 1
+
+            # -- session 2: start again from the same Home, then cancel ----
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+                label="stage3-start-screen",
+            )
+            open_start_form()
+            await pilot.click("#start-button")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen),
+                timeout_seconds=30.0,
+                label="stage4-workspace",
+            )
+            workspace2 = pilot.app.screen
+            assert workspace2.mode is WorkspaceMode.LIVE
+            assert workspace2 is not workspace1
+            await wait_until(
+                pilot,
+                lambda: len(workspace2._live_events) >= 4,
+                timeout_seconds=120.0,
+                label="stage5-live-events",
+            )
+            await pilot.press("c")
+            await wait_live_terminal(pilot, workspace2)
+            assert "cancelled" in live_bar_text(workspace2)
+            session2_id = app.live_view.session_id
+            assert session2_id is not None
+            assert session2_id != session1_id
+            await pilot.press("q")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+                label="stage6-home",
+            )
+            # both sequential sessions are in history with distinct ids
+            table = pilot.app.screen.query_one("#history-table")
+            assert table.row_count == 2
+            ids = [entry.session_id for entry in app.history_store.list_sessions()]
+            assert session1_id in ids and session2_id in ids
+            assert len(set(ids)) == 2
+
+        run_headless(app, scenario, size=(100, 30))
