@@ -2,21 +2,21 @@
 
 ## Durum notu
 
-**2026-08-15 Local Application V1 — ACTIVE / TASKS 1–5 ACCEPTED.**
+**2026-08-15 Local Application V1 — ACTIVE / TASKS 1–7 ACCEPTED.**
 Authoritative architecture and phased plan: `docs/architecture/local-application-v1.md`.
-Completed: **Tasks 1–5**. The application now has validated session contracts,
-incremental controller observability, a cancellable worker/process foundation,
-structured debugger/source/patch/verifier observability, one shared live
-`SessionEvent` emission authority, filesystem-backed app-owned history, and
-read-only replay through the same presentation reducer. Current next milestone:
-**Task 6 — Build the replay-first Textual application**. Existing R1-R6
-scientific results, frozen evidence, and the sustained local-GPU hardware stop
-remain unchanged; this application phase does not authorize training,
+Completed: **Tasks 1–7**. The application now has the accepted application
+contracts, shared observability/presentation model, cancellable worker/process
+boundary, app-owned history/replay, a replay-first Textual UI, and the real
+deterministic offline controller/PDB/PatchManager/verifier execution source wired
+live through the same journal/reducer path. Current final milestone:
+**Task 8 — Add configured command-model execution and harden V1**. Existing
+R1-R6 scientific results, frozen evidence, and the sustained local-GPU hardware
+stop remain unchanged; this application phase does not authorize training,
 final-holdout reruns, or sustained local GPU campaigns.
 
 - [ ] **Local Application V1** — execute the accepted phased roadmap in
-  `docs/architecture/local-application-v1.md` (Tasks 1–5 accepted; current
-  milestone: Task 6 of 8).
+  `docs/architecture/local-application-v1.md` (Tasks 1–7 accepted; current
+  milestone: Task 8 of 8).
 
 **2026-08-13 current status (R1-R6 closeout):** The 2026-08-11 S9
 bounded-negative closeout is **historical** and is preserved verbatim at

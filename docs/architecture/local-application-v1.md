@@ -1,7 +1,7 @@
 # Agentic Debugging Local Application V1 — Architecture and Implementation Plan
 
 **Document type:** Active architecture and phased implementation plan  
-**Status:** Active implementation baseline; Tasks 1–5 accepted, Task 6 next
+**Status:** Active implementation baseline; Tasks 1–7 accepted, Task 8 next
 **Repository:** `agentic-debugging-internship`  
 **Repository state inspected:** `main` at `e5ebe2680238624d7020ac9270918b4601848a83`, clean working tree and empty stash before this document was added  
 **Scope:** A professional local application surface over the existing Agentic Debugging system  
@@ -1154,62 +1154,98 @@ termination, and cleanup verification rather than as a partial controller-only c
 
 ### Task 6 — Build the replay-first Textual application
 
-**Objective:** Deliver the V1 information architecture using recorded sessions.
+**Status:** ACCEPTED (2026-08-15).
 
-**Why sixth:** Replay isolates presentation work from live execution risk.
+**Objective:** Deliver the V1 information architecture as a professional replay-first terminal application.
 
-**Expected areas:** Optional dependency, entry point, new `agentic_debugger/ui/` package.
+**Accepted implementation:**
 
-**Key work:**
-
-- home/history screens;
-- session workspace;
-- source/diff panel;
-- activity timeline and filters;
-- debugger, diagnosis, patch, and verifier panels;
-- replay controls;
-- error/missing-data states.
+- optional Textual 8 application extra and one documented module launch surface;
+- Home/History screen backed by `HistoryStore`, including honest complete,
+  interrupted, malformed, invalid-manifest, and empty states;
+- shared Session Workspace for replay/live rendering with Source, Debugger,
+  Patch, Verifier, Activity, and Timeline panes;
+- replay navigation for event, effective-phase, begin/end, and sequence jump;
+- all domain content rendered from immutable `SessionViewState`; UI-only focus,
+  tab, scroll, and cursor state remains outside the presentation model;
+- recorded/evidence content is appended as literal Rich `Text` with styles
+  supplied separately, preventing markup interpretation or escaping artifacts;
+- successful Start-session navigation replaces the start form so workspace
+  back/quit returns directly to Home/History;
+- finished/failed live-runner ownership is released without joining the runner
+  thread from the Textual event-loop callback, allowing repeated sessions in one
+  application lifetime;
+- optional Textual dependency does not contaminate the scientific/core import
+  surface.
 
 **Acceptance criteria:**
 
-- Representative canonical, R6, and professor traces render correctly.
-- Every view derives from the shared reducer.
-- Core-only installation remains Textual-free.
-- Full-screen Windows Terminal behavior is acceptable.
+- replay performs no controller/model/PDB/patch/verifier execution;
+- Home -> Start -> Workspace -> Home navigation is stable and reusable;
+- sequential completed/cancelled/failed sessions do not retain stale execution
+  ownership;
+- source/debugger/patch/verifier/activity/timeline panes render recorded evidence
+  literally and missing information honestly;
+- representative terminal sizes and headless interaction remain usable;
+- replay continues to use the same pure reducer as persisted/live state.
 
-**Validation:** Headless Pilot tests, resize tests, clean-environment packaging smoke.
+**Validation:** Headless Textual/Pilot application, navigation, lifecycle,
+rendering-safety, replay, adversarial, and resize tests; final Repair Pass 1 UI
+surface reported 65/65 passing.
 
 **Dependencies:** Tasks 1 and 5; consumes Task 4 data model.
 
-**Non-goals:** Live execution or browser support.
+**Non-goals:** Browser support, code editing, arbitrary PDB console, or provider configuration.
 
 ### Task 7 — Wire deterministic live sessions
 
-**Objective:** Run the genuine offline controller/PDB/patch/verifier path inside the application.
+**Status:** ACCEPTED (2026-08-15).
 
-**Why seventh:** It proves live execution without external model or GPU variability.
+**Objective:** Run the genuine deterministic offline controller/PDB/patch/verifier path inside the application and persist/replay it through the same presentation model.
 
-**Expected areas:** Offline source adapter, session service, live TUI controls.
+**Accepted implementation:**
 
-**Key work:**
-
-- start/cancel flow;
-- real-time event consumption;
-- journal catch-up after delayed notifications;
-- final history registration;
-- live/replay mode labels.
+- production deterministic source distinct from the Task-3 synthetic worker
+  scenarios;
+- real deterministic controller, tool registry, PDB, PatchManager, disposable
+  workspace, and independent verifier composition;
+- one worker/session `SessionEventEmitter` shared across lifecycle, controller,
+  debugger/source/patch, verifier, cleanup, and terminal events;
+- durable journal remains authoritative; lightweight notifications trigger
+  parent catch-up, including terminal remainder delivery after process exit;
+- `LiveSessionRunner` supervises `SessionWorkerProcess` on a background thread,
+  keeping controller/PDB/verifier work off the Textual event loop;
+- cooperative live cancellation uses the accepted Task-3 path and terminal UI
+  status waits for durable worker evidence;
+- app teardown closes/cancels boundedly and cannot intentionally orphan a live
+  worker;
+- completed/interrupted sessions integrate with app-owned history and can be
+  reopened read-only;
+- repeated deterministic sessions in one TUI lifetime receive distinct session
+  identities and remain independently replayable.
 
 **Acceptance criteria:**
 
-- User can start, observe, cancel, finish, and replay one offline session.
-- Live and replay view states match for all recorded prefixes.
-- Cleanup is confirmed before terminal cancellation.
+- user can start, observe, cancel, finish, return to history, start another
+  deterministic session, and replay prior sessions;
+- source/debugger/patch/verifier facts come from real executed operations, not
+  UI-only synthetic events;
+- cleanup is verified before cooperative terminal cancellation;
+- a completed real run's live final `SessionViewState` equals the final replay
+  state from its persisted journal;
+- UI shutdown leaves no live worker/process descendant under the accepted
+  supervision boundary;
+- configured/external model execution remains deferred to Task 8.
 
-**Validation:** Deterministic end-to-end smoke, cancellation smoke, replay parity.
+**Validation:** Real deterministic worker/UI end-to-end tests, sequential-session
+tests, cancellation/no-orphan tests, history registration/reopen, journal
+catch-up, and live/replay parity. Final captured evidence: 175 events,
+`succeeded/done`, cleanup verified, verifier `COMPLETED/RESOLVED` (f2p 1/1,
+p2p 2/2), final live/replay state equal.
 
 **Dependencies:** Tasks 1–6.
 
-**Non-goals:** External model execution.
+**Non-goals:** External/configured command-model execution.
 
 ### Task 8 — Add configured command-model execution and harden V1
 

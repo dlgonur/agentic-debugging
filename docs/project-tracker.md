@@ -79,10 +79,37 @@ Rules:
   compatibility gates. FirstMate independently reconstructed the candidate and
   confirmed 529 directly available application tests; the only two unavailable
   tests required R5 run artifacts absent from the supplied repository snapshot.
-- [ ] **Task 6 — Build the replay-first Textual application** — NEXT.
-  Build the actual full-screen application UI on the accepted
-  session/presentation/history/replay foundation; do not yet wire the production
-  deterministic live source (Task 7).
+- [x] **Task 6 — Build the replay-first Textual application** —
+  ACCEPTED (2026-08-15). Added the optional Textual 8 application surface and a
+  documented launch path (`python -m agentic_debugger.ui`). Home/history and the
+  full session workspace render exclusively from the accepted
+  `SessionViewState`: source/current-line, debugger stack/locals, patch
+  lifecycle/diff, verifier authority, activity, timeline, and read-only replay
+  controls. Replay remains execution-free. Repair Pass 1 fixed sequential-run
+  ownership, successful Start-screen replacement (`Home -> Workspace`), and
+  literal Rich rendering of recorded evidence. Headless validation reports
+  **65/65 UI tests**, including real Start-session navigation, sequential
+  sessions, cancellation, history/replay, resize/adversarial coverage, and
+  markup-safety tests. The scientific/core install remains Textual-free unless
+  the optional `app` extra is installed.
+- [x] **Task 7 — Wire deterministic live sessions** — ACCEPTED (2026-08-15).
+  Added the production deterministic offline execution source using the real
+  `DeterministicController`, tool registry, PDB, `PatchManager`, and independent
+  `EvaluationVerifier` inside the accepted Task-3 worker boundary. Live events
+  use the coordinator's one shared `SessionEventEmitter`; parent notifications
+  catch up from the authoritative journal; Textual supervision runs off the UI
+  event loop; cancellation and application shutdown use the accepted bounded
+  worker/process semantics; completed sessions register into app-owned history.
+  Final real-run evidence: **175 events**, operational `succeeded/done`,
+  cleanup verified, verifier `COMPLETED/RESOLVED` with f2p **1/1** and p2p
+  **2/2**, and final live/replay `SessionViewState` equality. Sequential real
+  sessions produced distinct history entries and the first remained replayable
+  after the second. Task 8 external/configured command-model execution remains
+  intentionally unimplemented.
+- [ ] **Task 8 — Add configured command-model execution and harden V1** — NEXT.
+  Reuse the existing explicitly configured command-model transport behind the
+  accepted worker/application/UI architecture, then complete V1 packaging,
+  operational diagnostics, cancellation/timeout, and release-quality hardening.
 
 ## 0. Daily Requirement
 
