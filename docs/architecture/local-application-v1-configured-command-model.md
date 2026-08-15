@@ -135,6 +135,25 @@ elsewhere; ``--root DIR`` overrides it).
   names, and paths — are **rejected at validation**, so no secret literal
   can be persisted into history, rendered in the UI, or serialized into a
   configuration fingerprint;
+- **safe bounded diagnostics (Repair Pass 2)**: every
+  ``CommandConfigError`` diagnostic is a safe structural message bounded to
+  an explicit UTF-8 byte limit (``MAX_CONFIG_DIAGNOSTIC_BYTES``, consistent
+  with the application's small bounded-diagnostic policy) at construction
+  time, in one place.  Raw untrusted config values and keys are never
+  echoed into a diagnostic — a malformed config must not leak secrets
+  through error text that reaches the Start screen or the worker/session
+  result — and a malformed config can never produce an oversized exception
+  string.  Known-safe validated identifiers (a profile id that passed its
+  own validation contract, safe fingerprints, counts/indexes) may be
+  included;
+- **authoritative bounded config read (Repair Pass 2)**: the configuration
+  file is read through one authoritative bounded read (at most
+  ``_MAX_CONFIG_FILE_BYTES + 1`` bytes).  A pre-read ``stat`` is never the
+  size authority, so a file that grows between any pre-read observation and
+  the read itself can never be read unbounded into memory; the actual bytes
+  parsed are exactly the bytes whose size was bounded.  Missing-file
+  semantics are unchanged (a file that disappears during load is the empty
+  configuration); malformed UTF-8/JSON remains a safe bounded config error;
 - **configuration TOCTOU pin**: a Start action pins the selected profile's
   safe configuration fingerprint into the worker launch parameters; the
   worker reloads the profile, recomputes the fingerprint, and fails closed

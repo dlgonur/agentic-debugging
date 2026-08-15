@@ -9,6 +9,7 @@ load), safe fingerprints, and the safe UI summaries.
 
 from __future__ import annotations
 
+import io
 import json
 import sys
 from pathlib import Path
@@ -17,10 +18,12 @@ import pytest
 
 from agentic_debugger.application.command_config import (
     COMMAND_CONFIG_SCHEMA_VERSION,
+    MAX_CONFIG_DIAGNOSTIC_BYTES,
     CommandConfigError,
     CommandConfigNotFoundError,
     CommandModelConfigStore,
     CommandModelProfile,
+    _MAX_CONFIG_FILE_BYTES,
 )
 
 FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "command_models" / "dummy_command_model.py"
@@ -305,3 +308,233 @@ class TestWorkerScenarioParamShape:
             {"config_root": str(Path.cwd()), "profile_id": "dummy", "policy": "pdb-on-uncertainty"}
         )
         assert params["profile_id"] == "dummy"
+
+
+def write_raw_config(root: Path, text: str) -> None:
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "command-models.json").write_text(text, encoding="utf-8")
+
+
+class TestSafeDiagnostics:
+    """Repair Pass 2 Blocker 1: malformed config must never leak raw
+    untrusted values/keys through diagnostics, and every diagnostic must
+    stay within the explicit UTF-8 byte bound.
+    """
+
+    SECRET = "API_KEY=supersecret-value"
+
+    def test_credential_shaped_schema_version_not_echoed(self, tmp_path):
+        write_raw_config(
+            tmp_path,
+            json.dumps({"schema_version": self.SECRET, "profiles": []}),
+        )
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert self.SECRET not in str(excinfo.value)
+        assert "unsupported command-model configuration version" in str(excinfo.value)
+
+    def test_credential_shaped_unknown_top_level_key_not_echoed(self, tmp_path):
+        write_raw_config(
+            tmp_path,
+            json.dumps(
+                {"schema_version": COMMAND_CONFIG_SCHEMA_VERSION, "profiles": [], self.SECRET: 1}
+            ),
+        )
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert self.SECRET not in str(excinfo.value)
+        assert "unknown field" in str(excinfo.value)
+
+    def test_credential_shaped_unknown_profile_key_not_echoed(self, tmp_path):
+        write_config(tmp_path, [make_profile(**{self.SECRET: 1})])
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert self.SECRET not in str(excinfo.value)
+        assert "unknown field" in str(excinfo.value)
+
+    def test_credential_shaped_environment_name_not_echoed(self, tmp_path):
+        write_config(tmp_path, [make_profile(environment={self.SECRET: "x"})])
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert self.SECRET not in str(excinfo.value)
+        assert "environment" in str(excinfo.value)
+
+    def test_credential_shaped_protocol_version_not_echoed(self):
+        secret = "token=supersecret-value"
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelProfile.from_mapping(make_profile(protocol_version=secret))
+        assert secret not in str(excinfo.value)
+        assert "protocol_version" in str(excinfo.value)
+
+    def test_huge_schema_version_stays_within_the_bound(self, tmp_path):
+        write_raw_config(
+            tmp_path,
+            json.dumps({"schema_version": "X" * 200000, "profiles": []}),
+        )
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+
+    def test_huge_unknown_field_name_stays_within_the_bound(self, tmp_path):
+        write_raw_config(
+            tmp_path,
+            json.dumps(
+                {
+                    "schema_version": COMMAND_CONFIG_SCHEMA_VERSION,
+                    "profiles": [],
+                    "Y" * 200000: 1,
+                }
+            ),
+        )
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+
+    def test_huge_environment_name_stays_within_the_bound(self, tmp_path):
+        write_config(tmp_path, [make_profile(environment={"Z" * 129: "x"})])
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+
+    def test_ordinary_configuration_errors_remain_actionable(self, tmp_path):
+        # wrong schema version
+        write_raw_config(
+            tmp_path,
+            json.dumps({"schema_version": "command-models-v999", "profiles": []}),
+        )
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "unsupported command-model configuration version" in str(excinfo.value)
+        # unknown top-level field (count is actionable)
+        write_raw_config(
+            tmp_path,
+            json.dumps(
+                {"schema_version": COMMAND_CONFIG_SCHEMA_VERSION, "profiles": [], "extra": 1}
+            ),
+        )
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "1 unknown field" in str(excinfo.value)
+        # invalid profile inside the store keeps its index
+        write_config(tmp_path, [make_profile(executable="rel/ative.exe")])
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "profile 0 is invalid" in str(excinfo.value)
+        # a valid profile id may be named in "profile not found"
+        write_config(tmp_path, [make_profile()])
+        with pytest.raises(CommandConfigNotFoundError) as excinfo:
+            CommandModelConfigStore(tmp_path).get("missing")
+        assert "profile not found: 'missing'" in str(excinfo.value)
+        # a raw unvalidated profile id is never repr()'d
+        with pytest.raises(CommandConfigNotFoundError) as excinfo:
+            CommandModelConfigStore(tmp_path).get(self.SECRET)
+        assert self.SECRET not in str(excinfo.value)
+
+    def test_every_diagnostic_is_bounded_by_construction(self):
+        # The bound is enforced at construction time, in one place.
+        huge = "A" * 100000
+        exc = CommandConfigError(huge)
+        assert len(str(exc).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+        assert len(exc.args[0].encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+
+
+class TestAuthoritativeBoundedRead:
+    """Repair Pass 2 Blocker 2: the 256 KiB config-file bound must be an
+    authoritative read bound, not a pre-read stat observation.
+    """
+
+    def test_bounded_valid_config_loads(self, tmp_path):
+        # ordinary valid bounded input
+        write_config(tmp_path, [make_profile()])
+        profiles = CommandModelConfigStore(tmp_path).list_profiles()
+        assert [p.profile_id for p in profiles] == ["dummy"]
+
+    def test_oversized_config_rejected(self, tmp_path):
+        write_raw_config(tmp_path, "x" * (_MAX_CONFIG_FILE_BYTES + 1))
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "byte bound" in str(excinfo.value)
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+
+    def test_stale_small_stat_cannot_permit_an_oversized_read(self, tmp_path, monkeypatch):
+        # TOCTOU seam: the file is small on disk (any pre-read stat sees a
+        # small size) but the actual read yields an oversized body, as if
+        # the file grew between stat and read.  The authoritative bounded
+        # read must reject it; a stale small stat can never permit an
+        # oversized read.
+        oversized = b"x" * (_MAX_CONFIG_FILE_BYTES + 1024)
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_path = config_dir / "command-models.json"
+        config_path.write_bytes(b"{}")  # small on disk
+
+        real_open = Path.open
+
+        def fake_open(self, *args, **kwargs):
+            if self == config_path:
+                return io.BytesIO(oversized)
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", fake_open)
+
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "byte bound" in str(excinfo.value)
+
+    def test_read_is_bounded_without_any_stat_authority(self, tmp_path, monkeypatch):
+        # The bounded read must not depend on a previous stat: even when
+        # stat reports a stale small size for an oversized file, the read
+        # itself remains the size authority and rejects it.
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_path = config_dir / "command-models.json"
+        config_path.write_bytes(b"y" * (_MAX_CONFIG_FILE_BYTES + 1))
+
+        real_stat = Path.stat
+
+        def lying_stat(self, *args, **kwargs):
+            result = real_stat(self, *args, **kwargs)
+            if self == config_path:
+                result.st_size = 10  # stale small size
+            return result
+
+        monkeypatch.setattr(Path, "stat", lying_stat)
+
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "byte bound" in str(excinfo.value)
+
+    def test_config_disappearance_during_load_is_empty(self, tmp_path, monkeypatch):
+        # A file that disappears during load keeps the missing-file
+        # semantics (empty configuration), never a crash.
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_path = config_dir / "command-models.json"
+        config_path.write_bytes(b"{}")
+
+        real_open = Path.open
+
+        def vanishing_open(self, *args, **kwargs):
+            if self == config_path:
+                raise FileNotFoundError("config vanished")
+            return real_open(self, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "open", vanishing_open)
+        assert CommandModelConfigStore(tmp_path).list_profiles() == ()
+
+    def test_malformed_utf8_is_a_safe_bounded_error(self, tmp_path):
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        (config_dir / "command-models.json").write_bytes(b"\xff\xfe\x00{not utf-8")
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "could not be read" in str(excinfo.value)
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
+
+    def test_malformed_json_is_a_safe_bounded_error(self, tmp_path):
+        write_raw_config(tmp_path, "{not-json")
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "could not be read" in str(excinfo.value)
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES

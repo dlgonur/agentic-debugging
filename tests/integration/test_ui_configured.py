@@ -150,6 +150,42 @@ class TestConfiguredStartScreen:
 
         run_headless(app, scenario, size=(100, 30))
 
+    def test_config_load_error_shows_safe_bounded_diagnostic(self, tmp_path):
+        """Repair Pass 2 Blocker 1: a malformed config whose raw values are
+        credential-shaped must surface only the safe bounded structural
+        diagnostic on the Start screen — never the secret literal.
+        """
+        secret = "API_KEY=supersecret-value"
+        config_dir = tmp_path / "config"
+        config_dir.mkdir()
+        (config_dir / "command-models.json").write_text(
+            json.dumps({"schema_version": secret, "profiles": []}),
+            encoding="utf-8",
+        )
+        app = make_app(tmp_path)
+
+        async def scenario(pilot):
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+            )
+            start = pilot.app.screen
+            start.query_one("#mode-select", Select).value = "configured"
+            await pilot.pause()
+            info = str(start.query_one("#config-info").render())
+            assert "configuration error" in info
+            # the safe structural diagnostic, never the raw secret
+            assert "unsupported command-model configuration version" in info
+            assert secret not in info
+            assert "supersecret-value" not in info
+            # the diagnostic stays within the explicit byte bound
+            assert len(info.encode("utf-8")) < 1000
+            assert start.query_one("#start-button", Button).disabled is True
+
+        run_headless(app, scenario, size=(100, 30))
+
     def test_profiles_are_listed_with_safe_info(self, tmp_path):
         write_profile(tmp_path, "dummy", "valid")
         app = make_app(tmp_path)

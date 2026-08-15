@@ -693,3 +693,57 @@ class TestConfiguredSourceFingerprintPinning:
         kinds = [e.event_kind for e in journal_of(store, session_id).events]
         assert SessionEventKind.MODEL_CONFIGURED in kinds
         assert SessionEventKind.VERIFIER_COMPLETED in kinds
+
+
+class TestConfiguredSourceConfigMutationSafety:
+    """Repair Pass 2 Blocker 1: a config mutated after Start into a
+    credential-shaped malformed config must fail closed in the worker
+    WITHOUT leaking the secret literal into the session result
+    diagnostics or any persisted app-owned evidence.
+    """
+
+    SECRET = "API_KEY=supersecret-value"
+
+    def test_mutated_credential_config_leaks_no_secret_into_evidence(self, tmp_path):
+        data_file = write_task_data(tmp_path)
+        write_profile(tmp_path, "dummy", "valid", extra_argv=("--data", str(data_file)))
+        store = HistoryStore(tmp_path)
+        from agentic_debugger.application.command_config import CommandModelConfigStore
+
+        pinned = CommandModelConfigStore(store.root).get("dummy").configuration_fingerprint
+
+        # Mutate the config AFTER selection into a malformed config whose raw
+        # value is credential-shaped.  The worker's own load must fail closed
+        # and its diagnostic must be the safe structural message only.
+        (tmp_path / "config" / "command-models.json").write_text(
+            json.dumps({"schema_version": self.SECRET, "profiles": []}),
+            encoding="utf-8",
+        )
+
+        session_id = "sess-cfg-mutation-0001"
+        worker = make_worker(
+            store, session_id, PDB_POLICY, expected_fingerprint=pinned
+        )
+        result = run_to_terminal(worker)
+        worker.close()
+
+        # The worker refuses with a bounded honest failure.
+        assert result.status is SessionStatus.FAILED
+        diagnostics = " ".join(result.diagnostics)
+        assert "unavailable" in diagnostics or "scenario input error" in diagnostics
+        # The secret literal must not appear in the session result or any
+        # persisted app-owned evidence.
+        assert self.SECRET not in json.dumps(result.to_mapping())
+        assert "supersecret-value" not in json.dumps(result.to_mapping())
+        session_dir = store.session_dir(session_id)
+        if session_dir.is_dir():
+            for artifact in session_dir.rglob("*"):
+                if artifact.is_file():
+                    content = artifact.read_text(encoding="utf-8", errors="replace")
+                    assert "supersecret-value" not in content, (
+                        f"secret leaked into {artifact.name}"
+                    )
+        # No executable was launched: no model.configured, no verifier.
+        kinds = [e.event_kind for e in journal_of(store, session_id).events]
+        assert SessionEventKind.MODEL_CONFIGURED not in kinds
+        assert SessionEventKind.VERIFIER_COMPLETED not in kinds

@@ -31,6 +31,16 @@ Security boundary rules (Task 8 Part A4/A5):
   configuration fingerprint.
 - Environment overrides are bounded explicit values; the inherited process
   environment is never serialized into evidence.
+- Every :class:`CommandConfigError` diagnostic is a safe structural
+  message with an explicit UTF-8 byte bound (Repair Pass 2): raw
+  untrusted config values and keys are never echoed into a diagnostic
+  (a malformed config must not leak secrets through error text that
+  reaches the Start screen or the worker/session result), and a
+  malformed config can never produce an oversized exception string.
+- The configuration file is read through one authoritative bounded read
+  (at most ``_MAX_CONFIG_FILE_BYTES + 1`` bytes); a pre-read ``stat`` is
+  never the size authority, so a file that grows between stat and read
+  cannot be read unbounded into memory.
 """
 
 from __future__ import annotations
@@ -92,14 +102,58 @@ _MAX_TOOL_VERSION_CHARS = 64
 _MIN_TIMEOUT_SECONDS = 1.0
 _MAX_TIMEOUT_SECONDS = 300.0
 _MAX_CONFIG_FILE_BYTES = 256 * 1024
+#: Explicit UTF-8 byte bound for every user-visible / worker-propagated
+#: command-model configuration diagnostic.  Consistent with the
+#: application's small bounded-diagnostic policy (the 400-byte bound used
+#: by local-source/tool diagnostics).  A malformed config must never
+#: yield an oversized exception string.
+MAX_CONFIG_DIAGNOSTIC_BYTES = 400
 
 
 class CommandConfigError(ApplicationError):
-    """Base class for command-model configuration failures."""
+    """Base class for command-model configuration failures.
+
+    Safe diagnostic policy (Repair Pass 2): every message is bounded to
+    :data:`MAX_CONFIG_DIAGNOSTIC_BYTES` UTF-8 bytes at construction time,
+    in this one place, so no propagation path (Start-screen error,
+    worker/session diagnostics, history evidence) can ever surface an
+    oversized configuration diagnostic.  Messages must be safe structural
+    diagnostics: they must not embed raw untrusted config values or keys
+    (a malformed config must not leak secrets through its own error
+    text).  Known-safe validated identifiers (a profile id that passed its
+    own validation contract, safe fingerprints, counts/indexes) may be
+    included.
+    """
+
+    def __init__(self, message: str = "") -> None:
+        super().__init__(_safe_diagnostic(message))
+
+    def __str__(self) -> str:
+        return _safe_diagnostic(super().__str__())
 
 
 class CommandConfigNotFoundError(CommandConfigError):
     """The requested profile id is not defined by the app-owned config."""
+
+
+def _safe_diagnostic(text: Any) -> str:
+    """One explicit bounded/safe diagnostic policy for config errors.
+
+    Applied at :class:`CommandConfigError` construction (and defensively
+    in ``__str__``), never as after-the-fact redaction of an arbitrarily
+    large string: the raw diagnostic is never constructed oversized in
+    the first place.  Control characters are flattened and the result is
+    truncated on a UTF-8 byte boundary.
+    """
+    cleaned = "".join(
+        char if 0x20 <= ord(char) != 0x7F else " " for char in str(text)
+    )
+    encoded = cleaned.encode("utf-8")
+    if len(encoded) > MAX_CONFIG_DIAGNOSTIC_BYTES:
+        cleaned = encoded[: MAX_CONFIG_DIAGNOSTIC_BYTES - 3].decode(
+            "utf-8", errors="ignore"
+        ) + "..."
+    return cleaned or "unspecified"
 
 
 def _reject_control(value: str, label: str) -> str:
@@ -163,9 +217,11 @@ def _validated_protocol_version(value: Any) -> str:
         "protocol_version",
     )
     if text != LIVE_PROTOCOL_VERSION:
+        # Safe structural diagnostic: the raw untrusted value is never
+        # echoed (it may be credential-shaped or oversized).
         raise CommandConfigError(
             "protocol_version must equal the supported runtime protocol "
-            f"{LIVE_PROTOCOL_VERSION!r}; got {text!r}"
+            f"{LIVE_PROTOCOL_VERSION!r}"
         )
     return text
 
@@ -281,8 +337,11 @@ def _validated_environment(value: Any) -> Tuple[Tuple[str, str], ...]:
     for name, item in items:
         key = _bounded_text(name, "environment name", _MAX_ENV_NAME_CHARS)
         if not _ENV_NAME_RE.fullmatch(key):
+            # Safe structural diagnostic: the raw untrusted name is never
+            # echoed (it may be credential-shaped or oversized).
             raise CommandConfigError(
-                f"environment name {key!r} is not a valid environment variable name"
+                "environment override name is invalid "
+                "(must match [A-Za-z_][A-Za-z0-9_]*)"
             )
         if (
             _ARGUMENT_SECRET_RE.search(key)
@@ -290,7 +349,7 @@ def _validated_environment(value: Any) -> Tuple[Tuple[str, str], ...]:
             or is_credential_name(key)
         ):
             raise CommandConfigError(
-                f"environment name {key!r} contains a credential-shaped value"
+                "environment override name contains a credential-shaped value"
             )
         val = _bounded_text(item, f"environment {key}", _MAX_ENV_VALUE_CHARS)
         if "\x00" in val:
@@ -392,8 +451,11 @@ class CommandModelProfile:
         }
         extra = set(value.keys()) - known
         if extra:
+            # Safe structural diagnostic: raw unknown field names are
+            # untrusted config text and are never echoed (they may be
+            # credential-shaped or oversized); the count stays actionable.
             raise CommandConfigError(
-                f"profile has unknown fields: {sorted(extra)}"
+                f"profile contains {len(extra)} unknown field(s)"
             )
         missing = {"profile_id", "display_name", "executable"} - set(value.keys())
         if missing:
@@ -524,25 +586,35 @@ class CommandModelConfigStore:
         """
         if not self._config_path.is_file():
             return ()
+        # Authoritative bounded read (Repair Pass 2): the actual bytes
+        # parsed are exactly the bytes whose size was bounded.  At most
+        # ``_MAX_CONFIG_FILE_BYTES + 1`` bytes are ever read into memory,
+        # so a file that grows between any pre-read observation and the
+        # read itself can never be read unbounded; a stale small ``stat``
+        # cannot permit an oversized read.  Missing-file semantics are
+        # unchanged (a file that disappears during load is the empty
+        # configuration).
         try:
-            size = self._config_path.stat().st_size
+            with self._config_path.open("rb") as handle:
+                raw_bytes = handle.read(_MAX_CONFIG_FILE_BYTES + 1)
+        except FileNotFoundError:
+            return ()
         except OSError as exc:
             raise CommandConfigError(
-                f"command-model configuration cannot be inspected: {exc}"
-            ) from exc
-        if size > _MAX_CONFIG_FILE_BYTES:
+                "command-model configuration could not be read: "
+                f"{_safe_diagnostic(exc)}"
+            ) from None
+        if len(raw_bytes) > _MAX_CONFIG_FILE_BYTES:
             raise CommandConfigError(
                 "command-model configuration exceeds the "
                 f"{_MAX_CONFIG_FILE_BYTES}-byte bound"
             )
         try:
-            raw = json.loads(self._config_path.read_text(encoding="utf-8"))
-        except FileNotFoundError:
-            return ()
-        except (OSError, UnicodeError, json.JSONDecodeError, TypeError) as exc:
+            raw = json.loads(raw_bytes.decode("utf-8"))
+        except (UnicodeError, json.JSONDecodeError, TypeError) as exc:
             raise CommandConfigError(
                 f"command-model configuration could not be read: "
-                f"{_bounded_diagnostic(exc)}"
+                f"{_safe_diagnostic(exc)}"
             ) from None
         if not isinstance(raw, Mapping):
             raise CommandConfigError(
@@ -551,13 +623,18 @@ class CommandModelConfigStore:
         known = {"schema_version", "profiles"}
         extra = set(raw.keys()) - known
         if extra:
+            # Safe structural diagnostic: raw unknown top-level keys are
+            # untrusted config text and are never echoed (they may be
+            # credential-shaped or oversized); the count stays actionable.
             raise CommandConfigError(
-                f"command-model configuration has unknown fields: {sorted(extra)}"
+                f"command-model configuration contains "
+                f"{len(extra)} unknown field(s)"
             )
         if raw.get("schema_version") != COMMAND_CONFIG_SCHEMA_VERSION:
+            # Safe structural diagnostic: the raw untrusted version value
+            # is never echoed (it may be credential-shaped or oversized).
             raise CommandConfigError(
-                "unsupported command-model configuration version: "
-                f"{raw.get('schema_version')!r}"
+                "unsupported command-model configuration version"
             )
         profiles_raw = raw.get("profiles")
         if type(profiles_raw) is not list:
@@ -596,17 +673,17 @@ class CommandModelConfigStore:
         for profile in self.load():
             if profile.profile_id == profile_id:
                 return profile
-        raise CommandConfigNotFoundError(f"profile not found: {profile_id!r}")
+        # A known-safe identifier may be named only after it passes its own
+        # safe validation contract; a raw unvalidated profile id is never
+        # repr()'d into the diagnostic (it may be credential-shaped or
+        # oversized).
+        if (
+            len(profile_id.encode("utf-8")) <= _MAX_PROFILE_ID_CHARS
+            and _PROFILE_ID_RE.fullmatch(profile_id) is not None
+        ):
+            raise CommandConfigNotFoundError(f"profile not found: {profile_id!r}")
+        raise CommandConfigNotFoundError("profile not found")
 
     def summaries(self) -> Tuple[ProfileSummary, ...]:
         """Safe concise summaries of every defined profile (UI discovery)."""
         return tuple(profile.summary() for profile in self.load())
-
-
-def _bounded_diagnostic(text: Any) -> str:
-    cleaned = "".join(
-        char if 0x20 <= ord(char) != 0x7F else " " for char in str(text)
-    )
-    if len(cleaned) > 400:
-        cleaned = cleaned[:397] + "..."
-    return cleaned or "unspecified"
