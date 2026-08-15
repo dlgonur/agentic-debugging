@@ -97,6 +97,12 @@ def render_view_header(
     head.append(view.session_id or "session-unbound", style="bold")
     head.append(f"  ·  task {view.task_id}")
     head.append(f"  ·  {view.source_kind.value}")
+    if view.model_provenance is not None and view.model_provenance.display_name:
+        # Recorded safe provenance only; never a claimed provider identity.
+        head.append(
+            f"  ·  model {view.model_provenance.display_name}"
+            f" ({view.model_provenance.profile_id})"
+        )
     head.append("\n")
     status_style = {
         SessionStatus.RUNNING: "bold blue",
@@ -263,21 +269,38 @@ def verifier_cell(entry: SessionHistoryEntry) -> str:
 
 
 class StartSessionScreen(Screen):
-    """Bounded start of one deterministic offline session."""
+    """Bounded start of one live session: deterministic or configured."""
 
     BINDINGS = [Binding("escape", "cancel", "Back")]
+
+    MODE_DETERMINISTIC = "deterministic"
+    MODE_CONFIGURED = "configured"
 
     def __init__(self, task_options: Optional[list[tuple[str, str]]] = None) -> None:
         super().__init__()
         self._task_options = list(task_options or [])
+        self._profiles: Tuple[Any, ...] = ()
+        self._config_error: Optional[str] = None
+        self._mode = self.MODE_DETERMINISTIC
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[bold #58a6ff]Start deterministic session[/]\n"
-            "[dim]Offline demo source: real controller, PDB, patch manager "
-            "and independent verifier. No provider, no network.[/]",
+            "[bold #58a6ff]Start session[/]\n"
+            "[dim]Deterministic offline demo or a configured local command "
+            "model. No provider, no network.[/]",
             id="start-title",
         )
+        yield Label("Mode")
+        yield Select(
+            id="mode-select",
+            options=[
+                ("deterministic offline", self.MODE_DETERMINISTIC),
+                ("configured command model", self.MODE_CONFIGURED),
+            ],
+            allow_blank=False,
+            value=self.MODE_DETERMINISTIC,
+        )
+        yield Static("", id="config-info")
         yield Label("Task")
         yield Select(id="task-select", options=self._task_options, allow_blank=False)
         yield Label("Policy")
@@ -290,6 +313,8 @@ class StartSessionScreen(Screen):
             allow_blank=False,
             value="pdb-on-uncertainty",
         )
+        yield Label("Command model profile", id="profile-label")
+        yield Select(id="profile-select", options=[], allow_blank=True)
         yield Label("Elapsed budget (seconds, optional)")
         yield Input(id="elapsed-input", placeholder="empty = no limit", type="integer")
         yield Button("Start session", id="start-button", variant="primary")
@@ -303,6 +328,80 @@ class StartSessionScreen(Screen):
             self.query_one("#task-select", Select).set_options(
                 [(task_id, task_id) for task_id in self.app.curated_task_ids()]
             )
+        self._refresh_profiles()
+        self._refresh_mode()
+
+    # -- profile discovery (invalid config must not crash the TUI) ---------
+
+    def _refresh_profiles(self) -> None:
+        from agentic_debugger.application.command_config import ProfileSummary
+
+        self._profiles, self._config_error = self.app.configured_profiles()
+        select = self.query_one("#profile-select", Select)
+        if self._profiles:
+            select.set_options(
+                [
+                    (
+                        f"{summary.display_name} ({summary.profile_id})",
+                        summary.profile_id,
+                    )
+                    for summary in self._profiles
+                ]
+            )
+        else:
+            select.set_options([("(no configured profiles)", "")])
+        self._render_config_info()
+
+    def _render_config_info(self) -> None:
+        info = self.query_one("#config-info", Static)
+        if self._mode == self.MODE_DETERMINISTIC:
+            info.update("")
+            return
+        lines: list[str] = []
+        if self._config_error is not None:
+            lines.append(f"[red]configuration error: {_markup_escape(self._config_error)}[/]")
+        for summary in self._profiles:
+            lines.append(
+                "[dim]"
+                f"{_markup_escape(summary.display_name)} "
+                f"({_markup_escape(summary.profile_id)}) · timeout "
+                f"{summary.request_timeout_seconds:g}s · fp "
+                f"{summary.configuration_fingerprint[:12]}[/]"
+            )
+        info.update("\n".join(lines) if lines else "[dim]no configured profiles[/]")
+
+    def _refresh_mode(self) -> None:
+        """Apply the selected mode: show/hide fields and gate Start.
+
+        Start is disabled with a clear reason when configured mode is
+        selected but no valid configured profile exists.
+        """
+        mode_select = self.query_one("#mode-select", Select)
+        mode = str(mode_select.value) if mode_select.value is not Select.BLANK else self.MODE_DETERMINISTIC
+        self._mode = mode
+        configured = mode == self.MODE_CONFIGURED
+        profile_label = self.query_one("#profile-label", Label)
+        profile_select = self.query_one("#profile-select", Select)
+        button = self.query_one("#start-button", Button)
+        if configured:
+            profile_label.display = True
+            profile_select.display = True
+            if not self._profiles:
+                button.disabled = True
+                button.tooltip = "no valid configured command-model profile"
+            else:
+                button.disabled = False
+        else:
+            profile_label.display = False
+            profile_select.display = False
+            button.disabled = False
+        self._render_config_info()
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        if event.select.id == "mode-select":
+            self._refresh_mode()
+        if event.select.id == "profile-select" and self._mode == self.MODE_CONFIGURED:
+            self._render_config_info()
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
@@ -316,8 +415,11 @@ class StartSessionScreen(Screen):
             self._start()
 
     def _start(self) -> None:
+        from agentic_debugger.application.events import SourceKind
+
         task_select = self.query_one("#task-select", Select)
         policy_select = self.query_one("#policy-select", Select)
+        profile_select = self.query_one("#profile-select", Select)
         elapsed_input = self.query_one("#elapsed-input", Input)
         error = self.query_one("#start-error", Static)
         if task_select.value is Select.BLANK:
@@ -335,11 +437,22 @@ class StartSessionScreen(Screen):
                 error.update("[red]elapsed budget must be at least 1 second[/]")
                 return
         error.update("")
+        configured = self._mode == self.MODE_CONFIGURED
+        profile_id: Optional[str] = None
+        if configured:
+            if profile_select.value is Select.BLANK or not self._profiles:
+                error.update("[red]select a configured command-model profile[/]")
+                return
+            profile_id = str(profile_select.value)
         try:
             self.app.start_live_session(
                 task_id=str(task_select.value),
                 policy=str(policy_select.value),
                 max_elapsed_seconds=max_elapsed,
+                source_kind=(
+                    SourceKind.CONFIGURED_MODEL if configured else SourceKind.OFFLINE_DEMO
+                ),
+                profile_id=profile_id,
             )
         except Exception as exc:
             error.update(f"[red]{_markup_escape(exc)}[/]")

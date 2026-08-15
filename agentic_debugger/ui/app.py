@@ -33,6 +33,10 @@ from typing import Optional, Tuple
 from textual.app import App
 from textual.binding import Binding
 
+from agentic_debugger.application.command_config import (
+    CommandConfigError,
+    CommandModelConfigStore,
+)
 from agentic_debugger.application.events import SessionEvent, SourceKind
 from agentic_debugger.application.history import HistoryStore
 from agentic_debugger.application.presentation import (
@@ -67,6 +71,15 @@ def deterministic_source_name() -> str:
     )
 
     return DETERMINISTIC_SOURCE_NAME
+
+
+def configured_source_name() -> str:
+    """The one production configured command-model worker source (Task 8)."""
+    from agentic_debugger.application.configured_source import (
+        CONFIGURED_SOURCE_NAME,
+    )
+
+    return CONFIGURED_SOURCE_NAME
 
 
 def default_history_root() -> Path:
@@ -111,6 +124,9 @@ class LocalApplicationV1(App):
             self._history_store = HistoryStore(
                 Path(history_root) if history_root is not None else default_history_root()
             )
+        # The app-owned command-model configuration lives under the same
+        # application root as history (``<root>/config/command-models.json``).
+        self._config_store = CommandModelConfigStore(self._history_store.root)
         self._repository_root = (
             Path(repo_root).resolve() if repo_root is not None else repository_root()
         )
@@ -129,6 +145,10 @@ class LocalApplicationV1(App):
     @property
     def history_store(self) -> HistoryStore:
         return self._history_store
+
+    @property
+    def config_store(self) -> CommandModelConfigStore:
+        return self._config_store
 
     @property
     def repository_root(self) -> Path:
@@ -236,31 +256,78 @@ class LocalApplicationV1(App):
             if task_id in supported
         )
 
+    def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
+        """Safe profile summaries for the Start screen, plus a load error.
+
+        Returns ``(summaries, error)``: an empty summary tuple with a
+        bounded diagnostic when the app-owned configuration cannot be
+        loaded (a malformed config must never crash the TUI; the Start
+        screen shows the reason and disables configured mode).
+        """
+        from agentic_debugger.application.command_config import ProfileSummary
+
+        try:
+            return self._config_store.summaries(), None
+        except CommandConfigError as exc:
+            return (), str(exc)
+
     def start_live_session(
         self,
         *,
         task_id: str,
         policy: str,
         max_elapsed_seconds: Optional[int],
+        source_kind: SourceKind = SourceKind.OFFLINE_DEMO,
+        profile_id: Optional[str] = None,
     ) -> None:
-        """Start one real deterministic offline session in the worker.
+        """Start one real live session in the worker.
 
-        The worker runs the accepted production deterministic source (real
-        controller, tool registry, PDB, PatchManager, and independent
-        verifier) with one shared session emitter.  The workspace is pushed
-        first so the presentation model is ready for the first events.
+        Two supported modes share the same accepted application pipeline:
+
+        - deterministic offline (default): the production deterministic
+          source (real controller, tool registry, PDB, PatchManager, and
+          independent verifier);
+        - configured command model: the same pipeline driven by a validated
+          app-owned command-model profile through the accepted JSON-lines
+          command transport and ``LiveModelAdapter``.
+
+        The workspace is pushed first so the presentation model is ready
+        for the first events.
         """
         if self._live_runner is not None:
             raise RuntimeError("a live session is already active")
         session_id = make_session_id()
         run_id = f"run-{session_id}"
+        if source_kind is SourceKind.CONFIGURED_MODEL:
+            if profile_id is None:
+                raise ValueError("configured command-model sessions require a profile id")
+            # Re-validate at start time: the configuration may have changed
+            # between discovery and start; a missing/invalid profile is a
+            # clear start error, never a silent fallback.
+            try:
+                self._config_store.get(profile_id)
+            except CommandConfigError as exc:
+                raise RuntimeError(
+                    f"configured command model unavailable: {exc}"
+                ) from exc
+            scenario = configured_source_name()
+            scenario_params = {
+                "config_root": str(self._config_store.root),
+                "profile_id": profile_id,
+                "policy": policy,
+            }
+            model_config_ref = profile_id
+        else:
+            scenario = deterministic_source_name()
+            scenario_params = {"task_id": task_id, "policy": policy}
+            model_config_ref = None
         spec = SessionSpec(
             task_id=task_id,
             source=ExecutionSourceSpec(
-                kind=SourceKind.OFFLINE_DEMO,
+                kind=source_kind,
                 task_id=task_id,
                 policy=policy,
-                model_config_ref=None,
+                model_config_ref=model_config_ref,
             ),
             budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
         )
@@ -269,8 +336,8 @@ class LocalApplicationV1(App):
             session_id=session_id,
             spec=spec,
             run_id=run_id,
-            scenario=deterministic_source_name(),
-            scenario_params={"task_id": task_id, "policy": policy},
+            scenario=scenario,
+            scenario_params=scenario_params,
             cooperative_grace_seconds=_COOPERATIVE_GRACE_SECONDS,
             ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
             max_elapsed_seconds=max_elapsed_seconds,

@@ -63,6 +63,7 @@ _ACTIVITY_FILTER_KINDS: dict[str, frozenset[str]] = {
             "model.request_completed",
             "model.directive_accepted",
             "model.directive_rejected",
+            "model.configured",
         }
     ),
     "tools": frozenset({"tool.started", "tool.completed"}),

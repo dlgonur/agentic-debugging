@@ -7,7 +7,9 @@ Usage::
 ``--root`` selects the application-owned history root (default:
 ``%LOCALAPPDATA%\\AgenticDebugger`` on Windows, ``~/AgenticDebugger``
 elsewhere).  The application is full-screen, offline, and requires no GPU,
-model provider, network, WSL, or campaign infrastructure.
+model provider, network, WSL, or campaign infrastructure.  It requires the
+optional ``app`` extra (Textual); launching without it prints a concise
+installation instruction instead of an import traceback.
 """
 
 from __future__ import annotations
@@ -22,8 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
         prog="python -m agentic_debugger.ui",
         description=(
             "Launch the Local Application V1 replay-first Textual "
-            "application over app-owned session history and deterministic "
-            "offline sessions."
+            "application over app-owned session history, deterministic "
+            "offline sessions, and configured command-model sessions."
         ),
     )
     parser.add_argument(
@@ -37,10 +39,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _require_textual() -> None:
+    """Fail with a concise installation instruction, never a traceback."""
+    try:
+        import textual  # noqa: F401
+    except ImportError as exc:
+        print(
+            "The Local Application V1 TUI requires the optional 'app' extra "
+            "(Textual).\n"
+            "Install it with:  python -m pip install -e '.[app]'\n"
+            f"(missing import: {exc.name})",
+            file=sys.stderr,
+        )
+        raise SystemExit(2) from None
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    args = build_parser().parse_args(argv)
+    _require_textual()
     from agentic_debugger.ui.app import LocalApplicationV1
 
-    args = build_parser().parse_args(argv)
     app = LocalApplicationV1(history_root=args.root)
     app.run()
     return 0
