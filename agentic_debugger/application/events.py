@@ -48,6 +48,14 @@ MAX_CHANGED_FILES = 64
 MAX_TUPLE_TEXT_CHARS = 512
 MAX_SHA256_HEX = 64
 MAX_JSON_DEPTH = 8
+#: Bounded app-owned source snapshot text.  Curated fixture modules are small;
+#: 64 KiB covers them with margin while still failing closed on unbounded
+#: files.  The Task-3 journal record bound (8 MiB) accommodates the resulting
+#: events.  Truncation is producer-side and marked with ``truncated=True``.
+MAX_SOURCE_TEXT_CHARS = 65536
+#: Bounded candidate patch text preserved for new app-owned sessions (the
+#: verifier's own candidate bound is 100_000 characters).
+MAX_PATCH_TEXT_CHARS = 100000
 
 _UTC_ISO_RE = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|\+00:00)$"
@@ -55,12 +63,34 @@ _UTC_ISO_RE = re.compile(
 
 #: Accepted credential-shape policy (mirrors the private policy in
 #: ``agentic_debugger/evaluation/live.py``): key=value shaped secrets,
-#: bearer/basic tokens.  Payload and configuration text fields that match
+#: bearer/basic tokens, plus the common quoted Python assignment forms
+#: (``{"api_key": "..."}`` dict literals and ``os.environ["API_KEY"] = ...``
+#: environment writes).  Payload and configuration text fields that match
 #: are rejected fail-closed.
+#:
+#: This is the single credential-shape policy shared by the event schema,
+#: the execution-source spec validation, and the Task-4 producer-side
+#: source/patch content policy (see :func:`contains_credential_shape`), so
+#: the schema and the producers cannot drift apart.  The pattern is
+#: keyword-anchored and requires an assignment/bearer shape, so harmless
+#: source identifiers such as ``token_count`` or ``secretary`` do not match.
 _SECRET_VALUE = re.compile(
     r"(?i)\b(?:bearer|basic)\s+\S+"
     r"|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|"
-    r"secret|token)\s*[:=]\s*\S+"
+    r"secret|token)\s*['\"]?\s*\]?\s*[:=]\s*['\"]?\s*\S+"
+)
+
+#: Runtime-local name policy (Repair Pass 2): a bounded producer-side rule
+#: for PDB frame locals.  A local whose *name* is exactly a credential-shaped
+#: identifier (``api_key``, ``access_token``, ``authorization``,
+#: ``credential``, ``password``, ``secret``, ``token``) never exposes its
+#: summarized value in an application event; harmless names such as
+#: ``token_count``, ``secretary``, or ``password_length`` are not credentials
+#: merely because of a substring.  See
+#: :func:`agentic_debugger.application.observability` for the redaction.
+_CREDENTIAL_NAME = re.compile(
+    r"(?i)^(?:api[_-]?key|access[_-]?token|authorization|credential|"
+    r"password|secret|token)$"
 )
 
 #: Allowed session identifier charset: lowercase alphanumeric start, then
@@ -169,6 +199,7 @@ class SessionEventKind(str, Enum):
     SESSION_FAILED = "session.failed"
     SESSION_CANCELLED = "session.cancelled"
     CONTROLLER_STEP = "controller.step"
+    CONTROLLER_TRANSITION = "controller.transition"
     MODEL_REQUEST_STARTED = "model.request_started"
     MODEL_REQUEST_COMPLETED = "model.request_completed"
     MODEL_DIRECTIVE_ACCEPTED = "model.directive_accepted"
@@ -181,8 +212,11 @@ class SessionEventKind(str, Enum):
     DEBUGGER_LOCALS_OBSERVED = "debugger.locals_observed"
     PATCH_PROPOSED = "patch.proposed"
     PATCH_REJECTED = "patch.rejected"
+    PATCH_APPLY_FAILED = "patch.apply_failed"
     PATCH_APPLIED = "patch.applied"
     PATCH_REVERTED = "patch.reverted"
+    SOURCE_SNAPSHOT = "source.snapshot"
+    DIAGNOSIS_RECORDED = "diagnosis.recorded"
     VERIFIER_STARTED = "verifier.started"
     VERIFIER_STAGE_STARTED = "verifier.stage_started"
     VERIFIER_STAGE_COMPLETED = "verifier.stage_completed"
@@ -217,6 +251,20 @@ class VerifierStageStatus(str, Enum):
     FAILED = "failed"
     SKIPPED = "skipped"
     CANCELLED = "cancelled"
+
+
+class SourceSnapshotStage(str, Enum):
+    """Material source state of one app-owned source snapshot.
+
+    ``INITIAL`` is the pristine task source, ``APPLIED`` is the workspace
+    state after an accepted patch was applied, and ``REVERTED`` is the
+    workspace state after that patch was reverted.  The accepted candidate
+    patch itself (the diff text) is carried by ``patch.proposed``.
+    """
+
+    INITIAL = "initial"
+    APPLIED = "applied"
+    REVERTED = "reverted"
 
 
 class ModelRequestStatus(str, Enum):
@@ -389,8 +437,34 @@ def _check_no_unknown(mapping: Mapping[str, Any], known: set, label: str) -> Non
         )
 
 
-def _looks_like_secret(value: str) -> bool:
+def contains_credential_shape(value: str) -> bool:
+    """Whether ``value`` matches the accepted credential-shape policy.
+
+    One shared policy for the event schema (regular text fields reject
+    credential-shaped values fail-closed) and the producer-side content
+    policy for source snapshots and patch bodies (see
+    :mod:`agentic_debugger.application.source_snapshots` and
+    :mod:`agentic_debugger.application.observability`).
+    """
     return _SECRET_VALUE.search(value) is not None
+
+
+def is_credential_name(name: str) -> bool:
+    """Whether a runtime local *name* is credential-shaped.
+
+    Exact-name policy for PDB frame locals (see :data:`_CREDENTIAL_NAME`):
+    the name itself is the secret key, so the summarized value must not be
+    exposed.  The match is anchored to the whole name, so harmless
+    identifiers such as ``token_count``, ``secretary``, or
+    ``password_length`` never match.
+    """
+    if type(name) is not str:
+        return False
+    return _CREDENTIAL_NAME.match(name) is not None
+
+
+def _looks_like_secret(value: str) -> bool:
+    return contains_credential_shape(value)
 
 
 def _bounded_text(
@@ -428,6 +502,46 @@ def _bounded_text_or_none(value: Any, label: str, max_chars: int) -> Optional[st
     if value is None:
         return None
     return _bounded_text(value, label, max_chars)
+
+
+def _multiline_text(value: Any, label: str, max_chars: int) -> str:
+    """Bound UTF-8 text that may contain normal source whitespace.
+
+    Source/patch content legitimately contains newlines and tabs, so this
+    validator allows ``\\n``, ``\\t`` and ``\\r`` but rejects every other
+    control character (NUL, ``0x7F``, and the rest of ``0x00-0x1F``) and any
+    oversized value.  It intentionally does not apply the credential-shape
+    regex here: source code may legitimately mention token-like identifiers,
+    so safe-data enforcement for source/patch content happens at the producer
+    boundary through the shared :func:`contains_credential_shape` policy
+    (captured source snapshots and patch bodies that match it are withheld
+    before they can enter an event).
+    """
+    if type(value) is not str:
+        raise SchemaValidationError(f"{label} must be a string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise SchemaValidationError(f"{label} must be UTF-8 text")
+    if len(encoded) > max_chars:
+        raise SchemaValidationError(
+            f"{label} exceeds the {max_chars}-byte bound"
+        )
+    for char in value:
+        code = ord(char)
+        if code == 0x00 or code == 0x7F or (
+            code < 0x20 and char not in "\n\t\r"
+        ):
+            raise SchemaValidationError(
+                f"{label} contains a prohibited control character"
+            )
+    return value
+
+
+def _multiline_text_or_none(value: Any, label: str, max_chars: int) -> Optional[str]:
+    if value is None:
+        return None
+    return _multiline_text(value, label, max_chars)
 
 
 def _identifier(value: Any, label: str) -> str:
@@ -779,7 +893,12 @@ def _payload_location_changed(payload: Mapping[str, Any]) -> dict[str, Any]:
         "function": _bounded_text_or_none(
             payload["function"], "function", MAX_IDENTIFIER_CHARS
         ),
-        "pause_generation": _nonneg_int(payload["pause_generation"], "pause_generation"),
+        # Nullable (Repair Pass 3): historical traces that never recorded a
+        # pause generation stay NOT RECORDED instead of receiving a
+        # synthesized counter.
+        "pause_generation": _int_or_none(
+            payload["pause_generation"], "pause_generation"
+        ),
     }
 
 
@@ -797,7 +916,9 @@ def _payload_stack_observed(payload: Mapping[str, Any]) -> dict[str, Any]:
             f"frames exceeds the {MAX_STACK_FRAMES}-item bound"
         )
     return {
-        "pause_generation": _nonneg_int(payload["pause_generation"], "pause_generation"),
+        "pause_generation": _int_or_none(
+            payload["pause_generation"], "pause_generation"
+        ),
         "frames": tuple(
             _frame_mapping(item, f"frames[{index}]") for index, item in enumerate(frames)
         ),
@@ -816,7 +937,9 @@ def _payload_locals_observed(payload: Mapping[str, Any]) -> dict[str, Any]:
     if len(locals_value) > MAX_LOCALS:
         raise SchemaValidationError(f"locals exceeds the {MAX_LOCALS}-item bound")
     return {
-        "pause_generation": _nonneg_int(payload["pause_generation"], "pause_generation"),
+        "pause_generation": _int_or_none(
+            payload["pause_generation"], "pause_generation"
+        ),
         "locals": tuple(
             _local_mapping(item, f"locals[{index}]") for index, item in enumerate(locals_value)
         ),
@@ -828,14 +951,21 @@ def _payload_patch(payload: Mapping[str, Any], label: str, *, applied: bool = Fa
         raise SchemaValidationError(f"{label} must be a mapping")
     if applied:
         required = {"attempt_index", "changed_files", "syntax_passed"}
+        optional: set[str] = set()
     elif rejected:
         required = {"attempt_index", "rejection_reason"}
+        optional = set()
     elif reverted:
         required = {"attempt_index"}
+        optional = set()
     else:
         required = {"attempt_index", "patch_sha256"}
+        # Additive Task-4 revision: the exact bounded candidate diff text is
+        # preserved for new app-owned sessions (it is the model-authored
+        # candidate already recorded in canonical tool observations).
+        optional = {"patch_text"}
     _check_required(payload, required, label)
-    _check_no_unknown(payload, required, label)
+    _check_no_unknown(payload, required | optional, label)
     result = {"attempt_index": _nonneg_int(payload["attempt_index"], "attempt_index")}
     if applied:
         result["changed_files"] = _string_tuple(
@@ -846,9 +976,95 @@ def _payload_patch(payload: Mapping[str, Any], label: str, *, applied: bool = Fa
         result["rejection_reason"] = _bounded_text(
             payload["rejection_reason"], "rejection_reason", MAX_SHORT_TEXT_CHARS
         )
-    elif not reverted:
+    elif reverted:
+        pass
+    else:
         result["patch_sha256"] = _sha256_hex(payload["patch_sha256"], "patch_sha256")
+        if "patch_text" in payload:
+            result["patch_text"] = _multiline_text(
+                payload["patch_text"], "patch_text", MAX_PATCH_TEXT_CHARS
+            )
     return result
+
+
+def _payload_patch_apply_failed(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("patch.apply_failed payload must be a mapping")
+    required = {"attempt_index", "apply_failure_reason"}
+    _check_required(payload, required, "patch.apply_failed payload")
+    _check_no_unknown(payload, required, "patch.apply_failed payload")
+    return {
+        "attempt_index": _nonneg_int(payload["attempt_index"], "attempt_index"),
+        "apply_failure_reason": _bounded_text(
+            payload["apply_failure_reason"], "apply_failure_reason", MAX_SHORT_TEXT_CHARS
+        ),
+    }
+
+
+def _payload_controller_transition(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("controller.transition payload must be a mapping")
+    required = {"source_state", "target_state", "reason"}
+    _check_required(payload, required, "controller.transition payload")
+    _check_no_unknown(payload, required, "controller.transition payload")
+    return {
+        "source_state": _enum(payload["source_state"], "source_state", ControllerState).value,
+        "target_state": _enum(payload["target_state"], "target_state", ControllerState).value,
+        "reason": _bounded_text_or_none(
+            payload["reason"], "reason", MAX_TEXT_CHARS
+        ),
+    }
+
+
+def _payload_source_snapshot(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("source.snapshot payload must be a mapping")
+    required = {"path", "sha256", "text", "line_count", "truncated", "stage"}
+    _check_required(payload, required, "source.snapshot payload")
+    _check_no_unknown(payload, required, "source.snapshot payload")
+    line_count = payload["line_count"]
+    if type(line_count) is not int or isinstance(line_count, bool) or line_count < 1:
+        raise SchemaValidationError("line_count must be a positive integer")
+    path = _bounded_text(payload["path"], "path", MAX_SHORT_TEXT_CHARS)
+    if _has_drive_letter(path) or path.startswith("/") or path.startswith("\\"):
+        raise SchemaValidationError(
+            "source.snapshot path must be a logical relative path"
+        )
+    parts = [part for part in path.replace("\\", "/").split("/") if part]
+    if ".." in parts:
+        raise SchemaValidationError(
+            "source.snapshot path must not contain .. traversal"
+        )
+    return {
+        "path": path,
+        "sha256": _sha256_hex(payload["sha256"], "sha256"),
+        "text": _multiline_text(payload["text"], "text", MAX_SOURCE_TEXT_CHARS),
+        "line_count": line_count,
+        "truncated": _bool(payload["truncated"], "truncated"),
+        "stage": _enum(payload["stage"], "stage", SourceSnapshotStage).value,
+    }
+
+
+def _has_drive_letter(path: str) -> bool:
+    return len(path) >= 2 and path[1] == ":" and path[0].isalpha()
+
+
+def _payload_diagnosis_recorded(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("diagnosis.recorded payload must be a mapping")
+    required = {"text", "file_path", "symbol", "confidence"}
+    _check_required(payload, required, "diagnosis.recorded payload")
+    _check_no_unknown(payload, required, "diagnosis.recorded payload")
+    return {
+        "text": _multiline_text_or_none(payload["text"], "text", MAX_TEXT_CHARS),
+        "file_path": _bounded_text_or_none(
+            payload["file_path"], "file_path", MAX_SHORT_TEXT_CHARS
+        ),
+        "symbol": _bounded_text_or_none(payload["symbol"], "symbol", MAX_IDENTIFIER_CHARS),
+        "confidence": _bounded_text_or_none(
+            payload["confidence"], "confidence", MAX_SHORT_TEXT_CHARS
+        ),
+    }
 
 
 def _payload_verifier_stage(payload: Mapping[str, Any], label: str, *, completed: bool) -> dict[str, Any]:
@@ -919,6 +1135,7 @@ _PAYLOAD_VALIDATORS: Dict[SessionEventKind, Any] = {
     SessionEventKind.SESSION_FAILED: lambda p: _payload_terminal(p, "session.failed payload", SessionEventKind.SESSION_FAILED),
     SessionEventKind.SESSION_CANCELLED: lambda p: _payload_terminal(p, "session.cancelled payload", SessionEventKind.SESSION_CANCELLED),
     SessionEventKind.CONTROLLER_STEP: _payload_controller_step,
+    SessionEventKind.CONTROLLER_TRANSITION: _payload_controller_transition,
     SessionEventKind.MODEL_REQUEST_STARTED: _payload_request_started,
     SessionEventKind.MODEL_REQUEST_COMPLETED: _payload_request_completed,
     SessionEventKind.MODEL_DIRECTIVE_ACCEPTED: _payload_directive_accepted,
@@ -931,8 +1148,11 @@ _PAYLOAD_VALIDATORS: Dict[SessionEventKind, Any] = {
     SessionEventKind.DEBUGGER_LOCALS_OBSERVED: _payload_locals_observed,
     SessionEventKind.PATCH_PROPOSED: lambda p: _payload_patch(p, "patch.proposed payload"),
     SessionEventKind.PATCH_REJECTED: lambda p: _payload_patch(p, "patch.rejected payload", rejected=True),
+    SessionEventKind.PATCH_APPLY_FAILED: _payload_patch_apply_failed,
     SessionEventKind.PATCH_APPLIED: lambda p: _payload_patch(p, "patch.applied payload", applied=True),
     SessionEventKind.PATCH_REVERTED: lambda p: _payload_patch(p, "patch.reverted payload", reverted=True),
+    SessionEventKind.SOURCE_SNAPSHOT: _payload_source_snapshot,
+    SessionEventKind.DIAGNOSIS_RECORDED: _payload_diagnosis_recorded,
     SessionEventKind.VERIFIER_STARTED: lambda p: _payload_empty(p, "verifier.started payload"),
     SessionEventKind.VERIFIER_STAGE_STARTED: lambda p: _payload_verifier_stage(p, "verifier.stage_started payload", completed=False),
     SessionEventKind.VERIFIER_STAGE_COMPLETED: lambda p: _payload_verifier_stage(p, "verifier.stage_completed payload", completed=True),
@@ -1214,8 +1434,10 @@ __all__ = [
     "MAX_IDENTIFIER_CHARS",
     "MAX_JSON_DEPTH",
     "MAX_LOCALS",
+    "MAX_PATCH_TEXT_CHARS",
     "MAX_SHORT_TEXT_CHARS",
     "MAX_SHA256_HEX",
+    "MAX_SOURCE_TEXT_CHARS",
     "MAX_STACK_FRAMES",
     "MAX_TEXT_CHARS",
     "MAX_TUPLE_TEXT_CHARS",
@@ -1227,11 +1449,14 @@ __all__ = [
     "SessionStatus",
     "SessionTerminationReason",
     "SourceKind",
+    "SourceSnapshotStage",
     "VerifierStage",
     "VerifierStageStatus",
     "allowed_transitions",
     "can_transition",
     "compatible_reasons",
+    "contains_credential_shape",
+    "is_credential_name",
     "terminal_status_for",
     "validate_session_event_stream",
     "validate_session_id",

@@ -2,22 +2,21 @@
 
 ## Durum notu
 
-**2026-08-14 Local Application V1 — ACTIVE / TASKS 1–3 ACCEPTED.**
+**2026-08-15 Local Application V1 — ACTIVE / TASKS 1–5 ACCEPTED.**
 Authoritative architecture and phased plan: `docs/architecture/local-application-v1.md`.
-Completed: **Task 1 — Establish application contracts**, **Task 2 — Add
-incremental controller observability**, and **Task 3 — Build the cancellable
-worker boundary**. The application now has validated session contracts,
-incremental controller observability, and an isolated cancellable worker/process
-foundation with crash-durable journaling, verified cleanup, and fail-closed
-Windows descendant containment. Current next milestone: **Task 4 — Expose patch,
-source, debugger, and verifier progress**. Existing R1-R6 scientific results,
-frozen evidence, and the sustained local-GPU hardware stop remain unchanged; this
-application phase does not authorize training, final-holdout reruns, or sustained
-local GPU campaigns.
+Completed: **Tasks 1–5**. The application now has validated session contracts,
+incremental controller observability, a cancellable worker/process foundation,
+structured debugger/source/patch/verifier observability, one shared live
+`SessionEvent` emission authority, filesystem-backed app-owned history, and
+read-only replay through the same presentation reducer. Current next milestone:
+**Task 6 — Build the replay-first Textual application**. Existing R1-R6
+scientific results, frozen evidence, and the sustained local-GPU hardware stop
+remain unchanged; this application phase does not authorize training,
+final-holdout reruns, or sustained local GPU campaigns.
 
 - [ ] **Local Application V1** — execute the accepted phased roadmap in
-  `docs/architecture/local-application-v1.md` (Tasks 1–3 accepted; current
-  milestone: Task 4 of 8).
+  `docs/architecture/local-application-v1.md` (Tasks 1–5 accepted; current
+  milestone: Task 6 of 8).
 
 **2026-08-13 current status (R1-R6 closeout):** The 2026-08-11 S9
 bounded-negative closeout is **historical** and is preserved verbatim at

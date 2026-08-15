@@ -441,6 +441,7 @@ class TestMapping:
             model_call_index=0,
             state_before=ControllerState.REPRODUCE,
             state_after=ControllerState.UNDERSTAND,
+            transition_reason="moved to understanding",
         ))
         adapter.notify(observation(
             ControllerObservationKind.TERMINAL,
@@ -448,7 +449,16 @@ class TestMapping:
             state_after=ControllerState.UNDERSTAND,
             stop_reason="done",
         ))
-        assert adapter.events() == ()
+        # Task-4 promotes STATE_TRANSITION into a controller.transition event;
+        # RUN_STARTED and TERMINAL still only track the controller phase.
+        assert len(adapter.events()) == 1
+        event = adapter.events()[0]
+        assert event.event_kind is SessionEventKind.CONTROLLER_TRANSITION
+        assert dict(event.payload) == {
+            "source_state": "Reproduce",
+            "target_state": "Understand",
+            "reason": "moved to understanding",
+        }
 
 
 class TestPrefixSemantics:
@@ -465,6 +475,7 @@ class TestPrefixSemantics:
             SessionEventKind.TOOL_STARTED,
             SessionEventKind.TOOL_COMPLETED,
             SessionEventKind.CONTROLLER_STEP,
+            SessionEventKind.CONTROLLER_TRANSITION,
         }
 
     def test_terminal_outcome_produces_no_session_terminal(self):
@@ -495,18 +506,22 @@ class TestPrefixSemantics:
             SessionEventKind.MODEL_REQUEST_STARTED,
             SessionEventKind.MODEL_REQUEST_COMPLETED,
             SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            SessionEventKind.CONTROLLER_TRANSITION,
             SessionEventKind.CONTROLLER_STEP,
             SessionEventKind.MODEL_REQUEST_STARTED,
             SessionEventKind.MODEL_REQUEST_COMPLETED,
             SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            SessionEventKind.CONTROLLER_TRANSITION,
             SessionEventKind.CONTROLLER_STEP,
             SessionEventKind.MODEL_REQUEST_STARTED,
             SessionEventKind.MODEL_REQUEST_COMPLETED,
             SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            SessionEventKind.CONTROLLER_TRANSITION,
             SessionEventKind.CONTROLLER_STEP,
             SessionEventKind.MODEL_REQUEST_STARTED,
             SessionEventKind.MODEL_REQUEST_COMPLETED,
             SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            SessionEventKind.CONTROLLER_TRANSITION,
             SessionEventKind.CONTROLLER_STEP,
         ]
 

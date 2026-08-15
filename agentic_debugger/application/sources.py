@@ -18,12 +18,15 @@ validation keep replay material out of the live-start workflow.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Protocol, runtime_checkable
 
 from agentic_debugger.application import ApplicationInputError
-from agentic_debugger.application.events import SourceKind, SessionEvent
+from agentic_debugger.application.events import (
+    SourceKind,
+    SessionEvent,
+    contains_credential_shape,
+)
 
 __all__ = [
     "ExecutionSourceSpec",
@@ -36,13 +39,6 @@ _STARTABLE_KINDS = frozenset({SourceKind.OFFLINE_DEMO, SourceKind.CONFIGURED_MOD
 
 _MAX_POLICY_CHARS = 64
 _MAX_CONFIG_REF_CHARS = 512
-
-#: Accepted credential-shape policy (mirrors ``evaluation/live.py``).
-_SECRET_VALUE = re.compile(
-    r"(?i)\b(?:bearer|basic)\s+\S+"
-    r"|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|"
-    r"secret|token)\s*[:=]\s*\S+"
-)
 
 
 def can_start_new_session(kind: SourceKind) -> bool:
@@ -68,7 +64,9 @@ def _bounded_text(value: Any, label: str, max_chars: int) -> str:
         raise ApplicationInputError(f"{label} exceeds the {max_chars}-byte bound")
     if any(ord(char) < 0x20 or ord(char) == 0x7F for char in value):
         raise ApplicationInputError(f"{label} contains control characters")
-    if _SECRET_VALUE.search(value) is not None:
+    # One shared credential-shape policy (see application.events); this
+    # module no longer keeps a private copy that could drift.
+    if contains_credential_shape(value):
         raise ApplicationInputError(f"{label} contains a credential-shaped value")
     return value
 

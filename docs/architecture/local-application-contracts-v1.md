@@ -117,16 +117,20 @@ mappings are never shared, `from_mapping()` is strict and detached, and
 cannot change the event.  `payload` behaves as a read-only mapping
 (`Mapping[str, Any]`).
 
-Event kinds (29, architecture §8.1): `session.created`, `session.started`,
-`session.status_changed`, `session.cancel_requested`, `session.completed`,
-`session.failed`, `session.cancelled`, `controller.step`,
-`model.request_started`, `model.request_completed`,
-`model.directive_accepted`, `model.directive_rejected`, `tool.started`,
-`tool.completed`, `debugger.started`, `debugger.location_changed`,
-`debugger.stack_observed`, `debugger.locals_observed`, `patch.proposed`,
-`patch.rejected`, `patch.applied`, `patch.reverted`, `verifier.started`,
-`verifier.stage_started`, `verifier.stage_completed`, `verifier.completed`,
-`cleanup.started`, `cleanup.completed`, `artifact.written`.
+Event kinds (33 after the bounded additive Task-4 revision; the 29
+architecture §8.1 kinds plus `controller.transition`, `patch.apply_failed`,
+`source.snapshot`, `diagnosis.recorded`): `session.created`,
+`session.started`, `session.status_changed`, `session.cancel_requested`,
+`session.completed`, `session.failed`, `session.cancelled`,
+`controller.step`, `controller.transition`, `model.request_started`,
+`model.request_completed`, `model.directive_accepted`,
+`model.directive_rejected`, `tool.started`, `tool.completed`,
+`debugger.started`, `debugger.location_changed`, `debugger.stack_observed`,
+`debugger.locals_observed`, `patch.proposed`, `patch.rejected`,
+`patch.apply_failed`, `patch.applied`, `patch.reverted`, `source.snapshot`,
+`diagnosis.recorded`, `verifier.started`, `verifier.stage_started`,
+`verifier.stage_completed`, `verifier.completed`, `cleanup.started`,
+`cleanup.completed`, `artifact.written`.
 
 Terminal kinds carry the exact terminal status: `completed` ∈
 {`succeeded`, `unresolved`}; `failed` ∈ {`failed`, `timed_out`,
@@ -138,23 +142,122 @@ Terminal kinds carry the exact terminal status: `completed` ∈
 - lifecycle: created→`spec_fingerprint`; started/cancel_requested/verifier.
   started/cleanup.started→empty; status_changed→`status`+`phase`; terminal
   events→`status`+`termination_reason`; cleanup.completed→`verified`.
-- controller.step→`step_index` + nullable `directive_kind`/`stop_reason`.
+- controller.step→`step_index` + nullable `directive_kind`/`stop_reason`;
+  controller.transition→`source_state`/`target_state` + nullable `reason`.
 - model.request_*→`request_index` (+`status` ∈ ok/error/timeout);
   directive_accepted→nullable kind/action/target;
   directive_rejected→nullable kind + `rejection_category`.
 - tool.started/completed→`tool_name` (+`status` ∈ ObservationStatus
   vocabulary).
 - debugger.started→nullable `script` + bounded `breakpoints`;
-  location_changed→nullable script/line/function + `pause_generation`;
-  stack_observed/locals_observed→`pause_generation` + bounded
-  frames/locals records.
-- patch.proposed→`attempt_index`+`patch_sha256`; rejected→+`rejection_reason`;
-  applied→+`changed_files`+nullable `syntax_passed`; reverted→`attempt_index`.
+  location_changed→nullable script/line/function + nullable
+  `pause_generation`; stack_observed/locals_observed→nullable
+  `pause_generation` + bounded frames/locals records (the pause generation
+  is nullable after Repair Pass 3 so historical traces that never recorded
+  one stay `NOT RECORDED` instead of receiving a synthesized counter).
+- patch.proposed→`attempt_index`+`patch_sha256` (+ optional bounded
+  `patch_text`, the exact model-authored candidate diff, Task-4 additive);
+  rejected→+`rejection_reason`; apply_failed→`attempt_index`+
+  `apply_failure_reason` (the real PatchManager apply-failure path, distinct
+  from rejection); applied→+`changed_files`+nullable `syntax_passed`;
+  reverted→`attempt_index`.
+- source.snapshot→logical relative `path`, `sha256`, bounded `text`,
+  `line_count`, `truncated`, `stage` ∈ {initial, applied, reverted};
+  diagnosis.recorded→nullable bounded `text`/`file_path`/`symbol`/
+  `confidence` (an explicitly recorded diagnosis artifact, never
+  chain-of-thought).
 - verifier.stage_*→`stage` (+`status` ∈ running/completed/failed/skipped/
   cancelled); verifier.completed→nullable `status` (EvaluationStatus
   vocabulary), `outcome` (SemanticOutcome), F2P/P2P counts,
   `workspace_cleaned`.
 - artifact.written→`path`+`sha256`.
+
+### 4.1.1 Task-4 additive revision note
+
+The four new kinds and the optional `patch.proposed.patch_text` are a
+bounded additive revision driven by real producer evidence (the structured
+PDB results, the real PatchManager lifecycle including its apply-failure
+path, safe source snapshots for new app-owned sessions, and the optional
+non-invasive verifier stage observer).  Existing Task-1 events are
+unchanged; previously valid journals remain valid; `RunEvent` 1.0 is
+untouched.  Source/patch `text` fields allow normal source whitespace
+(`\n`, `\t`, `\r`) and are bounded by dedicated limits
+(`MAX_SOURCE_TEXT_CHARS`, `MAX_PATCH_TEXT_CHARS`); credential-shape
+enforcement for source/patch content happens at the producer boundary
+through one shared policy (`contains_credential_shape`, the same policy the
+schema uses for all other payload text fields): a source snapshot whose
+captured content matches the policy is withheld (the capture fails closed,
+never silently rewritten), and an unsafe optional `patch_text` is omitted
+while the patch hash and lifecycle are retained.  Harmless source
+identifiers such as `token_count` or `secretary` never match the policy.
+
+### 4.1.2 Repair Pass 3 revision note
+
+- The debugger `pause_generation` fields (location_changed/stack_observed/
+  locals_observed) became nullable so historical traces that never recorded
+  a generation stay `NOT RECORDED`; live producers still always record one,
+  and the presentation stale-data guard treats a null generation as
+  stream-order-applied.
+- All live producers (controller adapter, debugger/source/patch
+  observability, verifier adapter) compose through one shared
+  application-owned emission authority (`SessionEventEmitter`) that owns
+  the session identity, clock, next sequence, and the optional authoritative
+  sink (Task-3 journal).  A sink failure becomes a sticky fatal state the
+  session owner must observe; it can never be swallowed into silent
+  continuation.
+
+### 4.1.3 Repair Pass 2 (final) revision note
+
+- **One sequence authority including the worker lifecycle.**  The real
+  Task-3 `SessionCoordinator` owns/exposes the `SessionEventEmitter`: the
+  worker's lifecycle, cleanup, and terminal events now flow through the same
+  shared authority as every producer, so one worker session has exactly one
+  event sequencing authority with no manual `initial_sequence`
+  synchronization.  When the authoritative journal rejects an event, the
+  emitter raises `EmitterFatalError` with sticky fatal state; the worker
+  treats that exactly like the Task-3 journal fatal (best-effort cleanup,
+  out-of-band fatal envelope, journal stays incomplete/non-successful) and
+  never degrades it into an ordinary harness/controller failure.
+- **Runtime-locals redaction.**  A PDB frame local whose name is
+  credential-shaped (`api_key`, `access_token`, `authorization`,
+  `credential`, `password`, `secret`, `token`, case-insensitive, whole-name
+  anchored) keeps its name but carries an explicit redacted summary; the
+  summarized value is never exposed and never silently replaced with a fake
+  ordinary value.  Harmless names (`token_count`, `secretary`,
+  `password_length`) are never treated as credentials.
+- **Quoted Python credential shapes.**  The shared
+  `contains_credential_shape` policy also matches the common quoted source
+  forms (`{"api_key": "..."}` dict literals and
+  `os.environ["API_KEY"] = "..."` environment assignments), so unsafe
+  source snapshots are withheld and unsafe optional patch bodies are omitted
+  while hash/lifecycle stay recorded.
+- **Source snapshot byte bound.**  Every successfully returned
+  `SourceSnapshot.text` re-encodes within `MAX_SOURCE_TEXT_CHARS` even when
+  the byte prefix splits a multi-byte UTF-8 character (replacement expansion
+  is trimmed back to a clean character prefix); the full-file SHA-256,
+  `truncated=True`, and line mapping for the retained text are unchanged.
+- **History read containment.**  `list_sessions()` and `reopen()` enforce
+  the same app-owned boundary as registration: a session directory is read
+  as this store's history only when its resolved location is a genuine
+  immediate child of the store's resolved `runs/` root with the child's own
+  name.  Escaping symlink/reparse points are skipped in listing and fail
+  closed in `reopen()`; external evidence is never classified COMPLETE and
+  never modified.
+- **Historical identity honesty.**  `run_id` is populated only when the
+  source evidence actually records a genuine run identifier.  A Git source
+  commit (`professor_trace.run_provenance.source_commit_sha`) and an
+  experiment id (`r5_evidence.run_identity.experiment_id`, which names the
+  whole matrix) are preserved as bounded provenance in
+  `RecordedRunInfo.provenance`, never as run identity; the presentation
+  session id is derived deterministically from the recorded task/path (and,
+  for R5, the embedded trajectory's genuine per-task run id when recorded),
+  so distinct traces/tasks never collapse into one presentation session.
+- **Effective replay phase boundaries.**  `phase_boundaries()` tracks
+  effective state: a session phase changes only when a
+  `session.status_changed` actually records a new phase, and a controller
+  phase changes only when an event actually carries a non-null
+  `controller_phase`.  Ordinary events that omit these values never reset
+  the current effective value to `None`.
 
 ### 4.2 Safe-data rules
 
@@ -248,8 +351,9 @@ unknown kinds, illegal transitions, and identity mismatches.  Live and
 replay feed the same reducer (prefix parity by construction).  Rules:
 
 - stale stack/locals observations cannot replace newer-pause data
-  (`pause_generation` guard); location comes from the latest
-  location-bearing event;
+  (`pause_generation` guard; an observation without a recorded generation is
+  applied in stream order and never synthesized); location comes from the
+  latest location-bearing event;
 - patch attempts accumulate across their lifecycle events; an applied
   attempt becomes `verified` only when `verifier.completed` reports
   `COMPLETED` — application ≠ correctness;

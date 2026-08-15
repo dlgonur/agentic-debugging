@@ -4,7 +4,9 @@ This module runs inside a dedicated child process launched by the supervisor
 (``worker_process.SessionWorkerProcess``) through the accepted PDB-style
 bootstrap (``sys.executable -I -u -c`` + ``runpy``).  It owns:
 
-- the Task-3 session event journal (single writer, single sequence owner);
+- the Task-3 session event journal (single durable writer) and the shared
+  :class:`SessionEventEmitter` (the worker lifetime's one sequence
+  authority, owned/exposed by :class:`SessionCoordinator`);
 - the cooperative cancellation token and the stdin cancel reader;
 - the disposable execution work directory, created only when execution
   actually begins (after ``session.started``) and removed by the worker's
@@ -31,9 +33,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from agentic_debugger.application.emitter import (
+    EmitterFatalError,
+    SessionEventEmitter,
+)
 from agentic_debugger.application.events import (
-    SESSION_EVENT_SCHEMA_VERSION,
-    SessionEvent,
     SessionEventKind,
     SessionPhase,
     SessionStatus,
@@ -103,13 +107,22 @@ def _send(payload: bytes) -> None:
 
 
 class SessionCoordinator:
-    """Worker-side session lifecycle: sequence owner + journal + notification.
+    """Worker-side session lifecycle: shared emitter + journal + notification.
 
     The coordinator is the single producer of ``SessionEvent`` records for
-    one worker lifetime: it assigns contiguous sequences, appends each event
-    to the durable journal (which validates identity and contiguity
-    fail-closed), and forwards a notification to the supervisor (the journal
-    remains authoritative).
+    one worker lifetime: it owns/exposes the one :class:`SessionEventEmitter`
+    that assigns every contiguous sequence (lifecycle, controller, debugger,
+    source, patch, verifier, cleanup, and terminal events), appends each
+    event to the durable journal through that authority (which validates
+    identity and contiguity fail-closed), and forwards a notification to the
+    supervisor (the journal remains authoritative).
+
+    Sink-failure semantics: when the journal rejects an event, the shared
+    emitter records the sticky fatal state and raises
+    :class:`EmitterFatalError` (the journal-failure visibility rule).  The
+    worker recognizes that as the authoritative out-of-band journal fatal:
+    best-effort cleanup, fatal envelope, incomplete/non-successful journal --
+    never an ordinary harness/controller failure.
     """
 
     def __init__(
@@ -121,6 +134,7 @@ class SessionCoordinator:
         source_kind: SourceKind,
         run_id: str,
         clock: Any = None,
+        emitter: SessionEventEmitter | None = None,
     ) -> None:
         self._journal = journal
         self._session_id = session_id
@@ -132,6 +146,39 @@ class SessionCoordinator:
         self._terminal_emitted = False
         self._started_at_utc: Optional[str] = None
         self._ended_at_utc: Optional[str] = None
+        self._emitter = self._resolve_emitter(emitter)
+
+    def _resolve_emitter(
+        self, emitter: SessionEventEmitter | None
+    ) -> SessionEventEmitter:
+        """Use the injected shared authority or build the session's own.
+
+        The session's own emitter starts at sequence 0 and uses the same
+        injectable clock, with the durable journal as its authoritative
+        sink.  An injected emitter must carry the identical session/task/
+        source identity (fail closed); its sink/clock are owned by whoever
+        constructed it.
+        """
+        if emitter is not None:
+            if type(emitter) is not SessionEventEmitter:
+                raise JournalError("emitter must be a SessionEventEmitter")
+            if (
+                emitter.session_id != self._session_id
+                or emitter.task_id != self._task_id
+                or emitter.source_kind is not self._source_kind
+            ):
+                raise JournalError(
+                    "shared emitter identity does not match the session"
+                )
+            return emitter
+        return SessionEventEmitter(
+            session_id=self._session_id,
+            task_id=self._task_id,
+            source_kind=self._source_kind,
+            clock=self._clock,
+            sink=self._journal,
+            initial_sequence=0,
+        )
 
     @property
     def started(self) -> bool:
@@ -147,15 +194,47 @@ class SessionCoordinator:
 
     @property
     def last_sequence(self) -> int:
-        return self._journal.next_sequence - 1
+        return self._emitter.last_sequence
+
+    @property
+    def emitter(self) -> SessionEventEmitter:
+        """The session's one shared emission authority (sequence owner).
+
+        Every producer of this worker session (controller adapter,
+        observability producer, verifier adapter) must receive this same
+        authority so lifecycle and producer events form one contiguous
+        journal sequence.
+        """
+        return self._emitter
+
+    @property
+    def fatal(self) -> bool:
+        """Whether the authoritative journal rejected an event (sticky)."""
+        return self._emitter.fatal
+
+    @property
+    def fatal_error(self) -> Optional[str]:
+        return self._emitter.fatal_error
 
     def emit(self, kind: SessionEventKind, payload: Dict[str, Any]) -> SessionEvent:
-        """Append one validated event durably and notify the parent."""
+        """Append one validated event durably and notify the parent.
+
+        The emission goes through the shared :class:`SessionEventEmitter`:
+        the emitter assigns the next contiguous sequence, validates the
+        event, appends it to the journal (the authoritative sink), and only
+        then advances.  A journal rejection becomes the sticky fatal state
+        and raises :class:`EmitterFatalError`, which the worker treats as
+        the out-of-band journal fatal.
+        """
         if kind is SessionEventKind.SESSION_STARTED:
             if self._started:
                 raise JournalError("duplicate session.started")
             self._started = True
             self._started_at_utc = self._clock()
+            # The shared authority binds the session run identity exactly
+            # when the lifecycle does: events before ``session.started``
+            # carry null, everything after carries the bound run id.
+            self._emitter.bind_run_id(self._run_id)
         if kind in (
             SessionEventKind.SESSION_COMPLETED,
             SessionEventKind.SESSION_FAILED,
@@ -165,19 +244,7 @@ class SessionCoordinator:
                 raise JournalError("duplicate terminal event")
             self._terminal_emitted = True
             self._ended_at_utc = self._clock()
-        event = SessionEvent(
-            schema_version=SESSION_EVENT_SCHEMA_VERSION,
-            session_id=self._session_id,
-            task_id=self._task_id,
-            run_id=self._run_id if self._started else None,
-            sequence=self._journal.next_sequence,
-            timestamp_utc=self._clock(),
-            source_kind=self._source_kind,
-            event_kind=kind,
-            controller_phase=None,
-            payload=payload,
-        )
-        self._journal.append(event)
+        event = self._emitter.emit(kind, payload)
         _send(event_notification(event.sequence))
         return event
 
@@ -343,7 +410,7 @@ def run_worker(request: StartRequest) -> int:
             SessionEventKind.SESSION_CREATED,
             {"spec_fingerprint": request.spec.fingerprint()},
         )
-    except JournalError as exc:
+    except (JournalError, EmitterFatalError) as exc:
         return _fatal_journal_exit(work_dir, diagnostics, journal, exc)
 
     _send(ready_message(coordinator.last_sequence))
@@ -374,6 +441,7 @@ def run_worker(request: StartRequest) -> int:
                 work_dir=work_dir,
                 token=token,
                 journal=journal,
+                emitter=coordinator.emitter,
                 run_id=request.run_id,
             ),
             request.scenario_params,
@@ -382,14 +450,14 @@ def run_worker(request: StartRequest) -> int:
         if exc.reason is CancellationReason.CANCELLED:
             try:
                 coordinator.emit_cancel_requested()
-            except JournalError as journal_exc:
+            except (JournalError, EmitterFatalError) as journal_exc:
                 return _fatal_journal_exit(work_dir, diagnostics, journal, journal_exc)
         outcome = (
             "cancelled"
             if exc.reason is CancellationReason.CANCELLED
             else "timed_out"
         )
-    except JournalError as exc:
+    except (JournalError, EmitterFatalError) as exc:
         return _fatal_journal_exit(work_dir, diagnostics, journal, exc)
     except ScenarioInputError as exc:
         diagnostics.append(_bounded_diagnostic(f"scenario input error: {exc}"))
@@ -433,7 +501,7 @@ def run_worker(request: StartRequest) -> int:
             diagnostics=diagnostics,
         )
         _send(terminal_message(result))
-    except JournalError as exc:
+    except (JournalError, EmitterFatalError) as exc:
         return _fatal_journal_exit(work_dir, diagnostics, journal, exc)
     return EXIT_OK
 

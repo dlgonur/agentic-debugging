@@ -32,6 +32,11 @@ VALID_PAYLOADS = {
         "directive_kind": "action",
         "stop_reason": None,
     },
+    SessionEventKind.CONTROLLER_TRANSITION: {
+        "source_state": "Reproduce",
+        "target_state": "Understand",
+        "reason": "moved to understanding",
+    },
     SessionEventKind.MODEL_REQUEST_STARTED: {"request_index": 0},
     SessionEventKind.MODEL_REQUEST_COMPLETED: {"request_index": 0, "status": "ok"},
     SessionEventKind.MODEL_DIRECTIVE_ACCEPTED: {
@@ -67,12 +72,30 @@ VALID_PAYLOADS = {
     },
     SessionEventKind.PATCH_PROPOSED: {"attempt_index": 0, "patch_sha256": VALID_PATCH_SHA256},
     SessionEventKind.PATCH_REJECTED: {"attempt_index": 0, "rejection_reason": "malformed_diff"},
+    SessionEventKind.PATCH_APPLY_FAILED: {
+        "attempt_index": 0,
+        "apply_failure_reason": "hunk does not apply",
+    },
     SessionEventKind.PATCH_APPLIED: {
         "attempt_index": 0,
         "changed_files": ["buggy.py"],
         "syntax_passed": True,
     },
     SessionEventKind.PATCH_REVERTED: {"attempt_index": 0},
+    SessionEventKind.SOURCE_SNAPSHOT: {
+        "path": "buggy.py",
+        "sha256": VALID_PATCH_SHA256,
+        "text": "def main():\n    return 1\n",
+        "line_count": 2,
+        "truncated": False,
+        "stage": "initial",
+    },
+    SessionEventKind.DIAGNOSIS_RECORDED: {
+        "text": "count is off by one",
+        "file_path": "buggy.py",
+        "symbol": "main",
+        "confidence": "medium",
+    },
     SessionEventKind.VERIFIER_STARTED: {},
     SessionEventKind.VERIFIER_STAGE_STARTED: {"stage": "prepare_workspace"},
     SessionEventKind.VERIFIER_STAGE_COMPLETED: {"stage": "prepare_workspace", "status": "completed"},

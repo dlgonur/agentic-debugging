@@ -21,7 +21,11 @@ Scenario vocabulary (name -> params):
 - ``crash_hard`` — intentional hard crash (``os._exit``) with no terminal;
 - ``crash`` — harness exception (complete FAILED terminal);
 - ``cleanup_failure`` — forces the worker cleanup cycle to fail;
-- ``break_journal`` — breaks the session journal out from under the worker.
+- ``break_journal`` — breaks the session journal out from under the worker;
+- ``emit_large_event`` — one valid event well above 64 KiB through the
+  durable journal;
+- ``emit_enriched_stream`` — a bounded representative Task-4 enriched prefix
+  (debugger/source/patch/diagnosis/verifier events) through the journal.
 
 Scenarios validate their own parameters fail-closed and raise
 :class:`ScenarioInputError` on malformed input.
@@ -38,6 +42,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional
 
 from agentic_debugger.application import ApplicationInputError
+from agentic_debugger.application.emitter import SessionEventEmitter
 from agentic_debugger.application.journal import SessionEventJournal
 from agentic_debugger.cancellation import CancellationError, CancellationToken
 from agentic_debugger.runtime.command_runner import CommandRunner
@@ -66,6 +71,7 @@ class ScenarioContext:
     work_dir: Path
     token: CancellationToken
     journal: Optional[SessionEventJournal] = None
+    emitter: Optional[SessionEventEmitter] = None
     run_id: Optional[str] = None
 
 
@@ -324,35 +330,159 @@ def _scenario_emit_large_event(ctx: ScenarioContext, params: Mapping[str, Any]) 
 
     Proves that valid large ``SessionEvent`` records (e.g.
     ``debugger.locals_observed`` with the full 512-local bound) survive the
-    durable journal and the parent's journal catch-up.
+    durable journal and the parent's journal catch-up.  The event is emitted
+    through the session's shared emission authority (the coordinator's
+    emitter), so the sequence stays the journal's single authority's.
     """
     _unknown_params(params, set())
-    if ctx.journal is None:
-        raise ScenarioInputError("emit_large_event requires the journal context")
-    from agentic_debugger.application.events import (
-        SESSION_EVENT_SCHEMA_VERSION,
-        SessionEvent,
-        SessionEventKind,
-    )
-    from datetime import datetime, timezone
+    if ctx.emitter is None:
+        raise ScenarioInputError("emit_large_event requires the emitter context")
+    from agentic_debugger.application.events import SessionEventKind
 
     locals_records = [
         {"name": f"var_{index:03d}", "summary": "value-" + "x" * 280}
         for index in range(512)
     ]
-    event = SessionEvent(
-        schema_version=SESSION_EVENT_SCHEMA_VERSION,
-        session_id=ctx.journal.session_id,
-        task_id=ctx.journal.task_id,
-        run_id=ctx.run_id,
-        sequence=ctx.journal.next_sequence,
-        timestamp_utc=datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
-        source_kind=ctx.journal.source_kind,
-        event_kind=SessionEventKind.DEBUGGER_LOCALS_OBSERVED,
-        controller_phase=None,
-        payload={"pause_generation": 0, "locals": locals_records},
+    ctx.emitter.emit(
+        SessionEventKind.DEBUGGER_LOCALS_OBSERVED,
+        {"pause_generation": 0, "locals": locals_records},
     )
-    ctx.journal.append(event)
+
+
+def _scenario_emit_enriched_stream(ctx: ScenarioContext, params: Mapping[str, Any]) -> None:
+    """Append a bounded representative Task-4 enriched event prefix.
+
+    Proves that every new Task-4 event kind (controller.transition,
+    debugger started/location/stack/locals, source snapshots, patch
+    lifecycle incl. apply-failed, diagnosis, verifier stages/completed)
+    survives the durable journal and parent catch-up as one coherent
+    enriched stream.  This is internal non-product scenario evidence only;
+    the real deterministic source wiring is a later roadmap task.
+    """
+    _unknown_params(params, set())
+    if ctx.emitter is None:
+        raise ScenarioInputError("emit_enriched_stream requires the emitter context")
+    from agentic_debugger.application.events import (
+        SessionEventKind,
+        SourceSnapshotStage,
+    )
+
+    emit = ctx.emitter.emit
+
+    emit(
+        SessionEventKind.CONTROLLER_TRANSITION,
+        {"source_state": "Reproduce", "target_state": "Understand", "reason": "reproduced"},
+    )
+    emit(
+        SessionEventKind.DEBUGGER_STARTED,
+        {"script": "profile.py", "breakpoints": ["profile.py:12"]},
+    )
+    emit(
+        SessionEventKind.DEBUGGER_LOCATION_CHANGED,
+        {"script": "profile.py", "line": 12, "function": "format_display_name", "pause_generation": 1},
+    )
+    emit(
+        SessionEventKind.DEBUGGER_STACK_OBSERVED,
+        {
+            "pause_generation": 1,
+            "frames": [
+                {"index": 0, "function": "format_display_name", "file": "profile.py", "line": 12, "is_current": True}
+            ],
+        },
+    )
+    emit(
+        SessionEventKind.DEBUGGER_LOCALS_OBSERVED,
+        {
+            "pause_generation": 1,
+            "locals": [
+                {"name": "display_name", "summary": "None"},
+                {"name": "other", "summary": "<str len=4>"},
+            ],
+        },
+    )
+    emit(
+        SessionEventKind.SOURCE_SNAPSHOT,
+        {
+            "path": "profile.py",
+            "sha256": "a" * 64,
+            "text": "def format_display_name(name, fallback):\n    return name or fallback\n",
+            "line_count": 2,
+            "truncated": False,
+            "stage": SourceSnapshotStage.INITIAL.value,
+        },
+    )
+    emit(
+        SessionEventKind.DIAGNOSIS_RECORDED,
+        {"text": "fallback is ignored", "file_path": "profile.py", "symbol": "format_display_name", "confidence": "medium"},
+    )
+    emit(
+        SessionEventKind.PATCH_PROPOSED,
+        {
+            "attempt_index": 0,
+            "patch_sha256": "b" * 64,
+            "patch_text": "--- a/profile.py\n+++ b/profile.py\n@@ -1,2 +1,2 @@\n",
+        },
+    )
+    emit(
+        SessionEventKind.PATCH_APPLIED,
+        {"attempt_index": 0, "changed_files": ["profile.py"], "syntax_passed": True},
+    )
+    emit(
+        SessionEventKind.SOURCE_SNAPSHOT,
+        {
+            "path": "profile.py",
+            "sha256": "c" * 64,
+            "text": "def format_display_name(name, fallback):\n    return name if name else fallback\n",
+            "line_count": 2,
+            "truncated": False,
+            "stage": SourceSnapshotStage.APPLIED.value,
+        },
+    )
+    emit(
+        SessionEventKind.PATCH_REVERTED,
+        {"attempt_index": 0},
+    )
+    emit(
+        SessionEventKind.PATCH_PROPOSED,
+        {
+            "attempt_index": 1,
+            "patch_sha256": "d" * 64,
+            "patch_text": "--- a/profile.py\n+++ b/profile.py\n@@ -1 +1 @@\n",
+        },
+    )
+    emit(
+        SessionEventKind.PATCH_APPLY_FAILED,
+        {"attempt_index": 1, "apply_failure_reason": "hunk does not apply"},
+    )
+    emit(SessionEventKind.VERIFIER_STARTED, {})
+    emit(
+        SessionEventKind.VERIFIER_STAGE_STARTED,
+        {"stage": "prepare_workspace"},
+    )
+    emit(
+        SessionEventKind.VERIFIER_STAGE_COMPLETED,
+        {"stage": "prepare_workspace", "status": "completed"},
+    )
+    emit(
+        SessionEventKind.VERIFIER_STAGE_STARTED,
+        {"stage": "baseline_reproduction"},
+    )
+    emit(
+        SessionEventKind.VERIFIER_STAGE_COMPLETED,
+        {"stage": "baseline_reproduction", "status": "completed"},
+    )
+    emit(
+        SessionEventKind.VERIFIER_COMPLETED,
+        {
+            "status": "COMPLETED",
+            "outcome": "RESOLVED",
+            "f2p_passed": 1,
+            "f2p_total": 1,
+            "p2p_passed": 2,
+            "p2p_total": 2,
+            "workspace_cleaned": True,
+        },
+    )
 
 
 SCENARIOS: Mapping[str, Callable[[ScenarioContext, Mapping[str, Any]], None]] = {
@@ -368,6 +498,7 @@ SCENARIOS: Mapping[str, Callable[[ScenarioContext, Mapping[str, Any]], None]] = 
     "cleanup_failure": _scenario_cleanup_failure,
     "break_journal": _scenario_break_journal,
     "emit_large_event": _scenario_emit_large_event,
+    "emit_enriched_stream": _scenario_emit_enriched_stream,
 }
 
 #: Publicly documented scenario names (worker dispatch fails closed on others).

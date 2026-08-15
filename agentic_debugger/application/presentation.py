@@ -42,6 +42,7 @@ from agentic_debugger.application.events import (
     SessionStatus,
     SessionTerminationReason,
     SourceKind,
+    SourceSnapshotStage,
     VerifierStage,
     VerifierStageStatus,
     can_transition,
@@ -57,6 +58,7 @@ MAX_TIMELINE_SUMMARY_CHARS = 240
 
 __all__ = [
     "DebuggerViewState",
+    "DiagnosisView",
     "FrameRecord",
     "LocalRecord",
     "MAX_TIMELINE_ENTRIES",
@@ -64,9 +66,11 @@ __all__ = [
     "PatchStage",
     "PresentationIdentity",
     "SessionViewState",
+    "SourceView",
     "TimelineEntry",
     "VerifierStageView",
     "VerifierSummaryView",
+    "current_source",
     "initial_session_view",
     "presentation_identity",
     "reduce_event",
@@ -95,12 +99,17 @@ class LocalRecord:
 
 @dataclass(frozen=True)
 class DebuggerViewState:
-    """Recorded debugger presentation data (never live PDB state)."""
+    """Recorded debugger presentation data (never live PDB state).
+
+    ``pause_generation`` is nullable (Repair Pass 3): historical traces that
+    never recorded a generation stay ``None`` (``NOT RECORDED``) instead of
+    receiving a synthesized counter.
+    """
 
     script: Optional[str] = None
     line: Optional[int] = None
     function: Optional[str] = None
-    pause_generation: int = 0
+    pause_generation: Optional[int] = None
     frames: Tuple[FrameRecord, ...] = ()
     locals: Tuple[LocalRecord, ...] = ()
     breakpoints: Tuple[str, ...] = ()
@@ -112,11 +121,13 @@ class PatchStage(str, Enum):
 
     ``VERIFIED`` means the independent verifier completed and the applied
     candidate was part of that completed evaluation; it never means the
-    repair is correct.
+    repair is correct.  ``APPLY_FAILED`` is the real PatchManager apply
+    failure path (distinct from a validation/authorization ``REJECTED``).
     """
 
     PROPOSED = "proposed"
     REJECTED = "rejected"
+    APPLY_FAILED = "apply_failed"
     APPLIED = "applied"
     REVERTED = "reverted"
     VERIFIED = "verified"
@@ -129,9 +140,11 @@ class PatchAttemptView:
     attempt_index: int
     stage: PatchStage
     patch_sha256: Optional[str] = None
+    patch_text: Optional[str] = None
     changed_files: Tuple[str, ...] = ()
     syntax_passed: Optional[bool] = None
     rejection_reason: Optional[str] = None
+    apply_failure_reason: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -153,6 +166,34 @@ class VerifierSummaryView:
     p2p_passed: Optional[int]
     p2p_total: Optional[int]
     workspace_cleaned: Optional[bool]
+
+
+@dataclass(frozen=True)
+class SourceView:
+    """One bounded app-owned source snapshot (initial/applied/reverted).
+
+    ``text`` is the bounded captured content; ``truncated=True`` means the
+    original file exceeded the capture bound and only a prefix is present.
+    ``line_count`` counts the captured text.  The logical ``path`` is the
+    repository/workspace-relative identity used by debugger location events.
+    """
+
+    path: str
+    sha256: str
+    text: str
+    line_count: int
+    truncated: bool
+    stage: SourceSnapshotStage
+
+
+@dataclass(frozen=True)
+class DiagnosisView:
+    """Recorded diagnosis presentation copy (never chain-of-thought)."""
+
+    text: Optional[str] = None
+    file_path: Optional[str] = None
+    symbol: Optional[str] = None
+    confidence: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +221,8 @@ class SessionViewState:
     patch_attempts: Tuple[PatchAttemptView, ...] = ()
     verifier_stages: Tuple[VerifierStageView, ...] = ()
     verifier_summary: Optional[VerifierSummaryView] = None
+    diagnosis: Optional[DiagnosisView] = None
+    sources: Tuple[SourceView, ...] = ()
     cleanup_verified: Optional[bool] = None
     timeline: Tuple[TimelineEntry, ...] = ()
 
@@ -214,6 +257,11 @@ def summarize_event(event: SessionEvent) -> str:
     if kind is SessionEventKind.CONTROLLER_STEP:
         detail = payload.get("directive_kind") or payload.get("stop_reason") or "step"
         return f"controller step {payload['step_index']} ({detail})"
+    if kind is SessionEventKind.CONTROLLER_TRANSITION:
+        return (
+            f"controller transition "
+            f"({payload['source_state']} -> {payload['target_state']})"
+        )
     if kind is SessionEventKind.MODEL_REQUEST_STARTED:
         return f"model request {payload['request_index']} started"
     if kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
@@ -243,10 +291,19 @@ def summarize_event(event: SessionEvent) -> str:
         return f"patch attempt {payload['attempt_index']} proposed"
     if kind is SessionEventKind.PATCH_REJECTED:
         return f"patch attempt {payload['attempt_index']} rejected"
+    if kind is SessionEventKind.PATCH_APPLY_FAILED:
+        return f"patch attempt {payload['attempt_index']} apply failed"
     if kind is SessionEventKind.PATCH_APPLIED:
         return f"patch attempt {payload['attempt_index']} applied"
     if kind is SessionEventKind.PATCH_REVERTED:
         return f"patch attempt {payload['attempt_index']} reverted"
+    if kind is SessionEventKind.SOURCE_SNAPSHOT:
+        return (
+            f"source snapshot ({payload['path']}, {payload['stage']}, "
+            f"{payload['line_count']} lines)"
+        )
+    if kind is SessionEventKind.DIAGNOSIS_RECORDED:
+        return "diagnosis recorded"
     if kind is SessionEventKind.VERIFIER_STARTED:
         return "verifier started"
     if kind is SessionEventKind.VERIFIER_STAGE_STARTED:
@@ -353,13 +410,19 @@ def _upsert_patch_attempt(
     for index, existing in enumerate(attempts):
         if existing.attempt_index == attempt.attempt_index:
             # One attempt accumulates fields across its lifecycle events
-            # (proposed carries the hash; applied carries files/syntax).
+            # (proposed carries the hash and patch text; applied carries
+            # files/syntax; later stages carry a failure/revert reason).
             merged = replace(
                 attempt,
                 patch_sha256=(
                     attempt.patch_sha256
                     if attempt.patch_sha256 is not None
                     else existing.patch_sha256
+                ),
+                patch_text=(
+                    attempt.patch_text
+                    if attempt.patch_text is not None
+                    else existing.patch_text
                 ),
             )
             return attempts[:index] + (merged,) + attempts[index + 1 :]
@@ -373,6 +436,16 @@ def _upsert_verifier_stage(
         if existing.stage is stage.stage:
             return stages[:index] + (stage,) + stages[index + 1 :]
     return stages + (stage,)
+
+
+def _upsert_source(
+    sources: Tuple[SourceView, ...], source: SourceView
+) -> Tuple[SourceView, ...]:
+    """Keep the latest snapshot per logical path (the current source state)."""
+    for index, existing in enumerate(sources):
+        if existing.path == source.path:
+            return sources[:index] + (source,) + sources[index + 1 :]
+    return sources + (source,)
 
 
 def _mark_applied_verified(
@@ -408,6 +481,40 @@ def _locals_from_payload(payload: dict) -> Tuple[LocalRecord, ...]:
         LocalRecord(name=item["name"], summary=item["summary"])
         for item in payload["locals"]
     )
+
+
+def _newer_or_unknown(generation: Optional[int], current: Optional[int]) -> bool:
+    """Whether a recorded observation may update the debugger view.
+
+    An observation without a recorded generation is applied in stream order
+    (replay order is authoritative; live producers always record one).  With
+    a recorded generation, the stale-data guard applies: it may not replace
+    data for a newer pause.
+    """
+    if generation is None or current is None:
+        return True
+    return generation >= current
+
+
+def current_source(state: SessionViewState) -> Optional[SourceView]:
+    """The recorded source view matching the debugger's current location.
+
+    When the debugger has a concrete current ``script``, only the recorded
+    snapshot whose logical path equals that script may be returned; if none
+    exists the result is ``None`` (``NOT RECORDED``) -- a mismatched file is
+    never presented as the current source.  When the debugger has no
+    location/script at all, the most recent recorded snapshot may still be
+    returned.  Pure: never reads the filesystem.
+    """
+    if not state.sources:
+        return None
+    script = state.debugger.script
+    if script is None:
+        return state.sources[-1]
+    for source in reversed(state.sources):
+        if source.path == script:
+            return source
+    return None
 
 
 def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewState:
@@ -511,6 +618,7 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         )
 
     if kind in (
+        SessionEventKind.CONTROLLER_TRANSITION,
         SessionEventKind.MODEL_REQUEST_STARTED,
         SessionEventKind.MODEL_REQUEST_COMPLETED,
         SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
@@ -561,8 +669,11 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
     if kind is SessionEventKind.DEBUGGER_STACK_OBSERVED:
         debugger = state.debugger
         # Stale observations for an older pause must never replace
-        # information for the newer pause.
-        if payload["pause_generation"] >= debugger.pause_generation:
+        # information for the newer pause; an observation without a recorded
+        # generation is applied in stream order (see ``_newer_or_unknown``).
+        if _newer_or_unknown(
+            payload["pause_generation"], debugger.pause_generation
+        ):
             debugger = replace(
                 debugger,
                 pause_generation=payload["pause_generation"],
@@ -578,7 +689,9 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
 
     if kind is SessionEventKind.DEBUGGER_LOCALS_OBSERVED:
         debugger = state.debugger
-        if payload["pause_generation"] >= debugger.pause_generation:
+        if _newer_or_unknown(
+            payload["pause_generation"], debugger.pause_generation
+        ):
             debugger = replace(
                 debugger,
                 pause_generation=payload["pause_generation"],
@@ -597,6 +710,7 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
             attempt_index=payload["attempt_index"],
             stage=PatchStage.PROPOSED,
             patch_sha256=payload["patch_sha256"],
+            patch_text=payload.get("patch_text"),
         )
         return replace(
             state,
@@ -615,6 +729,51 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         return replace(
             state,
             patch_attempts=_upsert_patch_attempt(state.patch_attempts, attempt),
+            controller_phase=controller_phase,
+            run_id=run_id,
+            timeline=timeline,
+        )
+
+    if kind is SessionEventKind.PATCH_APPLY_FAILED:
+        attempt = PatchAttemptView(
+            attempt_index=payload["attempt_index"],
+            stage=PatchStage.APPLY_FAILED,
+            apply_failure_reason=payload["apply_failure_reason"],
+        )
+        return replace(
+            state,
+            patch_attempts=_upsert_patch_attempt(state.patch_attempts, attempt),
+            controller_phase=controller_phase,
+            run_id=run_id,
+            timeline=timeline,
+        )
+
+    if kind is SessionEventKind.SOURCE_SNAPSHOT:
+        source = SourceView(
+            path=payload["path"],
+            sha256=payload["sha256"],
+            text=payload["text"],
+            line_count=payload["line_count"],
+            truncated=payload["truncated"],
+            stage=SourceSnapshotStage(payload["stage"]),
+        )
+        return replace(
+            state,
+            sources=_upsert_source(state.sources, source),
+            controller_phase=controller_phase,
+            run_id=run_id,
+            timeline=timeline,
+        )
+
+    if kind is SessionEventKind.DIAGNOSIS_RECORDED:
+        return replace(
+            state,
+            diagnosis=DiagnosisView(
+                text=payload.get("text"),
+                file_path=payload.get("file_path"),
+                symbol=payload.get("symbol"),
+                confidence=payload.get("confidence"),
+            ),
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,

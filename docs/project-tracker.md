@@ -55,10 +55,34 @@ Rules:
   green except the two known baseline-local demo-catalog failures caused by
   gitignored QuixBugs copies. Production deterministic application-source wiring
   remains intentionally deferred to Task 7.
-- [ ] **Task 4 — Expose patch, source, debugger, and verifier progress** — NEXT.
-  Add structured debugger/source/patch/verifier observability on top of the
-  accepted application contracts and worker boundary without changing verifier
-  correctness authority or canonical scientific event semantics.
+- [x] **Task 4 — Expose patch, source, debugger, and verifier progress** —
+  ACCEPTED (2026-08-15). Added structured application observability for real PDB
+  locations/stack/locals, bounded safe source snapshots, diagnosis and real patch
+  lifecycle, plus optional verifier-stage progress/cancellation. A shared
+  `SessionEventEmitter` now provides one session-wide identity/clock/sequence
+  authority across lifecycle, controller, debugger/source/patch, and verifier
+  producers. Runtime credential-shaped locals are explicitly redacted; unsafe
+  source/patch bodies are withheld; UTF-8 source truncation remains inside the
+  event contract. Patch application remains distinct from repair correctness and
+  final `EvaluationResult` remains verifier authority.
+- [x] **Task 5 — Add app-owned history and replay** — ACCEPTED (2026-08-15).
+  Added filesystem-backed app-owned history with atomic validated manifests,
+  journal/artifact integrity checks, app-owned path containment for register,
+  discovery, and reopen, and honest complete/interrupted/malformed states. Replay
+  is read-only and uses the same pure presentation reducer as live events.
+  Canonical trajectories, R5 evidence, and professor-safe traces have explicit
+  read-only adapters that preserve genuine run identity/provenance and represent
+  missing facts as not recorded; frozen/historical evidence is never modified.
+  Final Goal-mode validation reported **563 application unit tests**, **36
+  worker-process integration tests**, **11 verifier-observability integration
+  tests**, plus PDB/canonical-replay/golden/controller/demo/verifier/patch
+  compatibility gates. FirstMate independently reconstructed the candidate and
+  confirmed 529 directly available application tests; the only two unavailable
+  tests required R5 run artifacts absent from the supplied repository snapshot.
+- [ ] **Task 6 — Build the replay-first Textual application** — NEXT.
+  Build the actual full-screen application UI on the accepted
+  session/presentation/history/replay foundation; do not yet wire the production
+  deterministic live source (Task 7).
 
 ## 0. Daily Requirement
 

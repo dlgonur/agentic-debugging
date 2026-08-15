@@ -1,7 +1,7 @@
 # Agentic Debugging Local Application V1 — Architecture and Implementation Plan
 
 **Document type:** Active architecture and phased implementation plan  
-**Status:** Active implementation baseline; Tasks 1–3 accepted, Task 4 next
+**Status:** Active implementation baseline; Tasks 1–5 accepted, Task 6 next
 **Repository:** `agentic-debugging-internship`  
 **Repository state inspected:** `main` at `e5ebe2680238624d7020ac9270918b4601848a83`, clean working tree and empty stash before this document was added  
 **Scope:** A professional local application surface over the existing Agentic Debugging system  
@@ -1087,62 +1087,70 @@ termination, and cleanup verification rather than as a partial controller-only c
 
 ### Task 4 — Expose patch, source, debugger, and verifier progress
 
-**Objective:** Supply the structured information needed by professional session views.
+**Status:** ACCEPTED (2026-08-15).
 
-**Why fourth:** Complete the presentation event model before UI work.
+**Objective:** Supply truthful structured debugger/source/patch/verifier information to the shared application presentation model.
 
-**Expected areas:** Demo tools/context, source handling, verifier, application adapters.
+**Accepted implementation:**
 
-**Key work:**
-
-- normalized patch attempts;
-- safe source snapshots;
-- structured location/stack/locals projection;
-- optional verifier-stage observer;
-- between-stage verifier cancellation checkpoints.
+- real structured PDB location, breakpoint, stack, current-frame, locals, and pause-generation projection without reparsing terminal text;
+- safe bounded source snapshots with repository-relative logical paths, full-source SHA-256, deterministic UTF-8 truncation, and explicit withholding of credential-shaped content;
+- normalized diagnosis and patch lifecycle including proposed, rejected, apply-failed, applied, and reverted states, with optional safe patch body;
+- optional verifier stage observer and between-stage operational cancellation while the existing final `EvaluationResult` remains the sole correctness authority;
+- shared `SessionEventEmitter` as the session-wide identity/clock/sequence/sink authority used by the worker lifecycle and controller/debugger/source/patch/verifier producers;
+- pure presentation-state support for source/current-line, debugger state, diagnosis, patch attempts, verifier progress, and final verifier summary;
+- explicit runtime-local credential redaction and bounded safe-data enforcement.
 
 **Acceptance criteria:**
 
-- Patch application is distinct from correctness.
-- Source location remains synchronized by pause generation.
-- Verifier results are unchanged when observation is disabled.
-- No hidden-test/oracle leakage.
+- patch application is never treated as repair correctness;
+- stale debugger observations cannot replace newer recorded pause state;
+- source snapshots are bounded, path-safe, hashed, and replayable after disposable workspace cleanup;
+- verifier observation/cancellation does not change scientific result semantics;
+- one live application journal has a contiguous sequence across all producer families;
+- no hidden-test/oracle/credential content is intentionally persisted through these producer paths;
+- canonical scientific `RunEvent` 1.0 remains unchanged.
 
-**Validation:** Patch, PDB, source-snapshot, verifier parity, and cancellation tests.
+**Validation:** Application observability/adversarial tests, real PDB and verifier integration, shared-emitter/journal integration, source/patch safety tests, UTF-8 boundary tests, and directly affected compatibility gates.
 
 **Dependencies:** Tasks 1–3.
 
-**Non-goals:** User-issued PDB commands or patch editing.
+**Non-goals:** User-issued PDB commands, manual patch editing, Textual UI, or production deterministic worker-to-demo source wiring.
 
 ### Task 5 — Add app-owned history and replay
 
-**Objective:** Persist new sessions durably and open supported historical formats safely.
+**Status:** ACCEPTED (2026-08-15).
 
-**Why fifth:** Presentation should be built against replayable evidence before live concurrency.
+**Objective:** Persist and reopen app-owned sessions safely and adapt supported recorded evidence read-only through the same presentation model.
 
-**Expected areas:** History store, manifest, journal reader, format adapters.
+**Accepted implementation:**
 
-**Key work:**
-
-- app-owned session directories and atomic manifests;
-- crash recovery;
-- canonical trajectory adapter;
-- R5/R6 evidence adapter;
-- professor-trace adapter;
-- provenance/hash retention.
+- filesystem-backed `HistoryStore`; no database;
+- one-level app-owned session discovery with resolved-path containment on register, list, and reopen;
+- atomic versioned manifests derived from the authoritative Task-3 journal;
+- manifest/journal/artifact hash and identity consistency checks before a session can classify as complete;
+- honest complete, interrupted, malformed/corrupt, invalid-manifest, and unregistered classifications;
+- read-only `SessionReplaySource` navigation over persisted `SessionEvent` streams using the same pure reducer as live execution;
+- prefix-by-prefix live/replay presentation parity;
+- explicit read-only adapters for canonical trajectories, R5 evidence, and professor-safe traces;
+- genuine recorded run identity preserved only when actually present; source commits/experiment ids retained as provenance rather than invented run ids;
+- historical absent data remains not recorded and source evidence is never reconstructed from the current checkout.
 
 **Acceptance criteria:**
 
-- Existing evidence remains byte-for-byte untouched.
-- Missing historical fields are shown as not recorded.
-- Invalid/incomplete sessions cannot appear successful.
-- No database is added.
+- existing frozen/historical evidence remains byte-for-byte untouched;
+- external/symlink-escaped directories cannot be treated as app-owned history;
+- stale/tampered manifests or referenced artifacts cannot remain `COMPLETE`;
+- missing historical fields are never invented;
+- invalid/incomplete journals cannot appear successful;
+- replay invokes no controller, model, PDB, patch application, verifier, or cleanup;
+- no database is added.
 
-**Validation:** Fixture, corruption, provenance, and replay-parity tests.
+**Validation:** Manifest integrity/containment tests, interrupted/malformed journal tests, historical provenance/absence tests, replay navigation and live/replay parity tests, and read-only evidence mutation guards.
 
 **Dependencies:** Tasks 1–4.
 
-**Non-goals:** Migrating/indexing every campaign folder.
+**Non-goals:** Migrating/indexing every campaign folder, background file watching, remote history, or UI implementation.
 
 ### Task 6 — Build the replay-first Textual application
 

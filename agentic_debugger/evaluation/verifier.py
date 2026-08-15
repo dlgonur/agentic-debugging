@@ -14,8 +14,9 @@ import re
 from collections import Counter
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Optional, Sequence
+from typing import Any, Callable, Optional, Protocol, Sequence
 
+from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.evaluation.outcome_taxonomy import classify_outcome
 from agentic_debugger.evaluation.runner import (
     BaselineRecord,
@@ -51,6 +52,55 @@ from agentic_debugger.runtime.patcher import PatchManager
 from agentic_debugger.runtime.test_runner import TestRunKind, TestRunResult, TestRunner
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
+
+# ---------------------------------------------------------------------------
+# Optional non-invasive progress observation (Task-4 observability seam)
+# ---------------------------------------------------------------------------
+#
+# Stage names are the application `VerifierStage` values (see
+# ``agentic_debugger.application.events``); statuses are the application
+# `VerifierStageStatus` values (``completed``/``failed``/``skipped``/
+# ``cancelled``).  The verifier module stays decoupled from the application
+# package: these are plain strings, and the application adapter validates
+# them fail-closed.  The observer is optional, non-authoritative telemetry:
+# an ordinary observer ``Exception`` is swallowed and never changes verifier
+# behavior, result, classification, or workspace semantics.  The final
+# ``EvaluationResult`` remains the only correctness authority.
+
+STAGE_PREPARE_WORKSPACE = "prepare_workspace"
+STAGE_BASELINE_REPRODUCTION = "baseline_reproduction"
+STAGE_PRE_PATCH_TARGETED = "pre_patch_targeted"
+STAGE_APPLY_CANDIDATE = "apply_candidate"
+STAGE_SYNTAX_VALIDATION = "syntax_validation"
+STAGE_POST_PATCH_REPRODUCTION = "post_patch_reproduction"
+STAGE_F2P_P2P_CHECKS = "f2p_p2p_checks"
+STAGE_BROADER_SUITE = "broader_suite"
+STAGE_CLASSIFICATION = "classification"
+STAGE_CLEANUP_INTEGRITY = "cleanup_integrity"
+
+
+class VerifierProgressObserver(Protocol):
+    """Optional observer of real verifier stage boundaries.
+
+    ``stage_started`` fires immediately before the stage's work begins;
+    ``stage_completed`` fires after the stage's work produced its record
+    (with ``completed`` or ``failed``; stages never entered are not
+    reported).  Implementations must be side-effect safe.
+    """
+
+    def stage_started(self, stage: str) -> None: ...
+
+    def stage_completed(self, stage: str, status: str) -> None: ...
+
+
+class NoopVerifierProgressObserver:
+    """Default observer: receives stage boundaries and does nothing."""
+
+    def stage_started(self, stage: str) -> None:
+        return None
+
+    def stage_completed(self, stage: str, status: str) -> None:
+        return None
 
 
 @dataclass
@@ -91,6 +141,8 @@ class EvaluationVerifier:
         workspace_factory: Callable[..., TaskWorkspace] = TaskWorkspace,
         test_runner_factory: Callable[[TaskWorkspace], TestRunner] = TestRunner,
         execution_context: Optional[VerifiedExecutionContext] = None,
+        progress_observer: Optional[VerifierProgressObserver] = None,
+        cancel_check: Optional[Callable[[], None]] = None,
     ) -> None:
         if not isinstance(repository_root, str) or not repository_root:
             raise EvaluationInvariantError("repository_root must be non-empty")
@@ -100,11 +152,48 @@ class EvaluationVerifier:
         if workspace_parent is not None:
             if not isinstance(workspace_parent, str) or not os.path.isdir(workspace_parent):
                 raise EvaluationInvariantError("workspace_parent must be an existing directory")
+        if progress_observer is not None and not callable(
+            getattr(progress_observer, "stage_started", None)
+        ):
+            raise EvaluationInvariantError("progress_observer must implement stage_started")
+        if cancel_check is not None and not callable(cancel_check):
+            raise EvaluationInvariantError("cancel_check must be callable")
         self._repository_root = root
         self._workspace_parent = workspace_parent
         self._workspace_factory = workspace_factory
         self._test_runner_factory = test_runner_factory
         self._execution_context = execution_context
+        self._progress_observer = progress_observer
+        self._cancel_check = cancel_check
+
+    def _notify_stage_started(self, stage: str) -> None:
+        observer = self._progress_observer
+        if observer is None:
+            return
+        try:
+            observer.stage_started(stage)
+        except Exception:
+            pass
+
+    def _notify_stage_completed(self, stage: str, status: str) -> None:
+        observer = self._progress_observer
+        if observer is None:
+            return
+        try:
+            observer.stage_completed(stage, status)
+        except Exception:
+            pass
+
+    def _checkpoint(self) -> None:
+        """Honor operational cancellation between verifier stages.
+
+        The caller's ``cancel_check`` raises :class:`CancellationError` for
+        cooperative cancellation; it propagates out of ``evaluate`` after
+        cleanup runs (the ``finally`` block), so cancellation is never
+        converted into a scientific verdict.
+        """
+        if self._cancel_check is not None:
+            self._cancel_check()
 
     def evaluate(self, task: Any, candidate_patch: str) -> EvaluationResult:
         loaded = load_task(task)
@@ -129,15 +218,19 @@ class EvaluationVerifier:
         workspace: Optional[TaskWorkspace] = None
         try:
             if state.canonical_hash_error is None:
+                self._checkpoint()
+                self._notify_stage_started(STAGE_PREPARE_WORKSPACE)
                 try:
                     workspace = self._make_workspace(fixture)
                 except WorkspaceError as exc:
                     state.status = EvaluationStatus.WORKSPACE_PREPARATION_FAILED
                     state.stop_reason = "workspace_preparation_failed"
                     state.diagnostic = bounded_error(exc)
+                    self._notify_stage_completed(STAGE_PREPARE_WORKSPACE, "failed")
                 else:
                     state.workspace_prepared = True
                     state.workspace_record = WorkspaceRecord(LifecycleStatus.PREPARED, True, False, False, False, before_hash, None, None)
+                    self._notify_stage_completed(STAGE_PREPARE_WORKSPACE, "completed")
                     if self._execution_context is not None:
                         runner = TestRunner(workspace, execution_context=self._execution_context)
                     else:
@@ -154,8 +247,11 @@ class EvaluationVerifier:
                             state.status = EvaluationStatus.BASELINE_INVALID
                             state.stop_reason = state.baseline_reason or "baseline_invalid"
                     else:
+                        self._checkpoint()
                         self._run_candidate(loaded, candidate_patch, runner, workspace, state)
         except (KeyboardInterrupt, SystemExit, GeneratorExit):
+            raise
+        except CancellationError:
             raise
         except EvaluationInvariantError as exc:
             state.status = EvaluationStatus.EVALUATOR_INVARIANT_FAILED
@@ -169,13 +265,20 @@ class EvaluationVerifier:
             state.stop_reason = "patch_apply_failed"
             state.diagnostic = bounded_error(exc)
             state.outcome = None
+            self._notify_stage_completed(STAGE_APPLY_CANDIDATE, "failed")
         except Exception as exc:
             state.status = EvaluationStatus.INTERNAL_ERROR
             state.stop_reason = "internal_error"
             state.diagnostic = bounded_error(exc)
             state.outcome = None
         finally:
+            self._notify_stage_started(STAGE_CLEANUP_INTEGRITY)
             result = self._finish(loaded, state, before_hash, workspace, fixture)
+            cleaned = result.workspace.cleaned and result.workspace.lifecycle is LifecycleStatus.CLEANED
+            self._notify_stage_completed(
+                STAGE_CLEANUP_INTEGRITY,
+                "completed" if cleaned else "failed",
+            )
         return result
 
     run = evaluate
@@ -262,15 +365,22 @@ class EvaluationVerifier:
 
     def _run_baseline(self, task: DebugTask, runner: TestRunner, state: _EvaluationState, workspace: TaskWorkspace) -> None:
         all_nodes = tuple(task.tests.fail_to_pass) + tuple(task.tests.pass_to_pass)
+        self._checkpoint()
+        self._notify_stage_started(STAGE_BASELINE_REPRODUCTION)
         state.collection = self._run_collection(task, runner, state, workspace, all_nodes)
         if not state.collection.passed:
             state.baseline_reason = "baseline_collection_process_error" if state.collection.error in {"collection timeout", "collection process error"} else ("baseline_collection_output_error" if state.collection.error == "malformed collection output" else "baseline_collection_invalid")
+            self._notify_stage_completed(STAGE_BASELINE_REPRODUCTION, "failed")
             return
         state.reproduction = self._run_reproduction(task, runner, state, workspace, "baseline")
+        self._notify_stage_completed(STAGE_BASELINE_REPRODUCTION, "completed")
+        self._checkpoint()
+        self._notify_stage_started(STAGE_PRE_PATCH_TARGETED)
         for node in task.tests.fail_to_pass:
             state.baseline_f2p.append(self._run_node(task, runner, state, workspace, node, "F2P", "baseline"))
         for node in task.tests.pass_to_pass:
             state.baseline_p2p.append(self._run_node(task, runner, state, workspace, node, "P2P", "baseline"))
+        self._notify_stage_completed(STAGE_PRE_PATCH_TARGETED, "completed")
         records = state.baseline_f2p + state.baseline_p2p
         if state.reproduction.timed_out or any(record.timed_out for record in records):
             state.timeout = True
@@ -291,20 +401,35 @@ class EvaluationVerifier:
             state.patch = PatchRecord(True, True, True, (), 0, None)
             state.syntax = SyntaxRecord((), True, (), None)
         else:
+            self._checkpoint()
+            self._notify_stage_started(STAGE_APPLY_CANDIDATE)
             manager = PatchManager(workspace, list(task.constraints.allowed_write_paths), list(task.constraints.denied_write_paths))
             applied = manager.apply_patch(candidate_patch)
             state.patch = PatchRecord(True, True, not applied.changed_files, tuple(sorted(item.path for item in applied.changed_files)), applied.hunk_count, None)
+            self._notify_stage_completed(STAGE_APPLY_CANDIDATE, "completed")
+            self._checkpoint()
+            self._notify_stage_started(STAGE_SYNTAX_VALIDATION)
             checked = manager.syntax_check()
             state.syntax = SyntaxRecord(tuple(sorted(item.path for item in checked.results)), checked.all_passed, tuple(SyntaxFileRecord(item.path, item.success, item.error_type, item.message, item.line, item.column) for item in checked.results), None)
+            self._notify_stage_completed(
+                STAGE_SYNTAX_VALIDATION,
+                "completed" if state.syntax.passed else "failed",
+            )
         if not state.syntax.passed:
             state.status = EvaluationStatus.SYNTAX_FAILED
             state.stop_reason = "syntax_failed"
             return
+        self._checkpoint()
+        self._notify_stage_started(STAGE_POST_PATCH_REPRODUCTION)
         state.post_reproduction = self._run_reproduction(task, runner, state, workspace, "post")
+        self._notify_stage_completed(STAGE_POST_PATCH_REPRODUCTION, "completed")
+        self._checkpoint()
+        self._notify_stage_started(STAGE_F2P_P2P_CHECKS)
         for node in task.tests.fail_to_pass:
             state.post_f2p.append(self._run_node(task, runner, state, workspace, node, "F2P", "post"))
         for node in task.tests.pass_to_pass:
             state.post_p2p.append(self._run_node(task, runner, state, workspace, node, "P2P", "post"))
+        self._notify_stage_completed(STAGE_F2P_P2P_CHECKS, "completed")
         records = state.post_f2p + state.post_p2p
         if state.post_reproduction.timed_out or any(record.timed_out for record in records):
             state.timeout = True
@@ -315,7 +440,10 @@ class EvaluationVerifier:
             state.status = EvaluationStatus.TEST_EXECUTION_FAILED
             state.stop_reason = "post_patch_test_execution_failed"
             return
+        self._checkpoint()
+        self._notify_stage_started(STAGE_BROADER_SUITE)
         state.full_suite = self._run_full_suite(task, runner, state, workspace)
+        self._notify_stage_completed(STAGE_BROADER_SUITE, "completed")
         if state.full_suite.status is TestRecordStatus.TIMEOUT:
             state.timeout = True
             state.status = EvaluationStatus.TEST_TIMEOUT
@@ -329,9 +457,12 @@ class EvaluationVerifier:
             state.status = EvaluationStatus.FULL_SUITE_CONTRADICTION
             state.stop_reason = "full_suite_contradicts_declared_nodes"
             return
+        self._checkpoint()
+        self._notify_stage_started(STAGE_CLASSIFICATION)
         state.outcome = classify_outcome([record.passed for record in state.post_f2p], [record.passed for record in state.post_p2p])
         state.status = EvaluationStatus.COMPLETED
         state.stop_reason = "completed"
+        self._notify_stage_completed(STAGE_CLASSIFICATION, "completed")
 
     def _run_collection(self, task: DebugTask, runner: TestRunner, state: _EvaluationState, workspace: TaskWorkspace, nodes: Sequence[str]) -> CollectionRecord:
         argv = list(task.tests.full_suite_argv) + ["--collect-only"]

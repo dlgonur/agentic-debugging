@@ -56,6 +56,10 @@ from agentic_debugger.agent.tool_registry import (
     ToolSpec,
     ToolTimeoutError,
 )
+from agentic_debugger.application.source_snapshots import (
+    SourceSnapshotStage,
+    capture_source_snapshot,
+)
 from agentic_debugger.demo.catalog import (
     DemoScenario,
     probe_driver_source,
@@ -354,6 +358,7 @@ class DemoToolContext:
         execution_context: Optional[VerifiedExecutionContext] = None,
         pdb_session_factory: Callable[[TaskWorkspace], PdbSession] = PdbSession,
         verifier_feedback_fn: Optional[Callable[[DebugTask, str], dict[str, Any]]] = None,
+        observability: Any = None,
     ) -> None:
         self.task = task
         self.workspace = workspace
@@ -381,6 +386,19 @@ class DemoToolContext:
             list(task.constraints.allowed_write_paths),
             list(task.constraints.denied_write_paths),
         )
+        # Optional Task-4 observability producer (``SessionObservability`` or
+        # an object with the same emit methods).  When set, the tool handlers
+        # project real debugger/patch/source/diagnosis facts into validated
+        # application events.  Observability is strictly observational: a
+        # failure is swallowed and never changes a tool result or the demo.
+        self.observability = observability
+        # Patch attempts are counted per apply_patch invocation; rejected,
+        # apply-failed, and reverted attempts share the same attempt index.
+        self.patch_attempt_index = 0
+        # Best-effort initial source snapshot of the pristine task source
+        # (the disposable workspace copy is pristine at construction).
+        if observability is not None:
+            self._capture_initial_source()
 
         self.tool_calls: list[str] = []
         self.tool_errors: list[dict[str, str]] = []
@@ -398,6 +416,51 @@ class DemoToolContext:
         self.pdb_pause_generation: Optional[int] = None
         self.pdb_observation_names: list[str] = []
         self.pdb_session_started = False
+
+    # -- observability helpers ---------------------------------------------
+
+    def observe(self, fn: Callable[[], None]) -> None:
+        """Run one observability projection; failure never changes execution.
+
+        Mirrors the controller's observer rule: an ordinary ``Exception`` in
+        observability is swallowed and never alters a tool decision, result,
+        budget, or cleanup.  ``BaseException`` propagates.
+        """
+        if self.observability is None:
+            return
+        try:
+            fn()
+        except Exception:
+            pass
+
+    def _capture_initial_source(self) -> None:
+        """Emit one bounded initial source snapshot for the task target.
+
+        Best-effort: any failure is swallowed (observability never changes
+        the demonstration), and only the declared production module path is
+        captured -- never tests, oracles, or unrelated files.
+        """
+        try:
+            module_path = task_target_module_path(self.task)
+            snapshot = capture_source_snapshot(
+                self.workspace.root, module_path, SourceSnapshotStage.INITIAL
+            )
+        except Exception:
+            return
+        self.observe(lambda: self.observability.source_snapshot(snapshot))
+
+    def _capture_changed_source(self, stage: SourceSnapshotStage) -> None:
+        """Emit one bounded source snapshot per currently changed file."""
+        for path in self.patch_changed_files:
+            try:
+                snapshot = capture_source_snapshot(
+                    self.workspace.root, path, stage
+                )
+            except Exception:
+                continue
+            self.observe(
+                lambda captured=snapshot: self.observability.source_snapshot(captured)
+            )
 
     # -- lifecycle ---------------------------------------------------------
 
@@ -711,12 +774,27 @@ def build_registry(
             "file_path": declared["target_file"],
             "symbol": declared["target_symbol"],
         }
+        # The hypothesis is an explicit model-authored diagnosis artifact
+        # (already recorded verbatim in the canonical tool observation); the
+        # app event carries the bounded structured claim, never hidden
+        # reasoning or evaluator information.
+        context.observe(
+            lambda: context.observability.diagnosis_recorded(
+                text=declared["statement"],
+                file_path=declared["target_file"],
+                symbol=declared["target_symbol"],
+                confidence=declared["confidence"],
+            )
+        )
         return _ok(dict(declared), "root-cause hypothesis recorded")
 
     # -- patch lifecycle ---------------------------------------------------
 
     def handle_apply_patch(action: Action, arguments: dict[str, object]) -> ToolResult:
         diff = arguments["patch"]
+        attempt_index = context.patch_attempt_index
+        context.patch_attempt_index += 1
+        patch_sha256 = hashlib.sha256(diff.encode("utf-8")).hexdigest()
         reverted_previous = False
         # A repair retry replaces the previous accepted candidate: if the
         # PatchManager still holds an active patch, revert it first so the
@@ -728,11 +806,30 @@ def build_registry(
             except (PatchStateError, PatchApplyError) as exc:
                 raise _safe_rejection(bounded_diagnostic(exc)) from exc
             reverted_previous = True
+            context.observe(
+                lambda: context.observability.patch_reverted(attempt_index - 1)
+            )
+            context._capture_changed_source(SourceSnapshotStage.REVERTED)
+        context.observe(
+            lambda: context.observability.patch_proposed(
+                attempt_index, patch_sha256, patch_text=diff
+            )
+        )
         try:
             result = context.patch_manager.apply_patch(diff)
         except (PatchValidationError, PatchAuthorizationError, PatchStateError) as exc:
+            context.observe(
+                lambda: context.observability.patch_rejected(
+                    attempt_index, bounded_diagnostic(exc, context.workspace.root)
+                )
+            )
             raise _safe_rejection(bounded_diagnostic(exc)) from exc
         except PatchApplyError as exc:
+            context.observe(
+                lambda: context.observability.patch_apply_failed(
+                    attempt_index, bounded_diagnostic(exc, context.workspace.root)
+                )
+            )
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
         # Only a patch that passed the real PatchManager lifecycle becomes
         # authoritative evidence for the evaluator.  Rejected or failed
@@ -740,6 +837,12 @@ def build_registry(
         context.candidate_patch = diff
         context.patch_applied = bool(result.success)
         context.patch_changed_files = tuple(sorted(item.path for item in result.changed_files))
+        context.observe(
+            lambda: context.observability.patch_applied(
+                attempt_index, context.patch_changed_files, None
+            )
+        )
+        context._capture_changed_source(SourceSnapshotStage.APPLIED)
         # Real independent-verifier feedback on the exact accepted candidate
         # (optional; bound failures, never crash the tool).
         verifier_feedback: Optional[dict[str, Any]] = None
@@ -773,6 +876,23 @@ def build_registry(
             result = context.patch_manager.revert_patch()
         except (PatchStateError, PatchApplyError) as exc:
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        changed_files = tuple(sorted(item.path for item in result.changed_files))
+        reverted_index = max(0, context.patch_attempt_index - 1)
+        context.observe(
+            lambda: context.observability.patch_reverted(reverted_index)
+        )
+        # Capture the reverted (baseline) source while the changed-file paths
+        # are still known, before the accepted candidate state is cleared.
+        for path in changed_files:
+            try:
+                snapshot = capture_source_snapshot(
+                    context.workspace.root, path, SourceSnapshotStage.REVERTED
+                )
+            except Exception:
+                continue
+            context.observe(
+                lambda captured=snapshot: context.observability.source_snapshot(captured)
+            )
         context.candidate_patch = ""
         context.patch_applied = False
         context.patch_changed_files = ()
@@ -780,7 +900,7 @@ def build_registry(
         return _ok(
             {
                 "reverted": True,
-                "changed_files": [item.path for item in result.changed_files],
+                "changed_files": list(changed_files),
             },
             "accepted candidate patch reverted from the disposable workspace",
         )
@@ -845,6 +965,17 @@ def build_registry(
                 "runtime probe did not reach the declared breakpoint",
                 safe_diagnostic="runtime probe did not reach the declared breakpoint",
             )
+        context.pdb_pause_generation = 1
+        context.observe(
+            lambda: context.observability.debugger_started(
+                probe.script, [f"{probe.script}:{breakpoint_line}"]
+            )
+        )
+        context.observe(
+            lambda: context.observability.location_changed(
+                started["script"], started["line"], started["function"], 1
+            )
+        )
         payload = {
             "state": "paused",
             "script": started["script"],
@@ -874,6 +1005,9 @@ def build_registry(
             )
         context.pdb_pause_generation = generation
         context.pdb_observation_names.append("get_stack_summary")
+        context.observe(
+            lambda: context.observability.stack_observed(dict(stack))
+        )
         return _ok(_json_safe(dict(stack), "get_stack_summary"), "bounded stack summary collected")
 
     def handle_frame_locals(action: Action, arguments: dict[str, object]) -> ToolResult:
@@ -886,6 +1020,9 @@ def build_registry(
             diag = bounded_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         context.pdb_observation_names.append("get_frame_locals")
+        context.observe(
+            lambda: context.observability.locals_observed(dict(result))
+        )
         return _ok(_json_safe(dict(result), "get_frame_locals"), "bounded frame locals collected")
 
     def handle_safe_eval(action: Action, arguments: dict[str, object]) -> ToolResult:
@@ -921,6 +1058,19 @@ def build_registry(
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
             diag = bounded_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        if result.get("state") == "paused":
+            # Every step/next/continue pause increments the PDB worker's
+            # pause generation; the demo context mirrors that authoritative
+            # counter so location events stay truthful and monotonic.
+            context.pdb_pause_generation = (context.pdb_pause_generation or 0) + 1
+            context.observe(
+                lambda: context.observability.location_changed(
+                    result["script"],
+                    result["line"],
+                    result["function"],
+                    context.pdb_pause_generation,
+                )
+            )
         context.pdb_observation_names.append(action.name)
         return _ok(
             _json_safe(dict(result), action.name),

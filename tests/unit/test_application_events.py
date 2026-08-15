@@ -47,7 +47,10 @@ def make_event_mapping(kind: SessionEventKind, payload=None, **overrides):
 class TestSessionEventSchema:
     def test_every_kind_has_a_valid_payload(self):
         assert set(VALID_PAYLOADS) == set(SessionEventKind)
-        assert len(SessionEventKind) == 29
+        # 29 Task-1 kinds + 4 bounded additive Task-4 kinds
+        # (controller.transition, patch.apply_failed, source.snapshot,
+        # diagnosis.recorded).
+        assert len(SessionEventKind) == 33
 
     @pytest.mark.parametrize("kind", list(SessionEventKind))
     def test_valid_event_round_trip(self, kind):

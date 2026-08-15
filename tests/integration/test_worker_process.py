@@ -298,6 +298,101 @@ class TestWorkerLifecycle:
         assert received[0].to_mapping() == large[0].to_mapping()
         worker.close()
 
+    def test_enriched_task4_stream_survives_worker_journal(self, tmp_path):
+        """Every new Task-4 event kind survives the real worker journal and
+        parent catch-up as one coherent enriched session stream."""
+        worker = make_worker(
+            tmp_path, "lifecycle.enriched", "emit_enriched_stream", {},
+        )
+        assert worker.start() is None
+        result = worker.wait()
+        assert result.status is SessionStatus.SUCCEEDED
+        read = read_session_journal(worker.journal_path)
+        assert read.state is JournalReadState.COMPLETE
+        kinds = {event.event_kind.value for event in read.events}
+        for expected in (
+            "controller.transition",
+            "debugger.started",
+            "debugger.location_changed",
+            "debugger.stack_observed",
+            "debugger.locals_observed",
+            "source.snapshot",
+            "diagnosis.recorded",
+            "patch.proposed",
+            "patch.applied",
+            "patch.reverted",
+            "patch.apply_failed",
+            "verifier.started",
+            "verifier.stage_started",
+            "verifier.stage_completed",
+            "verifier.completed",
+        ):
+            assert expected in kinds, expected
+        # The parent's journal catch-up surfaces the same enriched events.
+        parent_kinds = {event.event_kind.value for event in worker.events}
+        assert "source.snapshot" in parent_kinds
+        assert "patch.apply_failed" in parent_kinds
+        worker.close()
+
+    def test_worker_session_registers_and_replays_through_history(self, tmp_path):
+        """One real worker session registers into app-owned history and
+        replays read-only through the shared presentation reducer."""
+        from agentic_debugger.application.history import HistoryStore
+        from agentic_debugger.application.presentation import (
+            PresentationIdentity,
+            initial_session_view,
+            reduce_event,
+        )
+
+        store = HistoryStore(tmp_path)
+        session_id = "lifecycle.enriched.history"
+        # Run the worker inside the store's app-owned run root so the
+        # session directory is exactly what the store indexes.
+        worker = SessionWorkerProcess(
+            session_dir=store.session_dir(session_id),
+            session_id=session_id,
+            spec=make_spec(),
+            run_id=f"run-{session_id}",
+            scenario="emit_enriched_stream",
+            scenario_params={},
+            cooperative_grace_seconds=5.0,
+            ready_timeout_seconds=30.0,
+        )
+        assert worker.start() is None
+        result = worker.wait()
+        assert result.status is SessionStatus.SUCCEEDED
+        worker.close()
+
+        entry = store.register(worker.session_dir)
+        assert entry.is_success is True
+        reopened = store.reopen(session_id)
+        assert reopened.entry.classification.value == "complete"
+
+        identity = PresentationIdentity(
+            task_id=TASK_ID,
+            source_kind=SourceKind.OFFLINE_DEMO,
+            session_id=session_id,
+        )
+        view = initial_session_view(identity)
+        replay = reopened.replay
+        while True:
+            event = replay.next_event()
+            if event is None:
+                break
+            view = reduce_event(view, event)
+        # The enriched stream's recorded facts are present in the replayed
+        # presentation: source snapshots, patch lifecycle, diagnosis,
+        # verifier summary, and terminal status.
+        assert view.sources
+        assert any(attempt.stage.value == "reverted" for attempt in view.patch_attempts)
+        assert any(attempt.stage.value == "apply_failed" for attempt in view.patch_attempts)
+        assert view.diagnosis is not None
+        assert view.verifier_summary is not None
+        assert view.verifier_summary.outcome.value == "RESOLVED"
+        assert view.status is SessionStatus.SUCCEEDED
+        assert view.cleanup_verified is True
+        assert replay.at_end
+
 
 class TestWorkerCancellation:
     def test_cooperative_cancel_mid_run(self, tmp_path):

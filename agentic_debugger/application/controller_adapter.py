@@ -56,7 +56,6 @@ from agentic_debugger.agent.observer import (
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.application import ApplicationContractError, ApplicationInputError
 from agentic_debugger.application.events import (
-    SESSION_EVENT_SCHEMA_VERSION,
     ModelRequestStatus,
     SessionEvent,
     SessionEventKind,
@@ -64,6 +63,7 @@ from agentic_debugger.application.events import (
     validate_session_id,
     validate_utc_timestamp,
 )
+from agentic_debugger.application.emitter import SessionEventEmitter
 from agentic_debugger.application.sources import SessionEventSink, can_start_new_session
 
 _MAX_TASK_ID_BYTES = 256
@@ -79,13 +79,20 @@ _VALID_REQUEST_STATUSES = frozenset(
         ModelRequestStatus.ERROR.value,
     }
 )
+#: ``RUN_STARTED`` and ``TERMINAL`` only track the controller phase; every
+#: other observation kind produces a Task-1 event (Task-4 promotes
+#: ``STATE_TRANSITION`` into a ``controller.transition`` event carrying the
+#: recorded source/target states and reason).
 _NON_EVENT_KINDS = frozenset(
     {
         ControllerObservationKind.RUN_STARTED,
-        ControllerObservationKind.STATE_TRANSITION,
         ControllerObservationKind.TERMINAL,
     }
 )
+
+#: The controller observer allows transition reasons up to 2048 bytes; the
+#: ``controller.transition`` payload bound (MAX_TEXT_CHARS) covers it.
+_MAX_TRANSITION_REASON_BYTES = 2048
 
 
 def _bounded_text(value: Any, label: str, max_chars: int) -> str:
@@ -182,10 +189,21 @@ class ControllerSessionEventAdapter(ControllerObserver):
     """Convert controller-native observations into Task-1 ``SessionEvent``s.
 
     Implements the controller observer contract; every produced event is a
-    schema-validated :class:`SessionEvent` with the adapter's own contiguous
-    sequence numbers and an injectable UTC clock (a fixed clock makes the
-    output deterministic).  Events are appended in emission order and may
+    schema-validated :class:`SessionEvent` carrying a contiguous sequence
+    and an injectable UTC clock (a fixed clock makes the output
+    deterministic).  Events are appended in emission order and may
     optionally be forwarded through a Task-1 :class:`SessionEventSink`.
+
+    Sequence authority (Repair Pass 3): by default the adapter owns a
+    private :class:`SessionEventEmitter` starting at
+    ``context.initial_sequence``, so standalone tests stay possible.  When a
+    shared ``emitter`` is supplied, ALL producers of the session emit
+    through it, making the emitter the one authoritative sequence/identity/
+    clock owner and the journal-failure gate; the adapter then never guesses
+    another producer's next sequence.  The shared emitter identity must
+    match the adapter context (fail closed), and the adapter's run binding
+    from the authoritative ``RUN_STARTED`` observation binds the shared
+    emitter as well.
 
     Identity is fail-closed: observations whose ``task_id`` (or declared/
     bound ``run_id``) do not match the context raise
@@ -199,20 +217,69 @@ class ControllerSessionEventAdapter(ControllerObserver):
         *,
         clock: Callable[[], str] | None = None,
         sink: SessionEventSink | None = None,
+        emitter: SessionEventEmitter | None = None,
     ) -> None:
         if type(context) is not ControllerObservationContext:
             raise ApplicationInputError("context must be a ControllerObservationContext")
         self._context = context
         self._clock = _validated_clock(clock) if clock is not None else _default_clock
-        self._sink = sink
-        self._sequence = context.initial_sequence
         self._events: list[SessionEvent] = []
         self._run_id: Optional[str] = context.run_id
         self._phase: Optional[ControllerState] = None
+        self._emitter = self._resolve_emitter(context, emitter, clock, sink)
+
+    def _resolve_emitter(
+        self,
+        context: ControllerObservationContext,
+        emitter: SessionEventEmitter | None,
+        clock: Callable[[], str] | None,
+        sink: SessionEventSink | None,
+    ) -> SessionEventEmitter:
+        if emitter is not None:
+            if type(emitter) is not SessionEventEmitter:
+                raise ApplicationInputError("emitter must be a SessionEventEmitter")
+            if (
+                emitter.session_id != context.session_id
+                or emitter.task_id != context.task_id
+                or emitter.source_kind is not context.source_kind
+            ):
+                raise ApplicationContractError(
+                    "shared emitter identity does not match the adapter context"
+                )
+            if clock is not None or sink is not None:
+                raise ApplicationInputError(
+                    "clock/sink belong to the shared emitter; pass them there"
+                )
+            if (
+                context.run_id is not None
+                and emitter.run_id is not None
+                and emitter.run_id != context.run_id
+            ):
+                raise ApplicationContractError(
+                    "shared emitter run id does not match the adapter context"
+                )
+            # The shared emitter's run_id is bound by the session owner at
+            # ``session.started`` (events before it carry null), never by a
+            # producer at construction time.
+            return emitter
+        return SessionEventEmitter(
+            session_id=context.session_id,
+            task_id=context.task_id,
+            source_kind=context.source_kind,
+            run_id=context.run_id,
+            clock=self._clock,
+            sink=sink,
+            initial_sequence=context.initial_sequence,
+        )
 
     @property
     def context(self) -> ControllerObservationContext:
         return self._context
+
+    @property
+    def emitter(self) -> SessionEventEmitter:
+        """The session's shared emission authority (sequence owner)."""
+        return self._emitter
 
     def events(self) -> Tuple[SessionEvent, ...]:
         """The produced session events in emission (sequence) order."""
@@ -230,6 +297,9 @@ class ControllerSessionEventAdapter(ControllerObserver):
                     "run identity is not established before RUN_STARTED"
                 )
             self._run_id = observation.run_id
+            # The shared emission authority binds the same authoritative run
+            # identity, so every producer that shares it stays consistent.
+            self._emitter.bind_run_id(observation.run_id)
         elif observation.run_id != self._run_id:
             raise ApplicationContractError(
                 f"observation run_id {observation.run_id!r} does not match "
@@ -244,22 +314,8 @@ class ControllerSessionEventAdapter(ControllerObserver):
             self._phase = phase
 
     def _emit(self, kind: SessionEventKind, payload: Dict[str, Any]) -> None:
-        event = SessionEvent(
-            schema_version=SESSION_EVENT_SCHEMA_VERSION,
-            session_id=self._context.session_id,
-            task_id=self._context.task_id,
-            run_id=self._run_id,
-            sequence=self._sequence,
-            timestamp_utc=self._clock(),
-            source_kind=self._context.source_kind,
-            event_kind=kind,
-            controller_phase=self._phase,
-            payload=payload,
-        )
-        self._sequence += 1
+        event = self._emitter.emit(kind, payload, controller_phase=self._phase)
         self._events.append(event)
-        if self._sink is not None:
-            self._sink.append(event)
 
     def _require_index(self, observation: ControllerObservation, label: str) -> int:
         if observation.model_call_index is None:
@@ -318,6 +374,25 @@ class ControllerSessionEventAdapter(ControllerObserver):
         self._validate_identity(observation)
         self._track_phase(observation)
         if observation.kind in _NON_EVENT_KINDS:
+            return
+
+        if observation.kind is ControllerObservationKind.STATE_TRANSITION:
+            if observation.state_before is None or observation.state_after is None:
+                raise ApplicationContractError(
+                    "STATE_TRANSITION observation requires source and target states"
+                )
+            self._emit(
+                SessionEventKind.CONTROLLER_TRANSITION,
+                {
+                    "source_state": observation.state_before.value,
+                    "target_state": observation.state_after.value,
+                    "reason": _bounded_text_or_none(
+                        observation.transition_reason,
+                        "transition_reason",
+                        _MAX_TRANSITION_REASON_BYTES,
+                    ),
+                },
+            )
             return
 
         if observation.kind is ControllerObservationKind.MODEL_REQUEST_STARTED:
