@@ -48,6 +48,13 @@ VALID_PAYLOADS = {
         "directive_kind": "action",
         "rejection_category": "invalid_arguments",
     },
+    SessionEventKind.MODEL_CONFIGURED: {
+        "profile_id": "local-dummy",
+        "config_fingerprint": VALID_SPEC_FINGERPRINT,
+        "display_name": "Dummy command model",
+        "protocol_version": "1.3",
+        "tool_version": "live-command-v1",
+    },
     SessionEventKind.TOOL_STARTED: {"tool_name": "apply_patch"},
     SessionEventKind.TOOL_COMPLETED: {"tool_name": "apply_patch", "status": "ok"},
     SessionEventKind.DEBUGGER_STARTED: {

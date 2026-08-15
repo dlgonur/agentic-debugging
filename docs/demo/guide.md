@@ -120,9 +120,11 @@ accepted run's full archived evidence.
 ## 5a. Local Application V1 (the replay-first TUI)
 
 The Local Application V1 is a full-screen Textual terminal application over
-app-owned session history and deterministic offline sessions
-(`docs/architecture/local-application-v1.md`).  It requires the optional
-application extra and launches with one command:
+app-owned session history and two live execution modes: the deterministic
+offline session and the configured command-model session
+(`docs/architecture/local-application-v1.md` and
+`docs/architecture/local-application-v1-configured-command-model.md`).  It
+requires the optional application extra and launches with one command:
 
 ```powershell
 python -m pip install -e .[app]
@@ -131,19 +133,37 @@ python -m agentic_debugger.ui [--root DIR]
 
 - `--root` selects the application-owned history root (default:
   `%LOCALAPPDATA%\AgenticDebugger` on Windows, `~/AgenticDebugger`
-  elsewhere); every session the application runs and registers lives there.
+  elsewhere); every session the application runs and registers lives there,
+  and the app-owned command-model configuration lives at
+  `<root>\config\command-models.json`.
 - The Home screen lists app-owned sessions (completed, interrupted,
   malformed, and unregistered states are shown honestly), opens recorded
-  sessions as read-only replays, and starts a bounded deterministic offline
-  session (`n`) through the real controller/PDB/PatchManager/verifier stack
-  in the accepted cancellable worker process.
+  sessions as read-only replays, and starts a session (`n`) through the
+  real controller/PDB/PatchManager/verifier stack in the accepted
+  cancellable worker process.
+- The Start screen offers two modes:
+  - **deterministic offline** — the default source (Task 7), no provider
+    and no network;
+  - **configured command model** — a validated local profile executed
+    through the accepted JSON-lines command transport and the same
+    controller contract (Task 8).  Profiles are defined in
+    `command-models.json` (explicit `argv`, `shell=False`, validated and
+    credential-free; see the Task-8 contract doc for the exact format and
+    safety rules).  Start is disabled with a clear reason when no valid
+    profile exists; expected command failures (missing executable,
+    malformed protocol, non-zero exit, timeout, cancellation, oversized
+    output) are professional states, never tracebacks.
 - Replay navigation is read-only (`[`/`]` previous/next event,
   `{`/`}` phase boundaries, `g`/`G` beginning/end, `j` jump to sequence,
   `q` back to history); `c` cancels a live session, and quitting the app
-  never strands the live worker.
+  never strands the live worker or a configured command descendant.
+- Replaying a configured session from history never re-runs its command;
+  history records only the safe profile id, configuration fingerprint, and
+  display label.
 - The application requires no GPU, model provider, network, WSL, or
   campaign infrastructure; the scientific core and existing CLI paths never
-  import the TUI.
+  import the TUI.  Launching the TUI without the `app` extra prints a
+  concise installation instruction instead of an import traceback.
 
 ## 6. Blockers and safe recovery
 
