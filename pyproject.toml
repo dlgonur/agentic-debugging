@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "agentic-debugger"
 version = "0.1.0"
@@ -10,6 +14,12 @@ test = ["pytest"]
 # paths never import this extra; the TUI is an optional application surface
 # (docs/architecture/local-application-v1.md section 5.1).
 app = ["textual>=8,<9"]
+
+# The repository is a flat layout with many top-level research/operator
+# directories; discovery is pinned to the one installable package so the
+# documented ``pip install -e .[test]`` / ``.[app]`` commands keep working.
+[tool.setuptools.packages.find]
+include = ["agentic_debugger*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

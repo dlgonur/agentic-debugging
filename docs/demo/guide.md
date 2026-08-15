@@ -117,6 +117,34 @@ accepted run's full archived evidence.
   those workstreams have any runtime code to demo yet
   (`docs/evaluation/model-rag-sft-dpo.md`).
 
+## 5a. Local Application V1 (the replay-first TUI)
+
+The Local Application V1 is a full-screen Textual terminal application over
+app-owned session history and deterministic offline sessions
+(`docs/architecture/local-application-v1.md`).  It requires the optional
+application extra and launches with one command:
+
+```powershell
+python -m pip install -e .[app]
+python -m agentic_debugger.ui [--root DIR]
+```
+
+- `--root` selects the application-owned history root (default:
+  `%LOCALAPPDATA%\AgenticDebugger` on Windows, `~/AgenticDebugger`
+  elsewhere); every session the application runs and registers lives there.
+- The Home screen lists app-owned sessions (completed, interrupted,
+  malformed, and unregistered states are shown honestly), opens recorded
+  sessions as read-only replays, and starts a bounded deterministic offline
+  session (`n`) through the real controller/PDB/PatchManager/verifier stack
+  in the accepted cancellable worker process.
+- Replay navigation is read-only (`[`/`]` previous/next event,
+  `{`/`}` phase boundaries, `g`/`G` beginning/end, `j` jump to sequence,
+  `q` back to history); `c` cancels a live session, and quitting the app
+  never strands the live worker.
+- The application requires no GPU, model provider, network, WSL, or
+  campaign infrastructure; the scientific core and existing CLI paths never
+  import the TUI.
+
 ## 6. Blockers and safe recovery
 
 | Symptom | Likely cause | Safe recovery |

@@ -49,7 +49,6 @@ from agentic_debugger.application.presentation import (
 )
 from agentic_debugger.application.replay import phase_boundaries
 from agentic_debugger.application.session import SessionResult
-from agentic_debugger.application.worker_process import SessionWorkerProcess
 from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
