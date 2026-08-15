@@ -1,4 +1,4 @@
-"""Production deterministic offline execution source (Task 7).
+"""Production deterministic offline execution source (Task 7, Task 8 refactor).
 
 This is the real application execution source that Task 3's internal
 scenario harness explicitly deferred.  It binds the accepted deterministic
@@ -7,6 +7,14 @@ registry (``demo.tools.build_registry``), real PDB, the real PatchManager,
 the real independent :class:`EvaluationVerifier`, and a disposable task
 workspace -- into one application session lifecycle running inside the
 accepted Task-3 worker process.
+
+Task 8 refactor: the execution pipeline itself now lives in the shared
+:mod:`agentic_debugger.application.local_source` module so the deterministic
+offline source and the configured command-model source visibly share the
+same pipeline, with model construction (and the source-specific failure
+semantics) being the meaningful difference.  This module remains the
+deterministic source's public face: same source name, same error type, same
+artifact names, same parameter contract, same behavior.
 
 Rules:
 
@@ -35,80 +43,36 @@ Rules:
 
 from __future__ import annotations
 
-import hashlib
-import json
-import shutil
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
-from agentic_debugger.agent.controller import (
-    ControllerRunConfig,
-    DeterministicController,
-)
-from agentic_debugger.agent.controller_policy import (
-    ControllerBudgetLimits,
-    ControllerBudgetState,
-    HypothesisLedger,
-    PdbPolicy,
-)
-from agentic_debugger.agent.model_adapter import ControllerSnapshot
-from agentic_debugger.agent.state_machine import ControllerState
-from agentic_debugger.application.controller_adapter import (
-    ControllerObservationContext,
-    ControllerSessionEventAdapter,
-)
-from agentic_debugger.application.events import SessionEventKind
-from agentic_debugger.application.observability import (
-    ObservabilityContext,
-    SessionObservability,
-)
-from agentic_debugger.application.verifier_observer import (
-    VerifierSessionEventAdapter,
+from agentic_debugger.application.local_source import (
+    CANDIDATE_PATCH_NAME,
+    EVALUATION_JSON_NAME,
+    LocalSourceError,
+    run_local_session,
 )
 from agentic_debugger.application.worker_scenarios import (
     ScenarioContext,
     ScenarioInputError,
 )
-from agentic_debugger.cancellation import CancellationError
-from agentic_debugger.demo.catalog import scenario_for
-from agentic_debugger.demo.isolation import OfflineGuard
+from agentic_debugger.demo.catalog import build_reference_patch, scenario_for
 from agentic_debugger.demo.model import DemoPolicyModel
-from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
+from agentic_debugger.demo.policies import DemoPolicy
 from agentic_debugger.demo.runner import DEMO_MAX_MODEL_CALLS
-from agentic_debugger.demo.tools import (
-    DemoToolContext,
-    build_registry,
-    prepare_pdb_probe,
-)
-from agentic_debugger.evaluation.runner import load_task
-from agentic_debugger.evaluation.verifier import EvaluationVerifier
-from agentic_debugger.runtime.workspace import TaskWorkspace
+from agentic_debugger.demo.tools import DemoToolContext
 
 #: The one production deterministic source name the worker dispatches.
 DETERMINISTIC_SOURCE_NAME = "deterministic_offline"
 
-_MAX_DIAGNOSTIC_CHARS = 400
 _KNOWN_PARAMS = frozenset({"task_id", "policy"})
 _MAX_TASK_ID_CHARS = 128
 _MAX_POLICY_CHARS = 64
 
-#: App-owned artifact names persisted into the durable session directory.
-CANDIDATE_PATCH_NAME = "candidate.patch"
-EVALUATION_JSON_NAME = "evaluation.json"
 
-
-class DeterministicSourceError(RuntimeError):
+class DeterministicSourceError(LocalSourceError):
     """Raised when the production source itself fails (never for scientific
     outcomes; the verifier remains the correctness authority)."""
-
-
-def _bounded_diagnostic(text: str) -> str:
-    cleaned = "".join(
-        char if 0x20 <= ord(char) != 0x7F else " " for char in str(text)
-    )
-    if len(cleaned) > _MAX_DIAGNOSTIC_CHARS:
-        cleaned = cleaned[: _MAX_DIAGNOSTIC_CHARS - 3] + "..."
-    return cleaned or "unspecified"
 
 
 def _require_text(params: Mapping[str, Any], key: str, maximum: int) -> str:
@@ -133,22 +97,6 @@ def _validate_params(params: Mapping[str, Any]) -> tuple[str, str]:
     return task_id, policy
 
 
-def _curated_fixture_dir(task_id: str) -> Path:
-    import agentic_debugger
-
-    package_dir = Path(agentic_debugger.__file__).resolve().parent
-    fixture_dir = package_dir / "datasets" / "curated" / task_id
-    if not (fixture_dir / "task.json").is_file():
-        raise ScenarioInputError(f"curated task manifest is missing: {task_id}")
-    return fixture_dir
-
-
-def _repository_root() -> Path:
-    import agentic_debugger
-
-    return Path(agentic_debugger.__file__).resolve().parent.parent
-
-
 def run_deterministic_session(
     ctx: ScenarioContext,
     params: Mapping[str, Any],
@@ -161,229 +109,46 @@ def run_deterministic_session(
     ``ctx.token`` at every safe boundary.
     """
     task_id, policy_value = _validate_params(params)
-    if ctx.emitter is None:
-        raise ScenarioInputError("deterministic source requires the shared emitter")
     policy = DemoPolicy(policy_value)
-    pdb_mode = pdb_policy_for(policy)
-    session_id = ctx.emitter.session_id
-    task_name = ctx.emitter.task_id
-    source_kind = ctx.emitter.source_kind
-    if task_id != task_name:
-        raise ScenarioInputError(
-            f"deterministic source task {task_id!r} does not match the "
-            f"session task {task_name!r}"
-        )
 
-    fixture_dir = _curated_fixture_dir(task_id)
     scenario = scenario_for(task_id)
-    case_parent = ctx.work_dir / f"case-{task_id}-{policy_value}"
-    diagnostics: list[str] = []
 
-    observability = SessionObservability(
-        ObservabilityContext(
-            session_id=session_id,
-            task_id=task_id,
-            source_kind=source_kind,
-            run_id=ctx.run_id,
-        ),
-        emitter=ctx.emitter,
-    )
-    controller_adapter = ControllerSessionEventAdapter(
-        ControllerObservationContext(
-            session_id=session_id,
-            task_id=task_id,
-            source_kind=source_kind,
-            run_id=ctx.run_id,
-        ),
-        emitter=ctx.emitter,
-    )
+    def _initial_patch(workspace: Any) -> str:
+        from agentic_debugger.demo.catalog import build_reference_patch
 
-    workspace: Optional[TaskWorkspace] = None
-    demo_context: Optional[DemoToolContext] = None
-    evaluation = None
-    try:
-        ctx.token.check()  # cancellation boundary before any execution work
-        case_parent.mkdir(parents=False, exist_ok=False)
-        guard = OfflineGuard()
-        with guard:
-            workspace = TaskWorkspace(str(fixture_dir), parent_dir=str(case_parent))
-            source_path = Path(workspace.root) / scenario.reference_repair.target_path
-            patch_text = _build_reference_patch(source_path, scenario)
-            probe = (
-                prepare_pdb_probe(fixture_dir, scenario, case_parent)
-                if pdb_mode is not PdbPolicy.DISABLED
-                else None
-            )
-            demo_context = DemoToolContext(
-                task=load_task(str(fixture_dir / "task.json")),
-                workspace=workspace,
-                patch=patch_text,
-                probe=probe,
-                observability=observability,
-            )
-            model = DemoPolicyModel(
-                scenario=scenario,
-                patch=patch_text,
-                pdb_policy=pdb_mode,
-            )
-            controller = DeterministicController(
-                build_registry(demo_context),
-                model,
-                ControllerRunConfig(max_model_calls=DEMO_MAX_MODEL_CALLS),
-                observer=controller_adapter,
-            )
-            task = demo_context.task
-            snapshot = ControllerSnapshot(
-                run_id=ctx.run_id or f"{task_id}--{policy_value}",
-                task_id=task_id,
-                state=ControllerState.REPRODUCE,
-                model_call_index=0,
-                budget_limits=ControllerBudgetLimits.from_task_constraints(
-                    task.constraints
-                ),
-                budget_state=ControllerBudgetState(),
-                hypotheses=HypothesisLedger(),
-            )
-            controller.run(snapshot, cancel_check=ctx.token.check)
-            ctx.token.check()  # controller -> verifier boundary
-
-            # Independent verifier: progress events through the shared
-            # emitter; the final EvaluationResult stays the only authority.
-            ctx.emitter.emit(
-                SessionEventKind.SESSION_STATUS_CHANGED,
-                {"status": "running", "phase": "verifying"},
-            )
-            verifier_adapter = VerifierSessionEventAdapter(
-                ObservabilityContext(
-                    session_id=session_id,
-                    task_id=task_id,
-                    source_kind=source_kind,
-                    run_id=ctx.run_id,
-                ),
-                emitter=ctx.emitter,
-            )
-            verifier_adapter.started()
-            evaluation = EvaluationVerifier(
-                str(_repository_root()),
-                workspace_parent=str(case_parent),
-                progress_observer=verifier_adapter,
-                cancel_check=ctx.token.check,
-            ).evaluate(task, patch_text)
-            verifier_adapter.completed(evaluation)
-            _persist_artifacts(ctx, task_id, patch_text, evaluation)
-    except CancellationError:
-        raise
-    except Exception as exc:
-        raise DeterministicSourceError(
-            f"deterministic session failed: {_bounded_diagnostic(exc)}"
-        ) from exc
-    finally:
-        _release(demo_context, workspace, case_parent, diagnostics)
-        if diagnostics and not ctx.token.is_cancelled:
-            # Cleanup truth stays with the worker cleanup cycle when the
-            # session was cancelled: a cancellation must not be flipped into
-            # a generic failure by a best-effort release diagnostic.
-            raise DeterministicSourceError(
-                "deterministic session cleanup failed: "
-                + "; ".join(diagnostics[:4])
-            )
-
-
-def _build_reference_patch(source_path: Path, scenario: Any) -> str:
-    from agentic_debugger.demo.catalog import build_reference_patch
-
-    return build_reference_patch(
-        source_path.read_text(encoding="utf-8"), scenario.reference_repair
-    )
-
-
-def _persist_artifacts(
-    ctx: ScenarioContext,
-    task_id: str,
-    patch_text: str,
-    evaluation: Any,
-) -> None:
-    """Write the app-owned artifacts into the durable session directory.
-
-    The session directory (journal parent) survives the disposable work
-    directory cleanup, so a reopened/replayed session keeps its candidate
-    patch and verifier record.  Every artifact is emitted through the shared
-    emission authority with its exact content hash.
-    """
-    session_dir = ctx.session_dir
-    if session_dir is None:
-        return
-    try:
-        session_dir.mkdir(parents=True, exist_ok=True)
-    except OSError:
-        return
-    candidate_path = session_dir / CANDIDATE_PATCH_NAME
-    candidate_path.write_text(patch_text, encoding="utf-8", newline="\n")
-    ctx.emitter.emit(
-        SessionEventKind.ARTIFACT_WRITTEN,
-        {
-            "path": CANDIDATE_PATCH_NAME,
-            "sha256": _file_sha256(candidate_path),
-        },
-    )
-    evaluation_path = session_dir / EVALUATION_JSON_NAME
-    evaluation_path.write_text(
-        json.dumps(evaluation.to_mapping(), ensure_ascii=False, allow_nan=False, sort_keys=True),
-        encoding="utf-8",
-        newline="\n",
-    )
-    ctx.emitter.emit(
-        SessionEventKind.ARTIFACT_WRITTEN,
-        {
-            "path": EVALUATION_JSON_NAME,
-            "sha256": _file_sha256(evaluation_path),
-        },
-    )
-
-
-def _file_sha256(path: Path) -> str:
-    digest = hashlib.sha256()
-    with open(path, "rb") as stream:
-        for chunk in iter(lambda: stream.read(65536), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _release(
-    demo_context: Optional[DemoToolContext],
-    workspace: Optional[TaskWorkspace],
-    case_parent: Path,
-    diagnostics: list[str],
-) -> None:
-    """Best-effort release of every disposable execution resource.
-
-    Mirrors the accepted demo ``_release`` behavior; the worker cleanup
-    cycle remains the authoritative cleanup owner.
-    """
-    root = str(case_parent)
-    if demo_context is not None:
-        for error in demo_context.release_pdb():
-            diagnostics.append(
-                f"pdb cleanup failed: {_bounded_diagnostic(error)}"
-            )
-    if workspace is not None:
-        try:
-            workspace.cleanup()
-            if Path(workspace.root).exists():
-                raise RuntimeError("controller workspace root remains after cleanup")
-        except Exception as exc:
-            diagnostics.append(
-                f"controller workspace cleanup failed: {_bounded_diagnostic(exc)}"
-            )
-    try:
-        if case_parent.exists():
-            shutil.rmtree(case_parent)
-        if case_parent.exists():
-            diagnostics.append("case workspace parent still exists after cleanup")
-    except Exception as exc:
-        diagnostics.append(
-            f"case workspace cleanup failed: {_bounded_diagnostic(exc)}"
+        source_path = Path(workspace.root) / scenario.reference_repair.target_path
+        return build_reference_patch(
+            source_path.read_text(encoding="utf-8"), scenario.reference_repair
         )
+
+    def _model_factory(demo_context: DemoToolContext, registry: Any) -> Any:
+        from agentic_debugger.demo.policies import pdb_policy_for
+
+        return DemoPolicyModel(
+            scenario=scenario,
+            patch=demo_context.patch,
+            pdb_policy=pdb_policy_for(policy),
+        )
+
+    def _verifier_patch(demo_context: DemoToolContext, result: Any) -> Optional[str]:
+        # Accepted Task-7 semantics: the deterministic source always
+        # verifies the catalog reference patch the demonstration model
+        # proposes (the model's own candidate is that same patch).
+        return demo_context.patch
+
+    try:
+        run_local_session(
+            ctx,
+            task_id=task_id,
+            policy=policy,
+            initial_patch=_initial_patch,
+            model_factory=_model_factory,
+            verifier_patch=_verifier_patch,
+            fail_on_controller_failure=False,
+            max_model_calls=DEMO_MAX_MODEL_CALLS,
+        )
+    except LocalSourceError as exc:
+        raise DeterministicSourceError(str(exc)) from exc
 
 
 __all__ = [

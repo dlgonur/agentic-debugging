@@ -51,6 +51,7 @@ from agentic_debugger.application.session import (
     SessionResult,
     SessionSpec,
 )
+from agentic_debugger.application.sources import ModelExecutionError
 from agentic_debugger.application.worker_protocol import (
     MAX_WORKER_LINE_BYTES,
     StartRequest,
@@ -91,10 +92,15 @@ def run_worker_source(
     """Dispatch one worker execution source.
 
     The internal Task-3 scenarios (``worker_scenarios``) remain the bounded
-    non-product boundary harness.  The one production deterministic source
-    (Task 7) is dispatched separately so the product's live execution never
-    uses a synthetic scenario mode.
+    non-product boundary harness.  The two production sources (Task 7
+    deterministic offline, Task 8 configured command model) are dispatched
+    separately so the product's live execution never uses a synthetic
+    scenario mode.
     """
+    from agentic_debugger.application.configured_source import (
+        CONFIGURED_SOURCE_NAME,
+        run_configured_session,
+    )
     from agentic_debugger.application.deterministic_source import (
         DETERMINISTIC_SOURCE_NAME,
         run_deterministic_session,
@@ -102,6 +108,9 @@ def run_worker_source(
 
     if name == DETERMINISTIC_SOURCE_NAME:
         run_deterministic_session(ctx, params)
+        return
+    if name == CONFIGURED_SOURCE_NAME:
+        run_configured_session(ctx, params)
         return
     run_scenario(name, ctx, params)
 
@@ -473,6 +482,7 @@ def run_worker(request: StartRequest) -> int:
     _start_cancel_reader(token)
 
     outcome: str = "completed"
+    failure_reason: Optional[SessionTerminationReason] = None
     try:
         if request.pre_start_delay_seconds > 0:
             time.sleep(request.pre_start_delay_seconds)
@@ -519,6 +529,16 @@ def run_worker(request: StartRequest) -> int:
     except ScenarioInputError as exc:
         diagnostics.append(_bounded_diagnostic(f"scenario input error: {exc}"))
         outcome = "failed"
+    except ModelExecutionError as exc:
+        # A production source classified its controller run as a genuine
+        # model-execution failure (transport/provider failure, directive
+        # exhaustion, controller failure).  The exact Task-1 termination
+        # reason travels with the exception so the session terminal is
+        # honest (model_error / directive_exhausted / controller_failed)
+        # instead of an orderly completion.
+        failure_reason = exc.termination_reason
+        diagnostics.append(_bounded_diagnostic(f"model execution failed: {exc}"))
+        outcome = "failed"
     except Exception as exc:
         diagnostics.append(_bounded_diagnostic(f"scenario failed: {exc}"))
         outcome = "failed"
@@ -541,7 +561,9 @@ def run_worker(request: StartRequest) -> int:
         else:
             cleanup_ok = False
 
-        status, reason = _terminal_for(outcome, cleanup_ok, coordinator.started)
+        status, reason = _terminal_for(
+            outcome, cleanup_ok, coordinator.started, failure_reason
+        )
         coordinator.emit_terminal(status, reason)
         try:
             journal.close()
@@ -567,6 +589,7 @@ def _terminal_for(
     outcome: str,
     cleanup_ok: bool,
     started: bool,
+    failure_reason: Optional[SessionTerminationReason] = None,
 ) -> tuple[SessionStatus, SessionTerminationReason]:
     if not started:
         # Pre-start terminals: the session never began, so no execution-owned
@@ -586,7 +609,9 @@ def _terminal_for(
         return SessionStatus.CANCELLED, SessionTerminationReason.CANCELLED
     if outcome == "timed_out":
         return SessionStatus.TIMED_OUT, SessionTerminationReason.TIMEOUT
-    return SessionStatus.FAILED, SessionTerminationReason.CONTROLLER_FAILED
+    # A production source may carry the exact honest termination reason of a
+    # model-execution failure; the generic harness failure stays the default.
+    return SessionStatus.FAILED, failure_reason or SessionTerminationReason.CONTROLLER_FAILED
 
 
 def main() -> None:
@@ -597,6 +622,9 @@ def main() -> None:
     with a buffered-stdin fatal error.  All protocol writes and journal
     records are flushed per message, so a hard exit loses nothing.
     """
+    from agentic_debugger.application.configured_source import (
+        CONFIGURED_SOURCE_NAME,
+    )
     from agentic_debugger.application.deterministic_source import (
         DETERMINISTIC_SOURCE_NAME,
     )
@@ -619,6 +647,7 @@ def main() -> None:
     if (
         request.scenario not in SCENARIO_NAMES
         and request.scenario != DETERMINISTIC_SOURCE_NAME
+        and request.scenario != CONFIGURED_SOURCE_NAME
     ):
         _send(error_message("unknown_scenario", [request.scenario]))
         os._exit(EXIT_STARTUP_ERROR)
