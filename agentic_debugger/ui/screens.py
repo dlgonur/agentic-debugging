@@ -16,8 +16,6 @@ from typing import Any, Optional, Tuple
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
-from textual.message import Message
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -33,18 +31,15 @@ from textual.widgets import (
 from agentic_debugger.application.events import (
     SessionEvent,
     SessionEventKind,
-    SessionPhase,
     SessionStatus,
 )
 from agentic_debugger.application.history import (
     HistoryClassification,
-    ReopenedSession,
     SessionHistoryEntry,
 )
 from agentic_debugger.application.presentation import (
     PresentationIdentity,
     SessionViewState,
-    initial_session_view,
     reduce_event,
 )
 from agentic_debugger.application.replay import phase_boundaries

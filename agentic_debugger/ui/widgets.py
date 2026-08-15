@@ -13,7 +13,7 @@ come from the view.
 
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional
+from typing import Any, Optional
 
 from rich.text import Text
 from textual.app import ComposeResult
@@ -24,7 +24,6 @@ from agentic_debugger.application.presentation import (
     DebuggerViewState,
     PatchStage,
     SessionViewState,
-    SourceView,
     VerifierSummaryView,
     current_source,
 )

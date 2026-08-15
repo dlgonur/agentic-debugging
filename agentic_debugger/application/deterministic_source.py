@@ -53,12 +53,10 @@ from agentic_debugger.agent.controller_policy import (
 )
 from agentic_debugger.agent.model_adapter import ControllerSnapshot
 from agentic_debugger.agent.state_machine import ControllerState
-from agentic_debugger.application import ApplicationInputError
 from agentic_debugger.application.controller_adapter import (
     ControllerObservationContext,
     ControllerSessionEventAdapter,
 )
-from agentic_debugger.application.emitter import SessionEventEmitter
 from agentic_debugger.application.events import SessionEventKind
 from agentic_debugger.application.observability import (
     ObservabilityContext,
