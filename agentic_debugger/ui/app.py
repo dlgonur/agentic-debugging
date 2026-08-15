@@ -140,6 +140,11 @@ class LocalApplicationV1(App):
     def live_events(self) -> Tuple[SessionEvent, ...]:
         return self._live_events
 
+    @property
+    def live_view(self) -> Optional[SessionViewState]:
+        """The app-owned live presentation state (None before a live start)."""
+        return self._live_view
+
     # -- boot ---------------------------------------------------------------
 
     def on_mount(self) -> None:
@@ -194,14 +199,41 @@ class LocalApplicationV1(App):
     def go_home(self) -> None:
         """Return to the history screen; a live session keeps running."""
         self.pop_screen()
+        self.refresh_home_history()
+
+    def refresh_home_history(self) -> None:
+        """Refresh the history table after the current screen settles.
+
+        Called when a workspace is popped so a just-registered live session
+        is immediately visible in the app-owned history list.
+        """
+        self.call_later(self._refresh_home_history)
+
+    def _refresh_home_history(self) -> None:
+        screen = self.screen
+        if isinstance(screen, HomeScreen):
+            screen.refresh_history()
 
     # -- live sessions ------------------------------------------------------
 
     def curated_task_ids(self) -> Tuple[str, ...]:
-        """The canonical curated fixture catalog (never a second list)."""
+        """The canonical deterministic-session task catalog.
+
+        Discovery comes from the live curated fixture directory; only tasks
+        the accepted deterministic demo source actually has a scenario for
+        are offered (starting any other fixture would fail at scenario
+        resolution).  This is the repository's own catalog, never a second
+        list.
+        """
+        from agentic_debugger.demo.catalog import scenario_ids
         from agentic_debugger.demo.runner import curated_task_ids
 
-        return curated_task_ids(self._repository_root)
+        supported = set(scenario_ids())
+        return tuple(
+            task_id
+            for task_id in curated_task_ids(self._repository_root)
+            if task_id in supported
+        )
 
     def start_live_session(
         self,

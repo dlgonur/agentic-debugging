@@ -294,6 +294,7 @@ class LiveSessionRunner:
         self._thread: Optional[threading.Thread] = None
         self._started = False
         self._terminal: Optional[SessionResult] = None
+        self._delivered_count = 0
 
     # -- state --------------------------------------------------------------
 
@@ -398,6 +399,7 @@ class LiveSessionRunner:
             events = self._worker.events
             if len(events) > last:
                 last = len(events)
+                self._delivered_count = last
                 self._call(self._on_events, events)
             if events and events[-1].event_kind in _TERMINAL_KINDS:
                 return
@@ -416,6 +418,14 @@ class LiveSessionRunner:
             self._call(self._on_failure, f"worker supervision failed: {exc}")
             self._worker.close()
             return
+        # The worker can write its terminal event and exit between two polls;
+        # ``wait()``'s final journal catch-up then holds events the driver
+        # never delivered.  Deliver the remainder before the terminal result
+        # so the presentation model always reaches the recorded final state.
+        remaining = self._worker.events
+        if len(remaining) > self._delivered_count:
+            self._delivered_count = len(remaining)
+            self._call(self._on_events, remaining)
         self._terminal = result
         registration_error = self._best_effort_register()
         self._call(self._on_terminal, result, registration_error)

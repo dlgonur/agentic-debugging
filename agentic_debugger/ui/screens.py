@@ -214,7 +214,13 @@ class HomeScreen(Screen):
         self.action_open_selected()
 
     def action_start_session(self) -> None:
-        self.app.push_screen(StartSessionScreen())
+        self.app.push_screen(
+            StartSessionScreen(
+                task_options=[
+                    (task_id, task_id) for task_id in self.app.curated_task_ids()
+                ]
+            )
+        )
 
     def action_open_selected(self) -> None:
         entry = self._selected_entry()
@@ -262,6 +268,10 @@ class StartSessionScreen(Screen):
 
     BINDINGS = [Binding("escape", "cancel", "Back")]
 
+    def __init__(self, task_options: Optional[list[tuple[str, str]]] = None) -> None:
+        super().__init__()
+        self._task_options = list(task_options or [])
+
     def compose(self) -> ComposeResult:
         yield Static(
             "[bold #58a6ff]Start deterministic session[/]\n"
@@ -270,7 +280,7 @@ class StartSessionScreen(Screen):
             id="start-title",
         )
         yield Label("Task")
-        yield Select(id="task-select", allow_blank=False)
+        yield Select(id="task-select", options=self._task_options, allow_blank=False)
         yield Label("Policy")
         yield Select(
             id="policy-select",
@@ -290,13 +300,10 @@ class StartSessionScreen(Screen):
         )
 
     def on_mount(self) -> None:
-        options = []
-        for task_id in self.app.curated_task_ids():
-            options.append((task_id, task_id))
-        select = self.query_one("#task-select", Select)
-        select.set_options(options)
-        if options:
-            select.value = options[0][1]
+        if not self._task_options:
+            self.query_one("#task-select", Select).set_options(
+                [(task_id, task_id) for task_id in self.app.curated_task_ids()]
+            )
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
@@ -430,6 +437,10 @@ class WorkspaceScreen(Screen):
 
     def on_unmount(self) -> None:
         self.app.detach_live_workspace(self)
+        # A live session may have just registered into app-owned history;
+        # make the freshly visible home list show it.
+        if self.mode is WorkspaceMode.LIVE:
+            self.app.refresh_home_history()
 
     # -- live wiring --------------------------------------------------------
 
@@ -444,6 +455,15 @@ class WorkspaceScreen(Screen):
             self._live_last_sequence = event.sequence
             self._view = reduce_event(self._view, event)
             self._live_events = self._live_events + (event,)
+            # The visible cancelling state comes from the recorded
+            # ``session.cancel_requested`` evidence, never from the key
+            # press alone; the terminal still waits for worker evidence.
+            if (
+                event.event_kind is SessionEventKind.SESSION_CANCEL_REQUESTED
+                and not self._view.status.terminal
+            ):
+                self._cancel_requested_ui = True
+                self._cancel_active = False
         self._render_all()
 
     def show_live_terminal(self, result: SessionResult, registration_error: Optional[str]) -> None:
@@ -461,10 +481,6 @@ class WorkspaceScreen(Screen):
         self._live_failure = diagnostic
         self._render_all()
         self.notify(diagnostic, severity="error", title="Live session")
-
-    def live_cancelling(self) -> None:
-        self._cancel_requested_ui = True
-        self._render_all()
 
     # -- rendering ----------------------------------------------------------
 
@@ -552,8 +568,11 @@ class WorkspaceScreen(Screen):
                 )
             elif self._live_failure is not None:
                 bar.update(f"[bold red]startup failed[/]  ·  [bold]q[/] returns to history")
-            elif self._cancel_requested_ui:
-                bar.update("[bold yellow]cancel requested[/] — waiting for the worker's cooperative cleanup and terminal evidence")
+            elif self._cancel_requested_ui or self._cancel_active:
+                bar.update(
+                    "[bold yellow]cancel requested[/] — waiting for the "
+                    "worker's cooperative cleanup and terminal evidence"
+                )
             else:
                 bar.update("[dim]live session running[/]   ·   [bold]c[/] cancel   [bold]q[/] history")
 

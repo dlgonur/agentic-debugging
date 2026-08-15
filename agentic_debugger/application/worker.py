@@ -129,6 +129,33 @@ def _send(payload: bytes) -> None:
         pass
 
 
+class _NotifyingJournalSink:
+    """Journal sink wrapper that notifies the parent per durable append.
+
+    The shared emitter is the session's single sequence/identity authority;
+    producers (controller adapter, debugger/source/patch observability,
+    verifier adapter) append through it directly.  This wrapper is the
+    coordinator's notification seam: every durable append -- lifecycle or
+    producer -- forwards one small sequence notification to the supervisor,
+    which then catches up from the authoritative journal.  The wrapper never
+    changes journal semantics: an append failure still raises the journal
+    error the emitter converts into its sticky fatal state.
+    """
+
+    def __init__(self, journal: SessionEventJournal) -> None:
+        self._journal = journal
+
+    def append(self, event: SessionEvent) -> None:
+        self._journal.append(event)
+        _send(event_notification(event.sequence))
+
+    def flush(self) -> None:
+        self._journal.flush()
+
+    def close(self) -> None:
+        self._journal.close()
+
+
 class SessionCoordinator:
     """Worker-side session lifecycle: shared emitter + journal + notification.
 
@@ -199,7 +226,11 @@ class SessionCoordinator:
             task_id=self._task_id,
             source_kind=self._source_kind,
             clock=self._clock,
-            sink=self._journal,
+            # The notifying sink forwards one sequence notification per
+            # durable append, so EVERY producer emission (controller,
+            # debugger/source/patch, verifier) reaches the supervisor live --
+            # not only the lifecycle events routed through coordinator.emit.
+            sink=_NotifyingJournalSink(self._journal),
             initial_sequence=0,
         )
 
