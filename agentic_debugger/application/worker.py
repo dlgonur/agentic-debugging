@@ -299,7 +299,9 @@ class SessionCoordinator:
             self._terminal_emitted = True
             self._ended_at_utc = self._clock()
         event = self._emitter.emit(kind, payload)
-        _send(event_notification(event.sequence))
+        # The notification is forwarded by the notifying journal sink
+        # (``_NotifyingJournalSink``) for every durable append, including
+        # producer emissions that never pass through ``coordinator.emit``.
         return event
 
     def emit_status(self, phase: SessionPhase) -> SessionEvent:
