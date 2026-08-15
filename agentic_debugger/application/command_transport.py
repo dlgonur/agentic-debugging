@@ -51,6 +51,11 @@ from agentic_debugger.evaluation.live import (
 _POLL_INTERVAL_SECONDS = 0.05
 _TERMINATE_JOIN_SECONDS = 2.0
 _READ_CHUNK_BYTES = 8192
+#: The stdin writer is joined in bounded slices so an explicit cancellation
+#: interrupts a blocked request write promptly (a child that never reads
+#: stdin fills the OS pipe and blocks the writer indefinitely); the request
+#: deadline is honored by the same loop.
+_WRITE_JOIN_SLICE_SECONDS = 0.05
 
 
 class _BoundedCapture:
@@ -162,7 +167,18 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         signal); a request timeout terminates the tree and raises
         ``LiveTransportError(request_timeout)`` exactly like the accepted
         transport.
+
+        Cancellation is honored at every wait, including while the request
+        writer is blocked on a full stdin pipe (a child that never reads
+        stdin): the writer is joined in bounded slices that poll both the
+        cancellation check and the request deadline, so an explicit user
+        cancellation can never be masked into ``request_timeout`` by a
+        blocked write.
         """
+        if self._cancel_check is not None:
+            # Cancellation boundary before any process is spawned.
+            self._cancel_check()
+
         try:
             request_bytes = (
                 json.dumps(payload, ensure_ascii=False, allow_nan=False) + "\n"
@@ -217,16 +233,49 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
 
         writer = threading.Thread(target=write_request, daemon=True)
         writer.start()
-        writer.join(timeout=max(0.0, deadline - time.monotonic()))
-        if writer.is_alive():
-            _terminate_command_tree(process)
-            for thread in threads:
-                thread.join(timeout=_TERMINATE_JOIN_SECONDS)
-            raise LiveTransportError(
-                "model request stdin write timed out",
-                kind="request_timeout",
-                timed_out=True,
-            ) from None
+
+        def _interrupt_writer() -> None:
+            """Unblock a stdin writer safely after the tree is terminated.
+
+            Terminating the child closes the pipe's read end, so the blocked
+            write fails promptly and the writer thread exits; only then is the
+            parent's stdin handle closed (closing it while the writer still
+            holds the buffer lock would serialize on the same lock).  Every
+            step is bounded; the writer is a daemon thread, so a residual
+            writer can never block the transport's return.
+            """
+            writer.join(timeout=_TERMINATE_JOIN_SECONDS)
+            if not writer.is_alive():
+                try:
+                    if process.stdin is not None:
+                        process.stdin.close()
+                except Exception:
+                    pass
+
+        # Wait for the request writer in bounded slices: both an explicit
+        # cancellation and the request deadline must win promptly, even when
+        # the write itself is blocked on a full pipe.
+        while writer.is_alive():
+            if self._cancel_check is not None:
+                try:
+                    self._cancel_check()
+                except BaseException:
+                    _terminate_command_tree(process)
+                    _interrupt_writer()
+                    for thread in threads:
+                        thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+                    raise
+            if time.monotonic() >= deadline:
+                _terminate_command_tree(process)
+                _interrupt_writer()
+                for thread in threads:
+                    thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+                raise LiveTransportError(
+                    "model request stdin write timed out",
+                    kind="request_timeout",
+                    timed_out=True,
+                ) from None
+            writer.join(timeout=_WRITE_JOIN_SLICE_SECONDS)
 
         while True:
             if self._cancel_check is not None:

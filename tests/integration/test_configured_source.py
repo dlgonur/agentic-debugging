@@ -125,6 +125,59 @@ def write_task_data(root: Path) -> Path:
     return data_file
 
 
+def write_secret_task_data(root: Path, secret_line: str) -> Path:
+    """Task-data whose patch FIXES the bug AND embeds a credential literal.
+
+    The patch is a real unified diff over the canonical fixture source: it
+    applies the reference repair (so the controller reaches Done and the
+    independent verifier evaluates it in memory) and additionally inserts a
+    credential-shaped module line.  This drives the real configured pipeline
+    to produce an unsafe candidate patch, exercising the durable-artifact
+    withholding gate (Blocker B) without weakening the verifier.
+    """
+    import difflib
+
+    scenario = scenario_for(TASK_ID)
+    source_path = (
+        Path("agentic_debugger/datasets/curated")
+        / TASK_ID
+        / scenario.reference_repair.target_path
+    )
+    original = source_path.read_text(encoding="utf-8")
+    repaired = original.replace(
+        scenario.reference_repair.old_snippet,
+        scenario.reference_repair.new_snippet,
+        1,
+    )
+    patched = secret_line + "\n\n\n" + repaired
+    diff = "".join(
+        difflib.unified_diff(
+            original.splitlines(keepends=True),
+            patched.splitlines(keepends=True),
+            fromfile=f"a/{scenario.reference_repair.target_path}",
+            tofile=f"b/{scenario.reference_repair.target_path}",
+            lineterm="\n",
+        )
+    )
+    patch_file = root / "secret.patch"
+    patch_file.write_text(diff, encoding="utf-8")
+    data_file = root / "data.json"
+    data_file.write_text(
+        json.dumps(
+            {
+                "symbol": scenario.localization.symbol,
+                "file": scenario.localization.file_path,
+                "hypothesis_id": scenario.hypothesis_id,
+                "statement": scenario.root_cause_statement,
+                "patch_file": str(patch_file),
+                "expressions": list(scenario.runtime_probe.inspect_expressions),
+            }
+        ),
+        encoding="utf-8",
+    )
+    return data_file
+
+
 def make_spec(policy: str, profile_id: str = "dummy") -> SessionSpec:
     return SessionSpec(
         task_id=TASK_ID,
@@ -143,21 +196,25 @@ def make_worker(
     session_id: str,
     policy: str,
     profile_id: str = "dummy",
+    expected_fingerprint: str | None = None,
     **kwargs,
 ) -> SessionWorkerProcess:
     kwargs.setdefault("cooperative_grace_seconds", 15.0)
     kwargs.setdefault("ready_timeout_seconds", 90.0)
+    scenario_params = {
+        "config_root": str(store.root),
+        "profile_id": profile_id,
+        "policy": policy,
+    }
+    if expected_fingerprint is not None:
+        scenario_params["expected_fingerprint"] = expected_fingerprint
     return SessionWorkerProcess(
         session_dir=store.session_dir(session_id),
         session_id=session_id,
         spec=make_spec(policy, profile_id),
         run_id=f"run-{session_id}",
         scenario=CONFIGURED_SOURCE_NAME,
-        scenario_params={
-            "config_root": str(store.root),
-            "profile_id": profile_id,
-            "policy": policy,
-        },
+        scenario_params=scenario_params,
         **kwargs,
     )
 
@@ -498,3 +555,141 @@ class TestConfiguredSourceEvidenceSafety:
         )
         assert phase_after == phase_before
         worker.close()
+
+
+class TestConfiguredSourceSecretPatchWithholding:
+    """Blocker B: an unsafe candidate patch must not leak into durable
+    app-owned artifacts.
+
+    The real configured pipeline produces a credential-shaped patch (it
+    fixes the bug AND embeds a secret literal).  The in-memory candidate the
+    independent verifier evaluates is unchanged, but the durable
+    ``candidate.patch`` artifact must be withheld and the secret literal must
+    not appear anywhere in the app-owned session evidence.
+    """
+
+    SECRET = 'API_KEY = "supersecret-value"'
+
+    def test_secret_patch_body_withheld_from_all_persisted_evidence(self, tmp_path):
+        data_file = write_secret_task_data(tmp_path, self.SECRET)
+        write_profile(
+            tmp_path, "dummy", "valid", extra_argv=("--data", str(data_file))
+        )
+        store = HistoryStore(tmp_path)
+        session_id = "sess-cfg-secretpatch-0001"
+        worker = make_worker(store, session_id, PDB_POLICY)
+        result = run_to_terminal(worker)
+        worker.close()
+
+        # The pipeline still completes and the verifier still evaluates the
+        # real in-memory candidate (withholding does not weaken verification).
+        assert result.status is SessionStatus.SUCCEEDED
+        kinds = [e.event_kind for e in journal_of(store, session_id).events]
+        assert SessionEventKind.VERIFIER_COMPLETED in kinds
+
+        session_dir = store.session_dir(session_id)
+        # The durable candidate.patch artifact is withheld (not persisted).
+        assert not (session_dir / "candidate.patch").exists()
+
+        # The secret literal must not occur in ANY persisted app-owned
+        # evidence: journal, manifest, result, evaluation, or any other file.
+        def _scan(path: Path) -> None:
+            if path.is_file():
+                content = path.read_text(encoding="utf-8", errors="replace")
+                assert "supersecret-value" not in content, f"secret leaked into {path.name}"
+            elif path.is_dir():
+                for child in path.iterdir():
+                    _scan(child)
+
+        _scan(session_dir)
+
+        # Patch identity/hash/lifecycle remain available safely: the journal
+        # records a patch.proposed event with a sha256 but no unsafe body.
+        read = journal_of(store, session_id)
+        proposed = [
+            e for e in read.events if e.event_kind is SessionEventKind.PATCH_PROPOSED
+        ]
+        assert proposed, "patch lifecycle (proposed) must still be recorded"
+        for event in proposed:
+            assert len(event.payload["patch_sha256"]) == 64
+            # the unsafe body is withheld from the event too
+            assert "patch_text" not in event.payload or "supersecret-value" not in event.payload.get("patch_text", "")
+
+        # The history manifest must not claim an artifact that was not
+        # persisted: registration succeeds and lists no candidate.patch.
+        entry = store.register(session_dir)
+        assert entry.classification.is_success
+        manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+        artifact_paths = [a["path"] for a in manifest["artifacts"]]
+        assert "candidate.patch" not in artifact_paths
+
+
+class TestConfiguredSourceFingerprintPinning:
+    """Blocker C: profile selection must be pinned against config TOCTOU.
+
+    A Start action pins the selected profile's safe fingerprint.  If the
+    config file is mutated to a different valid profile with the same id
+    before the worker loads it, the worker must fail closed: no executable
+    launch, no side effect, and a safe fingerprint-mismatch diagnostic.
+    """
+
+    def test_fingerprint_mismatch_launches_no_command(self, tmp_path):
+        # Profile A is selected and its fingerprint pinned.
+        data_file = write_task_data(tmp_path)
+        write_profile(tmp_path, "dummy", "valid", extra_argv=("--data", str(data_file)))
+        store = HistoryStore(tmp_path)
+        from agentic_debugger.application.command_config import CommandModelConfigStore
+
+        pinned = CommandModelConfigStore(store.root).get("dummy").configuration_fingerprint
+
+        # Mutate the config to a DIFFERENT valid profile with the SAME id but
+        # a different safe fingerprint (different mode -> different argv ->
+        # different hash).  If this profile were launched it would emit a
+        # model.configured provenance event and (for a valid mode) reach the
+        # verifier; the pin must prevent all of it.
+        write_profile(
+            tmp_path,
+            "dummy",
+            "fail",  # profile B: same id, different argv -> different fingerprint
+            extra_argv=("--data", str(data_file)),
+        )
+        mutated = CommandModelConfigStore(store.root).get("dummy").configuration_fingerprint
+        assert mutated != pinned, "test requires a fingerprint-changing mutation"
+
+        session_id = "sess-cfg-toctou-0001"
+        worker = make_worker(
+            store, session_id, PDB_POLICY, expected_fingerprint=pinned
+        )
+        result = run_to_terminal(worker)
+        worker.close()
+
+        # The worker refuses: bounded failure, never a launch of profile B.
+        assert result.status is SessionStatus.FAILED
+        diagnostics = " ".join(result.diagnostics)
+        assert "fingerprint" in diagnostics
+        assert "does not match" in diagnostics
+        # No model.configured provenance was emitted (refused before emission)
+        # and profile B's executable never ran (no verifier, no model error).
+        kinds = [e.event_kind for e in journal_of(store, session_id).events]
+        assert SessionEventKind.MODEL_CONFIGURED not in kinds
+        assert SessionEventKind.VERIFIER_COMPLETED not in kinds
+
+    def test_unchanged_profile_with_pinned_fingerprint_still_launches(self, tmp_path):
+        data_file = write_task_data(tmp_path)
+        write_profile(tmp_path, "dummy", "valid", extra_argv=("--data", str(data_file)))
+        store = HistoryStore(tmp_path)
+        from agentic_debugger.application.command_config import CommandModelConfigStore
+
+        pinned = CommandModelConfigStore(store.root).get("dummy").configuration_fingerprint
+        session_id = "sess-cfg-toctou-ok-0001"
+        worker = make_worker(
+            store, session_id, PDB_POLICY, expected_fingerprint=pinned
+        )
+        result = run_to_terminal(worker)
+        worker.close()
+        # Unchanged configuration: the pinned fingerprint matches and the
+        # session runs to the real verifier.
+        assert result.status is SessionStatus.SUCCEEDED
+        kinds = [e.event_kind for e in journal_of(store, session_id).events]
+        assert SessionEventKind.MODEL_CONFIGURED in kinds
+        assert SessionEventKind.VERIFIER_COMPLETED in kinds

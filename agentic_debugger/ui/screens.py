@@ -287,7 +287,7 @@ class StartSessionScreen(Screen):
         yield Static(
             "[bold #58a6ff]Start session[/]\n"
             "[dim]Deterministic offline demo or a configured local command "
-            "model. No provider, no network.[/]",
+            "model.[/]",
             id="start-title",
         )
         yield Label("Mode")
@@ -370,6 +370,30 @@ class StartSessionScreen(Screen):
             )
         info.update("\n".join(lines) if lines else "[dim]no configured profiles[/]")
 
+    def _render_trust_hint(self) -> None:
+        """Mode-aware security/trust-boundary wording (Blocker F).
+
+        Rendered in the bottom hint (below the Start button) so it never
+        pushes the button off-screen at the accepted compact 80x24 size.
+        Deterministic mode keeps its truthful offline claim; configured mode
+        states that the child is trusted user configuration and that V1 does
+        NOT enforce child-process network isolation (no umbrella "no
+        network" promise covers the configured command subprocess).
+        """
+        hint = self.query_one("#start-hint", Static)
+        if self._mode == self.MODE_CONFIGURED:
+            hint.update(
+                "[dim]escape: back · configured command = trusted user "
+                "configuration; V1 does not enforce child-process network "
+                "isolation (provide it externally if required)[/]"
+            )
+        else:
+            hint.update(
+                "[dim]escape: back · deterministic mode: application-"
+                "controlled offline execution, no provider/network "
+                "requirement[/]"
+            )
+
     def _refresh_mode(self) -> None:
         """Apply the selected mode: show/hide fields and gate Start.
 
@@ -396,6 +420,7 @@ class StartSessionScreen(Screen):
             profile_select.display = False
             button.disabled = False
         self._render_config_info()
+        self._render_trust_hint()
 
     def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "mode-select":

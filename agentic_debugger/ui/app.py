@@ -18,8 +18,12 @@ layer:
 - app teardown never strands a live worker (bounded cooperative
   cancellation, Task-3 escalation, then handle release).
 
-The app requires no GPU, model provider, network, WSL, or campaign
-infrastructure.  The scientific core never imports this package.
+The app requires no GPU, model provider, WSL, or campaign infrastructure.
+Deterministic sessions are application-controlled offline execution.
+Configured command-model sessions launch a user-configured local command
+(trusted user configuration); the app itself adds no provider integration,
+but V1 does not enforce child-process network isolation.  The scientific
+core never imports this package.
 """
 
 from __future__ import annotations
@@ -303,9 +307,13 @@ class LocalApplicationV1(App):
                 raise ValueError("configured command-model sessions require a profile id")
             # Re-validate at start time: the configuration may have changed
             # between discovery and start; a missing/invalid profile is a
-            # clear start error, never a silent fallback.
+            # clear start error, never a silent fallback.  The selected
+            # profile's safe fingerprint is pinned into the worker launch
+            # params so the worker can detect a configuration that changed
+            # between this selection and its own load (TOCTOU) and fail
+            # closed before launching any executable.
             try:
-                self._config_store.get(profile_id)
+                profile = self._config_store.get(profile_id)
             except CommandConfigError as exc:
                 raise RuntimeError(
                     f"configured command model unavailable: {exc}"
@@ -315,6 +323,7 @@ class LocalApplicationV1(App):
                 "config_root": str(self._config_store.root),
                 "profile_id": profile_id,
                 "policy": policy,
+                "expected_fingerprint": profile.configuration_fingerprint,
             }
             model_config_ref = profile_id
         else:

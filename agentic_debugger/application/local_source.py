@@ -72,6 +72,7 @@ from agentic_debugger.application.controller_adapter import (
 from agentic_debugger.application.events import (
     SessionEventKind,
     SessionTerminationReason,
+    contains_credential_shape,
 )
 from agentic_debugger.application.observability import (
     ObservabilityContext,
@@ -321,6 +322,16 @@ def _persist_artifacts(
     directory cleanup, so a reopened/replayed session keeps its candidate
     patch and verifier record.  Every artifact is emitted through the shared
     emission authority with its exact content hash.
+
+    The durable ``candidate.patch`` body is gated by the same shared
+    credential-content policy the application evidence uses: a patch whose
+    content matches the policy is withheld from the durable artifact (the
+    raw body is never persisted and never redacted into a fake original).
+    Truthful patch identity/hash/lifecycle remain available through the
+    already-recorded safe patch events, and the history manifest only
+    references artifacts that were actually written, so a withheld body is
+    never claimed.  The in-memory candidate the verifier evaluated is
+    unchanged by this gate.
     """
     session_dir = ctx.session_dir
     if session_dir is None:
@@ -329,15 +340,16 @@ def _persist_artifacts(
         session_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
         return
-    candidate_path = session_dir / CANDIDATE_PATCH_NAME
-    candidate_path.write_text(patch_text, encoding="utf-8", newline="\n")
-    ctx.emitter.emit(
-        SessionEventKind.ARTIFACT_WRITTEN,
-        {
-            "path": CANDIDATE_PATCH_NAME,
-            "sha256": _file_sha256(candidate_path),
-        },
-    )
+    if not contains_credential_shape(patch_text):
+        candidate_path = session_dir / CANDIDATE_PATCH_NAME
+        candidate_path.write_text(patch_text, encoding="utf-8", newline="\n")
+        ctx.emitter.emit(
+            SessionEventKind.ARTIFACT_WRITTEN,
+            {
+                "path": CANDIDATE_PATCH_NAME,
+                "sha256": _file_sha256(candidate_path),
+            },
+        )
     evaluation_path = session_dir / EVALUATION_JSON_NAME
     evaluation_path.write_text(
         json.dumps(evaluation.to_mapping(), ensure_ascii=False, allow_nan=False, sort_keys=True),

@@ -39,7 +39,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from agentic_debugger.application import (
@@ -50,6 +50,7 @@ from agentic_debugger.application.events import (
     contains_credential_shape,
     is_credential_name,
 )
+from agentic_debugger.evaluation.live import LIVE_PROTOCOL_VERSION
 
 __all__ = [
     "COMMAND_CONFIG_SCHEMA_VERSION",
@@ -147,35 +148,78 @@ def _reject_credential(value: str, label: str) -> str:
     return value
 
 
+def _validated_protocol_version(value: Any) -> str:
+    """Pin ``protocol_version`` to the one truthful wire protocol.
+
+    The command-model runtime speaks exactly the accepted live JSON-lines
+    protocol (``evaluation.live.LIVE_PROTOCOL_VERSION``).  The config field
+    is therefore only an explicit compatibility assertion: any value that is
+    not the actually supported runtime protocol is rejected fail-closed, so
+    ``model.configured.protocol_version`` can never persist false
+    provenance.  An omitted field defaults to the runtime constant.
+    """
+    text = _reject_credential(
+        _bounded_text(value, "protocol_version", _MAX_PROTOCOL_CHARS),
+        "protocol_version",
+    )
+    if text != LIVE_PROTOCOL_VERSION:
+        raise CommandConfigError(
+            "protocol_version must equal the supported runtime protocol "
+            f"{LIVE_PROTOCOL_VERSION!r}; got {text!r}"
+        )
+    return text
+
+
 def _validated_executable(value: Any) -> str:
     """Validate the executable without accepting shell-string ambiguity.
 
-    A bare command name (no path separators) is resolved through the
-    process ``PATH`` like any explicit CLI invocation; an absolute path is
-    used verbatim.  A relative path containing separators is rejected as
-    ambiguous (it would otherwise depend on an implicit working directory).
+    Accepted intentionally:
+
+    - a bare command name (no path separators), resolved through the
+      process ``PATH`` like any explicit CLI invocation;
+    - a true Windows absolute drive path (``C:\\tools\\model.exe``);
+    - a true UNC absolute path (``\\\\server\\share\\model.exe``);
+    - a true POSIX absolute path (``/usr/bin/python``).
+
+    Rejected: drive-relative Windows paths (``C:relative.exe``,
+    ``C:..\\evil.exe``, or a bare drive spec) and relative paths with
+    separators (``.\\model.exe``, ``..\\model.exe``, ``folder/tool``).
+    Their resolution depends on the per-drive current directory or an
+    implicit working directory, which violates the deliberate "bare
+    executable name OR absolute path" contract.  The check uses correct
+    ``ntpath``/``PureWindowsPath`` semantics rather than assuming that a
+    drive letter implies an absolute path.
     """
     text = _bounded_text(value, "executable", _MAX_EXECUTABLE_CHARS)
     _reject_credential(text, "executable")
     if "\x00" in text:
         raise CommandConfigError("executable contains a null byte")
-    normalized = text.replace("\\", "/")
-    if "/" in normalized and not text.startswith("/") and not _has_drive_letter(text):
+    windows = PureWindowsPath(text)
+    if windows.is_absolute():
+        # True absolute path: drive-rooted (C:\...) or UNC (\\server\...).
+        return text
+    if windows.drive:
+        # Has a drive letter but no root: drive-relative, not absolute.
         raise CommandConfigError(
             "executable must be a bare command name or an absolute path "
-            "(relative paths with separators are ambiguous)"
+            "(drive-relative paths are ambiguous)"
         )
-    return text
-
-
-def _has_drive_letter(text: str) -> bool:
-    return len(text) >= 2 and text[1] == ":" and text[0].isalpha()
+    if "/" not in text and "\\" not in text:
+        return text
+    if PurePosixPath(text).is_absolute():
+        return text
+    raise CommandConfigError(
+        "executable must be a bare command name or an absolute path "
+        "(relative paths with separators are ambiguous)"
+    )
 
 
 def _validated_argv(value: Any) -> Tuple[str, ...]:
     if value is None:
         return ()
-    if type(value) is not list:
+    # The public dataclass advertises a tuple of strings; the config JSON
+    # supplies a list.  Both are the same bounded sequence contract.
+    if type(value) is not list and type(value) is not tuple:
         raise CommandConfigError("argv must be an array of strings or null")
     if len(value) > _MAX_ARGV_ENTRIES:
         raise CommandConfigError(
@@ -209,14 +253,32 @@ def _validated_cwd(value: Any) -> Optional[str]:
 def _validated_environment(value: Any) -> Tuple[Tuple[str, str], ...]:
     if value is None or value == ():
         return ()
-    if not isinstance(value, Mapping):
-        raise CommandConfigError("environment must be an object or null")
-    if len(value) > _MAX_ENV_OVERRIDES:
+    # The public dataclass advertises a tuple of (name, value) pairs; the
+    # config JSON supplies an object (a Mapping).  Both are accepted and
+    # validated identically.  A JSON array decodes to a ``list``, which is
+    # NOT part of the documented config schema, so it stays rejected -- this
+    # keeps the constructor self-consistent without broadening the bounded
+    # config JSON.
+    if isinstance(value, Mapping):
+        items = list(value.items())
+    elif type(value) is tuple:
+        items = []
+        for index, item in enumerate(value):
+            if type(item) is not tuple or len(item) != 2:
+                raise CommandConfigError(
+                    f"environment[{index}] must be a (name, value) pair"
+                )
+            items.append((item[0], item[1]))
+    else:
+        raise CommandConfigError(
+            "environment must be an object or a tuple of pairs or null"
+        )
+    if len(items) > _MAX_ENV_OVERRIDES:
         raise CommandConfigError(
             f"environment exceeds the {_MAX_ENV_OVERRIDES}-override bound"
         )
     result: list[tuple[str, str]] = []
-    for name, item in value.items():
+    for name, item in items:
         key = _bounded_text(name, "environment name", _MAX_ENV_NAME_CHARS)
         if not _ENV_NAME_RE.fullmatch(key):
             raise CommandConfigError(
@@ -258,7 +320,7 @@ class CommandModelProfile:
     cwd: Optional[str] = None
     request_timeout_seconds: float = 60.0
     environment: Tuple[Tuple[str, str], ...] = ()
-    protocol_version: str = "1.3"
+    protocol_version: str = LIVE_PROTOCOL_VERSION
     tool_version: str = "live-command-v1"
 
     def __post_init__(self) -> None:
@@ -295,16 +357,7 @@ class CommandModelProfile:
         )
         object.__setattr__(self, "environment", _validated_environment(self.environment))
         object.__setattr__(
-            self,
-            "protocol_version",
-            _reject_credential(
-                _bounded_text(
-                    self.protocol_version,
-                    "protocol_version",
-                    _MAX_PROTOCOL_CHARS,
-                ),
-                "protocol_version",
-            ),
+            self, "protocol_version", _validated_protocol_version(self.protocol_version)
         )
         object.__setattr__(
             self,
@@ -355,7 +408,7 @@ class CommandModelProfile:
             cwd=value.get("cwd"),
             request_timeout_seconds=value.get("request_timeout_seconds", 60.0),
             environment=value.get("environment"),
-            protocol_version=value.get("protocol_version", "1.3"),
+            protocol_version=value.get("protocol_version", LIVE_PROTOCOL_VERSION),
             tool_version=value.get("tool_version", "live-command-v1"),
         )
 

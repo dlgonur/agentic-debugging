@@ -69,6 +69,16 @@ class TestProfileValidation:
             ".\\relative.exe",
             "..\\up.exe",
             "folder/tool",
+            # Blocker E: drive-relative Windows paths are NOT absolute;
+            # their resolution depends on the per-drive current directory.
+            "C:relative.exe",
+            "C:..\\evil.exe",
+            "C:",
+            "d:folder\\tool.exe",
+            # mixed-separator traversal forms
+            "folder\\sub/tool.exe",
+            "./model.exe",
+            "../model.exe",
         ],
     )
     def test_relative_executable_ambiguity_rejected(self, executable):
@@ -77,8 +87,54 @@ class TestProfileValidation:
 
     def test_bare_name_and_absolute_path_accepted(self):
         CommandModelProfile.from_mapping(make_profile(executable="python"))
+        CommandModelProfile.from_mapping(make_profile(executable="python.exe"))
         CommandModelProfile.from_mapping(make_profile(executable=r"C:\tools\model.exe"))
         CommandModelProfile.from_mapping(make_profile(executable="/usr/bin/model"))
+        # true UNC absolute path
+        CommandModelProfile.from_mapping(
+            make_profile(executable=r"\\server\share\model.exe")
+        )
+
+    def test_public_constructor_defaults_are_self_consistent(self):
+        # Blocker E: a direct valid construction using the public dataclass
+        # type and its advertised tuple defaults must not fail because its
+        # own default representation is rejected by validation.
+        profile = CommandModelProfile(
+            profile_id="dummy",
+            display_name="Dummy command model",
+            executable="python",
+            argv=("arg1", "arg2"),
+            environment=(("MY_VAR", "value"),),
+        )
+        assert profile.argv == ("arg1", "arg2")
+        assert profile.environment == (("MY_VAR", "value"),)
+        # the fully-default construction is valid too
+        minimal = CommandModelProfile(
+            profile_id="dummy",
+            display_name="Dummy command model",
+            executable="python",
+        )
+        assert minimal.argv == ()
+        assert minimal.environment == ()
+
+    def test_protocol_version_pinned_to_runtime_authority(self):
+        # Blocker D: exactly one truthful protocol authority.
+        from agentic_debugger.evaluation.live import LIVE_PROTOCOL_VERSION
+
+        # current supported protocol accepted (explicitly and by default)
+        profile = CommandModelProfile.from_mapping(
+            make_profile(protocol_version=LIVE_PROTOCOL_VERSION)
+        )
+        assert profile.protocol_version == LIVE_PROTOCOL_VERSION
+        omitted = CommandModelProfile.from_mapping(make_profile())
+        assert omitted.protocol_version == LIVE_PROTOCOL_VERSION
+        # a wrong value is rejected before any executable launch
+        with pytest.raises(CommandConfigError):
+            CommandModelProfile.from_mapping(make_profile(protocol_version="999"))
+        with pytest.raises(CommandConfigError):
+            CommandModelProfile.from_mapping(make_profile(protocol_version="1.2"))
+        # provenance equals the runtime constant, always
+        assert profile.summary().protocol_version == LIVE_PROTOCOL_VERSION
 
     @pytest.mark.parametrize(
         "argv",

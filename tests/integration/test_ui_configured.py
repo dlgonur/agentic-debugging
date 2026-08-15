@@ -173,6 +173,53 @@ class TestConfiguredStartScreen:
 
         run_headless(app, scenario, size=(100, 30))
 
+    def test_trust_boundary_wording_is_truthful_per_mode(self, tmp_path):
+        """Blocker F: configured mode must not promise network isolation.
+
+        Deterministic mode keeps its truthful offline claim; configured mode
+        must state that the child is trusted user configuration and that V1
+        does not enforce child-process network isolation.  No umbrella
+        "no network" promise may cover the configured command subprocess.
+        """
+        write_profile(tmp_path, "dummy", "valid")
+        app = make_app(tmp_path)
+
+        async def scenario(pilot):
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+            )
+            start = pilot.app.screen
+
+            def description_text() -> str:
+                # The mode-aware trust-boundary wording lives in the bottom
+                # hint (below the Start button) so it never pushes the button
+                # off-screen at the accepted compact 80x24 size.
+                return str(start.query_one("#start-hint").render())
+
+            # Deterministic mode: truthful offline claim.
+            start.query_one("#mode-select", Select).value = "deterministic"
+            await pilot.pause()
+            det = description_text()
+            assert "offline" in det
+            assert "network isolation" not in det
+
+            # Configured mode: must NOT promise network isolation; must state
+            # the child is trusted user configuration and V1 does not enforce
+            # child-process network isolation.
+            start.query_one("#mode-select", Select).value = "configured"
+            await pilot.pause()
+            cfg = description_text()
+            assert "trusted user configuration" in cfg
+            assert "does not enforce" in cfg and "network isolation" in cfg
+            # No false umbrella promise that the configured child is
+            # network-isolated.
+            assert "network-isolated" not in cfg
+
+        run_headless(app, scenario, size=(100, 30))
+
 
 class TestConfiguredLiveSession:
     def test_configured_session_completes_replays_and_is_parity(self, tmp_path):
@@ -510,6 +557,196 @@ class TestMixedSequentialSessions:
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
             assert session1_id in ids and session2_id in ids
             assert len(set(ids)) == 2
+
+        run_headless(app, scenario, size=(100, 30))
+
+
+class TestMixedSequentialSessionsExtra:
+    """Blocker-F adversarial matrix: the remaining mixed-mode orderings.
+
+    Complements ``TestMixedSequentialSessions`` (configured -> deterministic)
+    and the failure/cancel retry tests with the two remaining orderings:
+    deterministic -> configured, and configured cancel -> retry.
+    """
+
+    def test_deterministic_then_configured_in_one_lifetime(self, tmp_path):
+        write_profile(tmp_path, "dummy", "malformed", timeout=10.0)
+        app = make_app(tmp_path)
+
+        async def scenario(pilot):
+            # -- session 1: deterministic, cancelled ------------------------
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+            )
+            start = pilot.app.screen
+            start.query_one("#task-select", Select).value = TASK_ID
+            start.query_one("#policy-select", Select).value = PDB_POLICY
+            await pilot.click("#start-button")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen),
+                timeout_seconds=30.0,
+            )
+            workspace1 = pilot.app.screen
+            assert "offline_demo" in header_text(workspace1)
+            await wait_until(
+                pilot,
+                lambda: len(workspace1._live_events) >= 4,
+                timeout_seconds=120.0,
+                label="stage1-det-events",
+            )
+            await pilot.press("c")
+            await wait_until(
+                pilot,
+                lambda: workspace1._live_terminal is not None,
+                timeout_seconds=120.0,
+                label="stage2-det-terminal",
+            )
+            assert "cancelled" in live_bar_text(workspace1)
+            await pilot.press("q")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+            )
+
+            # -- session 2: configured, honest failure ----------------------
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+            )
+            start2 = pilot.app.screen
+            start2.query_one("#mode-select", Select).value = "configured"
+            start2.query_one("#profile-select", Select).value = "dummy"
+            start2.query_one("#task-select", Select).value = TASK_ID
+            start2.query_one("#policy-select", Select).value = PDB_POLICY
+            await pilot.pause()
+            await pilot.click("#start-button")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen),
+                timeout_seconds=30.0,
+            )
+            workspace2 = pilot.app.screen
+            assert workspace2 is not workspace1
+            assert "configured_model" in header_text(workspace2)
+            await wait_until(
+                pilot,
+                lambda: workspace2._live_terminal is not None,
+                timeout_seconds=180.0,
+                label="stage3-configured-terminal",
+            )
+            assert workspace2._live_terminal.status is SessionStatus.FAILED
+            await pilot.press("q")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+            )
+            # both sessions registered with distinct identities
+            table = pilot.app.screen.query_one("#history-table")
+            assert table.row_count == 2
+            ids = [entry.session_id for entry in app.history_store.list_sessions()]
+            assert len(set(ids)) == 2
+
+        run_headless(app, scenario, size=(100, 30))
+
+    def test_configured_cancel_then_retry_in_one_lifetime(self, tmp_path):
+        write_profile(
+            tmp_path, "dummy", "slow", timeout=120.0, extra_argv=("--delay", "300")
+        )
+        app = make_app(tmp_path)
+
+        async def scenario(pilot):
+            # -- session 1: configured, cancelled ---------------------------
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+            )
+            start = pilot.app.screen
+            start.query_one("#mode-select", Select).value = "configured"
+            start.query_one("#profile-select", Select).value = "dummy"
+            start.query_one("#task-select", Select).value = TASK_ID
+            start.query_one("#policy-select", Select).value = PDB_POLICY
+            await pilot.pause()
+            await pilot.click("#start-button")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen),
+                timeout_seconds=30.0,
+            )
+            workspace1 = pilot.app.screen
+            await wait_until(
+                pilot,
+                lambda: len(workspace1._live_events) >= 3,
+                timeout_seconds=120.0,
+                label="stage1-request-active",
+            )
+            await pilot.press("c")
+            await wait_until(
+                pilot,
+                lambda: workspace1._live_terminal is not None,
+                timeout_seconds=120.0,
+                label="stage2-cancel-terminal",
+            )
+            assert workspace1._live_terminal.status is SessionStatus.CANCELLED
+            await pilot.press("q")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+            )
+
+            # -- session 2: configured retry after the cancel ---------------
+            await pilot.press("n")
+            await wait_until(
+                pilot,
+                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
+                timeout_seconds=30.0,
+            )
+            start2 = pilot.app.screen
+            start2.query_one("#mode-select", Select).value = "configured"
+            start2.query_one("#profile-select", Select).value = "dummy"
+            start2.query_one("#task-select", Select).value = TASK_ID
+            start2.query_one("#policy-select", Select).value = PDB_POLICY
+            await pilot.pause()
+            await pilot.click("#start-button")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen),
+                timeout_seconds=30.0,
+            )
+            workspace2 = pilot.app.screen
+            assert workspace2 is not workspace1
+            await wait_until(
+                pilot,
+                lambda: len(workspace2._live_events) >= 3,
+                timeout_seconds=120.0,
+                label="stage3-retry-active",
+            )
+            await pilot.press("c")
+            await wait_until(
+                pilot,
+                lambda: workspace2._live_terminal is not None,
+                timeout_seconds=120.0,
+                label="stage4-retry-terminal",
+            )
+            await pilot.press("q")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+            )
+            # both the cancelled session and the retry registered
+            table = pilot.app.screen.query_one("#history-table")
+            assert table.row_count == 2
 
         run_headless(app, scenario, size=(100, 30))
 

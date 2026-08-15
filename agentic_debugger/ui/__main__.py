@@ -6,10 +6,14 @@ Usage::
 
 ``--root`` selects the application-owned history root (default:
 ``%LOCALAPPDATA%\\AgenticDebugger`` on Windows, ``~/AgenticDebugger``
-elsewhere).  The application is full-screen, offline, and requires no GPU,
-model provider, network, WSL, or campaign infrastructure.  It requires the
-optional ``app`` extra (Textual); launching without it prints a concise
-installation instruction instead of an import traceback.
+elsewhere).  The application is full-screen and requires no GPU, model
+provider, WSL, or campaign infrastructure.  Deterministic sessions are
+application-controlled offline execution; configured command-model sessions
+launch a user-configured local command (trusted user configuration) whose
+capabilities are those of that executable under the host OS -- V1 does not
+enforce child-process network isolation.  It requires the optional ``app``
+extra (Textual); launching without it prints a concise installation
+instruction instead of an import traceback.
 """
 
 from __future__ import annotations

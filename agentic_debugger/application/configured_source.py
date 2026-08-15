@@ -40,6 +40,7 @@ or environment values.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any, Mapping, Optional
 
@@ -74,10 +75,14 @@ from agentic_debugger.evaluation.live import (
 #: dispatches.
 CONFIGURED_SOURCE_NAME = "configured_command_model"
 
-_KNOWN_PARAMS = frozenset({"config_root", "profile_id", "policy"})
+_KNOWN_PARAMS = frozenset(
+    {"config_root", "profile_id", "policy", "expected_fingerprint"}
+)
 _MAX_CONFIG_ROOT_CHARS = 2048
 _MAX_PROFILE_ID_CHARS = 128
 _MAX_POLICY_CHARS = 64
+#: A safe configuration fingerprint is a SHA-256 hex digest.
+_FINGERPRINT_RE = re.compile(r"[0-9a-f]{64}")
 
 _DEFAULT_MAX_MODEL_REQUESTS = 64
 _DEFAULT_MAX_CONTROLLER_STEPS = 64
@@ -102,7 +107,28 @@ def _require_text(params: Mapping[str, Any], key: str, maximum: int) -> str:
     return value
 
 
-def _validate_params(params: Mapping[str, Any]) -> tuple[str, str, str]:
+def _optional_fingerprint(params: Mapping[str, Any]) -> Optional[str]:
+    """Validate the optional pinned configuration fingerprint.
+
+    The Start action pins the selected profile's safe fingerprint so the
+    worker can detect a configuration that changed between selection and
+    worker load (TOCTOU).  When present it must be an exact SHA-256 hex
+    digest; any other shape fails closed.
+    """
+    value = params.get("expected_fingerprint")
+    if value is None:
+        return None
+    if type(value) is not str or _FINGERPRINT_RE.fullmatch(value) is None:
+        raise ScenarioInputError(
+            "configured source param 'expected_fingerprint' must be a "
+            "64-character lowercase hex fingerprint"
+        )
+    return value
+
+
+def _validate_params(
+    params: Mapping[str, Any]
+) -> tuple[str, str, str, Optional[str]]:
     extra = set(params.keys()) - _KNOWN_PARAMS
     if extra:
         raise ScenarioInputError(f"unknown configured source params: {sorted(extra)}")
@@ -111,7 +137,8 @@ def _validate_params(params: Mapping[str, Any]) -> tuple[str, str, str]:
     policy = _require_text(params, "policy", _MAX_POLICY_CHARS)
     if policy not in {candidate.value for candidate in DemoPolicy}:
         raise ScenarioInputError(f"unknown demonstration policy: {policy!r}")
-    return config_root, profile_id, policy
+    expected_fingerprint = _optional_fingerprint(params)
+    return config_root, profile_id, policy, expected_fingerprint
 
 
 def run_configured_session(
@@ -126,7 +153,9 @@ def run_configured_session(
     ``ctx.token`` at every safe boundary, including inside the model
     transport's request poll.
     """
-    config_root, profile_id, policy_value = _validate_params(params)
+    config_root, profile_id, policy_value, expected_fingerprint = _validate_params(
+        params
+    )
     if ctx.emitter is None:
         raise ScenarioInputError("configured source requires the shared emitter")
     policy = DemoPolicy(policy_value)
@@ -138,6 +167,24 @@ def run_configured_session(
         raise ScenarioInputError(
             f"configured model profile is unavailable: {exc}"
         ) from exc
+
+    # Configuration TOCTOU pin: the Start action captured the selected
+    # profile's safe fingerprint; the worker recomputes it from the
+    # configuration it actually loaded.  A mismatch means the configuration
+    # changed between selection and load, so the session fails closed before
+    # any model.configured emission or executable launch.  The diagnostic
+    # carries only the safe profile id and the two fingerprints (hashes of
+    # credential-free validated configuration), never an executable or value.
+    if (
+        expected_fingerprint is not None
+        and profile.configuration_fingerprint != expected_fingerprint
+    ):
+        raise ScenarioInputError(
+            "configured model profile changed between selection and launch: "
+            f"profile {profile_id!r} fingerprint {expected_fingerprint} "
+            f"does not match the loaded configuration "
+            f"{profile.configuration_fingerprint}"
+        )
 
     # Safe provenance through the shared emission authority: history/replay
     # identifies the selected profile by id + fingerprint, never by a live

@@ -240,6 +240,77 @@ class TestTimeoutAndCancellation:
         assert exc.value.kind == "request_timeout"
 
 
+class TestBlockedStdinCancellation:
+    """Blocker A: cancellation must win over a blocked request write.
+
+    A configured command that never reads stdin fills the OS pipe with a
+    large request, blocking the writer thread.  An explicit cancellation
+    must interrupt that blocked write promptly and surface the neutral
+    :class:`CancellationError` -- never ``request_timeout`` -- and must
+    terminate the command process (and any descendant) without leaking it.
+    """
+
+    def test_cancel_wins_over_blocked_stdin_write(self, tmp_path):
+        pid_file = tmp_path / "child.pid"
+        command = [
+            sys.executable,
+            str(FIXTURE),
+            "hang_on_stdin",
+            "--pid-file",
+            str(pid_file),
+        ]
+        token = CancellationToken()
+        transport = transport_for(command, cancel_check=token.check)
+
+        def _cancel() -> None:
+            time.sleep(0.3)
+            token.request()
+
+        threading.Thread(target=_cancel, daemon=True).start()
+        # A request large enough to fill the pipe (the child never reads
+        # stdin) with a timeout long enough to prove cancellation, not the
+        # deadline, is what ends the request.
+        big_payload = {"blob": "x" * 500000}
+        started = time.monotonic()
+        with pytest.raises(CancellationError):
+            transport.request(big_payload, 30.0)
+        elapsed = time.monotonic() - started
+        # Prompt: well under the 30 s request timeout.
+        assert elapsed < 10.0, f"cancellation took {elapsed:.1f}s"
+
+        # The command process is dead (no orphan from the blocked write).
+        from agentic_debugger.application.process_tree import pid_is_alive
+
+        deadline = time.monotonic() + 10.0
+        child_pid = int(pid_file.read_text()) if pid_file.is_file() else None
+        assert child_pid is not None
+        while time.monotonic() < deadline and pid_is_alive(child_pid):
+            time.sleep(0.1)
+        assert not pid_is_alive(child_pid), "command survived blocked-write cancel"
+
+    def test_cancel_before_spawn_raises_without_launch(self):
+        # Cancellation requested before the request is issued must raise the
+        # neutral signal and never spawn the command.
+        token = CancellationToken()
+        token.request()
+        transport = transport_for(
+            py("import time; time.sleep(60)"), cancel_check=token.check
+        )
+        with pytest.raises(CancellationError):
+            transport.request({}, 30.0)
+
+    def test_blocked_stdin_write_timeout_still_distinct(self, tmp_path):
+        # With no cancellation, a blocked stdin write still honors the
+        # request deadline as a genuine request_timeout (semantics preserved).
+        command = [sys.executable, str(FIXTURE), "hang_on_stdin"]
+        transport = transport_for(command, cancel_check=None)
+        big_payload = {"blob": "x" * 500000}
+        with pytest.raises(LiveTransportError) as exc:
+            transport.request(big_payload, 1.0)
+        assert exc.value.kind == "request_timeout"
+        assert exc.value.timed_out is True
+
+
 class TestProtocolParity:
     def test_uses_the_same_wire_format_as_the_scientific_transport(self):
         # The accepted scientific transport parses the same stdout bytes;

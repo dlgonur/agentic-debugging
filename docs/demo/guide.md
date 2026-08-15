@@ -142,8 +142,9 @@ python -m agentic_debugger.ui [--root DIR]
   real controller/PDB/PatchManager/verifier stack in the accepted
   cancellable worker process.
 - The Start screen offers two modes:
-  - **deterministic offline** — the default source (Task 7), no provider
-    and no network;
+  - **deterministic offline** — the default source (Task 7),
+    application-controlled offline execution with no provider or network
+    requirement;
   - **configured command model** — a validated local profile executed
     through the accepted JSON-lines command transport and the same
     controller contract (Task 8).  Profiles are defined in
@@ -152,7 +153,12 @@ python -m agentic_debugger.ui [--root DIR]
     safety rules).  Start is disabled with a clear reason when no valid
     profile exists; expected command failures (missing executable,
     malformed protocol, non-zero exit, timeout, cancellation, oversized
-    output) are professional states, never tracebacks.
+    output) are professional states, never tracebacks.  The configured
+    command is trusted user configuration: the application itself adds no
+    provider SDK/account/key vault, but V1 does not enforce child-process
+    network isolation — the child's capabilities are those of that
+    executable under the host OS, and users who require network isolation
+    must provide it externally.
 - Replay navigation is read-only (`[`/`]` previous/next event,
   `{`/`}` phase boundaries, `g`/`G` beginning/end, `j` jump to sequence,
   `q` back to history); `c` cancels a live session, and quitting the app
@@ -160,8 +166,11 @@ python -m agentic_debugger.ui [--root DIR]
 - Replaying a configured session from history never re-runs its command;
   history records only the safe profile id, configuration fingerprint, and
   display label.
-- The application requires no GPU, model provider, network, WSL, or
-  campaign infrastructure; the scientific core and existing CLI paths never
+- The application requires no GPU, model provider, WSL, or campaign
+  infrastructure; deterministic sessions are application-controlled offline
+  execution, and configured command-model sessions launch only the
+  explicitly configured local command (V1 does not enforce child-process
+  network isolation).  The scientific core and existing CLI paths never
   import the TUI.  Launching the TUI without the `app` extra prints a
   concise installation instruction instead of an import traceback.
 

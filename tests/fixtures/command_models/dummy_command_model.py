@@ -347,6 +347,9 @@ def main() -> int:
         time.sleep(3600)
         return 0
     if MODE == "hang_on_stdin":
+        pid_file = _arg("--pid-file")
+        if pid_file:
+            Path(pid_file).write_text(str(os.getpid()), encoding="utf-8")
         time.sleep(3600)
         return 0
     if MODE == "slow":

@@ -103,16 +103,26 @@ elsewhere; ``--root DIR`` overrides it).
 - ``profile_id`` — stable id ``[a-z0-9][a-z0-9._-]{0,63}`` (unique).
 - ``display_name`` — safe non-empty label (bounded, credential-shaped
   values rejected).
-- ``executable`` — a bare command name (resolved through ``PATH``) or an
-  absolute path.  Relative paths with separators are rejected as
-  ambiguous.
+- ``executable`` — a bare command name (resolved through ``PATH``) or a
+  true absolute path (Windows drive-rooted ``C:\...``, UNC ``\\server\...``,
+  or POSIX ``/...``).  Drive-relative Windows paths (``C:relative.exe``,
+  ``C:..\evil.exe``) and relative paths with separators are rejected as
+  ambiguous; the check uses correct ``ntpath``/``PureWindowsPath``
+  semantics, not "has a drive letter == absolute".
 - ``argv`` — explicit argument list (max 31 entries, bounded); combined
   with the executable the accepted 32-argument command cap applies.
 - ``cwd`` — optional absolute working directory.
 - ``request_timeout_seconds`` — 1..300.
 - ``environment`` — optional bounded explicit overrides (max 8); the
   inherited process environment is never serialized into evidence.
-- ``protocol_version`` / ``tool_version`` — bounded version metadata.
+- ``protocol_version`` — an explicit compatibility assertion only.  There
+  is exactly one truthful protocol authority: the runtime wire protocol
+  ``evaluation.live.LIVE_PROTOCOL_VERSION`` (currently ``1.3``).  A profile
+  value that does not equal the actually supported runtime protocol is
+  rejected fail-closed before any executable launch, so
+  ``model.configured.protocol_version`` always equals the wire protocol
+  used.  An omitted field defaults to the runtime constant.
+- ``tool_version`` — bounded version metadata.
 
 **Security rules (Task 8 Part A4/A5):**
 
@@ -125,6 +135,20 @@ elsewhere; ``--root DIR`` overrides it).
   names, and paths — are **rejected at validation**, so no secret literal
   can be persisted into history, rendered in the UI, or serialized into a
   configuration fingerprint;
+- **configuration TOCTOU pin**: a Start action pins the selected profile's
+  safe configuration fingerprint into the worker launch parameters; the
+  worker reloads the profile, recomputes the fingerprint, and fails closed
+  (no executable launch, no side effect) when the loaded configuration no
+  longer matches the pinned fingerprint.  The mismatch diagnostic carries
+  only the safe profile id and the two fingerprints;
+- **durable candidate-patch withholding**: the durable app-owned
+  ``candidate.patch`` artifact is gated by the same shared
+  credential-content policy the application evidence uses.  A patch whose
+  body matches the policy is not persisted (never redacted into a fake
+  original); truthful patch identity/hash/lifecycle remain available
+  through the already-recorded safe patch events, and the history manifest
+  only references artifacts that were actually written.  The in-memory
+  candidate the independent verifier evaluates is unchanged by this gate;
 - history/replay stores configuration **provenance and fingerprint**
   (``model.configured`` event: profile id, safe fingerprint, display
   label, protocol/tool version), never a live executable object;
@@ -132,6 +156,21 @@ elsewhere; ``--root DIR`` overrides it).
   bounded vocabulary diagnostics (``request_timeout``,
   ``provider_or_transport_error``, ``invalid_model_response``, …) reach
   session diagnostics.
+
+**Network trust boundary (truthful):**
+
+- **Deterministic / Offline** — application-controlled offline
+  deterministic execution; no provider/network requirement.
+- **Configured Command Model** — the application launches only the
+  explicitly configured local command through the validated argv contract
+  (``shell=False``); the application itself adds no provider SDK, account
+  integration, or API-key vault.  The configured child process is
+  **trusted user configuration**: V1 does **not** enforce child-process
+  network isolation, and the child's capabilities are those available to
+  that executable under the host OS.  The in-process ``OfflineGuard``
+  covers only the application process itself.  Users who require network
+  isolation for a configured command must provide it externally (OS
+  sandbox, firewall, container).
 
 ## 4. Protocol expectations
 
@@ -160,6 +199,13 @@ policy; the configured transport cannot bypass either.
   transport's request poll; the active command tree is terminated promptly
   and the session reports ``CANCELLED`` only after verified cleanup.
   Cancellation is never converted into a model error or a timeout.
+- Cancellation is honored at **every** wait, including while the request
+  writer is blocked on a full stdin pipe (a child that never reads stdin).
+  The writer is joined in bounded slices that poll both the cancellation
+  check and the request deadline, so an explicit user cancellation can
+  never be masked into ``request_timeout`` by a blocked write.  On
+  cancellation the command tree is terminated, the blocked writer is
+  interrupted safely, and the writer/reader threads are joined boundedly.
 - Request timeout terminates the command **tree** (Windows:
   ``taskkill /T /F`` — an explicit standard utility invocation, never a
   shell string; POSIX: the accepted process-group ladder) and is never
