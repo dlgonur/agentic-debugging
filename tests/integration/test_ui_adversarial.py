@@ -228,7 +228,7 @@ class TestReplayAdversarial:
             assert "APPLIED" in patch
             assert "VERIFIED" not in patch
             verifier = pane_text(workspace, "#verifier-pane")
-            assert "No verifier result recorded" in verifier
+            assert "No verifier result" in verifier
 
         run_headless(app, scenario)
 
@@ -308,7 +308,7 @@ class TestReplayAdversarial:
                 label="live-terminal",
             )
             header = str(workspace.query_one("#status-header", StatusHeader).render())
-            assert "succeeded" in header or "cancelled" in header
+            assert "SUCCEEDED" in header or "CANCELLED" in header
 
         run_headless(app, scenario)
 

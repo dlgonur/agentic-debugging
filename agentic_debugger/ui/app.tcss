@@ -122,18 +122,51 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 
 /* -- jump-to-sequence modal ---------------------------------------------- */
 
+#jump-dialog {
+    padding: 1 2;
+    margin: 2 4;
+    background: #161b22;
+    border: round #58a6ff;
+    height: auto;
+}
+
 #jump-title {
-    padding: 1 2 0 2;
+    padding: 1 0 0 0;
     text-style: bold;
 }
 
 #jump-hint {
-    padding: 0 2 1 2;
+    padding: 0 0 1 0;
     color: #8b949e;
 }
 
 #jump-input {
-    margin: 0 2;
+    margin: 1 0;
+}
+
+/* -- help modal --------------------------------------------------------- */
+
+#help-dialog {
+    padding: 1 2;
+    margin: 1 4;
+    background: #161b22;
+    border: round #58a6ff;
+    height: auto;
+    max-height: 90%;
+}
+
+#help-title {
+    padding: 0 0 1 0;
+    text-style: bold;
+}
+
+#help-content {
+    padding: 0 0 1 0;
+}
+
+#help-hint {
+    padding: 0 0 0 0;
+    color: #8b949e;
 }
 
 /* -- shared focus language ------------------------------------------------ */

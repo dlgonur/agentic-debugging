@@ -90,7 +90,7 @@ class TestBootAndHome:
             app = pilot.app
             empty = app.screen.query_one("#home-empty")
             assert empty.display is True
-            assert "No app-owned sessions" in str(empty.render())
+            assert "No sessions yet" in str(empty.render())
 
         run_headless(make_app(tmp_path), scenario)
 
@@ -130,6 +130,27 @@ class TestBootAndHome:
 
         run_headless(make_app(tmp_path), scenario)
 
+    def test_history_table_120_columns_shows_result_and_verifier(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess-demo-professor-001")
+        populate_history(store, "sess-demo-cancelled-002", interrupted=True)
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            table = pilot.app.screen.query_one("#history-table")
+            rendered = table_text(table)
+            assert "complete" in rendered
+            assert "interrupted" in rendered
+            assert "succeeded" in rendered
+            assert "RESOLVED" in rendered
+            columns = [col.label.plain for col in table.columns.values()]
+            assert columns == [
+                "Record", "Session", "Task", "Source", "Started", "Duration",
+                "Result", "Verifier",
+            ]
+
+        run_headless(app, scenario, size=(120, 35))
+
 
 class TestOpenReplay:
     def test_open_completed_session_renders_all_panes(self, tmp_path):
@@ -145,7 +166,8 @@ class TestOpenReplay:
             # header shows REPLAY identity and position
             header = str(workspace.query_one("#status-header", StatusHeader).render())
             assert "REPLAY" in header
-            assert "0/28 events" in header
+            assert "0/28" in header
+            assert "before first event" in header
             # replay to the end so every recorded fact is in the view
             await pilot.press("G")
             # source pane renders recorded source with the execution line
@@ -236,7 +258,7 @@ class TestOpenReplay:
             await pilot.press("G")
             assert "28/28" in str(bar.render())
             header_text = str(header.render())
-            assert "succeeded" in header_text
+            assert "SUCCEEDED" in header_text
             assert "at end" in header_text
             await pilot.press("g")
             assert "0/28" in str(bar.render())
@@ -264,7 +286,7 @@ class TestOpenReplay:
             workspace = pilot.app.screen
             # No events reduced yet: no recorded source exists at the start.
             source = pane_text(workspace, "#source-pane")
-            assert "NOT RECORDED" in source
+            assert "Source snapshot not yet available" in source
             # Reduce through the source snapshot (sequence 13 -> index 14):
             # the recorded debugger location (line 25) is outside the
             # recorded snapshot, so the pane shows the location marker

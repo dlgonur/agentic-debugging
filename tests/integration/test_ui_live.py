@@ -123,7 +123,7 @@ class TestLiveStartAndProgression:
             # operational terminal arrives with real evidence
             await wait_live_terminal(pilot, workspace)
             bar = live_bar_text(workspace)
-            assert "succeeded" in bar
+            assert "SUCCEEDED" in bar
             assert "cleanup verified: True" in bar
             live_view = app.live_view
             assert live_view is not None
@@ -377,7 +377,7 @@ class TestStartSessionScreen:
             # workspace is Home, not StartSessionScreen.
             assert isinstance(pilot.app._screen_stack[-2], HomeScreen)
             await wait_live_terminal(pilot, workspace1)
-            assert "succeeded" in live_bar_text(workspace1)
+            assert "SUCCEEDED" in live_bar_text(workspace1)
             session1_id = app.live_view.session_id
             assert session1_id is not None
             # q returns to Home (the app says "q returns to history").
@@ -420,7 +420,7 @@ class TestStartSessionScreen:
             )
             await pilot.press("c")
             await wait_live_terminal(pilot, workspace2)
-            assert "cancelled" in live_bar_text(workspace2)
+            assert "CANCELLED" in live_bar_text(workspace2)
             session2_id = app.live_view.session_id
             assert session2_id is not None
             assert session2_id != session1_id

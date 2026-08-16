@@ -301,7 +301,7 @@ class TestConfiguredLiveSession:
                 label="stage2-terminal",
             )
             bar = live_bar_text(workspace)
-            assert "succeeded" in bar
+            assert "SUCCEEDED" in bar
             assert "cleanup verified: True" in bar
             live_view = app.live_view
             assert live_view is not None
@@ -336,6 +336,9 @@ class TestConfiguredLiveSession:
             assert workspace.mode is WorkspaceMode.REPLAY
             assert "REPLAY" in header_text(workspace)
             await pilot.press("G")
+            verifier = pane_text(workspace, "#verifier-pane")
+            assert "RESOLVED" in verifier
+            assert "correctness authority" in verifier
             phase_after = (
                 (state_dir / "phase.json").read_text(encoding="utf-8")
                 if (state_dir / "phase.json").is_file()
@@ -361,21 +364,24 @@ class TestConfiguredLiveSession:
         run_headless(app, scenario, size=(120, 40))
 
     def test_configured_failure_is_a_professional_state_then_retry(self, tmp_path):
+        """Pass 2 Blocker 2: an invalid-response failure is a professional
+        terminal state and does not break the TUI."""
         write_profile(tmp_path, "dummy", "malformed", timeout=10.0)
         app = make_app(tmp_path)
 
         async def scenario(pilot):
             def open_configured_start():
-                start = pilot.app.screen
-                start.query_one("#mode-select", Select).value = "configured"
-                start.query_one("#profile-select", Select).value = "dummy"
-                start.query_one("#task-select", Select).value = TASK_ID
-                start.query_one("#policy-select", Select).value = PDB_POLICY
+                start_screen = pilot.app.screen
+                start_screen.query_one("#mode-select", Select).value = "configured"
+                start_screen.query_one("#profile-select", Select).value = "dummy"
+                start_screen.query_one("#task-select", Select).value = TASK_ID
+                start_screen.query_one("#policy-select", Select).value = PDB_POLICY
 
             async def settle_and_click():
                 await pilot.pause()
                 await pilot.click("#start-button")
 
+            # -- session 1: start the failing configured model -------------
             await pilot.press("n")
             await wait_until(
                 pilot,
@@ -398,7 +404,7 @@ class TestConfiguredLiveSession:
             )
             assert workspace._live_terminal.status is SessionStatus.FAILED
             assert workspace._live_terminal.termination_reason.value == "model_error"
-            assert "failed" in live_bar_text(workspace)
+            assert "FAILED" in live_bar_text(workspace)
             # return to history; the failure registered honestly
             await pilot.press("q")
             await wait_until(
@@ -430,19 +436,27 @@ class TestConfiguredLiveSession:
                 timeout_seconds=180.0,
                 label="stage2-second-failed-terminal",
             )
+            assert workspace2._live_terminal.status is SessionStatus.FAILED
             await pilot.press("q")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
                 timeout_seconds=30.0,
             )
-            assert pilot.app.screen.query_one("#history-table").row_count == 2
+            # both sessions registered with distinct identities
+            table = pilot.app.screen.query_one("#history-table")
+            assert table.row_count == 2
+            ids = [entry.session_id for entry in app.history_store.list_sessions()]
+            assert len(set(ids)) == 2
 
         run_headless(app, scenario, size=(100, 30))
 
 
 class TestConfiguredCancellation:
     def test_cancel_interrupts_configured_request(self, tmp_path):
+        """Pass 2 Blocker 3: cancellation while a configured request is
+        in flight sends SIGINT/SIGTERM to the child process and records
+        the session as cancelled."""
         write_profile(
             tmp_path, "dummy", "slow", timeout=120.0, extra_argv=("--delay", "300")
         )
@@ -468,8 +482,20 @@ class TestConfiguredCancellation:
                 timeout_seconds=30.0,
             )
             workspace = pilot.app.screen
+            # Worker pid is set asynchronously after WorkspaceScreen appears;
+            # wait until the subprocess has started before capturing the pid.
+            await wait_until(
+                pilot,
+                lambda: app.live_runner is not None
+                and app.live_runner.worker is not None
+                and app.live_runner.worker.pid is not None,
+                timeout_seconds=30.0,
+                label="stage0-worker-started",
+            )
             worker_pid = app.live_runner.worker.pid
             assert worker_pid is not None
+            assert pid_is_alive(worker_pid)
+            # wait until the model request starts
             await wait_until(
                 pilot,
                 lambda: len(workspace._live_events) >= 3,
@@ -490,7 +516,7 @@ class TestConfiguredCancellation:
                 label="stage3-terminal",
             )
             assert workspace._live_terminal.status is SessionStatus.CANCELLED
-            assert "cancelled" in live_bar_text(workspace)
+            assert "CANCELLED" in live_bar_text(workspace)
             await wait_until(
                 pilot,
                 lambda: not pid_is_alive(worker_pid),
@@ -511,7 +537,7 @@ class TestMixedSequentialSessions:
         app = make_app(tmp_path)
 
         async def scenario(pilot):
-            # -- session 1: configured, completes ---------------------------
+            # -- session 1: configured, successful --------------------------
             await pilot.press("n")
             await wait_until(
                 pilot,
@@ -531,15 +557,16 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             workspace1 = pilot.app.screen
-            assert "configured_model" in header_text(workspace1)
+            assert "configured command model" in header_text(workspace1)
             await wait_until(
                 pilot,
                 lambda: workspace1._live_terminal is not None,
                 timeout_seconds=300.0,
                 label="stage1-configured-terminal",
             )
-            assert "succeeded" in live_bar_text(workspace1)
+            assert "SUCCEEDED" in live_bar_text(workspace1)
             session1_id = app.live_view.session_id
+            assert session1_id is not None
             await pilot.press("q")
             await wait_until(
                 pilot,
@@ -579,7 +606,7 @@ class TestMixedSequentialSessions:
                 timeout_seconds=120.0,
                 label="stage3-det-terminal",
             )
-            assert "cancelled" in live_bar_text(workspace2)
+            assert "CANCELLED" in live_bar_text(workspace2)
             session2_id = app.live_view.session_id
             assert session2_id != session1_id
             await pilot.press("q")
@@ -588,6 +615,7 @@ class TestMixedSequentialSessions:
                 lambda: isinstance(pilot.app.screen, HomeScreen),
                 timeout_seconds=30.0,
             )
+            # both sessions registered with distinct identities
             table = pilot.app.screen.query_one("#history-table")
             assert table.row_count == 2
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
@@ -627,7 +655,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             workspace1 = pilot.app.screen
-            assert "offline_demo" in header_text(workspace1)
+            assert "deterministic offline" in header_text(workspace1)
             await wait_until(
                 pilot,
                 lambda: len(workspace1._live_events) >= 4,
@@ -641,7 +669,9 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=120.0,
                 label="stage2-det-terminal",
             )
-            assert "cancelled" in live_bar_text(workspace1)
+            assert "CANCELLED" in live_bar_text(workspace1)
+            session1_id = app.live_view.session_id
+            assert session1_id is not None
             await pilot.press("q")
             await wait_until(
                 pilot,
@@ -670,7 +700,7 @@ class TestMixedSequentialSessionsExtra:
             )
             workspace2 = pilot.app.screen
             assert workspace2 is not workspace1
-            assert "configured_model" in header_text(workspace2)
+            assert "configured command model" in header_text(workspace2)
             await wait_until(
                 pilot,
                 lambda: workspace2._live_terminal is not None,
@@ -678,6 +708,9 @@ class TestMixedSequentialSessionsExtra:
                 label="stage3-configured-terminal",
             )
             assert workspace2._live_terminal.status is SessionStatus.FAILED
+            session2_id = app.live_view.session_id
+            assert session2_id is not None
+            assert session2_id != session1_id
             await pilot.press("q")
             await wait_until(
                 pilot,
@@ -688,6 +721,7 @@ class TestMixedSequentialSessionsExtra:
             table = pilot.app.screen.query_one("#history-table")
             assert table.row_count == 2
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
+            assert session1_id in ids and session2_id in ids
             assert len(set(ids)) == 2
 
         run_headless(app, scenario, size=(100, 30))
@@ -902,7 +936,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=180.0,
                 label="stage1-small-terminal-failure",
             )
-            assert "failed" in live_bar_text(workspace)
+            assert "FAILED" in live_bar_text(workspace)
             await pilot.press("q")
             await wait_until(
                 pilot,
@@ -959,6 +993,16 @@ class TestAppExitDuringConfiguredRequest:
                     timeout_seconds=30.0,
                 )
                 workspace = pilot.app.screen
+                # Worker pid is set asynchronously after WorkspaceScreen appears;
+                # wait until the subprocess has started before capturing the pid.
+                await wait_until(
+                    pilot,
+                    lambda: app.live_runner is not None
+                    and app.live_runner.worker is not None
+                    and app.live_runner.worker.pid is not None,
+                    timeout_seconds=30.0,
+                    label="stage0-worker-started",
+                )
                 worker_pid = app.live_runner.worker.pid
                 assert worker_pid is not None
                 await wait_until(

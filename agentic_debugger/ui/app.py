@@ -67,6 +67,54 @@ DEFAULT_HISTORY_DIR_NAME = "AgenticDebugger"
 _COOPERATIVE_GRACE_SECONDS = 10.0
 _READY_TIMEOUT_SECONDS = 30.0
 
+_CURATED_TASK_TITLES: dict[str, str] = {
+    "curated-none-handling-001": "Format an optional display name",
+    "curated-off-by-one-002": "Return the complete recent window",
+    "curated-wrong-branch-003": "Select the correct access branch",
+    "curated-mutation-alias-004": "Append a label without mutating the caller",
+    "curated-caller-callee-005": "Convert the caller representation at the boundary",
+}
+
+
+def task_display_title(task_id: str, repo_root: Optional[Path] = None) -> str:
+    """Return a human-readable title for a task id.
+
+    Tries loading the task title from task.json under the repository root,
+    then checks curated mapping, and falls back to task_id if unavailable.
+    """
+    if repo_root is not None:
+        task_json = (
+            Path(repo_root)
+            / "agentic_debugger"
+            / "datasets"
+            / "curated"
+            / task_id
+            / "task.json"
+        )
+        if task_json.is_file():
+            try:
+                import json
+
+                with open(task_json, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, dict) and data.get("title"):
+                        return str(data["title"])
+            except Exception:
+                pass
+    if task_id in _CURATED_TASK_TITLES:
+        return _CURATED_TASK_TITLES[task_id]
+    return task_id
+
+
+def task_display_option(
+    task_id: str, repo_root: Optional[Path] = None
+) -> tuple[str, str]:
+    """Return (label, task_id) for dropdown selectors."""
+    title = task_display_title(task_id, repo_root)
+    if title != task_id:
+        return f"{title} · {task_id}", task_id
+    return task_id, task_id
+
 
 def deterministic_source_name() -> str:
     """The one production deterministic worker source (Task 7)."""
@@ -258,6 +306,13 @@ class LocalApplicationV1(App):
             task_id
             for task_id in curated_task_ids(self._repository_root)
             if task_id in supported
+        )
+
+    def curated_task_options(self) -> Tuple[Tuple[str, str], ...]:
+        """Human-readable options (label, task_id) for task selectors."""
+        return tuple(
+            task_display_option(task_id, self._repository_root)
+            for task_id in self.curated_task_ids()
         )
 
     def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
@@ -475,4 +530,6 @@ __all__ = [
     "default_history_root",
     "make_session_id",
     "repository_root",
+    "task_display_option",
+    "task_display_title",
 ]

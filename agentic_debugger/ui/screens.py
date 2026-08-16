@@ -32,6 +32,7 @@ from agentic_debugger.application.events import (
     SessionEvent,
     SessionEventKind,
     SessionStatus,
+    SourceKind,
 )
 from agentic_debugger.application.history import (
     HistoryClassification,
@@ -40,6 +41,7 @@ from agentic_debugger.application.history import (
 from agentic_debugger.application.presentation import (
     PresentationIdentity,
     SessionViewState,
+    current_source,
     reduce_event,
 )
 from agentic_debugger.application.replay import phase_boundaries
@@ -48,6 +50,7 @@ from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
     DebuggerPanel,
+    EvidenceState,
     LiveBar,
     PatchPanel,
     ReplayBar,
@@ -78,6 +81,69 @@ def _markup_escape(value: Any) -> str:
     return str(value).replace("[", "\\[").replace("]", "\\]")
 
 
+def _format_duration(started: Optional[str], ended: Optional[str]) -> str:
+    if not started or not ended:
+        return "—"
+    try:
+        from datetime import datetime
+
+        start_dt = datetime.fromisoformat(started.replace("Z", "+00:00"))
+        end_dt = datetime.fromisoformat(ended.replace("Z", "+00:00"))
+        seconds = max(0.0, (end_dt - start_dt).total_seconds())
+        if seconds < 60:
+            return f"{seconds:.1f}s"
+        minutes = int(seconds // 60)
+        remaining = int(seconds % 60)
+        return f"{minutes}m {remaining}s"
+    except Exception:
+        return "—"
+
+
+def _format_timestamp(utc_str: Optional[str]) -> str:
+    if not utc_str:
+        return "—"
+    clean = utc_str.replace("T", " ")
+    if len(clean) >= 16:
+        return clean[:16]
+    return clean
+
+
+def _compact_session_id(session_id: Optional[str], max_len: int = 16) -> str:
+    if not session_id:
+        return "—"
+    if len(session_id) <= max_len:
+        return session_id
+    head = max_len // 2 - 1
+    tail = max_len - head - 1
+    return f"{session_id[:head]}…{session_id[-tail:]}"
+
+
+def _compact_source_label(source_kind: Optional[SourceKind]) -> str:
+    if source_kind is None:
+        return "—"
+    return {
+        SourceKind.OFFLINE_DEMO: "offline",
+        SourceKind.CONFIGURED_MODEL: "configured",
+        SourceKind.SESSION_BUNDLE: "bundle",
+        SourceKind.CANONICAL_TRAJECTORY: "trajectory",
+        SourceKind.EXPERIMENT_EVIDENCE: "experiment",
+    }.get(source_kind, source_kind.value)
+
+
+_RESULT_STYLE: dict[SessionStatus, str] = {
+    SessionStatus.SUCCEEDED: "bold green",
+    SessionStatus.CANCELLED: "bold yellow",
+    SessionStatus.FAILED: "bold red",
+    SessionStatus.TIMED_OUT: "bold red",
+    SessionStatus.INTERRUPTED: "bold red",
+    SessionStatus.CLEANUP_FAILED: "bold red",
+    SessionStatus.UNRESOLVED: "yellow",
+    SessionStatus.RUNNING: "bold blue",
+    SessionStatus.STARTING: "blue",
+    SessionStatus.CREATED: "dim",
+}
+
+
 def render_view_header(
     view: SessionViewState,
     *,
@@ -92,17 +158,30 @@ def render_view_header(
     as Rich markup), so session ids, task ids, run ids, paths, and status
     text render literally; styling is supplied separately.
     """
+    from agentic_debugger.ui.app import task_display_title
+
     head = Text()
-    head.append(f"{mode} ", style=mode_style)
-    head.append(view.session_id or "session-unbound", style="bold")
-    head.append(f"  ·  task {view.task_id}")
-    head.append(f"  ·  {view.source_kind.value}")
+    head.append(f" {mode} ", style=mode_style)
+    title = task_display_title(view.task_id)
+    if title and title != view.task_id:
+        head.append(f"  ·  {title} · {view.task_id}")
+    else:
+        head.append(f"  ·  task {view.task_id}")
+    source_label = {
+        SourceKind.OFFLINE_DEMO: "deterministic offline",
+        SourceKind.CONFIGURED_MODEL: "configured command model",
+    }.get(view.source_kind, view.source_kind.value)
+    head.append(f"  ·  {source_label}")
     if view.model_provenance is not None and view.model_provenance.display_name:
         # Recorded safe provenance only; never a claimed provider identity.
         head.append(
             f"  ·  model {view.model_provenance.display_name}"
             f" ({view.model_provenance.profile_id})"
         )
+    if replay_position is not None:
+        head.append(f"  ·  {replay_position}")
+    if view.session_id:
+        head.append(f"  ·  {view.session_id}", style="dim")
     head.append("\n")
     status_style = {
         SessionStatus.RUNNING: "bold blue",
@@ -116,27 +195,30 @@ def render_view_header(
         SessionStatus.CLEANUP_FAILED: "bold red",
         SessionStatus.CREATED: "dim",
     }.get(view.status, "default")
-    status_text = view.status.value
+    status_text = view.status.value.upper()
     if view.status is SessionStatus.RUNNING and view.phase is not None:
-        status_text += f"/{view.phase.value}"
+        status_text += f" ({view.phase.value})"
     if view.status.terminal and view.termination_reason is not None:
         status_text += f" ({view.termination_reason.value})"
     head.append(status_text, style=status_style)
     if view.controller_phase is not None:
-        head.append(f"  ·  controller: {view.controller_phase.value}")
+        head.append(f"  ·  phase: {view.controller_phase.value.capitalize()}")
     verifier = ""
     if view.verifier_summary is not None:
         summary = view.verifier_summary
-        verifier = f"{summary.status or '?'}/{summary.outcome.value if summary.outcome else '?'}"
+        outcome_str = summary.outcome.value if summary.outcome else (summary.status or "?")
+        verifier = f"verifier: {outcome_str}"
         if summary.f2p_total is not None:
-            verifier += f" f2p {summary.f2p_passed}/{summary.f2p_total}"
+            verifier += f" · fail-to-pass {summary.f2p_passed}/{summary.f2p_total}"
+        if summary.p2p_total is not None and summary.p2p_total > 0:
+            verifier += f" · pass-to-pass {summary.p2p_passed}/{summary.p2p_total}"
+        if summary.workspace_cleaned:
+            verifier += " · cleanup verified"
     elif view.verifier_stages:
-        verifier = "running"
-    head.append(f"  ·  verifier: {verifier or '—'}")
-    if view.run_id is not None:
-        head.append(f"  ·  run {view.run_id}")
-    if replay_position is not None:
-        head.append(f"  ·  {replay_position}")
+        verifier = "verifier: running"
+    else:
+        verifier = "verifier: pending" if view.status is SessionStatus.RUNNING else "verifier: —"
+    head.append(f"  ·  {verifier}")
     if extra is not None:
         head.append(f"  ·  {extra}")
     return head
@@ -171,8 +253,8 @@ class HomeScreen(Screen):
         table = self.query_one("#history-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(
-            "State", "Session", "Task", "Source", "Started", "Ended",
-            "Status", "Verifier", "Note",
+            "Record", "Session", "Task", "Source", "Started", "Duration",
+            "Result", "Verifier",
         )
         self.refresh_history()
 
@@ -183,24 +265,28 @@ class HomeScreen(Screen):
         empty = self.query_one("#home-empty", Static)
         if not entries:
             empty.update(
-                "[dim]No app-owned sessions yet.  Press [bold]n[/] to start a "
-                "deterministic offline session, or [bold]r[/] to refresh.[/]"
+                "[dim]No sessions yet.  Press [bold]n[/] to start a "
+                "new session, or [bold]r[/] to refresh.[/]"
             )
             empty.display = True
         else:
             empty.display = False
         for entry in entries:
+            result_style = (
+                _RESULT_STYLE.get(entry.status, "default")
+                if entry.status
+                else "default"
+            )
             table.add_row(
                 Text(entry.classification.value, style=_CLASSIFICATION_STYLE.get(
                     entry.classification, "default")),
-                Text(entry.session_id or "—"),
+                Text(_compact_session_id(entry.session_id)),
                 Text(entry.task_id or "—"),
-                Text(entry.source_kind.value if entry.source_kind else "—"),
-                Text(entry.started_at_utc or "—"),
-                Text(entry.ended_at_utc or "—"),
-                Text(entry.status.value if entry.status else "—"),
+                Text(_compact_source_label(entry.source_kind)),
+                Text(_format_timestamp(entry.started_at_utc)),
+                Text(_format_duration(entry.started_at_utc, entry.ended_at_utc)),
+                Text(entry.status.value if entry.status else "—", style=result_style),
                 Text(verifier_cell(entry)),
-                Text(entry.note or ""),
                 key=entry.session_id or entry.directory or "",
             )
 
@@ -221,9 +307,7 @@ class HomeScreen(Screen):
     def action_start_session(self) -> None:
         self.app.push_screen(
             StartSessionScreen(
-                task_options=[
-                    (task_id, task_id) for task_id in self.app.curated_task_ids()
-                ]
+                task_options=list(self.app.curated_task_options())
             )
         )
 
@@ -255,16 +339,14 @@ class HomeScreen(Screen):
         self.app.exit()
 
     def action_show_help(self) -> None:
-        self.notify(
-            "n new session · o/enter open replay · r refresh · q quit. "
-            "Replay is always read-only.",
-            title="Home",
-        )
+        self.app.push_screen(HelpModalScreen())
 
 
 def verifier_cell(entry: SessionHistoryEntry) -> str:
-    if entry.verifier_status or entry.verifier_outcome:
-        return f"{entry.verifier_status or '?'}/{entry.verifier_outcome or '?'}"
+    if entry.verifier_outcome:
+        return entry.verifier_outcome.upper()
+    if entry.verifier_status:
+        return entry.verifier_status.upper()
     return "—"
 
 
@@ -278,7 +360,20 @@ class StartSessionScreen(Screen):
 
     def __init__(self, task_options: Optional[list[tuple[str, str]]] = None) -> None:
         super().__init__()
-        self._task_options = list(task_options or [])
+        from agentic_debugger.ui.app import task_display_option
+
+        raw_options = list(task_options or [])
+        formatted_options: list[tuple[str, str]] = []
+        for item in raw_options:
+            if isinstance(item, tuple) and len(item) == 2:
+                lbl, val = item
+                if lbl == val:
+                    formatted_options.append(task_display_option(val))
+                else:
+                    formatted_options.append((lbl, val))
+            elif isinstance(item, str):
+                formatted_options.append(task_display_option(item))
+        self._task_options = formatted_options
         self._profiles: Tuple[Any, ...] = ()
         self._config_error: Optional[str] = None
         self._mode = self.MODE_DETERMINISTIC
@@ -286,7 +381,7 @@ class StartSessionScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Static(
             "[bold #58a6ff]Start session[/]\n"
-            "[dim]Deterministic offline demo or a configured local command "
+            "[dim]Deterministic offline execution or a configured command "
             "model.[/]",
             id="start-title",
         )
@@ -325,9 +420,8 @@ class StartSessionScreen(Screen):
 
     def on_mount(self) -> None:
         if not self._task_options:
-            self.query_one("#task-select", Select).set_options(
-                [(task_id, task_id) for task_id in self.app.curated_task_ids()]
-            )
+            self._task_options = list(self.app.curated_task_options())
+            self.query_one("#task-select", Select).set_options(self._task_options)
         self._refresh_profiles()
         self._refresh_mode()
 
@@ -514,6 +608,7 @@ class WorkspaceScreen(Screen):
         Binding("c", "cancel_live", "Cancel session"),
         Binding("q", "back_home", "Back to history"),
         Binding("escape", "back_home", "Back", show=False),
+        Binding("?", "show_help", "Help"),
     ]
 
     def __init__(
@@ -658,12 +753,21 @@ class WorkspaceScreen(Screen):
         position: Optional[str] = None
         extra: Optional[str] = None
         if self.mode is WorkspaceMode.REPLAY and self.controller is not None:
-            position = (
-                f"{self.controller.index}/{self.controller.total_events} events"
-                "  ·  read-only replay"
-            )
-            if self.controller.at_end:
-                position += "  ·  at end"
+            if self.controller.at_beginning:
+                position = (
+                    f"position 0/{self.controller.total_events}"
+                    "  ·  before first event  ·  read-only replay"
+                )
+            elif self.controller.at_end:
+                position = (
+                    f"event {self.controller.index}/{self.controller.total_events}"
+                    "  ·  at end  ·  read-only replay"
+                )
+            else:
+                position = (
+                    f"event {self.controller.index}/{self.controller.total_events}"
+                    "  ·  read-only replay"
+                )
         if self.mode is WorkspaceMode.LIVE:
             if self._live_terminal is not None:
                 extra = "session finished — q returns to history"
@@ -674,16 +778,86 @@ class WorkspaceScreen(Screen):
             elif self._cancel_active:
                 extra = "cancelling…"
             else:
-                extra = "live"
+                extra = None
         header = render_view_header(
             view, mode=mode, mode_style=mode_style,
             replay_position=position, extra=extra,
         )
         self.query_one("#status-header", StatusHeader).update(header)
-        self.query_one("#source-pane", SourcePanel).update_view(view)
-        self.query_one("#debugger-pane", DebuggerPanel).update_view(view)
-        self.query_one("#patch-pane", PatchPanel).update_view(view)
-        self.query_one("#verifier-pane", VerifierPanel).update_view(view)
+
+        # Determine the domain evidence state for each pane
+        is_live_running = (
+            self.mode is WorkspaceMode.LIVE
+            and self._live_terminal is None
+            and self._live_failure is None
+        )
+
+        if self.mode is WorkspaceMode.REPLAY and self.controller is not None:
+            events = self.controller.replay.events
+            has_source = any(e.event_kind is SessionEventKind.SOURCE_SNAPSHOT for e in events)
+            has_debugger = any(e.event_kind.value.startswith("debugger.") for e in events)
+            has_patch = any(e.event_kind.value.startswith("patch.") for e in events)
+            has_verifier = any(e.event_kind.value.startswith("verifier.") for e in events)
+
+            source_state = (
+                EvidenceState.AVAILABLE
+                if current_source(view) is not None
+                else (EvidenceState.REPLAY_PENDING if has_source else EvidenceState.SESSION_ABSENT)
+            )
+            debugger_state = (
+                EvidenceState.AVAILABLE
+                if view.debugger.session_started
+                else (EvidenceState.REPLAY_PENDING if has_debugger else EvidenceState.SESSION_ABSENT)
+            )
+            patch_state = (
+                EvidenceState.AVAILABLE
+                if view.patch_attempts
+                else (EvidenceState.REPLAY_PENDING if has_patch else EvidenceState.SESSION_ABSENT)
+            )
+            verifier_state = (
+                EvidenceState.AVAILABLE
+                if (view.verifier_summary is not None or view.verifier_stages)
+                else (EvidenceState.REPLAY_PENDING if has_verifier else EvidenceState.SESSION_ABSENT)
+            )
+        elif self.mode is WorkspaceMode.LIVE:
+            source_state = (
+                EvidenceState.AVAILABLE
+                if current_source(view) is not None
+                else (EvidenceState.LIVE_PENDING if is_live_running else EvidenceState.SESSION_ABSENT)
+            )
+            debugger_state = (
+                EvidenceState.AVAILABLE
+                if view.debugger.session_started
+                else (EvidenceState.LIVE_PENDING if is_live_running else EvidenceState.SESSION_ABSENT)
+            )
+            patch_state = (
+                EvidenceState.AVAILABLE
+                if view.patch_attempts
+                else (EvidenceState.LIVE_PENDING if is_live_running else EvidenceState.SESSION_ABSENT)
+            )
+            verifier_state = (
+                EvidenceState.AVAILABLE
+                if (view.verifier_summary is not None or view.verifier_stages)
+                else (EvidenceState.LIVE_PENDING if is_live_running else EvidenceState.SESSION_ABSENT)
+            )
+        else:
+            source_state = EvidenceState.SESSION_ABSENT
+            debugger_state = EvidenceState.SESSION_ABSENT
+            patch_state = EvidenceState.SESSION_ABSENT
+            verifier_state = EvidenceState.SESSION_ABSENT
+
+        self.query_one("#source-pane", SourcePanel).update_view(
+            view, evidence_state=source_state
+        )
+        self.query_one("#debugger-pane", DebuggerPanel).update_view(
+            view, evidence_state=debugger_state
+        )
+        self.query_one("#patch-pane", PatchPanel).update_view(
+            view, evidence_state=patch_state
+        )
+        self.query_one("#verifier-pane", VerifierPanel).update_view(
+            view, evidence_state=verifier_state
+        )
         self.query_one("#activity-pane", ActivityPanel).update_view(view)
         boundaries = self._current_boundaries()
         self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
@@ -706,30 +880,42 @@ class WorkspaceScreen(Screen):
                 bar.update("")
                 return
             controller = self.controller
+            pos_label = (
+                "before first event"
+                if controller.at_beginning
+                else ("at end" if controller.at_end else f"event {controller.index}/{controller.total_events}")
+            )
             bar.update(
-                f"[dim][bold]replay[/] {controller.index}/{controller.total_events} events"
+                f"[dim][bold]replay[/] {controller.index}/{controller.total_events} events ({pos_label})"
                 f"   ·   [bold]\\[[/] prev   [bold]][/] next   [bold]{{[/] prev phase   "
                 f"[bold]}}[/] next phase   [bold]g[/] begin   [bold]G[/] end   "
-                f"[bold]j[/] jump to seq   [bold]q[/] history[/]"
+                f"[bold]j[/] jump   [bold]?[/] help   [bold]q[/] history[/]"
             )
         else:
             bar = self.query_one("#live-bar", LiveBar)
             if self._live_terminal is not None:
                 result = self._live_terminal
+                term_style = (
+                    "bold green"
+                    if result.status is SessionStatus.SUCCEEDED
+                    else ("bold yellow" if result.status is SessionStatus.CANCELLED else "bold red")
+                )
                 bar.update(
-                    f"[bold]{result.status.value}[/] ({result.termination_reason.value})"
+                    f"[{term_style}]{result.status.value.upper()}[/] ({result.termination_reason.value})"
                     f"  ·  cleanup verified: {result.cleanup_verified}"
-                    f"  ·  [bold]q[/] returns to history"
+                    f"  ·  [bold]?[/] help  ·  [bold]q[/] returns to history"
                 )
             elif self._live_failure is not None:
-                bar.update(f"[bold red]startup failed[/]  ·  [bold]q[/] returns to history")
+                bar.update(f"[bold red]startup failed[/]  ·  [bold]?[/] help  ·  [bold]q[/] returns to history")
             elif self._cancel_requested_ui or self._cancel_active:
                 bar.update(
                     "[bold yellow]cancel requested[/] — waiting for the "
                     "worker's cooperative cleanup and terminal evidence"
                 )
             else:
-                bar.update("[dim]live session running[/]   ·   [bold]c[/] cancel   [bold]q[/] history")
+                bar.update(
+                    "[dim]live session running[/]   ·   [bold]c[/] cancel   [bold]?[/] help   [bold]q[/] history"
+                )
 
     # -- replay actions -----------------------------------------------------
 
@@ -774,7 +960,16 @@ class WorkspaceScreen(Screen):
     def action_replay_jump(self) -> None:
         if self.controller is None:
             return
-        self.app.push_screen(JumpToSequenceScreen(self._jump_to_sequence))
+        events = self.controller.replay.events
+        min_seq = events[0].sequence if events else 0
+        max_seq = events[-1].sequence if events else None
+        self.app.push_screen(
+            JumpToSequenceScreen(
+                self._jump_to_sequence,
+                min_sequence=min_seq,
+                max_sequence=max_seq,
+            )
+        )
 
     def _jump_to_sequence(self, sequence: Optional[int]) -> None:
         if sequence is None or self.controller is None:
@@ -803,6 +998,9 @@ class WorkspaceScreen(Screen):
 
     def action_back_home(self) -> None:
         self.app.go_home()
+
+    def action_show_help(self) -> None:
+        self.app.push_screen(HelpModalScreen())
 
     # -- activity filters ---------------------------------------------------
 
@@ -842,14 +1040,32 @@ class JumpToSequenceScreen(Screen):
 
     BINDINGS = [Binding("escape", "cancel", "Back")]
 
-    def __init__(self, on_submit: Any) -> None:
+    def __init__(
+        self,
+        on_submit: Any,
+        min_sequence: int = 0,
+        max_sequence: Optional[int] = None,
+    ) -> None:
         super().__init__()
         self._on_submit = on_submit
+        self._min_sequence = min_sequence
+        self._max_sequence = max_sequence
 
     def compose(self) -> ComposeResult:
-        yield Static("[bold #58a6ff]Jump to sequence[/]", id="jump-title")
-        yield Input(id="jump-input", placeholder="sequence number")
-        yield Static("[dim]enter: jump · escape: cancel[/]", id="jump-hint")
+        with Static(id="jump-dialog"):
+            yield Static("[bold #58a6ff]Jump to sequence[/]", id="jump-title")
+            placeholder = (
+                f"sequence number ({self._min_sequence}–{self._max_sequence})"
+                if self._max_sequence is not None
+                else "sequence number"
+            )
+            yield Input(id="jump-input", placeholder=placeholder)
+            hint = (
+                f"[dim]enter: jump ({self._min_sequence}–{self._max_sequence}) · escape: cancel[/]"
+                if self._max_sequence is not None
+                else "[dim]enter: jump · escape: cancel[/]"
+            )
+            yield Static(hint, id="jump-hint")
 
     def on_mount(self) -> None:
         self.query_one("#jump-input", Input).focus()
@@ -872,7 +1088,55 @@ class JumpToSequenceScreen(Screen):
         self.app.pop_screen()
 
 
+class HelpModalScreen(Screen):
+    """Product conceptual legend and key bindings modal."""
+
+    BINDINGS = [
+        Binding("escape", "close_help", "Close"),
+        Binding("q", "close_help", "Close"),
+        Binding("enter", "close_help", "Close"),
+        Binding("?", "close_help", "Close"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Static(id="help-dialog"):
+            yield Static(
+                "[bold #58a6ff]Agentic Debugging — Local Application V1[/]\n"
+                "[dim]Developer Guide & Conceptual Legend[/]",
+                id="help-title",
+            )
+            yield Static(
+                "[bold #79c0ff]Core Concepts[/]\n"
+                "  • [bold]LIVE[/]       Executing session (deterministic offline or configured command)\n"
+                "  • [bold]REPLAY[/]     Read-only recorded session from authoritative journal\n"
+                "\n"
+                "[bold #79c0ff]Workspace Panes[/]\n"
+                "  • [bold]Source[/]     Recorded workspace source with execution line markers\n"
+                "  • [bold]Debugger[/]   PDB location, stack frames, locals, breakpoints\n"
+                "  • [bold]Patch[/]      Candidate lifecycle and unified diff\n"
+                "  • [bold]Verifier[/]   Independent correctness authority (RESOLVED / UNRESOLVED)\n"
+                "  • [bold]Activity[/]   Filtered operational events (keys 1..7)\n"
+                "  • [bold]Timeline[/]   Full ordered SessionEvent stream with phase boundaries\n"
+                "\n"
+                "[bold yellow]Important Principle:[/] [bold]APPLIED does not mean FIXED.[/]\n"
+                "[dim]Only the independent verifier decides whether a candidate is RESOLVED.[/]\n"
+                "\n"
+                "[bold #79c0ff]Navigation[/]\n"
+                "  • Home:      [bold]n[/] new session · [bold]o[/]/[bold]enter[/] open replay · [bold]r[/] refresh · [bold]q[/] quit · [bold]?[/] help\n"
+                "  • Workspace: [bold]\\[[/]/[bold]][/] prev/next event · [bold]{{[/]/[bold]}}[/] prev/next phase · [bold]g[/]/[bold]G[/] begin/end\n"
+                "               [bold]j[/] jump to sequence · [bold]1[/]..[bold]7[/] activity filter · [bold]c[/] cancel live · [bold]q[/] history · [bold]?[/] help",
+                id="help-content",
+            )
+            yield Static(
+                "[dim]Press escape, q, or enter to close help[/]", id="help-hint"
+            )
+
+    def action_close_help(self) -> None:
+        self.app.pop_screen()
+
+
 __all__ = [
+    "HelpModalScreen",
     "HomeScreen",
     "JumpToSequenceScreen",
     "StartSessionScreen",

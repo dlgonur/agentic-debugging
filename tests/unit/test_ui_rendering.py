@@ -20,6 +20,7 @@ import pytest
 from agentic_debugger.application.events import SessionEventKind, SourceKind
 from agentic_debugger.application.presentation import (
     PresentationIdentity,
+    TimelineEntry,
     initial_session_view,
     reduce_event,
 )
@@ -27,10 +28,14 @@ from agentic_debugger.ui.screens import render_view_header
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
     DebuggerPanel,
+    EvidenceState,
     PatchPanel,
     SourcePanel,
     TimelinePanel,
     VerifierPanel,
+    _ACTIVITY_FILTER_KINDS,
+    _KIND_STYLE,
+    _entry_style,
 )
 
 from application_support import (
@@ -264,7 +269,8 @@ class TestHeaderRendering:
         plain = header.plain
         assert "LIVE" in plain
         assert view.session_id in plain
-        assert "task curated-off-by-one-002" in plain
+        assert "curated-off-by-one-002" in plain
+        assert "Return the complete recent window" in plain
         assert_no_style_tags(plain)
 
     def test_replay_header_plain_has_mode_but_no_markup(self):
@@ -278,7 +284,7 @@ class TestHeaderRendering:
         plain = header.plain
         assert "REPLAY" in plain
         assert "28/28 events" in plain
-        assert "succeeded" in plain
+        assert "SUCCEEDED" in plain
         assert_no_style_tags(plain)
 
     def test_header_status_and_verifier_text_is_plain(self):
@@ -287,8 +293,9 @@ class TestHeaderRendering:
             view, mode="REPLAY", mode_style="bold white on #238636"
         )
         plain = header.plain
-        assert "verifier: COMPLETED/RESOLVED f2p 1/1" in plain
-        assert "run run-test-001" in plain
+        assert "verifier: RESOLVED" in plain
+        assert "fail-to-pass 1/1" in plain
+        assert "cleanup verified" in plain
         assert_no_style_tags(plain)
 
 
@@ -381,3 +388,141 @@ class TestPaneRendering:
             VerifierPanel._render_view(view).plain,
         ):
             assert_no_style_tags(plain)
+
+    def test_live_pending_pane_rendering_has_no_replay_wording(self):
+        view = initial_session_view(make_identity())
+
+        src_plain = SourcePanel._render_view(view, evidence_state=EvidenceState.LIVE_PENDING).plain
+        assert "Source evidence not available yet." in src_plain
+        assert "Waiting for the live session..." in src_plain
+        assert "replay position" not in src_plain
+        assert "Advance the replay" not in src_plain
+
+        dbg_plain = DebuggerPanel._render_view(view, evidence_state=EvidenceState.LIVE_PENDING).plain
+        assert "Debugger evidence not available yet." in dbg_plain
+        assert "Waiting for debugger activity..." in dbg_plain
+        assert "replay position" not in dbg_plain
+        assert "Advance the replay" not in dbg_plain
+
+        patch_plain = PatchPanel._render_view(view, evidence_state=EvidenceState.LIVE_PENDING).plain
+        assert "No patch attempt yet." in patch_plain
+        assert "Waiting for patch generation..." in patch_plain
+        assert "replay position" not in patch_plain
+
+        verifier_plain = VerifierPanel._render_view(view, evidence_state=EvidenceState.LIVE_PENDING).plain
+        assert "Verifier has not started yet." in verifier_plain
+        assert "Waiting for independent verification..." in verifier_plain
+        assert "replay position" not in verifier_plain
+
+    def test_replay_pending_pane_rendering_has_advance_guidance(self):
+        view = initial_session_view(make_identity())
+
+        src_plain = SourcePanel._render_view(view, evidence_state=EvidenceState.REPLAY_PENDING).plain
+        assert "Source snapshot not yet available at this replay position." in src_plain
+        assert "Advance the replay to the first source event." in src_plain
+
+        dbg_plain = DebuggerPanel._render_view(view, evidence_state=EvidenceState.REPLAY_PENDING).plain
+        assert "Debugger evidence not yet available at this replay position." in dbg_plain
+        assert "Advance the replay to the first debugger event." in dbg_plain
+
+        patch_plain = PatchPanel._render_view(view, evidence_state=EvidenceState.REPLAY_PENDING).plain
+        assert "Patch attempts not yet available at this replay position." in patch_plain
+        assert "Advance the replay to the first patch event." in patch_plain
+
+        verifier_plain = VerifierPanel._render_view(view, evidence_state=EvidenceState.REPLAY_PENDING).plain
+        assert "Verifier evidence not yet available at this replay position." in verifier_plain
+        assert "Advance the replay to the verifier events." in verifier_plain
+
+    def test_session_absent_pane_rendering_shows_not_recorded(self):
+        view = initial_session_view(make_identity())
+
+        src_plain = SourcePanel._render_view(view, evidence_state=EvidenceState.SESSION_ABSENT).plain
+        assert "No source snapshot was recorded for this session." in src_plain
+        assert "NOT RECORDED" in src_plain
+
+        dbg_plain = DebuggerPanel._render_view(view, evidence_state=EvidenceState.SESSION_ABSENT).plain
+        assert "No debugger evidence was recorded for this session." in dbg_plain
+        assert "NOT RECORDED" in dbg_plain
+
+        patch_plain = PatchPanel._render_view(view, evidence_state=EvidenceState.SESSION_ABSENT).plain
+        assert "No patch attempts were recorded for this session." in patch_plain
+        assert "NOT RECORDED" in patch_plain
+
+        verifier_plain = VerifierPanel._render_view(view, evidence_state=EvidenceState.SESSION_ABSENT).plain
+        assert "No verifier result was recorded for this session." in verifier_plain
+        assert "NOT RECORDED" in verifier_plain
+
+
+class TestActivityFilterVocabularyAndStyling:
+    def test_all_filters_contain_only_authoritative_session_event_kinds(self):
+        all_accepted_kinds = {kind.value for kind in SessionEventKind}
+        for filter_name, kinds in _ACTIVITY_FILTER_KINDS.items():
+            if filter_name == "all":
+                assert kinds == frozenset()
+            else:
+                for k in kinds:
+                    assert k in all_accepted_kinds, f"Filter {filter_name} has invalid kind {k}"
+
+    def test_controller_filter_contents(self):
+        kinds = _ACTIVITY_FILTER_KINDS["controller"]
+        assert SessionEventKind.CONTROLLER_STEP.value in kinds
+        assert SessionEventKind.CONTROLLER_TRANSITION.value in kinds
+
+    def test_model_filter_contents(self):
+        kinds = _ACTIVITY_FILTER_KINDS["model"]
+        assert SessionEventKind.MODEL_REQUEST_STARTED.value in kinds
+        assert SessionEventKind.MODEL_REQUEST_COMPLETED.value in kinds
+        assert SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value in kinds
+        assert SessionEventKind.MODEL_DIRECTIVE_REJECTED.value in kinds
+        assert SessionEventKind.MODEL_CONFIGURED.value in kinds
+
+    def test_debugger_filter_contents(self):
+        kinds = _ACTIVITY_FILTER_KINDS["debugger"]
+        assert SessionEventKind.DEBUGGER_STARTED.value in kinds
+        assert SessionEventKind.DEBUGGER_LOCATION_CHANGED.value in kinds
+        assert SessionEventKind.DEBUGGER_STACK_OBSERVED.value in kinds
+        assert SessionEventKind.DEBUGGER_LOCALS_OBSERVED.value in kinds
+
+    def test_patch_filter_contents(self):
+        kinds = _ACTIVITY_FILTER_KINDS["patch"]
+        assert SessionEventKind.PATCH_PROPOSED.value in kinds
+        assert SessionEventKind.PATCH_REJECTED.value in kinds
+        assert SessionEventKind.PATCH_APPLY_FAILED.value in kinds
+        assert SessionEventKind.PATCH_APPLIED.value in kinds
+        assert SessionEventKind.PATCH_REVERTED.value in kinds
+        assert SessionEventKind.SOURCE_SNAPSHOT.value in kinds
+        assert SessionEventKind.DIAGNOSIS_RECORDED.value in kinds
+
+    def test_verifier_filter_contents(self):
+        kinds = _ACTIVITY_FILTER_KINDS["verifier"]
+        assert SessionEventKind.VERIFIER_STARTED.value in kinds
+        assert SessionEventKind.VERIFIER_STAGE_STARTED.value in kinds
+        assert SessionEventKind.VERIFIER_STAGE_COMPLETED.value in kinds
+        assert SessionEventKind.VERIFIER_COMPLETED.value in kinds
+
+    def test_lifecycle_filter_contents(self):
+        kinds = _ACTIVITY_FILTER_KINDS["lifecycle"]
+        assert SessionEventKind.SESSION_CREATED.value in kinds
+        assert SessionEventKind.SESSION_STARTED.value in kinds
+        assert SessionEventKind.SESSION_STATUS_CHANGED.value in kinds
+        assert SessionEventKind.SESSION_CANCEL_REQUESTED.value in kinds
+        assert SessionEventKind.SESSION_COMPLETED.value in kinds
+        assert SessionEventKind.SESSION_FAILED.value in kinds
+        assert SessionEventKind.SESSION_CANCELLED.value in kinds
+        assert SessionEventKind.CLEANUP_STARTED.value in kinds
+        assert SessionEventKind.CLEANUP_COMPLETED.value in kinds
+        assert SessionEventKind.ARTIFACT_WRITTEN.value in kinds
+
+    def test_tool_event_styling(self):
+        ok_entry = TimelineEntry(sequence=1, event_kind=SessionEventKind.TOOL_COMPLETED, summary="tool get_stack_summary completed (ok)")
+        assert _entry_style(ok_entry) == "dark_cyan"
+
+        err_entry = TimelineEntry(sequence=2, event_kind=SessionEventKind.TOOL_COMPLETED, summary="tool step completed (error: timeout)")
+        assert _entry_style(err_entry) == "bold red"
+
+    def test_negative_event_styling(self):
+        assert _KIND_STYLE[SessionEventKind.SESSION_FAILED.value] == "bold red"
+        assert _KIND_STYLE[SessionEventKind.PATCH_APPLY_FAILED.value] == "bold red"
+        assert _KIND_STYLE[SessionEventKind.MODEL_DIRECTIVE_REJECTED.value] == "yellow"
+        assert _KIND_STYLE[SessionEventKind.PATCH_REJECTED.value] == "yellow"
+        assert _KIND_STYLE[SessionEventKind.SESSION_CANCELLED.value] == "bold yellow"

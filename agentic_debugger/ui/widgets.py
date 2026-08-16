@@ -13,6 +13,7 @@ come from the view.
 
 from __future__ import annotations
 
+from enum import Enum
 from typing import Any, Optional
 
 from rich.text import Text
@@ -20,18 +21,34 @@ from textual.app import ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
+from agentic_debugger.application.events import (
+    SessionEventKind,
+    SessionStatus,
+    SourceSnapshotStage,
+)
 from agentic_debugger.application.presentation import (
     DebuggerViewState,
     PatchStage,
     SessionViewState,
+    TimelineEntry,
     VerifierSummaryView,
     current_source,
 )
 
 _NOT_RECORDED = "NOT RECORDED"
 
+
+class EvidenceState(str, Enum):
+    """Presentation availability of domain evidence in the active view."""
+
+    AVAILABLE = "available"
+    LIVE_PENDING = "live_pending"
+    REPLAY_PENDING = "replay_pending"
+    SESSION_ABSENT = "session_absent"
+
+
 _ACTIVITY_FILTERS: tuple[tuple[str, str], ...] = (
-    ("all", "all"),
+    ("all", "all events"),
     ("lifecycle", "lifecycle (session/cleanup)"),
     ("controller", "controller"),
     ("model", "model requests"),
@@ -45,92 +62,115 @@ _ACTIVITY_FILTER_KINDS: dict[str, frozenset[str]] = {
     "all": frozenset(),
     "lifecycle": frozenset(
         {
-            "session.created",
-            "session.started",
-            "session.status_changed",
-            "session.cancel_requested",
-            "session.completed",
-            "session.failed",
-            "session.cancelled",
-            "cleanup.started",
-            "cleanup.completed",
+            SessionEventKind.SESSION_CREATED.value,
+            SessionEventKind.SESSION_STARTED.value,
+            SessionEventKind.SESSION_STATUS_CHANGED.value,
+            SessionEventKind.SESSION_CANCEL_REQUESTED.value,
+            SessionEventKind.SESSION_COMPLETED.value,
+            SessionEventKind.SESSION_FAILED.value,
+            SessionEventKind.SESSION_CANCELLED.value,
+            SessionEventKind.CLEANUP_STARTED.value,
+            SessionEventKind.CLEANUP_COMPLETED.value,
+            SessionEventKind.ARTIFACT_WRITTEN.value,
         }
     ),
-    "controller": frozenset({"controller.step", "controller.transition"}),
+    "controller": frozenset(
+        {
+            SessionEventKind.CONTROLLER_STEP.value,
+            SessionEventKind.CONTROLLER_TRANSITION.value,
+        }
+    ),
     "model": frozenset(
         {
-            "model.request_started",
-            "model.request_completed",
-            "model.directive_accepted",
-            "model.directive_rejected",
-            "model.configured",
+            SessionEventKind.MODEL_REQUEST_STARTED.value,
+            SessionEventKind.MODEL_REQUEST_COMPLETED.value,
+            SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value,
+            SessionEventKind.MODEL_DIRECTIVE_REJECTED.value,
+            SessionEventKind.MODEL_CONFIGURED.value,
         }
     ),
-    "tools": frozenset({"tool.started", "tool.completed"}),
+    "tools": frozenset(
+        {
+            SessionEventKind.TOOL_STARTED.value,
+            SessionEventKind.TOOL_COMPLETED.value,
+        }
+    ),
     "debugger": frozenset(
         {
-            "debugger.started",
-            "debugger.location_changed",
-            "debugger.stack_observed",
-            "debugger.locals_observed",
+            SessionEventKind.DEBUGGER_STARTED.value,
+            SessionEventKind.DEBUGGER_LOCATION_CHANGED.value,
+            SessionEventKind.DEBUGGER_STACK_OBSERVED.value,
+            SessionEventKind.DEBUGGER_LOCALS_OBSERVED.value,
         }
     ),
     "patch": frozenset(
         {
-            "patch.proposed",
-            "patch.rejected",
-            "patch.apply_failed",
-            "patch.applied",
-            "patch.reverted",
-            "source.snapshot",
-            "diagnosis.recorded",
+            SessionEventKind.PATCH_PROPOSED.value,
+            SessionEventKind.PATCH_REJECTED.value,
+            SessionEventKind.PATCH_APPLY_FAILED.value,
+            SessionEventKind.PATCH_APPLIED.value,
+            SessionEventKind.PATCH_REVERTED.value,
+            SessionEventKind.SOURCE_SNAPSHOT.value,
+            SessionEventKind.DIAGNOSIS_RECORDED.value,
         }
     ),
     "verifier": frozenset(
         {
-            "verifier.started",
-            "verifier.stage_started",
-            "verifier.stage_completed",
-            "verifier.completed",
+            SessionEventKind.VERIFIER_STARTED.value,
+            SessionEventKind.VERIFIER_STAGE_STARTED.value,
+            SessionEventKind.VERIFIER_STAGE_COMPLETED.value,
+            SessionEventKind.VERIFIER_COMPLETED.value,
         }
     ),
 }
 
 _KIND_STYLE: dict[str, str] = {
-    "session.created": "bold",
-    "session.started": "bold",
-    "session.status_changed": "bold",
-    "session.cancel_requested": "bold yellow",
-    "session.completed": "bold green",
-    "session.failed": "bold red",
-    "session.cancelled": "bold yellow",
-    "controller.step": "dim",
-    "controller.transition": "cyan",
-    "model.request_started": "blue",
-    "model.request_completed": "blue",
-    "model.directive_accepted": "green",
-    "model.directive_rejected": "yellow",
-    "tool.started": "magenta",
-    "tool.completed": "magenta",
-    "debugger.started": "deep_sky_blue1",
-    "debugger.location_changed": "deep_sky_blue1",
-    "debugger.stack_observed": "deep_sky_blue1",
-    "debugger.locals_observed": "deep_sky_blue1",
-    "patch.proposed": "yellow",
-    "patch.rejected": "red",
-    "patch.apply_failed": "red",
-    "patch.applied": "orange1",
-    "patch.reverted": "orange1",
-    "source.snapshot": "steel_blue1",
-    "diagnosis.recorded": "steel_blue1",
-    "verifier.started": "green",
-    "verifier.stage_started": "green",
-    "verifier.stage_completed": "green",
-    "verifier.completed": "bold green",
-    "cleanup.started": "dim",
-    "cleanup.completed": "dim",
-    "artifact.written": "dim",
+    SessionEventKind.SESSION_CREATED.value: "dim",
+    SessionEventKind.SESSION_STARTED.value: "bold green",
+    SessionEventKind.SESSION_STATUS_CHANGED.value: "bold",
+    SessionEventKind.SESSION_CANCEL_REQUESTED.value: "bold yellow",
+    SessionEventKind.SESSION_COMPLETED.value: "bold green",
+    SessionEventKind.SESSION_FAILED.value: "bold red",
+    SessionEventKind.SESSION_CANCELLED.value: "bold yellow",
+    SessionEventKind.CLEANUP_STARTED.value: "dim",
+    SessionEventKind.CLEANUP_COMPLETED.value: "dim green",
+    SessionEventKind.ARTIFACT_WRITTEN.value: "dim cyan",
+    SessionEventKind.CONTROLLER_STEP.value: "#8fb7d9",
+    SessionEventKind.CONTROLLER_TRANSITION.value: "bold #8fb7d9",
+    SessionEventKind.MODEL_REQUEST_STARTED.value: "#a371f7",
+    SessionEventKind.MODEL_REQUEST_COMPLETED.value: "#a371f7",
+    SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value: "bold #a371f7",
+    SessionEventKind.MODEL_DIRECTIVE_REJECTED.value: "yellow",
+    SessionEventKind.MODEL_CONFIGURED.value: "bold #a371f7",
+    SessionEventKind.TOOL_STARTED.value: "dark_cyan",
+    SessionEventKind.TOOL_COMPLETED.value: "dark_cyan",
+    SessionEventKind.DEBUGGER_STARTED.value: "magenta",
+    SessionEventKind.DEBUGGER_LOCATION_CHANGED.value: "magenta",
+    SessionEventKind.DEBUGGER_STACK_OBSERVED.value: "magenta",
+    SessionEventKind.DEBUGGER_LOCALS_OBSERVED.value: "magenta",
+    SessionEventKind.PATCH_PROPOSED.value: "yellow",
+    SessionEventKind.PATCH_REJECTED.value: "yellow",
+    SessionEventKind.PATCH_APPLY_FAILED.value: "bold red",
+    SessionEventKind.PATCH_APPLIED.value: "orange1",
+    SessionEventKind.PATCH_REVERTED.value: "orange1",
+    SessionEventKind.SOURCE_SNAPSHOT.value: "dim cyan",
+    SessionEventKind.DIAGNOSIS_RECORDED.value: "cyan",
+    SessionEventKind.VERIFIER_STARTED.value: "blue",
+    SessionEventKind.VERIFIER_STAGE_STARTED.value: "dim blue",
+    SessionEventKind.VERIFIER_STAGE_COMPLETED.value: "green",
+    SessionEventKind.VERIFIER_COMPLETED.value: "bold green",
 }
+
+
+def _entry_style(entry: TimelineEntry) -> str:
+    """Return styling for a timeline entry using kind and status information."""
+    if entry.event_kind == SessionEventKind.TOOL_COMPLETED:
+        if "(error" in entry.summary or "(failed" in entry.summary:
+            return "bold red"
+        if "(rejected" in entry.summary:
+            return "yellow"
+        return "dark_cyan"
+    return _KIND_STYLE.get(entry.event_kind.value, "default")
 
 
 def _append_section(text: Text, title: str) -> None:
@@ -169,33 +209,62 @@ class SourcePanel(VerticalScroll):
         super().__init__(**kwargs)
         self._text: Static = Static("")
         self._view: Optional[SessionViewState] = None
+        self._evidence_state: EvidenceState = EvidenceState.AVAILABLE
 
     def compose(self) -> ComposeResult:
         yield self._text
 
-    def update_view(self, view: SessionViewState) -> None:
+    def update_view(
+        self,
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> None:
         self._view = view
-        self._text.update(self._render_view(view))
+        self._evidence_state = evidence_state
+        self._text.update(
+            self._render_view(view, evidence_state=evidence_state)
+        )
 
     @staticmethod
-    def _render_view(view: SessionViewState) -> Text:
+    def _render_view(
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> Text:
         source = current_source(view)
         debugger = view.debugger
         if source is None:
-            if not view.sources:
-                text = Text("No source snapshot recorded for this session.\n\n")
+            if view.sources:
+                text = Text(
+                    "The debugger's current file has no recorded source snapshot "
+                    "(source for the current execution location is not recorded).\n\n",
+                    style="yellow",
+                )
                 text.append("NOT RECORDED", style="bold dim")
                 return text
-            text = Text(
-                "The debugger's current file has no recorded source snapshot "
-                "(source for the current execution location is not recorded).\n\n",
-                style="yellow",
-            )
+            if evidence_state == EvidenceState.LIVE_PENDING:
+                text = Text("Source evidence not available yet.\n")
+                text.append("Waiting for the live session...\n", style="dim")
+                return text
+            if evidence_state == EvidenceState.REPLAY_PENDING:
+                text = Text(
+                    "Source snapshot not yet available at this replay position.\n"
+                )
+                text.append(
+                    "Advance the replay to the first source event.\n",
+                    style="dim",
+                )
+                return text
+            text = Text("No source snapshot was recorded for this session.\n\n")
             text.append("NOT RECORDED", style="bold dim")
             return text
         text = Text()
+        stage_label = {
+            SourceSnapshotStage.INITIAL: "initial workspace",
+            SourceSnapshotStage.APPLIED: "patched workspace",
+            SourceSnapshotStage.REVERTED: "reverted workspace",
+        }.get(source.stage, source.stage.value)
         text.append(
-            f"{source.path}  ·  {source.stage.value}  ·  sha256 "
+            f"{source.path}  ·  {stage_label}  ·  sha256 "
             f"{source.sha256[:12]}…"
         )
         if source.truncated:
@@ -241,20 +310,44 @@ class DebuggerPanel(VerticalScroll):
         super().__init__(**kwargs)
         self._text: Static = Static("")
         self._view: Optional[SessionViewState] = None
+        self._evidence_state: EvidenceState = EvidenceState.AVAILABLE
 
     def compose(self) -> ComposeResult:
         yield self._text
 
-    def update_view(self, view: SessionViewState) -> None:
+    def update_view(
+        self,
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> None:
         self._view = view
-        self._text.update(self._render_view(view))
+        self._evidence_state = evidence_state
+        self._text.update(
+            self._render_view(view, evidence_state=evidence_state)
+        )
 
     @staticmethod
-    def _render_view(view: SessionViewState) -> Text:
+    def _render_view(
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> Text:
         debugger: DebuggerViewState = view.debugger
         text = Text()
         if not debugger.session_started:
-            text.append("No debugger session was recorded.\n\n")
+            if evidence_state == EvidenceState.LIVE_PENDING:
+                text.append("Debugger evidence not available yet.\n")
+                text.append("Waiting for debugger activity...\n", style="dim")
+                return text
+            if evidence_state == EvidenceState.REPLAY_PENDING:
+                text.append(
+                    "Debugger evidence not yet available at this replay position.\n"
+                )
+                text.append(
+                    "Advance the replay to the first debugger event.\n",
+                    style="dim",
+                )
+                return text
+            text.append("No debugger evidence was recorded for this session.\n\n")
             text.append(_NOT_RECORDED, style="dim italic")
             return text
         _append_section(text, "Current location")
@@ -317,19 +410,43 @@ class PatchPanel(VerticalScroll):
         super().__init__(**kwargs)
         self._text: Static = Static("")
         self._view: Optional[SessionViewState] = None
+        self._evidence_state: EvidenceState = EvidenceState.AVAILABLE
 
     def compose(self) -> ComposeResult:
         yield self._text
 
-    def update_view(self, view: SessionViewState) -> None:
+    def update_view(
+        self,
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> None:
         self._view = view
-        self._text.update(self._render_view(view))
+        self._evidence_state = evidence_state
+        self._text.update(
+            self._render_view(view, evidence_state=evidence_state)
+        )
 
     @staticmethod
-    def _render_view(view: SessionViewState) -> Text:
+    def _render_view(
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> Text:
         text = Text()
         if not view.patch_attempts:
-            text.append("No patch attempts were recorded.\n\n")
+            if evidence_state == EvidenceState.LIVE_PENDING:
+                text.append("No patch attempt yet.\n")
+                text.append("Waiting for patch generation...\n", style="dim")
+                return text
+            if evidence_state == EvidenceState.REPLAY_PENDING:
+                text.append(
+                    "Patch attempts not yet available at this replay position.\n"
+                )
+                text.append(
+                    "Advance the replay to the first patch event.\n",
+                    style="dim",
+                )
+                return text
+            text.append("No patch attempts were recorded for this session.\n\n")
             text.append(_NOT_RECORDED, style="dim italic")
             return text
         for attempt in view.patch_attempts:
@@ -384,16 +501,27 @@ class VerifierPanel(VerticalScroll):
         super().__init__(**kwargs)
         self._text: Static = Static("")
         self._view: Optional[SessionViewState] = None
+        self._evidence_state: EvidenceState = EvidenceState.AVAILABLE
 
     def compose(self) -> ComposeResult:
         yield self._text
 
-    def update_view(self, view: SessionViewState) -> None:
+    def update_view(
+        self,
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> None:
         self._view = view
-        self._text.update(self._render_view(view))
+        self._evidence_state = evidence_state
+        self._text.update(
+            self._render_view(view, evidence_state=evidence_state)
+        )
 
     @staticmethod
-    def _render_view(view: SessionViewState) -> Text:
+    def _render_view(
+        view: SessionViewState,
+        evidence_state: EvidenceState = EvidenceState.AVAILABLE,
+    ) -> Text:
         text = Text()
         if view.verifier_stages:
             _append_section(text, "Stages (progress only)")
@@ -411,10 +539,34 @@ class VerifierPanel(VerticalScroll):
                 text.append("\n")
         summary: Optional[VerifierSummaryView] = view.verifier_summary
         if summary is None:
-            text.append("\nNo verifier result recorded.\n\n")
             if view.verifier_stages:
-                text.append("Verifier is in progress or was interrupted.", style="yellow")
+                text.append(
+                    "\nVerifier is in progress or was interrupted.\n",
+                    style="yellow",
+                )
+            elif evidence_state == EvidenceState.LIVE_PENDING:
+                text.append(
+                    "\nVerifier has not started yet.\n"
+                )
+                text.append(
+                    "Waiting for independent verification...\n",
+                    style="dim",
+                )
+            elif evidence_state == EvidenceState.REPLAY_PENDING:
+                text.append(
+                    "\nVerifier evidence not yet available at this replay position.\n"
+                )
+                text.append(
+                    "Advance the replay to the verifier events.\n",
+                    style="dim",
+                )
+            elif view.status == SessionStatus.CANCELLED:
+                text.append(
+                    "\nIndependent verification was not run: the session was cancelled before reaching the verification stage.\n\n"
+                )
+                text.append(_NOT_RECORDED, style="dim italic")
             else:
+                text.append("\nNo verifier result was recorded for this session.\n\n")
                 text.append(_NOT_RECORDED, style="dim italic")
             return text
         _append_section(text, "Final verifier result (authoritative)")
@@ -487,7 +639,7 @@ class ActivityPanel(VerticalScroll):
             text.append("No activity recorded for this filter.", style="dim")
             return text
         for entry in reversed(entries):
-            style = _KIND_STYLE.get(entry.event_kind.value, "default")
+            style = _entry_style(entry)
             text.append(f"#{entry.sequence:<5} ", style="dim")
             text.append(entry.summary, style=style)
             text.append("\n")
@@ -528,7 +680,7 @@ class TimelinePanel(VerticalScroll):
             return text
         for entry in view.timeline:
             marker = "» " if entry.sequence in self._boundaries else "  "
-            style = _KIND_STYLE.get(entry.event_kind.value, "default")
+            style = _entry_style(entry)
             text.append(f"{marker}#{entry.sequence:<5} ", style="dim")
             text.append(entry.summary, style=style)
             text.append("\n")
@@ -554,6 +706,7 @@ class LiveBar(Static):
 __all__ = [
     "ActivityPanel",
     "DebuggerPanel",
+    "EvidenceState",
     "LiveBar",
     "PatchPanel",
     "ReplayBar",
