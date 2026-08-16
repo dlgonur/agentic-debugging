@@ -13,8 +13,9 @@ fixture, proving:
   bounded sanitized diagnostics;
 - cooperative cancellation interrupts the active command promptly and
   terminates with CANCELLED only after verified cleanup;
-- configured command descendants cannot be orphaned (per-request timeout/
-  cancel tree kill; job close at worker release);
+- configured command descendants cannot be orphaned (per-request cleanup on
+  every request exit — success, natural error, timeout, cancel — plus job
+  close at worker release);
 - secret-looking stderr output is never persisted into history evidence;
 - live/replay presentation parity for a successful configured run, and
   replay executes nothing (the recorded journal is the only input).
@@ -453,6 +454,7 @@ class TestConfiguredSourceProcessTree:
     def test_completed_session_job_close_leaves_no_descendant(self, tmp_path):
         data_file = write_task_data(tmp_path)
         child_pid_file = tmp_path / "child.pid"
+        grandchild_pid_file = tmp_path / "grandchild.pid"
         write_profile(
             tmp_path,
             "dummy",
@@ -462,6 +464,8 @@ class TestConfiguredSourceProcessTree:
                 str(data_file),
                 "--child-pid-file",
                 str(child_pid_file),
+                "--grandchild-pid-file",
+                str(grandchild_pid_file),
             ),
         )
         store = HistoryStore(tmp_path)
@@ -470,14 +474,25 @@ class TestConfiguredSourceProcessTree:
         result = run_to_terminal(worker)
         assert result.status is SessionStatus.SUCCEEDED
         child_pid = int(child_pid_file.read_text()) if child_pid_file.is_file() else None
-        assert child_pid is not None
-        # the descendant stays inside the accepted Windows job until the
-        # supervisor releases it; after close nothing may survive
+        grandchild_pid = (
+            int(grandchild_pid_file.read_text()) if grandchild_pid_file.is_file() else None
+        )
+        assert child_pid is not None and grandchild_pid is not None
+        # Normal worker completion gate (Repair Pass 4): a configured session
+        # whose command request temporarily creates descendants and then
+        # returns valid responses must not leave those descendants alive
+        # after the session completes normally.  On POSIX the per-request
+        # group cleanup already kills the tree when each successful request
+        # returns; on Windows the descendants stay inside the accepted job
+        # until the supervisor releases it.  After close nothing may survive.
         worker.close()
         deadline = time.monotonic() + 10.0
-        while time.monotonic() < deadline and pid_is_alive(child_pid):
+        while time.monotonic() < deadline and (
+            pid_is_alive(child_pid) or pid_is_alive(grandchild_pid)
+        ):
             time.sleep(0.1)
         assert not pid_is_alive(child_pid), "descendant survived worker close"
+        assert not pid_is_alive(grandchild_pid), "grandchild survived worker close"
 
 
 class TestConfiguredSourceEvidenceSafety:

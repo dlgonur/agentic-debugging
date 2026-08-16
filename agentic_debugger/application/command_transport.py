@@ -18,7 +18,12 @@ validation contract:
 - **Process-tree termination**: on Windows the command tree is terminated
   with ``taskkill /T /F`` (an explicit standard utility invocation, never a
   shell string), with the accepted CTRL_BREAK/terminate/kill group ladder as
-  the fallback; POSIX uses the accepted process-group ladder.
+  the fallback; POSIX uses the accepted process-group ladder.  On POSIX the
+  request-owned group is additionally cleaned on EVERY request exit —
+  including a normal successful or naturally failed command exit, when the
+  direct process is already reaped — using the authoritative group id known
+  at spawn time, so a completed request can never leave live descendants
+  behind in its request-owned group.
 
 The protocol contract is byte-for-byte the existing one: one JSON-lines
 request on stdin, one JSON object on stdout, bounded stdout/stderr captures,
@@ -42,6 +47,7 @@ from agentic_debugger.application import ApplicationInputError
 from agentic_debugger.application.process_tree import (
     register_request_group,
     terminate_process_group,
+    terminate_request_group_id,
     terminate_request_process_group,
     unregister_request_group,
 )
@@ -248,8 +254,24 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         try:
             return self._run_request(process, request_bytes, timeout_seconds)
         finally:
+            # Request-owned group ownership invariant (POSIX): when request()
+            # leaves for ANY reason — success, invalid response, non-zero
+            # exit, cancellation, timeout, or a bounded transport failure —
+            # no ordinary descendant may remain in the request-owned group.
+            # The explicit cancellation/timeout ladders already terminate the
+            # tree while the command is alive; this final cleanup covers the
+            # normal/natural exit paths, where the direct process is already
+            # reaped and os.getpgid(proc.pid) can no longer resolve the group
+            # even while descendants with the original group id are alive.
+            # The authoritative group id is the one known at spawn time.
             if request_group_id is not None:
-                unregister_request_group(request_group_id)
+                try:
+                    terminate_request_group_id(request_group_id)
+                finally:
+                    # Unregister only after the final group cleanup was
+                    # attempted, so the worker-lifecycle SIGTERM handler
+                    # still owns any in-flight group up to this point.
+                    unregister_request_group(request_group_id)
 
     def _run_request(
         self,
@@ -262,7 +284,9 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         Split out of :meth:`request` so the request-owned process group can be
         registered/unregistered around the whole request lifetime in one
         place; every cancellation, timeout, and error path still terminates
-        the tree before returning.
+        the tree before returning, and :meth:`request` performs the final
+        request-owned group cleanup on every exit path (including a normal
+        command exit) before unregistering the group.
         """
         stdout = _BoundedCapture(self.max_output_bytes)
         stderr = _BoundedCapture(self.max_output_bytes)

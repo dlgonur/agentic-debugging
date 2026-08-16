@@ -24,9 +24,14 @@ group), so the per-request cancellation/timeout ladder kills the command and
 every descendant in that group; and every in-flight group is registered here
 with a worker SIGTERM handler that terminates all registered groups before
 the worker's default termination, so a forced/cooperative worker shutdown
-cannot leave a detached command tree behind.  On Windows the accepted Job
-Object already covers the worker-escalation topology, so the registry is a
-no-op there.
+cannot leave a detached command tree behind.  The same authoritative
+group id (known at spawn time: the direct command's pid) is also used for
+the final per-request cleanup on EVERY request exit — including a normal
+successful or naturally failed command exit, when the direct process is
+already reaped and ``os.getpgid(proc.pid)`` can no longer resolve the group
+— so no request-owned group is ever unregistered with live descendants
+still in it.  On Windows the accepted Job Object already covers the
+worker-escalation topology, so the registry is a no-op there.
 """
 
 from __future__ import annotations
@@ -332,6 +337,12 @@ _REQUEST_GROUP_LOCK = threading.RLock()
 _REQUEST_GROUP_IDS: set[int] = set()
 _REQUEST_GROUP_HANDLER_INSTALLED = False
 
+#: Bounded disappearance check for a signaled request-owned group: a short
+#: polling window (never a busy spin) between SIGTERM and the SIGKILL
+#: escalation, and again after SIGKILL before reporting the group state.
+_GROUP_VANISH_SECONDS = 2.0
+_GROUP_POLL_SECONDS = 0.05
+
 
 def _snapshot_request_groups() -> list[int]:
     """Return the in-flight request group ids.
@@ -466,6 +477,76 @@ def terminate_request_process_group(proc: subprocess.Popen) -> None:
     _wait_proc(proc, 1.0)
 
 
+def terminate_request_group_id(group_id: int) -> bool:
+    """Terminate a known request-owned process group by its id (POSIX).
+
+    The authoritative request-group id is known at spawn time (with
+    ``start_new_session`` the direct command is its own group leader, so the
+    group id equals its pid).  This helper works from that id alone, because
+    on a NORMAL command exit the direct process is already reaped and
+    ``os.getpgid(proc.pid)`` may fail even while descendants with the
+    original group id are still alive.
+
+    Bounded ladder: SIGTERM to the group, a bounded disappearance check
+    (polling, never a busy spin), SIGKILL to the group if members remain.
+    A group that is already gone (``ProcessLookupError``) is ordinary
+    success.  The worker's own process group is never signaled: an invalid
+    or self-referential id is refused.  On Windows this is a no-op (the
+    accepted Job Object owns the tree).
+
+    Returns True when the group is observed empty afterwards (including the
+    already-gone case), False when the id was refused or members could not
+    be confirmed gone within the bounded window.
+    """
+    if sys.platform == "win32":
+        return True
+    if type(group_id) is not int or isinstance(group_id, bool) or group_id <= 0:
+        return False
+    try:
+        own_pgid = os.getpgid(os.getpid())
+    except OSError:  # pragma: no cover - defensive
+        own_pgid = None
+    if own_pgid is not None and group_id == own_pgid:
+        # Defensive: never signal the worker's own process group.
+        return False
+
+    def _group_empty() -> bool:
+        try:
+            os.killpg(group_id, 0)
+        except ProcessLookupError:
+            return True
+        except PermissionError:
+            # Members exist but are not ours to signal: not empty.
+            return False
+        except OSError:
+            return True
+        return False
+
+    try:
+        os.killpg(group_id, signal.SIGTERM)
+    except ProcessLookupError:
+        return True
+    except (PermissionError, OSError):
+        return _group_empty()
+    deadline = time.monotonic() + _GROUP_VANISH_SECONDS
+    while time.monotonic() < deadline:
+        if _group_empty():
+            return True
+        time.sleep(_GROUP_POLL_SECONDS)
+    if _group_empty():
+        return True
+    try:
+        os.killpg(group_id, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError, OSError):
+        pass
+    deadline = time.monotonic() + _GROUP_VANISH_SECONDS
+    while time.monotonic() < deadline:
+        if _group_empty():
+            return True
+        time.sleep(_GROUP_POLL_SECONDS)
+    return _group_empty()
+
+
 def terminate_process_group(proc: subprocess.Popen) -> None:
     """Best-effort group kill ladder for the worker's own process group.
 
@@ -531,6 +612,7 @@ __all__ = [
     "spawn_suspended_on_windows",
     "terminate_process_group",
     "terminate_process_tree",
+    "terminate_request_group_id",
     "terminate_request_process_group",
     "unregister_request_group",
 ]

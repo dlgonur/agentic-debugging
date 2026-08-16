@@ -36,6 +36,12 @@ Modes (first argv argument):
   spawns a grandchild), records both pids in ``--child-pid-file`` /
   ``--grandchild-pid-file``, then behaves like ``valid`` (process-tree
   tests);
+- ``spawn_child_exit_nonzero``: same tree as ``spawn_child``, but exits
+  naturally with code 3 after emitting nothing (normal-exit process-tree
+  cleanup tests: the direct process is reaped while the tree is alive);
+- ``spawn_child_exit_invalid``: same tree as ``spawn_child``, but exits
+  naturally with code 0 after emitting invalid JSON (normal-exit
+  invalid-response process-tree cleanup tests);
 - ``hang_on_stdin``: never reads stdin and never exits (stdin write
   timeout).
 
@@ -337,6 +343,21 @@ def _spawn_descendant() -> None:
     if pid_file:
         Path(pid_file).write_text(str(child.pid), encoding="utf-8")
 
+    # Bounded readiness barrier: the tree modes claim a command -> child ->
+    # grandchild tree, so the direct command does not proceed (to respond,
+    # sleep, or exit) until the deepest requested marker exists.  This makes
+    # the natural-exit tree modes deterministic: the command exits with the
+    # whole tree confirmed alive, and the transport's prompt request-group
+    # cleanup cannot race the child's marker writes.  Bounded polling on an
+    # explicit marker, never an arbitrary fixed sleep.
+    marker = _arg("--grandchild-pgid-file") or _arg("--grandchild-pid-file")
+    if marker:
+        deadline = time.monotonic() + 15.0
+        while time.monotonic() < deadline:
+            if Path(marker).is_file():
+                break
+            time.sleep(0.02)
+
 
 def main() -> int:
     if MODE == "malformed":
@@ -397,6 +418,17 @@ def main() -> int:
         delay = _arg("--delay")
         if delay:
             time.sleep(float(delay))
+    if MODE == "spawn_child_exit_nonzero":
+        # Natural non-zero exit with the tree alive: the direct process is
+        # reaped while child/grandchild remain in its request-owned group.
+        _spawn_descendant()
+        return 3
+    if MODE == "spawn_child_exit_invalid":
+        # Natural zero exit with an invalid response and the tree alive.
+        _spawn_descendant()
+        sys.stdout.write("{not-json}\n")
+        sys.stdout.flush()
+        return 0
     if MODE in ("valid", "stderr", "secret_on_stderr", "slow", "spawn_child"):
         request = _read_request()
         state_dir = _arg("--state-dir")

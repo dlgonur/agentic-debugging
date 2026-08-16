@@ -7,6 +7,14 @@ SIGTERM handler (worker-lifecycle cleanup ownership) terminates every
 in-flight group so a forced/cooperative worker shutdown cannot orphan a
 detached command tree.
 
+Repair Pass 4 Blocker: the request-owned group belongs to the application
+for the ENTIRE request lifetime.  A normally completed command (successful
+response, non-zero exit, or invalid response) is reaped before ``request()``
+returns, so ``os.getpgid(proc.pid)`` can no longer resolve the group even
+while descendants with the original group id are alive; the final cleanup
+therefore uses the authoritative group id known at spawn time and runs on
+EVERY request exit path before the group is unregistered.
+
 These tests use real local dummy processes with explicit readiness/PID markers
 and bounded waits — never a fixed arbitrary sleep before cancellation.  They
 are platform-gated to POSIX: process-group semantics (``os.getpgid`` /
@@ -203,6 +211,111 @@ class TestPosixTimeoutKillsWholeTree:
         assert wait_until_dead(self_pid), "direct command survived the timeout"
         assert wait_until_dead(child_pid), "child survived the timeout"
         assert wait_until_dead(grandchild_pid), "grandchild survived the timeout"
+
+
+@POSIX_ONLY
+class TestPosixNormalExitCleansRequestGroup:
+    """Repair Pass 4: a normally completed request owns its group until
+    ``request()`` returns — no descendant may survive a natural exit.
+
+    The direct command exits naturally (successfully, non-zero, or with an
+    invalid response) and is reaped BEFORE ``request()`` returns, so the
+    group cleanup must work from the authoritative group id known at spawn
+    time, not from ``os.getpgid(proc.pid)``.
+    """
+
+    def test_successful_request_kills_child_and_grandchild(self, tmp_path):
+        # The exact FirstMate reproduction: command -> child -> grandchild,
+        # the command emits a valid response and exits 0.  After request()
+        # RETURNS SUCCESSFULLY the whole tree must be dead.  delay=0: the
+        # command exits naturally right after the tree is confirmed alive
+        # (the fixture's readiness barrier), never via the request timeout.
+        command = spawn_tree_command(tmp_path, delay="0")
+        transport = transport_for(command)
+        response = transport.request({"controller": {"state": "Reproduce"}}, 60.0)
+        # The response stays a successful valid directive: the residual
+        # descendant cleanup must not reinterpret a valid response.
+        assert response["kind"] == "action"
+        assert response["name"] == "run_reproduction"
+
+        self_pid, child_pid, grandchild_pid = read_pids(tmp_path)
+        assert wait_until_dead(self_pid), "direct command not reaped"
+        assert wait_until_dead(child_pid), "child survived a successful request"
+        assert wait_until_dead(grandchild_pid), (
+            "grandchild survived a successful request"
+        )
+
+    def test_natural_nonzero_exit_kills_child_and_grandchild(self, tmp_path):
+        # Natural non-zero exit with the tree alive: the existing
+        # process_error taxonomy is retained and the tree is cleaned.
+        command = [
+            sys.executable,
+            str(FIXTURE),
+            "spawn_child_exit_nonzero",
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--self-pid-file",
+            str(tmp_path / "self.pid"),
+            "--child-pid-file",
+            str(tmp_path / "child.pid"),
+            "--grandchild-pid-file",
+            str(tmp_path / "grandchild.pid"),
+        ]
+        transport = transport_for(command)
+        with pytest.raises(LiveTransportError) as exc:
+            transport.request({}, 60.0)
+        assert exc.value.kind == "process_error"
+
+        assert wait_for_file(tmp_path / "child.pid"), "child never spawned"
+        assert wait_for_file(tmp_path / "grandchild.pid"), "grandchild never spawned"
+        self_pid, child_pid, grandchild_pid = read_pids(tmp_path)
+        assert wait_until_dead(self_pid), "direct command not reaped"
+        assert wait_until_dead(child_pid), "child survived a natural non-zero exit"
+        assert wait_until_dead(grandchild_pid), (
+            "grandchild survived a natural non-zero exit"
+        )
+
+    def test_natural_invalid_response_kills_child_and_grandchild(self, tmp_path):
+        # Natural zero exit with an invalid response and the tree alive: the
+        # existing invalid_response taxonomy is retained and the tree is
+        # cleaned.
+        command = [
+            sys.executable,
+            str(FIXTURE),
+            "spawn_child_exit_invalid",
+            "--state-dir",
+            str(tmp_path / "state"),
+            "--self-pid-file",
+            str(tmp_path / "self.pid"),
+            "--child-pid-file",
+            str(tmp_path / "child.pid"),
+            "--grandchild-pid-file",
+            str(tmp_path / "grandchild.pid"),
+        ]
+        transport = transport_for(command)
+        with pytest.raises(LiveTransportError) as exc:
+            transport.request({}, 60.0)
+        assert exc.value.kind == "invalid_response"
+
+        assert wait_for_file(tmp_path / "child.pid"), "child never spawned"
+        assert wait_for_file(tmp_path / "grandchild.pid"), "grandchild never spawned"
+        self_pid, child_pid, grandchild_pid = read_pids(tmp_path)
+        assert wait_until_dead(self_pid), "direct command not reaped"
+        assert wait_until_dead(child_pid), "child survived an invalid response"
+        assert wait_until_dead(grandchild_pid), (
+            "grandchild survived an invalid response"
+        )
+
+    def test_request_group_is_unregistered_after_request(self, tmp_path):
+        # After any completed request the group is unregistered: the worker
+        # SIGTERM registry only tracks IN-FLIGHT requests.
+        from agentic_debugger.application.process_tree import _snapshot_request_groups
+
+        command = spawn_tree_command(tmp_path, delay="0")
+        transport = transport_for(command)
+        transport.request({"controller": {"state": "Reproduce"}}, 60.0)
+        self_pid, _, _ = read_pids(tmp_path)
+        assert self_pid not in _snapshot_request_groups()
 
 
 # A minimal worker stand-in: installs the worker-lifecycle cleanup handler,
