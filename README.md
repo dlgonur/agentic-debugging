@@ -2,6 +2,14 @@
 
 Research and prototype workspace for an agentic debugging system.
 
+**Local Application V1 (2026-08-16): COMPLETE — Tasks 1–8 accepted.** V1 is a
+local application surface over the existing scientific system (deterministic
+offline sessions and explicitly configured command-model sessions through one
+shared application architecture); see `docs/architecture/local-application-v1.md`.
+Provider marketplaces/SDKs, credential management, arbitrary-repository IDE
+behavior, GPU/model hosting, browser UI, and campaign orchestration remain
+explicit non-goals; V1 completion authorizes no new empirical campaign.
+
 **Current project status (2026-08-13):** the R1-R6 phase superseded the
 2026-08-11 S9 bounded-negative closeout (which remains historical, archived
 at `docs/archive/status/project-closeout-2026-08-11.md`). Current state:
@@ -17,9 +25,10 @@ not claimed complete). No matched-base fine-tuning ablation exists. The
 single canonical authority for current status is
 `docs/project-closeout.md`; the full technical report is
 `docs/final-report.md`; the diary is complete through 2026-08-13. FirstMate
-review of the documentation candidate: ACCEPTED (2026-08-13). Remaining:
-Git commit/push of the documentation candidate (Final Git operator) and
-eventual integration to main.
+review of the documentation candidate: ACCEPTED (2026-08-13). The R1-R6
+documentation closeout is committed, pushed, and integrated to main (owner
+Git evidence at the accepted Local Application V1 closeout showed main ==
+origin/main at `387a100`, the accepted pre-reconciliation baseline).
 
 Historical status (2026-08-07): tracked history through `1e680b1`
 contains the literature syntheses, bounded post-mortem PDB implementation,

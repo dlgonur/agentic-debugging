@@ -15,10 +15,21 @@ technical narrative through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `docs/archive/reports/final-report-2026-08-11.md`.
 
+**2026-08-16 status update:** Local Application V1 Tasks 1–8 are COMPLETE /
+ACCEPTED (authoritative record `docs/architecture/local-application-v1.md`);
+TODO.md and `docs/project-tracker.md` have been reconciled to the post-V1
+current status. The R1-R6 documentation candidate was committed, pushed, and
+integrated to main by the Final Git operator; at the accepted Local
+Application V1 closeout, owner Git evidence showed main == origin/main at
+`387a100` (accepted pre-reconciliation baseline; Task-8 branch deleted
+locally and remotely). This update does not change any scientific finding,
+qualifier, metric, or the INCOMPLETE_HARDWARE_STOP boundary in this document.
+
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
 ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT
-INCOMPLETE DUE HARDWARE; MAIN INTEGRATION PENDING**
+INCOMPLETE DUE HARDWARE; R1-R6 DOCS CLOSEOUT COMMITTED, PUSHED, AND
+INTEGRATED TO MAIN**
 
 ---
 
@@ -141,7 +152,8 @@ structured JSON trace export.
 
 ## 8. Git/evidence carrier
 
-- Current docs branch: `docs/r1-r6-current-closeout-v1`.
+- R1-R6 documentation carrier branch used for the 2026-08-13 closeout
+  (historical): `docs/r1-r6-current-closeout-v1`.
 - Milestones: R1 `c842d69`, R2 `97cc7fe`, R3 `f2291df`, R4
   `372d51f1a35e071c677391c9970f7b552bb276f2`, R5 reproducibility closeout
   `54828db1d5dec4e95105f1c1d07ba5dd7518060c`, R6 preserved implementation/
@@ -157,20 +169,26 @@ structured JSON trace export.
   promoted to `frozen_in_repo`; tracked carriers are named per claim in
   `docs/final-report.md` §22.
 
-## 9. What remains operationally before final main integration
+## 9. Git closeout and what remains
 
-1. FirstMate review of this documentation candidate
-   (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) — **ACCEPTED**
-   (2026-08-13).
-2. Git commit/push of the documentation candidate (owner/Final Git
-   operator; not performed in this BUILD).
-3. Integration to `main` (fast-forward or reviewed merge; owner decision).
-4. Not in current scope: resuming the R6 final five-task holdout (closed
-   boundary — INCOMPLETE_HARDWARE_STOP), DPO, RAG correctness campaigns,
-   BugsInPy execution (license-gated), new model experiments.
+The R1-R6 documentation candidate Git work is **COMPLETE**: FirstMate review
+**ACCEPTED** (2026-08-13); commit/push and integration to `main` were
+performed by the Final Git operator; at the accepted Local Application V1
+closeout, owner Git evidence showed main == origin/main at `387a100`
+(accepted pre-reconciliation baseline; Task-8 branch deleted locally and
+remotely).
+
+Not in current scope: resuming the R6 final five-task holdout (closed
+boundary — INCOMPLETE_HARDWARE_STOP), DPO, RAG correctness campaigns,
+BugsInPy execution (license-gated), new model experiments. The real operator
+preflight and any live campaign (including the Authorized Six-Case Live
+Campaign) remain OPTIONAL / OWNER-AUTHORIZED future actions only; they are
+not the current engineering task and require separate explicit owner
+authorization and fresh valid operator artifacts.
 
 ---
 
-*Current closeout BUILD: no commit, push, or merge was performed during the
-BUILD; the historical 2026-08-11 closeout and report remain archived
+*Historical R1-R6 documentation BUILD note: the candidate BUILD itself
+performed no Git mutation; owner Git closeout was later completed as recorded
+in §9. The historical 2026-08-11 closeout and report remain archived
 verbatim.*

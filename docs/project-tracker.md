@@ -104,8 +104,8 @@ Rules:
   cleanup verified, verifier `COMPLETED/RESOLVED` with f2p **1/1** and p2p
   **2/2**, and final live/replay `SessionViewState` equality. Sequential real
   sessions produced distinct history entries and the first remained replayable
-  after the second. Task 8 external/configured command-model execution remains
-  intentionally unimplemented.
+  after the second. At Task-7 acceptance, configured command-model execution
+  was intentionally deferred to Task 8; Task 8 is now accepted below.
 - [x] **Task 8 — Add configured command-model execution and harden V1** —
   ACCEPTED (2026-08-16). Added the validated app-owned `command-models-v1`
   profile contract and configured-command execution through the existing
@@ -158,7 +158,7 @@ Rules:
 
 - [x] 1.1 Research debugging, automated debugging, fault localization, and program repair. (Bounded reviewed survey accepted at `3c23b6e`; unresolved claims are excluded rather than asserted.)
 - [x] 1.2 Study LLM-based debugging work. (Bounded reviewed synthesis accepted at `3c23b6e`; additional frontier reading remains optional follow-up.)
-- [ ] 1.3 Study agentic debugging, tool-using agents, and multi-agent debugging.
+- [x] 1.3 Study agentic debugging, tool-using agents, and multi-agent debugging. (Tamamlandı 2026-08-11 — S7 focused literature closeout, 20 works, commit `677992f`; evidence tiers preserved; see `research/literature/agentic_debugging_literature_closeout_2026-08-11.md`. Subtasks 1.3.3/1.3.4/1.3.7 resolved via that closeout; 1.3.5/1.3.6 superseded — see below.)
 - [x] 1.4 Compare traditional debugging, LLM-based debugging, and agentic debugging. (`docs/research/debugging-approaches.md`, accepted at `3c23b6e`.)
 - [x] 1.5 Study SWE-Agent, OpenHands, AutoCodeRover, Agentless, and ChatDBG. (All five have dedicated reviewed notes; capability matrix v1 is tracked. This aligns the parent with completed subtasks 1.5.1–1.5.6 and instructor item 5.)
 
@@ -185,19 +185,19 @@ Rules:
 
 - [x] 1.2.0 Download Tier 2 papers into research/papers/tier2_core_sections/.
 - [x] 1.2.1 Read LDB / Debug Like a Human.
-- [ ] 1.2.2 Read Self-Debugging.
-- [ ] 1.2.3 Read DebugBench.
+- [ ] 1.2.2 Read Self-Debugging. (**SUPERSEDED — excluded from the accepted bounded review.** `docs/research/llm-debugging.md` §3.5 records no tracked primary note and excludes unverified claims (`3c23b6e`); not in the S7 20-work scope. Optional frontier reading only — **not current work**.)
+- [ ] 1.2.3 Read DebugBench. (**SUPERSEDED — excluded from the accepted bounded review.** Same treatment as 1.2.2: no tracked primary note (`docs/research/llm-debugging.md` §3.5); not in the S7 20-work scope. Optional frontier reading only — **not current work**.)
 - [x] 1.2.4 Summarize how LLM debugging differs from static code repair. (`docs/research/llm-debugging.md` §5 records the evidence acquisition, hypothesis revision, causal target, tool, validation, and data distinctions.)
 
 ### 1.3 Subtasks / Log
 
 - [x] 1.3.1 Read RepairAgent.
 - [x] 1.3.2 Verify debug-gym.
-- [ ] 1.3.3 Verify Debug2Fix.
-- [ ] 1.3.4 Verify FramePilot / ADI.
-- [ ] 1.3.5 Verify EnIGMA.
-- [ ] 1.3.6 Verify SWE-Doctor.
-- [ ] 1.3.7 Decide which frontier systems are core evidence and which are only supporting references.
+- [x] 1.3.3 Verify Debug2Fix. (Verified via the S7 closeout `677992f` — dedicated Debug2Fix section: atomic `Debug Start Session` operation, debug-subagent design, 2026 preprint evidence tier.)
+- [x] 1.3.4 Verify FramePilot / ADI. (Verified via the S7 closeout `677992f` — dedicated ADI/FramePilot section: agent-centric state-transition interface, FSE 2026 peer-reviewed tier, raw-PDB vs ADI controlled numbers.)
+- [ ] 1.3.5 Verify EnIGMA. (**SUPERSEDED — not in the accepted S7 20-work scope**; CTV-006 remains excluded from factual claims (`docs/research/automated-debugging.md`). **Not current work.**)
+- [ ] 1.3.6 Verify SWE-Doctor. (**SUPERSEDED — not in the accepted S7 20-work scope**; CTV-005 remains excluded from factual claims (`docs/research/automated-debugging.md`). **Not current work.**)
+- [x] 1.3.7 Decide which frontier systems are core evidence and which are only supporting references. (Decided by the S7 closeout evidence-tier system `677992f` — peer-reviewed vs preprint/environment tiers.)
 
 ### 1.4 Subtasks / Log
 
@@ -222,7 +222,7 @@ Rules:
 - [x] 2.1 Research debugging and bug-fix datasets on Hugging Face and open-source platforms.
 - [x] 2.2 Compare SWE-bench, SWE-bench Lite, SWE-bench Verified, BugsInPy, Defects4J, and QuixBugs.
 - [x] 2.3 Select datasets suitable for fine-tuning, RAG, and evaluation. (Final decision: SWE-rebench V2 = primary authentic SFT/post-training dataset; QuixBugs = controlled evaluation cohort, kept entirely outside SFT training; BugsInPy = historical candidate considered during dataset research, not the final primary SFT source. Sequencing decisions recorded in Dataset and Evaluation Decision v1.)
-- [ ] 2.4 Analyze datasets and prepare train/test splits.
+- [x] 2.4 Analyze datasets and prepare train/test splits. (Tamamlandı — SWE-rebench V2: 1,594 tasks / 347 repos; frozen split 1,000 train / 150 validation / 444 unused; repo-overlap 0; seed `20260808`; ≤32K no-truncation view 940/135; QuixBugs kept outside SFT. Matches TODO Phase 2 and `docs/project-closeout.md` §D item 9.)
 
 ### 2.x Subtasks / Log
 
@@ -239,26 +239,26 @@ Rules:
 ## 3. Phase 3 — Model and Fine-tuning
 
 - [x] 3.1 Select an open-source code model. (External/branch-bound selection recorded: `Qwen/Qwen2.5-Coder-7B-Instruct` at the pinned revision; no QLoRA repository change in this reconciliation.)
-- [ ] 3.2 Convert dataset to instruction-response format if needed.
-- [ ] 3.3 Run supervised fine-tuning with LoRA or QLoRA.
-- [ ] 3.4 Compare pre-fine-tuning and post-fine-tuning model performance.
+- [x] 3.2 Convert dataset to instruction-response format if needed. (Tamamlandı — SFT formulation: input problem statement + oracle-file-localized exact pre-fix source; target `PATCH` + stored gold repair diff; localized-repair / repair-after-localization SFT. R6 later added the debugger-trajectory SFT dataset: 29/40 usable frozen fixtures, 21 train / 8 validation, 164/61 SFT pairs.)
+- [x] 3.3 Run supervised fine-tuning with LoRA or QLoRA. (Tamamlandı — QLoRA SFT `Qwen/Qwen2.5-Coder-7B-Instruct` @ `c03e6d358207e414f1eca0bb1891e29f1db0e242`; definitive surviving checkpoint cp118; later R6 debugger-oriented QLoRA checkpoint-30 selected from disjoint validation only.)
+- [x] 3.4 Compare pre-fine-tuning and post-fine-tuning model performance. (Tamamlandı — RAW vs cp118: negative executable-repair transfer, cp118 0/40 apply / 0/40 RESOLVED vs RAW 20/40 apply / 5/40 RESOLVED; formulation-specific, not "fine-tuning is bad"; R6 8/8 disjoint validation recorded separately with no matched-base causal claim.)
 
 ### 3.x Subtasks / Log
 
 - [x] 3.1.1 Record the selected model identity, revision, and license. (Completed on the external QLoRA branch at `3f0d3e7`; main repository records the decision without importing or modifying that repository.)
-- [ ] 3.2.1 Draft instruction-response schema for debugger trajectories.
-- [ ] 3.3.1 Collect successful debugger trajectories before SFT.
-- [ ] 3.4.1 Define pre/post fine-tuning evaluation protocol.
+- [x] 3.2.1 Draft instruction-response schema for debugger trajectories. (Fulfilled by the R6 debugger-trajectory SFT dataset, 2026-08-12/13 — 29/40 usable frozen fixtures, 21 train / 8 validation, 164 train / 61 validation pairs; see `docs/project-closeout.md` §3.)
+- [x] 3.3.1 Collect successful debugger trajectories before SFT. (Fulfilled by R6 trajectory collection from the pinned QuixBugs revision `4257f44b0ff1181dedaedee6a447e133219fcebf`.)
+- [x] 3.4.1 Define pre/post fine-tuning evaluation protocol. (Fulfilled — RAW-vs-cp118 protocol with the S5 canonical ledger, and the R6 frozen task-disjoint validation protocol; the stronger R6 final five-task curated holdout is preregistered and INCOMPLETE_HARDWARE_STOP.)
 
 ---
 
 ## 4. Phase 4 — RAG and Agent Tools
 
 - [x] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages. (Completed 2026-08-06 — deterministic repository-native lexical RAG v1, `agentic_debugger/rag/`: fixture-scoped default + declared corpus-root/repo mode; source/test/issue/failure documents; safe task/issue projection with unit-tested oracle exclusion; explicit exclusion rules; `repository-index-v1`/`retrieval-result-v1` strict artifacts; revision binding; documented bounds; fail-closed. Infrastructure completion only; no RAG performance claim. See `docs/architecture/repository-rag.md`, `docs/evaluation/rag-comparison.md`.)
-- [ ] 4.2 Combine fine-tuned model with RAG. (Partial 2026-08-06 — optional `rag_context` injection ready at the demo/model-adapter and `LiveModelAdapter` boundaries (additive; default request/case byte-identity proven; 20 KB public-request bound enforced pre-transport). Real fine-tuned generation import + verified combination remains open.)
+- [ ] 4.2 Combine fine-tuned model with RAG. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — optional `rag_context` injection ready at the demo/model-adapter and `LiveModelAdapter` boundaries (additive; default request/case byte-identity proven; 20 KB public-request bound enforced pre-transport); frozen cp118+RAG treatment produced 10/40 valid pairs; primary correctness **NOT_EVALUATED**; no RAG success/failure claim. **Not an active future task.** Matches TODO Phase 4.)
 - [x] 4.3 Develop file-read, code-search, test-run, and patch-apply tools.
 - [x] 4.4 Create the debugging agent.
-- [ ] 4.5 Make the model localize faults, identify root cause, and generate patches.
+- [x] 4.5 Make the model localize faults, identify root cause, and generate patches. (PARTIAL → DONE (R1-R6 phase, 2026-08-11/13) — R1 breakpoint/stack, R2 multi-turn dynamic loop + diagnosis, R3 debugger-informed patch → independent verifier RESOLVED, R4 model-generated regression test; R5 base-14B 5/5 clean holdout; R6 fine-tuned 7B 8/8 disjoint validation. Historical D1/S2 bounded-negative (2026-08-10/11) preserved, superseded.)
 
 ### 4.x Subtasks / Log
 
@@ -299,15 +299,15 @@ Rules:
 
 ## 5. Phase 5 — Preference Optimization
 
-- [ ] 5.1 Create preference dataset from successful and failed debugging outputs. (Partial 2026-08-06 — exporter v1 infrastructure complete and deterministic demo-scale pairs produced from verifier evidence; production corpus awaits real attempts. See `docs/architecture/preference-export.md`.)
-- [ ] 5.2 Apply DPO or an appropriate RLHF method.
-- [ ] 5.3 Compare base model, fine-tuned model, RAG-supported model, and agentic system. (Partial 2026-08-06 — comparison harness v1 complete (imported `generation-artifact-v1` + native agentic conditions; normalized `comparison-v1` metrics; JSON/CSV/Markdown; aggregates; delta vs baseline; see `docs/evaluation/comparison-harness.md`); real base-versus-tuned comparison awaits real imported generations. Synthetic `offline-deterministic-demo` identities are not model performance.)
+- [x] 5.1 Create preference dataset from successful and failed debugging outputs. (Completed as bounded historical controlled preference data + preference-pair exporter v1 (2026-08-06; see `docs/architecture/preference-export.md`); authentic production preference corpus **CLOSED / NOT JUSTIFIED** — insufficient clean homogeneous data.)
+- [x] 5.2 Apply DPO or an appropriate RLHF method. (Completed as a bounded historical controlled investigation — B1 27/30, matched SFT 27/30, DPO 21/30; negative result; campaign **CLOSED / NOT JUSTIFIED**; not authorization for new DPO experiments.)
+- [x] 5.3 Compare base model, fine-tuned model, RAG-supported model, and agentic system. (Completed via S5 with explicit missingness — 8-axis canonical comparison ledger, `NOT_RECORDED` / `NOT_EVALUATED`; root-cause assessment contract + comparison harness; not presented as a fabricated complete four-way correctness matrix. R1-R6 real-model results are recorded separately (`docs/final-report.md` §22), not folded into the S5 ledger.)
 
 ### 5.x Subtasks / Log
 
-- [ ] 5.1.1 Defer until enough real/debugger trajectories exist.
+- [x] 5.1.1 Defer until enough real/debugger trajectories exist. (Superseded — R1-R6 produced real debugger trajectories, but the preference direction closed: authentic production corpus **CLOSED / NOT JUSTIFIED** (2026-08-11).)
 - [x] 5.1.2 Preference-pair exporter v1 (2026-08-06): ordered rules, `preference-pair-v1` schema, held-out/oracle-answer-contamination/duplicate/same-response/no-evidence guards, JSONL + audit; no DPO/RLHF. (Repair 1: pair identity binds response/patch/verifier-evidence hashes and is verified on load; contamination checked on the full response before any storage bound; marker-inclusive UTF-8-safe response bounding; complete audit keys.)
-- [ ] 5.2.1 Defer DPO/RLHF until SFT baseline is measured.
+- [x] 5.2.1 Defer DPO/RLHF until SFT baseline is measured. (Superseded — SFT baselines were measured (RAW vs cp118; R6 8/8 disjoint validation), the bounded DPO investigation completed with a negative result, and the campaign closed as NOT JUSTIFIED.)
 - [x] 5.3.1 Comparison protocol v1 (2026-08-06): `comparison-v1` schema, condition identities, declared baseline, imported + native modes. (Repair 1: strict attempt roles — evaluation vs preference-fixture — with at-most-one primary per task/condition; raw-output-to-patch binding; recursive JSON bounds; telemetry separation; `memory_bytes` in metrics/CSV.)
 
 ---
@@ -315,9 +315,9 @@ Rules:
 ## 6. Phase 6 — Debugger Adapter
 
 - [x] 6.1 Develop a debugger adapter for PDB, GDB, or LLDB. (Completed for the instructor's “or” requirement with the accepted Python/PDB-first adapter; GDB/LLDB are outside current scope.)
-- [ ] 6.2 Enable the fine-tuned model to generate debugger commands and interpret outputs.
-- [ ] 6.3 Enable breakpoint placement, variable inspection, stack trace reading, and step-by-step debugging. (Partial: full mechanism and scripted trajectories exist; no accepted live-model full sequence.)
-- [ ] 6.4 Enable patch generation and test validation after debugger interaction. (Partial: mechanism is verifier-backed; no accepted PDB-after-live-model resolved case.)
+- [x] 6.2 Enable the fine-tuned model to generate debugger commands and interpret outputs. (**DONE** — 2026-08-11/13 R1-R6: real model authored a valid breakpoint; the real PDB session paused with stack/locals observations (R1/R2); R6 fine-tuned 7B generated and interpreted debugger commands on the 8/8 disjoint validation. Historical 2026-08-11 **CLOSED — BOUNDED NEGATIVE** (D1 `break 20` → tool error; S2 `continue` → rejected; 0 successful observations) preserved, superseded.)
+- [x] 6.3 Enable breakpoint placement, variable inspection, stack trace reading, and step-by-step debugging. (**DONE** — R2 multi-turn breakpoint → stack G1 → locals → step/next → post-step stack G2 → diagnosis chain (`97cc7fe`). Historical 2026-08-11 bounded-negative (no real-model breakpoint → observation → step/locals sequence) preserved, superseded.)
+- [x] 6.4 Enable patch generation and test validation after debugger interaction. (**DONE** — R3 debugger evidence → diagnosis → semantic patch → PatchManager → independent verifier RESOLVED (`f2291df`; raw patch hunk-count metadata normalization qualifier); R4 model-generated regression test; R5 5/5; R6 8/8.)
 
 ### 6.x Subtasks / Log
 
@@ -336,7 +336,7 @@ Rules:
 
 ## 7. Phase 7 — Evaluation and Final Report
 
-- [ ] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Metrics are defined — see 7.1.1-7.1.5 — and the comparison harness now derives them (`comparison-v1`: failure categories, aggregates, delta, cost/tokens, retrieval, replay, cleanup; see `docs/evaluation/comparison-harness.md`), but no real model has been evaluated against an external dataset yet, so there is no cross-dataset model result to report against these metrics.)
+- [x] 7.1 Evaluate results by success rate, localization accuracy, test pass rate, cost, and runtime. (Tamamlandı via S5 — 8-axis canonical comparison ledger; missing values explicit as `NOT_RECORDED` / `NOT_EVALUATED`; root-cause assessment contract + comparison harness; no missing value converted to zero. Real-model results are recorded for the curated fixtures (R5 5/5 clean holdout) and the frozen QuixBugs disjoint validation (R6 8/8); the stronger R6 final five-task curated holdout is **INCOMPLETE_HARDWARE_STOP** — not a failed benchmark, not 2/5, not 1/5. No SWE-bench-style external-dataset model result exists.)
 - [x] 7.2 Prepare a working agentic debugging demo and technical report. (Demo Guide v1 and Final Technical Report v1 completed and accepted 2026-07-31 — infrastructure/evaluation-platform demo and report, explicitly not a model-debugging-performance demo; see below.)
 
 ### 7.x Subtasks / Log
@@ -355,7 +355,74 @@ Rules:
 
 ---
 
-## Current Focus — R1-R6 documentation closeout (2026-08-13)
+## Post-V1 Current Focus (2026-08-16)
+
+**Current project status (2026-08-16):** Local Application V1 is COMPLETE —
+Tasks 1–8 accepted; the authoritative architecture and implementation record
+is `docs/architecture/local-application-v1.md`. The R1-R6 phase is the
+current scientific closeout. The stronger R6 tuned-model final five-task
+curated holdout is **INCOMPLETE_HARDWARE_STOP** — not a failed benchmark, not
+2/5, not 1/5; no sustained local rerun is scheduled in current scope. Status
+authorities: `docs/project-closeout.md` (scientific closeout),
+`docs/final-report.md` (technical report),
+`docs/architecture/local-application-v1.md` (V1), TODO.md + this tracker
+(execution status).
+
+**COMPLETE (accepted evidence):**
+
+- Local Application V1 Tasks 1–8 (2026-08-14…16, accepted).
+- R1–R4 real-model debugger capability milestones: real-model PDB
+  interaction (R1, `c842d69`); multi-turn debugger use (R2, `97cc7fe`);
+  debugger evidence → diagnosis → patch → verifier (R3, `f2291df`);
+  model-generated regression test (R4, `372d51f`).
+- R5 clean base-14B curated holdout 5/5 (0 leakage findings across 41
+  audited prompts).
+- R6 project-fine-tuned 7B debugger 8/8 on the frozen task-disjoint QuixBugs
+  validation (no matched-base causal fine-tuning claim).
+- Professor structured traces (10 documents, `docs/professor_traces/`,
+  `c9afe37`).
+
+**CLOSED / PARTIAL / NOT_EVALUATED (not active future tasks):**
+
+- fine-tuned + RAG correctness — **CLOSED — PARTIAL / COMPUTE-CONSTRAINED**;
+  frozen cp118+RAG treatment produced 10/40 valid pairs; primary correctness
+  **NOT_EVALUATED**; no RAG success/failure claim.
+- DPO / preference optimization — **CLOSED / NOT JUSTIFIED** (bounded
+  historical result preserved: B1 27/30, matched SFT 27/30, DPO 21/30).
+- The 2026-08-11 S8/S9 bounded-negative overall conclusion — historical;
+  superseded by R1-R6; evidence preserved.
+
+**BLOCKED:**
+
+- BugsInPy execution — license-gated / **BLOCKED** (unchanged).
+
+**Genuinely open (explicit and bounded):**
+
+- Real operator preflight and any real live campaign (including the
+  Authorized Six-Case Live Campaign) — **OPTIONAL / OWNER-AUTHORIZED future
+  actions only**, not the current engineering task. A real campaign requires
+  separate explicit owner authorization, fresh valid v4 operator artifacts
+  (`research/quixbugs/PAIRED_PILOT_V4.json` contract), and a successful route
+  gate before any provider contact.
+
+**Historical / not current:**
+
+- The R1-R6 documentation closeout subsection below is a preserved 2026-08-13
+  snapshot; its remaining-closeout-work list is complete (FirstMate review
+  ACCEPTED 2026-08-13; the documentation candidate was committed, pushed, and
+  integrated to main; at the accepted Local Application V1 closeout, owner
+  Git evidence showed main == origin/main at `387a100`, the accepted
+  pre-reconciliation baseline; Task-8 branch deleted locally and remotely).
+- All preserved execution/planning/current-state language below this section
+  boundary (live-runner, adapter, operator-preflight, dataset, and pilot
+  entries dated 2026-08-02/03/11 — including wording such as "are the active
+  task") is snapshot history and does not override the 2026-08-16 Post-V1
+  Current Focus above.
+
+**No GPU/provider/training/benchmark/WSL/final-holdout run is authorized by
+this reconciliation.**
+
+### R1-R6 documentation closeout (2026-08-13) — historical snapshot
 
 **Current project status (2026-08-13):** the S8/S9 bounded-negative closeout
 is **historical**; the R1-R6 phase superseded the overall conclusion while
@@ -383,11 +450,13 @@ INCOMPLETE / CLOSED BOUNDARY:
   outcomes after repeated local hardware power-offs). Not 2/5, not 1/5, not a
   failed benchmark. No sustained local rerun is scheduled in current scope.
 
-Remaining project closeout work after this task:
+Remaining project closeout work after this task (all **COMPLETED**):
 - FirstMate review (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) —
   **ACCEPTED** (2026-08-13);
-- Git commit/push of the documentation candidate (Final Git operator);
-- eventual integration to main.
+- Git commit/push of the documentation candidate (Final Git operator) —
+  **completed** (owner Git evidence at the accepted Local Application V1
+  closeout showed main == origin/main at `387a100`);
+- eventual integration to main — **completed**.
 
 Closed historical boundaries (not reopened): DPO (CLOSED / NOT JUSTIFIED),
 RAG correctness campaign (S4 PARTIAL / NOT_EVALUATED), BugsInPy execution
@@ -739,8 +808,8 @@ committed.
 ### BugsInPy licensing and metadata preflight
 
 - [x] Licensing gate completed at `da39c55`.
-- [x] Metadata-only BugsInPy preflight is the active task (`bugsinpy-metadata-preflight-v1`).
-- [ ] BugsInPy source acquisition and execution remain unauthorized; no containment implementation or benchmark execution is approved.
+- [x] Metadata-only BugsInPy preflight was the active task at 2026-08-02 (historical snapshot; `bugsinpy-metadata-preflight-v1`). Not current focus.
+- [ ] BugsInPy source acquisition and execution remain unauthorized; no containment implementation or benchmark execution is approved. (**BLOCKED — license-gated**; unchanged by V1 completion; **not an active engineering task**.)
 
 Current state (2026-08-02):
 
@@ -1152,7 +1221,8 @@ bounded public GitHub tree metadata and individual license/notice files.
 
 ### QuixBugs Paired Pilot Planning and Qualification v1
 
-The QuixBugs paired-pilot plan and no-model qualification are the active task.
+In this historical planning snapshot, the QuixBugs paired-pilot plan and
+no-model qualification were the active task.
 The frozen manifest is research/quixbugs/PAIRED_PILOT_V1.json; it selects
 three tasks and six future static-baseline/PDB-policy cases by deterministic
 hash order. The harness defaults to validation and provides model-free
@@ -1246,6 +1316,20 @@ made.
   suite 88 passed, combined paired-pilot suite 267 passed.
 
 ## Last Updated
+
+2026-08-16 (Post-V1 status reconciliation: Local Application V1 Tasks 1–8
+accepted; Phase 1–7 tracker statuses aligned with TODO.md and the accepted
+R1-R6/V1 evidence — 1.3, 2.4, 3.2–3.4, 3.2.1/3.3.1/3.4.1, 4.5, 5.1–5.3,
+5.1.1/5.2.1, 6.2–6.4, and 7.1 completed with their bounded-result qualifiers;
+literature subtasks excluded from the accepted scope (1.2.2, 1.2.3, 1.3.5,
+1.3.6) marked SUPERSEDED; 4.2 CLOSED — PARTIAL / NOT_EVALUATED; BugsInPy
+execution BLOCKED / license-gated; R1-R6 documentation closeout Git work
+completed (owner Git evidence at the accepted Local Application V1 closeout
+showed main == origin/main at `387a100` — the accepted pre-reconciliation
+baseline); R6 final five-task holdout
+remains INCOMPLETE_HARDWARE_STOP with no sustained local rerun; real operator
+preflight and any live campaign are OPTIONAL / OWNER-AUTHORIZED future
+actions; no new GPU/provider/training/benchmark run authorized)
 
 2026-08-13 (R1-R6 documentation closeout: current status reconciled through
 the R1-R6 phase — real-model debugger milestones, R5 clean base-14B holdout,

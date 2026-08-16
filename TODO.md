@@ -24,6 +24,15 @@ hardware stop remain unchanged. V1 completion does not authorize training,
 final-holdout reruns, sustained local GPU campaigns, provider SDK integration,
 or reinterpretation of accepted scientific evidence.
 
+**Post-V1 current focus (2026-08-16):** there is presently no active
+engineering campaign following V1 completion. The R1-R6 scientific closeout
+stands unchanged; the stronger R6 final five-task holdout remains
+INCOMPLETE_HARDWARE_STOP with no sustained local rerun scheduled; DPO
+(CLOSED / NOT JUSTIFIED), fine-tuned+RAG correctness (CLOSED — PARTIAL /
+COMPUTE-CONSTRAINED / NOT_EVALUATED), and BugsInPy execution (BLOCKED /
+license-gated) remain closed or blocked; the real operator preflight and any
+live campaign are OPTIONAL / OWNER-AUTHORIZED future actions only.
+
 - [x] **Local Application V1** — accepted phased roadmap complete
   (`docs/architecture/local-application-v1.md`; Tasks 1–8 accepted).
 
@@ -55,12 +64,14 @@ INCOMPLETE / CLOSED BOUNDARY:
   1/5, not a failed benchmark; final-holdout leakage=0 not established.
   Do not schedule a sustained local rerun in current scope.
 
-Remaining project closeout work after this documentation task:
-1. FirstMate review of the candidate
-   (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) — **ACCEPTED**
-   (2026-08-13);
-2. Git commit/push of the documentation candidate (Final Git operator);
-3. eventual integration to main.
+R1-R6 documentation closeout Git work — **COMPLETED**: FirstMate review of
+the candidate (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) **ACCEPTED**
+(2026-08-13); the documentation candidate was committed, pushed, and
+integrated to main by the Final Git operator. At the accepted Local
+Application V1 closeout, owner Git evidence showed main == origin/main at
+`387a100` — the accepted pre-reconciliation baseline (docs baseline
+`34cce329` and R1-R6 milestone commits `c842d69`…`c9afe37` on main; Task-8
+branch deleted locally and remotely).
 
 DPO (CLOSED / NOT JUSTIFIED), RAG correctness (S4 PARTIAL / NOT_EVALUATED)
 and BugsInPy execution (license-gated) remain closed and are not reopened
@@ -457,16 +468,20 @@ empirical evaluation, model performance, PDB effectiveness, RAG, SFT ve DPO
 tamamlanmis isaretlenmedi; tarihsel OpenCode Zen kayitlari degismeden
 historical kaldi.
 
-### Operator Authorization and Real Route Preflight v1 (2026-08-03, operator preparation; OPEN)
+### Operator Authorization and Real Route Preflight v1 (2026-08-03, operator preparation; OPTIONAL / OWNER-AUTHORIZED)
 
-- [ ] **Gerçek operator preflight (ACIK / OPEN).** Gerçek `route-capture` ve
+- [ ] **Gerçek operator preflight — OPTIONAL / OWNER-AUTHORIZED future
+  action, not the current engineering task.** Gerçek `route-capture` ve
   `operator-bundle` komutlarinin operator tarafindan calistirilmasi hala
   bekliyor: FirstMate review'i ve Onur'un manuel yurutmesi gerekiyor. Bu
   maddede uygulama agent'i hicbir gercek OpenCode inspection komutunu
   calistirmadi; yalnizca operator-akisi implementasyonu ve paketi hazir.
-  Tamamlanmis isaretlenmez: operator authorization yurutmesi, gercek route
-  preflight, gercek OpenCode Go execution, six-case live campaign, empirical
-  evaluation, model performance, PDB effectiveness, RAG, SFT, DPO.
+  V1 completion and this reconciliation do not authorize it; any real live
+  campaign still requires separate explicit owner authorization and fresh
+  valid operator artifacts. Tamamlanmis isaretlenmez: operator authorization
+  yurutmesi, gercek route preflight, gercek OpenCode Go execution, six-case
+  live campaign, empirical evaluation, model performance, PDB effectiveness,
+  RAG, SFT, DPO.
 
 Operator hazirlik akisi implemente edildi ve paketlendi (yalnizca operator;
 hicbir gercek OpenCode inspection komutu calistirilmadi):
