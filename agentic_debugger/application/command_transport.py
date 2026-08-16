@@ -39,7 +39,12 @@ import time
 from typing import Any, Callable, Mapping, Optional
 
 from agentic_debugger.application import ApplicationInputError
-from agentic_debugger.application.process_tree import terminate_process_group
+from agentic_debugger.application.process_tree import (
+    register_request_group,
+    terminate_process_group,
+    terminate_request_process_group,
+    unregister_request_group,
+)
 from agentic_debugger.evaluation.live import (
     JsonlCommandTransport,
     LiveConfigurationError,
@@ -100,6 +105,11 @@ def _terminate_command_tree(process: subprocess.Popen) -> None:
     exit; per-request timeout/cancel needs this explicit tree kill).  The
     accepted CTRL_BREAK/terminate/kill group ladder is the fallback on every
     platform and guarantees the direct process is reaped.
+
+    POSIX: the command was spawned into its own request-owned process group
+    (``start_new_session``), so the group ladder signals the command AND
+    every descendant in that group; the worker-lifecycle registry + SIGTERM
+    handler covers the forced/cooperative worker-shutdown path.
     """
     if sys.platform == "win32":
         try:
@@ -112,7 +122,9 @@ def _terminate_command_tree(process: subprocess.Popen) -> None:
             )
         except Exception:
             pass
-    terminate_process_group(process)
+        terminate_process_group(process)
+    else:
+        terminate_request_process_group(process)
 
 
 class CancellableJsonlCommandTransport(JsonlCommandTransport):
@@ -156,6 +168,14 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         self._cancel_check = cancel_check
         self._cwd = cwd
         self._environment = validated_environment
+        # NOTE: the worker-lifecycle cleanup ownership for request-owned
+        # process groups (the POSIX SIGTERM handler that kills every in-flight
+        # group on worker shutdown) is installed by the worker process itself
+        # (``worker.run_worker``), not here.  Installing a signal handler in
+        # the transport constructor would mutate the signal state of any
+        # process that merely constructs a transport (e.g. the unit-test
+        # runner); the worker is the correct lifecycle owner.  The transport
+        # still registers/unregisters each request group below.
 
     def request(self, payload: Any, timeout_seconds: float) -> Mapping[str, Any]:
         """One bounded JSON-lines model request with cancellation polling.
@@ -200,6 +220,14 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                 shell=False,
                 env=environment,
                 cwd=self._cwd,
+                # POSIX: the command runs in its own request-owned process
+                # group/session so the per-request cancellation/timeout ladder
+                # can kill the command AND every descendant in that group.
+                # The worker-lifecycle registry + SIGTERM handler covers the
+                # forced/cooperative worker-shutdown path.  Windows keeps the
+                # accepted CREATE_NEW_PROCESS_GROUP (the Job Object owns the
+                # tree there).
+                start_new_session=sys.platform != "win32",
                 creationflags=(
                     subprocess.CREATE_NEW_PROCESS_GROUP
                     if os.name == "nt"
@@ -211,6 +239,31 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                 "model command could not be launched", kind="launch_error"
             ) from None
 
+        # With start_new_session the child is its own group leader, so the
+        # request-owned group id is the child pid.  Register it for the
+        # worker-lifecycle cleanup and unregister on every exit path below.
+        request_group_id = process.pid if sys.platform != "win32" else None
+        if request_group_id is not None:
+            register_request_group(request_group_id)
+        try:
+            return self._run_request(process, request_bytes, timeout_seconds)
+        finally:
+            if request_group_id is not None:
+                unregister_request_group(request_group_id)
+
+    def _run_request(
+        self,
+        process: subprocess.Popen,
+        request_bytes: bytes,
+        timeout_seconds: float,
+    ) -> Mapping[str, Any]:
+        """Drive one spawned request to a validated response (internal).
+
+        Split out of :meth:`request` so the request-owned process group can be
+        registered/unregistered around the whole request lifetime in one
+        place; every cancellation, timeout, and error path still terminates
+        the tree before returning.
+        """
         stdout = _BoundedCapture(self.max_output_bytes)
         stderr = _BoundedCapture(self.max_output_bytes)
         threads = [

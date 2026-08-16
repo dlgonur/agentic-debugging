@@ -16,6 +16,17 @@ uses the accepted SIGTERM/SIGKILL process-group ladder.  Children that detach
 into their own groups (the PDB worker does) are not reachable by that ladder;
 this is a documented POSIX limitation — the Task-3 acceptance gate is
 Windows, where the job object covers the same topology.
+
+Configured command-model requests (Task 8) close the POSIX gap with a
+request-owned process group plus explicit worker-lifecycle cleanup ownership:
+each configured command is spawned with ``start_new_session`` (its own
+group), so the per-request cancellation/timeout ladder kills the command and
+every descendant in that group; and every in-flight group is registered here
+with a worker SIGTERM handler that terminates all registered groups before
+the worker's default termination, so a forced/cooperative worker shutdown
+cannot leave a detached command tree behind.  On Windows the accepted Job
+Object already covers the worker-escalation topology, so the registry is a
+no-op there.
 """
 
 from __future__ import annotations
@@ -25,6 +36,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from ctypes import wintypes
 from typing import Optional
@@ -300,6 +312,160 @@ def _wait_proc(proc: subprocess.Popen, timeout: float) -> None:
         pass
 
 
+# ---------------------------------------------------------------------------
+# Request-owned process groups (POSIX configured-command containment)
+# ---------------------------------------------------------------------------
+#
+# A configured command request is spawned into its own POSIX process group
+# (``start_new_session``) so the per-request cancellation/timeout ladder can
+# kill the command AND every descendant with a group signal.  That detachment
+# means a forced supervisor kill of the worker (which signals only the
+# worker's own group) can no longer reach the command tree by itself.  The
+# registry below is the explicit worker-lifecycle cleanup ownership that
+# closes that gap: every in-flight request registers its group id here, and a
+# one-time SIGTERM handler terminates every registered group before the
+# worker's default termination runs.  On Windows the accepted Job Object
+# already covers the worker-escalation topology, so the registry is a no-op
+# there (the job kills every member, detached or not).
+
+_REQUEST_GROUP_LOCK = threading.RLock()
+_REQUEST_GROUP_IDS: set[int] = set()
+_REQUEST_GROUP_HANDLER_INSTALLED = False
+
+
+def _snapshot_request_groups() -> list[int]:
+    """Return the in-flight request group ids.
+
+    Registration, unregistration, and the SIGTERM handler all execute on the
+    worker's main thread (the transport request loop), so a snapshot is safe;
+    the reentrant lock additionally guards a future cross-thread caller and,
+    critically, lets the SIGTERM handler re-acquire the lock if the signal
+    interrupts the main thread while it already holds it (``threading.Lock``
+    is not reentrant and would deadlock the handler).
+    """
+    with _REQUEST_GROUP_LOCK:
+        return list(_REQUEST_GROUP_IDS)
+
+
+def _terminate_registered_groups() -> None:
+    """Best-effort SIGTERM+SIGKILL of every in-flight request-owned group.
+
+    Used by the worker's SIGTERM handler (the forced/cooperative shutdown
+    path): it must leave no descendant behind, so it escalates straight to
+    SIGKILL after SIGTERM.  Every step is bounded and exception-safe; a group
+    that is already gone simply raises ``ProcessLookupError`` and is skipped.
+    """
+    for group_id in _snapshot_request_groups():
+        try:
+            os.killpg(group_id, signal.SIGTERM)
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+        try:
+            os.killpg(group_id, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError, OSError):
+            continue
+
+
+def _worker_signal_handler(signum, frame):  # pragma: no cover - signal path
+    # Terminate every in-flight request-owned group (lock-free), then restore
+    # and re-raise the default disposition so the worker still terminates the
+    # normal way.  Never returns to the interrupted frame.
+    try:
+        _terminate_registered_groups()
+    finally:
+        try:
+            signal.signal(signum, signal.SIG_DFL)
+            os.kill(os.getpid(), signum)
+        except Exception:
+            os._exit(128 + int(signum))
+
+
+def install_worker_request_group_cleanup() -> None:
+    """Register the worker-lifecycle cleanup for request-owned groups.
+
+    Idempotent.  On POSIX it installs a SIGTERM handler that terminates every
+    in-flight configured-command group before the worker's default
+    termination, so a forced/cooperative worker shutdown cannot orphan a
+    detached command tree.  On Windows the accepted Job Object already kills
+    every descendant on escalation/close, so nothing extra is required.
+    """
+    global _REQUEST_GROUP_HANDLER_INSTALLED
+    if sys.platform == "win32":
+        return
+    with _REQUEST_GROUP_LOCK:
+        if _REQUEST_GROUP_HANDLER_INSTALLED:
+            return
+        try:
+            signal.signal(signal.SIGTERM, _worker_signal_handler)
+        except (ValueError, OSError):
+            # Not in the main thread or signal unsupported: the per-request
+            # ladder still owns cancellation/timeout cleanup.
+            return
+        _REQUEST_GROUP_HANDLER_INSTALLED = True
+
+
+def register_request_group(group_id: int) -> None:
+    """Track one in-flight request-owned process group for worker cleanup."""
+    if sys.platform == "win32":
+        return
+    if type(group_id) is not int or isinstance(group_id, bool) or group_id <= 0:
+        return
+    with _REQUEST_GROUP_LOCK:
+        _REQUEST_GROUP_IDS.add(group_id)
+
+
+def unregister_request_group(group_id: int) -> None:
+    """Stop tracking a request group once its request has fully terminated."""
+    if sys.platform == "win32":
+        return
+    with _REQUEST_GROUP_LOCK:
+        _REQUEST_GROUP_IDS.discard(group_id)
+
+
+def terminate_request_process_group(proc: subprocess.Popen) -> None:
+    """Terminate a request-owned process group and every descendant (POSIX).
+
+    The command was spawned with ``start_new_session``, so its process group
+    id equals its pid and is distinct from the worker's group; the ladder
+    signals the whole group (SIGTERM then SIGKILL), which reaches the command
+    and every child/grandchild that did not itself detach.  Falls back to the
+    direct-process ladder when the group cannot be resolved.  On Windows this
+    delegates to the accepted group ladder (the job object owns the tree).
+    """
+    if sys.platform == "win32":
+        terminate_process_group(proc)
+        return
+    group_id: Optional[int] = None
+    try:
+        group_id = os.getpgid(proc.pid)
+    except (ProcessLookupError, PermissionError, OSError):
+        group_id = None
+    if group_id is None or group_id <= 0:
+        # The process is already gone or its group is unreadable: reap the
+        # direct process and fall back to the generic ladder.
+        terminate_process_group(proc)
+        return
+    own_pgid = os.getpgid(os.getpid())
+    if group_id == own_pgid:
+        # Defensive: never signal the worker's own group.
+        terminate_process_group(proc)
+        return
+    try:
+        os.killpg(group_id, signal.SIGTERM)
+        _wait_proc(proc, 2.0)
+        os.killpg(group_id, signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    except OSError:
+        proc.terminate()
+    _wait_proc(proc, 1.0)
+    try:
+        proc.kill()
+    except Exception:
+        pass
+    _wait_proc(proc, 1.0)
+
+
 def terminate_process_group(proc: subprocess.Popen) -> None:
     """Best-effort group kill ladder for the worker's own process group.
 
@@ -359,8 +525,12 @@ def terminate_process_tree(
 __all__ = [
     "ProcessTreeError",
     "WindowsProcessTreeJob",
+    "install_worker_request_group_cleanup",
     "pid_is_alive",
+    "register_request_group",
     "spawn_suspended_on_windows",
     "terminate_process_group",
     "terminate_process_tree",
+    "terminate_request_process_group",
+    "unregister_request_group",
 ]

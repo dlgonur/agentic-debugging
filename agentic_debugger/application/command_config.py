@@ -38,9 +38,12 @@ Security boundary rules (Task 8 Part A4/A5):
   reaches the Start screen or the worker/session result), and a
   malformed config can never produce an oversized exception string.
 - The configuration file is read through one authoritative bounded read
-  (at most ``_MAX_CONFIG_FILE_BYTES + 1`` bytes); a pre-read ``stat`` is
-  never the size authority, so a file that grows between stat and read
-  cannot be read unbounded into memory.
+  (at most ``_MAX_CONFIG_FILE_BYTES + 1`` bytes) that is also the single
+  filesystem authority (Repair Pass 3): there is no ``is_file()``/``stat``
+  preflight, so a genuinely missing file keeps the empty-profile semantics
+  while a directory/unreadable/I-O error becomes a safe bounded config
+  error, and a file that grows between any observation and the read can
+  never be read unbounded into memory.
 """
 
 from __future__ import annotations
@@ -583,9 +586,15 @@ class CommandModelConfigStore:
         A missing file is the empty configuration.  Malformed JSON,
         oversized files, unknown fields, invalid profiles, and duplicate
         profile ids all fail closed with a bounded diagnostic.
+
+        The direct bounded ``open`` is the single filesystem authority
+        (Repair Pass 3): there is no ``is_file()``/``stat`` preflight, so a
+        genuinely missing file and an existing-but-unreadable path are never
+        conflated by a separate earlier observation.  ``FileNotFoundError``
+        keeps the empty-profile semantics; every other ``OSError``
+        (directory, permission, I/O error) becomes a safe bounded
+        :class:`CommandConfigError`.
         """
-        if not self._config_path.is_file():
-            return ()
         # Authoritative bounded read (Repair Pass 2): the actual bytes
         # parsed are exactly the bytes whose size was bounded.  At most
         # ``_MAX_CONFIG_FILE_BYTES + 1`` bytes are ever read into memory,

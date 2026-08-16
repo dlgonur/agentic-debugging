@@ -281,18 +281,52 @@ def _spawn_descendant() -> None:
 
     The child sleeps forever and records the grandchild's pid; the
     grandchild is detached from the child's stdout/stderr so it cannot be
-    reached by closing the child's pipes.  Both pids are recorded for the
-    process-tree assertions.
+    reached by closing the child's pipes.  Pids are recorded for the
+    process-tree assertions (``--self-pid-file``, ``--child-pid-file``,
+    ``--grandchild-pid-file``).  The optional ``--self-pgid-file`` /
+    ``--child-pgid-file`` / ``--grandchild-pgid-file`` variants additionally
+    record each process's POSIX process-group id so tests can verify the
+    request-owned group topology deterministically (POSIX only; the pgid
+    files are simply not written when the args are absent).
     """
+    self_pid_file = _arg("--self-pid-file")
+    if self_pid_file:
+        Path(self_pid_file).write_text(str(os.getpid()), encoding="utf-8")
+    self_pgid_file = _arg("--self-pgid-file")
+    if self_pgid_file and hasattr(os, "getpgid"):
+        Path(self_pgid_file).write_text(
+            str(os.getpgid(os.getpid())), encoding="utf-8"
+        )
+
     grandchild_pid_file = _arg("--grandchild-pid-file")
-    grandchild_code = "import time; time.sleep(3600)"
-    child_code = (
-        "import subprocess, sys, time; "
+    grandchild_pgid_file = _arg("--grandchild-pgid-file")
+    child_pgid_file = _arg("--child-pgid-file")
+
+    grandchild_parts = ["import time"]
+    if grandchild_pgid_file:
+        grandchild_parts = [
+            "import os, time",
+            f"open({str(grandchild_pgid_file)!r}, 'w')"
+            ".write(str(os.getpgid(os.getpid())))",
+        ]
+    grandchild_parts.append("time.sleep(3600)")
+    grandchild_code = "; ".join(grandchild_parts)
+
+    child_parts = [
+        "import subprocess, sys, time",
         f"p = subprocess.Popen([sys.executable, '-c', {grandchild_code!r}], "
-        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False); "
-        f"open({str(grandchild_pid_file)!r}, 'w').write(str(p.pid)); "
-        "time.sleep(3600)"
-    )
+        "stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, shell=False)",
+        f"open({str(grandchild_pid_file)!r}, 'w').write(str(p.pid))",
+    ]
+    if child_pgid_file:
+        child_parts[0] = "import os, subprocess, sys, time"
+        child_parts.append(
+            f"open({str(child_pgid_file)!r}, 'w')"
+            ".write(str(os.getpgid(os.getpid())))"
+        )
+    child_parts.append("time.sleep(3600)")
+    child_code = "; ".join(child_parts)
+
     child = subprocess.Popen(
         [sys.executable, "-c", child_code],
         stdout=subprocess.DEVNULL,

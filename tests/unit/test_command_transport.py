@@ -46,6 +46,34 @@ def py(code: str):
 VALID_RESPONSE = "import sys,json; sys.stdout.write(json.dumps({'kind':'action','name':'run_reproduction','arguments':{'phase':'baseline'}})+chr(10))"
 
 
+def wait_for_file(path: Path, timeout_seconds: float = 15.0) -> bool:
+    """Bounded readiness wait: poll until ``path`` exists or the deadline.
+
+    Process tests must synchronize on an explicit ready/PID marker written by
+    the fixture, never on a fixed arbitrary sleep before cancellation.  The
+    deadline is generous (loaded CI) but bounded, so a fixture that never
+    becomes ready fails the test instead of hanging it.
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if path.exists():
+            return True
+        time.sleep(0.02)
+    return False
+
+
+def wait_until_dead(pid: int, timeout_seconds: float = 10.0) -> bool:
+    """Bounded wait until ``pid`` is no longer alive (termination evidence)."""
+    from agentic_debugger.application.process_tree import pid_is_alive
+
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not pid_is_alive(pid):
+            return True
+        time.sleep(0.05)
+    return not pid_is_alive(pid)
+
+
 class TestRequestSuccess:
     def test_valid_response_round_trip(self):
         transport = transport_for(py(VALID_RESPONSE))
@@ -140,15 +168,20 @@ class TestTimeoutAndCancellation:
         assert exc.value.timed_out is True
         assert time.monotonic() - started < 30.0
 
-    def test_cancellation_raises_cancellation_error(self):
-        token = CancellationToken()
-        transport = transport_for(
-            py("import time; time.sleep(60)"),
-            cancel_check=token.check,
+    def test_cancellation_raises_cancellation_error(self, tmp_path):
+        # Deterministic: cancellation is gated on the fixture's explicit
+        # readiness marker (its own pid file), never on a fixed sleep.
+        pid_file = tmp_path / "simple.pid"
+        code = (
+            "import os,sys,time; "
+            f"open({str(pid_file)!r},'w').write(str(os.getpid())); "
+            "time.sleep(60)"
         )
+        token = CancellationToken()
+        transport = transport_for(py(code), cancel_check=token.check)
 
         def _cancel() -> None:
-            time.sleep(0.5)
+            assert wait_for_file(pid_file), "command never became ready"
             token.request()
 
         threading.Thread(target=_cancel, daemon=True).start()
@@ -174,7 +207,13 @@ class TestTimeoutAndCancellation:
             pytest.fail("cancellation did not raise")
 
     def test_timeout_terminates_descendant_tree(self, tmp_path):
+        # Deterministic: the fixture spawns child -> grandchild and records
+        # both pids before it ever reads the request.  The request timeout is
+        # the trigger; it is set comfortably longer than the bounded readiness
+        # wait so the tree is confirmed spawned before it fires.  No fixed
+        # pre-sleep.
         child_pid_file = tmp_path / "child.pid"
+        grandchild_pid_file = tmp_path / "grandchild.pid"
         command = [
             sys.executable,
             str(FIXTURE),
@@ -183,23 +222,29 @@ class TestTimeoutAndCancellation:
             str(tmp_path / "state"),
             "--child-pid-file",
             str(child_pid_file),
+            "--grandchild-pid-file",
+            str(grandchild_pid_file),
             "--delay",
             "60",
         ]
         transport = transport_for(command)
-        with pytest.raises(LiveTransportError):
-            transport.request({}, 1.0)
-        deadline = time.monotonic() + 10.0
-        child_pid = int(child_pid_file.read_text()) if child_pid_file.is_file() else None
-        assert child_pid is not None
-        from agentic_debugger.application.process_tree import pid_is_alive
-
-        while time.monotonic() < deadline and pid_is_alive(child_pid):
-            time.sleep(0.1)
-        assert not pid_is_alive(child_pid), "descendant survived the request timeout"
+        with pytest.raises(LiveTransportError) as exc:
+            transport.request({}, 6.0)
+        assert exc.value.kind == "request_timeout"
+        # Readiness evidence: the tree was spawned before the timeout fired.
+        assert wait_for_file(child_pid_file), "child was never spawned"
+        assert wait_for_file(grandchild_pid_file), "grandchild was never spawned"
+        child_pid = int(child_pid_file.read_text())
+        grandchild_pid = int(grandchild_pid_file.read_text())
+        assert wait_until_dead(child_pid), "descendant survived the request timeout"
+        assert wait_until_dead(grandchild_pid), "grandchild survived the request timeout"
 
     def test_cancellation_terminates_descendant_tree(self, tmp_path):
+        # Deterministic: cancellation is gated on the fixture's explicit
+        # readiness markers (child + grandchild pid files), never on a fixed
+        # sleep, so the tree is confirmed spawned before cancellation fires.
         child_pid_file = tmp_path / "child.pid"
+        grandchild_pid_file = tmp_path / "grandchild.pid"
         command = [
             sys.executable,
             str(FIXTURE),
@@ -208,6 +253,8 @@ class TestTimeoutAndCancellation:
             str(tmp_path / "state"),
             "--child-pid-file",
             str(child_pid_file),
+            "--grandchild-pid-file",
+            str(grandchild_pid_file),
             "--delay",
             "60",
         ]
@@ -215,20 +262,17 @@ class TestTimeoutAndCancellation:
         transport = transport_for(command, cancel_check=token.check)
 
         def _cancel() -> None:
-            time.sleep(0.5)
+            assert wait_for_file(child_pid_file), "child was never spawned"
+            assert wait_for_file(grandchild_pid_file), "grandchild was never spawned"
             token.request()
 
         threading.Thread(target=_cancel, daemon=True).start()
         with pytest.raises(CancellationError):
             transport.request({}, 60.0)
-        deadline = time.monotonic() + 10.0
-        child_pid = int(child_pid_file.read_text()) if child_pid_file.is_file() else None
-        assert child_pid is not None
-        from agentic_debugger.application.process_tree import pid_is_alive
-
-        while time.monotonic() < deadline and pid_is_alive(child_pid):
-            time.sleep(0.1)
-        assert not pid_is_alive(child_pid), "descendant survived cancellation"
+        child_pid = int(child_pid_file.read_text())
+        grandchild_pid = int(grandchild_pid_file.read_text())
+        assert wait_until_dead(child_pid), "descendant survived cancellation"
+        assert wait_until_dead(grandchild_pid), "grandchild survived cancellation"
 
     def test_stdin_write_timeout(self):
         # A command that never reads stdin with a request larger than the
@@ -263,7 +307,9 @@ class TestBlockedStdinCancellation:
         transport = transport_for(command, cancel_check=token.check)
 
         def _cancel() -> None:
-            time.sleep(0.3)
+            # Deterministic: gate cancellation on the fixture's explicit
+            # readiness marker (its own pid file), never on a fixed sleep.
+            assert wait_for_file(pid_file), "command never became ready"
             token.request()
 
         threading.Thread(target=_cancel, daemon=True).start()
@@ -279,14 +325,8 @@ class TestBlockedStdinCancellation:
         assert elapsed < 10.0, f"cancellation took {elapsed:.1f}s"
 
         # The command process is dead (no orphan from the blocked write).
-        from agentic_debugger.application.process_tree import pid_is_alive
-
-        deadline = time.monotonic() + 10.0
-        child_pid = int(pid_file.read_text()) if pid_file.is_file() else None
-        assert child_pid is not None
-        while time.monotonic() < deadline and pid_is_alive(child_pid):
-            time.sleep(0.1)
-        assert not pid_is_alive(child_pid), "command survived blocked-write cancel"
+        child_pid = int(pid_file.read_text())
+        assert wait_until_dead(child_pid), "command survived blocked-write cancel"
 
     def test_cancel_before_spawn_raises_without_launch(self):
         # Cancellation requested before the request is issued must raise the

@@ -434,6 +434,18 @@ def run_worker(request: StartRequest) -> int:
     """Execute one worker lifetime; returns the process exit code."""
     work_dir = Path(request.work_dir)
 
+    # Worker-lifecycle cleanup ownership for request-owned process groups
+    # (Task 8 configured commands): on POSIX each configured command runs in
+    # its own detached group, so a forced/cooperative worker shutdown must
+    # terminate every in-flight group explicitly or it would be orphaned.
+    # Idempotent and a no-op on Windows (the accepted Job Object already
+    # covers the worker-escalation topology there).
+    from agentic_debugger.application.process_tree import (
+        install_worker_request_group_cleanup,
+    )
+
+    install_worker_request_group_cleanup()
+
     # The worker is spawned with the durable session directory as its
     # bootstrap cwd; Windows refuses to remove the cwd of a running process,
     # so the worker steps into the journal directory (the durable session

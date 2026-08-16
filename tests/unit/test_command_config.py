@@ -483,27 +483,63 @@ class TestAuthoritativeBoundedRead:
         assert "byte bound" in str(excinfo.value)
 
     def test_read_is_bounded_without_any_stat_authority(self, tmp_path, monkeypatch):
-        # The bounded read must not depend on a previous stat: even when
-        # stat reports a stale small size for an oversized file, the read
-        # itself remains the size authority and rejects it.
+        # Repair Pass 3: the bounded read must not depend on ANY pre-read
+        # stat/is_file observation.  The loader's correctness is asserted
+        # with a valid mechanism (never by mutating ``os.stat_result``, whose
+        # fields are read-only): ``Path.stat`` and ``Path.is_file`` are
+        # monkeypatched to fail loudly, and the loader must still (a) load a
+        # valid config, (b) reject an oversized file via the bounded read,
+        # and (c) keep missing-file empty semantics -- proving the direct
+        # bounded open is the single filesystem authority.
         config_dir = tmp_path / "config"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_path = config_dir / "command-models.json"
+
+        def forbidden_stat(self, *args, **kwargs):
+            raise AssertionError(
+                "config loader must not call Path.stat (no pre-read authority)"
+            )
+
+        def forbidden_is_file(self, *args, **kwargs):
+            raise AssertionError(
+                "config loader must not call Path.is_file (no preflight)"
+            )
+
+        monkeypatch.setattr(Path, "stat", forbidden_stat)
+        monkeypatch.setattr(Path, "is_file", forbidden_is_file)
+
+        # (a) a valid bounded config still loads without any stat authority
+        config_path.write_bytes(
+            json.dumps(
+                {"schema_version": COMMAND_CONFIG_SCHEMA_VERSION, "profiles": [make_profile()]}
+            ).encode("utf-8")
+        )
+        profiles = CommandModelConfigStore(tmp_path).list_profiles()
+        assert [p.profile_id for p in profiles] == ["dummy"]
+
+        # (b) an oversized file is still rejected by the bounded read itself
         config_path.write_bytes(b"y" * (_MAX_CONFIG_FILE_BYTES + 1))
-
-        real_stat = Path.stat
-
-        def lying_stat(self, *args, **kwargs):
-            result = real_stat(self, *args, **kwargs)
-            if self == config_path:
-                result.st_size = 10  # stale small size
-            return result
-
-        monkeypatch.setattr(Path, "stat", lying_stat)
-
         with pytest.raises(CommandConfigError) as excinfo:
             CommandModelConfigStore(tmp_path).list_profiles()
         assert "byte bound" in str(excinfo.value)
+
+        # (c) a genuinely missing file keeps the empty-profile semantics
+        config_path.unlink()
+        assert CommandModelConfigStore(tmp_path).list_profiles() == ()
+
+    def test_directory_or_read_error_is_a_safe_bounded_error(self, tmp_path):
+        # Repair Pass 3: with no is_file() preflight, an existing path that
+        # is a directory (or otherwise unreadable) must become a safe bounded
+        # config error -- never conflated with the missing-file semantics.
+        config_dir = tmp_path / "config"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        # Make the config path itself a directory: open() then fails with
+        # IsADirectoryError (POSIX) / PermissionError (Windows), both OSError.
+        (config_dir / "command-models.json").mkdir()
+        with pytest.raises(CommandConfigError) as excinfo:
+            CommandModelConfigStore(tmp_path).list_profiles()
+        assert "could not be read" in str(excinfo.value)
+        assert len(str(excinfo.value).encode("utf-8")) <= MAX_CONFIG_DIAGNOSTIC_BYTES
 
     def test_config_disappearance_during_load_is_empty(self, tmp_path, monkeypatch):
         # A file that disappears during load keeps the missing-file
