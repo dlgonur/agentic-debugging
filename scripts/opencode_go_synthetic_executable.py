@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 """Deterministic synthetic OpenCode CLI (test-only; runs behind the real protocol wrapper).
 
 This module is the fake ``opencode.cmd`` invoked by the accepted protocol
@@ -60,6 +61,17 @@ Scenarios (``synthetic_scenario`` in the request file):
 * ``timeout-with-child`` — sleeps and spawns a child process that keeps
   writing a marker file; the transport's process-group cleanup must
   terminate the tree.
+* ``external-cancel-tree`` — spawns a child which spawns a grandchild, writes
+  a deterministic readiness marker (adapter pid, opencode pid, child pid,
+  grandchild pid) into the current working directory, then sleeps far beyond
+  any request budget; the OUTER transport's external cancellation must
+  terminate the adapter AND the whole detached tree.
+* ``auth-env-probe`` — emits a boolean-only probe event reporting whether the
+  ``OPENCODE_AUTH_CONTENT`` environment value was injected and matches the
+  request's ``synthetic_marker`` field, then emits one valid directive; the
+  adapter passes the probe event through untouched (it carries no secret
+  bytes) while the marker itself must never appear in any adapter-owned
+  artifact.
 * ``oversized`` — floods stdout far beyond the wrapper's bounded capture.
 * ``nonzero-exit`` — writes a bounded stderr diagnostic and exits 7.
 * ``startup-failure`` — exits 1 before reading anything.
@@ -100,6 +112,8 @@ from typing import Any
 SYNTHETIC_MODEL_IDS = (
     "test-deepseek-v4-flash",
     "synthetic-deepseek-v4-flash",
+    "deepseek-v4-pro",
+    "test-deepseek-v4-pro",
 )
 SYNTHETIC_VERSION = "1.0.0"
 SYNTHETIC_PROVIDER = "opencode-go"
@@ -209,6 +223,28 @@ def _run_behavior(request: dict[str, Any]) -> int:
     if scenario == "timeout-with-child":
         _spawn_child(35.0)
         time.sleep(30.0)
+        return 0
+    if scenario == "external-cancel-tree":
+        _spawn_external_cancel_tree()
+        time.sleep(120.0)
+        return 0
+    if scenario == "auth-env-probe":
+        marker = request.get("synthetic_marker")
+        marker = marker if isinstance(marker, str) else ""
+        auth_content = os.environ.get("OPENCODE_AUTH_CONTENT", "")
+        sys.stdout.write(
+            json.dumps({
+                "type": "auth_env_probe",
+                "part": {
+                    "auth_env_present": "OPENCODE_AUTH_CONTENT" in os.environ,
+                    "auth_env_matches_marker": bool(marker) and marker in auth_content,
+                },
+            }, ensure_ascii=False)
+            + "\n"
+        )
+        sys.stdout.flush()
+        _emit_text(json.dumps(_state_legal_directive(request), ensure_ascii=False))
+        _emit_step_finish({"tokens": {"input": 11, "output": 5}, "cost": 0.0042})
         return 0
     if scenario == "oversized":
         sys.stdout.write("x" * 8_000_000 + "\n")
@@ -336,13 +372,79 @@ def _spawn_child(seconds: float) -> int:
     return pid
 
 
+def _spawn_external_cancel_tree() -> int:
+    """Spawn a child which spawns a grandchild, then block far beyond any
+    request budget.
+
+    The readiness marker (written once by the child into the current working
+    directory) carries the adapter pid (the synthetic process's parent), the
+    synthetic opencode pid, the child pid, and the grandchild pid, so the
+    outer-transport cancellation test can wait for an explicit readiness/PID
+    marker and then assert adapter/child/grandchild are all dead.  All three
+    descendants stay inside the synthetic opencode's process group on POSIX
+    (the child never calls setsid), so the adapter's external-cancellation
+    handler and the transport's tree termination both cover them.
+    """
+    marker = Path.cwd() / f"opencode-go-synthetic-tree-{os.getpid()}.json"
+    adapter_pid = os.getppid()
+    opencode_pid = os.getpid()
+    child_code = (
+        "import json,sys,time,os,pathlib,subprocess\n"
+        "marker = sys.argv[1]\n"
+        "code = 'import time,sys; end = time.monotonic() + float(sys.argv[1]); '\n"
+        "code += 'while time.monotonic() < end: time.sleep(0.15)'\n"
+        "grandchild = subprocess.Popen([sys.executable, '-c', code, '150'],\n"
+        "                              stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)\n"
+        f"pathlib.Path(marker).write_text(json.dumps({{\n"
+        f"    'adapter_pid': {adapter_pid},\n"
+        f"    'opencode_pid': {opencode_pid},\n"
+        f"    'child_pid': os.getpid(),\n"
+        f"    'grandchild_pid': grandchild.pid,\n"
+        f"}}), encoding='utf-8')\n"
+        "end = time.monotonic() + 150.0\n"
+        "while time.monotonic() < end:\n"
+        "    time.sleep(0.15)\n"
+    )
+    pid = subprocess.Popen(
+        [sys.executable, "-c", child_code, str(marker)],
+        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        creationflags=getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0),
+    ).pid
+    return pid
+
+
+def _is_network_module(name: str) -> bool:
+    """Whether a loaded module name represents a real network capability.
+
+    ``socket``, ``http``, ``requests``, ``aiohttp``, and ``httpx`` always
+    are.  The ``urllib`` package namespace and its passive ``urllib.parse``
+    parser are not (they cannot open a connection and are present at
+    interpreter startup on some platform builds); every other ``urllib.*``
+    submodule is a network capability.
+    """
+    top = name.split(".")[0]
+    if top in {"socket", "http", "requests", "aiohttp", "httpx"}:
+        return True
+    if top == "urllib":
+        return name not in ("urllib", "urllib.parse")
+    return False
+
+
 def main(argv: list[str] | None = None) -> int:
     args = list(argv if argv is not None else sys.argv[1:])
 
     # Network-incapable guard: refuse to run in an interpreter that already
     # imported network modules.  The synthetic executable itself never
-    # imports them.
-    network_modules = [name for name in sys.modules if name.split(".")[0] in {"socket", "http", "urllib", "requests", "aiohttp", "httpx"}]
+    # imports them.  ``urllib``/``urllib.parse`` are passive: the bare
+    # package namespace and the parser are present at interpreter startup on
+    # some platform builds (``pathlib`` imports ``urllib.parse`` on
+    # Python 3.10) and can never open a connection, so they are not network
+    # capabilities; ``urllib.request`` and the other submodules are.
+    network_modules = [
+        name
+        for name in sys.modules
+        if _is_network_module(name)
+    ]
     if network_modules:
         sys.stderr.write(f"synthetic opencode refuses to run with network modules loaded: {sorted(network_modules)}\n")
         return 3
