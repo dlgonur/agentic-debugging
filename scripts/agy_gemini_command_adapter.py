@@ -16,9 +16,10 @@ Architecture:
 The adapter does not execute source tools, tests, PDB, patches, or the
 verifier.  AGY is the decision model only.  Each request writes a temporary
 capability-free custom MAIN agent and pins ``--agent local-application-decision``.
-An init/capability event that advertises usable tools fails closed.  Any later
-tool or subagent event is also rejected, even if the terminal result contains
-a valid directive.
+The decision-only AGY agent may expose the explicitly audited intrinsic
+``ask_permission`` control-plane capability in the init inventory.  No
+task/execution capability is accepted.  Any later tool or subagent event is
+also rejected, even if the terminal result contains a valid directive.
 
 Process contract: one Local Application request owns exactly one adapter-owned
 ``agy --print`` process.  Adapter-level retry is 0.  Adapter-level fallback is
@@ -112,6 +113,9 @@ SAFE_STEP_TYPES = frozenset({
     "reasoning",
     "thinking",
     "thought",
+})
+ALLOWED_INTRINSIC_INIT_CAPABILITIES = frozenset({
+    "ask_permission",
 })
 FORBIDDEN_STEP_TYPES = frozenset({
     "tool",
@@ -803,30 +807,34 @@ def assert_command_is_fresh_print(command: Sequence[str]) -> None:
 
 # --- Stream parsing ---------------------------------------------------------
 
-def _usable_init_tools(payload: Mapping[str, Any], event: Mapping[str, Any]) -> list[str]:
-    raw = payload.get("tools")
-    if raw is None:
-        raw = event.get("tools")
-    if raw is None:
+def _advertised_init_tools(payload: Mapping[str, Any], event: Mapping[str, Any]) -> list[str]:
+    if "tools" in payload:
+        raw = payload["tools"]
+    elif "tools" in event:
+        raw = event["tools"]
+    else:
         return []
     if not isinstance(raw, list):
         raise ValueError("AGY init tools field is not a list")
-    return [str(item) for item in raw if item]
+    if any(type(item) is not str for item in raw):
+        raise ValueError("AGY init tools entries are not strings")
+    return list(raw)
 
 
 def _init_capability_reason(event: Mapping[str, Any]) -> Optional[str]:
-    """Reject an init event that advertises usable tool or subagent capability."""
+    """Reject unapproved init capabilities and all advertised subagents."""
     payload = event.get("init")
     if payload is None:
         payload = {}
     if not isinstance(payload, Mapping):
         return "AGY init payload is not an object"
     try:
-        tools = _usable_init_tools(payload, event)
+        tools = _advertised_init_tools(payload, event)
     except ValueError as exc:
         return str(exc)
-    if tools:
-        return f"AGY init advertises usable tools ({tools[0]})"
+    for tool in tools:
+        if tool not in ALLOWED_INTRINSIC_INIT_CAPABILITIES:
+            return f"AGY init advertises unapproved capability ({tool})"
     for key in ("subagents", "available_subagents", "subagent_info"):
         value = payload.get(key)
         if value:
@@ -846,9 +854,9 @@ def _tool_or_subagent_reason(event: Mapping[str, Any]) -> Optional[str]:
     step_type = payload.get("step_type")
     if isinstance(step_type, str) and step_type in FORBIDDEN_STEP_TYPES:
         return f"AGY attempted a {step_type} operation"
-    if payload.get("tool_name") or payload.get("tool_info"):
+    if "tool_name" in payload or "tool_info" in payload:
         return "AGY attempted a tool operation"
-    if payload.get("subagent_info") or payload.get("subagents"):
+    if "subagent_info" in payload or "subagents" in payload:
         return "AGY attempted a subagent operation"
     for key in ("mcp", "skill", "command", "web_search", "webfetch"):
         if key in payload and payload.get(key):

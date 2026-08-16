@@ -192,6 +192,7 @@ def test_local_application_ceiling_and_command_line_bounds() -> None:
         "gemini-3.7-flash-medium",
         "gemini-3.7-flash-high",
     }
+    assert adapter.ALLOWED_INTRINSIC_INIT_CAPABILITIES == {"ask_permission"}
 
 
 def test_ceiling_plus_one_fails_closed() -> None:
@@ -485,7 +486,7 @@ def _stream(*events: dict[str, Any]) -> str:
 def test_parse_stream_accepts_reasoning_then_structured_result() -> None:
     directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
     structured, usage = adapter.parse_agy_stream(_stream(
-        {"event": "init", "init": {"cwd": "/tmp", "tools": [], "agent": adapter.DECISION_AGENT_NAME}},
+        {"event": "init", "init": {"cwd": "/tmp", "tools": ["ask_permission"], "agent": adapter.DECISION_AGENT_NAME}},
         {"event": "step_update", "step_update": {"step_type": "user_input", "state": "DONE"}},
         {"event": "step_update", "step_update": {"step_type": "reasoning", "state": "DONE"}},
         {"event": "result", "result": {
@@ -498,25 +499,61 @@ def test_parse_stream_accepts_reasoning_then_structured_result() -> None:
     assert usage == {"prompt_tokens": 9, "completion_tokens": 3}
 
 
-def test_parse_stream_rejects_init_advertising_run_command() -> None:
+@pytest.mark.parametrize("tools", [[], ["ask_permission"]])
+def test_parse_stream_accepts_missing_or_audited_init_capabilities(tools: list[str]) -> None:
     directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
-    with pytest.raises(ValueError, match="usable tools"):
+    structured, _usage = adapter.parse_agy_stream(_stream(
+        {"event": "init", "init": {"tools": tools}},
+        {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
+    ))
+    assert structured == directive
+
+    missing_tools, _usage = adapter.parse_agy_stream(_stream(
+        {"event": "init", "init": {}},
+        {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
+    ))
+    assert missing_tools == directive
+
+
+@pytest.mark.parametrize("tools", [
+    ["run_command"],
+    ["view_file"],
+    ["read_url"],
+    ["invoke_subagent"],
+    ["unknown_future_tool"],
+    ["ask_permission", "run_command"],
+])
+def test_parse_stream_rejects_unapproved_init_capabilities(tools: list[str]) -> None:
+    directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+    with pytest.raises(ValueError, match="unapproved capability"):
         adapter.parse_agy_stream(_stream(
-            {"event": "init", "init": {"tools": ["run_command"]}},
+            {"event": "init", "init": {"tools": tools}},
             {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
         ))
 
 
-def test_parse_stream_rejects_init_advertising_file_or_web_tool() -> None:
-    directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
-    with pytest.raises(ValueError, match="usable tools"):
+def test_parse_stream_rejects_malformed_init_tools() -> None:
+    with pytest.raises(ValueError, match="tools field is not a list"):
         adapter.parse_agy_stream(_stream(
-            {"event": "init", "init": {"tools": ["view_file"]}},
-            {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
+            {"event": "init", "init": {"tools": "ask_permission"}},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
         ))
-    with pytest.raises(ValueError, match="usable tools"):
+    with pytest.raises(ValueError, match="tools entries are not strings"):
         adapter.parse_agy_stream(_stream(
-            {"event": "init", "init": {"tools": ["read_url"]}},
+            {"event": "init", "init": {"tools": ["ask_permission", 1]}},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
+        ))
+
+
+def test_parse_stream_rejects_actual_ask_permission_event_even_with_valid_result() -> None:
+    directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
+    with pytest.raises(ValueError, match="tool"):
+        adapter.parse_agy_stream(_stream(
+            {"event": "init", "init": {"tools": ["ask_permission"]}},
+            {"event": "step_update", "step_update": {
+                "step_type": "agent_response",
+                "tool_info": {"name": "ask_permission"},
+            }},
             {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
         ))
 
@@ -641,10 +678,13 @@ def test_hypothesis_directive_end_to_end(fake_agy: dict[str, str], tmp_path: Pat
 
 @pytest.mark.parametrize("scenario,needle", [
     ("tool-event", "tool"),
+    ("ask-permission-event", "tool"),
     ("subagent-event", "subagent"),
-    ("init-run-command", "usable tools"),
-    ("init-file-tool", "usable tools"),
-    ("init-web-tool", "usable tools"),
+    ("init-run-command", "unapproved capability"),
+    ("init-file-tool", "unapproved capability"),
+    ("init-web-tool", "unapproved capability"),
+    ("init-unknown-tool", "unapproved capability"),
+    ("init-ask-permission-plus-run-command", "unapproved capability"),
     ("malformed-ndjson", "NDJSON"),
     ("missing-result", "missing a terminal result"),
     ("duplicate-result", "duplicate"),
@@ -661,6 +701,17 @@ def test_synthetic_failure_scenarios_fail_closed(
     req["synthetic_scenario"] = scenario
     with pytest.raises(LiveTransportError):
         transport.request(req, timeout_seconds=15.0)
+
+
+@pytest.mark.parametrize("scenario", ["init-empty-tools", "init-ask-permission-only", "legal-action"])
+def test_synthetic_init_capability_acceptance_end_to_end(
+    fake_agy: dict[str, str], tmp_path: Path, scenario: str
+) -> None:
+    transport = _transport(fake_agy, tmp_path)
+    req = sample_request()
+    req["synthetic_scenario"] = scenario
+    response = transport.request(req, timeout_seconds=15.0)
+    assert response["directive"]["kind"] == "action"
 
 
 def test_tool_event_rejected_end_to_end(fake_agy: dict[str, str], tmp_path: Path) -> None:

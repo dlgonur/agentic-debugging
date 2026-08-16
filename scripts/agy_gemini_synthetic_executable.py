@@ -120,7 +120,7 @@ def _emit_init(argv: list[str], *, tools: list[str] | None = None) -> None:
         "event": "init",
         "init": {
             "cwd": str(Path.cwd()),
-            "tools": [] if tools is None else list(tools),
+            "tools": ["ask_permission"] if tools is None else list(tools),
             "permission_mode": "request-review",
             "model": _argv_value(argv, "--model") or "",
             "agent": _argv_value(argv, "--agent") or "",
@@ -363,6 +363,23 @@ def _run_print(argv: list[str]) -> int:
         })
         _emit_result(_state_legal_directive(request), usage=_default_usage())
         return 0
+    if scenario == "ask-permission-event":
+        _emit_init(argv, tools=["ask_permission"])
+        _emit_user_input()
+        _emit({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 2,
+                "state": "DONE",
+                "step_type": "agent_response",
+                "tool_info": {
+                    "name": "ask_permission",
+                    "parameters": {"permission": "command(*)"},
+                },
+            },
+        })
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
     if scenario == "subagent-event":
         _emit_init(argv)
         _emit_user_input()
@@ -436,6 +453,26 @@ def _run_print(argv: list[str]) -> int:
         return 0
     if scenario == "init-web-tool":
         _emit_init(argv, tools=["read_url"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-empty-tools":
+        _emit_init(argv, tools=[])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-ask-permission-only":
+        _emit_init(argv, tools=["ask_permission"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-unknown-tool":
+        _emit_init(argv, tools=["unknown_future_tool"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-ask-permission-plus-run-command":
+        _emit_init(argv, tools=["ask_permission", "run_command"])
         _emit_user_input()
         _emit_result(_state_legal_directive(request), usage=_default_usage())
         return 0
