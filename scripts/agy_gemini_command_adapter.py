@@ -16,10 +16,12 @@ Architecture:
 The adapter does not execute source tools, tests, PDB, patches, or the
 verifier.  AGY is the decision model only.  Each request writes a temporary
 capability-free custom MAIN agent and pins ``--agent local-application-decision``.
-The decision-only AGY agent may expose the explicitly audited intrinsic
-``ask_permission`` control-plane capability in the init inventory.  No
-task/execution capability is accepted.  Any later tool or subagent event is
-also rejected, even if the terminal result contains a valid directive.
+The decision-only AGY agent may expose only the explicitly audited intrinsic
+control-plane capabilities in the init inventory.  No task/execution
+capability is accepted.  Any later tool or subagent event is also rejected,
+even if the terminal result contains a valid directive.  A temporary AGY
+``PreToolUse`` hook independently denies every actual tool invocation before
+execution.
 
 Process contract: one Local Application request owns exactly one adapter-owned
 ``agy --print`` process.  Adapter-level retry is 0.  Adapter-level fallback is
@@ -38,6 +40,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -77,6 +80,13 @@ EMPTY_MCP_CONFIG = {"mcpServers": {}}
 MCP_CLI_RELATIVE = Path(".gemini") / "antigravity-cli" / "mcp_config.json"
 MCP_WORKSPACE_RELATIVE = Path(".agents") / "mcp_config.json"
 MCP_CONFIG_RELATIVE = Path(".gemini") / "config" / "mcp_config.json"
+PRE_TOOL_USE_HOOK_SCRIPT_NAME = "agy-decision-only-deny-hook.py"
+PRE_TOOL_USE_HOOK_CONFIG_RELATIVE = Path(".gemini") / "config" / "hooks.json"
+PRE_TOOL_USE_HOOK_NAME = "local-application-decision-deny-all"
+PRE_TOOL_USE_HOOK_REASON = (
+    "Local Application decision-only model: tool execution disabled"
+)
+MAX_PRE_TOOL_USE_HOOK_INPUT_BYTES = 64 * 1024
 
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
 PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
@@ -114,9 +124,14 @@ SAFE_STEP_TYPES = frozenset({
     "thinking",
     "thought",
 })
-ALLOWED_INTRINSIC_INIT_CAPABILITIES = frozenset({
+DOCUMENTED_INTRINSIC_INIT_CAPABILITIES = frozenset({
     "ask_permission",
+    "ask_question",
+    "list_permissions",
 })
+# Compatibility alias for callers that used the prior constant name.  The
+# audited set above remains the single source of truth.
+ALLOWED_INTRINSIC_INIT_CAPABILITIES = DOCUMENTED_INTRINSIC_INIT_CAPABILITIES
 FORBIDDEN_STEP_TYPES = frozenset({
     "tool",
     "subagent",
@@ -180,6 +195,34 @@ ISOLATION_SETTINGS = {
         ],
     },
 }
+
+PRE_TOOL_USE_HOOK_SCRIPT = f'''#!/usr/bin/env python3
+"""Temporary Local Application AGY deny-all PreToolUse hook."""
+
+import json
+import sys
+
+MAX_INPUT_BYTES = {MAX_PRE_TOOL_USE_HOOK_INPUT_BYTES}
+DENY_RESPONSE = {json.dumps(json.dumps({"decision": "deny", "reason": PRE_TOOL_USE_HOOK_REASON}, sort_keys=True))}
+
+
+def main() -> int:
+    # Consume only a bounded amount of the documented JSON request.  The
+    # decision is unconditional and does not inspect or persist its content.
+    raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+    if len(raw) <= MAX_INPUT_BYTES:
+        try:
+            json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            pass
+    sys.stdout.write(DENY_RESPONSE + "\\n")
+    sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
 
 
 # --- Redaction & Diagnostics ------------------------------------------------
@@ -617,6 +660,14 @@ def isolation_settings() -> dict[str, Any]:
     return json.loads(json.dumps(ISOLATION_SETTINGS))
 
 
+def _hook_command(executable: Path, script: Path) -> str:
+    """Return a shell-safe command using the trusted adapter interpreter."""
+    parts = [str(executable), str(script)]
+    if os.name == "nt":
+        return subprocess.list2cmdline(parts)
+    return " ".join(shlex.quote(part) for part in parts)
+
+
 def prepare_isolation(root: Path) -> dict[str, Any]:
     """Prepare a fresh empty AGY workspace and a credential-free temp home.
 
@@ -647,6 +698,31 @@ def prepare_isolation(root: Path) -> dict[str, Any]:
     agent_path = home / DECISION_AGENT_RELATIVE
     agent_path.parent.mkdir(parents=True, exist_ok=True)
     agent_path.write_text(DECISION_AGENT_MARKDOWN, encoding="utf-8")
+    trusted_python = Path(sys.executable).resolve()
+    if not trusted_python.is_absolute() or not trusted_python.is_file():
+        raise RuntimeError("trusted hook Python executable is unusable")
+    hook_script_path = root / PRE_TOOL_USE_HOOK_SCRIPT_NAME
+    hook_script_path.write_text(PRE_TOOL_USE_HOOK_SCRIPT, encoding="utf-8")
+    if os.name != "nt":
+        hook_script_path.chmod(0o700)
+    hooks_config_path = home / PRE_TOOL_USE_HOOK_CONFIG_RELATIVE
+    hooks_config_path.parent.mkdir(parents=True, exist_ok=True)
+    hooks_config = {
+        PRE_TOOL_USE_HOOK_NAME: {
+            "PreToolUse": [{
+                "matcher": "*",
+                "hooks": [{
+                    "type": "command",
+                    "command": _hook_command(trusted_python, hook_script_path),
+                    "timeout": 1,
+                }],
+            }],
+        },
+    }
+    hooks_config_path.write_text(
+        json.dumps(hooks_config, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
     empty_mcp = json.dumps(EMPTY_MCP_CONFIG, indent=2, sort_keys=True) + "\n"
     cli_mcp = home / MCP_CLI_RELATIVE
     cli_mcp.parent.mkdir(parents=True, exist_ok=True)
@@ -679,6 +755,9 @@ def prepare_isolation(root: Path) -> dict[str, Any]:
         "workspace": workspace,
         "settings_path": settings_path,
         "agent_path": agent_path,
+        "hook_script_path": hook_script_path,
+        "hooks_config_path": hooks_config_path,
+        "hook_command": _hook_command(trusted_python, hook_script_path),
         "mcp_cli_path": cli_mcp,
         "mcp_workspace_path": workspace_mcp,
     }
@@ -832,9 +911,12 @@ def _init_capability_reason(event: Mapping[str, Any]) -> Optional[str]:
         tools = _advertised_init_tools(payload, event)
     except ValueError as exc:
         return str(exc)
-    for tool in tools:
-        if tool not in ALLOWED_INTRINSIC_INIT_CAPABILITIES:
-            return f"AGY init advertises unapproved capability ({tool})"
+    unapproved = sorted(
+        set(tools) - DOCUMENTED_INTRINSIC_INIT_CAPABILITIES
+    )
+    if unapproved:
+        names = ", ".join(unapproved)
+        return f"AGY init advertises unapproved capability names ({names})"
     for key in ("subagents", "available_subagents", "subagent_info"):
         value = payload.get(key)
         if value:

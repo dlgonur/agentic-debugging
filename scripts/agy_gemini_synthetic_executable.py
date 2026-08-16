@@ -21,6 +21,7 @@ from __future__ import annotations
 import atexit
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -171,6 +172,137 @@ def _default_usage() -> dict[str, Any]:
         "cache_read_tokens": 0,
         "total_tokens": 18,
     }
+
+
+def _pre_tool_use_hook_config() -> Path:
+    home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or ""
+    return Path(home) / ".gemini" / "config" / "hooks.json"
+
+
+def _consult_pre_tool_use_hook(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    """Run the isolated deny hook exactly as AGY would before a tool call."""
+    config_path = _pre_tool_use_hook_config()
+    try:
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return {
+            "hook_observed": False,
+            "decision": None,
+            "reason": "missing or invalid hooks.json",
+        }
+    if not isinstance(config, dict):
+        return {"hook_observed": False, "decision": None, "reason": "hooks.json is not an object"}
+    hook_commands: list[str] = []
+    for definition in config.values():
+        if not isinstance(definition, dict):
+            continue
+        entries = definition.get("PreToolUse")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            matcher = entry.get("matcher")
+            if not isinstance(matcher, str):
+                continue
+            try:
+                matches = matcher in ("", "*") or re.fullmatch(matcher, tool_name) is not None
+            except re.error:
+                matches = False
+            if not matches:
+                continue
+            handlers = entry.get("hooks")
+            if not isinstance(handlers, list):
+                continue
+            for handler in handlers:
+                if isinstance(handler, dict) and isinstance(handler.get("command"), str):
+                    hook_commands.append(handler["command"])
+    if not hook_commands:
+        return {"hook_observed": False, "decision": None, "reason": "no matching PreToolUse hook"}
+    payload = {
+        "toolCall": {"name": tool_name, "args": arguments},
+        "stepIdx": 2,
+    }
+    for command in hook_commands:
+        try:
+            completed = subprocess.run(
+                command,
+                input=json.dumps(payload, ensure_ascii=False),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=True,
+                timeout=2.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError) as exc:
+            return {"hook_observed": False, "decision": None, "reason": type(exc).__name__}
+        if completed.returncode != 0:
+            return {"hook_observed": False, "decision": None, "reason": "hook returned nonzero"}
+        try:
+            response = json.loads((completed.stdout or "").strip())
+        except json.JSONDecodeError:
+            return {"hook_observed": False, "decision": None, "reason": "hook output is not JSON"}
+        if not isinstance(response, dict):
+            return {"hook_observed": False, "decision": None, "reason": "hook output is not an object"}
+        return {
+            "hook_observed": True,
+            "decision": response.get("decision"),
+            "reason": response.get("reason"),
+        }
+    return {"hook_observed": False, "decision": None, "reason": "hook was not run"}
+
+
+def _run_pre_tool_attempt(argv: list[str], request: dict[str, Any], *, tool_name: str, subagent: bool = False) -> int:
+    arguments = {"synthetic": True}
+    hook = _consult_pre_tool_use_hook(tool_name, arguments)
+    evidence_root = Path.cwd().parent.parent
+    sentinel = evidence_root / f"agy-synthetic-tool-side-effect-{os.getpid()}.sentinel"
+    evidence_path = evidence_root / f"agy-synthetic-pretool-use-{os.getpid()}.json"
+    evidence: dict[str, Any] = {
+        "hook_observed": hook["hook_observed"],
+        "decision": hook["decision"],
+        "reason": hook["reason"],
+        "tool_name": tool_name,
+        "subagent": subagent,
+        "sentinel": str(sentinel),
+        "sentinel_exists_before": sentinel.exists(),
+        "side_effect_attempted": False,
+    }
+    if hook["decision"] != "deny":
+        sentinel.write_text("synthetic tool side effect\n", encoding="utf-8")
+        evidence["side_effect_attempted"] = True
+    evidence["sentinel_exists_after_hook"] = sentinel.exists()
+    evidence_path.write_text(json.dumps(evidence, sort_keys=True) + "\n", encoding="utf-8")
+
+    advertised = [tool_name] if tool_name in {"ask_permission", "ask_question", "list_permissions"} else []
+    _emit_init(argv, tools=advertised)
+    _emit_user_input()
+    if subagent:
+        _emit({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 2,
+                "state": "DONE",
+                "step_type": "agent_response",
+                "subagent_info": {"subagents": [{"type_name": tool_name}]},
+            },
+        })
+    else:
+        _emit({
+            "event": "step_update",
+            "step_update": {
+                "step_index": 2,
+                "state": "DONE",
+                "step_type": "tool",
+                "tool_name": tool_name,
+                "tool_info": {"name": tool_name, "parameters": arguments},
+            },
+        })
+    _emit_result(_state_legal_directive(request), usage=_default_usage())
+    return 0
 
 
 def _record_invocation(argv: list[str], request: dict[str, Any]) -> None:
@@ -380,6 +512,41 @@ def _run_print(argv: list[str]) -> int:
         })
         _emit_result(_state_legal_directive(request), usage=_default_usage())
         return 0
+    if scenario in {
+        "pretool-hook-tool-attempt",
+        "tool-attempt",
+        "ask-permission-attempt",
+        "ask-question-attempt",
+        "list-permissions-attempt",
+        "run-command-attempt",
+        "view-file-attempt",
+        "web-attempt",
+        "mcp-attempt",
+        "generate-image-attempt",
+        "unknown-tool-attempt",
+    }:
+        default_names = {
+            "ask-permission-attempt": "ask_permission",
+            "ask-question-attempt": "ask_question",
+            "list-permissions-attempt": "list_permissions",
+            "run-command-attempt": "run_command",
+            "view-file-attempt": "view_file",
+            "web-attempt": "search_web",
+            "mcp-attempt": "mcp_call",
+            "generate-image-attempt": "generate_image",
+            "unknown-tool-attempt": "unknown_future_tool",
+        }
+        tool_name = request.get("synthetic_tool_name")
+        if not isinstance(tool_name, str) or not tool_name:
+            tool_name = default_names.get(scenario, "run_command")
+        return _run_pre_tool_attempt(argv, request, tool_name=tool_name)
+    if scenario in {"pretool-hook-subagent-attempt", "subagent-attempt"}:
+        return _run_pre_tool_attempt(
+            argv,
+            request,
+            tool_name="invoke_subagent",
+            subagent=True,
+        )
     if scenario == "subagent-event":
         _emit_init(argv)
         _emit_user_input()
@@ -466,6 +633,21 @@ def _run_print(argv: list[str]) -> int:
         _emit_user_input()
         _emit_result(_state_legal_directive(request), usage=_default_usage())
         return 0
+    if scenario == "init-ask-question-only":
+        _emit_init(argv, tools=["ask_question"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-list-permissions-only":
+        _emit_init(argv, tools=["list_permissions"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-audited-intrinsic-inventory":
+        _emit_init(argv, tools=["ask_permission", "ask_question", "list_permissions"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
     if scenario == "init-unknown-tool":
         _emit_init(argv, tools=["unknown_future_tool"])
         _emit_user_input()
@@ -473,6 +655,11 @@ def _run_print(argv: list[str]) -> int:
         return 0
     if scenario == "init-ask-permission-plus-run-command":
         _emit_init(argv, tools=["ask_permission", "run_command"])
+        _emit_user_input()
+        _emit_result(_state_legal_directive(request), usage=_default_usage())
+        return 0
+    if scenario == "init-multiple-unapproved-tools":
+        _emit_init(argv, tools=["run_command", "view_file", "unknown_future_tool"])
         _emit_user_input()
         _emit_result(_state_legal_directive(request), usage=_default_usage())
         return 0

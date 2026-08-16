@@ -192,7 +192,12 @@ def test_local_application_ceiling_and_command_line_bounds() -> None:
         "gemini-3.7-flash-medium",
         "gemini-3.7-flash-high",
     }
-    assert adapter.ALLOWED_INTRINSIC_INIT_CAPABILITIES == {"ask_permission"}
+    assert adapter.DOCUMENTED_INTRINSIC_INIT_CAPABILITIES == {
+        "ask_permission",
+        "ask_question",
+        "list_permissions",
+    }
+    assert adapter.ALLOWED_INTRINSIC_INIT_CAPABILITIES == adapter.DOCUMENTED_INTRINSIC_INIT_CAPABILITIES
 
 
 def test_ceiling_plus_one_fails_closed() -> None:
@@ -340,6 +345,38 @@ def test_prepare_isolation_does_not_copy_credentials_or_repo(tmp_path: Path) -> 
     assert env["USERPROFILE"] == str(isolation["home"])
     assert not any("TOKEN" in key.upper() or "SECRET" in key.upper() for key in env)
     assert REPO_ROOT not in isolation["agent_path"].parents
+
+
+def test_prepare_isolation_installs_temporary_deny_all_pretool_hook(tmp_path: Path) -> None:
+    isolation = adapter.prepare_isolation(tmp_path / "iso")
+    config_path = isolation["hooks_config_path"]
+    assert config_path == isolation["home"] / adapter.PRE_TOOL_USE_HOOK_CONFIG_RELATIVE
+    config = json.loads(config_path.read_text(encoding="utf-8"))
+    definition = config[adapter.PRE_TOOL_USE_HOOK_NAME]
+    entry = definition["PreToolUse"][0]
+    assert entry["matcher"] == "*"
+    handler = entry["hooks"][0]
+    assert handler["type"] == "command"
+    assert handler["timeout"] == 1
+    assert str(Path(sys.executable).resolve()) in handler["command"]
+    assert isolation["hook_script_path"].is_file()
+    completed = subprocess.run(
+        handler["command"],
+        input=json.dumps({"toolCall": {"name": "run_command", "args": {}}}),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=isolation["environment"],
+        shell=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {
+        "decision": "deny",
+        "reason": adapter.PRE_TOOL_USE_HOOK_REASON,
+    }
+    assert completed.stdout.count("\n") == 1
 
 
 def test_temporary_decision_agent_is_capability_free(tmp_path: Path) -> None:
@@ -499,7 +536,14 @@ def test_parse_stream_accepts_reasoning_then_structured_result() -> None:
     assert usage == {"prompt_tokens": 9, "completion_tokens": 3}
 
 
-@pytest.mark.parametrize("tools", [[], ["ask_permission"]])
+@pytest.mark.parametrize("tools", [
+    [],
+    ["ask_permission"],
+    ["ask_question"],
+    ["list_permissions"],
+    ["ask_permission", "ask_question"],
+    ["ask_permission", "ask_question", "list_permissions"],
+])
 def test_parse_stream_accepts_missing_or_audited_init_capabilities(tools: list[str]) -> None:
     directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
     structured, _usage = adapter.parse_agy_stream(_stream(
@@ -518,8 +562,17 @@ def test_parse_stream_accepts_missing_or_audited_init_capabilities(tools: list[s
 @pytest.mark.parametrize("tools", [
     ["run_command"],
     ["view_file"],
-    ["read_url"],
+    ["write_to_file"],
+    ["grep_search"],
+    ["search_web"],
+    ["read_url_content"],
+    ["manage_task"],
+    ["schedule"],
     ["invoke_subagent"],
+    ["define_subagent"],
+    ["send_message"],
+    ["manage_subagents"],
+    ["generate_image"],
     ["unknown_future_tool"],
     ["ask_permission", "run_command"],
 ])
@@ -529,6 +582,16 @@ def test_parse_stream_rejects_unapproved_init_capabilities(tools: list[str]) -> 
         adapter.parse_agy_stream(_stream(
             {"event": "init", "init": {"tools": tools}},
             {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
+        ))
+
+
+def test_parse_stream_reports_complete_sorted_unapproved_capability_names() -> None:
+    with pytest.raises(ValueError, match=r"run_command, unknown_future_tool, view_file"):
+        adapter.parse_agy_stream(_stream(
+            {"event": "init", "init": {
+                "tools": ["unknown_future_tool", "run_command", "view_file", "run_command"],
+            }},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
         ))
 
 
@@ -685,6 +748,7 @@ def test_hypothesis_directive_end_to_end(fake_agy: dict[str, str], tmp_path: Pat
     ("init-web-tool", "unapproved capability"),
     ("init-unknown-tool", "unapproved capability"),
     ("init-ask-permission-plus-run-command", "unapproved capability"),
+    ("init-multiple-unapproved-tools", "run_command, unknown_future_tool, view_file"),
     ("malformed-ndjson", "NDJSON"),
     ("missing-result", "missing a terminal result"),
     ("duplicate-result", "duplicate"),
@@ -703,7 +767,14 @@ def test_synthetic_failure_scenarios_fail_closed(
         transport.request(req, timeout_seconds=15.0)
 
 
-@pytest.mark.parametrize("scenario", ["init-empty-tools", "init-ask-permission-only", "legal-action"])
+@pytest.mark.parametrize("scenario", [
+    "init-empty-tools",
+    "init-ask-permission-only",
+    "init-ask-question-only",
+    "init-list-permissions-only",
+    "init-audited-intrinsic-inventory",
+    "legal-action",
+])
 def test_synthetic_init_capability_acceptance_end_to_end(
     fake_agy: dict[str, str], tmp_path: Path, scenario: str
 ) -> None:
@@ -712,6 +783,65 @@ def test_synthetic_init_capability_acceptance_end_to_end(
     req["synthetic_scenario"] = scenario
     response = transport.request(req, timeout_seconds=15.0)
     assert response["directive"]["kind"] == "action"
+
+
+@pytest.mark.parametrize("scenario,tool_name", [
+    ("ask-permission-attempt", "ask_permission"),
+    ("ask-question-attempt", "ask_question"),
+    ("list-permissions-attempt", "list_permissions"),
+    ("run-command-attempt", "run_command"),
+    ("view-file-attempt", "view_file"),
+    ("web-attempt", "search_web"),
+    ("mcp-attempt", "mcp_call"),
+    ("generate-image-attempt", "generate_image"),
+    ("unknown-tool-attempt", "unknown_future_tool"),
+])
+def test_pretool_deny_prevents_synthetic_side_effect_before_stream_rejection(
+    fake_agy: dict[str, str], tmp_path: Path, scenario: str, tool_name: str
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    rc, stdout, stderr = run_adapter_real(
+        fake_agy,
+        {**sample_request(), "synthetic_scenario": scenario},
+        extra_argv=["--work-root", str(work)],
+    )
+    assert rc == 1
+    assert stdout == ""
+    assert "tool" in stderr.lower()
+    evidence_files = list(work.glob("agy-synthetic-pretool-use-*.json"))
+    assert len(evidence_files) == 1
+    evidence = json.loads(evidence_files[0].read_text(encoding="utf-8"))
+    assert evidence["hook_observed"] is True
+    assert evidence["decision"] == "deny"
+    assert evidence["reason"] == adapter.PRE_TOOL_USE_HOOK_REASON
+    assert evidence["tool_name"] == tool_name
+    assert evidence["side_effect_attempted"] is False
+    assert evidence["sentinel_exists_after_hook"] is False
+    assert not Path(evidence["sentinel"]).exists()
+
+
+def test_pretool_deny_prevents_synthetic_subagent_side_effect(
+    fake_agy: dict[str, str], tmp_path: Path
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    rc, stdout, stderr = run_adapter_real(
+        fake_agy,
+        {**sample_request(), "synthetic_scenario": "subagent-attempt"},
+        extra_argv=["--work-root", str(work)],
+    )
+    assert rc == 1
+    assert stdout == ""
+    assert "subagent" in stderr.lower()
+    evidence_files = list(work.glob("agy-synthetic-pretool-use-*.json"))
+    assert len(evidence_files) == 1
+    evidence = json.loads(evidence_files[0].read_text(encoding="utf-8"))
+    assert evidence["hook_observed"] is True
+    assert evidence["decision"] == "deny"
+    assert evidence["subagent"] is True
+    assert evidence["side_effect_attempted"] is False
+    assert not Path(evidence["sentinel"]).exists()
 
 
 def test_tool_event_rejected_end_to_end(fake_agy: dict[str, str], tmp_path: Path) -> None:
