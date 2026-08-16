@@ -1,7 +1,7 @@
 # Agentic Debugging Local Application V1 — Architecture and Implementation Plan
 
 **Document type:** Active architecture and phased implementation plan  
-**Status:** Active implementation baseline; Tasks 1–7 accepted, Task 8 next
+**Status:** V1 COMPLETE; Tasks 1–8 accepted (2026-08-16)
 **Repository:** `agentic-debugging-internship`  
 **Repository state inspected:** `main` at `e5ebe2680238624d7020ac9270918b4601848a83`, clean working tree and empty stash before this document was added  
 **Scope:** A professional local application surface over the existing Agentic Debugging system  
@@ -1249,34 +1249,84 @@ p2p 2/2), final live/replay state equal.
 
 ### Task 8 — Add configured command-model execution and harden V1
 
-**Objective:** Support the existing explicitly configured live-model path and complete release-quality hardening.
+**Status:** ACCEPTED (2026-08-16) — Local Application V1 final milestone.
 
-**Why last:** It introduces real external failure modes only after session/event/cleanup behavior is proven.
+**Objective:** Support explicitly configured command-model execution through the
+accepted application architecture and complete release-quality V1 hardening.
 
-**Expected areas:** Live source adapter, configuration UI, packaging and operator documentation.
+**Accepted implementation:**
 
-**Key work:**
+- app-owned, versioned `command-models-v1` configuration with explicit argv,
+  `shell=False`, bounded direct file reads, safe profile identifiers,
+  deterministic safe fingerprints, and structural secret-free diagnostics;
+- configured profiles are fingerprint-pinned from UI selection through worker
+  consumption, so configuration mutation fails closed before executable launch;
+- the existing `JsonlCommandTransport`, `LiveModelAdapter`, `LiveModelConfig`,
+  and live protocol remain the command-model authority rather than a parallel
+  provider protocol;
+- configured execution shares the same local-session pipeline as deterministic
+  execution: controller, typed tools, real PDB, PatchManager, independent
+  verifier, SessionCoordinator, one `SessionEventEmitter`, durable journal,
+  app-owned history, pure presentation reducer, and read-only replay;
+- configured-command output, stderr, protocol lines, diagnostics, argv/env
+  surfaces, and persisted candidate artifacts are bounded and subjected to the
+  accepted safe-data policy;
+- explicit cancellation remains operational `CancellationError`; request timeout
+  remains a distinct transport failure;
+- Windows retains Job Object / `taskkill` tree containment;
+- POSIX configured requests own independent process groups and retain ownership
+  until final group cleanup has been attempted on every exit path: successful
+  response, natural error, cancellation, timeout, bounded transport failure,
+  and worker shutdown;
+- configured-command subprocesses are documented as trusted user configuration:
+  V1 does not falsely claim child-process network isolation and introduces no
+  provider SDK/account/key-management layer;
+- the existing Textual Start-session flow supports deterministic and configured
+  modes using the same Workspace and `SessionViewState`;
+- completed configured sessions register in history and replay without executing
+  their command, with live/replay final-state parity;
+- core imports remain Textual-free and the optional application packaging/launch
+  path remains supported.
 
-- reuse `LiveModelConfig`, `LiveRunLimits`, and JSONL command transport;
-- explicit live confirmation;
-- sanitized configuration summary;
-- model subprocess cancellation;
-- timeout/malformed-response diagnostics;
-- Windows packaging and operational docs.
+**Final acceptance evidence:**
 
-**Acceptance criteria:**
+- command configuration: 59 passed;
+- cross-platform configured transport: 22 passed;
+- real POSIX request-tree suite under WSL Ubuntu-22.04: 8 passed, including
+  success, natural error, cancellation, timeout, and worker-shutdown descendant
+  cleanup;
+- configured-source integration on Windows: 19 passed;
+- configured Textual integration: 15 passed;
+- Task-3 worker/process gates: 36 passed;
+- deterministic/replay compatibility and command-runner cancellation gates
+  remained green;
+- compile/import/packaging/whitespace gates remained clean;
+- final review package path/count/integrity matched the declared 24-file
+  candidate, and FirstMate independently reconstructed the accepted lineage and
+  re-ran 59 configuration, 22 transport, and 8 POSIX process-tree tests
+  successfully.
 
-- No generic provider capability is claimed.
-- Live mode cannot start without valid configuration and explicit confirmation.
-- Timeout/cancel removes model subprocesses and workspaces.
-- Offline/replay work without model dependencies.
-- Existing live CLI remains unchanged.
+**Acceptance criteria satisfied:**
 
-**Validation:** Scripted JSONL command, malformed response, timeout, cancel, and clean-install smoke.
+- no generic provider capability is claimed;
+- configured mode requires validated explicit configuration;
+- command cancellation/timeout and normal request completion do not knowingly
+  leave ordinary request-group descendants behind on the validated Windows/POSIX
+  paths;
+- diagnostics and app-owned evidence remain bounded and secret-safe within the
+  accepted policy;
+- replay performs no command/model execution;
+- deterministic/offline mode remains independent of configured-model
+  dependencies;
+- verifier correctness authority and canonical scientific `RunEvent` 1.0 remain
+  unchanged;
+- frozen scientific evidence remains read-only.
 
 **Dependencies:** Tasks 1–7.
 
-**Non-goals:** GPU campaigns, provider management, QuixBugs campaign control, arbitrary repositories.
+**Non-goals:** Provider marketplace/SDK integration, credential vaults, GPU
+campaigns/model hosting, arbitrary repository support, QuixBugs campaign
+control, browser UI, IDE/editor behavior, or OS-level network sandboxing.
 
 ## 17. Principal risks and mitigations
 

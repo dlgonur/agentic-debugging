@@ -106,10 +106,39 @@ Rules:
   sessions produced distinct history entries and the first remained replayable
   after the second. Task 8 external/configured command-model execution remains
   intentionally unimplemented.
-- [ ] **Task 8 — Add configured command-model execution and harden V1** — NEXT.
-  Reuse the existing explicitly configured command-model transport behind the
-  accepted worker/application/UI architecture, then complete V1 packaging,
-  operational diagnostics, cancellation/timeout, and release-quality hardening.
+- [x] **Task 8 — Add configured command-model execution and harden V1** —
+  ACCEPTED (2026-08-16). Added the validated app-owned `command-models-v1`
+  profile contract and configured-command execution through the existing
+  `JsonlCommandTransport` / `LiveModelAdapter` protocol while preserving the
+  same controller, PDB, PatchManager, verifier, worker, emitter, journal,
+  history, replay, and Textual presentation architecture used by deterministic
+  sessions. Configuration uses explicit argv with `shell=False`, safe
+  fingerprints, protocol-version authority, bounded direct file reads, and
+  structural secret-free diagnostics. Profile fingerprints are pinned from UI
+  selection through worker load so changed configuration fails closed before
+  executable launch.
+
+  Final V1 hardening adds bounded stdout/stderr and request diagnostics,
+  blocked-stdin cancellation, distinct request-timeout semantics, safe
+  candidate-patch persistence, truthful configured-command network trust
+  boundaries, Windows Job Object / `taskkill` descendant containment, and POSIX
+  request-owned process groups with cleanup across successful response,
+  natural error, cancellation, timeout, and worker-shutdown paths. Final
+  Repair-Pass-4 evidence reports real WSL POSIX tests **8/8 passed** plus
+  cross-platform transport **22/22 passed**; Windows configured-source
+  integration **19/19 passed**, configured UI **15/15 passed**, config
+  validation **59/59 passed**, and Task-3 worker gates **36/36 passed**.
+  Configured live sessions reach the independent verifier, persist to app-owned
+  history, replay without executing commands, and retain final
+  `SessionViewState` parity. Deterministic mode remains compatible, canonical
+  `RunEvent` 1.0 and verifier correctness authority are unchanged, and frozen
+  R1-R6 evidence remains untouched.
+- [x] **Local Application V1 — V1 COMPLETE** (2026-08-16).
+  All eight roadmap tasks are accepted. Current V1 supports deterministic
+  offline sessions and explicitly configured command-model sessions through one
+  shared application architecture. Provider marketplaces/SDKs, credential
+  management, arbitrary-repository IDE behavior, GPU/model hosting, browser UI,
+  and campaign orchestration remain explicit non-goals.
 
 ## 0. Daily Requirement
 
