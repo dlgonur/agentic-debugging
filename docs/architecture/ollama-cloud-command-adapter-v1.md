@@ -11,12 +11,16 @@ independent verifier.
 
 The configured profile launches
 `scripts/ollama_cloud_command_adapter.py`. For every protocol-1.3 request,
-the adapter sends exactly one request to the signed-in local Ollama daemon:
+the adapter establishes Cloud provenance from zero-inference local metadata
+and then sends exactly one generation request to the signed-in local Ollama
+daemon. Metadata and chat share the same adapter timeout budget.
 
 ```text
 Local Application protocol 1.3
   -> Ollama Cloud command adapter
-  -> http://127.0.0.1:11434/api/chat
+  -> GET  http://127.0.0.1:11434/api/tags
+  -> POST http://127.0.0.1:11434/api/show
+  -> POST http://127.0.0.1:11434/api/chat
   -> final assistant content
   -> strict JSON and request-bound directive validation
   -> existing LiveModelAdapter/controller/verifier path
@@ -34,17 +38,23 @@ application's credential boundary.
 
 ## Response boundary
 
-The response must identify the exact configured model or its explicitly
-validated Cloud upstream identity, be complete, contain a completed assistant
-message, and contain bounded string `message.content`. For the Cloud form,
-`model` must be exactly `gpt-oss:20b`, `remote_model` must also be exactly
-`gpt-oss:20b`, and `remote_host` must identify exactly `https://ollama.com`
-(with only harmless default HTTPS port/trailing-slash representation
-differences normalized). The pinned local alias form is accepted only with
-the same exact remote provenance. Tool/function-call activity is rejected.
-`message.thinking` is discarded and never enters adapter stdout, Local
-Application protocol data, events, history, diagnostics, validation evidence,
-or review artifacts.
+Cloud provenance is established from `/api/tags` and `/api/show` before any
+generation call. Those metadata endpoints must map the exact local alias
+`gpt-oss:20b-cloud` to upstream model `gpt-oss:20b` and Ollama Cloud host
+`https://ollama.com`, and `/api/show` must report
+`details.parent_model: gpt-oss:20b`. Harmless default HTTPS port or trailing
+slash differences on the metadata host are normalized. Wrong or missing
+metadata fails closed and does not call `/api/chat`.
+
+The `/api/chat` response is not a provenance document. For this Cloud alias it
+must have `model` exactly `gpt-oss:20b`, be complete, contain a completed
+assistant message, and contain bounded string `message.content`. Chat
+`remote_model` and `remote_host` are not required and are not used; the
+installed Ollama 0.32.14 local Cloud proxy omits them. Returning the local
+alias `gpt-oss:20b-cloud` as `model` is metadata/chat disagreement and fails.
+Tool/function-call activity is rejected. `message.thinking` is discarded and
+never enters adapter stdout, Local Application protocol data, events, history,
+diagnostics, validation evidence, or review artifacts.
 
 The complete content string must be one JSON object. Markdown fences, prose,
 concatenated JSON values, malformed JSON, non-object JSON, ambiguous output,
@@ -54,13 +64,15 @@ directive again downstream and remains authoritative.
 
 ## Zero-inference preflight
 
-`--preflight` performs only local metadata checks: `/api/version`, `/api/tags`,
-and `/api/show` for the exact model. It requires the alias metadata to map to
-`remote_model: gpt-oss:20b`, `remote_host: https://ollama.com`, and
-`details.parent_model: gpt-oss:20b`. It reports local API readiness, expected
-version, model availability, readable metadata, the validated provenance, and
-`provider_inference_started: false`. It does not call `/api/chat` or
-`/api/generate` and does not establish that Cloud inference will succeed.
+`--preflight` is an operator diagnostic, not the provenance authority for later
+disposable adapter processes. It performs only local metadata checks:
+`/api/version`, `/api/tags`, and `/api/show` for the exact model. It requires
+the same alias-to-upstream mapping as the normal request path. It reports
+local API readiness, expected version, model availability, readable metadata,
+the validated provenance, and `provider_inference_started: false`. It does
+not call `/api/chat` or `/api/generate` and does not establish that Cloud
+inference will succeed. Each later adapter invocation revalidates `/api/tags`
+and `/api/show` under the same request timeout before it may call `/api/chat`.
 
 The verified owner environment for this contract is Ollama `0.32.14` with
 `gpt-oss:20b-cloud` available. A version mismatch fails closed.

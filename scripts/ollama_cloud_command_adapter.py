@@ -260,6 +260,19 @@ def _read_http_body(
     return b"".join(chunks)
 
 
+def _validate_timeout_seconds(timeout_seconds: float) -> float:
+    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 300:
+        raise OllamaAdapterError("Ollama request timeout is invalid", kind="configuration")
+    return float(timeout_seconds)
+
+
+def _remaining_timeout(deadline: float) -> float:
+    remaining = deadline - time.monotonic()
+    if remaining <= 0:
+        raise OllamaAdapterError("Ollama response timed out", kind="timeout")
+    return remaining
+
+
 def _http_json_request(
     endpoint: str,
     method: str,
@@ -269,8 +282,7 @@ def _http_json_request(
     timeout_seconds: float,
 ) -> Mapping[str, Any]:
     host, port, base_path = validate_endpoint(endpoint)
-    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 300:
-        raise OllamaAdapterError("Ollama request timeout is invalid", kind="configuration")
+    timeout_seconds = _validate_timeout_seconds(timeout_seconds)
     request_bytes = None
     headers = {"Accept": "application/json"}
     if body is not None:
@@ -433,12 +445,8 @@ def validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> 
 
 
 def _extract_final_content(response: Mapping[str, Any]) -> str:
-    model = response.get("model")
-    if model not in {MODEL_ID, EXPECTED_CLOUD_REMOTE_MODEL}:
+    if response.get("model") != EXPECTED_CLOUD_REMOTE_MODEL:
         raise OllamaAdapterError("Ollama returned an unexpected model", kind="model_mismatch")
-    if response.get("remote_model") != EXPECTED_CLOUD_REMOTE_MODEL:
-        raise OllamaAdapterError("Ollama returned unexpected remote model provenance", kind="model_mismatch")
-    _normalize_cloud_remote_host(response.get("remote_host"))
     if type(response.get("done")) is not bool or response.get("done") is not True:
         raise OllamaAdapterError("Ollama response is incomplete", kind="invalid_completion")
     if type(response.get("done_reason")) is not str or not response["done_reason"]:
@@ -503,6 +511,35 @@ def _preflight_model_entry(tags: Mapping[str, Any]) -> Mapping[str, Any]:
     raise OllamaAdapterError("configured Ollama model is unavailable", kind="preflight_failed")
 
 
+def _read_cloud_metadata(
+    endpoint: str,
+    *,
+    deadline: float,
+) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
+    """Establish Cloud provenance from zero-inference metadata only."""
+
+    tags_response = _http_json_request(
+        endpoint,
+        "GET",
+        "/tags",
+        timeout_seconds=_remaining_timeout(deadline),
+    )
+    tag = _preflight_model_entry(tags_response)
+    show_response = _http_json_request(
+        endpoint,
+        "POST",
+        "/show",
+        body={"model": MODEL_ID},
+        timeout_seconds=_remaining_timeout(deadline),
+    )
+    details = show_response.get("details")
+    if not isinstance(details, Mapping) or not isinstance(show_response.get("model_info"), Mapping):
+        raise OllamaAdapterError("Ollama model metadata is incomplete", kind="preflight_failed")
+    if details.get("parent_model") != EXPECTED_CLOUD_REMOTE_MODEL:
+        raise OllamaAdapterError("configured Ollama model has unexpected parent model", kind="preflight_failed")
+    return tag, show_response
+
+
 def run_preflight(
     *,
     endpoint: str = DEFAULT_ENDPOINT,
@@ -512,24 +549,17 @@ def run_preflight(
     """Read only Ollama readiness and model metadata; never calls generation."""
 
     host, port, _ = validate_endpoint(endpoint)
-    version_response = _http_json_request(endpoint, "GET", "/version", timeout_seconds=timeout_seconds)
+    deadline = time.monotonic() + _validate_timeout_seconds(timeout_seconds)
+    version_response = _http_json_request(
+        endpoint,
+        "GET",
+        "/version",
+        timeout_seconds=_remaining_timeout(deadline),
+    )
     version = version_response.get("version")
     if type(version) is not str or version != expected_version:
         raise OllamaAdapterError("Ollama version is not the expected version", kind="preflight_failed")
-    tags_response = _http_json_request(endpoint, "GET", "/tags", timeout_seconds=timeout_seconds)
-    tag = _preflight_model_entry(tags_response)
-    show_response = _http_json_request(
-        endpoint,
-        "POST",
-        "/show",
-        body={"model": MODEL_ID},
-        timeout_seconds=timeout_seconds,
-    )
-    details = show_response.get("details")
-    if not isinstance(details, Mapping) or not isinstance(show_response.get("model_info"), Mapping):
-        raise OllamaAdapterError("Ollama model metadata is incomplete", kind="preflight_failed")
-    if details.get("parent_model") != EXPECTED_CLOUD_REMOTE_MODEL:
-        raise OllamaAdapterError("configured Ollama model has unexpected parent model", kind="preflight_failed")
+    tag, show_response = _read_cloud_metadata(endpoint, deadline=deadline)
     capabilities = show_response.get("capabilities")
     if not isinstance(capabilities, list) or any(type(item) is not str for item in capabilities):
         raise OllamaAdapterError("Ollama model capabilities are invalid", kind="preflight_failed")
@@ -601,7 +631,14 @@ def run_adapter(
 
         request = _read_request(stdin_stream)
         validate_logical_call_index(request, args.max_logical_model_calls)
-        response = _chat_request(args.endpoint, request, timeout_seconds=args.timeout)
+        canonical_public_request(request)
+        deadline = time.monotonic() + _validate_timeout_seconds(args.timeout)
+        _read_cloud_metadata(args.endpoint, deadline=deadline)
+        response = _chat_request(
+            args.endpoint,
+            request,
+            timeout_seconds=_remaining_timeout(deadline),
+        )
         content = _extract_final_content(response)
         directive = parse_directive_content(content, request)
         stdout_stream.write(_safe_json({"directive": directive}) + "\n")

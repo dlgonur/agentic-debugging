@@ -74,6 +74,7 @@ OLLAMA_ADAPTER = (
 class _SyntheticOllamaState:
     def __init__(self) -> None:
         self.calls: list[dict] = []
+        self.paths: list[str] = []
         self.lock = threading.Lock()
 
 
@@ -84,20 +85,59 @@ class _SyntheticOllamaHandler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
         return
 
+    def _send_json(self, payload: dict, status: int = 200) -> None:
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        with self.state.lock:
+            self.state.paths.append(self.path)
+        if self.path == "/api/tags":
+            self._send_json(
+                {
+                    "models": [
+                        {
+                            "name": "gpt-oss:20b-cloud",
+                            "model": "gpt-oss:20b-cloud",
+                            "remote_model": "gpt-oss:20b",
+                            "remote_host": "https://ollama.com",
+                            "digest": "synthetic-digest",
+                        }
+                    ]
+                }
+            )
+            return
+        self._send_json({"error": "unexpected path"}, status=404)
+
     def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
         length = int(self.headers.get("Content-Length", "0"))
         payload = json.loads(self.rfile.read(length).decode("utf-8"))
         with self.state.lock:
-            self.state.calls.append(payload)
-            call_index = len(self.state.calls)
+            self.state.paths.append(self.path)
+            if self.path == "/api/chat":
+                self.state.calls.append(payload)
+                call_index = len(self.state.calls)
+            else:
+                call_index = 0
+        if self.path == "/api/show":
+            self._send_json(
+                {
+                    "details": {"family": "gptoss", "parent_model": "gpt-oss:20b"},
+                    "capabilities": ["completion", "tools", "thinking"],
+                    "model_info": {"gptoss.context_length": 131072},
+                }
+            )
+            return
         if self.path != "/api/chat":
-            response = {"error": "unexpected path"}
-            status = 404
-        elif call_index == 1:
+            self._send_json({"error": "unexpected path"}, status=404)
+            return
+        if call_index == 1:
             response = {
-                "model": "gpt-oss:20b-cloud",
-                "remote_model": "gpt-oss:20b",
-                "remote_host": "https://ollama.com",
+                "model": "gpt-oss:20b",
                 "done": True,
                 "done_reason": "stop",
                 "message": {
@@ -112,12 +152,9 @@ class _SyntheticOllamaHandler(BaseHTTPRequestHandler):
                     ),
                 },
             }
-            status = 200
         else:
             response = {
-                "model": "gpt-oss:20b-cloud",
-                "remote_model": "gpt-oss:20b",
-                "remote_host": "https://ollama.com",
+                "model": "gpt-oss:20b",
                 "done": True,
                 "done_reason": "stop",
                 "message": {
@@ -131,13 +168,7 @@ class _SyntheticOllamaHandler(BaseHTTPRequestHandler):
                     ),
                 },
             }
-            status = 200
-        body = json.dumps(response).encode("utf-8")
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(body)))
-        self.end_headers()
-        self.wfile.write(body)
+        self._send_json(response)
 
 
 def _start_synthetic_ollama() -> tuple[_SyntheticOllamaState, ThreadingHTTPServer, str]:
@@ -451,6 +482,9 @@ class TestConfiguredSourceHappyPath:
             assert all(call["model"] == "gpt-oss:20b-cloud" for call in state.calls)
             assert all(call["stream"] is False for call in state.calls)
             assert all("tools" not in call for call in state.calls)
+            assert state.paths.count("/api/tags") == 2
+            assert state.paths.count("/api/show") == 2
+            assert state.paths.count("/api/chat") == 2
             assert _SyntheticOllamaHandler.THINKING_SECRET not in json.dumps(
                 [event.to_mapping() for event in read.events]
             )

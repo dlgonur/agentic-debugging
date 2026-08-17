@@ -73,6 +73,32 @@ def valid_content() -> str:
     return json.dumps({"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}, separators=(",", ":"))
 
 
+def valid_tags_entry(**overrides: Any) -> dict[str, Any]:
+    entry = {
+        "name": adapter.MODEL_ID,
+        "model": adapter.MODEL_ID,
+        "remote_model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
+        "digest": "synthetic-digest",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def encode_tags(entry: dict[str, Any] | None = None) -> bytes:
+    return json.dumps({"models": [entry or valid_tags_entry()]}).encode()
+
+
+def encode_show(*, parent_model: str = adapter.EXPECTED_CLOUD_REMOTE_MODEL) -> bytes:
+    return json.dumps(
+        {
+            "details": {"family": "gptoss", "parent_model": parent_model},
+            "capabilities": ["completion", "tools", "thinking"],
+            "model_info": {"gptoss.context_length": 131072},
+        }
+    ).encode()
+
+
 class _FixtureState:
     def __init__(
         self,
@@ -80,52 +106,39 @@ class _FixtureState:
         chat_body: bytes | None = None,
         chat_status: int = 200,
         delay: float = 0.0,
-        tags_body: bytes | None = None,
-        show_body: bytes | None = None,
+        tags_delay: float = 0.0,
+        show_delay: float = 0.0,
+        tags_payload: bytes | None = None,
+        show_payload: bytes | None = None,
     ) -> None:
         self.chat_body = chat_body or self._chat_envelope(valid_content())
         self.chat_status = chat_status
         self.delay = delay
-        self.tags_body = tags_body or json.dumps(
-            {
-                "models": [
-                    {
-                        "name": adapter.MODEL_ID,
-                        "model": adapter.MODEL_ID,
-                        "remote_model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-                        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
-                        "digest": "synthetic-digest",
-                    }
-                ]
-            }
-        ).encode()
-        self.show_body = show_body or json.dumps(
-            {
-                "details": {"family": "gptoss", "parent_model": adapter.EXPECTED_CLOUD_REMOTE_MODEL},
-                "capabilities": ["completion", "tools", "thinking"],
-                "model_info": {"gptoss.context_length": 131072},
-            }
-        ).encode()
+        self.tags_delay = tags_delay
+        self.show_delay = show_delay
+        self.tags_body = tags_payload or encode_tags()
+        self.show_body = show_payload or encode_show()
         self.requests: list[tuple[str, dict[str, Any] | None]] = []
         self.chat_started = threading.Event()
         self.lock = threading.Lock()
 
     @staticmethod
     def _chat_envelope(content: str, **message_fields: Any) -> bytes:
-        model = message_fields.pop("model", adapter.MODEL_ID)
-        remote_model = message_fields.pop("remote_model", adapter.EXPECTED_CLOUD_REMOTE_MODEL)
-        remote_host = message_fields.pop("remote_host", adapter.EXPECTED_CLOUD_REMOTE_HOST)
+        model = message_fields.pop("model", adapter.EXPECTED_CLOUD_REMOTE_MODEL)
+        remote_model = message_fields.pop("remote_model", None)
+        remote_host = message_fields.pop("remote_host", None)
         message = {"role": "assistant", "content": content, **message_fields}
-        return json.dumps(
-            {
-                "model": model,
-                "remote_model": remote_model,
-                "remote_host": remote_host,
-                "done": True,
-                "done_reason": "stop",
-                "message": message,
-            }
-        ).encode("utf-8")
+        envelope: dict[str, Any] = {
+            "model": model,
+            "done": True,
+            "done_reason": "stop",
+            "message": message,
+        }
+        if remote_model is not None:
+            envelope["remote_model"] = remote_model
+        if remote_host is not None:
+            envelope["remote_host"] = remote_host
+        return json.dumps(envelope).encode("utf-8")
 
     def chat(self, content: str, **message_fields: Any) -> None:
         self.chat_body = self._chat_envelope(content, **message_fields)
@@ -155,6 +168,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"version": adapter.EXPECTED_OLLAMA_VERSION}).encode())
             return
         if self.path == "/api/tags":
+            if self.state.tags_delay:
+                time.sleep(self.state.tags_delay)
             self._send(200, self.state.tags_body)
             return
         self._send(404, b"{}")
@@ -165,6 +180,8 @@ class _Handler(BaseHTTPRequestHandler):
         payload = json.loads(raw.decode("utf-8"))
         self.state.record(self.path, payload)
         if self.path == "/api/show":
+            if self.state.show_delay:
+                time.sleep(self.state.show_delay)
             self._send(200, self.state.show_body)
             return
         if self.path != "/api/chat":
@@ -206,29 +223,37 @@ def invoke(endpoint: str, request: dict[str, Any] | None = None, *, timeout: flo
     return rc, stdout.getvalue(), stderr.getvalue()
 
 
+def request_paths(state: _FixtureState) -> list[str]:
+    return [path for path, _payload in state.requests]
+
+
+def chat_payloads(state: _FixtureState) -> list[dict[str, Any]]:
+    return [payload for path, payload in state.requests if path == "/api/chat" and payload is not None]
+
+
 def test_valid_directive_and_request_contract(fixture_server) -> None:
     state, _server, endpoint = fixture_server()
     rc, stdout, stderr = invoke(endpoint)
     assert rc == 0, stderr
     assert json.loads(stdout) == {"directive": json.loads(valid_content())}
     assert stderr == ""
-    path, payload = state.requests[0]
-    assert path == "/api/chat"
-    assert payload is not None
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    payload = chat_payloads(state)[0]
     assert payload["model"] == adapter.MODEL_ID
     assert payload["stream"] is False
     assert payload["think"] == "low"
     assert "tools" not in payload
+    assert "functions" not in payload
     assert "format" not in payload
+    assert adapter.ADAPTER_RETRY_COUNT == 0
+    assert adapter.FALLBACK_COUNT == 0
 
 
-def test_real_cloud_provenance_shape_is_accepted(fixture_server) -> None:
+def test_real_cloud_chat_shape_without_remote_fields_succeeds(fixture_server) -> None:
     state = _FixtureState(
         chat_body=_FixtureState._chat_envelope(
             valid_content(),
             model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-            remote_model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-            remote_host=adapter.EXPECTED_CLOUD_REMOTE_HOST,
         )
     )
     _state, _server, endpoint = fixture_server(state)
@@ -237,6 +262,8 @@ def test_real_cloud_provenance_shape_is_accepted(fixture_server) -> None:
 
     assert rc == 0, stderr
     assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    assert chat_payloads(state)[0]["model"] == adapter.MODEL_ID
 
 
 def test_wrong_upstream_model_is_rejected(fixture_server) -> None:
@@ -244,66 +271,84 @@ def test_wrong_upstream_model_is_rejected(fixture_server) -> None:
         chat_body=_FixtureState._chat_envelope(
             valid_content(),
             model="gpt-oss:21b",
-            remote_model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-            remote_host=adapter.EXPECTED_CLOUD_REMOTE_HOST,
         )
     )
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, _stderr = invoke(endpoint)
     assert rc == 1
     assert stdout == ""
+    assert request_paths(state)[-1] == "/api/chat"
+
+
+def test_chat_local_alias_is_rejected_as_metadata_disagreement(fixture_server) -> None:
+    state = _FixtureState(
+        chat_body=_FixtureState._chat_envelope(
+            valid_content(),
+            model=adapter.MODEL_ID,
+        )
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint)
+    assert rc == 1
+    assert stdout == ""
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
 @pytest.mark.parametrize(
-    ("remote_model", "remote_host"),
+    "entry",
     [
-        ("other-model", adapter.EXPECTED_CLOUD_REMOTE_HOST),
-        (adapter.EXPECTED_CLOUD_REMOTE_MODEL, "https://example.com"),
-        (adapter.EXPECTED_CLOUD_REMOTE_MODEL, "https://ollama.com.evil.example"),
+        valid_tags_entry(remote_model="other-model"),
+        valid_tags_entry(remote_host="https://example.com"),
+        valid_tags_entry(remote_host="https://ollama.com.evil.example"),
+        valid_tags_entry(remote_model=None),
+        valid_tags_entry(remote_host=None),
+        valid_tags_entry(name="other-cloud", model="other-cloud"),
+        valid_tags_entry(model="gpt-oss:20b"),
     ],
 )
-def test_cloud_provenance_mismatch_is_rejected(fixture_server, remote_model: str, remote_host: str) -> None:
-    state = _FixtureState(
-        chat_body=_FixtureState._chat_envelope(
-            valid_content(),
-            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-            remote_model=remote_model,
-            remote_host=remote_host,
-        )
-    )
+def test_wrong_or_missing_tags_provenance_is_rejected_before_chat(fixture_server, entry: dict[str, Any]) -> None:
+    mutated = dict(entry)
+    if mutated.get("remote_model") is None:
+        mutated.pop("remote_model", None)
+    if mutated.get("remote_host") is None:
+        mutated.pop("remote_host", None)
+    state = _FixtureState(tags_payload=encode_tags(mutated))
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, _stderr = invoke(endpoint)
     assert rc == 1
     assert stdout == ""
+    assert "/api/chat" not in request_paths(state)
+    assert "/api/generate" not in request_paths(state)
 
 
-def test_cloud_provenance_missing_remote_model_is_rejected(fixture_server) -> None:
-    response = json.loads(
-        _FixtureState._chat_envelope(
-            valid_content(),
-            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-        )
-    )
-    response.pop("remote_model")
-    state = _FixtureState(chat_body=json.dumps(response).encode())
+def test_wrong_show_parent_model_is_rejected_before_chat(fixture_server) -> None:
+    state = _FixtureState(show_payload=encode_show(parent_model="other-parent"))
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, _stderr = invoke(endpoint)
     assert rc == 1
     assert stdout == ""
+    assert request_paths(state) == ["/api/tags", "/api/show"]
+    assert "/api/chat" not in request_paths(state)
 
 
-def test_cloud_provenance_accepts_default_https_port(fixture_server) -> None:
+def test_missing_show_parent_model_is_rejected_before_chat(fixture_server) -> None:
+    state = _FixtureState(show_payload=encode_show(parent_model=""))
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint)
+    assert rc == 1
+    assert stdout == ""
+    assert "/api/chat" not in request_paths(state)
+
+
+def test_metadata_host_accepts_default_https_port(fixture_server) -> None:
     state = _FixtureState(
-        chat_body=_FixtureState._chat_envelope(
-            valid_content(),
-            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
-            remote_host="https://ollama.com:443",
-        )
+        tags_payload=encode_tags(valid_tags_entry(remote_host="https://ollama.com:443"))
     )
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, stderr = invoke(endpoint)
     assert rc == 0, stderr
     assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
 def test_legal_repository_action_is_a_local_application_directive(fixture_server) -> None:
@@ -329,8 +374,7 @@ def test_legal_repository_action_is_a_local_application_directive(fixture_server
 
     assert rc == 0, stderr
     assert json.loads(stdout)["directive"]["name"] == "apply_patch"
-    _path, payload = state.requests[0]
-    assert payload is not None
+    payload = chat_payloads(state)[0]
     assert "tools" not in payload
     assert "functions" not in payload
     assert "format" not in payload
@@ -354,7 +398,8 @@ def test_final_content_must_be_one_json_object(fixture_server, content: str) -> 
     rc, stdout, _stderr = invoke(endpoint)
     assert rc == 1
     assert stdout == ""
-    assert len(state.requests) == 1
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    assert len(chat_payloads(state)) == 1
 
 
 @pytest.mark.parametrize("content", [
@@ -370,13 +415,18 @@ def test_illegal_directive_is_rejected_before_success(fixture_server, content: s
 
 
 @pytest.mark.parametrize("response", [
-    {"model": adapter.MODEL_ID, "done": True, "message": {"role": "assistant"}},
-    {"model": adapter.MODEL_ID, "done": True, "message": {"role": "user", "content": valid_content()}},
-    {"model": adapter.MODEL_ID, "done": True, "message": {"role": "assistant", "content": 3}},
+    {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": True, "message": {"role": "assistant"}},
+    {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": True, "message": {"role": "user", "content": valid_content()}},
+    {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": True, "message": {"role": "assistant", "content": 3}},
     {"model": "other-model", "done": True, "message": {"role": "assistant", "content": valid_content()}},
-    {"model": adapter.MODEL_ID, "done": False, "message": {"role": "assistant", "content": valid_content()}},
-    {"model": adapter.MODEL_ID, "done": True, "done_reason": 3, "message": {"role": "assistant", "content": valid_content()}},
-    {"model": adapter.MODEL_ID, "done": True, "message": {"role": "assistant", "content": valid_content(), "tool_calls": []}},
+    {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": False, "done_reason": "stop", "message": {"role": "assistant", "content": valid_content()}},
+    {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": True, "done_reason": 3, "message": {"role": "assistant", "content": valid_content()}},
+    {
+        "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "content": valid_content(), "tool_calls": []},
+    },
 ])
 def test_response_shape_completion_model_and_tools_fail_closed(fixture_server, response: dict[str, Any]) -> None:
     state = _FixtureState(chat_body=json.dumps(response).encode())
@@ -396,6 +446,7 @@ def test_thinking_is_discarded_and_not_emitted(fixture_server) -> None:
     assert secret not in stdout
     assert secret not in stderr
     assert json.loads(stdout)["directive"] == json.loads(valid_content())
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
 def test_oversized_http_body_and_http_error_are_bounded(fixture_server) -> None:
@@ -410,7 +461,8 @@ def test_oversized_http_body_and_http_error_are_bounded(fixture_server) -> None:
     rc, stdout, _stderr = invoke(endpoint)
     assert rc == 1
     assert stdout == ""
-    assert [path for path, _payload in failed.requests] == ["/api/chat"]
+    assert request_paths(failed) == ["/api/tags", "/api/show", "/api/chat"]
+    assert len(chat_payloads(failed)) == 1
 
 
 def test_timeout_is_bounded_and_no_retry_occurs(fixture_server) -> None:
@@ -422,7 +474,23 @@ def test_timeout_is_bounded_and_no_retry_occurs(fixture_server) -> None:
     assert rc == 1
     assert stdout == ""
     assert elapsed < 2.0
-    assert len(state.requests) == 1
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    assert len(chat_payloads(state)) == 1
+    assert adapter.ADAPTER_RETRY_COUNT == 0
+    assert adapter.FALLBACK_COUNT == 0
+
+
+def test_shared_deadline_includes_metadata_cost(fixture_server) -> None:
+    state = _FixtureState(tags_delay=0.2, show_delay=0.2)
+    _state, _server, endpoint = fixture_server(state)
+    started = time.monotonic()
+    rc, stdout, _stderr = invoke(endpoint, timeout=0.3)
+    elapsed = time.monotonic() - started
+    assert rc == 1
+    assert stdout == ""
+    assert elapsed < 0.9
+    assert "/api/chat" not in request_paths(state)
+    assert "/api/generate" not in request_paths(state)
     assert adapter.ADAPTER_RETRY_COUNT == 0
     assert adapter.FALLBACK_COUNT == 0
 
@@ -483,8 +551,8 @@ def test_preflight_rejects_unexpected_cloud_provenance(fixture_server, field: st
         "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
     }
     model_entry[field] = "unexpected-model" if field == "remote_model" else "https://example.com"
-    tags_body = json.dumps({"models": [model_entry]}).encode()
-    state = _FixtureState(tags_body=tags_body)
+    tags_payload = json.dumps({"models": [model_entry]}).encode()
+    state = _FixtureState(tags_payload=tags_payload)
     _state, _server, endpoint = fixture_server(state)
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -524,4 +592,5 @@ def test_external_cancellation_terminates_adapter_promptly(fixture_server, tmp_p
     thread.join(10.0)
     assert not thread.is_alive()
     assert outcome and isinstance(outcome[0], CancellationError)
-    assert len(state.requests) == 1
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    assert len(chat_payloads(state)) == 1
