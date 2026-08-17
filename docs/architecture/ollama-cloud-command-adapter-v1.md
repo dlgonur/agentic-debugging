@@ -37,13 +37,18 @@ user message derives illustrative legal action JSON from the current
 `allowed_actions` and `action_contracts`; it does not grant provider tools.
 When `apply_patch` is legal, that user guidance also states the exact
 unified-diff form accepted by the existing PatchManager: both
-`--- a/<path>` and `+++ b/<same-path>` headers, a complete numeric hunk
-header `@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@`, matching hunk
-counts, significant ` ` / `-` / `+` prefixes, repository-relative paths,
-no Markdown fences, and no unsupported Git metadata. A rejected
-`apply_patch` does not create an active patch; `revert_patch` and
-patch-dependent `syntax_check` apply only after a successful apply. The
-adapter does not normalize or repair malformed diffs.
+`--- a/<path>` and `+++ b/<same-path>` headers; a complete numeric hunk
+header `@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@` with 1-based
+starts; mechanical count formulas
+`OLD_COUNT = context(" ") + removed("-")` and
+`NEW_COUNT = context(" ") + added("+")`; the rule that context lines
+count toward both sides; a pre-output four-number checklist; and a
+neutral arithmetic example whose header counts equal its body counts.
+Zero-context hunks are valid when they uniquely locate the edit, so the
+guidance prefers the smallest valid hunk. A rejected `apply_patch` does
+not create an active patch; `revert_patch` and patch-dependent
+`syntax_check` apply only after a successful apply. The adapter does
+not normalize or repair malformed diffs.
 The adapter has zero provider retry and zero fallback, and preserves the
 25-logical-call and 25,000-byte public-request bounds.
 

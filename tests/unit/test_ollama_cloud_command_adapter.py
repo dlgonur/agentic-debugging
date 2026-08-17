@@ -446,6 +446,55 @@ def _apply_patch_request() -> dict[str, Any]:
     return request
 
 
+ZERO_CONTEXT_UNIFIED_DIFF_EXAMPLE = (
+    "--- a/example.py\n"
+    "+++ b/example.py\n"
+    "@@ -2,2 +2,3 @@\n"
+    "-old_a = 1\n"
+    "-old_b = 2\n"
+    "+new_a = 1\n"
+    "+new_b = 2\n"
+    "+new_c = 3\n"
+)
+
+SECOND_SESSION_COUNT_MISMATCH_DIFF = (
+    "--- a/display_name.py\n"
+    "+++ b/display_name.py\n"
+    "@@ -1,2 +1,6 @@\n"
+    " def format_display_name(name: str | None) -> str:\n"
+    "-    normalized_name = name.strip()\n"
+    "-    return normalized_name\n"
+    "+    if name is None:\n"
+    "+        return \"Anonymous\"\n"
+    "+    normalized_name = name.strip()\n"
+    "+    return normalized_name\n"
+)
+
+
+def _raw_hunk_body_counts(diff: str) -> tuple[int, int]:
+    """Count hunk-body prefixes from the raw patch text, independent of header numbers."""
+
+    in_hunk = False
+    old_count = 0
+    new_count = 0
+    for line in diff.splitlines():
+        if line.startswith("@@"):
+            in_hunk = True
+            continue
+        if not in_hunk:
+            continue
+        if line.startswith("--- ") or line.startswith("+++ "):
+            break
+        if line.startswith(" "):
+            old_count += 1
+            new_count += 1
+        elif line.startswith("-"):
+            old_count += 1
+        elif line.startswith("+"):
+            new_count += 1
+    return old_count, new_count
+
+
 def test_apply_patch_guidance_teaches_exact_unified_diff_requirements() -> None:
     messages = adapter.build_chat_messages(_apply_patch_request())
     user = messages[1]["content"]
@@ -453,16 +502,41 @@ def test_apply_patch_guidance_teaches_exact_unified_diff_requirements() -> None:
     assert "--- a/<relative-path>" in guidance
     assert "+++ b/<same-relative-path>" in guidance
     assert "@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@" in guidance
-    assert "A bare @@ is invalid." in guidance
+    assert "OLD_START and NEW_START are 1-based line positions." in guidance
+    assert "Never emit bare @@." in guidance
+    assert "Never leave symbolic placeholders such as OLD_COUNT in the actual patch." in guidance
+    assert adapter.OLD_COUNT_FORMULA in guidance
+    assert adapter.NEW_COUNT_FORMULA in guidance
+    assert "count toward both OLD_COUNT and NEW_COUNT" in guidance
     assert "Hunk counts must exactly match the hunk body." in guidance
+    assert "If the header counts do not equal the body counts, correct the header before output." in guidance
+    assert "Prefer the smallest valid hunk that uniquely expresses the edit." in guidance
+    assert "Zero-context hunks" in guidance
     assert "one leading space for unchanged/context" in guidance
     assert "repository-relative paths" in guidance
     assert "Do not wrap the patch string in Markdown fences." in guidance
     assert "diff --git" in guidance
     assert adapter.APPLY_PATCH_DIRECTIVE_SHAPE in guidance
     assert adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE.rstrip("\n") in guidance
+    assert "OLD_COUNT = 1 context + 2 removed = 3" in guidance
+    assert "NEW_COUNT = 1 context + 3 added = 4" in guidance
     assert "display_name.py" not in guidance
     assert ".strip()" not in guidance
+    assert "Anonymous" not in guidance
+
+
+def test_apply_patch_guidance_includes_pre_output_count_checklist() -> None:
+    guidance = adapter.build_apply_patch_guidance(_apply_patch_request())
+    assert "Before emitting the JSON, verify:" in guidance
+    assert "1. --- and +++ headers both exist and refer to the same repository-relative path." in guidance
+    assert "2. Every hunk header contains four numeric values." in guidance
+    assert "3. Count every hunk body line by prefix." in guidance
+    assert "4. Recompute OLD_COUNT from context + removed." in guidance
+    assert "5. Recompute NEW_COUNT from context + added." in guidance
+    assert "6. Header counts exactly equal those totals." in guidance
+    assert '7. Every hunk body line starts with " ", "-", or "+".' in guidance
+    assert "8. No Markdown fences or unsupported Git metadata." in guidance
+    assert f"9. The complete patch is inside {adapter.APPLY_PATCH_DIRECTIVE_SHAPE}" in guidance
 
 
 def test_apply_patch_guidance_distinguishes_rejected_and_applied_lifecycle() -> None:
@@ -471,6 +545,7 @@ def test_apply_patch_guidance_distinguishes_rejected_and_applied_lifecycle() -> 
     assert "does not mutate the workspace" in guidance
     assert "do not call revert_patch merely to undo that rejected patch" in guidance
     assert "Do not call patch-dependent syntax_check without an active successfully applied patch." in guidance
+    assert "correct the patch format or content and submit a new valid apply_patch" in guidance
     assert "successfully applied" in guidance
     assert "legal validation lifecycle" in guidance
 
@@ -478,7 +553,7 @@ def test_apply_patch_guidance_distinguishes_rejected_and_applied_lifecycle() -> 
 def test_neutral_unified_diff_example_is_accepted_by_real_patch_manager(tmp_path: Path) -> None:
     source = tmp_path / "src"
     source.mkdir()
-    (source / "example.py").write_text("value = 1\nprint(value)\n", encoding="utf-8")
+    (source / "example.py").write_text("keep = True\nold_a = 1\nold_b = 2\n", encoding="utf-8")
     workspace = TaskWorkspace(str(source))
     try:
         parsed = _parse_unified_diff(adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE)
@@ -489,10 +564,68 @@ def test_neutral_unified_diff_example_is_accepted_by_real_patch_manager(tmp_path
         assert result.success is True
         assert result.hunk_count == 1
         patched = Path(workspace.resolve_path("example.py")).read_text(encoding="utf-8")
-        assert patched == "value = 2\nprint(value)\n"
+        assert patched == "keep = True\nnew_a = 1\nnew_b = 2\nnew_c = 3\n"
         manager.revert_patch()
     finally:
         workspace.cleanup()
+
+
+def test_arithmetic_example_header_counts_equal_body_prefix_counts() -> None:
+    parsed = _parse_unified_diff(adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE)
+    hunk = parsed[0].hunks[0]
+    body_old, body_new = _raw_hunk_body_counts(adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE)
+    context = sum(1 for line in hunk.lines if line.prefix == " ")
+    removed = sum(1 for line in hunk.lines if line.prefix == "-")
+    added = sum(1 for line in hunk.lines if line.prefix == "+")
+    assert (context, removed, added) == (1, 2, 3)
+    assert hunk.old_count == body_old == context + removed == 3
+    assert hunk.new_count == body_new == context + added == 4
+    assert hunk.old_start == 1
+    assert hunk.new_start == 1
+
+
+def test_zero_context_hunk_is_accepted_by_unchanged_real_patch_manager(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "example.py").write_text("keep = True\nold_a = 1\nold_b = 2\n", encoding="utf-8")
+    workspace = TaskWorkspace(str(source))
+    try:
+        parsed = _parse_unified_diff(ZERO_CONTEXT_UNIFIED_DIFF_EXAMPLE)
+        hunk = parsed[0].hunks[0]
+        assert sum(1 for line in hunk.lines if line.prefix == " ") == 0
+        body_old, body_new = _raw_hunk_body_counts(ZERO_CONTEXT_UNIFIED_DIFF_EXAMPLE)
+        assert hunk.old_count == body_old == 2
+        assert hunk.new_count == body_new == 3
+        manager = PatchManager(workspace, allowed_paths=["example.py"], denied_paths=[])
+        result = manager.apply_patch(ZERO_CONTEXT_UNIFIED_DIFF_EXAMPLE)
+        assert result.success is True
+        assert result.hunk_count == 1
+        patched = Path(workspace.resolve_path("example.py")).read_text(encoding="utf-8")
+        assert patched == "keep = True\nnew_a = 1\nnew_b = 2\nnew_c = 3\n"
+        manager.revert_patch()
+    finally:
+        workspace.cleanup()
+
+
+def test_second_session_count_mismatch_remains_rejected_by_real_patch_manager() -> None:
+    with pytest.raises(
+        PatchValidationError,
+        match="old_count=2 but body has 3 context/removed lines",
+    ):
+        _parse_unified_diff(SECOND_SESSION_COUNT_MISMATCH_DIFF)
+
+
+def test_adapter_does_not_normalize_or_rewrite_patches() -> None:
+    source = Path(adapter.__file__).read_text(encoding="utf-8")
+    assert "agentic_debugger.runtime.patcher" not in source
+    assert "_parse_unified_diff" not in source
+    assert "def normalize_patch" not in source
+    assert "def rewrite_patch" not in source
+    assert "def repair_patch" not in source
+    assert "def fix_hunk" not in source
+    assert not hasattr(adapter, "normalize_patch")
+    assert not hasattr(adapter, "rewrite_patch")
+    assert not hasattr(adapter, "repair_patch")
 
 
 @pytest.mark.parametrize(
@@ -504,6 +637,7 @@ def test_neutral_unified_diff_example_is_accepted_by_real_patch_manager(tmp_path
         "--- a/display_name.py\n+++ b/display_name.py\n@@\n",
         "--- a/example.py\n",
         "--- a/example.py\n-value = 1\n+value = 2\n",
+        SECOND_SESSION_COUNT_MISMATCH_DIFF,
     ],
 )
 def test_malformed_unified_diffs_remain_rejected_without_normalization(diff: str) -> None:

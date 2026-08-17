@@ -229,10 +229,20 @@ def _illustrative_argument_value(field: str, spec: Mapping[str, Any] | None) -> 
 NEUTRAL_UNIFIED_DIFF_EXAMPLE = (
     "--- a/example.py\n"
     "+++ b/example.py\n"
-    "@@ -1,2 +1,2 @@\n"
-    "-value = 1\n"
-    "+value = 2\n"
-    " print(value)\n"
+    "@@ -1,3 +1,4 @@\n"
+    " keep = True\n"
+    "-old_a = 1\n"
+    "-old_b = 2\n"
+    "+new_a = 1\n"
+    "+new_b = 2\n"
+    "+new_c = 3\n"
+)
+
+OLD_COUNT_FORMULA = (
+    'OLD_COUNT = number of lines beginning with " " + number of lines beginning with "-"'
+)
+NEW_COUNT_FORMULA = (
+    'NEW_COUNT = number of lines beginning with " " + number of lines beginning with "+"'
 )
 
 APPLY_PATCH_DIRECTIVE_SHAPE = (
@@ -288,15 +298,35 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         "+++ b/<same-relative-path>",
         "Every hunk requires a complete numeric header of the form:",
         "@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@",
-        "A bare @@ is invalid.",
+        "OLD_START and NEW_START are 1-based line positions.",
+        "Always emit the complete form. Never emit bare @@.",
+        "Never leave symbolic placeholders such as OLD_COUNT in the actual patch.",
+        "After composing each hunk body, count prefixes mechanically before returning the JSON directive:",
+        OLD_COUNT_FORMULA,
+        NEW_COUNT_FORMULA,
+        'Lines beginning with "-" do not count toward NEW_COUNT.',
+        'Lines beginning with "+" do not count toward OLD_COUNT.',
+        'Context lines beginning with exactly one space count toward both OLD_COUNT and NEW_COUNT.',
         "Hunk counts must exactly match the hunk body.",
+        "If the header counts do not equal the body counts, correct the header before output.",
+        "Prefer the smallest valid hunk that uniquely expresses the edit. Zero-context hunks, with no lines beginning with a single space, are accepted when the removed and added lines uniquely locate the edit.",
         "Hunk body prefixes are significant: one leading space for unchanged/context, - for removed, + for added.",
         "Use repository-relative paths only.",
         "Do not wrap the patch string in Markdown fences.",
         "Do not include unsupported Git metadata such as diff --git, new file, deleted file, rename, or copy lines.",
         f"The entire patch remains the value of {APPLY_PATCH_DIRECTIVE_SHAPE}",
-        "Neutral valid example:",
+        "Neutral arithmetic example. For this body, OLD_COUNT = 1 context + 2 removed = 3 and NEW_COUNT = 1 context + 3 added = 4:",
         NEUTRAL_UNIFIED_DIFF_EXAMPLE.rstrip("\n"),
+        "Before emitting the JSON, verify:",
+        "1. --- and +++ headers both exist and refer to the same repository-relative path.",
+        "2. Every hunk header contains four numeric values.",
+        "3. Count every hunk body line by prefix.",
+        "4. Recompute OLD_COUNT from context + removed.",
+        "5. Recompute NEW_COUNT from context + added.",
+        "6. Header counts exactly equal those totals.",
+        '7. Every hunk body line starts with " ", "-", or "+".',
+        "8. No Markdown fences or unsupported Git metadata.",
+        f"9. The complete patch is inside {APPLY_PATCH_DIRECTIVE_SHAPE}",
         "A rejected apply_patch does not create an active patch and does not mutate the workspace.",
         "After a rejected patch, do not call revert_patch merely to undo that rejected patch.",
     ]
