@@ -30,6 +30,16 @@ python experiments/model_generated_test_probe_r4/probe.py --run-offline --output
 python experiments/model_generated_test_probe_r4/probe.py --run --output-dir <dir>   # GPU, ONE model call
 ```
 
+## Accepted result
+
+A model-authored regression test T failed the original buggy workspace and
+passed the independently verified fixed workspace (accepted R3.2 repair
+`R_fix_C`), with the independent `EvaluationVerifier` reporting RESOLVED
+(`docs/project-closeout.md` §3; accepted commit
+`372d51f1a35e071c677391c9970f7b552bb276f2`). The generated test is
+auxiliary evidence; the verifier over the frozen F2P/P2P contract remains
+the correctness authority. Live `runs/` output is gitignored.
+
 ## Key rules (see r4_contract.json)
 
 - EXACTLY ONE generation call; any failure leaves R4 OPEN with the first

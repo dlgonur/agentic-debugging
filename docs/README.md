@@ -10,13 +10,17 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | Current reviewer/handoff status document (2026-08-13, R1-R6 state) |
+| `project-closeout.md` | **Current status authority** (2026-08-13 R1–R6 state, plus 2026-08-16/17 product closeout) |
+| `results-index.md` | Concise map from accepted conclusions to surviving evidence |
 | `final-report.md` | Current technical report through 2026-08-13 (R1-R6 phase; S8/S9 snapshot archived) |
 | `project-tracker.md` | Current execution tracker |
 | `instructor-todo.md` | Instructor's original 27-item task list (byte-identical) |
 
-Repository-level status: root `README.md`; roadmap `TODO.md`. The historical
+Repository-level landing: root `README.md`; roadmap `TODO.md`. The historical
 2026-08-11 S9 closeout is archived at `archive/status/project-closeout-2026-08-11.md`.
+The 2026-08-10 master execution plan is a historical evidence carrier (not
+current execution authority) at
+`archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`.
 
 ## architecture/
 
@@ -59,6 +63,12 @@ Historical snapshots, kept intact:
   closeout (moved from the repository root; content unchanged).
 - `status/instructor-status-map.md` — per-item status map snapshot.
 - `status/repo-reconciliation-2026-08-07.md` — repository status reconciliation.
+- `status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` — 2026-08-10
+  master plan (still a frozen-in-repo carrier for some S5/RAW/cp118/DPO
+  aggregates; its header still says ACTIVE at S1 and is not current status).
+- `status/README-historical-status-log-through-2026-08-07.md` — chronological
+  status log formerly appended to the repository-root `README.md`. Archived
+  unchanged; **not** current status authority.
 
 ## professor_traces/
 

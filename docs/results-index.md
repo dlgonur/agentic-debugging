@@ -1,0 +1,55 @@
+# Results and evidence index
+
+Concise map from accepted project conclusions to the surviving tracked
+evidence. Numbers and wording are taken from `docs/project-closeout.md`,
+`docs/final-report.md`, and `TODO.md`. This index does not replace those
+documents and does not invent metrics.
+
+**Current status authority:** [`project-closeout.md`](project-closeout.md).
+**Full narrative:** [`final-report.md`](final-report.md).
+**Family notes:** [`../experiments/README.md`](../experiments/README.md).
+
+| Area | Result | Status | Evidence |
+| --- | --- | --- | --- |
+| Local Application V1 | Local product surface over the scientific system; Tasks 1–8 accepted | COMPLETE (2026-08-16) | [`architecture/local-application-v1.md`](architecture/local-application-v1.md); [`project-closeout.md`](project-closeout.md) 2026-08-16 update |
+| Real Ollama Cloud product proof | Session `sess-20260817-103258-3d1193` on `curated-none-handling-001` / `pdb-on-uncertainty`: SUCCEEDED; independent verifier RESOLVED; F2P 1/1; P2P 2/2; cleanup verified; live/replay terminal-state parity. Product success YES; debugging success YES. PDB **NOT EXERCISED** (not PASS, not a failure). | COMPLETE (2026-08-17) | [`architecture/ollama-cloud-command-adapter-v1.md`](architecture/ollama-cloud-command-adapter-v1.md); [`project-closeout.md`](project-closeout.md) 2026-08-17 update; [`../TODO.md`](../TODO.md) |
+| R1 repaired-interface breakpoint | Real RAW Qwen2.5-Coder-7B authored a valid breakpoint; real PDB session paused and returned a production-region observation | Accepted (2026-08-11); commit `c842d69` | [`../experiments/debugger_interaction_v2_r1/README.md`](../experiments/debugger_interaction_v2_r1/README.md); `r1_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
+| R2 multi-turn debugger loop | Real model completed breakpoint → stack → locals → step/next → post-step stack → diagnosis | Accepted (2026-08-11); commit `97cc7fe` | [`../experiments/debugger_interaction_v2_r2/README.md`](../experiments/debugger_interaction_v2_r2/README.md); `r2_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
+| R3 debugger-informed repair | Debugger evidence → diagnosis → semantic patch → PatchManager → independent verifier RESOLVED. Mandatory qualifier: raw patch carried a unified-diff hunk-count metadata error corrected by deterministic COUNT-ONLY serialization normalization | Accepted (2026-08-11); commit `f2291df` | [`../experiments/debugger_interaction_v2_r3/README.md`](../experiments/debugger_interaction_v2_r3/README.md); `r3_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
+| R4 model-generated regression test | Model-authored test T failed the buggy workspace and passed the accepted fixed workspace; verifier RESOLVED | Accepted; commit `372d51f1a35e071c677391c9970f7b552bb276f2` | [`../experiments/model_generated_test_probe_r4/README.md`](../experiments/model_generated_test_probe_r4/README.md); `r4_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
+| R5 clean base-14B holdout | Qwen2.5-Coder-14B-Instruct BASE (`adapter_applied=false`) resolved all five curated bugs **5/5** under sanitized r5.9; 0 leakage findings across 41 audited actual prompts. Earlier r5.7 5/5 is disqualified (hidden-test leakage into PATCH prompts) and is historical upper-bound evidence only. Does not claim that fine-tuning caused an improvement | Accepted (2026-08-12) | [`../experiments/debugger_interaction_v2_r5/README.md`](../experiments/debugger_interaction_v2_r5/README.md); `r5_contract_14b.json`; [`project-closeout.md`](project-closeout.md) §3 |
+| R6 tuned 7B disjoint validation | Project-fine-tuned Qwen2.5-Coder-7B debugger **8/8 RESOLVED** on frozen task-disjoint QuixBugs validation (97 model calls, 64,783 tokens, 841,702 ms task runtime, zero row errors). Checkpoint-30; adapter model SHA256 `7ef5d70a…`, config `92ddf91e…`. No matched-base ablation; fine-tuning is not claimed to have causally improved over a matched base | Accepted (2026-08-12/13) | [`../experiments/r6_debugger_training/README.md`](../experiments/r6_debugger_training/README.md); `runs/frozen/`; [`professor_traces/`](professor_traces/); [`project-closeout.md`](project-closeout.md) §3 |
+| Stronger R6 final holdout | Five-task curated holdout: `curated-none-handling-001` RESOLVED (F2P 1/1, P2P 2/2); `curated-off-by-one-002` BREAKING_RESOLVED (F2P 1/1, P2P 1/2); three tasks never produced outcomes. Not 2/5, not 1/5, not a failed 5-task benchmark. Holdout leakage=0 not established | **INCOMPLETE_HARDWARE_STOP** | [`../experiments/r6_debugger_training/README.md`](../experiments/r6_debugger_training/README.md); `runs/frozen/final_holdout_partial/`; [`professor_traces/r6_holdout_partial/`](professor_traces/r6_holdout_partial/); [`project-closeout.md`](project-closeout.md) §6 |
+| Professor traces | Exactly 10 `professor_debug_trace_v1` documents (8 R6 validation + 2 partial holdout); professor-safe audit 10 documents, 0 findings, passed=true | Complete | [`professor_traces/README.md`](professor_traces/README.md); `professor_safe_audit.json`; `trace_sha_manifest.json` |
+| Historical D1/S2 debugger failures | Under the old interface, RAW (`break 20` → tool error) and cp118 (`continue` → rejected, no session) produced zero successful observations | Historical; superseded by R1–R4 | [`project-closeout.md`](project-closeout.md) §4; [`../analysis/s5_final_controlled_comparison/README.md`](../analysis/s5_final_controlled_comparison/README.md) |
+| RAW vs cp118 localized repair | RAW Track A 5/40 RESOLVED; cp118 localized-repair QLoRA 0/40 apply, 0/40 RESOLVED. Formulation-specific negative transfer; not “fine-tuning is generally harmful” | Accepted negative / comparison | [`../analysis/s5_final_controlled_comparison/s5_controlled_comparison_report.md`](../analysis/s5_final_controlled_comparison/s5_controlled_comparison_report.md); [`archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`](archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md) §2.5 |
+| Fine-tuned + RAG (S4) | cp118 + frozen repository RAG: 10/40 partial, compute-constrained; primary correctness NOT_EVALUATED; no RAG success/failure claim | **CLOSED — PARTIAL / COMPUTE-CONSTRAINED / NOT_EVALUATED** | [`../experiments/cp118_rag_definitive/RESULT.md`](../experiments/cp118_rag_definitive/RESULT.md); `s4_contract.json`; [`final-report.md`](final-report.md) §10 |
+| DPO | Historical controlled DPO: B1 27/30, matched SFT 27/30, DPO 21/30; insufficient clean data for a new campaign | **CLOSED / NOT JUSTIFIED** | [`evaluation/model-rag-sft-dpo.md`](evaluation/model-rag-sft-dpo.md); [`final-report.md`](final-report.md) §9; S5 ledger |
+| BugsInPy | Selected as primary external dataset; license/redistribution gate unresolved | **BLOCKED / license-gated** | [`datasets/bugsinpy/license-gate.md`](datasets/bugsinpy/license-gate.md); [`../research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json`](../research/bugsinpy/BUGSINPY_LICENSE_GATE_V1.json) |
+| Authorized Six-Case Live Campaign | Frozen OpenCode Go V4 paired static-versus-PDB design. Not required for Local Application V1 or the R1–R6 closeout. The 2026-08-17 Ollama session did not record PDB and does not supersede the paired question | **RETAIN_OPTIONAL / OWNER-AUTHORIZED** | [`../research/quixbugs/README.md`](../research/quixbugs/README.md); [`../research/quixbugs/PAIRED_PILOT_V4.json`](../research/quixbugs/PAIRED_PILOT_V4.json); [`project-closeout.md`](project-closeout.md) §9 |
+| QuixBugs gold baselines | Single-task gcd smoke and eight-task gold baseline 8/8 (literal upstream diffs). Infrastructure only — no model, PDB, or broader campaign | Accepted infrastructure | [`datasets/quixbugs/smoke-guide.md`](datasets/quixbugs/smoke-guide.md); [`datasets/quixbugs/baseline-8-task.md`](datasets/quixbugs/baseline-8-task.md) |
+| S5 controlled comparison | Synthesis of accepted evidence across eight axes; not another model campaign | Accepted analysis | [`../analysis/s5_final_controlled_comparison/README.md`](../analysis/s5_final_controlled_comparison/README.md) |
+| S6 presentation snapshot | Static HTML bound to then-accepted evidence: presentation_reproducible=YES; positive_real_model_dynamic_debugger_demo=NO; bounded_negative=YES | Historical presentation (pre-R1–R6) | [`../presentation/s6-real-debugging-evidence/README.md`](../presentation/s6-real-debugging-evidence/README.md) |
+| Local inference / SDPA | Efficient-SDPA workaround packaged; measured stock 301.4 s → efficient 3.56 s on the recorded 6079+1 case. Engineering, not a scientific repair result | Accepted engineering | [`../experiments/local_inference_perf/README.md`](../experiments/local_inference_perf/README.md) |
+| Tuned-debugger pilot v1 | Frozen infrastructure for a 10-case tuned-vs-RAW debugger pilot; later R1–R6 are the accepted scientific debugger campaign | Contract / runner preserved | [`../experiments/tuned_debugger_pilot_v1/README.md`](../experiments/tuned_debugger_pilot_v1/README.md) |
+| Literature closeout (S7) | 20-work survey: runtime evidence can help; raw debugger exposure alone is not reliably beneficial; ordinary localized-repair SFT does not teach debugger competence | Accepted research | [`../research/literature/agentic_debugging_literature_closeout_2026-08-11.md`](../research/literature/agentic_debugging_literature_closeout_2026-08-11.md); [`research/`](research/) |
+
+## What is not claimed
+
+- The Ollama Cloud product proof is not a PDB-effectiveness result (PDB was
+  NOT EXERCISED).
+- R6 8/8 is not a matched-base fine-tuning ablation.
+- The interrupted R6 holdout is not 2/5 and is not a failed five-task
+  benchmark.
+- S4 does not support a RAG success or failure claim.
+- QuixBugs gold-patch 8/8 does not prove model debugging ability.
+- Ignored local trees (`artifacts/`, `runs/`, `operator/`) may hold raw
+  machine state; they are not the professor-facing evidence carriers.
+
+## Historical documents (not current authority)
+
+- [`archive/status/project-closeout-2026-08-11.md`](archive/status/project-closeout-2026-08-11.md) — S9 bounded-negative closeout
+- [`archive/reports/final-report-2026-08-11.md`](archive/reports/final-report-2026-08-11.md) — S8/S9 report snapshot
+- [`archive/reports/final-report-v1.md`](archive/reports/final-report-v1.md) — 2026-07-31 report
+- [`archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`](archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md) — 2026-08-10 plan (header still says ACTIVE at S1)
+- Frozen Friday delivery files `docs/FRIDAY_*` (path- and hash-sensitive; do not rename)

@@ -43,6 +43,11 @@ operator/
 
 # Tool-local state (no project source or evidence; verified 2026-08-11)
 .opencode/
+.claude/
+.codex/
+
+# Review packages and local FirstMate output (never commit)
+_ai-review/
 
 # R6 generated training corpus (regenerable from the pinned QuixBugs revision
 # 4257f44b via experiments/r6_debugger_training/quixbugs_tasks.py; identities

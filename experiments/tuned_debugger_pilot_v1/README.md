@@ -54,3 +54,14 @@ false` and `adapter_path = null`.
 `pilot_evidence.json` is a derived, review-oriented projection retaining the
 required public evidence fields. Observable model directives are typed JSON
 only; no private chain-of-thought is requested or recorded.
+
+## What this family is now
+
+This directory freezes the **infrastructure and contract** for the earliest
+tuned-vs-RAW interactive debugger pilot (professor TODO #23–25). The later
+R1–R6 campaign is the accepted scientific debugger sequence
+(`docs/project-closeout.md`). This file does not invent a numerical pilot
+score: live `artifacts/tuned_debugger_pilot_v1/` output is gitignored and
+is not a clean-checkout scientific carrier. Use this directory to
+understand the frozen 10-case design and the model-selected breakpoint /
+step / next surface that later work reused.
