@@ -27,6 +27,7 @@ import json
 import sys
 import threading
 import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 import pytest
@@ -63,6 +64,84 @@ FIXTURE = (
     / "command_models"
     / "dummy_command_model.py"
 )
+OLLAMA_ADAPTER = (
+    Path(__file__).resolve().parents[2]
+    / "scripts"
+    / "ollama_cloud_command_adapter.py"
+)
+
+
+class _SyntheticOllamaState:
+    def __init__(self) -> None:
+        self.calls: list[dict] = []
+        self.lock = threading.Lock()
+
+
+class _SyntheticOllamaHandler(BaseHTTPRequestHandler):
+    state: _SyntheticOllamaState
+    THINKING_SECRET = "synthetic-thinking-must-not-enter-session-evidence"
+
+    def log_message(self, *_args):
+        return
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        with self.state.lock:
+            self.state.calls.append(payload)
+            call_index = len(self.state.calls)
+        if self.path != "/api/chat":
+            response = {"error": "unexpected path"}
+            status = 404
+        elif call_index == 1:
+            response = {
+                "model": "gpt-oss:20b-cloud",
+                "done": True,
+                "done_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "thinking": self.THINKING_SECRET,
+                    "content": json.dumps(
+                        {
+                            "kind": "action",
+                            "name": "run_reproduction",
+                            "arguments": {"phase": "baseline"},
+                        }
+                    ),
+                },
+            }
+            status = 200
+        else:
+            response = {
+                "model": "gpt-oss:20b-cloud",
+                "done": True,
+                "done_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "kind": "transition",
+                            "target_state": "Failed",
+                            "reason": "synthetic adapter integration boundary",
+                        }
+                    ),
+                },
+            }
+            status = 200
+        body = json.dumps(response).encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+
+def _start_synthetic_ollama() -> tuple[_SyntheticOllamaState, ThreadingHTTPServer, str]:
+    state = _SyntheticOllamaState()
+    handler = type("SyntheticOllamaHandler", (_SyntheticOllamaHandler,), {"state": state})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return state, server, f"http://127.0.0.1:{server.server_port}/api"
 
 
 def write_profile(
@@ -320,6 +399,61 @@ class TestConfiguredSourceHappyPath:
         assert SessionEventKind.DEBUGGER_STARTED not in kinds
         assert SessionEventKind.VERIFIER_COMPLETED in kinds
         worker.close()
+
+    def test_ollama_cloud_adapter_reaches_configured_controller_boundary(self, tmp_path):
+        state, server, endpoint = _start_synthetic_ollama()
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "command-models.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "command-models-v1",
+                        "profiles": [
+                            {
+                                "profile_id": "ollama-synthetic",
+                                "display_name": "Ollama Cloud synthetic",
+                                "executable": sys.executable,
+                                "argv": [
+                                    str(OLLAMA_ADAPTER),
+                                    "--endpoint",
+                                    endpoint,
+                                    "--timeout",
+                                    "5",
+                                ],
+                                "request_timeout_seconds": 10,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = HistoryStore(tmp_path)
+            session_id = "sess-cfg-ollama-synthetic-0001"
+            worker = make_worker(
+                store,
+                session_id,
+                STATIC_POLICY,
+                profile_id="ollama-synthetic",
+            )
+            result = run_to_terminal(worker)
+            assert result.status is SessionStatus.FAILED
+            read = journal_of(store, session_id)
+            validate_session_event_stream(read.events)
+            kinds = [event.event_kind for event in read.events]
+            assert SessionEventKind.MODEL_CONFIGURED in kinds
+            assert SessionEventKind.TOOL_COMPLETED in kinds
+            assert len(state.calls) == 2
+            assert all(call["model"] == "gpt-oss:20b-cloud" for call in state.calls)
+            assert all(call["stream"] is False for call in state.calls)
+            assert all("tools" not in call for call in state.calls)
+            assert _SyntheticOllamaHandler.THINKING_SECRET not in json.dumps(
+                [event.to_mapping() for event in read.events]
+            )
+            worker.close()
+        finally:
+            server.shutdown()
+            server.server_close()
 
 
 class TestConfiguredSourceFailures:
