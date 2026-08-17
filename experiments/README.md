@@ -2,8 +2,10 @@
 
 Tracked experiment families for the accepted scientific and engineering
 campaigns. Each family directory has a short note answering what it was and
-what was learned. The canonical conclusion map is
-[`docs/results-index.md`](../docs/results-index.md).
+what was learned.
+
+- **Executive summary across all experiments:** [`RESULTS_SUMMARY.md`](RESULTS_SUMMARY.md)
+- **Canonical conclusion map:** [`docs/results-index.md`](../docs/results-index.md)
 
 Raw live-run trees under most `runs/` directories are gitignored. Accepted
 numbers live in `docs/project-closeout.md` and `docs/final-report.md`. The

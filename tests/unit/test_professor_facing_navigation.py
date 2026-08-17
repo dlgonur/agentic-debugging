@@ -30,7 +30,7 @@ FAMILY_ENTRY_POINTS = {
     "local_inference": "experiments/local_inference_perf/README.md",
     "s5": "analysis/s5_final_controlled_comparison/README.md",
     "s5_report": "analysis/s5_final_controlled_comparison/s5_controlled_comparison_report.md",
-    "s6": "presentation/s6-real-debugging-evidence/README.md",
+    "s6": "docs/archive/presentation/s6-real-debugging-evidence/README.md",
     "quixbugs": "research/quixbugs/README.md",
     "bugsinpy": "research/bugsinpy/README.md",
     "professor_traces": "docs/professor_traces/README.md",

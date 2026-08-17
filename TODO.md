@@ -373,7 +373,7 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 ## Phase 7 — Evaluation and Final Report
 
 - [x] Sonuçları başarı oranı, localization accuracy, root-cause explanation, test pass rate, maliyet ve çalışma süresi açısından değerlendir. (Tamamlandı S5 üzerinden — 8 eksenli canonical comparison ledger; eksik değerler `NOT_RECORDED` / `NOT_EVALUATED` olarak explicit; root-cause assessment contract + comparison harness; hiçbir eksik değer sıfıra çevrilmedi.)
-- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı — Final Technical Report **V2** (`docs/final-report.md`, S8) + V1 (2026-07-31) historical; deterministic offline demo + S6 professor-facing bounded-negative evidence presentation (`presentation/s6-real-debugging-evidence/`). Bu bir altyapı/evaluation-platform demosudur, model debugging performance demosu değildir.)
+- [x] Çalışan bir agentic debugging demosu ve teknik rapor hazırla. (Tamamlandı — Final Technical Report **V2** (`docs/final-report.md`, S8) + V1 (2026-07-31) historical; deterministic offline demo + S6 professor-facing bounded-negative evidence presentation (`docs/archive/presentation/s6-real-debugging-evidence/`). Bu bir altyapı/evaluation-platform demosudur, model debugging performance demosu değildir.)
 
 ### Live-runner material repair (2026-08-02, runner-only)
 

@@ -841,7 +841,7 @@ collapsed into any repair score.
 ## 16. S6 evidence presentation
 
 The S6 professor-facing evidence presentation
-(`presentation/s6-real-debugging-evidence/`) is a self-contained static HTML
+(`docs/archive/presentation/s6-real-debugging-evidence/`) is a self-contained static HTML
 that opens locally with no external URLs, CDNs, scripts, or stylesheets. Every
 load-bearing fact carries a `data-claim-id` bound to an entry in
 `s6_presentation_manifest.json`.
@@ -1202,7 +1202,7 @@ evidence table (§11) and preserved throughout this report.
 
 | Fact | Source | Provenance tier | Tracked? | Clean-checkout? |
 |---|---|---|---|---|
-| S6: reproducible=YES, positive_demo=NO, bounded_negative=YES | `presentation/s6-real-debugging-evidence/s6_presentation_manifest.json` | frozen_in_repo | yes | yes |
+| S6: reproducible=YES, positive_demo=NO, bounded_negative=YES | `docs/archive/presentation/s6-real-debugging-evidence/s6_presentation_manifest.json` | frozen_in_repo | yes | yes |
 | PDB backend + deterministic tests pass | `agentic_debugger/runtime/pdb_*`, `tests/` | frozen_in_repo | yes | yes |
 | Golden reachability: 2 successful PDB observations | `tests/golden_trajectories/data/quixbugs-gcd-pdb-reachability-captured-result.json` | frozen_in_repo | yes | yes |
 
@@ -1224,7 +1224,7 @@ The following load-bearing sources were verified by `git ls-files
 | `Agentic_Debugging_Master_Execution_Plan_2026-08-11_S5_CURRENT.md` | no | (untracked; not a carrier) |
 | `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | **yes** | frozen_in_repo (carrier for dataset/training/metric facts) |
 | `analysis/s5_final_controlled_comparison/*` (6 files) | **yes** | frozen_in_repo |
-| `presentation/s6-real-debugging-evidence/*` (2 files) | **yes** | frozen_in_repo |
+| `docs/archive/presentation/s6-real-debugging-evidence/*` (2 files) | **yes** | frozen_in_repo |
 | `research/literature/agentic_debugging_literature_closeout_2026-08-11.md` | **yes** | frozen_in_repo |
 | `docs/datasets/quixbugs/baseline-8-task.md` | **yes** | frozen_in_repo |
 | `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json` | **yes** | frozen_in_repo |
