@@ -179,6 +179,96 @@ def _start_synthetic_ollama() -> tuple[_SyntheticOllamaState, ThreadingHTTPServe
     return state, server, f"http://127.0.0.1:{server.server_port}/api"
 
 
+class _SyntheticNemotronHandler(_SyntheticOllamaHandler):
+    def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
+        with self.state.lock:
+            self.state.paths.append(self.path)
+        if self.path == "/api/tags":
+            self._send_json(
+                {
+                    "models": [
+                        {
+                            "name": "nemotron-3-nano:30b-cloud",
+                            "model": "nemotron-3-nano:30b-cloud",
+                            "remote_model": "nemotron-3-nano:30b",
+                            "remote_host": "https://ollama.com",
+                            "digest": "synthetic-nemotron-digest",
+                        }
+                    ]
+                }
+            )
+            return
+        self._send_json({"error": "unexpected path"}, status=404)
+
+    def do_POST(self) -> None:  # noqa: N802 - stdlib handler API
+        length = int(self.headers.get("Content-Length", "0"))
+        payload = json.loads(self.rfile.read(length).decode("utf-8"))
+        with self.state.lock:
+            self.state.paths.append(self.path)
+            if self.path == "/api/chat":
+                self.state.calls.append(payload)
+                call_index = len(self.state.calls)
+            else:
+                call_index = 0
+        if self.path == "/api/show":
+            self._send_json(
+                {
+                    "details": {
+                        "family": "nemotron-3-nano",
+                        "parent_model": "nemotron-3-nano:30b",
+                    },
+                    "capabilities": ["completion", "tools", "thinking"],
+                    "model_info": {"nemotron-3-nano.context_length": 262144},
+                }
+            )
+            return
+        if self.path != "/api/chat":
+            self._send_json({"error": "unexpected path"}, status=404)
+            return
+        if call_index == 1:
+            response = {
+                "model": "nemotron-3-nano:30b",
+                "done": True,
+                "done_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "thinking": self.THINKING_SECRET,
+                    "content": json.dumps(
+                        {
+                            "kind": "action",
+                            "name": "run_reproduction",
+                            "arguments": {"phase": "baseline"},
+                        }
+                    ),
+                },
+            }
+        else:
+            response = {
+                "model": "nemotron-3-nano:30b",
+                "done": True,
+                "done_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "kind": "transition",
+                            "target_state": "Failed",
+                            "reason": "synthetic adapter integration boundary",
+                        }
+                    ),
+                },
+            }
+        self._send_json(response)
+
+
+def _start_synthetic_nemotron() -> tuple[_SyntheticOllamaState, ThreadingHTTPServer, str]:
+    state = _SyntheticOllamaState()
+    handler = type("SyntheticNemotronHandler", (_SyntheticNemotronHandler,), {"state": state})
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return state, server, f"http://127.0.0.1:{server.server_port}/api"
+
+
 def write_profile(
     root: Path,
     profile_id: str,
@@ -488,6 +578,63 @@ class TestConfiguredSourceHappyPath:
             assert _SyntheticOllamaHandler.THINKING_SECRET not in json.dumps(
                 [event.to_mapping() for event in read.events]
             )
+            worker.close()
+        finally:
+            server.shutdown()
+            server.server_close()
+
+    def test_ollama_cloud_nemotron_profile_selects_configured_model(self, tmp_path):
+        state, server, endpoint = _start_synthetic_nemotron()
+        try:
+            config_dir = tmp_path / "config"
+            config_dir.mkdir(parents=True, exist_ok=True)
+            (config_dir / "command-models.json").write_text(
+                json.dumps(
+                    {
+                        "schema_version": "command-models-v1",
+                        "profiles": [
+                            {
+                                "profile_id": "ollama-nemotron-synthetic",
+                                "display_name": "Ollama Cloud Nemotron synthetic",
+                                "executable": sys.executable,
+                                "argv": [
+                                    str(OLLAMA_ADAPTER),
+                                    "--endpoint",
+                                    endpoint,
+                                    "--model",
+                                    "nemotron-3-nano:30b-cloud",
+                                    "--timeout",
+                                    "5",
+                                ],
+                                "request_timeout_seconds": 10,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            store = HistoryStore(tmp_path)
+            session_id = "sess-cfg-ollama-nemotron-synthetic-0001"
+            worker = make_worker(
+                store,
+                session_id,
+                STATIC_POLICY,
+                profile_id="ollama-nemotron-synthetic",
+            )
+            result = run_to_terminal(worker)
+            assert result.status is SessionStatus.FAILED
+            read = journal_of(store, session_id)
+            validate_session_event_stream(read.events)
+            kinds = [event.event_kind for event in read.events]
+            assert SessionEventKind.MODEL_CONFIGURED in kinds
+            assert SessionEventKind.TOOL_COMPLETED in kinds
+            assert len(state.calls) == 2
+            assert all(call["model"] == "nemotron-3-nano:30b-cloud" for call in state.calls)
+            assert all(call["stream"] is False for call in state.calls)
+            assert all("tools" not in call for call in state.calls)
+            assert state.paths.count("/api/tags") == 2
+            assert state.paths.count("/api/show") == 2
+            assert state.paths.count("/api/chat") == 2
             worker.close()
         finally:
             server.shutdown()

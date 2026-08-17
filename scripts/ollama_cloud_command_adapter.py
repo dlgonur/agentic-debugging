@@ -1,7 +1,8 @@
 """Bounded Ollama Cloud decision-model adapter for Local Application V1.
 
-The adapter is deliberately provider-specific.  It accepts one Local
-Application protocol-1.3 request on stdin, sends one request to the signed-in
+The adapter is deliberately provider-specific and model-profile-driven.
+It accepts one Local Application protocol-1.3 request on stdin, selects one
+accepted Cloud alias from ``--model``, sends one request to the signed-in
 local Ollama daemon, and emits only one validated directive envelope on
 stdout.  Local Application remains the executor, controller, and verifier.
 
@@ -19,14 +20,41 @@ import socket
 import sys
 import time
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, TextIO
 from urllib.parse import urlsplit
 
 
+@dataclass(frozen=True)
+class CloudModelSpec:
+    """One accepted Ollama Cloud alias and its fail-closed provenance contract.
+
+    ``local_alias`` is the Ollama CLI / ``/api/chat`` request identity.
+    ``upstream_model`` is the observed Cloud provenance: ``/api/tags``
+    ``remote_model``, ``/api/show`` ``details.parent_model``, and the
+    ``/api/chat`` response ``model``.  Those three fields share one
+    expected value for every currently accepted alias.
+    """
+
+    local_alias: str
+    upstream_model: str
+
+
+CLOUD_MODELS: dict[str, CloudModelSpec] = {
+    "gpt-oss:20b-cloud": CloudModelSpec(
+        local_alias="gpt-oss:20b-cloud",
+        upstream_model="gpt-oss:20b",
+    ),
+    "nemotron-3-nano:30b-cloud": CloudModelSpec(
+        local_alias="nemotron-3-nano:30b-cloud",
+        upstream_model="nemotron-3-nano:30b",
+    ),
+}
+
 MODEL_ID = "gpt-oss:20b-cloud"
 DEFAULT_MODEL_ID = MODEL_ID
-ALLOWED_MODEL_IDENTIFIERS = frozenset({MODEL_ID})
-EXPECTED_CLOUD_REMOTE_MODEL = "gpt-oss:20b"
+ALLOWED_MODEL_IDENTIFIERS = frozenset(CLOUD_MODELS)
+EXPECTED_CLOUD_REMOTE_MODEL = CLOUD_MODELS[MODEL_ID].upstream_model
 EXPECTED_CLOUD_REMOTE_HOST = "https://ollama.com"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434/api"
 EXPECTED_OLLAMA_VERSION = "0.32.14"
@@ -87,6 +115,17 @@ class OllamaAdapterError(RuntimeError):
     def __init__(self, message: str, *, kind: str = "adapter_error") -> None:
         super().__init__(message)
         self.kind = kind
+
+
+def resolve_cloud_model(model_id: Any) -> CloudModelSpec:
+    """Return the accepted Cloud spec for ``model_id`` or fail closed."""
+
+    if type(model_id) is not str or not model_id:
+        raise OllamaAdapterError("requested Ollama Cloud model is invalid", kind="configuration")
+    spec = CLOUD_MODELS.get(model_id)
+    if spec is None:
+        raise OllamaAdapterError("requested Ollama Cloud model is not supported", kind="configuration")
+    return spec
 
 
 def _safe_json(value: Any) -> str:
@@ -716,8 +755,8 @@ def validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> 
         raise OllamaAdapterError("hypothesis status is invalid", kind="invalid_directive")
 
 
-def _extract_final_content(response: Mapping[str, Any]) -> str:
-    if response.get("model") != EXPECTED_CLOUD_REMOTE_MODEL:
+def _extract_final_content(response: Mapping[str, Any], spec: CloudModelSpec) -> str:
+    if response.get("model") != spec.upstream_model:
         raise OllamaAdapterError("Ollama returned an unexpected model", kind="model_mismatch")
     if type(response.get("done")) is not bool or response.get("done") is not True:
         raise OllamaAdapterError("Ollama response is incomplete", kind="invalid_completion")
@@ -750,11 +789,12 @@ def parse_directive_content(content: str, request: Mapping[str, Any]) -> dict[st
 def _chat_request(
     endpoint: str,
     request: Mapping[str, Any],
+    spec: CloudModelSpec,
     *,
     timeout_seconds: float,
 ) -> Mapping[str, Any]:
     payload = {
-        "model": MODEL_ID,
+        "model": spec.local_alias,
         "messages": build_chat_messages(request),
         "stream": False,
         "think": "low",
@@ -768,15 +808,15 @@ def _chat_request(
     )
 
 
-def _preflight_model_entry(tags: Mapping[str, Any]) -> Mapping[str, Any]:
+def _preflight_model_entry(tags: Mapping[str, Any], spec: CloudModelSpec) -> Mapping[str, Any]:
     models = tags.get("models")
     if not isinstance(models, list):
         raise OllamaAdapterError("Ollama tags response is invalid", kind="preflight_failed")
     for entry in models:
         if not isinstance(entry, Mapping):
             continue
-        if entry.get("name") == MODEL_ID and entry.get("model") == MODEL_ID:
-            if entry.get("remote_model") != EXPECTED_CLOUD_REMOTE_MODEL:
+        if entry.get("name") == spec.local_alias and entry.get("model") == spec.local_alias:
+            if entry.get("remote_model") != spec.upstream_model:
                 raise OllamaAdapterError("configured Ollama model has unexpected remote model", kind="preflight_failed")
             _normalize_cloud_remote_host(entry.get("remote_host"))
             return entry
@@ -785,6 +825,7 @@ def _preflight_model_entry(tags: Mapping[str, Any]) -> Mapping[str, Any]:
 
 def _read_cloud_metadata(
     endpoint: str,
+    spec: CloudModelSpec,
     *,
     deadline: float,
 ) -> tuple[Mapping[str, Any], Mapping[str, Any]]:
@@ -796,18 +837,18 @@ def _read_cloud_metadata(
         "/tags",
         timeout_seconds=_remaining_timeout(deadline),
     )
-    tag = _preflight_model_entry(tags_response)
+    tag = _preflight_model_entry(tags_response, spec)
     show_response = _http_json_request(
         endpoint,
         "POST",
         "/show",
-        body={"model": MODEL_ID},
+        body={"model": spec.local_alias},
         timeout_seconds=_remaining_timeout(deadline),
     )
     details = show_response.get("details")
     if not isinstance(details, Mapping) or not isinstance(show_response.get("model_info"), Mapping):
         raise OllamaAdapterError("Ollama model metadata is incomplete", kind="preflight_failed")
-    if details.get("parent_model") != EXPECTED_CLOUD_REMOTE_MODEL:
+    if details.get("parent_model") != spec.upstream_model:
         raise OllamaAdapterError("configured Ollama model has unexpected parent model", kind="preflight_failed")
     return tag, show_response
 
@@ -815,11 +856,13 @@ def _read_cloud_metadata(
 def run_preflight(
     *,
     endpoint: str = DEFAULT_ENDPOINT,
+    model: str | CloudModelSpec = MODEL_ID,
     expected_version: str = EXPECTED_OLLAMA_VERSION,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
     """Read only Ollama readiness and model metadata; never calls generation."""
 
+    spec = model if isinstance(model, CloudModelSpec) else resolve_cloud_model(model)
     host, port, _ = validate_endpoint(endpoint)
     deadline = time.monotonic() + _validate_timeout_seconds(timeout_seconds)
     version_response = _http_json_request(
@@ -831,7 +874,7 @@ def run_preflight(
     version = version_response.get("version")
     if type(version) is not str or version != expected_version:
         raise OllamaAdapterError("Ollama version is not the expected version", kind="preflight_failed")
-    tag, show_response = _read_cloud_metadata(endpoint, deadline=deadline)
+    tag, show_response = _read_cloud_metadata(endpoint, spec, deadline=deadline)
     capabilities = show_response.get("capabilities")
     if not isinstance(capabilities, list) or any(type(item) is not str for item in capabilities):
         raise OllamaAdapterError("Ollama model capabilities are invalid", kind="preflight_failed")
@@ -841,8 +884,8 @@ def run_preflight(
         "endpoint": f"http://{host}:{port}/api",
         "local_daemon_api_ready": True,
         "ollama_version": version,
-        "expected_model": MODEL_ID,
-        "expected_remote_model": EXPECTED_CLOUD_REMOTE_MODEL,
+        "expected_model": spec.local_alias,
+        "expected_remote_model": spec.upstream_model,
         "expected_remote_host": EXPECTED_CLOUD_REMOTE_HOST,
         "model_available": True,
         "model_metadata_readable": True,
@@ -880,7 +923,7 @@ def run_adapter(
 ) -> int:
     parser = argparse.ArgumentParser(description="Ollama Cloud Local Application V1 command adapter")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
-    parser.add_argument("--model", default=MODEL_ID)
+    parser.add_argument("--model", default=DEFAULT_MODEL_ID)
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
@@ -888,12 +931,12 @@ def run_adapter(
     args = parser.parse_args(argv)
 
     try:
-        if args.model != MODEL_ID:
-            raise OllamaAdapterError("only gpt-oss:20b-cloud is supported", kind="configuration")
+        spec = resolve_cloud_model(args.model)
         validate_endpoint(args.endpoint)
         if args.preflight:
             result = run_preflight(
                 endpoint=args.endpoint,
+                model=spec,
                 expected_version=args.expected_version,
                 timeout_seconds=args.timeout,
             )
@@ -905,13 +948,14 @@ def run_adapter(
         validate_logical_call_index(request, args.max_logical_model_calls)
         canonical_public_request(request)
         deadline = time.monotonic() + _validate_timeout_seconds(args.timeout)
-        _read_cloud_metadata(args.endpoint, deadline=deadline)
+        _read_cloud_metadata(args.endpoint, spec, deadline=deadline)
         response = _chat_request(
             args.endpoint,
             request,
+            spec,
             timeout_seconds=_remaining_timeout(deadline),
         )
-        content = _extract_final_content(response)
+        content = _extract_final_content(response, spec)
         directive = parse_directive_content(content, request)
         stdout_stream.write(_safe_json({"directive": directive}) + "\n")
         stdout_stream.flush()

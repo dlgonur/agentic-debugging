@@ -45,6 +45,10 @@ mutation of `research/quixbugs/PAIRED_PILOT_V4.json`.
   (successful session `sess-20260817-103258-3d1193`). See
   `docs/architecture/ollama-cloud-command-adapter-v1.md` and
   `docs/architecture/local-application-v1.md`.
+- The same Ollama Cloud adapter also accepts an experimental
+  `nemotron-3-nano:30b-cloud` profile through `--model`. That profile is
+  integration-ready only; it is not the accepted product-runtime proof and
+  does not authorize a comparative experiment by itself.
 - This is the model used **by** Local Application. It does not select or
   replace the coding-agent implementation route.
 

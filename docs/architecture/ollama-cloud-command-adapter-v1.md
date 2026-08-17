@@ -1,14 +1,28 @@
 # Local Application V1 — Ollama Cloud Command Adapter
 
-**Status:** bounded implementation contract for `gpt-oss:20b-cloud`
+**Status:** bounded implementation contract for one shared Ollama Cloud
+adapter with accepted model profiles
+
+**Accepted profiles:**
+
+| Local Application / Ollama CLI alias | Upstream Cloud provenance | Role |
+| --- | --- | --- |
+| `gpt-oss:20b-cloud` | `gpt-oss:20b` | accepted product-runtime default |
+| `nemotron-3-nano:30b-cloud` | `nemotron-3-nano:30b` | experimental candidate |
+
+`--model` selects one accepted alias. The default remains
+`gpt-oss:20b-cloud`. The OpenCode display name
+`ollama-cloud/nemotron-3-nano:30b` is not an Ollama CLI identifier and is
+rejected. Other Ollama Cloud models visible in OpenCode are not accepted.
 
 **2026-08-17:** the first real remote product proof through this adapter is
 COMPLETE — session `sess-20260817-103258-3d1193` (task
 `curated-none-handling-001`, policy `pdb-on-uncertainty`) SUCCEEDED with the
 independent verifier RESOLVED (F2P 1/1, P2P 2/2), cleanup verified, and
 observed live/replay terminal-state parity. PDB was NOT EXERCISED in that
-session. See `docs/project-tracker.md` (Local Application V1 real remote
-route proof, 2026-08-17) for the full record.
+session. That proof used `gpt-oss:20b-cloud`. See `docs/project-tracker.md`
+(Local Application V1 real remote route proof, 2026-08-17) for the full
+record. The later multi-model generalization does not replace that proof.
 
 This adapter is a provider-specific decision-model command for the existing
 Local Application configured-command source. It does not replace or extend
@@ -34,7 +48,7 @@ Local Application protocol 1.3
   -> existing LiveModelAdapter/controller/verifier path
 ```
 
-The only accepted model is `gpt-oss:20b-cloud`. The request uses
+The request uses the selected accepted Cloud alias as `model`, plus
 `stream: false` and `think: "low"`; it does not send `format`, `tools`, or
 function definitions. Chat messages use a `system` role for the stable
 directive-schema contract and a `user` role for the bounded canonical public
@@ -71,19 +85,23 @@ application's credential boundary.
 ## Response boundary
 
 Cloud provenance is established from `/api/tags` and `/api/show` before any
-generation call. Those metadata endpoints must map the exact local alias
-`gpt-oss:20b-cloud` to upstream model `gpt-oss:20b` and Ollama Cloud host
-`https://ollama.com`, and `/api/show` must report
-`details.parent_model: gpt-oss:20b`. Harmless default HTTPS port or trailing
-slash differences on the metadata host are normalized. Wrong or missing
-metadata fails closed and does not call `/api/chat`.
+generation call. Those metadata endpoints must map the selected local alias
+to that alias's expected upstream model and Ollama Cloud host
+`https://ollama.com`, and `/api/show` must report the same upstream value as
+`details.parent_model`. For the accepted product default this is
+`gpt-oss:20b-cloud` → `gpt-oss:20b`. For the experimental Nemotron candidate
+this is `nemotron-3-nano:30b-cloud` → `nemotron-3-nano:30b`. Harmless default
+HTTPS port or trailing slash differences on the metadata host are
+normalized. Wrong or missing metadata fails closed and does not call
+`/api/chat`.
 
-The `/api/chat` response is not a provenance document. For this Cloud alias it
-must have `model` exactly `gpt-oss:20b`, be complete, contain a completed
-assistant message, and contain bounded string `message.content`. Chat
-`remote_model` and `remote_host` are not required and are not used; the
-installed Ollama 0.32.14 local Cloud proxy omits them. Returning the local
-alias `gpt-oss:20b-cloud` as `model` is metadata/chat disagreement and fails.
+The `/api/chat` response is not a provenance document. For a selected Cloud
+alias it must have `model` exactly equal to that alias's expected upstream
+model, be complete, contain a completed assistant message, and contain
+bounded string `message.content`. Chat `remote_model` and `remote_host` are
+not required and are not used; the installed Ollama 0.32.14 local Cloud
+proxy omits them. Returning the local Cloud alias as `model` is
+metadata/chat disagreement and fails.
 Tool/function-call activity is rejected. `message.thinking` is discarded and
 never enters adapter stdout, Local Application protocol data, events, history,
 diagnostics, validation evidence, or review artifacts.
@@ -106,8 +124,49 @@ not call `/api/chat` or `/api/generate` and does not establish that Cloud
 inference will succeed. Each later adapter invocation revalidates `/api/tags`
 and `/api/show` under the same request timeout before it may call `/api/chat`.
 
-The verified owner environment for this contract is Ollama `0.32.14` with
-`gpt-oss:20b-cloud` available. A version mismatch fails closed.
+The verified owner environment for this contract is Ollama `0.32.14`. The
+accepted product default requires `gpt-oss:20b-cloud` available. The
+experimental Nemotron profile requires `nemotron-3-nano:30b-cloud`
+available. A version mismatch fails closed.
+
+Local Application selects a model by launching the same adapter through a
+`command-models-v1` profile whose `argv` includes `--model <accepted
+alias>`. Omitting `--model` keeps the `gpt-oss:20b-cloud` default. Example
+profiles:
+
+```json
+{
+  "schema_version": "command-models-v1",
+  "profiles": [
+    {
+      "profile_id": "ollama-cloud-gpt-oss-20b",
+      "display_name": "Ollama Cloud GPT-OSS 20B",
+      "executable": "python",
+      "argv": [
+        "C:\\path\\to\\scripts\\ollama_cloud_command_adapter.py",
+        "--model",
+        "gpt-oss:20b-cloud"
+      ],
+      "request_timeout_seconds": 60
+    },
+    {
+      "profile_id": "ollama-cloud-nemotron-3-nano-30b",
+      "display_name": "Ollama Cloud Nemotron 3 Nano 30B",
+      "executable": "python",
+      "argv": [
+        "C:\\path\\to\\scripts\\ollama_cloud_command_adapter.py",
+        "--model",
+        "nemotron-3-nano:30b-cloud"
+      ],
+      "request_timeout_seconds": 60
+    }
+  ]
+}
+```
+
+Model identity stays adapter-owned. The command-model config does not
+invent a second provenance schema; it only passes the accepted `--model`
+flag through the existing argv contract.
 
 ## Cancellation and ownership
 

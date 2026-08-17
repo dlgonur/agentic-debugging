@@ -214,14 +214,23 @@ def fixture_server():
         server.server_close()
 
 
-def invoke(endpoint: str, request: dict[str, Any] | None = None, *, timeout: float = 2.0) -> tuple[int, str, str]:
+def invoke(
+    endpoint: str,
+    request: dict[str, Any] | None = None,
+    *,
+    timeout: float = 2.0,
+    model: str | None = None,
+) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
+    argv = ["--endpoint", endpoint, "--timeout", str(timeout)]
+    if model is not None:
+        argv.extend(["--model", model])
     rc = adapter.run_adapter(
         stdin_stream=io.StringIO(json.dumps(request or sample_request()) + "\n"),
         stdout_stream=stdout,
         stderr_stream=stderr,
-        argv=["--endpoint", endpoint, "--timeout", str(timeout)],
+        argv=argv,
     )
     return rc, stdout.getvalue(), stderr.getvalue()
 
@@ -232,6 +241,56 @@ def request_paths(state: _FixtureState) -> list[str]:
 
 def chat_payloads(state: _FixtureState) -> list[dict[str, Any]]:
     return [payload for path, payload in state.requests if path == "/api/chat" and payload is not None]
+
+
+NEMOTRON_ALIAS = "nemotron-3-nano:30b-cloud"
+NEMOTRON_UPSTREAM = "nemotron-3-nano:30b"
+
+
+def nemotron_tags_entry(**overrides: Any) -> dict[str, Any]:
+    entry = {
+        "name": NEMOTRON_ALIAS,
+        "model": NEMOTRON_ALIAS,
+        "remote_model": NEMOTRON_UPSTREAM,
+        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
+        "digest": "synthetic-nemotron-digest",
+    }
+    entry.update(overrides)
+    return entry
+
+
+def encode_nemotron_show(*, parent_model: str = NEMOTRON_UPSTREAM) -> bytes:
+    return json.dumps(
+        {
+            "details": {"family": "nemotron-3-nano", "parent_model": parent_model},
+            "capabilities": ["completion", "tools", "thinking"],
+            "model_info": {"nemotron-3-nano.context_length": 262144},
+        }
+    ).encode()
+
+
+def nemotron_state(*, chat_model: str = NEMOTRON_UPSTREAM, **overrides: Any) -> _FixtureState:
+    return _FixtureState(
+        tags_payload=encode_tags(nemotron_tags_entry()),
+        show_payload=encode_nemotron_show(),
+        chat_body=_FixtureState._chat_envelope(valid_content(), model=chat_model),
+        **overrides,
+    )
+
+
+def test_registry_keeps_gpt_oss_default_and_accepted_aliases() -> None:
+    assert adapter.DEFAULT_MODEL_ID == "gpt-oss:20b-cloud"
+    assert adapter.MODEL_ID == "gpt-oss:20b-cloud"
+    assert adapter.EXPECTED_CLOUD_REMOTE_MODEL == "gpt-oss:20b"
+    assert adapter.ALLOWED_MODEL_IDENTIFIERS == frozenset(
+        {"gpt-oss:20b-cloud", "nemotron-3-nano:30b-cloud"}
+    )
+    gpt = adapter.resolve_cloud_model("gpt-oss:20b-cloud")
+    nemotron = adapter.resolve_cloud_model("nemotron-3-nano:30b-cloud")
+    assert gpt.local_alias == "gpt-oss:20b-cloud"
+    assert gpt.upstream_model == "gpt-oss:20b"
+    assert nemotron.local_alias == NEMOTRON_ALIAS
+    assert nemotron.upstream_model == NEMOTRON_UPSTREAM
 
 
 def test_valid_directive_and_request_contract(fixture_server) -> None:
@@ -327,6 +386,101 @@ def test_chat_local_alias_is_rejected_as_metadata_disagreement(fixture_server) -
     assert rc == 1
     assert stdout == ""
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+
+
+def test_unsupported_model_is_rejected_before_http(fixture_server) -> None:
+    state, _server, endpoint = fixture_server()
+    rc, stdout, stderr = invoke(endpoint, model="kimi-k2.5-cloud")
+    assert rc == 1
+    assert stdout == ""
+    assert "not supported" in stderr
+    assert state.requests == []
+
+
+def test_opencode_display_name_is_not_an_accepted_cli_identifier(fixture_server) -> None:
+    state, _server, endpoint = fixture_server()
+    rc, stdout, stderr = invoke(endpoint, model="ollama-cloud/nemotron-3-nano:30b")
+    assert rc == 1
+    assert stdout == ""
+    assert "not supported" in stderr
+    assert state.requests == []
+
+
+def test_explicit_gpt_oss_model_flag_remains_compatible(fixture_server) -> None:
+    state, _server, endpoint = fixture_server()
+    rc, stdout, stderr = invoke(endpoint, model="gpt-oss:20b-cloud")
+    assert rc == 0, stderr
+    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert chat_payloads(state)[0]["model"] == "gpt-oss:20b-cloud"
+
+
+def test_nemotron_model_is_passed_to_chat_and_validates_provenance(fixture_server) -> None:
+    state = nemotron_state()
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, stderr = invoke(endpoint, model=NEMOTRON_ALIAS)
+    assert rc == 0, stderr
+    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    payload = chat_payloads(state)[0]
+    assert payload["model"] == NEMOTRON_ALIAS
+    assert payload["stream"] is False
+    assert payload["think"] == "low"
+    assert "tools" not in payload
+    assert [message["role"] for message in payload["messages"]] == ["system", "user"]
+
+
+def test_nemotron_wrong_upstream_chat_model_is_rejected(fixture_server) -> None:
+    state = nemotron_state(chat_model="nemotron-3-nano:31b")
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint, model=NEMOTRON_ALIAS)
+    assert rc == 1
+    assert stdout == ""
+    assert request_paths(state)[-1] == "/api/chat"
+
+
+def test_nemotron_local_alias_chat_model_is_rejected(fixture_server) -> None:
+    state = nemotron_state(chat_model=NEMOTRON_ALIAS)
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint, model=NEMOTRON_ALIAS)
+    assert rc == 1
+    assert stdout == ""
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+
+
+def test_gpt_oss_request_rejects_nemotron_tags_before_chat(fixture_server) -> None:
+    state = _FixtureState(tags_payload=encode_tags(nemotron_tags_entry()))
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint, model="gpt-oss:20b-cloud")
+    assert rc == 1
+    assert stdout == ""
+    assert "/api/chat" not in request_paths(state)
+
+
+def test_nemotron_wrong_or_missing_tags_provenance_is_rejected_before_chat(
+    fixture_server,
+) -> None:
+    state = _FixtureState(
+        tags_payload=encode_tags(nemotron_tags_entry(remote_model="gpt-oss:20b")),
+        show_payload=encode_nemotron_show(),
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint, model=NEMOTRON_ALIAS)
+    assert rc == 1
+    assert stdout == ""
+    assert "/api/chat" not in request_paths(state)
+
+
+def test_nemotron_wrong_show_parent_model_is_rejected_before_chat(fixture_server) -> None:
+    state = _FixtureState(
+        tags_payload=encode_tags(nemotron_tags_entry()),
+        show_payload=encode_nemotron_show(parent_model="nemotron-3-super"),
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint, model=NEMOTRON_ALIAS)
+    assert rc == 1
+    assert stdout == ""
+    assert request_paths(state) == ["/api/tags", "/api/show"]
+    assert "/api/chat" not in request_paths(state)
 
 
 @pytest.mark.parametrize(
@@ -806,6 +960,32 @@ def test_preflight_uses_only_metadata_endpoints(fixture_server) -> None:
     assert result["model_available"] is True
     assert result["model_metadata_readable"] is True
     assert result["model_remote_model"] == adapter.EXPECTED_CLOUD_REMOTE_MODEL
+    assert result["model_remote_host"] == adapter.EXPECTED_CLOUD_REMOTE_HOST
+    assert result["provider_inference_started"] is False
+    assert result["cloud_inference_verified"] is False
+    paths = [path for path, _payload in state.requests]
+    assert paths == ["/api/version", "/api/tags", "/api/show"]
+    assert all(path not in {"/api/chat", "/api/generate"} for path in paths)
+    assert result["expected_model"] == adapter.MODEL_ID
+    assert result["expected_remote_model"] == adapter.EXPECTED_CLOUD_REMOTE_MODEL
+
+
+def test_nemotron_preflight_uses_only_metadata_and_reports_nemotron_identity(fixture_server) -> None:
+    state = nemotron_state()
+    _state, _server, endpoint = fixture_server(state)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    rc = adapter.run_adapter(
+        stdin_stream=io.StringIO(""),
+        stdout_stream=stdout,
+        stderr_stream=stderr,
+        argv=["--endpoint", endpoint, "--model", NEMOTRON_ALIAS, "--preflight"],
+    )
+    assert rc == 0, stderr.getvalue()
+    result = json.loads(stdout.getvalue())
+    assert result["expected_model"] == NEMOTRON_ALIAS
+    assert result["expected_remote_model"] == NEMOTRON_UPSTREAM
+    assert result["model_remote_model"] == NEMOTRON_UPSTREAM
     assert result["model_remote_host"] == adapter.EXPECTED_CLOUD_REMOTE_HOST
     assert result["provider_inference_started"] is False
     assert result["cloud_inference_verified"] is False
