@@ -51,7 +51,13 @@ documentation candidate; see
 `docs/project-tracker.md`. This update does not change any scientific
 finding, qualifier, metric, or the INCOMPLETE_HARDWARE_STOP boundary in this
 document, and it does not reopen DPO, fine-tuned+RAG correctness, or
-BugsInPy execution.
+BugsInPy execution. The historical Authorized Six-Case Live Campaign is
+**RETAIN_OPTIONAL / OWNER-AUTHORIZED**: not required for Local Application
+V1 or the accepted R1-R6 closeout; the frozen OpenCode Go V4 path remains
+preserved evidence, not the current product route; do not run OpenCode Go
+merely for checkbox completion; a future Ollama PDB-versus-static comparison
+would be a new experiment, not a mutation of
+`research/quixbugs/PAIRED_PILOT_V4.json`.
 
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
@@ -208,11 +214,21 @@ remotely).
 
 Not in current scope: resuming the R6 final five-task holdout (closed
 boundary — INCOMPLETE_HARDWARE_STOP), DPO, RAG correctness campaigns,
-BugsInPy execution (license-gated), new model experiments. The real operator
-preflight and any live campaign (including the Authorized Six-Case Live
-Campaign) remain OPTIONAL / OWNER-AUTHORIZED future actions only; they are
-not the current engineering task and require separate explicit owner
-authorization and fresh valid operator artifacts.
+BugsInPy execution (license-gated), new model experiments.
+
+The historical Authorized Six-Case Live Campaign is **RETAIN_OPTIONAL /
+OWNER-AUTHORIZED**. It is not required for Local Application V1 completion
+and not required for the accepted R1-R6 scientific closeout. The 2026-08-17
+Ollama Cloud product proof (`sess-20260817-103258-3d1193`) did not record
+PDB evidence and does not supersede the campaign's original paired
+static-versus-PDB question. The frozen OpenCode Go V4 execution path
+(`research/quixbugs/PAIRED_PILOT_V4.json`) remains preserved evidence, not
+the current product route; do not run OpenCode Go merely for checkbox
+completion. A future PDB-versus-static comparative experiment using Ollama
+would be a new experiment with a new protocol and separate owner
+authorization, not a mutation of `PAIRED_PILOT_V4.json`. The real OpenCode
+Go operator preflight remains the same optional owner-authorized action.
+There is no active engineering campaign after this disposition.
 
 ---
 

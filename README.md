@@ -20,7 +20,13 @@ remains historical/optional. Accepted adapter lineage on main:
 `2d256a1`…`cdd9792` (through "Strengthen Ollama unified diff count
 guidance"); see `docs/architecture/ollama-cloud-command-adapter-v1.md`,
 `docs/project-tracker.md`, and `TODO.md`. This closeout changes no closed
-scientific boundary and authorizes no new campaign.
+scientific boundary and authorizes no new campaign. The historical
+Authorized Six-Case Live Campaign is **RETAIN_OPTIONAL / OWNER-AUTHORIZED**:
+not required for Local Application V1 or the accepted R1-R6 closeout; the
+frozen OpenCode Go V4 path remains preserved evidence, not the current
+product route; do not run OpenCode Go merely for checkbox completion; a
+future Ollama PDB-versus-static comparison would be a new experiment, not a
+mutation of `research/quixbugs/PAIRED_PILOT_V4.json`.
 
 **Local Application V1 (2026-08-16): COMPLETE — Tasks 1–8 accepted.** V1 is a
 local application surface over the existing scientific system (deterministic

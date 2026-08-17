@@ -396,14 +396,18 @@ authorities: `docs/project-closeout.md` (scientific closeout),
 
 - BugsInPy execution — license-gated / **BLOCKED** (unchanged).
 
-**Genuinely open (explicit and bounded):**
+**RETAIN_OPTIONAL / OWNER-AUTHORIZED (not required, not current work):**
 
-- Real operator preflight and any real live campaign (including the
-  Authorized Six-Case Live Campaign) — **OPTIONAL / OWNER-AUTHORIZED future
-  actions only**, not the current engineering task. A real campaign requires
-  separate explicit owner authorization, fresh valid v4 operator artifacts
-  (`research/quixbugs/PAIRED_PILOT_V4.json` contract), and a successful route
-  gate before any provider contact.
+- Historical Authorized Six-Case Live Campaign and the real OpenCode Go
+  operator preflight — **RETAIN_OPTIONAL / OWNER-AUTHORIZED**. Not required
+  for Local Application V1 completion. Not required for the accepted R1-R6
+  scientific closeout. The frozen OpenCode Go V4 path
+  (`research/quixbugs/PAIRED_PILOT_V4.json`) remains preserved evidence, not
+  the current product route. Do not run OpenCode Go merely for checkbox
+  completion. A future PDB-versus-static comparative experiment using
+  Ollama would be a new experiment with a new protocol and separate owner
+  authorization, not a mutation of `PAIRED_PILOT_V4.json`. There is no
+  active engineering campaign after this disposition.
 
 **Historical / not current:**
 
@@ -495,11 +499,17 @@ stands; the stronger R6 final five-task holdout remains
 INCOMPLETE_HARDWARE_STOP; DPO remains CLOSED / NOT JUSTIFIED; fine-tuned+RAG
 correctness remains CLOSED — PARTIAL / COMPUTE-CONSTRAINED / NOT_EVALUATED;
 BugsInPy execution remains BLOCKED / license-gated. The historical
-Authorized Six-Case Live Campaign / OpenCode Go paired-pilot material
-remains a separate historical/optional owner-authorized research campaign;
-it is not the current proof requirement for the now-successful Local
-Application real-provider route, it is not marked completed by this run,
-and OpenCode Go is not reopened as the primary product route.
+Authorized Six-Case Live Campaign is **RETAIN_OPTIONAL / OWNER-AUTHORIZED**.
+It is not required for Local Application V1 completion and not required for
+the accepted R1-R6 scientific closeout. The successful Ollama session did
+not record PDB evidence and does not supersede the campaign's original
+paired static-versus-PDB question. The frozen OpenCode Go V4 execution path
+remains preserved evidence, not the current product route; do not run
+OpenCode Go merely for checkbox completion. A future PDB-versus-static
+comparative experiment using Ollama would be a new experiment with a new
+protocol and separate owner authorization, not a mutation of
+`research/quixbugs/PAIRED_PILOT_V4.json`. There is no active engineering
+campaign after this disposition.
 
 **No GPU/provider/training/benchmark/WSL/final-holdout run is authorized by
 this reconciliation.**

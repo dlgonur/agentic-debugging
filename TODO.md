@@ -61,11 +61,17 @@ the stronger R6 final five-task holdout remains INCOMPLETE_HARDWARE_STOP;
 DPO remains CLOSED / NOT JUSTIFIED; fine-tuned+RAG correctness remains
 CLOSED — PARTIAL / COMPUTE-CONSTRAINED / NOT_EVALUATED; BugsInPy execution
 remains BLOCKED / license-gated. The historical Authorized Six-Case Live
-Campaign / OpenCode Go paired-pilot material remains a separate
-historical/optional owner-authorized research campaign; it is not the
-current proof requirement for the now-successful Local Application
-real-provider route, it is not marked completed by this run, and OpenCode Go
-is not reopened as the primary product route.
+Campaign is **RETAIN_OPTIONAL / OWNER-AUTHORIZED**. It is not required for
+Local Application V1 completion and not required for the accepted R1-R6
+scientific closeout. The successful Ollama session did not record PDB
+evidence and does not supersede the campaign's original paired
+static-versus-PDB question. The frozen OpenCode Go V4 execution path remains
+preserved evidence, not the current product route; do not run OpenCode Go
+merely for checkbox completion. A future PDB-versus-static comparative
+experiment using Ollama would be a new experiment with a new protocol and
+separate owner authorization, not a mutation of
+`research/quixbugs/PAIRED_PILOT_V4.json`. There is no active engineering
+campaign after this disposition.
 
 **2026-08-16 Local Application V1 — COMPLETE / TASKS 1–8 ACCEPTED.**
 Authoritative architecture and implementation record:
@@ -96,11 +102,19 @@ stands unchanged; the stronger R6 final five-task holdout remains
 INCOMPLETE_HARDWARE_STOP with no sustained local rerun scheduled; DPO
 (CLOSED / NOT JUSTIFIED), fine-tuned+RAG correctness (CLOSED — PARTIAL /
 COMPUTE-CONSTRAINED / NOT_EVALUATED), and BugsInPy execution (BLOCKED /
-license-gated) remain closed or blocked; the real operator preflight and any
-live campaign are OPTIONAL / OWNER-AUTHORIZED future actions only.
+license-gated) remain closed or blocked. The historical Authorized Six-Case
+Live Campaign and the real OpenCode Go operator preflight remain
+**RETAIN_OPTIONAL / OWNER-AUTHORIZED**; they are not required for Local
+Application V1 completion, not required for the accepted R1-R6 scientific
+closeout, and not the current engineering task.
 
 - [x] **Local Application V1** — accepted phased roadmap complete
   (`docs/architecture/local-application-v1.md`; Tasks 1–8 accepted).
+- [x] **Authorized Six-Case Live Campaign disposition — RETAIN_OPTIONAL /
+  OWNER-AUTHORIZED** (2026-08-17). Not required for Local Application V1 or
+  the accepted R1-R6 closeout; frozen OpenCode Go V4 path preserved, not
+  mutated onto Ollama; no active engineering campaign after this
+  disposition.
 
 **2026-08-13 current status (R1-R6 closeout):** The 2026-08-11 S9
 bounded-negative closeout is **historical** and is preserved verbatim at
@@ -534,20 +548,19 @@ empirical evaluation, model performance, PDB effectiveness, RAG, SFT ve DPO
 tamamlanmis isaretlenmedi; tarihsel OpenCode Zen kayitlari degismeden
 historical kaldi.
 
-### Operator Authorization and Real Route Preflight v1 (2026-08-03, operator preparation; OPTIONAL / OWNER-AUTHORIZED)
+### Operator Authorization and Real Route Preflight v1 (2026-08-03, operator preparation; RETAIN_OPTIONAL / OWNER-AUTHORIZED)
 
-- [ ] **Gerçek operator preflight — OPTIONAL / OWNER-AUTHORIZED future
-  action, not the current engineering task.** Gerçek `route-capture` ve
-  `operator-bundle` komutlarinin operator tarafindan calistirilmasi hala
-  bekliyor: FirstMate review'i ve Onur'un manuel yurutmesi gerekiyor. Bu
-  maddede uygulama agent'i hicbir gercek OpenCode inspection komutunu
-  calistirmadi; yalnizca operator-akisi implementasyonu ve paketi hazir.
-  V1 completion and this reconciliation do not authorize it; any real live
-  campaign still requires separate explicit owner authorization and fresh
-  valid operator artifacts. Tamamlanmis isaretlenmez: operator authorization
-  yurutmesi, gercek route preflight, gercek OpenCode Go execution, six-case
-  live campaign, empirical evaluation, model performance, PDB effectiveness,
-  RAG, SFT, DPO.
+- [ ] **Gerçek operator preflight — RETAIN_OPTIONAL / OWNER-AUTHORIZED;
+  not required for Local Application V1 or R1-R6; not the current
+  engineering task.** The implemented `route-capture` / `operator-bundle`
+  operator flow remains preserved for the frozen OpenCode Go V4 protocol
+  only. Do not run it merely for checkbox completion. A future
+  PDB-versus-static comparative experiment using Ollama would be a new
+  experiment with a new protocol and separate owner authorization, not a
+  mutation of `research/quixbugs/PAIRED_PILOT_V4.json`. This item is not
+  marked complete because the optional OpenCode Go operator execution was
+  not performed; V1 completion, the 2026-08-17 Ollama product proof, and
+  this disposition do not authorize it.
 
 Operator hazirlik akisi implemente edildi ve paketlendi (yalnizca operator;
 hicbir gercek OpenCode inspection komutu calistirilmadi):
