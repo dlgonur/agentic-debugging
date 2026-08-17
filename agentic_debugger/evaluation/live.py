@@ -359,6 +359,8 @@ def _action_contracts_for_state(
     session_active: bool = False,
     pdb_available: bool = True,
     pdb_observations_remaining: int | None = None,
+    post_patch_f2p_collected: bool = False,
+    regression_collected: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Return the effective contract derived from the supplied registry."""
 
@@ -382,6 +384,13 @@ def _action_contracts_for_state(
         }
         if not session_active:
             effective.discard(ActionName.START_PDB_SESSION)
+    if state is ControllerState.VALIDATE and not (
+        post_patch_f2p_collected and regression_collected
+    ):
+        # classify_outcome is legal in Validate but meaningless until both
+        # required evidence values exist.  Hide it rather than leaving the
+        # model to rediscover a deterministic tool error.
+        effective.discard(ActionName.CLASSIFY_OUTCOME)
     result: dict[str, dict[str, Any]] = {}
     for action in ActionName:
         if action not in effective or action.value not in contracts:
@@ -549,6 +558,8 @@ class LiveModelAdapter:
         self._failure_reproduced = False
         self._pdb_session_active = False
         self._runtime_transition_authorized = False
+        self._post_patch_f2p_collected = False
+        self._regression_collected = False
         # Per-logical-call PDB gate cache: ``(model_call_index, decision)``.
         # ``model_call_index`` is constant across the transport retry loop and
         # increments only on the next controller step, so it is the natural
@@ -565,12 +576,28 @@ class LiveModelAdapter:
         return [{"hypothesis_id":item.hypothesis_id,"statement":item.statement,"confidence":item.confidence.value,"status":item.status.value,"evidence_refs":list(item.evidence_refs),"requires_runtime_evidence":item.requires_runtime_evidence,"revision":item.revision} for item in snapshot.hypotheses.hypotheses]
     def _observe_snapshot(self, snapshot: ControllerSnapshot) -> None:
         observation = snapshot.last_observation
-        if observation is None or observation.status.value != "ok":
+        if observation is None:
+            return
+        if observation.name in {
+            ActionName.APPLY_PATCH.value,
+            ActionName.REVERT_PATCH.value,
+        }:
+            # A new or reverted candidate invalidates prior Validate evidence.
+            self._post_patch_f2p_collected = False
+            self._regression_collected = False
+            return
+        if observation.status.value != "ok":
             return
         payload = observation.payload
-        if observation.name == ActionName.RUN_REPRODUCTION.value and payload.get("phase") == "baseline":
-            if type(payload.get("failure_reproduced")) is bool:
-                self._failure_reproduced = payload["failure_reproduced"]
+        if observation.name == ActionName.RUN_REPRODUCTION.value:
+            phase = payload.get("phase")
+            if phase == "baseline":
+                if type(payload.get("failure_reproduced")) is bool:
+                    self._failure_reproduced = payload["failure_reproduced"]
+            elif phase == "post_patch":
+                self._post_patch_f2p_collected = True
+        elif observation.name == ActionName.RUN_REGRESSION_TESTS.value:
+            self._regression_collected = True
         elif observation.name == ActionName.START_PDB_SESSION.value:
             self._pdb_session_active = payload.get("state") == "paused"
         elif observation.name == ActionName.STOP_PDB_SESSION.value:
@@ -676,6 +703,8 @@ class LiveModelAdapter:
             session_active=self._pdb_session_active,
             pdb_available=pdb_available,
             pdb_observations_remaining=pdb_observations_remaining,
+            post_patch_f2p_collected=self._post_patch_f2p_collected,
+            regression_collected=self._regression_collected,
         )
     def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"

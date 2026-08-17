@@ -106,6 +106,20 @@ def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
         return ("post_patch",)
     return ()
 
+
+def validation_classification_ready(
+    post_patch_f2p_passed: object,
+    regression_passed: object,
+) -> bool:
+    """Return whether both required Validate evidence values have been collected.
+
+    ``False`` is collected evidence (the check failed).  Only ``None`` means
+    the corresponding evidence has not been gathered yet.  This helper never
+    invents a pass/fail value.
+    """
+
+    return post_patch_f2p_passed is not None and regression_passed is not None
+
 #: Maximum characters of a bounded diagnostic retained for reporting.
 MAX_DIAGNOSTIC_CHARS = 400
 
@@ -417,6 +431,20 @@ class DemoToolContext:
         self.pdb_observation_names: list[str] = []
         self.pdb_session_started = False
 
+    def validation_evidence_ready(self) -> bool:
+        """Return whether classify_outcome has both required evidence values."""
+
+        return validation_classification_ready(
+            self.post_patch_f2p_passed, self.regression_passed
+        )
+
+    def clear_validation_evidence(self) -> None:
+        """Forget controller-validation evidence after the candidate changes."""
+
+        self.post_patch_f2p_passed = None
+        self.regression_passed = None
+        self.controller_outcome = None
+
     # -- observability helpers ---------------------------------------------
 
     def observe(self, fn: Callable[[], None]) -> None:
@@ -624,7 +652,7 @@ def build_registry(
         )
 
     def handle_classify_outcome(action: Action, arguments: dict[str, object]) -> ToolResult:
-        if context.post_patch_f2p_passed is None or context.regression_passed is None:
+        if not context.validation_evidence_ready():
             raise ToolExecutionError("validation evidence is incomplete")
         f2p = [context.post_patch_f2p_passed]
         p2p = [context.regression_passed]
@@ -791,6 +819,9 @@ def build_registry(
     # -- patch lifecycle ---------------------------------------------------
 
     def handle_apply_patch(action: Action, arguments: dict[str, object]) -> ToolResult:
+        # A new apply attempt replaces or abandons the previous candidate, so
+        # any earlier Validate evidence is no longer about the workspace.
+        context.clear_validation_evidence()
         diff = arguments["patch"]
         attempt_index = context.patch_attempt_index
         context.patch_attempt_index += 1
@@ -897,6 +928,7 @@ def build_registry(
         context.patch_applied = False
         context.patch_changed_files = ()
         context.syntax_passed = None
+        context.clear_validation_evidence()
         return _ok(
             {
                 "reverted": True,
@@ -1182,4 +1214,5 @@ __all__ = [
     "prepare_pdb_probe",
     "legal_reproduction_phases",
     "pytest_argv",
+    "validation_classification_ready",
 ]

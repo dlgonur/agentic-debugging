@@ -621,6 +621,8 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
                 for action in allowed_actions_for_state(state)
             } & registered
             expected -= pdb_names
+            if state is ControllerState.VALIDATE:
+                expected.discard(ActionName.CLASSIFY_OUTCOME.value)
             assert set(contracts) == expected
             for contract in contracts.values():
                 assert set(contract["required"]) == set(contract["properties"])

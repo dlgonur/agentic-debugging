@@ -262,6 +262,28 @@ class TestValidationEvidence:
         assert observation.payload["outcome"] == "BREAKING_RESOLVED"
         assert context.controller_outcome == "BREAKING_RESOLVED"
 
+    def test_apply_and_revert_forget_stale_validation_evidence(
+        self, context: DemoToolContext
+    ) -> None:
+        context.post_patch_f2p_passed = True
+        context.regression_passed = True
+        context.controller_outcome = "RESOLVED"
+        observation = _dispatch(
+            context, "apply_patch", ControllerState.PATCH, {"patch": context.patch}
+        )
+        assert observation.status is ObservationStatus.OK
+        assert context.post_patch_f2p_passed is None
+        assert context.regression_passed is None
+        assert context.controller_outcome is None
+        context.post_patch_f2p_passed = False
+        context.regression_passed = True
+        context.controller_outcome = "NO_OP"
+        reverted = _dispatch(context, "revert_patch", ControllerState.VALIDATE, {})
+        assert reverted.status is ObservationStatus.OK
+        assert context.post_patch_f2p_passed is None
+        assert context.regression_passed is None
+        assert context.controller_outcome is None
+
     def test_hypothesis_declaration_records_the_localization_claim(
         self, context: DemoToolContext
     ) -> None:
