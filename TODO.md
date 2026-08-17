@@ -2,6 +2,71 @@
 
 ## Durum notu
 
+**2026-08-17 Local Application V1 real remote decision-model product proof —
+COMPLETE via Ollama Cloud `gpt-oss:20b-cloud`.** A real Ollama Cloud
+configured-command route completed successfully through the accepted Local
+Application path: Ollama CLI/API 0.32.14, signed-in local Ollama daemon,
+requested Cloud alias `gpt-oss:20b-cloud`, observed upstream chat model
+`gpt-oss:20b`, provider route Ollama Cloud, adapter retry 0, fallback 0, no
+persistent model conversation, Local Application protocol 1.3. Accepted
+adapter lineage on main: `2d256a1` (Add Ollama Cloud command adapter),
+`0a90853` (Fix Ollama Cloud model provenance), `730e37d` (Fix Ollama Cloud
+chat provenance), `13b167c` (Strengthen Ollama directive prompt contract),
+`66a6178` (Teach Ollama PatchManager unified diff contract), `cdd9792`
+(Strengthen Ollama unified diff count guidance) — the accepted main lineage
+through `cdd9792` before this documentation candidate.
+
+Successful real product session `sess-20260817-103258-3d1193` (task
+`curated-none-handling-001`, policy `pdb-on-uncertainty`): SUCCEEDED (done),
+phase Done, independent verifier **RESOLVED**, fail-to-pass 1/1,
+pass-to-pass 2/2, cleanup verified, `candidate.patch` and `evaluation.json`
+artifacts written. The successful patch handles `None` before `.strip()`
+while preserving the blank/whitespace fallback behavior. Trajectory evidence:
+real remote model requests through the configured-command path; reproduction;
+Reproduce → Understand; root-cause hypothesis; source evidence; Understand →
+Patch; patch attempt 0 rejected safely by PatchManager; patch attempt 1
+applied; source snapshot from the patched workspace; Patch → Validate;
+post-patch reproduction; regression tests; Validate → Done; independent
+verifier executed all stages; RESOLVED; cleanup integrity; session succeeded.
+The session is registered in Local Application history; read-only replay
+opened it at 120/120 events with the same patched source, the same rejected
+first patch and applied second patch, and the same terminal state — observed
+live/replay terminal-state parity (replay does not execute Ollama again).
+
+Recorded separately: **PRODUCT SUCCESS: YES** (real remote Ollama Cloud
+decision model through the product's configured-command path while preserving
+controller/tool/PatchManager/verifier/history/replay ownership) and
+**DEBUGGING SUCCESS: YES** (model-produced patch applied; independent
+verifier RESOLVED with F2P 1/1 and P2P 2/2). Milestone classification:
+L1 Connection established PASS; L2 First directive validated PASS;
+L3 Baseline reproduced PASS; L4 PDB evidence captured **NOT EXERCISED**;
+L5 Hypothesis formulated PASS; L6 Patch proposed/applied PASS;
+L7 Independent verifier executed PASS; L8 Verifier RESOLVED PASS.
+**No PDB/debugger evidence was recorded in this successful session: PDB here
+is NOT EXERCISED — not PASS and not a failure.** The earlier accepted R1–R3
+PDB scientific milestones remain unchanged.
+
+The two earlier failed Ollama full runs are preserved as engineering
+evidence: they failed before verifier success due to malformed unified-diff
+generation and led to the bounded prompt-contract repairs above; they are not
+a provider-integration failure after the final successful run. AGY remains
+historical/optional and was abandoned as the primary runtime route after its
+final bounded canary failed to provide the required structured terminal
+output; its accepted security work is preserved
+(`docs/architecture/agy-runtime-hook-attestation-v1.md`). No provider
+token/cost figures are recorded for this session and none are fabricated.
+
+This closeout changes no closed boundary: R1–R6 scientific closeout stands;
+the stronger R6 final five-task holdout remains INCOMPLETE_HARDWARE_STOP;
+DPO remains CLOSED / NOT JUSTIFIED; fine-tuned+RAG correctness remains
+CLOSED — PARTIAL / COMPUTE-CONSTRAINED / NOT_EVALUATED; BugsInPy execution
+remains BLOCKED / license-gated. The historical Authorized Six-Case Live
+Campaign / OpenCode Go paired-pilot material remains a separate
+historical/optional owner-authorized research campaign; it is not the
+current proof requirement for the now-successful Local Application
+real-provider route, it is not marked completed by this run, and OpenCode Go
+is not reopened as the primary product route.
+
 **2026-08-16 Local Application V1 — COMPLETE / TASKS 1–8 ACCEPTED.**
 Authoritative architecture and implementation record:
 `docs/architecture/local-application-v1.md`.
@@ -24,8 +89,9 @@ hardware stop remain unchanged. V1 completion does not authorize training,
 final-holdout reruns, sustained local GPU campaigns, provider SDK integration,
 or reinterpretation of accepted scientific evidence.
 
-**Post-V1 current focus (2026-08-16):** there is presently no active
-engineering campaign following V1 completion. The R1-R6 scientific closeout
+**Post-V1 current focus (2026-08-17):** following the 2026-08-17 real remote
+Ollama Cloud product proof above, there is presently no active engineering
+campaign. The R1-R6 scientific closeout
 stands unchanged; the stronger R6 final five-task holdout remains
 INCOMPLETE_HARDWARE_STOP with no sustained local rerun scheduled; DPO
 (CLOSED / NOT JUSTIFIED), fine-tuned+RAG correctness (CLOSED — PARTIAL /

@@ -25,6 +25,34 @@ Application V1 closeout, owner Git evidence showed main == origin/main at
 locally and remotely). This update does not change any scientific finding,
 qualifier, metric, or the INCOMPLETE_HARDWARE_STOP boundary in this document.
 
+**2026-08-17 status update:** Local Application V1 real remote
+decision-model product proof is **COMPLETE** via Ollama Cloud
+`gpt-oss:20b-cloud`. A real Ollama Cloud configured-command route completed
+successfully through the accepted Local Application path (Ollama CLI/API
+0.32.14; signed-in local Ollama daemon; requested Cloud alias
+`gpt-oss:20b-cloud`; observed upstream chat model `gpt-oss:20b`; provider
+route Ollama Cloud; adapter retry 0; fallback 0; no persistent model
+conversation; Local Application protocol 1.3). Successful real product
+session `sess-20260817-103258-3d1193` (task `curated-none-handling-001`,
+policy `pdb-on-uncertainty`): SUCCEEDED (done), phase Done, independent
+verifier RESOLVED, fail-to-pass 1/1, pass-to-pass 2/2, cleanup verified,
+`candidate.patch` and `evaluation.json` artifacts written. The session is
+registered in Local Application history; read-only replay opened it at
+120/120 events with the same patched source, the same rejected first patch
+and applied second patch, and the same terminal state — observed live/replay
+terminal-state parity (replay does not execute Ollama again). Product
+success: YES; debugging success: YES. PDB was NOT EXERCISED in this session
+(not PASS, not a failure); the R1–R3 PDB scientific milestones in this
+document remain unchanged. AGY remains historical/optional. Accepted
+adapter lineage on main: `2d256a1`…`cdd9792` (through "Strengthen Ollama
+unified diff count guidance") — the accepted main lineage before this
+documentation candidate; see
+`docs/architecture/ollama-cloud-command-adapter-v1.md` and
+`docs/project-tracker.md`. This update does not change any scientific
+finding, qualifier, metric, or the INCOMPLETE_HARDWARE_STOP boundary in this
+document, and it does not reopen DPO, fine-tuned+RAG correctness, or
+BugsInPy execution.
+
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
 ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT

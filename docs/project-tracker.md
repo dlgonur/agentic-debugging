@@ -419,6 +419,88 @@ authorities: `docs/project-closeout.md` (scientific closeout),
   task") is snapshot history and does not override the 2026-08-16 Post-V1
   Current Focus above.
 
+## Local Application V1 real remote route proof (2026-08-17)
+
+**Local Application V1 real remote decision-model product proof is COMPLETE
+via Ollama Cloud `gpt-oss:20b-cloud`.** A real Ollama Cloud
+configured-command route completed successfully through the accepted Local
+Application path: Ollama CLI/API 0.32.14, signed-in local Ollama daemon,
+requested Cloud alias `gpt-oss:20b-cloud`, observed upstream chat model
+`gpt-oss:20b`, provider route Ollama Cloud, adapter retry 0, fallback 0, no
+persistent model conversation, Local Application protocol 1.3. Accepted
+adapter lineage on main: `2d256a1` (Add Ollama Cloud command adapter),
+`0a90853` (Fix Ollama Cloud model provenance), `730e37d` (Fix Ollama Cloud
+chat provenance), `13b167c` (Strengthen Ollama directive prompt contract),
+`66a6178` (Teach Ollama PatchManager unified diff contract), `cdd9792`
+(Strengthen Ollama unified diff count guidance) — the accepted main lineage
+through `cdd9792` before this documentation candidate. Adapter contract:
+`docs/architecture/ollama-cloud-command-adapter-v1.md`.
+
+Successful real product session `sess-20260817-103258-3d1193` (task
+`curated-none-handling-001`, policy `pdb-on-uncertainty`): SUCCEEDED (done),
+phase Done, independent verifier **RESOLVED**, fail-to-pass 1/1,
+pass-to-pass 2/2, cleanup verified, `candidate.patch` and `evaluation.json`
+artifacts written. The successful patch handles `None` before `.strip()`
+while preserving the blank/whitespace fallback behavior. Trajectory evidence:
+real remote model requests accepted through the configured-command path;
+run_reproduction completed; Reproduce → Understand; root-cause hypothesis
+recorded; source evidence gathered; Understand → Patch; patch attempt 0
+rejected safely by PatchManager; patch attempt 1 applied; source snapshot
+recorded from the patched workspace; Patch → Validate; post-patch
+reproduction completed; regression tests completed; Validate → Done;
+independent verifier executed all stages; verifier final outcome RESOLVED;
+cleanup integrity completed; session succeeded.
+
+History and replay: the session is registered in Local Application history
+alongside the two earlier failed Ollama sessions; result `succeeded`,
+verifier `RESOLVED`. Read-only replay opened the successful session at
+120/120 recorded events with the same patched source, the same rejected
+first patch and verified/applied second patch, and the same terminal state
+(SUCCEEDED (done), phase Done, verifier RESOLVED, F2P 1/1, P2P 2/2, cleanup
+verified). This establishes observed live/replay terminal-state parity for
+the successful real Ollama session; replay does not execute the configured
+model again.
+
+Recorded separately:
+
+- **PRODUCT SUCCESS: YES** — the accepted Local Application used a real
+  remote Ollama Cloud decision model through the product's
+  configured-command path while preserving controller/tool/PatchManager/
+  verifier/history/replay ownership.
+- **DEBUGGING SUCCESS: YES** — the model produced a patch that was applied
+  and the independent verifier returned RESOLVED with F2P 1/1 and P2P 2/2.
+
+Milestone classification for this run: L1 Connection established PASS;
+L2 First directive validated PASS; L3 Baseline reproduced PASS;
+L4 PDB evidence captured **NOT EXERCISED**; L5 Hypothesis formulated PASS;
+L6 Patch proposed/applied PASS; L7 Independent verifier executed PASS;
+L8 Verifier RESOLVED PASS. **No PDB/debugger evidence was recorded in this
+successful session: PDB here is NOT EXERCISED — not PASS and not a
+failure.** The earlier accepted R1–R3 PDB scientific milestones remain
+unchanged.
+
+The two earlier failed Ollama full runs are preserved as engineering
+evidence: they failed before verifier success due to malformed unified-diff
+generation and led to the bounded prompt-contract repairs in the adapter
+lineage above; they are not presented as a provider-integration failure
+after the final successful run. AGY remains historical/optional and was
+abandoned as the primary runtime route after its final bounded canary
+failed to provide the required structured terminal output; its accepted
+security work is preserved
+(`docs/architecture/agy-runtime-hook-attestation-v1.md`). No provider
+token/cost figures are recorded for this session and none are fabricated.
+
+This closeout changes no closed boundary: the R1–R6 scientific closeout
+stands; the stronger R6 final five-task holdout remains
+INCOMPLETE_HARDWARE_STOP; DPO remains CLOSED / NOT JUSTIFIED; fine-tuned+RAG
+correctness remains CLOSED — PARTIAL / COMPUTE-CONSTRAINED / NOT_EVALUATED;
+BugsInPy execution remains BLOCKED / license-gated. The historical
+Authorized Six-Case Live Campaign / OpenCode Go paired-pilot material
+remains a separate historical/optional owner-authorized research campaign;
+it is not the current proof requirement for the now-successful Local
+Application real-provider route, it is not marked completed by this run,
+and OpenCode Go is not reopened as the primary product route.
+
 **No GPU/provider/training/benchmark/WSL/final-holdout run is authorized by
 this reconciliation.**
 
@@ -1316,6 +1398,16 @@ made.
   suite 88 passed, combined paired-pilot suite 267 passed.
 
 ## Last Updated
+
+2026-08-17 (Ollama real-route closeout: Local Application V1 real remote
+decision-model product proof COMPLETE via Ollama Cloud `gpt-oss:20b-cloud`
+— successful real product session `sess-20260817-103258-3d1193` on
+`curated-none-handling-001` / `pdb-on-uncertainty`, independent verifier
+RESOLVED, F2P 1/1, P2P 2/2, cleanup verified, history registration and
+read-only replay terminal-state parity observed; PDB NOT EXERCISED in this
+session; AGY historical/optional; accepted main lineage through `cdd9792`;
+no closed scientific boundary changed; no new GPU/provider/training/
+benchmark run authorized)
 
 2026-08-16 (Post-V1 status reconciliation: Local Application V1 Tasks 1–8
 accepted; Phase 1–7 tracker statuses aligned with TODO.md and the accepted

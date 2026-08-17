@@ -2,6 +2,26 @@
 
 Research and prototype workspace for an agentic debugging system.
 
+**Local Application V1 real remote decision-model product proof (2026-08-17):
+COMPLETE via Ollama Cloud `gpt-oss:20b-cloud`.** A real Ollama Cloud
+configured-command route completed successfully through the accepted Local
+Application path (Ollama CLI/API 0.32.14; signed-in local daemon; requested
+Cloud alias `gpt-oss:20b-cloud`; observed upstream chat model `gpt-oss:20b`;
+protocol 1.3; adapter retry 0; fallback 0; no persistent conversation).
+Successful real product session `sess-20260817-103258-3d1193` on
+`curated-none-handling-001` / `pdb-on-uncertainty`: SUCCEEDED (done),
+independent verifier RESOLVED, fail-to-pass 1/1, pass-to-pass 2/2, cleanup
+verified, `candidate.patch` and `evaluation.json` written; the session is
+registered in app-owned history and read-only replay shows terminal-state
+parity (replay does not execute Ollama again). Product success: YES;
+debugging success: YES; PDB was NOT EXERCISED in this session (not PASS, not
+a failure) — the R1–R3 PDB scientific milestones remain unchanged. AGY
+remains historical/optional. Accepted adapter lineage on main:
+`2d256a1`…`cdd9792` (through "Strengthen Ollama unified diff count
+guidance"); see `docs/architecture/ollama-cloud-command-adapter-v1.md`,
+`docs/project-tracker.md`, and `TODO.md`. This closeout changes no closed
+scientific boundary and authorizes no new campaign.
+
 **Local Application V1 (2026-08-16): COMPLETE — Tasks 1–8 accepted.** V1 is a
 local application surface over the existing scientific system (deterministic
 offline sessions and explicitly configured command-model sessions through one

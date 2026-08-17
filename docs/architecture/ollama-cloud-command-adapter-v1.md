@@ -2,6 +2,14 @@
 
 **Status:** bounded implementation contract for `gpt-oss:20b-cloud`
 
+**2026-08-17:** the first real remote product proof through this adapter is
+COMPLETE — session `sess-20260817-103258-3d1193` (task
+`curated-none-handling-001`, policy `pdb-on-uncertainty`) SUCCEEDED with the
+independent verifier RESOLVED (F2P 1/1, P2P 2/2), cleanup verified, and
+observed live/replay terminal-state parity. PDB was NOT EXERCISED in that
+session. See `docs/project-tracker.md` (Local Application V1 real remote
+route proof, 2026-08-17) for the full record.
+
 This adapter is a provider-specific decision-model command for the existing
 Local Application configured-command source. It does not replace or extend
 the application controller, tool registry, PDB path, PatchManager, or

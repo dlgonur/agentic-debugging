@@ -81,3 +81,19 @@ unchanged.
 The next single real canary is required to prove that real AGY executes the
 generated `PreInvocation` hook and reaches a valid directive. This repair did
 not run real inference or real `agy --print`.
+
+## 2026-08-17 route status
+
+AGY is no longer the primary Local Application runtime route. It was
+abandoned as the primary route after its final bounded canary failed to
+provide the required structured terminal output. AGY remains
+historical/optional; the accepted security work recorded in this document is
+preserved unchanged. The accepted real remote decision-model route is the
+Ollama Cloud configured-command adapter
+(`docs/architecture/ollama-cloud-command-adapter-v1.md`), whose first real
+product proof completed successfully on 2026-08-17 (session
+`sess-20260817-103258-3d1193`, verifier RESOLVED; see
+`docs/project-tracker.md`). The "next single real canary" requirement above
+is superseded as a current proof requirement for the Local Application
+real-provider route; it remains the historical record of the AGY route's
+final state.
