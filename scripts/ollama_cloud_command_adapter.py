@@ -138,23 +138,169 @@ def canonical_public_request(request: Mapping[str, Any]) -> str:
     return canonical
 
 
+_DIRECTIVE_FIELD_ORDER: dict[str, tuple[str, ...]] = {
+    "action": ("kind", "name", "arguments"),
+    "transition": ("kind", "target_state", "reason"),
+    "add_hypothesis": (
+        "kind",
+        "hypothesis_id",
+        "statement",
+        "confidence",
+        "evidence_refs",
+        "requires_runtime_evidence",
+    ),
+    "revise_hypothesis": (
+        "kind",
+        "hypothesis_id",
+        "statement",
+        "confidence",
+        "evidence_refs",
+        "requires_runtime_evidence",
+    ),
+    "set_hypothesis_status": ("kind", "hypothesis_id", "status"),
+}
+
+
+def _directive_fields_match_validator() -> bool:
+    return all(
+        frozenset(fields) == DIRECTIVE_TOP_LEVEL_FIELDS[kind]
+        for kind, fields in _DIRECTIVE_FIELD_ORDER.items()
+    )
+
+
+if not _directive_fields_match_validator():
+    raise RuntimeError("directive prompt field names drifted from the adapter validator")
+
+
 SYSTEM_PROMPT = (
     "You are the debugging decision model for Local Application V1.\n"
     "Return exactly one legal JSON protocol directive.\n"
-    "Do not output Markdown, code fences, prose, explanations, or free-form text.\n"
+    "Output exactly one JSON object. Do not output Markdown, code fences, prose, explanations, or free-form text before or after it.\n"
+    "Use only the exact protocol field names. Never invent semantic aliases.\n"
+    "Never combine an action and a transition into one object. Choose one legal directive only.\n"
     "Do not directly invoke tools or functions, and do not perform filesystem, command, or repository operations.\n"
     "When the supplied allowed_actions and action_contracts permit an action, you may and should return that legal action directive.\n"
     "Local Application performs every actual action described by an accepted directive.\n"
-    "Obey the supplied directive schema, allowed actions, action contracts, and legal transitions."
+    "The top-level field identifying directive type is always \"kind\".\n"
+    "Do not use top-level keys named action, payload, or transition.\n"
+    "\n"
+    "Exact legal top-level forms. The first key is always \"kind\".\n"
+    "Action: {\"kind\":\"action\",\"name\":\"<allowed action>\",\"arguments\":{...}}\n"
+    "kind must literally be \"action\". name must come from controller.allowed_actions. arguments must satisfy that action's supplied action_contracts. Do not use top-level keys named action or payload.\n"
+    "Transition: {\"kind\":\"transition\",\"target_state\":\"<legal target>\",\"reason\":\"<bounded reason>\"}\n"
+    "kind must literally be \"transition\". target_state must come from controller.legal_transition_targets. Do not use a top-level key named transition.\n"
+    "add_hypothesis: {\"kind\":\"add_hypothesis\",\"hypothesis_id\":\"<id>\",\"statement\":\"<statement>\",\"confidence\":\"low|medium|high\",\"evidence_refs\":[],\"requires_runtime_evidence\":false}\n"
+    "revise_hypothesis: {\"kind\":\"revise_hypothesis\",\"hypothesis_id\":\"<id>\",\"statement\":\"<statement>\",\"confidence\":\"low|medium|high\",\"evidence_refs\":[],\"requires_runtime_evidence\":false}\n"
+    "set_hypothesis_status: {\"kind\":\"set_hypothesis_status\",\"hypothesis_id\":\"<id>\",\"status\":\"supported|rejected|discarded\"}\n"
+    "confidence must be exactly one of low, medium, high. status must be exactly one of supported, rejected, discarded. evidence_refs is a list of strings. requires_runtime_evidence is a boolean."
 )
 
 
-def build_protocol_message(request: Mapping[str, Any]) -> str:
+def _directive_kinds(request: Mapping[str, Any]) -> list[str]:
+    kinds = request.get("directive_schema")
+    if isinstance(kinds, Mapping):
+        kinds = list(kinds)
+    if not isinstance(kinds, list):
+        return []
+    return [kind for kind in kinds if type(kind) is str]
+
+
+def _illustrative_argument_value(field: str, spec: Mapping[str, Any] | None) -> Any:
+    if isinstance(spec, Mapping):
+        enum = spec.get("enum")
+        if isinstance(enum, list) and enum and type(enum[0]) in (str, int, float, bool):
+            return enum[0]
+        type_name = spec.get("type")
+        if type_name == "boolean":
+            return True
+        if type_name == "integer":
+            return 0
+        if type_name == "number":
+            return 0
+        if type_name == "array":
+            return []
+        if type_name == "object":
+            return {}
+        if type_name == "null":
+            return None
+    return f"<{field}>"
+
+
+def illustrative_action_directive(name: str, contracts: Any) -> dict[str, Any]:
+    arguments: dict[str, Any] = {}
+    if isinstance(contracts, Mapping):
+        contract = contracts.get(name)
+        if isinstance(contract, Mapping):
+            properties = contract.get("properties")
+            if not isinstance(properties, Mapping):
+                properties = contract
+            required = contract.get("required")
+            if isinstance(required, list):
+                for field in required:
+                    if type(field) is not str:
+                        continue
+                    spec = properties.get(field) if isinstance(properties, Mapping) else None
+                    arguments[field] = _illustrative_argument_value(
+                        field,
+                        spec if isinstance(spec, Mapping) else None,
+                    )
+    return {"kind": "action", "name": name, "arguments": arguments}
+
+
+def build_request_guidance(request: Mapping[str, Any]) -> str:
+    """Request-specific legal shapes derived from the current protocol request."""
+
+    kinds = set(_directive_kinds(request))
+    controller = request.get("controller")
+    if not isinstance(controller, Mapping):
+        controller = {}
+    lines = [
+        "Current request legal decision surface:",
+        "Return exactly one JSON object using only the exact protocol field names.",
+        "Do not invent keys named action, payload, or transition.",
+        "Do not combine an action and a transition.",
+    ]
+    allowed = controller.get("allowed_actions")
+    contracts = request.get("action_contracts")
+    if "action" in kinds and isinstance(allowed, list):
+        for name in allowed:
+            if type(name) is not str or not name:
+                continue
+            example = illustrative_action_directive(name, contracts)
+            lines.append(
+                "Legal action representation: "
+                + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+            )
+    targets = controller.get("legal_transition_targets")
+    if "transition" in kinds and isinstance(targets, list) and targets:
+        legal = ", ".join(target for target in targets if type(target) is str)
+        if legal:
+            lines.append(
+                "Legal transition representation: "
+                '{"kind":"transition","target_state":"<one of '
+                + legal
+                + '>","reason":"<bounded reason>"}'
+            )
+    return "\n".join(lines)
+
+
+def build_chat_messages(request: Mapping[str, Any]) -> list[dict[str, str]]:
     canonical = canonical_public_request(request)
-    return (
-        f"{SYSTEM_PROMPT}\n\n"
+    user_content = (
+        f"{build_request_guidance(request)}\n\n"
         f"{PUBLIC_REQUEST_START}\n{canonical}\n{PUBLIC_REQUEST_END}"
     )
+    return [
+        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "user", "content": user_content},
+    ]
+
+
+def build_protocol_message(request: Mapping[str, Any]) -> str:
+    """Compatibility wrapper: user-message body only. Prefer build_chat_messages."""
+
+    messages = build_chat_messages(request)
+    return messages[1]["content"]
 
 
 def validate_endpoint(endpoint: str) -> tuple[str, int, str]:
@@ -483,7 +629,7 @@ def _chat_request(
 ) -> Mapping[str, Any]:
     payload = {
         "model": MODEL_ID,
-        "messages": [{"role": "user", "content": build_protocol_message(request)}],
+        "messages": build_chat_messages(request),
         "stream": False,
         "think": "low",
     }

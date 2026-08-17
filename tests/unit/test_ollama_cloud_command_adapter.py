@@ -245,8 +245,40 @@ def test_valid_directive_and_request_contract(fixture_server) -> None:
     assert "tools" not in payload
     assert "functions" not in payload
     assert "format" not in payload
+    messages = payload["messages"]
+    assert [message["role"] for message in messages] == ["system", "user"]
     assert adapter.ADAPTER_RETRY_COUNT == 0
     assert adapter.FALLBACK_COUNT == 0
+
+
+def test_system_prompt_teaches_exact_validator_field_names() -> None:
+    assert adapter._directive_fields_match_validator()
+    system = adapter.SYSTEM_PROMPT
+    assert '"kind"' in system
+    assert '{"kind":"action","name":"<allowed action>","arguments":{...}}' in system
+    assert '{"kind":"transition","target_state":"<legal target>","reason":"<bounded reason>"}' in system
+    for kind, fields in adapter.DIRECTIVE_TOP_LEVEL_FIELDS.items():
+        assert kind in system
+        for field in fields:
+            assert f'"{field}"' in system
+    assert "Do not use top-level keys named action, payload, or transition." in system
+    assert "Never combine an action and a transition" in system
+
+
+def test_request_guidance_uses_exact_run_reproduction_shape() -> None:
+    messages = adapter.build_chat_messages(sample_request())
+    assert [message["role"] for message in messages] == ["system", "user"]
+    user = messages[1]["content"]
+    expected = json.dumps(
+        {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
+        separators=(",", ":"),
+    )
+    assert expected in user
+    assert '"kind"' in messages[0]["content"]
+    assert "name" in messages[0]["content"]
+    assert "arguments" in messages[0]["content"]
+    assert "target_state" in messages[0]["content"]
+    assert "reason" in messages[0]["content"]
 
 
 def test_real_cloud_chat_shape_without_remote_fields_succeeds(fixture_server) -> None:
@@ -378,10 +410,15 @@ def test_legal_repository_action_is_a_local_application_directive(fixture_server
     assert "tools" not in payload
     assert "functions" not in payload
     assert "format" not in payload
-    prompt = payload["messages"][0]["content"]
-    assert "directly invoke tools or functions" in prompt
-    assert "legal action directive" in prompt
-    assert "Local Application performs every actual action" in prompt
+    messages = payload["messages"]
+    assert [message["role"] for message in messages] == ["system", "user"]
+    system = messages[0]["content"]
+    user = messages[1]["content"]
+    assert "directly invoke tools or functions" in system
+    assert "legal action directive" in system
+    assert "Local Application performs every actual action" in system
+    assert '{"kind":"action","name":"apply_patch","arguments":{"patch":"<patch>"}}' in user
+    assert "run_reproduction" not in user.split(adapter.PUBLIC_REQUEST_START, 1)[0]
 
 
 @pytest.mark.parametrize("content", [
@@ -400,6 +437,17 @@ def test_final_content_must_be_one_json_object(fixture_server, content: str) -> 
     assert stdout == ""
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
     assert len(chat_payloads(state)) == 1
+
+
+def test_observed_alias_payload_shape_remains_rejected(fixture_server) -> None:
+    content = '{"action":"run_reproduction","transition":"Understand","payload":{"phase":"baseline"}}'
+    state = _FixtureState(chat_body=_FixtureState._chat_envelope(content))
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, stderr = invoke(endpoint)
+    assert rc == 1
+    assert stdout == ""
+    assert "directive kind is not allowed" in stderr
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
 @pytest.mark.parametrize("content", [

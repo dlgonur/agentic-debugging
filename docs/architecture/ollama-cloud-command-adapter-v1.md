@@ -28,8 +28,18 @@ Local Application protocol 1.3
 
 The only accepted model is `gpt-oss:20b-cloud`. The request uses
 `stream: false` and `think: "low"`; it does not send `format`, `tools`, or
-function definitions. The adapter has zero provider retry and zero fallback,
-and preserves the 25-logical-call and 25,000-byte public-request bounds.
+function definitions. Chat messages use a `system` role for the stable
+directive-schema contract and a `user` role for the bounded canonical public
+request plus request-specific legal shapes. The system prompt states that the
+top-level type field is always `kind` and gives the exact action,
+transition, and hypothesis objects enforced by the adapter validator. The
+user message derives illustrative legal action JSON from the current
+`allowed_actions` and `action_contracts`; it does not grant provider tools.
+The adapter has zero provider retry and zero fallback, and preserves the
+25-logical-call and 25,000-byte public-request bounds.
+
+Malformed provider JSON is not rewritten. Invented aliases such as
+top-level `action`, `payload`, or `transition` remain invalid.
 
 The adapter accepts only the intended `http://127.0.0.1/.../api` loopback
 endpoint. It never reads, accepts, copies, persists, or emits an Ollama API
