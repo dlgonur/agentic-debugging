@@ -74,18 +74,58 @@ def valid_content() -> str:
 
 
 class _FixtureState:
-    def __init__(self, *, chat_body: bytes | None = None, chat_status: int = 200, delay: float = 0.0) -> None:
+    def __init__(
+        self,
+        *,
+        chat_body: bytes | None = None,
+        chat_status: int = 200,
+        delay: float = 0.0,
+        tags_body: bytes | None = None,
+        show_body: bytes | None = None,
+    ) -> None:
         self.chat_body = chat_body or self._chat_envelope(valid_content())
         self.chat_status = chat_status
         self.delay = delay
+        self.tags_body = tags_body or json.dumps(
+            {
+                "models": [
+                    {
+                        "name": adapter.MODEL_ID,
+                        "model": adapter.MODEL_ID,
+                        "remote_model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+                        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
+                        "digest": "synthetic-digest",
+                    }
+                ]
+            }
+        ).encode()
+        self.show_body = show_body or json.dumps(
+            {
+                "details": {"family": "gptoss", "parent_model": adapter.EXPECTED_CLOUD_REMOTE_MODEL},
+                "capabilities": ["completion", "tools", "thinking"],
+                "model_info": {"gptoss.context_length": 131072},
+            }
+        ).encode()
         self.requests: list[tuple[str, dict[str, Any] | None]] = []
         self.chat_started = threading.Event()
         self.lock = threading.Lock()
 
     @staticmethod
     def _chat_envelope(content: str, **message_fields: Any) -> bytes:
+        model = message_fields.pop("model", adapter.MODEL_ID)
+        remote_model = message_fields.pop("remote_model", adapter.EXPECTED_CLOUD_REMOTE_MODEL)
+        remote_host = message_fields.pop("remote_host", adapter.EXPECTED_CLOUD_REMOTE_HOST)
         message = {"role": "assistant", "content": content, **message_fields}
-        return json.dumps({"model": adapter.MODEL_ID, "done": True, "done_reason": "stop", "message": message}).encode("utf-8")
+        return json.dumps(
+            {
+                "model": model,
+                "remote_model": remote_model,
+                "remote_host": remote_host,
+                "done": True,
+                "done_reason": "stop",
+                "message": message,
+            }
+        ).encode("utf-8")
 
     def chat(self, content: str, **message_fields: Any) -> None:
         self.chat_body = self._chat_envelope(content, **message_fields)
@@ -115,7 +155,7 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({"version": adapter.EXPECTED_OLLAMA_VERSION}).encode())
             return
         if self.path == "/api/tags":
-            self._send(200, json.dumps({"models": [{"name": adapter.MODEL_ID, "model": adapter.MODEL_ID, "digest": "synthetic-digest"}]}).encode())
+            self._send(200, self.state.tags_body)
             return
         self._send(404, b"{}")
 
@@ -125,7 +165,7 @@ class _Handler(BaseHTTPRequestHandler):
         payload = json.loads(raw.decode("utf-8"))
         self.state.record(self.path, payload)
         if self.path == "/api/show":
-            self._send(200, json.dumps({"details": {"family": "gptoss"}, "capabilities": ["completion", "tools", "thinking"], "model_info": {"gptoss.context_length": 131072}}).encode())
+            self._send(200, self.state.show_body)
             return
         if self.path != "/api/chat":
             self._send(404, b"{}")
@@ -180,6 +220,90 @@ def test_valid_directive_and_request_contract(fixture_server) -> None:
     assert payload["think"] == "low"
     assert "tools" not in payload
     assert "format" not in payload
+
+
+def test_real_cloud_provenance_shape_is_accepted(fixture_server) -> None:
+    state = _FixtureState(
+        chat_body=_FixtureState._chat_envelope(
+            valid_content(),
+            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            remote_model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            remote_host=adapter.EXPECTED_CLOUD_REMOTE_HOST,
+        )
+    )
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+
+
+def test_wrong_upstream_model_is_rejected(fixture_server) -> None:
+    state = _FixtureState(
+        chat_body=_FixtureState._chat_envelope(
+            valid_content(),
+            model="gpt-oss:21b",
+            remote_model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            remote_host=adapter.EXPECTED_CLOUD_REMOTE_HOST,
+        )
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint)
+    assert rc == 1
+    assert stdout == ""
+
+
+@pytest.mark.parametrize(
+    ("remote_model", "remote_host"),
+    [
+        ("other-model", adapter.EXPECTED_CLOUD_REMOTE_HOST),
+        (adapter.EXPECTED_CLOUD_REMOTE_MODEL, "https://example.com"),
+        (adapter.EXPECTED_CLOUD_REMOTE_MODEL, "https://ollama.com.evil.example"),
+    ],
+)
+def test_cloud_provenance_mismatch_is_rejected(fixture_server, remote_model: str, remote_host: str) -> None:
+    state = _FixtureState(
+        chat_body=_FixtureState._chat_envelope(
+            valid_content(),
+            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            remote_model=remote_model,
+            remote_host=remote_host,
+        )
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint)
+    assert rc == 1
+    assert stdout == ""
+
+
+def test_cloud_provenance_missing_remote_model_is_rejected(fixture_server) -> None:
+    response = json.loads(
+        _FixtureState._chat_envelope(
+            valid_content(),
+            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+        )
+    )
+    response.pop("remote_model")
+    state = _FixtureState(chat_body=json.dumps(response).encode())
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, _stderr = invoke(endpoint)
+    assert rc == 1
+    assert stdout == ""
+
+
+def test_cloud_provenance_accepts_default_https_port(fixture_server) -> None:
+    state = _FixtureState(
+        chat_body=_FixtureState._chat_envelope(
+            valid_content(),
+            model=adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            remote_host="https://ollama.com:443",
+        )
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, stderr = invoke(endpoint)
+    assert rc == 0, stderr
+    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
 
 
 def test_legal_repository_action_is_a_local_application_directive(fixture_server) -> None:
@@ -341,11 +465,38 @@ def test_preflight_uses_only_metadata_endpoints(fixture_server) -> None:
     assert result["local_daemon_api_ready"] is True
     assert result["model_available"] is True
     assert result["model_metadata_readable"] is True
+    assert result["model_remote_model"] == adapter.EXPECTED_CLOUD_REMOTE_MODEL
+    assert result["model_remote_host"] == adapter.EXPECTED_CLOUD_REMOTE_HOST
     assert result["provider_inference_started"] is False
     assert result["cloud_inference_verified"] is False
     paths = [path for path, _payload in state.requests]
     assert paths == ["/api/version", "/api/tags", "/api/show"]
     assert all(path not in {"/api/chat", "/api/generate"} for path in paths)
+
+
+@pytest.mark.parametrize("field", ["remote_model", "remote_host"])
+def test_preflight_rejects_unexpected_cloud_provenance(fixture_server, field: str) -> None:
+    model_entry = {
+        "name": adapter.MODEL_ID,
+        "model": adapter.MODEL_ID,
+        "remote_model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
+    }
+    model_entry[field] = "unexpected-model" if field == "remote_model" else "https://example.com"
+    tags_body = json.dumps({"models": [model_entry]}).encode()
+    state = _FixtureState(tags_body=tags_body)
+    _state, _server, endpoint = fixture_server(state)
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    rc = adapter.run_adapter(
+        stdin_stream=io.StringIO(""),
+        stdout_stream=stdout,
+        stderr_stream=stderr,
+        argv=["--endpoint", endpoint, "--preflight"],
+    )
+    assert rc == 1
+    assert stdout.getvalue() == ""
+    assert "/api/chat" not in [path for path, _payload in state.requests]
 
 
 def test_external_cancellation_terminates_adapter_promptly(fixture_server, tmp_path: Path) -> None:

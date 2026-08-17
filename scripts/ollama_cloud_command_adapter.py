@@ -26,6 +26,8 @@ from urllib.parse import urlsplit
 MODEL_ID = "gpt-oss:20b-cloud"
 DEFAULT_MODEL_ID = MODEL_ID
 ALLOWED_MODEL_IDENTIFIERS = frozenset({MODEL_ID})
+EXPECTED_CLOUD_REMOTE_MODEL = "gpt-oss:20b"
+EXPECTED_CLOUD_REMOTE_HOST = "https://ollama.com"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434/api"
 EXPECTED_OLLAMA_VERSION = "0.32.14"
 PROTOCOL_NAME = "agentic-debugger-live-jsonl"
@@ -182,6 +184,30 @@ def validate_endpoint(endpoint: str) -> tuple[str, int, str]:
     if not 1 <= port <= 65_535:
         raise OllamaAdapterError("Ollama endpoint port is invalid", kind="configuration")
     return parsed.hostname, port, "/api"
+
+
+def _normalize_cloud_remote_host(value: Any) -> str:
+    """Accept only the documented Ollama Cloud host representation."""
+
+    if type(value) is not str or not value:
+        raise OllamaAdapterError("Ollama Cloud provenance host is invalid", kind="model_mismatch")
+    try:
+        parsed = urlsplit(value)
+        port = parsed.port
+    except ValueError:
+        raise OllamaAdapterError("Ollama Cloud provenance host is invalid", kind="model_mismatch") from None
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "ollama.com"
+        or port not in (None, 443)
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.path not in ("", "/")
+        or parsed.query
+        or parsed.fragment
+    ):
+        raise OllamaAdapterError("Ollama Cloud provenance host is invalid", kind="model_mismatch")
+    return EXPECTED_CLOUD_REMOTE_HOST
 
 
 def _path(base_path: str, suffix: str) -> str:
@@ -408,8 +434,11 @@ def validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> 
 
 def _extract_final_content(response: Mapping[str, Any]) -> str:
     model = response.get("model")
-    if model != MODEL_ID:
+    if model not in {MODEL_ID, EXPECTED_CLOUD_REMOTE_MODEL}:
         raise OllamaAdapterError("Ollama returned an unexpected model", kind="model_mismatch")
+    if response.get("remote_model") != EXPECTED_CLOUD_REMOTE_MODEL:
+        raise OllamaAdapterError("Ollama returned unexpected remote model provenance", kind="model_mismatch")
+    _normalize_cloud_remote_host(response.get("remote_host"))
     if type(response.get("done")) is not bool or response.get("done") is not True:
         raise OllamaAdapterError("Ollama response is incomplete", kind="invalid_completion")
     if type(response.get("done_reason")) is not str or not response["done_reason"]:
@@ -466,9 +495,10 @@ def _preflight_model_entry(tags: Mapping[str, Any]) -> Mapping[str, Any]:
     for entry in models:
         if not isinstance(entry, Mapping):
             continue
-        if entry.get("name") == MODEL_ID and (
-            "model" not in entry or entry.get("model") == MODEL_ID
-        ):
+        if entry.get("name") == MODEL_ID and entry.get("model") == MODEL_ID:
+            if entry.get("remote_model") != EXPECTED_CLOUD_REMOTE_MODEL:
+                raise OllamaAdapterError("configured Ollama model has unexpected remote model", kind="preflight_failed")
+            _normalize_cloud_remote_host(entry.get("remote_host"))
             return entry
     raise OllamaAdapterError("configured Ollama model is unavailable", kind="preflight_failed")
 
@@ -495,8 +525,11 @@ def run_preflight(
         body={"model": MODEL_ID},
         timeout_seconds=timeout_seconds,
     )
-    if not isinstance(show_response.get("details"), Mapping) or not isinstance(show_response.get("model_info"), Mapping):
+    details = show_response.get("details")
+    if not isinstance(details, Mapping) or not isinstance(show_response.get("model_info"), Mapping):
         raise OllamaAdapterError("Ollama model metadata is incomplete", kind="preflight_failed")
+    if details.get("parent_model") != EXPECTED_CLOUD_REMOTE_MODEL:
+        raise OllamaAdapterError("configured Ollama model has unexpected parent model", kind="preflight_failed")
     capabilities = show_response.get("capabilities")
     if not isinstance(capabilities, list) or any(type(item) is not str for item in capabilities):
         raise OllamaAdapterError("Ollama model capabilities are invalid", kind="preflight_failed")
@@ -507,8 +540,12 @@ def run_preflight(
         "local_daemon_api_ready": True,
         "ollama_version": version,
         "expected_model": MODEL_ID,
+        "expected_remote_model": EXPECTED_CLOUD_REMOTE_MODEL,
+        "expected_remote_host": EXPECTED_CLOUD_REMOTE_HOST,
         "model_available": True,
         "model_metadata_readable": True,
+        "model_remote_model": tag["remote_model"],
+        "model_remote_host": _normalize_cloud_remote_host(tag["remote_host"]),
         "model_capabilities": sorted(capabilities),
         "model_tag_digest": tag.get("digest") if type(tag.get("digest")) is str else None,
         "provider_inference_started": False,

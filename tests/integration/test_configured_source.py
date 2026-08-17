@@ -96,6 +96,8 @@ class _SyntheticOllamaHandler(BaseHTTPRequestHandler):
         elif call_index == 1:
             response = {
                 "model": "gpt-oss:20b-cloud",
+                "remote_model": "gpt-oss:20b",
+                "remote_host": "https://ollama.com",
                 "done": True,
                 "done_reason": "stop",
                 "message": {
@@ -114,6 +116,8 @@ class _SyntheticOllamaHandler(BaseHTTPRequestHandler):
         else:
             response = {
                 "model": "gpt-oss:20b-cloud",
+                "remote_model": "gpt-oss:20b",
+                "remote_host": "https://ollama.com",
                 "done": True,
                 "done_reason": "stop",
                 "message": {

@@ -34,11 +34,17 @@ application's credential boundary.
 
 ## Response boundary
 
-The response must identify the exact configured model, be complete, contain a
-completed assistant message, and contain bounded string `message.content`.
-Tool/function-call activity is rejected. `message.thinking` is discarded and
-never enters adapter stdout, Local Application protocol data, events, history,
-diagnostics, validation evidence, or review artifacts.
+The response must identify the exact configured model or its explicitly
+validated Cloud upstream identity, be complete, contain a completed assistant
+message, and contain bounded string `message.content`. For the Cloud form,
+`model` must be exactly `gpt-oss:20b`, `remote_model` must also be exactly
+`gpt-oss:20b`, and `remote_host` must identify exactly `https://ollama.com`
+(with only harmless default HTTPS port/trailing-slash representation
+differences normalized). The pinned local alias form is accepted only with
+the same exact remote provenance. Tool/function-call activity is rejected.
+`message.thinking` is discarded and never enters adapter stdout, Local
+Application protocol data, events, history, diagnostics, validation evidence,
+or review artifacts.
 
 The complete content string must be one JSON object. Markdown fences, prose,
 concatenated JSON values, malformed JSON, non-object JSON, ambiguous output,
@@ -49,8 +55,10 @@ directive again downstream and remains authoritative.
 ## Zero-inference preflight
 
 `--preflight` performs only local metadata checks: `/api/version`, `/api/tags`,
-and `/api/show` for the exact model. It reports local API readiness, expected
-version, model availability, readable metadata, and
+and `/api/show` for the exact model. It requires the alias metadata to map to
+`remote_model: gpt-oss:20b`, `remote_host: https://ollama.com`, and
+`details.parent_model: gpt-oss:20b`. It reports local API readiness, expected
+version, model availability, readable metadata, the validated provenance, and
 `provider_inference_started: false`. It does not call `/api/chat` or
 `/api/generate` and does not establish that Cloud inference will succeed.
 
