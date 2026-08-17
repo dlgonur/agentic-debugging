@@ -226,6 +226,100 @@ def _illustrative_argument_value(field: str, spec: Mapping[str, Any] | None) -> 
     return f"<{field}>"
 
 
+NEUTRAL_UNIFIED_DIFF_EXAMPLE = (
+    "--- a/example.py\n"
+    "+++ b/example.py\n"
+    "@@ -1,2 +1,2 @@\n"
+    "-value = 1\n"
+    "+value = 2\n"
+    " print(value)\n"
+)
+
+APPLY_PATCH_DIRECTIVE_SHAPE = (
+    '{"kind":"action","name":"apply_patch","arguments":{"patch":"..."}}'
+)
+
+
+def _syntax_check_advertises_path(contracts: Any) -> bool:
+    if not isinstance(contracts, Mapping):
+        return False
+    contract = contracts.get("syntax_check")
+    if not isinstance(contract, Mapping):
+        return False
+    properties = contract.get("properties")
+    if not isinstance(properties, Mapping):
+        properties = contract
+    return "path" in properties or "paths" in properties
+
+
+def _patch_budget_remaining(controller: Mapping[str, Any]) -> str | None:
+    limits = controller.get("budget_limits")
+    state = controller.get("budget_state")
+    if not isinstance(limits, Mapping) or not isinstance(state, Mapping):
+        return None
+    maximum = limits.get("max_patch_attempts")
+    used = state.get("patch_attempts")
+    if (
+        type(maximum) is not int
+        or isinstance(maximum, bool)
+        or type(used) is not int
+        or isinstance(used, bool)
+        or maximum <= 0
+        or used < 0
+    ):
+        return None
+    remaining = maximum - used
+    if remaining > 0:
+        return f"Patch-attempt budget remaining for this request: {remaining} of {maximum}."
+    return "Patch-attempt budget for this request is exhausted."
+
+
+def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
+    """PatchManager-derived apply_patch format and recovery rules."""
+
+    controller = request.get("controller")
+    if not isinstance(controller, Mapping):
+        controller = {}
+    contracts = request.get("action_contracts")
+    lines = [
+        "apply_patch arguments.patch must be a complete unified diff accepted by Local Application's PatchManager.",
+        "File headers must contain both lines, in this order:",
+        "--- a/<relative-path>",
+        "+++ b/<same-relative-path>",
+        "Every hunk requires a complete numeric header of the form:",
+        "@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@",
+        "A bare @@ is invalid.",
+        "Hunk counts must exactly match the hunk body.",
+        "Hunk body prefixes are significant: one leading space for unchanged/context, - for removed, + for added.",
+        "Use repository-relative paths only.",
+        "Do not wrap the patch string in Markdown fences.",
+        "Do not include unsupported Git metadata such as diff --git, new file, deleted file, rename, or copy lines.",
+        f"The entire patch remains the value of {APPLY_PATCH_DIRECTIVE_SHAPE}",
+        "Neutral valid example:",
+        NEUTRAL_UNIFIED_DIFF_EXAMPLE.rstrip("\n"),
+        "A rejected apply_patch does not create an active patch and does not mutate the workspace.",
+        "After a rejected patch, do not call revert_patch merely to undo that rejected patch.",
+    ]
+    if _syntax_check_advertises_path(contracts):
+        lines.append(
+            "Do not call patch-dependent syntax_check without an active successfully applied patch unless using the advertised path argument."
+        )
+    else:
+        lines.append(
+            "Do not call patch-dependent syntax_check without an active successfully applied patch."
+        )
+    lines.append(
+        "If apply_patch remains legal and patch-attempt budget remains, correct the patch format or content and submit a new valid apply_patch."
+    )
+    lines.append(
+        "After a patch is successfully applied, use the legal validation lifecycle exposed by the current controller and tools, including revert_patch only for an active successfully applied patch."
+    )
+    budget = _patch_budget_remaining(controller)
+    if budget is not None:
+        lines.append(budget)
+    return "\n".join(lines)
+
+
 def illustrative_action_directive(name: str, contracts: Any) -> dict[str, Any]:
     arguments: dict[str, Any] = {}
     if isinstance(contracts, Mapping):
@@ -271,6 +365,8 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
                 "Legal action representation: "
                 + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
             )
+            if name == "apply_patch":
+                lines.append(build_apply_patch_guidance(request))
     targets = controller.get("legal_transition_targets")
     if "transition" in kinds and isinstance(targets, list) and targets:
         legal = ", ".join(target for target in targets if type(target) is str)

@@ -20,6 +20,9 @@ import pytest
 from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
 from agentic_debugger.cancellation import CancellationError, CancellationToken
 from agentic_debugger.evaluation.live import LiveModelConfig
+from agentic_debugger.runtime.exceptions import PatchValidationError
+from agentic_debugger.runtime.patcher import PatchManager, _parse_unified_diff
+from agentic_debugger.runtime.workspace import TaskWorkspace
 from scripts import ollama_cloud_command_adapter as adapter
 
 
@@ -418,7 +421,94 @@ def test_legal_repository_action_is_a_local_application_directive(fixture_server
     assert "legal action directive" in system
     assert "Local Application performs every actual action" in system
     assert '{"kind":"action","name":"apply_patch","arguments":{"patch":"<patch>"}}' in user
+    assert adapter.APPLY_PATCH_DIRECTIVE_SHAPE in user
     assert "run_reproduction" not in user.split(adapter.PUBLIC_REQUEST_START, 1)[0]
+
+
+def _apply_patch_request() -> dict[str, Any]:
+    request = sample_request()
+    request["controller"]["allowed_actions"] = ["apply_patch", "revert_patch", "syntax_check"]
+    request["action_contracts"]["apply_patch"] = {
+        "properties": {"patch": {"type": "string", "min_length": 1}},
+        "required": ["patch"],
+        "additional_properties": False,
+    }
+    request["action_contracts"]["revert_patch"] = {
+        "properties": {},
+        "required": [],
+        "additional_properties": False,
+    }
+    request["action_contracts"]["syntax_check"] = {
+        "properties": {},
+        "required": [],
+        "additional_properties": False,
+    }
+    return request
+
+
+def test_apply_patch_guidance_teaches_exact_unified_diff_requirements() -> None:
+    messages = adapter.build_chat_messages(_apply_patch_request())
+    user = messages[1]["content"]
+    guidance = user.split(adapter.PUBLIC_REQUEST_START, 1)[0]
+    assert "--- a/<relative-path>" in guidance
+    assert "+++ b/<same-relative-path>" in guidance
+    assert "@@ -OLD_START,OLD_COUNT +NEW_START,NEW_COUNT @@" in guidance
+    assert "A bare @@ is invalid." in guidance
+    assert "Hunk counts must exactly match the hunk body." in guidance
+    assert "one leading space for unchanged/context" in guidance
+    assert "repository-relative paths" in guidance
+    assert "Do not wrap the patch string in Markdown fences." in guidance
+    assert "diff --git" in guidance
+    assert adapter.APPLY_PATCH_DIRECTIVE_SHAPE in guidance
+    assert adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE.rstrip("\n") in guidance
+    assert "display_name.py" not in guidance
+    assert ".strip()" not in guidance
+
+
+def test_apply_patch_guidance_distinguishes_rejected_and_applied_lifecycle() -> None:
+    guidance = adapter.build_apply_patch_guidance(_apply_patch_request())
+    assert "does not create an active patch" in guidance
+    assert "does not mutate the workspace" in guidance
+    assert "do not call revert_patch merely to undo that rejected patch" in guidance
+    assert "Do not call patch-dependent syntax_check without an active successfully applied patch." in guidance
+    assert "successfully applied" in guidance
+    assert "legal validation lifecycle" in guidance
+
+
+def test_neutral_unified_diff_example_is_accepted_by_real_patch_manager(tmp_path: Path) -> None:
+    source = tmp_path / "src"
+    source.mkdir()
+    (source / "example.py").write_text("value = 1\nprint(value)\n", encoding="utf-8")
+    workspace = TaskWorkspace(str(source))
+    try:
+        parsed = _parse_unified_diff(adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE)
+        assert len(parsed) == 1
+        assert parsed[0].path == "example.py"
+        manager = PatchManager(workspace, allowed_paths=["example.py"], denied_paths=[])
+        result = manager.apply_patch(adapter.NEUTRAL_UNIFIED_DIFF_EXAMPLE)
+        assert result.success is True
+        assert result.hunk_count == 1
+        patched = Path(workspace.resolve_path("example.py")).read_text(encoding="utf-8")
+        assert patched == "value = 2\nprint(value)\n"
+        manager.revert_patch()
+    finally:
+        workspace.cleanup()
+
+
+@pytest.mark.parametrize(
+    "diff",
+    [
+        "--- a/example.py\n@@\n",
+        "--- a/example.py\n+++ b/example.py\n@@\n",
+        "--- a/display_name.py\n@@\n",
+        "--- a/display_name.py\n+++ b/display_name.py\n@@\n",
+        "--- a/example.py\n",
+        "--- a/example.py\n-value = 1\n+value = 2\n",
+    ],
+)
+def test_malformed_unified_diffs_remain_rejected_without_normalization(diff: str) -> None:
+    with pytest.raises(PatchValidationError):
+        _parse_unified_diff(diff)
 
 
 @pytest.mark.parametrize("content", [
