@@ -192,12 +192,9 @@ def test_local_application_ceiling_and_command_line_bounds() -> None:
         "gemini-3.7-flash-medium",
         "gemini-3.7-flash-high",
     }
-    assert adapter.DOCUMENTED_INTRINSIC_INIT_CAPABILITIES == {
-        "ask_permission",
-        "ask_question",
-        "list_permissions",
-    }
-    assert adapter.ALLOWED_INTRINSIC_INIT_CAPABILITIES == adapter.DOCUMENTED_INTRINSIC_INIT_CAPABILITIES
+    assert adapter.MAX_INIT_TOOL_COUNT == 256
+    assert adapter.MAX_INIT_TOOL_NAME_CHARS == 128
+    assert adapter.MAX_INIT_TOOLS_ENCODED_BYTES == 16 * 1024
 
 
 def test_ceiling_plus_one_fails_closed() -> None:
@@ -379,6 +376,127 @@ def test_prepare_isolation_installs_temporary_deny_all_pretool_hook(tmp_path: Pa
     assert completed.stdout.count("\n") == 1
 
 
+def test_prepare_isolation_installs_preinvocation_attestation_hook(tmp_path: Path) -> None:
+    isolation = adapter.prepare_isolation(tmp_path / "iso")
+    config = json.loads(isolation["hooks_config_path"].read_text(encoding="utf-8"))
+    definition = config[adapter.PRE_TOOL_USE_HOOK_NAME]
+    handler = definition["PreInvocation"][0]
+    assert handler["type"] == "command"
+    assert handler["timeout"] == 1
+    marker_path = isolation["attestation_path"]
+    assert not marker_path.exists()
+    completed = subprocess.run(
+        handler["command"],
+        input=json.dumps({
+            "invocationNum": 0,
+            "initialNumSteps": 0,
+            "conversationId": "test-conversation",
+            "workspacePaths": [str(isolation["workspace"])],
+            "transcriptPath": str(isolation["workspace"] / "transcript.json"),
+            "artifactDirectoryPath": str(isolation["workspace"] / "artifacts"),
+            "modelName": "gemini-3.7-flash-medium",
+        }),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=isolation["environment"],
+        shell=True,
+        timeout=5,
+        check=False,
+    )
+    assert completed.returncode == 0
+    assert json.loads(completed.stdout) == {"injectSteps": []}
+    assert json.loads(marker_path.read_text(encoding="utf-8")) == {
+        "schema": adapter.PRE_INVOCATION_ATTESTATION_SCHEMA,
+        "nonce": isolation["attestation_nonce"],
+    }
+    adapter.validate_preinvocation_attestation(
+        marker_path, isolation["attestation_nonce"]
+    )
+
+
+def test_preinvocation_attestation_hook_rejects_invalid_or_precreated_marker(
+    tmp_path: Path,
+) -> None:
+    isolation = adapter.prepare_isolation(tmp_path / "iso")
+    command = isolation["attestation_hook_command"]
+    marker_path = isolation["attestation_path"]
+
+    invalid = subprocess.run(
+        command,
+        input=json.dumps({"invocationNum": -1, "initialNumSteps": 0}),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=isolation["environment"],
+        shell=True,
+        timeout=5,
+        check=False,
+    )
+    assert invalid.returncode != 0
+    assert not marker_path.exists()
+
+    marker_path.write_text(
+        json.dumps({
+            "schema": adapter.PRE_INVOCATION_ATTESTATION_SCHEMA,
+            "nonce": isolation["attestation_nonce"],
+        }),
+        encoding="utf-8",
+    )
+    stale = subprocess.run(
+        command,
+        input=json.dumps({"invocationNum": 0, "initialNumSteps": 0}),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=isolation["environment"],
+        shell=True,
+        timeout=5,
+        check=False,
+    )
+    assert stale.returncode != 0
+
+
+def test_precreated_attestation_marker_rejects_request_setup(tmp_path: Path) -> None:
+    root = tmp_path / "iso"
+    root.mkdir()
+    (root / adapter.PRE_INVOCATION_ATTESTATION_FILENAME).write_text(
+        "{}", encoding="utf-8"
+    )
+    with pytest.raises(RuntimeError, match="exists before launch"):
+        adapter.prepare_isolation(root)
+
+
+@pytest.mark.parametrize("marker", [
+    None,
+    {"schema": adapter.PRE_INVOCATION_ATTESTATION_SCHEMA, "nonce": "wrong"},
+    {"schema": adapter.PRE_INVOCATION_ATTESTATION_SCHEMA},
+])
+def test_preinvocation_attestation_validation_fails_closed(
+    tmp_path: Path, marker: dict[str, Any] | None
+) -> None:
+    isolation = adapter.prepare_isolation(tmp_path / "iso")
+    marker_path = isolation["attestation_path"]
+    if marker is not None:
+        marker_path.write_text(json.dumps(marker), encoding="utf-8")
+    with pytest.raises(ValueError, match="PreInvocation attestation"):
+        adapter.validate_preinvocation_attestation(
+            marker_path, isolation["attestation_nonce"]
+        )
+
+
+def test_preinvocation_attestation_validation_rejects_oversized_marker(
+    tmp_path: Path,
+) -> None:
+    isolation = adapter.prepare_isolation(tmp_path / "iso")
+    marker_path = isolation["attestation_path"]
+    marker_path.write_bytes(b"{" + b"x" * adapter.MAX_PRE_INVOCATION_ATTESTATION_BYTES)
+    with pytest.raises(ValueError, match="size bound"):
+        adapter.validate_preinvocation_attestation(
+            marker_path, isolation["attestation_nonce"]
+        )
+
+
 def test_temporary_decision_agent_is_capability_free(tmp_path: Path) -> None:
     isolation = adapter.prepare_isolation(tmp_path / "iso")
     agent_path = isolation["agent_path"]
@@ -540,11 +658,10 @@ def test_parse_stream_accepts_reasoning_then_structured_result() -> None:
     [],
     ["ask_permission"],
     ["ask_question"],
-    ["list_permissions"],
-    ["ask_permission", "ask_question"],
-    ["ask_permission", "ask_question", "list_permissions"],
+    ["run_command", "view_file", "unknown_future_tool"],
+    synthetic.REALISTIC_HARNESS_INVENTORY,
 ])
-def test_parse_stream_accepts_missing_or_audited_init_capabilities(tools: list[str]) -> None:
+def test_parse_stream_accepts_missing_or_arbitrary_init_inventory(tools: list[str]) -> None:
     directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
     structured, _usage = adapter.parse_agy_stream(_stream(
         {"event": "init", "init": {"tools": tools}},
@@ -559,40 +676,21 @@ def test_parse_stream_accepts_missing_or_audited_init_capabilities(tools: list[s
     assert missing_tools == directive
 
 
-@pytest.mark.parametrize("tools", [
-    ["run_command"],
-    ["view_file"],
-    ["write_to_file"],
-    ["grep_search"],
-    ["search_web"],
-    ["read_url_content"],
-    ["manage_task"],
-    ["schedule"],
-    ["invoke_subagent"],
-    ["define_subagent"],
-    ["send_message"],
-    ["manage_subagents"],
-    ["generate_image"],
-    ["unknown_future_tool"],
-    ["ask_permission", "run_command"],
-])
-def test_parse_stream_rejects_unapproved_init_capabilities(tools: list[str]) -> None:
+def test_parse_stream_does_not_treat_init_inventory_as_authorization() -> None:
     directive = {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
-    with pytest.raises(ValueError, match="unapproved capability"):
-        adapter.parse_agy_stream(_stream(
-            {"event": "init", "init": {"tools": tools}},
-            {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
-        ))
+    structured, _usage = adapter.parse_agy_stream(_stream(
+        {"event": "init", "init": {"tools": ["run_command", "invoke_subagent", "future_tool"]}},
+        {"event": "result", "result": {"status": "SUCCESS", "structured_output": directive}},
+    ))
+    assert structured == directive
 
 
-def test_parse_stream_reports_complete_sorted_unapproved_capability_names() -> None:
-    with pytest.raises(ValueError, match=r"run_command, unknown_future_tool, view_file"):
-        adapter.parse_agy_stream(_stream(
-            {"event": "init", "init": {
-                "tools": ["unknown_future_tool", "run_command", "view_file", "run_command"],
-            }},
-            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
-        ))
+def test_parse_stream_accepts_duplicate_inventory_names() -> None:
+    structured, _usage = adapter.parse_agy_stream(_stream(
+        {"event": "init", "init": {"tools": ["run_command", "run_command"]}},
+        {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
+    ))
+    assert structured == {}
 
 
 def test_parse_stream_rejects_malformed_init_tools() -> None:
@@ -604,6 +702,26 @@ def test_parse_stream_rejects_malformed_init_tools() -> None:
     with pytest.raises(ValueError, match="tools entries are not strings"):
         adapter.parse_agy_stream(_stream(
             {"event": "init", "init": {"tools": ["ask_permission", 1]}},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
+        ))
+    with pytest.raises(ValueError, match="non-empty"):
+        adapter.parse_agy_stream(_stream(
+            {"event": "init", "init": {"tools": [""]}},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
+        ))
+    with pytest.raises(ValueError, match="individual name length"):
+        adapter.parse_agy_stream(_stream(
+            {"event": "init", "init": {"tools": ["x" * (adapter.MAX_INIT_TOOL_NAME_CHARS + 1)]}},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
+        ))
+    with pytest.raises(ValueError, match="item count"):
+        adapter.parse_agy_stream(_stream(
+            {"event": "init", "init": {"tools": ["tool"] * (adapter.MAX_INIT_TOOL_COUNT + 1)}},
+            {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
+        ))
+    with pytest.raises(ValueError, match="cumulative encoded size"):
+        adapter.parse_agy_stream(_stream(
+            {"event": "init", "init": {"tools": ["x" * 120] * 140}},
             {"event": "result", "result": {"status": "SUCCESS", "structured_output": {}}},
         ))
 
@@ -743,12 +861,6 @@ def test_hypothesis_directive_end_to_end(fake_agy: dict[str, str], tmp_path: Pat
     ("tool-event", "tool"),
     ("ask-permission-event", "tool"),
     ("subagent-event", "subagent"),
-    ("init-run-command", "unapproved capability"),
-    ("init-file-tool", "unapproved capability"),
-    ("init-web-tool", "unapproved capability"),
-    ("init-unknown-tool", "unapproved capability"),
-    ("init-ask-permission-plus-run-command", "unapproved capability"),
-    ("init-multiple-unapproved-tools", "run_command, unknown_future_tool, view_file"),
     ("malformed-ndjson", "NDJSON"),
     ("missing-result", "missing a terminal result"),
     ("duplicate-result", "duplicate"),
@@ -772,7 +884,6 @@ def test_synthetic_failure_scenarios_fail_closed(
     "init-ask-permission-only",
     "init-ask-question-only",
     "init-list-permissions-only",
-    "init-audited-intrinsic-inventory",
     "legal-action",
 ])
 def test_synthetic_init_capability_acceptance_end_to_end(
@@ -783,6 +894,27 @@ def test_synthetic_init_capability_acceptance_end_to_end(
     req["synthetic_scenario"] = scenario
     response = transport.request(req, timeout_seconds=15.0)
     assert response["directive"]["kind"] == "action"
+
+
+@pytest.mark.parametrize("scenario", [
+    "preinvocation-missing-marker",
+    "preinvocation-wrong-nonce",
+    "preinvocation-malformed-marker",
+    "preinvocation-oversized-marker",
+])
+def test_preinvocation_attestation_is_required_before_result_acceptance(
+    fake_agy: dict[str, str], tmp_path: Path, scenario: str
+) -> None:
+    work = tmp_path / "work"
+    work.mkdir()
+    rc, stdout, stderr = run_adapter_real(
+        fake_agy,
+        {**sample_request(), "synthetic_scenario": scenario},
+        extra_argv=["--work-root", str(work)],
+    )
+    assert rc == 1
+    assert stdout == ""
+    assert "PreInvocation attestation" in stderr
 
 
 @pytest.mark.parametrize("scenario,tool_name", [

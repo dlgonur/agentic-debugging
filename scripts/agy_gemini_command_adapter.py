@@ -16,12 +16,11 @@ Architecture:
 The adapter does not execute source tools, tests, PDB, patches, or the
 verifier.  AGY is the decision model only.  Each request writes a temporary
 capability-free custom MAIN agent and pins ``--agent local-application-decision``.
-The decision-only AGY agent may expose only the explicitly audited intrinsic
-control-plane capabilities in the init inventory.  No task/execution
-capability is accepted.  Any later tool or subagent event is also rejected,
-even if the terminal result contains a valid directive.  A temporary AGY
-``PreToolUse`` hook independently denies every actual tool invocation before
-execution.
+``init.tools`` is harness inventory telemetry, not an authorization boundary;
+its names are never used as a capability allowlist.  Any later tool or
+subagent event is rejected, even if the terminal result contains a valid
+directive.  Temporary AGY hooks independently attest the model invocation and
+deny every actual tool invocation before execution.
 
 Process contract: one Local Application request owns exactly one adapter-owned
 ``agy --print`` process.  Adapter-level retry is 0.  Adapter-level fallback is
@@ -48,6 +47,7 @@ import sys
 import tempfile
 import threading
 import time
+import uuid
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence, Tuple
 
@@ -87,6 +87,19 @@ PRE_TOOL_USE_HOOK_REASON = (
     "Local Application decision-only model: tool execution disabled"
 )
 MAX_PRE_TOOL_USE_HOOK_INPUT_BYTES = 64 * 1024
+PRE_INVOCATION_HOOK_SCRIPT_NAME = "agy-decision-only-attestation-hook.py"
+PRE_INVOCATION_HOOK_NAME = "local-application-decision-attestation"
+PRE_INVOCATION_ATTESTATION_SCHEMA = "agy-preinvocation-attestation-v1"
+PRE_INVOCATION_ATTESTATION_FILENAME = "preinvocation-attestation.json"
+MAX_PRE_INVOCATION_HOOK_INPUT_BYTES = 64 * 1024
+MAX_PRE_INVOCATION_ATTESTATION_BYTES = 1_024
+MAX_PRE_INVOCATION_NONCE_CHARS = 64
+
+# ``init.tools`` is provider/harness inventory telemetry.  These bounds are
+# structural only: no tool name, category, or heuristic grants permission.
+MAX_INIT_TOOL_COUNT = 256
+MAX_INIT_TOOL_NAME_CHARS = 128
+MAX_INIT_TOOLS_ENCODED_BYTES = 16 * 1024
 
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
 PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
@@ -124,14 +137,6 @@ SAFE_STEP_TYPES = frozenset({
     "thinking",
     "thought",
 })
-DOCUMENTED_INTRINSIC_INIT_CAPABILITIES = frozenset({
-    "ask_permission",
-    "ask_question",
-    "list_permissions",
-})
-# Compatibility alias for callers that used the prior constant name.  The
-# audited set above remains the single source of truth.
-ALLOWED_INTRINSIC_INIT_CAPABILITIES = DOCUMENTED_INTRINSIC_INIT_CAPABILITIES
 FORBIDDEN_STEP_TYPES = frozenset({
     "tool",
     "subagent",
@@ -216,6 +221,92 @@ def main() -> int:
         except (UnicodeDecodeError, json.JSONDecodeError):
             pass
     sys.stdout.write(DENY_RESPONSE + "\\n")
+    sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def _pre_invocation_hook_script(*, marker_path: Path, nonce: str) -> str:
+    """Build the request-bound PreInvocation attestation hook."""
+    marker_literal = json.dumps(str(marker_path), ensure_ascii=True)
+    nonce_literal = json.dumps(nonce)
+    return f'''#!/usr/bin/env python3
+"""Temporary Local Application AGY PreInvocation attestation hook."""
+
+import json
+import os
+import sys
+
+MAX_INPUT_BYTES = {MAX_PRE_INVOCATION_HOOK_INPUT_BYTES}
+MAX_MARKER_BYTES = {MAX_PRE_INVOCATION_ATTESTATION_BYTES}
+MAX_DOCUMENTED_INTEGER = 1_000_000
+MAX_METADATA_STRING_CHARS = 4_096
+MAX_WORKSPACE_PATHS = 64
+MAX_WORKSPACE_PATH_CHARS = 1_024
+EXPECTED_SCHEMA = {json.dumps(PRE_INVOCATION_ATTESTATION_SCHEMA)}
+EXPECTED_NONCE = {nonce_literal}
+MARKER_PATH = {marker_literal}
+RESPONSE = json.dumps({{"injectSteps": []}}, separators=(",", ":"))
+
+
+def _valid_event(raw: bytes) -> bool:
+    if len(raw) == 0 or len(raw) > MAX_INPUT_BYTES:
+        return False
+    try:
+        event = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(event, dict):
+        return False
+    for key in ("invocationNum", "initialNumSteps"):
+        value = event.get(key)
+        if type(value) is not int or isinstance(value, bool):
+            return False
+        if value < 0 or value > MAX_DOCUMENTED_INTEGER:
+            return False
+    for key in (
+        "conversationId",
+        "transcriptPath",
+        "artifactDirectoryPath",
+        "modelName",
+    ):
+        value = event.get(key)
+        if value is not None and (not isinstance(value, str) or len(value) > MAX_METADATA_STRING_CHARS):
+            return False
+    workspace_paths = event.get("workspacePaths")
+    if workspace_paths is not None:
+        if not isinstance(workspace_paths, list) or len(workspace_paths) > MAX_WORKSPACE_PATHS:
+            return False
+        if any(not isinstance(path, str) or not path or len(path) > MAX_WORKSPACE_PATH_CHARS
+               for path in workspace_paths):
+            return False
+    return True
+
+
+def main() -> int:
+    raw = sys.stdin.buffer.read(MAX_INPUT_BYTES + 1)
+    if not _valid_event(raw):
+        return 1
+    marker = json.dumps(
+        {{"schema": EXPECTED_SCHEMA, "nonce": EXPECTED_NONCE}},
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8") + b"\\n"
+    if len(marker) > MAX_MARKER_BYTES:
+        return 1
+    try:
+        descriptor = os.open(MARKER_PATH, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "wb") as stream:
+            stream.write(marker)
+            stream.flush()
+            os.fsync(stream.fileno())
+    except (FileExistsError, OSError):
+        return 1
+    sys.stdout.write(RESPONSE + "\\n")
     sys.stdout.flush()
     return 0
 
@@ -701,6 +792,22 @@ def prepare_isolation(root: Path) -> dict[str, Any]:
     trusted_python = Path(sys.executable).resolve()
     if not trusted_python.is_absolute() or not trusted_python.is_file():
         raise RuntimeError("trusted hook Python executable is unusable")
+    attestation_nonce = uuid.uuid4().hex
+    if not (0 < len(attestation_nonce) <= MAX_PRE_INVOCATION_NONCE_CHARS):
+        raise RuntimeError("generated PreInvocation attestation nonce is unusable")
+    attestation_path = root / PRE_INVOCATION_ATTESTATION_FILENAME
+    if attestation_path.exists():
+        raise RuntimeError("PreInvocation attestation marker exists before launch")
+    attestation_script_path = root / PRE_INVOCATION_HOOK_SCRIPT_NAME
+    attestation_script_path.write_text(
+        _pre_invocation_hook_script(
+            marker_path=attestation_path,
+            nonce=attestation_nonce,
+        ),
+        encoding="utf-8",
+    )
+    if os.name != "nt":
+        attestation_script_path.chmod(0o700)
     hook_script_path = root / PRE_TOOL_USE_HOOK_SCRIPT_NAME
     hook_script_path.write_text(PRE_TOOL_USE_HOOK_SCRIPT, encoding="utf-8")
     if os.name != "nt":
@@ -709,6 +816,11 @@ def prepare_isolation(root: Path) -> dict[str, Any]:
     hooks_config_path.parent.mkdir(parents=True, exist_ok=True)
     hooks_config = {
         PRE_TOOL_USE_HOOK_NAME: {
+            "PreInvocation": [{
+                "type": "command",
+                "command": _hook_command(trusted_python, attestation_script_path),
+                "timeout": 1,
+            }],
             "PreToolUse": [{
                 "matcher": "*",
                 "hooks": [{
@@ -756,8 +868,12 @@ def prepare_isolation(root: Path) -> dict[str, Any]:
         "settings_path": settings_path,
         "agent_path": agent_path,
         "hook_script_path": hook_script_path,
+        "attestation_script_path": attestation_script_path,
         "hooks_config_path": hooks_config_path,
         "hook_command": _hook_command(trusted_python, hook_script_path),
+        "attestation_hook_command": _hook_command(trusted_python, attestation_script_path),
+        "attestation_path": attestation_path,
+        "attestation_nonce": attestation_nonce,
         "mcp_cli_path": cli_mcp,
         "mcp_workspace_path": workspace_mcp,
     }
@@ -895,12 +1011,35 @@ def _advertised_init_tools(payload: Mapping[str, Any], event: Mapping[str, Any])
         return []
     if not isinstance(raw, list):
         raise ValueError("AGY init tools field is not a list")
+    if len(raw) > MAX_INIT_TOOL_COUNT:
+        raise ValueError(
+            f"AGY init tools inventory exceeds maximum item count ({MAX_INIT_TOOL_COUNT})"
+        )
     if any(type(item) is not str for item in raw):
         raise ValueError("AGY init tools entries are not strings")
+    for item in raw:
+        if not item:
+            raise ValueError("AGY init tools entries must be non-empty strings")
+        if len(item) > MAX_INIT_TOOL_NAME_CHARS:
+            raise ValueError(
+                "AGY init tool name exceeds maximum individual name length "
+                f"({MAX_INIT_TOOL_NAME_CHARS})"
+            )
+    try:
+        encoded_size = len(
+            json.dumps(raw, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        )
+    except UnicodeEncodeError as exc:
+        raise ValueError("AGY init tools inventory is not valid UTF-8") from exc
+    if encoded_size > MAX_INIT_TOOLS_ENCODED_BYTES:
+        raise ValueError(
+            "AGY init tools inventory exceeds cumulative encoded size bound "
+            f"({MAX_INIT_TOOLS_ENCODED_BYTES} bytes)"
+        )
     return list(raw)
 
 
-def _init_capability_reason(event: Mapping[str, Any]) -> Optional[str]:
+def _init_inventory_reason(event: Mapping[str, Any]) -> Optional[str]:
     """Reject unapproved init capabilities and all advertised subagents."""
     payload = event.get("init")
     if payload is None:
@@ -911,18 +1050,12 @@ def _init_capability_reason(event: Mapping[str, Any]) -> Optional[str]:
         tools = _advertised_init_tools(payload, event)
     except ValueError as exc:
         return str(exc)
-    unapproved = sorted(
-        set(tools) - DOCUMENTED_INTRINSIC_INIT_CAPABILITIES
-    )
-    if unapproved:
-        names = ", ".join(unapproved)
-        return f"AGY init advertises unapproved capability names ({names})"
-    for key in ("subagents", "available_subagents", "subagent_info"):
-        value = payload.get(key)
-        if value:
-            return "AGY init advertises subagent capability"
-    if payload.get("subagent") is True:
-        return "AGY init advertises subagent capability"
+    # ``tools`` is harness inventory telemetry, never selected-agent
+    # authorization.  Actual tool/subagent activity is rejected at stream
+    # level and by the separate deny-all PreToolUse hook.
+    _ = tools
+    # Other init inventory fields are likewise not execution evidence.  Only
+    # actual stream activity is rejected by ``_tool_or_subagent_reason``.
     return None
 
 
@@ -978,9 +1111,9 @@ def parse_agy_stream(raw_stdout: str) -> Tuple[dict[str, Any], Optional[dict[str
             last_event_was_result = False
             continue
         if event_type == "init":
-            capability_reason = _init_capability_reason(event)
-            if capability_reason is not None:
-                raise ValueError(capability_reason)
+            inventory_reason = _init_inventory_reason(event)
+            if inventory_reason is not None:
+                raise ValueError(inventory_reason)
             last_event_was_result = False
             continue
         if event_type == "result":
@@ -1019,6 +1152,33 @@ def _map_usage(raw: Any) -> Optional[dict[str, Any]]:
     if type(cost) in (int, float) and not isinstance(cost, bool):
         usage["cost"] = float(cost)
     return usage or None
+
+
+def validate_preinvocation_attestation(marker_path: Path, expected_nonce: str) -> None:
+    """Require the exact bounded marker written by this request's hook."""
+    if (
+        type(expected_nonce) is not str
+        or not expected_nonce
+        or len(expected_nonce) > MAX_PRE_INVOCATION_NONCE_CHARS
+    ):
+        raise ValueError("expected PreInvocation attestation nonce is unusable")
+    try:
+        with marker_path.open("rb") as stream:
+            raw = stream.read(MAX_PRE_INVOCATION_ATTESTATION_BYTES + 1)
+    except OSError as exc:
+        raise ValueError("PreInvocation attestation marker is missing or unreadable") from exc
+    if len(raw) > MAX_PRE_INVOCATION_ATTESTATION_BYTES:
+        raise ValueError("PreInvocation attestation marker exceeds its size bound")
+    try:
+        marker = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("PreInvocation attestation marker is malformed") from exc
+    expected = {
+        "schema": PRE_INVOCATION_ATTESTATION_SCHEMA,
+        "nonce": expected_nonce,
+    }
+    if marker != expected:
+        raise ValueError("PreInvocation attestation marker does not match this request")
 
 
 # --- Subprocess execution ---------------------------------------------------
@@ -1164,6 +1324,11 @@ def execute_print(
             raise ValueError(
                 f"command line exceeds bound ({command_line_chars} > {MAX_NATIVE_COMMAND_LINE_CHARS})"
             )
+        attestation_path = isolation["attestation_path"]
+        if not isinstance(attestation_path, Path):
+            raise RuntimeError("PreInvocation attestation path is unusable")
+        if attestation_path.exists():
+            raise RuntimeError("PreInvocation attestation marker exists before launch")
         stdout_capture = _BoundedCapture(max_response_bytes)
         stderr_capture = _BoundedCapture(max_response_bytes)
         try:
@@ -1207,6 +1372,10 @@ def execute_print(
         if process.returncode != 0:
             err_text = redact(stderr_capture.text()[:500].strip())
             raise RuntimeError(f"AGY CLI exited with code {process.returncode}: {err_text}")
+        validate_preinvocation_attestation(
+            attestation_path,
+            isolation["attestation_nonce"],
+        )
         structured, usage = parse_agy_stream(stdout_capture.text())
         directive = accept_structured_directive(structured, request)
         return directive, usage

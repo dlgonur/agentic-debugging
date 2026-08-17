@@ -39,6 +39,29 @@ SYNTHETIC_MODELS = (
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
 PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
 
+REALISTIC_HARNESS_INVENTORY = [
+    "browser_click_element",
+    "browser_get_dom",
+    "browser_subagent",
+    "call_mcp_tool",
+    "define_subagent",
+    "execute_browser_javascript",
+    "generate_image",
+    "grep_search",
+    "invoke_subagent",
+    "list_dir",
+    "list_permissions",
+    "manage_subagents",
+    "manage_task",
+    "read_resource",
+    "read_url_content",
+    "run_command",
+    "search_web",
+    "send_message",
+    "view_file",
+    "write_to_file",
+]
+
 DIRECTIVE_STOP = {"kind": "transition", "target_state": "Failed", "reason": "synthetic-success"}
 DIRECTIVE_ACTION_BASELINE = {
     "kind": "action",
@@ -121,7 +144,7 @@ def _emit_init(argv: list[str], *, tools: list[str] | None = None) -> None:
         "event": "init",
         "init": {
             "cwd": str(Path.cwd()),
-            "tools": ["ask_permission"] if tools is None else list(tools),
+            "tools": list(REALISTIC_HARNESS_INVENTORY) if tools is None else list(tools),
             "permission_mode": "request-review",
             "model": _argv_value(argv, "--model") or "",
             "agent": _argv_value(argv, "--agent") or "",
@@ -177,6 +200,76 @@ def _default_usage() -> dict[str, Any]:
 def _pre_tool_use_hook_config() -> Path:
     home = os.environ.get("USERPROFILE") or os.environ.get("HOME") or ""
     return Path(home) / ".gemini" / "config" / "hooks.json"
+
+
+def _consult_pre_invocation_hook(argv: list[str]) -> bool:
+    """Run the isolated PreInvocation hook before synthetic model output."""
+    try:
+        config = json.loads(_pre_tool_use_hook_config().read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(config, dict):
+        return False
+    commands: list[str] = []
+    for definition in config.values():
+        if not isinstance(definition, dict):
+            continue
+        entries = definition.get("PreInvocation")
+        if not isinstance(entries, list):
+            continue
+        for entry in entries:
+            if not isinstance(entry, dict):
+                continue
+            if isinstance(entry.get("command"), str):
+                commands.append(entry["command"])
+            else:
+                handlers = entry.get("hooks")
+                if not isinstance(handlers, list):
+                    continue
+                for handler in handlers:
+                    if isinstance(handler, dict) and isinstance(handler.get("command"), str):
+                        commands.append(handler["command"])
+    if not commands:
+        return False
+    payload = {
+        "invocationNum": 0,
+        "initialNumSteps": 0,
+        "conversationId": "synthetic-conversation",
+        "workspacePaths": [str(Path.cwd())],
+        "transcriptPath": str(Path.cwd() / "synthetic-transcript.json"),
+        "artifactDirectoryPath": str(Path.cwd() / "synthetic-artifacts"),
+        "modelName": _argv_value(argv, "--model") or "",
+    }
+    for command in commands:
+        try:
+            completed = subprocess.run(
+                command,
+                input=json.dumps(payload, separators=(",", ":")),
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                shell=True,
+                timeout=2.0,
+                check=False,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return False
+        if completed.returncode != 0:
+            return False
+        try:
+            response = json.loads((completed.stdout or "").strip())
+        except json.JSONDecodeError:
+            return False
+        if response != {"injectSteps": []}:
+            return False
+        return True
+    return False
+
+
+def _attestation_marker_path() -> Path:
+    return Path.cwd().parent / "preinvocation-attestation.json"
 
 
 def _consult_pre_tool_use_hook(tool_name: str, arguments: dict[str, Any]) -> dict[str, Any]:
@@ -427,8 +520,24 @@ def _run_print(argv: list[str]) -> int:
     prompt = _argv_value(argv, "--print") or _argv_value(argv, "-p") or _argv_value(argv, "--prompt")
     request = _request_from_message(prompt)
     _record_invocation(argv, request)
+    if not _consult_pre_invocation_hook(argv):
+        sys.stderr.write("synthetic agy: PreInvocation hook was not executed\n")
+        return 1
     scenario = request.get("synthetic_scenario")
     scenario = scenario if isinstance(scenario, str) else "valid"
+
+    marker_path = _attestation_marker_path()
+    if scenario == "preinvocation-missing-marker":
+        marker_path.unlink(missing_ok=True)
+    elif scenario == "preinvocation-wrong-nonce":
+        marker_path.write_text(json.dumps({
+            "schema": "agy-preinvocation-attestation-v1",
+            "nonce": "wrong",
+        }), encoding="utf-8")
+    elif scenario == "preinvocation-malformed-marker":
+        marker_path.write_text("not-json\n", encoding="utf-8")
+    elif scenario == "preinvocation-oversized-marker":
+        marker_path.write_bytes(b"x" * 2048)
 
     if scenario == "startup-failure":
         sys.stderr.write("synthetic agy: startup failure injected\n")
