@@ -1,6 +1,6 @@
 # Research Synthesis — Agentic Debugging Project
 
-**Purpose:** Consolidated research summary for the `research/` directory.  
+**Purpose:** Consolidated research summary for the `research/` directory.
 **Scope:** Literature notes, local paper archive, multi-model research reports, reviewed syntheses, QuixBugs/BugsInPy research records, and the empirical findings produced by this project itself.
 
 This document is a synthesis and navigation aid. It does **not** replace the canonical scientific evidence in `docs/`, `analysis/`, or `experiments/`. Raw AI-generated research reports under `research/reports/raw/` are treated as discovery material only; reviewed notes, syntheses, primary papers, manifests, and project evidence take precedence.
@@ -1311,4 +1311,3 @@ early debugger failures
 ```
 
 The most defensible final conclusion is therefore not that dynamic debugging is universally superior. It is that **debugger-grounded repair is technically viable, scientifically distinct from static repair, and strongly dependent on model competence, interaction design, and trajectory-specific training.**
-
