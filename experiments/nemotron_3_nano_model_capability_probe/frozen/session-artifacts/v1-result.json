@@ -1,0 +1,13 @@
+{
+  "cleanup_verified": true,
+  "diagnostics": [],
+  "ended_at_utc": "2026-08-17T20:11:35.169794Z",
+  "run_id": "run-sess-20260817-200956-160723",
+  "sequence": 68,
+  "session_id": "sess-20260817-200956-160723",
+  "source_kind": "configured_model",
+  "started_at_utc": "2026-08-17T20:09:57.139793Z",
+  "status": "failed",
+  "task_id": "curated-none-handling-001",
+  "termination_reason": "controller_failed"
+}

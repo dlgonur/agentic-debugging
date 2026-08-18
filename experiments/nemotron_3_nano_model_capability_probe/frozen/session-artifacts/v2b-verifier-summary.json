@@ -1,0 +1,26 @@
+{
+  "task_id": "curated-none-handling-001",
+  "status": "COMPLETED",
+  "outcome": "RESOLVED",
+  "stop_reason": "completed",
+  "f2p_passed": 1,
+  "f2p_total": 1,
+  "p2p_passed": 2,
+  "p2p_total": 2,
+  "full_suite_status": "PASS",
+  "full_suite_counts": {
+    "collected": null,
+    "errors": 0,
+    "failed": 0,
+    "passed": 3,
+    "skipped": 0,
+    "xfailed": 0,
+    "xpassed": 0
+  },
+  "workspace_cleaned": true,
+  "canonical_fixture_unchanged": true,
+  "patch_application_success": true,
+  "changed_files": [
+    "display_name.py"
+  ]
+}

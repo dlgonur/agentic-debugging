@@ -1,0 +1,123 @@
+{
+  "schema_version": "nemotron-3-nano-frozen-capsule-v1",
+  "experiment_id": "nemotron-3-nano-model-capability-probe-v1",
+  "description": "Minimum tracked frozen evidence for the Nemotron 3 Nano product-path capability probe. Sufficient to audit V1, V2, V2b, and the admissible five-task Harness V2 treatment without ephemeral TEMP roots or _ai-review.",
+  "harness_v2_commit": "4f0a748c30951010780835e3ff7d59fcdb346e30",
+  "aggregate": "1 RESOLVED / 5",
+  "journal_sha256": {
+    "sess-20260817-200956-160723": "cc6ed1d15a6b12c90713117727e5fd60ec21fefc2989e853c2afeabbed82e26a",
+    "sess-20260818-050514-20777e": "af72a4b8d51e0efac75d785b3540c3c5636562b9602dcda7b8695ff5c549d13d",
+    "sess-20260818-052524-f0287d": "eee92b80909804ace4e4bb42874d52a1e8b651f14afed5df7aa7e4ada7ec3631",
+    "sess-20260818-054844-226dce": "92bf6a6584a57616f374d746fe27e9742d2d6a0ac2ee9cb6ca23c2d44ea42570",
+    "sess-20260818-054959-5e3d9b": "f76459718875d6517fdacc5eeec8d33751fa90a4f7cb059bc174528554d2ae73",
+    "sess-20260818-055314-987b93": "959faa2e0becd78217e9f5f675d104c4b64fcd98f0266075c7625c6c87fd8baa",
+    "sess-20260818-055406-6e6522": "2f26afc749ba715156168cd6187c252f78607d2b4ae37d670ff9ff1914005cff"
+  },
+  "files": [
+    {
+      "path": "contract.json",
+      "bytes": 3250,
+      "sha256": "5334e5b35edf05a0e3106ec577ab4faa06ccdbd81b5b43a92bb74d4f16671ec6"
+    },
+    {
+      "path": "frozen/journals/sess-20260817-200956-160723.events.jsonl",
+      "bytes": 27566,
+      "sha256": "cc6ed1d15a6b12c90713117727e5fd60ec21fefc2989e853c2afeabbed82e26a"
+    },
+    {
+      "path": "frozen/journals/sess-20260818-050514-20777e.events.jsonl",
+      "bytes": 33914,
+      "sha256": "af72a4b8d51e0efac75d785b3540c3c5636562b9602dcda7b8695ff5c549d13d"
+    },
+    {
+      "path": "frozen/journals/sess-20260818-052524-f0287d.events.jsonl",
+      "bytes": 39154,
+      "sha256": "eee92b80909804ace4e4bb42874d52a1e8b651f14afed5df7aa7e4ada7ec3631"
+    },
+    {
+      "path": "frozen/journals/sess-20260818-054844-226dce.events.jsonl",
+      "bytes": 10435,
+      "sha256": "92bf6a6584a57616f374d746fe27e9742d2d6a0ac2ee9cb6ca23c2d44ea42570"
+    },
+    {
+      "path": "frozen/journals/sess-20260818-054959-5e3d9b.events.jsonl",
+      "bytes": 24533,
+      "sha256": "f76459718875d6517fdacc5eeec8d33751fa90a4f7cb059bc174528554d2ae73"
+    },
+    {
+      "path": "frozen/journals/sess-20260818-055314-987b93.events.jsonl",
+      "bytes": 8095,
+      "sha256": "959faa2e0becd78217e9f5f675d104c4b64fcd98f0266075c7625c6c87fd8baa"
+    },
+    {
+      "path": "frozen/journals/sess-20260818-055406-6e6522.events.jsonl",
+      "bytes": 23849,
+      "sha256": "2f26afc749ba715156168cd6187c252f78607d2b4ae37d670ff9ff1914005cff"
+    },
+    {
+      "path": "frozen/records/five_task_treatment.json",
+      "bytes": 4725,
+      "sha256": "e8028eb545bb944e741c79d8fc2d52df817e7c1b9560f41a35a1bdf65192da27"
+    },
+    {
+      "path": "frozen/records/v1.json",
+      "bytes": 2190,
+      "sha256": "e012aa0f0b7cfa006f847e8e1b7fd56b98956d1e4e4869ee956ba32939bae771"
+    },
+    {
+      "path": "frozen/records/v2.json",
+      "bytes": 2170,
+      "sha256": "1ce13eae64d87bcd3633c17d2e6984d47cffcc43b08632d46527fcabc8895de6"
+    },
+    {
+      "path": "frozen/records/v2b.json",
+      "bytes": 1899,
+      "sha256": "6fab2289f2bf81e318bc602381e0953ecf456b9585c9ac1ab988935c47cd227c"
+    },
+    {
+      "path": "frozen/session-artifacts/v1-applied-candidate.patch",
+      "bytes": 187,
+      "sha256": "a5fee2ede35400c2eb0297d79561b0e56b77de2380d5837c698fe8425c126f25"
+    },
+    {
+      "path": "frozen/session-artifacts/v1-result.json",
+      "bytes": 410,
+      "sha256": "7196c4fcae9e0ca1193685aa06f8a4322ba95e6bf725868452e9eddec5ea5a2d"
+    },
+    {
+      "path": "frozen/session-artifacts/v2-candidate.patch",
+      "bytes": 283,
+      "sha256": "d86dae6e1e76735ee4eeb439b735fd0e5eff3a378c64dd6b124532e77b556757"
+    },
+    {
+      "path": "frozen/session-artifacts/v2-evaluation.json",
+      "bytes": 2142,
+      "sha256": "da0bab6f7ae9e18118862d6b83d55b2b25195e66f2446055d6aa9e0f367cd933"
+    },
+    {
+      "path": "frozen/session-artifacts/v2-result.json",
+      "bytes": 400,
+      "sha256": "a24f78c961c6e5cf90422876cae11f87d661dc84877ecb42043c11156cecba61"
+    },
+    {
+      "path": "frozen/session-artifacts/v2b-candidate.patch",
+      "bytes": 181,
+      "sha256": "92632737c3b8089060a2cb402bae7240ab7390f1f97aebecc5dc1d19812c6652"
+    },
+    {
+      "path": "frozen/session-artifacts/v2b-result.json",
+      "bytes": 400,
+      "sha256": "e2c393dfa16ca00f6de7230d44a5fc1a5f19229ca3b64288d210b91238b1e1e6"
+    },
+    {
+      "path": "frozen/session-artifacts/v2b-verifier-summary.json",
+      "bytes": 566,
+      "sha256": "1c3abf0ae2678478a53b73c43caee769b1ac1ee901c08b811f02081a5197ab17"
+    },
+    {
+      "path": "README.md",
+      "bytes": 3516,
+      "sha256": "a044de7499a9a5894b1fbbf7eab95f1928f98bc1e6e99022df4e7d7e994cae61"
+    }
+  ]
+}

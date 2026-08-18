@@ -19,6 +19,7 @@ For complete narratives and broader context, see [`docs/project-closeout.md`](..
 | `cp118_rag_definitive/` | `s4-cp118-rag-definitive` | Qwen2.5-Coder-7B + cp118 + RAG | 40 QuixBugs tasks | CLOSED / PARTIAL | 10/40 tasks produced; compute-constrained stop; primary correctness **NOT_EVALUATED** | [`cp118_rag_definitive/RESULT.md`](cp118_rag_definitive/RESULT.md) |
 | `tuned_debugger_pilot_v1/` | `tuned-debugger-pilot-v1` | Qwen2.5-Coder-7B + early adapter | 5 curated tasks (10 cases) | HISTORICAL / SUPERSEDED | Early pilot protocol/provider failures; contract frozen as historical foundation for R1–R6 | [`tuned_debugger_pilot_v1/README.md`](tuned_debugger_pilot_v1/README.md) |
 | `local_inference_perf/` | `local-inference-perf` | Qwen2.5-Coder-7B + cp118 | 50-token parity & throughput | COMPLETE / ENGINEERING ACCEPTED | Windows SDPA speedup (301.4s → 3.56s on 6079+1 tokens) with numerical parity (`cosine=0.9999645`) | [`local_inference_perf/README.md`](local_inference_perf/README.md) |
+| `nemotron_3_nano_model_capability_probe/` | `nemotron-3-nano-model-capability-probe-v1` | Ollama Cloud Nemotron 3 Nano 30B (`nemotron-3-nano:30b-cloud`) | 5 curated tasks (Harness V2) | COMPLETE / CLOSED EVIDENCE | **1/5 RESOLVED**; V1 FAILED; V2 infrastructure-invalid; PDB NOT EXERCISED; not a causal comparison | [`nemotron_3_nano_model_capability_probe/README.md`](nemotron_3_nano_model_capability_probe/README.md) |
 
 ---
 
@@ -115,3 +116,13 @@ For complete narratives and broader context, see [`docs/project-closeout.md`](..
 - **Accepted Interpretation:** Engineering packaging milestone enabling feasible local inference; not a software repair result.
 - **Status:** COMPLETE / ENGINEERING ACCEPTED.
 - **Canonical Evidence:** [`experiments/local_inference_perf/README.md`](local_inference_perf/README.md), [`experiments/local_inference_perf/tests/`](local_inference_perf/tests/).
+
+### 10. Nemotron 3 Nano product-path capability probe (`nemotron_3_nano_model_capability_probe/`)
+- **What it was:** Selected lower-capacity Ollama Cloud model on the accepted Local Application configured-command path after the multi-model generalization and Harness V2 (State-Aware Validate).
+- **Why it existed:** Tested whether the deterministic product harness could support a selected non-default Cloud profile on the fixed five-task curated treatment, without claiming a causal model-strength comparison.
+- **Model / Checkpoint:** Ollama Cloud Nemotron 3 Nano 30B; alias `nemotron-3-nano:30b-cloud`; upstream `nemotron-3-nano:30b`.
+- **Dataset / Task Scope:** Five curated fixtures under policy `pdb-on-uncertainty`, protocol 1.3, fresh external application root per task. Distinct historical V1/V2/V2b records are preserved separately.
+- **Main Result:** Admissible Harness V2 treatment **1/5 RESOLVED**. V2b `sess-20260818-052524-f0287d` on `curated-none-handling-001` is independent-verifier COMPLETED / RESOLVED (F2P 1/1, P2P 2/2, full suite PASS 3/3). Four later tasks unresolved (premature controller Failed, or two identical/current-source-incompatible PatchManager rejections). V1 remains FAILED; V2 remains infrastructure-invalid `BASELINE_INVALID`. PDB NOT EXERCISED on all five treatment tasks.
+- **Accepted Interpretation:** The selected model completed one of five curated tasks through the accepted product runtime and independent verifier. Remaining failures included premature controller failure decisions and repeated source-incompatible patch proposals. A good deterministic harness does not make underlying model capability irrelevant. **Does not** claim a causal comparison with GPT-OSS, R5, or R6; **does not** claim model-size causation, fine-tuning necessity/sufficiency, or PDB benefit/harm.
+- **Status:** COMPLETE / CLOSED EVIDENCE (2026-08-18).
+- **Canonical Evidence:** [`experiments/nemotron_3_nano_model_capability_probe/README.md`](nemotron_3_nano_model_capability_probe/README.md), [`contract.json`](nemotron_3_nano_model_capability_probe/contract.json), [`frozen/`](nemotron_3_nano_model_capability_probe/frozen/), `docs/project-closeout.md` 2026-08-18 update.

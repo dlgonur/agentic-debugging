@@ -1,0 +1,13 @@
+{
+  "cleanup_verified": true,
+  "diagnostics": [],
+  "ended_at_utc": "2026-08-18T05:28:46.086616Z",
+  "run_id": "run-sess-20260818-052524-f0287d",
+  "sequence": 99,
+  "session_id": "sess-20260818-052524-f0287d",
+  "source_kind": "configured_model",
+  "started_at_utc": "2026-08-18T05:25:25.685151Z",
+  "status": "succeeded",
+  "task_id": "curated-none-handling-001",
+  "termination_reason": "done"
+}

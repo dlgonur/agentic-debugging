@@ -1409,6 +1409,16 @@ made.
 
 ## Last Updated
 
+2026-08-18 (Nemotron 3 Nano capability-probe closeout: selected
+`nemotron-3-nano:30b-cloud` five-task Harness V2 treatment COMPLETE as
+closed evidence — all five runs admissible, 1/5 RESOLVED via V2b
+`sess-20260818-052524-f0287d` on `curated-none-handling-001` F2P 1/1 P2P
+2/2; four tasks unresolved; V1 remains FAILED; V2 remains
+infrastructure-invalid BASELINE_INVALID; PDB NOT EXERCISED on all five;
+not a causal comparison with GPT-OSS/R5/R6; no closed scientific
+boundary changed; no new provider session in this documentation
+closeout)
+
 2026-08-17 (Ollama real-route closeout: Local Application V1 real remote
 decision-model product proof COMPLETE via Ollama Cloud `gpt-oss:20b-cloud`
 — successful real product session `sess-20260817-103258-3d1193` on

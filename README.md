@@ -24,6 +24,15 @@ the execution tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
   verifier **RESOLVED**; fail-to-pass **1/1**; pass-to-pass **2/2**; PDB
   **NOT EXERCISED** (not PASS, not a failure). Product success: YES;
   debugging success: YES. The R1–R3 PDB scientific milestones are unchanged.
+- **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
+  evidence. After the multi-model Ollama Cloud generalization, selected
+  `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated
+  treatment under Harness V2 (`4f0a748`). All five runs were admissible;
+  **1/5 RESOLVED** (V2b `sess-20260818-052524-f0287d` on
+  `curated-none-handling-001`; F2P 1/1; P2P 2/2). Four tasks remained
+  unresolved. PDB **NOT EXERCISED** on all five. This is not a causal
+  model-strength comparison with GPT-OSS, R5, or R6. Evidence:
+  [`experiments/nemotron_3_nano_model_capability_probe/`](experiments/nemotron_3_nano_model_capability_probe/README.md).
 - **R1–R6 scientific closeout** stands (positive real-model dynamic
   debugging under the repaired interface; R5 clean base-14B holdout 5/5;
   project-fine-tuned 7B debugger 8/8 RESOLVED on the frozen task-disjoint

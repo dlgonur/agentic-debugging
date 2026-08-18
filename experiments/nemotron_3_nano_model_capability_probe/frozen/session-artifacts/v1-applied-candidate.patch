@@ -1,0 +1,7 @@
+--- a/display_name.py
++++ b/display_name.py
+@@ -2,1 +2,3 @@
+-    normalized_name = name.strip()
++    if name is None:
++        return "Anonymous"
++    normalized_name = name.strip()

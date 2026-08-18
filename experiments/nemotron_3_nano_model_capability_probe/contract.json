@@ -1,0 +1,68 @@
+{
+  "schema_version": "nemotron-3-nano-model-capability-probe-v1",
+  "experiment_id": "nemotron-3-nano-model-capability-probe-v1",
+  "description": "Canonical closeout of the completed Ollama Cloud Nemotron 3 Nano product-path capability probe: distinct V1, V2, and V2b records plus the admissible five-task Harness V2 curated treatment.",
+  "status": "COMPLETE / ACCEPTED AS CLOSED EVIDENCE",
+  "closeout_date": "2026-08-18",
+  "model": {
+    "display_name": "Ollama Cloud Nemotron 3 Nano 30B",
+    "profile_id": "ollama-cloud-nemotron-3-nano-30b",
+    "alias": "nemotron-3-nano:30b-cloud",
+    "upstream": "nemotron-3-nano:30b",
+    "role": "experimental candidate on the accepted Local Application configured-command route; not the product-runtime default"
+  },
+  "product_path": {
+    "controller": "single deterministic Local Application controller",
+    "adapter": "scripts/ollama_cloud_command_adapter.py",
+    "patch_manager": "accepted product PatchManager",
+    "verifier": "independent EvaluationVerifier",
+    "protocol": "1.3",
+    "policy": "pdb-on-uncertainty"
+  },
+  "records": {
+    "v1": {
+      "session_id": "sess-20260817-200956-160723",
+      "harness": "before State-Aware Validate V1",
+      "harness_commit": "756bd2dbf7154b164c87abf4a566da3787b50c5e",
+      "result": "FAILED",
+      "counts_as_resolved": false
+    },
+    "v2": {
+      "session_id": "sess-20260818-050514-20777e",
+      "harness": "4f0a748",
+      "result": "BASELINE_INVALID",
+      "classification": "infrastructure-invalid verification run",
+      "counts_as_resolved": false
+    },
+    "v2b": {
+      "session_id": "sess-20260818-052524-f0287d",
+      "harness": "4f0a748",
+      "result": "COMPLETED / RESOLVED",
+      "f2p": "1/1",
+      "p2p": "2/2",
+      "counts_as_resolved": true
+    },
+    "five_task_harness_v2_treatment": {
+      "harness_commit": "4f0a748c30951010780835e3ff7d59fcdb346e30",
+      "n_admissible": 5,
+      "aggregate": "1 RESOLVED / 5",
+      "pdb": "PDB NOT EXERCISED on all five tasks"
+    }
+  },
+  "authority": "The independent verifier is the only RESOLVED authority. Controller Done is not RESOLVED. Controller Failed before verifier completion is unresolved. V1 remains FAILED. V2 remains infrastructure-invalid.",
+  "interpretation_limits": [
+    "Does not causally prove stronger models outperform weaker models.",
+    "Does not treat Nemotron as representative of all small or weaker models.",
+    "Does not claim model size caused the result.",
+    "Does not claim fine-tuning would necessarily improve this model.",
+    "Does not claim fine-tuning is unnecessary.",
+    "Does not claim PDB helped or hurt.",
+    "Does not treat Harness V2 as directly comparable to historical R5/R6 treatments.",
+    "Does not claim a completed matched five-task comparison of GPT-OSS and Nemotron."
+  ],
+  "separate_evidence": {
+    "r5": "separate evidence that a stronger clean base model achieved 5/5 in its accepted treatment",
+    "r6": "separate evidence that debugger-trajectory post-training achieved 8/8 disjoint validation, without a matched-base causal ablation",
+    "gpt_oss_product_proof": "separate 2026-08-17 Local Application product-runtime proof via gpt-oss:20b-cloud; not a matched five-task comparison"
+  }
+}

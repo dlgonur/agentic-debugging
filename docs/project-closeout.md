@@ -59,6 +59,27 @@ merely for checkbox completion; a future Ollama PDB-versus-static comparison
 would be a new experiment, not a mutation of
 `research/quixbugs/PAIRED_PILOT_V4.json`.
 
+**2026-08-18 status update:** the Ollama Cloud Nemotron 3 Nano
+model-capability probe is **COMPLETE** as closed evidence. After the
+multi-model adapter generalization (`756bd2d`) and State-Aware Validate
+(`4f0a748`, Harness V2), selected `nemotron-3-nano:30b-cloud` (upstream
+`nemotron-3-nano:30b`) was tested on the fixed five-task curated
+treatment under policy `pdb-on-uncertainty` with a fresh external
+application root per task. All five runs were admissible. One reached
+independent-verifier RESOLVED and four remained unresolved, producing
+**1/5**. Distinct historical records remain: V1
+`sess-20260817-200956-160723` FAILED (classify_outcome before post-patch
+F2P; verifier did not run); V2 `sess-20260818-050514-20777e`
+infrastructure-invalid `BASELINE_INVALID` (repository-nested verifier
+workspace prefixed pytest node IDs; candidate not evaluated); V2b
+`sess-20260818-052524-f0287d` COMPLETED / RESOLVED (F2P 1/1, P2P 2/2,
+full suite PASS 3/3). PDB was NOT EXERCISED on all five treatment tasks.
+This does not establish a causal model-strength comparison and does not
+change R1–R6, the 2026-08-17 `gpt-oss:20b-cloud` product proof, the
+INCOMPLETE_HARDWARE_STOP boundary, DPO, fine-tuned+RAG correctness, or
+BugsInPy execution. Canonical carrier:
+`experiments/nemotron_3_nano_model_capability_probe/`.
+
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
 ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT
@@ -214,7 +235,9 @@ remotely).
 
 Not in current scope: resuming the R6 final five-task holdout (closed
 boundary — INCOMPLETE_HARDWARE_STOP), DPO, RAG correctness campaigns,
-BugsInPy execution (license-gated), new model experiments.
+BugsInPy execution (license-gated), further new model experiments. The
+2026-08-18 Nemotron capability probe is completed closed evidence, not an
+open campaign.
 
 The historical Authorized Six-Case Live Campaign is **RETAIN_OPTIONAL /
 OWNER-AUTHORIZED**. It is not required for Local Application V1 completion

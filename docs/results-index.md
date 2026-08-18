@@ -13,6 +13,7 @@ documents and does not invent metrics.
 | --- | --- | --- | --- |
 | Local Application V1 | Local product surface over the scientific system; Tasks 1–8 accepted | COMPLETE (2026-08-16) | [`architecture/local-application-v1.md`](architecture/local-application-v1.md); [`project-closeout.md`](project-closeout.md) 2026-08-16 update |
 | Real Ollama Cloud product proof | Session `sess-20260817-103258-3d1193` on `curated-none-handling-001` / `pdb-on-uncertainty`: SUCCEEDED; independent verifier RESOLVED; F2P 1/1; P2P 2/2; cleanup verified; live/replay terminal-state parity. Product success YES; debugging success YES. PDB **NOT EXERCISED** (not PASS, not a failure). | COMPLETE (2026-08-17) | [`architecture/ollama-cloud-command-adapter-v1.md`](architecture/ollama-cloud-command-adapter-v1.md); [`project-closeout.md`](project-closeout.md) 2026-08-17 update; [`../TODO.md`](../TODO.md) |
+| Nemotron 3 Nano capability probe | Selected `nemotron-3-nano:30b-cloud` on the accepted Local Application path, Harness V2 (`4f0a748`), policy `pdb-on-uncertainty`, five curated tasks, fresh external root per task. All five runs admissible; **1/5 RESOLVED**. V2b `sess-20260818-052524-f0287d` on `curated-none-handling-001` is COMPLETED / RESOLVED (F2P 1/1, P2P 2/2). Four later tasks unresolved (premature controller Failed or PatchManager source-incompatible hunks). V1 remains FAILED; V2 remains infrastructure-invalid `BASELINE_INVALID`. PDB **NOT EXERCISED** on all five. Not a causal comparison with GPT-OSS, R5, or R6. | COMPLETE (2026-08-18) | [`../experiments/nemotron_3_nano_model_capability_probe/README.md`](../experiments/nemotron_3_nano_model_capability_probe/README.md); `contract.json`; `frozen/`; [`project-closeout.md`](project-closeout.md) 2026-08-18 update |
 | R1 repaired-interface breakpoint | Real RAW Qwen2.5-Coder-7B authored a valid breakpoint; real PDB session paused and returned a production-region observation | Accepted (2026-08-11); commit `c842d69` | [`../experiments/debugger_interaction_v2_r1/README.md`](../experiments/debugger_interaction_v2_r1/README.md); `r1_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
 | R2 multi-turn debugger loop | Real model completed breakpoint → stack → locals → step/next → post-step stack → diagnosis | Accepted (2026-08-11); commit `97cc7fe` | [`../experiments/debugger_interaction_v2_r2/README.md`](../experiments/debugger_interaction_v2_r2/README.md); `r2_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
 | R3 debugger-informed repair | Debugger evidence → diagnosis → semantic patch → PatchManager → independent verifier RESOLVED. Mandatory qualifier: raw patch carried a unified-diff hunk-count metadata error corrected by deterministic COUNT-ONLY serialization normalization | Accepted (2026-08-11); commit `f2291df` | [`../experiments/debugger_interaction_v2_r3/README.md`](../experiments/debugger_interaction_v2_r3/README.md); `r3_contract.json`; [`project-closeout.md`](project-closeout.md) §3 |
@@ -38,6 +39,11 @@ documents and does not invent metrics.
 
 - The Ollama Cloud product proof is not a PDB-effectiveness result (PDB was
   NOT EXERCISED).
+- The Nemotron 1/5 result is not a causal model-strength comparison, not a
+  matched five-task comparison with GPT-OSS, and not directly comparable to
+  R5 or R6. V1 remains FAILED; V2 remains infrastructure-invalid, not an
+  ordinary model failure and not RESOLVED. PDB was NOT EXERCISED on all
+  five Nemotron treatment tasks.
 - R6 8/8 is not a matched-base fine-tuning ablation.
 - The interrupted R6 holdout is not 2/5 and is not a failed five-task
   benchmark.

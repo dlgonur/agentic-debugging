@@ -1,0 +1,111 @@
+{
+  "record_id": "nemotron-harness-v2-five-task-treatment",
+  "treatment": "Harness V2 + Ollama Cloud Nemotron 3 Nano 30B + pdb-on-uncertainty + five-task curated holdout",
+  "fixed_condition": {
+    "model_profile": "Ollama Cloud Nemotron 3 Nano 30B",
+    "profile_id": "ollama-cloud-nemotron-3-nano-30b",
+    "alias": "nemotron-3-nano:30b-cloud",
+    "upstream": "nemotron-3-nano:30b",
+    "harness": "4f0a748",
+    "harness_commit": "4f0a748c30951010780835e3ff7d59fcdb346e30",
+    "policy": "pdb-on-uncertainty",
+    "protocol": "1.3",
+    "application_root": "fresh external application root per task"
+  },
+  "admissible": true,
+  "n_tasks": 5,
+  "n_admissible": 5,
+  "n_inadmissible": 0,
+  "resolved": 1,
+  "unresolved": 4,
+  "aggregate": "1 RESOLVED / 5",
+  "authority": "independent verifier outcome is the only RESOLVED authority; controller Done is not RESOLVED; controller Failed before verifier completion is unresolved",
+  "pdb_exercised_count": 0,
+  "pdb_not_exercised_count": 5,
+  "rows": [
+    {
+      "task_id": "curated-none-handling-001",
+      "session_id": "sess-20260818-052524-f0287d",
+      "source": "historical V2b, not rerun",
+      "admissible": true,
+      "controller": "Done",
+      "verifier": "COMPLETED / RESOLVED",
+      "f2p": "1/1",
+      "p2p": "2/2",
+      "pdb": "PDB NOT EXERCISED",
+      "counts_as_resolved": true,
+      "journal_sha256": "eee92b80909804ace4e4bb42874d52a1e8b651f14afed5df7aa7e4ada7ec3631"
+    },
+    {
+      "task_id": "curated-off-by-one-002",
+      "session_id": "sess-20260818-054844-226dce",
+      "source": "fresh campaign session",
+      "admissible": true,
+      "controller": "Failed before Understand",
+      "verifier": "not run",
+      "scientific_outcome": "unresolved",
+      "pdb": "PDB NOT EXERCISED",
+      "counts_as_resolved": false,
+      "journal_sha256": "92bf6a6584a57616f374d746fe27e9742d2d6a0ac2ee9cb6ca23c2d44ea42570"
+    },
+    {
+      "task_id": "curated-wrong-branch-003",
+      "session_id": "sess-20260818-054959-5e3d9b",
+      "source": "fresh campaign session",
+      "admissible": true,
+      "controller": "Understand reached; low-confidence hypothesis; two identical/current-source-incompatible patch hunks rejected by PatchManager; patch budget exhausted; Failed",
+      "verifier": "not run",
+      "scientific_outcome": "unresolved",
+      "pdb": "PDB NOT EXERCISED",
+      "counts_as_resolved": false,
+      "journal_sha256": "f76459718875d6517fdacc5eeec8d33751fa90a4f7cb059bc174528554d2ae73"
+    },
+    {
+      "task_id": "curated-mutation-alias-004",
+      "session_id": "sess-20260818-055314-987b93",
+      "source": "fresh campaign session",
+      "admissible": true,
+      "controller": "Failed after reproduction before Understand",
+      "verifier": "not run",
+      "scientific_outcome": "unresolved",
+      "pdb": "PDB NOT EXERCISED",
+      "counts_as_resolved": false,
+      "journal_sha256": "959faa2e0becd78217e9f5f675d104c4b64fcd98f0266075c7625c6c87fd8baa"
+    },
+    {
+      "task_id": "curated-caller-callee-005",
+      "session_id": "sess-20260818-055406-6e6522",
+      "source": "fresh campaign session",
+      "admissible": true,
+      "controller": "Understand reached; low-confidence hypothesis; two identical/current-source-incompatible patch hunks rejected by PatchManager; patch budget exhausted; Failed",
+      "verifier": "not run",
+      "scientific_outcome": "unresolved",
+      "pdb": "PDB NOT EXERCISED",
+      "counts_as_resolved": false,
+      "journal_sha256": "2f26afc749ba715156168cd6187c252f78607d2b4ae37d670ff9ff1914005cff"
+    }
+  ],
+  "excluded_from_this_treatment": [
+    {
+      "record_id": "nemotron-v1",
+      "session_id": "sess-20260817-200956-160723",
+      "reason": "pre-Harness-V2 historical record; session result remains FAILED"
+    },
+    {
+      "record_id": "nemotron-v2",
+      "session_id": "sess-20260818-050514-20777e",
+      "reason": "infrastructure-invalid BASELINE_INVALID verification; candidate was not evaluated"
+    }
+  ],
+  "interpretation_limits": [
+    "This is one selected model under Harness V2 on this five-task curated treatment.",
+    "It does not establish that stronger models outperform weaker models.",
+    "It does not establish that Nemotron is representative of all small or weaker models.",
+    "It does not claim that model size caused the result.",
+    "It does not claim that fine-tuning would necessarily improve this model.",
+    "It does not claim that fine-tuning is unnecessary.",
+    "It does not claim that PDB helped or hurt. PDB was NOT EXERCISED on all five tasks.",
+    "Harness V2 is not directly comparable to historical R5/R6 treatments.",
+    "GPT-OSS and Nemotron do not have a completed matched five-task comparison."
+  ]
+}

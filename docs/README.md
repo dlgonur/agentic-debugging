@@ -10,7 +10,7 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | **Current status authority** (2026-08-13 R1–R6 state, plus 2026-08-16/17 product closeout) |
+| `project-closeout.md` | **Current status authority** (2026-08-13 R1–R6 state, plus 2026-08-16/17 product closeout and 2026-08-18 Nemotron capability-probe closeout) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
 | `final-report.md` | Current technical report through 2026-08-13 (R1-R6 phase; S8/S9 snapshot archived) |
 | `project-tracker.md` | Current execution tracker |

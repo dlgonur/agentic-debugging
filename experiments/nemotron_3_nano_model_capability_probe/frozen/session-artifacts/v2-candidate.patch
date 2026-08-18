@@ -1,0 +1,9 @@
+--- a/display_name.py
++++ b/display_name.py
+@@ -1,2 +1,4 @@
+-def format_display_name(name: str | None) -> str:
+-    normalized_name = name.strip()
++def format_display_name(name: str | None) -> str:
++    if name is None:
++        return "Anonymous"
++    normalized_name = name.strip()

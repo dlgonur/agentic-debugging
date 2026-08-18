@@ -24,6 +24,13 @@ session. That proof used `gpt-oss:20b-cloud`. See `docs/project-tracker.md`
 (Local Application V1 real remote route proof, 2026-08-17) for the full
 record. The later multi-model generalization does not replace that proof.
 
+**2026-08-18:** the experimental Nemotron profile has a completed
+five-task Harness V2 capability probe (**1/5 RESOLVED**). That result is
+closed evidence at
+`experiments/nemotron_3_nano_model_capability_probe/`. It does not
+replace the `gpt-oss:20b-cloud` product-runtime proof and is not a
+matched five-task comparison.
+
 This adapter is a provider-specific decision-model command for the existing
 Local Application configured-command source. It does not replace or extend
 the application controller, tool registry, PDB path, PatchManager, or

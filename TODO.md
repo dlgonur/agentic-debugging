@@ -2,6 +2,23 @@
 
 ## Durum notu
 
+**2026-08-18 Nemotron 3 Nano capability probe — COMPLETE as closed
+evidence.** After the multi-model Ollama Cloud generalization, selected
+`nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated
+treatment under Harness V2 (`4f0a748`), policy `pdb-on-uncertainty`, with
+a fresh external application root per task. All five runs were
+admissible; **1/5 RESOLVED**. V2b `sess-20260818-052524-f0287d` on
+`curated-none-handling-001` is independent-verifier RESOLVED (F2P 1/1,
+P2P 2/2). Four tasks remained unresolved after premature controller
+Failed decisions or repeated source-incompatible PatchManager
+rejections. V1 remains FAILED; V2 remains infrastructure-invalid
+`BASELINE_INVALID`. PDB was NOT EXERCISED on all five tasks. This does
+not establish a causal model-strength comparison with GPT-OSS, R5, or
+R6. Canonical carrier:
+`experiments/nemotron_3_nano_model_capability_probe/`. Closed
+boundaries are unchanged. There is no active engineering campaign after
+this documentation closeout.
+
 **2026-08-17 Local Application V1 real remote decision-model product proof —
 COMPLETE via Ollama Cloud `gpt-oss:20b-cloud`.** A real Ollama Cloud
 configured-command route completed successfully through the accepted Local
