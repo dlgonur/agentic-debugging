@@ -1,0 +1,88 @@
+{
+  "controller": {
+    "architecture": "single DeterministicController + typed tools + PatchManager",
+    "attempts_per_task": 1,
+    "justification": {
+      "adapter_retry_count": "accepted Ollama Cloud adapter contract is zero retry",
+      "live_run_limit_retries": "accepted configured_source LiveRunLimits default; adapter itself still has zero provider retry/fallback",
+      "max_controller_steps": "accepted Local Application configured_source default",
+      "max_patch_attempts": "schema maximum 3; repository-scale diffs, not curated 2",
+      "max_test_runs": "raised from curated 5 to 12 within the schema cap of 20"
+    },
+    "live_run_limit_retries": 2,
+    "max_active_hypotheses": 3,
+    "max_controller_steps": 64,
+    "max_model_requests": 64,
+    "max_patch_attempts": 3,
+    "max_pdb_observations": 8,
+    "max_source_observations": 12,
+    "max_test_runs": 12,
+    "policy": "pdb-on-uncertainty"
+  },
+  "evaluation": {
+    "candidate_verifier_adapter": "agentic_debugger.swerebench.execution.OfficialSWERebenchVerifier",
+    "candidate_verifier_input": "candidate unified diff only; private task identity/spec stays outside model context",
+    "contract_repaired_before_first_provider_inference": true,
+    "correctness_authority": "official SWE-rebench Docker evaluator via OfficialSWERebenchVerifier",
+    "external_runtime_root": "%LOCALAPPDATA%/agentic-debugging/gpt-oss-swerebench-v2-pilot10",
+    "fresh_external_application_root_per_task": true,
+    "model_reproduction": "not officially declared; model-selected public_target only; hidden FAIL_TO_PASS withheld",
+    "model_workspace": "base_commit only; no test_patch; no gold patch",
+    "no_campaign_modification_after_first_provider_result": true,
+    "no_outcome_dependent_retries": true,
+    "no_task_specific_prompt_customization": true,
+    "pdb_required_treatment": "distinct frozen contract pdb-required-model-selected-target-v1; failing-runtime-coupled PDB required before debugger claims; not this Pilot-10",
+    "pdb_treatment": "Option B: Pilot-10 overall-repair treatment; PDB unavailable by treatment contract because the current launcher is not coupled to the failing public pytest runtime",
+    "verifier_workspace": "base_commit + hidden test_patch; gold never applied as model input"
+  },
+  "experiment_id": "gpt-oss-swerebench-v2-pilot10",
+  "harness": {
+    "harness_content_sha256": "1e643c37fa4c494499b7b0ba8e7670f9ab9a1cb5aebc87a9aa5430400032633d",
+    "note": "The parent baseline and harness content are frozen provenance; actual HEAD is recorded at execution time.",
+    "parent_baseline": "9a470019182760f7bb7a462c981b2f71052baf91",
+    "runtime_head_policy": "record_at_execution",
+    "working_tree_policy": "must_be_clean_at_execution"
+  },
+  "historical_product_evidence_excluded": {
+    "pdb": "NOT EXERCISED",
+    "policy": "pdb-on-uncertainty",
+    "role": "historical product evidence only; not in Pilot-10 denominator",
+    "session_id": "sess-20260817-103258-3d1193",
+    "task_id": "curated-none-handling-001"
+  },
+  "parent_baseline": "9a470019182760f7bb7a462c981b2f71052baf91",
+  "post_pilot_formulas": {
+    "debugger_assisted_resolved_count": "count(debugger_assisted_resolved)",
+    "infrastructure_invalid_rate": "count(infrastructure_invalid)/count(all rows)",
+    "logical_calls_per_task": "mean(logical_model_calls over admissible rows)",
+    "mean_task_wall_seconds": "mean(wall_clock_seconds over admissible rows)",
+    "median_task_wall_seconds": "median(wall_clock_seconds over admissible rows)",
+    "p95_task_wall_seconds": "percentile_95(wall_clock_seconds over admissible rows)",
+    "pdb_exercise_rate": "count(pdb_entered)/count(admissible_model_result)",
+    "projected_30_runtime_seconds": "10 * mean_task_wall_seconds * 3",
+    "projected_full_clean_validation_runtime_seconds": "mean_task_wall_seconds * eligible_population_n",
+    "resolved_rate": "count(resolved)/count(admissible_model_result)",
+    "tokens_per_task": "mean(token_usage.total) when durably available else null",
+    "total_provider_wall_seconds": "sum(wall_clock_seconds over all executed provider rows)"
+  },
+  "provider": {
+    "adapter": "scripts/ollama_cloud_command_adapter.py",
+    "adapter_logical_call_guidance": 25,
+    "adapter_retry_count": 0,
+    "alias": "gpt-oss:20b-cloud",
+    "display_name": "Ollama Cloud GPT-OSS 20B",
+    "fallback_count": 0,
+    "profile_id": "ollama-cloud-gpt-oss-20b",
+    "protocol": "1.3",
+    "public_request_byte_budget": 25000,
+    "route": "Ollama Cloud",
+    "upstream": "gpt-oss:20b"
+  },
+  "result_schema_version": "gpt-oss-swerebench-v2-pilot-result-v1",
+  "schema_version": "gpt-oss-swerebench-v2-pilot10-execution-contract-v2",
+  "scientific_questions": {
+    "debugger_assisted_repair": "actual PDB/runtime-debugger evidence exercised AND independently verified RESOLVED; PDB NOT EXERCISED is not debugger success",
+    "overall_repair": "independent verifier RESOLVED"
+  },
+  "status": "REPAIRED_BEFORE_FIRST_PROVIDER_INFERENCE"
+}

@@ -65,6 +65,14 @@ from agentic_debugger.demo.catalog import (
     probe_driver_source,
     resolve_probe_breakpoint,
 )
+from agentic_debugger.demo.external_runtime import (
+    PublicRuntimeClassification,
+    classify_public_runtime_result,
+    is_external_isolated_task,
+    production_path_prefixes,
+    validate_model_selected_pdb_target,
+    validate_public_runtime_target,
+)
 from agentic_debugger.demo.sanitize import (
     MAX_RAW_FAILURE_OUTPUT_CHARS,
     sanitize_failure_output,
@@ -192,7 +200,8 @@ def reproduction_failure_output(
     result: Any,
     workspace_root: Optional[str],
     script_path: str,
-    original_line_count: int,
+    original_line_count: Optional[int] = None,
+    production_paths: Optional[Sequence[str]] = None,
 ) -> str:
     """SANITIZED reproduction diagnostic of the executed test command.
 
@@ -208,7 +217,11 @@ def reproduction_failure_output(
     if not raw.strip():
         return ""
     diagnostic = sanitize_failure_output(
-        raw, workspace_root, script_path, original_line_count
+        raw,
+        workspace_root,
+        script_path,
+        original_line_count,
+        production_paths=production_paths,
     )
     return diagnostic.text
 
@@ -419,6 +432,9 @@ class DemoToolContext:
         self.baseline_failure_reproduced: Optional[bool] = None
         self.post_patch_f2p_passed: Optional[bool] = None
         self.regression_passed: Optional[bool] = None
+        # Durable external-runtime classification: a Docker/dependency launch
+        # failure is infrastructure evidence, not a model-reproduced bug.
+        self.runtime_infrastructure_failure = False
         self.patch_applied = False
         self.patch_changed_files: tuple[str, ...] = ()
         self.syntax_passed: Optional[bool] = None
@@ -469,6 +485,8 @@ class DemoToolContext:
         captured -- never tests, oracles, or unrelated files.
         """
         try:
+            if is_external_isolated_task(self.task):
+                return
             module_path = task_target_module_path(self.task)
             snapshot = capture_source_snapshot(
                 self.workspace.root, module_path, SourceSnapshotStage.INITIAL
@@ -546,6 +564,8 @@ def build_registry(
     """Register every demonstration tool against the accepted registry."""
 
     task = context.task
+    isolated = is_external_isolated_task(task)
+    external_interactive = isolated or interactive_debugger_controls
     reproduction_argv = tuple(task.reproduction.argv)
     reproduction_cwd = task.reproduction.cwd
 
@@ -576,46 +596,124 @@ def build_registry(
         phase = arguments["phase"]
         if phase not in legal_reproduction_phases(action.state):
             raise _safe_rejection("phase must be baseline or post_patch")
-        result = context.test_runner.run_reproduction(task)
+        isolated = is_external_isolated_task(task)
+        public_target = arguments.get("public_target")
+        if isolated and not public_target:
+            raise _safe_rejection(
+                "no public reproduction command is declared; provide a "
+                "model-selected public_target that already exists in the "
+                "workspace. Hidden verifier tests are withheld"
+            )
+        if isolated:
+            try:
+                public_target = validate_public_runtime_target(
+                    context.workspace,
+                    str(public_target),
+                )
+            except ValueError as exc:
+                raise _safe_rejection(str(exc)) from exc
+            argv = [
+                "python",
+                "-m",
+                "pytest",
+                public_target,
+                "-q",
+                "-p",
+                "no:cacheprovider",
+            ]
+            result = context.test_runner.run_tests(
+                argv,
+                task.reproduction.cwd,
+                task.reproduction.timeout_seconds,
+                kind=TestRunKind.REPRODUCTION,
+            )
+        else:
+            result = context.test_runner.run_reproduction(task)
+        runtime_classification = (
+            classify_public_runtime_result(result) if isolated else None
+        )
+        if runtime_classification is PublicRuntimeClassification.DEPENDENCY_FAILURE:
+            context.runtime_infrastructure_failure = True
         if result.timed_out:
+            if isolated:
+                classification = PublicRuntimeClassification.TIMEOUT.value
+                payload = {
+                    "phase": phase,
+                    "public_target": public_target,
+                    "passed": False,
+                    "failure_reproduced": False,
+                    "runtime_classification": classification,
+                    "exit_code": result.command_result.exit_code,
+                }
+                if phase == "baseline":
+                    context.baseline_failure_reproduced = False
+                else:
+                    context.post_patch_f2p_passed = False
+                return _ok(payload, "public pytest target timed out")
             raise ToolTimeoutError("reproduction command timed out")
         if result.launch_error or result.command_result.exit_code is None:
+            if isolated:
+                classification = PublicRuntimeClassification.DEPENDENCY_FAILURE.value
+                payload = {
+                    "phase": phase,
+                    "public_target": public_target,
+                    "passed": False,
+                    "failure_reproduced": False,
+                    "runtime_classification": classification,
+                    "exit_code": result.command_result.exit_code,
+                }
+                if phase == "baseline":
+                    context.baseline_failure_reproduced = False
+                else:
+                    context.post_patch_f2p_passed = False
+                return _ok(payload, "public pytest runtime was unavailable")
             raise ToolExecutionError("reproduction command could not be launched")
-        node_id = task.tests.fail_to_pass[0]
-        reproduced = bool(result.reproduction_match) and not result.passed
-        # Sanitized production diagnostic for the model (never hidden-test
-        # content) plus the bounded RAW output retained as evidence only.
-        module_path = task_target_module_path(task)
-        source_path = Path(context.workspace.root) / module_path
-        try:
-            original_line_count = len(
-                source_path.read_text(encoding="utf-8").splitlines()
-            )
-        except OSError:
-            raise ToolExecutionError(
-                "production module is missing from the disposable workspace"
-            ) from None
+        reproduced = not result.passed
+        if not isolated:
+            reproduced = bool(result.reproduction_match) and not result.passed
+        else:
+            reproduced = runtime_classification is PublicRuntimeClassification.TARGET_FAILED
+        prefixes = production_path_prefixes(task) if isolated else ()
+        module_path = ""
+        original_line_count: Optional[int] = None
+        if isolated:
+            module_path = ""
+        else:
+            module_path = task_target_module_path(task)
+            source_path = Path(context.workspace.root) / module_path
+            try:
+                original_line_count = len(
+                    source_path.read_text(encoding="utf-8").splitlines()
+                )
+            except OSError:
+                raise ToolExecutionError(
+                    "production module is missing from the disposable workspace"
+                ) from None
         payload: dict[str, Any] = {
             "phase": phase,
-            "node_id": node_id,
             "exit_code": result.command_result.exit_code,
-            "expected_exit_code": task.reproduction.expected_exit_code,
+            "expected_exit_code": (
+                None if isolated else task.reproduction.expected_exit_code
+            ),
             "passed": bool(result.passed),
             "failure_reproduced": reproduced,
-            # Sanitized production diagnostic (common deterministic
-            # sanitizer): structured production exception or generic
-            # behavioral-failure statement.  Never hidden test source,
-            # assertions, node ids, or expected literals.
+            "runtime_classification": (
+                runtime_classification.value if runtime_classification else None
+            ),
+            "public_target": public_target if isolated else None,
             "failure_output": reproduction_failure_output(
-                result, context.workspace.root, module_path,
+                result,
+                context.workspace.root,
+                module_path,
                 original_line_count,
+                production_paths=prefixes if isolated else None,
             ) if not result.passed else "",
-            # Bounded RAW reproduction output — audit-only evidence, never
-            # rendered into any model prompt.
             "failure_output_raw": reproduction_failure_output_raw(
                 result, context.workspace.root
             ) if not result.passed else "",
         }
+        if not isolated:
+            payload["node_id"] = task.tests.fail_to_pass[0]
         if phase == "baseline":
             context.baseline_failure_reproduced = reproduced
             summary = "baseline reproduction executed"
@@ -627,6 +725,18 @@ def build_registry(
     def handle_run_regression_tests(action: Action, arguments: dict[str, object]) -> ToolResult:
         nodes = list(task.tests.pass_to_pass)
         if not nodes:
+            if is_external_isolated_task(task):
+                context.regression_passed = True
+                return _ok(
+                    {
+                        "node_ids": [],
+                        "node_count": 0,
+                        "exit_code": 0,
+                        "all_passed": True,
+                        "empty_official_p2p": True,
+                    },
+                    "official pass-to-pass set is empty; regression is vacuously preserved",
+                )
             raise ToolExecutionError("task declares no pass-to-pass tests")
         argv = pytest_argv(reproduction_argv, nodes)
         result = context.test_runner.run_tests(
@@ -655,7 +765,10 @@ def build_registry(
         if not context.validation_evidence_ready():
             raise ToolExecutionError("validation evidence is incomplete")
         f2p = [context.post_patch_f2p_passed]
-        p2p = [context.regression_passed]
+        if is_external_isolated_task(task) and not task.tests.pass_to_pass:
+            p2p: list[bool] = []
+        else:
+            p2p = [context.regression_passed]
         outcome = classify_outcome(f2p, p2p)
         context.controller_outcome = outcome.value
         return _ok(
@@ -956,37 +1069,64 @@ def build_registry(
     def handle_start_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
         if pdb_policy is PdbPolicy.DISABLED:
             raise _safe_rejection("PDB access is disabled by evaluation policy")
+        isolated = is_external_isolated_task(task)
         probe = context.probe
-        if probe is None:
+        if not isolated and probe is None:
             raise _safe_rejection("no runtime probe is configured for this task")
         if context.pdb_session is not None:
             raise _safe_rejection("a PDB session is already active")
-        if interactive_debugger_controls and context.pdb_session_started:
+        if (isolated or interactive_debugger_controls) and context.pdb_session_started:
             raise _safe_rejection(
                 "interactive debugger pilot permits one PDB session per case"
             )
-        try:
-            workspace = TaskWorkspace(str(probe.source_dir), parent_dir=str(probe.parent_dir))
-        except WorkspaceError as exc:
-            diag = bounded_diagnostic(exc)
-            raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        script = probe.script if probe is not None else ""
+        breakpoint_line = probe.breakpoint_line if probe is not None else 0
+        selected_symbol = None
+        if isolated:
+            try:
+                script, breakpoint_line, selected_symbol = (
+                    validate_model_selected_pdb_target(
+                        context.workspace,
+                        str(arguments.get("path") or ""),
+                        int(arguments.get("breakpoint_line") or 0),
+                        prefixes=production_path_prefixes(task),
+                        symbol=(
+                            str(arguments["symbol"])
+                            if arguments.get("symbol")
+                            else None
+                        ),
+                    )
+                )
+            except (TypeError, ValueError) as exc:
+                raise _safe_rejection(str(exc)) from exc
+            try:
+                workspace = TaskWorkspace(
+                    context.workspace.root, parent_dir=str(Path(context.workspace.root).parent)
+                )
+            except WorkspaceError as exc:
+                diag = bounded_diagnostic(exc)
+                raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        else:
+            try:
+                workspace = TaskWorkspace(str(probe.source_dir), parent_dir=str(probe.parent_dir))
+            except WorkspaceError as exc:
+                diag = bounded_diagnostic(exc)
+                raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+            breakpoint_line = (
+                int(arguments["breakpoint_line"])
+                if interactive_debugger_controls
+                else probe.breakpoint_line
+            )
         context.pdb_workspace = workspace
-        # Register the session before starting it so a failed start is still
-        # stopped and its workspace removed by release_pdb().
         session = context.pdb_session_factory(workspace)
         context.pdb_session = session
-        breakpoint_line = (
-            int(arguments["breakpoint_line"])
-            if interactive_debugger_controls
-            else probe.breakpoint_line
-        )
         if breakpoint_line <= 0:
             context.release_pdb()
             raise _safe_rejection("breakpoint_line must be positive")
         try:
             session.start()
             context.pdb_session_started = True
-            started = session.start_paused_target(probe.script, [breakpoint_line])
+            started = session.start_paused_target(script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
             context.release_pdb()
             diag = bounded_diagnostic(exc)
@@ -994,13 +1134,13 @@ def build_registry(
         if started.get("state") != "paused":
             context.release_pdb()
             raise ToolExecutionError(
-                "runtime probe did not reach the declared breakpoint",
-                safe_diagnostic="runtime probe did not reach the declared breakpoint",
+                "runtime target did not reach the declared breakpoint",
+                safe_diagnostic="runtime target did not reach the declared breakpoint",
             )
         context.pdb_pause_generation = 1
         context.observe(
             lambda: context.observability.debugger_started(
-                probe.script, [f"{probe.script}:{breakpoint_line}"]
+                script, [f"{script}:{breakpoint_line}"]
             )
         )
         context.observe(
@@ -1015,11 +1155,15 @@ def build_registry(
             "function": started["function"],
             "breakpoint_line": breakpoint_line,
         }
-        if not interactive_debugger_controls:
+        if isolated:
+            payload["path"] = script
+            if selected_symbol:
+                payload["symbol"] = selected_symbol
+        elif not interactive_debugger_controls:
             payload["focus_function"] = probe.focus_function
         return _ok(
             payload,
-            "runtime probe paused at the declared breakpoint",
+            "debugger paused at the declared breakpoint",
         )
 
     def handle_stack_summary(action: Action, arguments: dict[str, object]) -> ToolResult:
@@ -1110,7 +1254,7 @@ def build_registry(
         )
 
     def handle_stop_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
-        if interactive_debugger_controls and context.pdb_session is None:
+        if (isolated or interactive_debugger_controls) and context.pdb_session is None:
             raise _safe_rejection(
                 "interactive debugger pilot stop requires an active PDB session"
             )
@@ -1129,8 +1273,25 @@ def build_registry(
             "PDB session stopped and its workspace released",
         )
 
+    repro_validator = _validator(
+        {"phase": str},
+        optional={"public_target": str} if isolated else None,
+    )
+    if isolated:
+        start_pdb_validator = _validator(
+            {"path": str, "breakpoint_line": int},
+            optional={"symbol": str},
+            minimums={"breakpoint_line": 1},
+        )
+    elif interactive_debugger_controls:
+        start_pdb_validator = _validator(
+            {"breakpoint_line": int},
+            minimums={"breakpoint_line": 1},
+        )
+    else:
+        start_pdb_validator = _validator({})
     tool_specs = [
-        spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
+        spec(ActionName.RUN_REPRODUCTION, repro_validator, handle_run_reproduction),
         spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
         spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
         spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
@@ -1165,14 +1326,7 @@ def build_registry(
         spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
         spec(
             ActionName.START_PDB_SESSION,
-            _validator(
-                {"breakpoint_line": int}
-                if interactive_debugger_controls
-                else {},
-                minimums={"breakpoint_line": 1}
-                if interactive_debugger_controls
-                else None,
-            ),
+            start_pdb_validator,
             handle_start_pdb,
         ),
         spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
@@ -1187,7 +1341,7 @@ def build_registry(
             handle_safe_eval,
         ),
     ]
-    if interactive_debugger_controls:
+    if external_interactive:
         control_validator = _validator({})
         tool_specs.extend(
             [

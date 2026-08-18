@@ -11,6 +11,10 @@ from agentic_debugger import SchemaValidationError
 TASK_SCHEMA_VERSION = "1.0"
 TASK_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 FIXTURE_PATH_PREFIX = "agentic_debugger/datasets/curated/"
+CURATED_TIMEOUT_SECONDS_MAX = 60
+EXTERNAL_TIMEOUT_SECONDS_MAX = 1800
+HIDDEN_TEST_PLACEHOLDER = "[hidden-from-model]"
+NO_PUBLIC_REPRODUCTION = "[no-public-reproduction-declared]"
 
 
 def _ensure_non_empty_str(v: Any, label: str) -> str:
@@ -90,7 +94,9 @@ class Reproduction:
     expected_exit_code: int
 
     @staticmethod
-    def from_mapping(m: Any) -> Reproduction:
+    def from_mapping(
+        m: Any, *, timeout_max: int = CURATED_TIMEOUT_SECONDS_MAX
+    ) -> Reproduction:
         if not isinstance(m, dict):
             raise SchemaValidationError("reproduction must be a mapping")
         _check_required_fields(
@@ -117,7 +123,10 @@ class Reproduction:
 
         cwd = _validate_path_relative(m["cwd"], "reproduction.cwd")
         timeout_seconds = _validate_int_range(
-            m["timeout_seconds"], "reproduction.timeout_seconds", 1, 60
+            m["timeout_seconds"],
+            "reproduction.timeout_seconds",
+            1,
+            timeout_max,
         )
         ec = m["expected_exit_code"]
         if not isinstance(ec, int) or isinstance(ec, bool):
@@ -150,7 +159,12 @@ class Tests:
     timeout_seconds: int
 
     @staticmethod
-    def from_mapping(m: Any) -> Tests:
+    def from_mapping(
+        m: Any,
+        *,
+        timeout_max: int = CURATED_TIMEOUT_SECONDS_MAX,
+        require_pass_to_pass: bool = True,
+    ) -> Tests:
         if not isinstance(m, dict):
             raise SchemaValidationError("tests must be a mapping")
         _check_required_fields(
@@ -179,7 +193,7 @@ class Tests:
         pass_to_pass = _ensure_list_of_non_empty_strs(
             m["pass_to_pass"], "tests.pass_to_pass"
         )
-        if len(pass_to_pass) < 1:
+        if require_pass_to_pass and len(pass_to_pass) < 1:
             raise SchemaValidationError(
                 "tests.pass_to_pass must have at least 1 entry"
             )
@@ -204,7 +218,10 @@ class Tests:
             )
 
         timeout_seconds = _validate_int_range(
-            m["timeout_seconds"], "tests.timeout_seconds", 1, 60
+            m["timeout_seconds"],
+            "tests.timeout_seconds",
+            1,
+            timeout_max,
         )
 
         return Tests(
@@ -463,6 +480,42 @@ class TaskSource:
 
 
 @dataclass(frozen=True)
+class EvaluationIsolation:
+    """Optional model-facing redaction contract for hidden evaluator assets.
+
+    Curated and QuixBugs tasks leave this unset. External hidden-test
+    datasets may set ``hide_test_identities_from_model`` so
+    ``agent_visible_mapping()`` cannot carry FAIL_TO_PASS / PASS_TO_PASS
+    node IDs or reproduction argv that name those tests. The in-memory
+    task object used by the independent verifier is unchanged.
+    """
+
+    hide_test_identities_from_model: bool
+
+    @staticmethod
+    def from_mapping(m: Any) -> "EvaluationIsolation":
+        if not isinstance(m, dict):
+            raise SchemaValidationError("evaluation_isolation must be a mapping")
+        _check_required_fields(
+            m, {"hide_test_identities_from_model"}, "evaluation_isolation"
+        )
+        _check_no_unknown_fields(
+            m, {"hide_test_identities_from_model"}, "evaluation_isolation"
+        )
+        flag = m["hide_test_identities_from_model"]
+        if not isinstance(flag, bool):
+            raise SchemaValidationError(
+                "evaluation_isolation.hide_test_identities_from_model must be a boolean"
+            )
+        return EvaluationIsolation(hide_test_identities_from_model=flag)
+
+    def to_mapping(self) -> Dict[str, Any]:
+        return {
+            "hide_test_identities_from_model": self.hide_test_identities_from_model
+        }
+
+
+@dataclass(frozen=True)
 class DebugTask:
     schema_version: str
     task_id: str
@@ -476,6 +529,7 @@ class DebugTask:
     oracle: Oracle
     tags: List[str]
     source: Optional[TaskSource] = None
+    evaluation_isolation: Optional[EvaluationIsolation] = None
 
     @staticmethod
     def from_mapping(m: Any) -> DebugTask:
@@ -513,6 +567,7 @@ class DebugTask:
                 "oracle",
                 "tags",
                 "source",
+                "evaluation_isolation",
             },
             "task",
         )
@@ -545,8 +600,26 @@ class DebugTask:
         if source is not None and source.path != fixture_path:
             raise SchemaValidationError("task.fixture_path must equal source.path")
 
-        reproduction = Reproduction.from_mapping(m["reproduction"])
-        tests = Tests.from_mapping(m["tests"])
+        timeout_max = (
+            EXTERNAL_TIMEOUT_SECONDS_MAX
+            if source is not None and source.kind == "external"
+            else CURATED_TIMEOUT_SECONDS_MAX
+        )
+        isolation = (
+            EvaluationIsolation.from_mapping(m["evaluation_isolation"])
+            if "evaluation_isolation" in m
+            else None
+        )
+        reproduction = Reproduction.from_mapping(
+            m["reproduction"], timeout_max=timeout_max
+        )
+        tests = Tests.from_mapping(
+            m["tests"],
+            timeout_max=timeout_max,
+            require_pass_to_pass=not (
+                source is not None and source.kind == "external"
+            ),
+        )
         constraints = Constraints.from_mapping(m["constraints"])
         oracle = Oracle.from_mapping(m["oracle"])
 
@@ -572,6 +645,7 @@ class DebugTask:
             oracle=oracle,
             tags=clean_tags,
             source=source,
+            evaluation_isolation=isolation,
         )
 
     @staticmethod
@@ -598,6 +672,8 @@ class DebugTask:
         }
         if self.source is not None:
             result["source"] = self.source.to_mapping()
+        if self.evaluation_isolation is not None:
+            result["evaluation_isolation"] = self.evaluation_isolation.to_mapping()
         return result
 
     def agent_visible_mapping(self) -> Dict[str, Any]:
@@ -605,4 +681,18 @@ class DebugTask:
         del result["oracle"]
         if self.source is not None:
             result["source"] = self.source.agent_visible_mapping()
+        if (
+            self.evaluation_isolation is not None
+            and self.evaluation_isolation.hide_test_identities_from_model
+        ):
+            result["tests"] = {
+                "fail_to_pass": [HIDDEN_TEST_PLACEHOLDER],
+                "pass_to_pass": [HIDDEN_TEST_PLACEHOLDER],
+                "full_suite_argv": [HIDDEN_TEST_PLACEHOLDER],
+                "timeout_seconds": self.tests.timeout_seconds,
+            }
+            reproduction = self.reproduction.to_mapping()
+            reproduction["argv"] = [NO_PUBLIC_REPRODUCTION]
+            result["reproduction"] = reproduction
+            result["public_reproduction"] = "not_declared"
         return result

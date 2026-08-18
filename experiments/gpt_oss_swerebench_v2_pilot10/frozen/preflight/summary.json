@@ -1,0 +1,66 @@
+{
+  "experiment_id": "gpt-oss-swerebench-v2-pilot10",
+  "external_root": "C:\\Users\\benya\\AppData\\Local\\agentic-debugging\\gpt-oss-swerebench-v2-pilot10",
+  "invalid": [],
+  "n": 10,
+  "parquet": {
+    "dataset_id": "nebius/SWE-rebench-V2",
+    "dataset_revision": "475dd5e8703bb5fb22dd3c60b5d038b019eba1e0",
+    "parquet_sha256": "0e0bf9355f892ad74ae98d4e1c404f39fd6654a8e351ee3e6ab162e4a64cd3ad"
+  },
+  "pdb_classifications": [
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "oscal-compass__compliance-trestle-1834"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "scoutapp__scout_apm_python-709"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "ploomber__jupysql-361"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "gammapy__gammapy-5342"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "audreyr__cookiecutter-967"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "yukinarit__pyserde-354"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "cta-observatory__ctapipe-1883"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "robotframework__seleniumlibrary-1269"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "d0c-s4vage__pfp-128"
+    },
+    {
+      "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+      "instance_id": "jax-ml__jax-25957"
+    }
+  ],
+  "ready": 10,
+  "records": [
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"oscal-compass__compliance-trestle-1834","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"scoutapp__scout_apm_python-709","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"ploomber__jupysql-361","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"gammapy__gammapy-5342","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"audreyr__cookiecutter-967","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"yukinarit__pyserde-354","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"cta-observatory__ctapipe-1883","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"robotframework__seleniumlibrary-1269","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"d0c-s4vage__pfp-128","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true},
+    {"authorization_status":"ready-for-authorized-execution","instance_id":"jax-ml__jax-25957","model_facing_isolated":true,"model_side_runtime_ready":true,"pdb_classification":"PDB_DEFERRED_TO_SEPARATE_TREATMENT","verifier_baseline_valid":true,"verifier_environment_ready":true}
+  ]
+}

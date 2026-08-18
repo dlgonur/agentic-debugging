@@ -102,6 +102,7 @@ def test_exact_outcome_matrix_and_invalid_vectors():
         classify_outcome([], [True])
     with pytest.raises(OutcomeInputError):
         classify_outcome([1], [True])
+    assert classify_outcome([True], []) is SemanticOutcome.RESOLVED
 
 
 def test_records_and_mappings_are_detached_and_immutable():

@@ -1,0 +1,100 @@
+{
+  "allowed_write_paths": [
+    "ctapipe",
+    "examples",
+    "setup.py"
+  ],
+  "authorization_status": "ready-for-authorized-execution",
+  "base_commit": "0612a333c87cbb7c39b3a82c4663082e77eceb72",
+  "clean_disposable_workspace": true,
+  "declared_metadata_valid": true,
+  "exclusion_reason": null,
+  "external_root": "C:\\Users\\benya\\AppData\\Local\\agentic-debugging\\gpt-oss-swerebench-v2-pilot10",
+  "external_root_outside_repository": true,
+  "gold_patch_present_in_official_row": true,
+  "harness": {
+    "harness_content_sha256": "afe969b744ec4b40b721061855bba9e9f544da7b25401223a55f6e6674d401b7",
+    "note": "parent_baseline is the accepted starting commit. Future execution must record runtime_head and verify harness_content_sha256 against this frozen identity.",
+    "parent_baseline": "9a470019182760f7bb7a462c981b2f71052baf91",
+    "runtime_head_policy": "record_at_execution",
+    "working_tree_policy": "must_be_clean_at_execution"
+  },
+  "independent_verifier_mappable": true,
+  "infrastructure_status": "ready-for-authorized-execution",
+  "instance_id": "cta-observatory__ctapipe-1883",
+  "model_facing_isolated": true,
+  "model_side_runtime_ready": true,
+  "model_task_constructed": true,
+  "notes": [
+    "checked out 0612a333c87cbb7c39b3a82c4663082e77eceb72 via public GitHub single-commit fetch",
+    "model reproduction is not officially declared; the model must supply a public_target. Hidden tests stay verifier-private"
+  ],
+  "official_eval": {
+    "baseline": {
+      "available": true,
+      "empty_official_p2p": false,
+      "error": null,
+      "f2p_now_passing_count": 0,
+      "p2p_failed_count": 0,
+      "passed_match": false,
+      "process_exit_code": 1,
+      "ran": true
+    },
+    "docker_available": true,
+    "evaluator_commit": "c71902a8cf8d2b725f63d51f199f4d3e56f68d2d",
+    "gold": {
+      "available": true,
+      "empty_official_p2p": false,
+      "error": null,
+      "f2p_now_passing_count": 1,
+      "p2p_failed_count": 0,
+      "passed_match": true,
+      "process_exit_code": 0,
+      "ran": true
+    },
+    "image_name": "docker.io/swerebenchv2/cta-observatory-ctapipe:1883-0612a33",
+    "image_pulled": true,
+    "reason": null,
+    "verifier_baseline_valid": true,
+    "verifier_environment_ready": true,
+    "verifier_gold_valid": true
+  },
+  "order_index": 7,
+  "parent_baseline": "9a470019182760f7bb7a462c981b2f71052baf91",
+  "pdb": {
+    "catalog_probe_present": false,
+    "classification": "PDB_DEFERRED_TO_SEPARATE_TREATMENT",
+    "future_pdb_required_treatment": "pdb-required-model-selected-target-v1",
+    "gate_can_open_under_policy": false,
+    "hidden_tests_required_for_official_reproduction": true,
+    "instance_id": "cta-observatory__ctapipe-1883",
+    "model_selected_entry_available": false,
+    "oracle_probe_used": false,
+    "pdb_exercised_requires": [
+      "start_pdb_session observation status OK",
+      "genuine public target failure recorded",
+      "same verified pytest runtime attached to PDB",
+      "breakpoint reached in that failing process",
+      "at least one subsequent debugger action"
+    ],
+    "policy": "pdb-on-uncertainty",
+    "public_failure_required_for_gate": false,
+    "reason": "Pilot-10 is the Option B overall-repair treatment. PDB is unavailable by treatment contract and deferred to the separate failing-runtime-coupled PDB treatment. This row must not claim debugger assistance."
+  },
+  "pdb_entry_capability": false,
+  "product_task_id": "swr-cta-observatory-ctapipe-1883",
+  "public_problem_statement_sha256": "f13ebb0a4625ba5c1502aba05a50f4e211a12972d65a09d4c81dd20e4c7b3a95",
+  "pytest_rootdir_safe": true,
+  "repo": "cta-observatory/ctapipe",
+  "repo_canonical": "cta-observatory/ctapipe",
+  "source_materialized": true,
+  "test_patch_present_in_official_row": true,
+  "verifier_baseline_valid": true,
+  "verifier_environment_ready": true,
+  "verifier_f2p_count": 1,
+  "verifier_gold_valid": true,
+  "verifier_p2p_count": 34,
+  "verifier_p2p_may_be_empty": false,
+  "verifier_task_constructed": true,
+  "verifier_tests_available": true
+}

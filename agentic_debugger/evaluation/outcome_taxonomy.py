@@ -21,9 +21,13 @@ Outcome = SemanticOutcome
 
 
 def classify_outcome(f2p_passed: Sequence[bool], p2p_passed: Sequence[bool]) -> SemanticOutcome:
-    """Classify only from the post-patch individual F2P/P2P vectors."""
-    _validate_vector(f2p_passed, "f2p_passed")
-    _validate_vector(p2p_passed, "p2p_passed")
+    """Classify only from the post-patch individual F2P/P2P vectors.
+
+    An empty P2P vector is vacuously preserved: the official suite declared
+    no pass-to-pass nodes. F2P must still contain at least one result.
+    """
+    _validate_vector(f2p_passed, "f2p_passed", allow_empty=False)
+    _validate_vector(p2p_passed, "p2p_passed", allow_empty=True)
     all_f2p = all(f2p_passed)
     some_f2p = any(f2p_passed)
     all_p2p = all(p2p_passed)
@@ -40,10 +44,12 @@ def classify_outcome(f2p_passed: Sequence[bool], p2p_passed: Sequence[bool]) -> 
     return SemanticOutcome.REGRESSION
 
 
-def _validate_vector(values: Sequence[bool], label: str) -> None:
+def _validate_vector(
+    values: Sequence[bool], label: str, *, allow_empty: bool = False
+) -> None:
     if not isinstance(values, (list, tuple)):
         raise OutcomeInputError(f"{label} must be a list or tuple")
-    if not values:
+    if not values and not allow_empty:
         raise OutcomeInputError(f"{label} must not be empty")
     if any(type(value) is not bool for value in values):
         raise OutcomeInputError(f"{label} must contain only booleans")

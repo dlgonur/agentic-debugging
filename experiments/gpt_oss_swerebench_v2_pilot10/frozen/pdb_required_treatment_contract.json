@@ -1,0 +1,16 @@
+{
+  "schema_version": "pdb-required-model-selected-target-v1",
+  "status": "DISTINCT_FUTURE_CONTRACT / NOT_PILOT10",
+  "policy": "pdb-on-uncertainty",
+  "not_always_on": true,
+  "description": "Future separate treatment: reproduce the model-selected public pytest target in the verified dependency environment, attach PDB to that same failing pytest process, require the selected production breakpoint to be reached, preserve typed PDB budgets/actions, and keep hidden FAIL_TO_PASS/PASS_TO_PASS identities private. Not part of the Pilot-10 denominator.",
+  "requires_separate_authorization": true,
+  "requires": [
+    "genuine_public_failure_reproduced",
+    "same_verified_pytest_runtime_under_pdb",
+    "model_selected_production_path_and_line",
+    "breakpoint_reached_in_failing_process",
+    "no_hidden_test_or_gold_leakage",
+    "independent_verification_remains_authority"
+  ]
+}

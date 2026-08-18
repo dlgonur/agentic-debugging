@@ -98,10 +98,12 @@ from agentic_debugger.demo.tools import (
 from agentic_debugger.evaluation.runner import load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.runtime.workspace import TaskWorkspace
+from agentic_debugger.runtime.execution import VerifiedExecutionContext
 
 #: App-owned artifact names persisted into the durable session directory.
 CANDIDATE_PATCH_NAME = "candidate.patch"
 EVALUATION_JSON_NAME = "evaluation.json"
+EXECUTION_EVIDENCE_NAME = "execution.evidence.json"
 
 _MAX_DIAGNOSTIC_CHARS = 400
 
@@ -151,6 +153,11 @@ def run_local_session(
     fail_on_controller_failure: bool,
     max_model_calls: int,
     registry_pdb_policy: Optional[PdbPolicy] = None,
+    fixture_dir: Optional[Path] = None,
+    task: Any = None,
+    execution_context: Optional[VerifiedExecutionContext] = None,
+    verifier_evaluator: Optional[Callable[[Any, str], Any]] = None,
+    verifier_repository_root: Optional[Path] = None,
 ) -> None:
     """Execute one real local debugging session through the shared pipeline.
 
@@ -174,8 +181,10 @@ def run_local_session(
             f"session task {task_name!r}"
         )
 
-    fixture_dir = _curated_fixture_dir(task_id)
-    scenario = scenario_for(task_id)
+    fixture_dir = fixture_dir or _curated_fixture_dir(task_id)
+    if task is None:
+        task = load_task(str(fixture_dir / "task.json"))
+    scenario = scenario_for(task_id) if fixture_dir.joinpath("task.json").is_file() else None
     case_parent = ctx.work_dir / f"case-{task_id}-{policy_value}"
     diagnostics: list[str] = []
 
@@ -210,14 +219,15 @@ def run_local_session(
             patch_text = initial_patch(workspace)
             probe = (
                 prepare_pdb_probe(fixture_dir, scenario, case_parent)
-                if pdb_mode is not PdbPolicy.DISABLED
+                if pdb_mode is not PdbPolicy.DISABLED and scenario is not None
                 else None
             )
             demo_context = DemoToolContext(
-                task=load_task(str(fixture_dir / "task.json")),
+                task=task,
                 workspace=workspace,
                 patch=patch_text,
                 probe=probe,
+                execution_context=execution_context,
                 observability=observability,
             )
             registry = build_registry(
@@ -273,12 +283,16 @@ def run_local_session(
                     emitter=ctx.emitter,
                 )
                 verifier_adapter.started()
-                evaluation = EvaluationVerifier(
-                    str(_repository_root()),
-                    workspace_parent=str(case_parent),
-                    progress_observer=verifier_adapter,
-                    cancel_check=ctx.token.check,
-                ).evaluate(task, verification_patch)
+                if verifier_evaluator is not None:
+                    evaluation = verifier_evaluator(task, verification_patch)
+                else:
+                    evaluation = EvaluationVerifier(
+                        str(verifier_repository_root or _repository_root()),
+                        workspace_parent=str(case_parent),
+                        progress_observer=verifier_adapter,
+                        cancel_check=ctx.token.check,
+                        execution_context=execution_context,
+                    ).evaluate(task, verification_patch)
                 verifier_adapter.completed(evaluation)
                 _persist_artifacts(ctx, task_id, verification_patch, evaluation)
     except (CancellationError, ModelExecutionError):
@@ -288,6 +302,7 @@ def run_local_session(
             f"local session failed: {_bounded_diagnostic(exc)}"
         ) from exc
     finally:
+        _persist_execution_evidence(ctx, demo_context)
         _release(demo_context, workspace, case_parent, diagnostics)
         if diagnostics and not ctx.token.is_cancelled:
             # Cleanup truth stays with the worker cleanup cycle when the
@@ -351,8 +366,13 @@ def _persist_artifacts(
             },
         )
     evaluation_path = session_dir / EVALUATION_JSON_NAME
+    evaluation_mapping = (
+        evaluation.to_mapping()
+        if callable(getattr(evaluation, "to_mapping", None))
+        else evaluation
+    )
     evaluation_path.write_text(
-        json.dumps(evaluation.to_mapping(), ensure_ascii=False, allow_nan=False, sort_keys=True),
+        json.dumps(evaluation_mapping, ensure_ascii=False, allow_nan=False, sort_keys=True),
         encoding="utf-8",
         newline="\n",
     )
@@ -363,6 +383,51 @@ def _persist_artifacts(
             "sha256": _file_sha256(evaluation_path),
         },
     )
+
+
+def _persist_execution_evidence(
+    ctx: ScenarioContext,
+    demo_context: Optional[DemoToolContext],
+) -> None:
+    """Persist bounded runtime facts before the disposable workspace dies.
+
+    The tool observation is intentionally not used as a proxy for this value:
+    an external run can return a structurally successful tool result while
+    the public runtime passed, timed out, or failed to launch.  The context
+    owns the exact reproduction fact and this app-owned record survives worker
+    cleanup for result projection.
+    """
+    if ctx.session_dir is None or demo_context is None:
+        return
+    value = demo_context.baseline_failure_reproduced
+    payload = {
+        "baseline_failure_reproduced": value if type(value) is bool else None,
+        "post_patch_f2p_passed": (
+            demo_context.post_patch_f2p_passed
+            if type(demo_context.post_patch_f2p_passed) is bool
+            else None
+        ),
+        "regression_passed": (
+            demo_context.regression_passed
+            if type(demo_context.regression_passed) is bool
+            else None
+        ),
+        "runtime_infrastructure_failure": bool(
+            demo_context.runtime_infrastructure_failure
+        ),
+    }
+    try:
+        ctx.session_dir.mkdir(parents=True, exist_ok=True)
+        (ctx.session_dir / EXECUTION_EVIDENCE_NAME).write_text(
+            json.dumps(payload, ensure_ascii=True, allow_nan=False, sort_keys=True),
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError:
+        # The durable journal remains authoritative for lifecycle facts.  A
+        # missing execution artifact must project baseline_reproduced as null,
+        # never as a manufactured success.
+        return
 
 
 def _file_sha256(path: Path) -> str:
@@ -412,6 +477,7 @@ def _release(
 __all__ = [
     "CANDIDATE_PATCH_NAME",
     "EVALUATION_JSON_NAME",
+    "EXECUTION_EVIDENCE_NAME",
     "LocalSourceError",
     "run_local_session",
 ]

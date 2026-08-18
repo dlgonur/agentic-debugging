@@ -27,7 +27,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, Sequence
 
 from agentic_debugger.evaluation.runner import normalize_output
 
@@ -107,6 +107,26 @@ def _is_production_path(path: str, script_path: str) -> bool:
     return path.endswith(script) or script.endswith(path)
 
 
+def _is_allowed_production_path(path: str, allowed: Sequence[str]) -> bool:
+    path = _normalize_path(path)
+    parts = path.split("/")
+    if any(part in {"tests", "test"} for part in parts):
+        return False
+    if path.endswith("task.json"):
+        return False
+    if not allowed:
+        return path.endswith(".py")
+    for prefix in allowed:
+        item = _normalize_path(str(prefix)).rstrip("/")
+        if not item:
+            continue
+        if path == item or path.endswith("/" + item) or path.endswith(item):
+            return True
+        if f"/{item}/" in f"/{path}/" or path.startswith(item + "/"):
+            return True
+    return False
+
+
 def _safe_exception_message(cls: str, message: str) -> Optional[str]:
     """Fail closed when the exception message is assertion-derived or empty.
 
@@ -136,6 +156,7 @@ def extract_production_exception(
     output_text: str,
     script_path: str,
     original_line_count: Optional[int] = None,
+    production_paths: Optional[Sequence[str]] = None,
 ) -> Optional[ProductionException]:
     """Mechanically extract the LAST safe production exception report.
 
@@ -147,7 +168,7 @@ def extract_production_exception(
     """
     if type(output_text) is not str or not output_text:
         return None
-    if type(script_path) is not str or not script_path:
+    if production_paths is None and (type(script_path) is not str or not script_path):
         return None
 
     exception: Optional[tuple[str, Optional[str]]] = None  # (cls, message)
@@ -179,11 +200,17 @@ def extract_production_exception(
             continue
         if smatch.group("cls") != exc_cls:
             continue
-        if not _is_production_path(smatch.group("path"), script_path):
+        frame_path = smatch.group("path")
+        if production_paths is not None:
+            if not _is_allowed_production_path(frame_path, production_paths):
+                continue
+        elif not _is_production_path(frame_path, script_path):
             continue
         line_no = int(smatch.group("line"))
-        if original_line_count is not None and not (
-            1 <= line_no <= original_line_count
+        if (
+            production_paths is None
+            and original_line_count is not None
+            and not (1 <= line_no <= original_line_count)
         ):
             continue
         summary = (smatch.group("path"), line_no, exc_cls)
@@ -203,6 +230,7 @@ def sanitize_failure_output(
     workspace_root: Optional[str],
     script_path: str,
     original_line_count: Optional[int] = None,
+    production_paths: Optional[Sequence[str]] = None,
 ) -> SanitizedDiagnostic:
     """Derive the bounded structured diagnostic from raw test output.
 
@@ -216,7 +244,10 @@ def sanitize_failure_output(
     normalized = normalize_output(raw, workspace_root)
     digest = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     exception = extract_production_exception(
-        normalized, script_path, original_line_count
+        normalized,
+        script_path,
+        original_line_count,
+        production_paths=production_paths,
     )
     if exception is None:
         text = GENERIC_BEHAVIORAL_FAILURE
