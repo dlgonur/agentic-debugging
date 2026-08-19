@@ -138,6 +138,20 @@ def _load_tasks() -> list[OrderedTask]:
     return [OrderedTask(**row) for row in payload["tasks"]]
 
 
+def _historical_v1_status(contract: object) -> str:
+    if not isinstance(contract, dict):
+        raise ValueError("DEVQUAL execution contract must be an object")
+    historical_v1 = contract.get("historical_v1")
+    if not isinstance(historical_v1, dict):
+        raise ValueError("DEVQUAL execution contract historical_v1 must be an object")
+    status = historical_v1.get("status")
+    if not isinstance(status, str) or not status.strip():
+        raise ValueError(
+            "DEVQUAL execution contract historical_v1.status must be a non-empty string"
+        )
+    return status
+
+
 def _authorize(args: argparse.Namespace) -> dict:
     _ensure_distinct_runtime_roots(args)
     identity = validate_devqual_identity(project=repository_root())
@@ -161,7 +175,7 @@ def _authorize(args: argparse.Namespace) -> dict:
     )
     result["experiment_id"] = DEVQUAL_EXPERIMENT_ID
     result["qualification_only"] = True
-    result["historical_v1_status"] = contract["historical_v1_status"]
+    result["historical_v1_status"] = _historical_v1_status(contract)
     result["devqual_identity"] = identity
     result["provider_generation_calls"] = 0
     return result

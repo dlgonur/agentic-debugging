@@ -61,7 +61,7 @@
   },
   "harness": {
     "parent_baseline": "d2a6de04d9ac0c3ab10b5ff7aba9c395aa1aac9b",
-    "harness_content_sha256": "06011010641493ba42ac30ca7b57a262b111ad88680edf42f81acb9f42256cb6",
+    "harness_content_sha256": "6641d6154877ab40bff9b29373d7a535b7c81b42a35119b75beaaa81fc93903d",
     "runtime_head_policy": "record_at_execution",
     "working_tree_policy": "must_be_clean_at_execution"
   },
