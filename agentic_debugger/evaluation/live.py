@@ -45,6 +45,63 @@ class LiveTransportError(LiveEvaluationError):
         super().__init__(message)
         self.kind = kind
         self.timed_out = timed_out
+        self.adapter_error = False
+        self.adapter_error_message = None
+
+
+COMMAND_ADAPTER_ERROR_SCHEMA_VERSION = "live-command-error-v1"
+COMMAND_ADAPTER_ERROR_KINDS = frozenset({
+    "adapter_error", "configuration", "http_error", "invalid_completion",
+    "invalid_directive", "invalid_request", "invalid_response",
+    "logical_call_limit", "model_mismatch", "preflight_failed",
+    "request_too_large", "response_too_large", "timeout", "tool_call_rejected",
+})
+MODEL_OUTPUT_ADAPTER_ERROR_KINDS = frozenset({
+    "invalid_directive", "invalid_response", "invalid_completion", "tool_call_rejected",
+})
+PROVIDER_ADAPTER_ERROR_KINDS = frozenset({"http_error", "timeout"})
+MAX_COMMAND_ADAPTER_ERROR_MESSAGE_CHARS = 256
+
+
+def parse_command_adapter_error(stderr: str) -> tuple[str, str] | None:
+    """Parse only the exact bounded command-adapter error envelope."""
+
+    if type(stderr) is not str:
+        return None
+    text = stderr.strip()
+    if not text or len(text.encode("utf-8", errors="replace")) > 1024:
+        return None
+    try:
+        value = json.loads(text)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping) or set(value) != {"schema_version", "kind", "message"}:
+        return None
+    if value.get("schema_version") != COMMAND_ADAPTER_ERROR_SCHEMA_VERSION:
+        return None
+    kind = value.get("kind")
+    message = value.get("message")
+    if (
+        type(kind) is not str
+        or kind not in COMMAND_ADAPTER_ERROR_KINDS
+        or type(message) is not str
+        or not message
+        or len(message.encode("utf-8", errors="replace")) > MAX_COMMAND_ADAPTER_ERROR_MESSAGE_CHARS
+        or any(ord(char) < 0x20 or ord(char) == 0x7F for char in message)
+    ):
+        return None
+    return kind, message
+
+
+def _command_adapter_transport_error(stderr: str) -> LiveTransportError | None:
+    parsed = parse_command_adapter_error(stderr)
+    if parsed is None:
+        return None
+    kind, message = parsed
+    error = LiveTransportError(f"command adapter reported {kind}", kind=kind)
+    error.adapter_error = True
+    error.adapter_error_message = message
+    return error
 
 class ModelRequestBudgetExceeded(LiveEvaluationError):
     """The transport rejected the model request before any provider process.
@@ -265,7 +322,11 @@ class JsonlCommandTransport:
             raise LiveTransportError("model request timed out",kind="request_timeout",timed_out=True) from None
         for thread in threads: thread.join(timeout=2)
         if stdout.truncated: raise LiveTransportError("model response exceeded the configured output bound",kind="response_too_large")
-        if process.returncode!=0: raise LiveTransportError("model command failed",kind="process_error")
+        if process.returncode!=0:
+            typed = _command_adapter_transport_error(stderr.text())
+            if typed is not None:
+                raise typed
+            raise LiveTransportError("model command failed",kind="process_error")
         try: value=json.loads(stdout.text())
         except (UnicodeError,json.JSONDecodeError): raise LiveTransportError("model response was invalid JSON",kind="invalid_response") from None
         if not isinstance(value,Mapping): raise LiveTransportError("model response was not an object",kind="invalid_response")
@@ -277,10 +338,17 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None
+    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); adapter_error_kinds:list[str]=field(default_factory=list); invalid_model_responses:int=0; setup_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
+    def adapter_error(self, kind: str) -> None:
+        if kind not in self.adapter_error_kinds: self.adapter_error_kinds.append(kind)
+    def invalid_model_response(self, kind: str | None = None) -> None:
+        self.invalid_model_responses += 1
+        if kind is not None: self.adapter_error(kind)
+    def setup_error(self, kind: str) -> None:
+        if kind not in self.setup_error_kinds: self.setup_error_kinds.append(kind)
     def usage(self,value):
         names=("prompt_tokens","completion_tokens","total_tokens")
         if not isinstance(value,Mapping):
@@ -291,7 +359,7 @@ class LiveModelMetrics:
             if type(number) is int and number >= 0:
                 old=getattr(self,name); setattr(self,name,number if old is None else old+number)
             elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason}
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason}
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
@@ -449,6 +517,7 @@ def _legal_transition_targets(
     *,
     pdb_transition_allowed: bool = True,
     candidate_applied: bool = False,
+    external_source_context_observed: bool | None = None,
 ) -> list[str]:
     return [
         candidate.value
@@ -464,6 +533,10 @@ def _legal_transition_targets(
             state is ControllerState.VALIDATE
             and candidate is ControllerState.DONE
             and not candidate_applied
+        )
+        and not (
+            candidate is ControllerState.PATCH
+            and external_source_context_observed is False
         )
     ]
 
@@ -592,6 +665,7 @@ class LiveModelAdapter:
         self._post_patch_f2p_collected = False
         self._regression_collected = False
         self._candidate_applied = False
+        self._source_context_observed = False
         # Per-logical-call PDB gate cache: ``(model_call_index, decision)``.
         # ``model_call_index`` is constant across the transport retry loop and
         # increments only on the next controller step, so it is the natural
@@ -631,6 +705,9 @@ class LiveModelAdapter:
         if observation.status.value != "ok":
             return
         payload = observation.payload
+        if observation.name == ActionName.GET_SOURCE_WINDOW.value:
+            self._source_context_observed = True
+            return
         if observation.name == ActionName.RUN_REPRODUCTION.value:
             phase = payload.get("phase")
             if phase == "baseline":
@@ -776,7 +853,7 @@ class LiveModelAdapter:
             "private. If no legitimate public reproduction is available, "
             "transition to Understand without claiming reproduction. "
         ) if snapshot.state is ControllerState.REPRODUCE and is_external_isolated_task(self.task) else ""
-        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed,candidate_applied=(snapshot.candidate_applied or self._candidate_applied)),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":external_reproduce_instructions+"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed,candidate_applied=(snapshot.candidate_applied or self._candidate_applied),external_source_context_observed=self._source_context_observed if is_external_isolated_task(self.task) else None),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":external_reproduce_instructions+"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
         if self._rag_context is not None:
             payload["retrieved_context"] = self._rag_context.to_request_mapping()
         return payload
@@ -857,7 +934,7 @@ class LiveModelAdapter:
                     self._record_pdb_gate_decision(snapshot, gate_decision)
                     self._pdb_gate_recorded_for_index = snapshot.model_call_index
                 contracts = effective_contract
-                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._runtime_transition_allowed(snapshot),candidate_applied=(snapshot.candidate_applied or self._candidate_applied))))
+                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._runtime_transition_allowed(snapshot),candidate_applied=(snapshot.candidate_applied or self._candidate_applied),external_source_context_observed=self._source_context_observed if is_external_isolated_task(self.task) else None)))
                 attempt_record["accepted"] = True
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True
@@ -877,6 +954,23 @@ class LiveModelAdapter:
                 raise
             except LiveTransportError as exc:
                 rejection=None
+                if exc.adapter_error:
+                    self.metrics.adapter_error(exc.kind)
+                    if exc.kind in MODEL_OUTPUT_ADAPTER_ERROR_KINDS:
+                        self.metrics.invalid_model_response(exc.kind)
+                        rejection={"category":DirectiveRejectionCategory.MALFORMED_DIRECTIVE.value,"message":"the command adapter rejected the model output","rejected_transport_attempt":attempt+1}
+                        self.directive_rejections.append(dict(rejection))
+                        if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
+                        self.metrics.termination_reason="invalid_model_response"
+                        raise LiveModelAdapterError("model output was rejected by the command adapter", detail="the command adapter rejected the model output") from None
+                    if exc.kind in PROVIDER_ADAPTER_ERROR_KINDS:
+                        self.metrics.error(exc.kind)
+                        if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
+                        self.metrics.termination_reason="request_timeout" if exc.kind == "timeout" else "provider_or_transport_error"
+                        raise LiveModelAdapterError("model transport failed") from None
+                    self.metrics.setup_error(exc.kind)
+                    self.metrics.termination_reason="setup_failure"
+                    raise LiveModelAdapterError("model adapter setup failed", detail="the command adapter failed before a valid model treatment") from None
                 self.metrics.error(exc.kind)
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
@@ -890,7 +984,7 @@ class LiveModelAdapter:
                 ):
                     self.directive_attempts[-1]["rejection"] = dict(rejection)
                 self.directive_rejections.append(dict(rejection))
-                self.metrics.error("invalid_model_response")
+                self.metrics.invalid_model_response()
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="invalid_model_response"; raise
             finally:
@@ -1507,4 +1601,4 @@ def validate_live_report(report):
         _schema_error("report completed count is inconsistent")
     return payload
 
-__all__=["DirectiveRejectionCategory","JsonlCommandTransport","LiveCaseResult","LiveCaseStatus","LiveConfigurationError","LiveEvaluationError","LiveExecutionAuthorization","LiveModelAdapter","LiveModelAdapterError","LiveModelConfig","LiveModelMetrics","LiveOptInError","LiveRunLimits","LiveTransportError","ModelTransport","LIVE_PROTOCOL_VERSION","LIVE_SCHEMA_VERSION","redact_for_recording","render_live_report","rejected_live_report","run_live_case","run_live_evaluation","validate_live_report"]
+__all__=["COMMAND_ADAPTER_ERROR_KINDS","COMMAND_ADAPTER_ERROR_SCHEMA_VERSION","DirectiveRejectionCategory","JsonlCommandTransport","LiveCaseResult","LiveCaseStatus","LiveConfigurationError","LiveEvaluationError","LiveExecutionAuthorization","LiveModelAdapter","LiveModelAdapterError","LiveModelConfig","LiveModelMetrics","LiveOptInError","LiveRunLimits","LiveTransportError","MODEL_OUTPUT_ADAPTER_ERROR_KINDS","ModelTransport","PROVIDER_ADAPTER_ERROR_KINDS","LIVE_PROTOCOL_VERSION","LIVE_SCHEMA_VERSION","parse_command_adapter_error","redact_for_recording","render_live_report","rejected_live_report","run_live_case","run_live_evaluation","validate_live_report"]

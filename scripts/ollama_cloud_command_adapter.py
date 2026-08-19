@@ -75,6 +75,8 @@ MAX_DIRECTIVE_EVIDENCE_REF_COUNT = 64
 
 ADAPTER_RETRY_COUNT = 0
 FALLBACK_COUNT = 0
+REASONING_EFFORTS = frozenset({"low", "medium", "high"})
+DEFAULT_REASONING_EFFORT = "low"
 
 PREFLIGHT_SCHEMA = "ollama-cloud-preflight-v1"
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
@@ -423,6 +425,24 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
         "Do not invent keys named action, payload, or transition.",
         "Do not combine an action and a transition.",
     ]
+    task = request.get("task")
+    source = task.get("source") if isinstance(task, Mapping) else None
+    external = isinstance(source, Mapping) and source.get("kind") == "external"
+    state = controller.get("state")
+    if external and state == "Understand":
+        lines.extend([
+            "Understand-state procedure: hypotheses from the issue statement are provisional.",
+            "Use bounded public repository tools to locate the relevant implementation and inspect actual source context before patching.",
+            "Do not guess repository paths or source bodies. Do not enter Patch until the target source region has been observed.",
+            "If a search is insufficient, continue public source inspection.",
+        ])
+    elif external and state == "Patch":
+        lines.extend([
+            "Patch-state procedure: build the patch from the exact observed repository-relative path and source context.",
+            "Never fabricate source context or submit a placeholder/dummy patch merely to satisfy the lifecycle.",
+            "Use the strict unified-diff rules below; bare @@ and invented hunk start locations remain invalid.",
+            "After a meaningful candidate succeeds, normally follow the legal Validate lifecycle. If context is insufficient, return to Understand.",
+        ])
     allowed = controller.get("allowed_actions")
     contracts = request.get("action_contracts")
     if "action" in kinds and isinstance(allowed, list):
@@ -575,6 +595,15 @@ def _validate_timeout_seconds(timeout_seconds: float) -> float:
     if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 300:
         raise OllamaAdapterError("Ollama request timeout is invalid", kind="configuration")
     return float(timeout_seconds)
+
+
+def validate_reasoning_effort(value: Any) -> str:
+    if type(value) is not str or value not in REASONING_EFFORTS:
+        raise OllamaAdapterError(
+            "reasoning effort is invalid",
+            kind="configuration",
+        )
+    return value
 
 
 def _remaining_timeout(deadline: float) -> float:
@@ -792,12 +821,14 @@ def _chat_request(
     spec: CloudModelSpec,
     *,
     timeout_seconds: float,
+    reasoning_effort: str = DEFAULT_REASONING_EFFORT,
 ) -> Mapping[str, Any]:
+    reasoning_effort = validate_reasoning_effort(reasoning_effort)
     payload = {
         "model": spec.local_alias,
         "messages": build_chat_messages(request),
         "stream": False,
-        "think": "low",
+        "think": reasoning_effort,
     }
     return _http_json_request(
         endpoint,
@@ -927,6 +958,7 @@ def run_adapter(
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
+    parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT, choices=sorted(REASONING_EFFORTS))
     parser.add_argument("--preflight", action="store_true")
     args = parser.parse_args(argv)
 
@@ -954,6 +986,7 @@ def run_adapter(
             request,
             spec,
             timeout_seconds=_remaining_timeout(deadline),
+            reasoning_effort=args.reasoning_effort,
         )
         content = _extract_final_content(response, spec)
         directive = parse_directive_content(content, request)
@@ -961,7 +994,17 @@ def run_adapter(
         stdout_stream.flush()
         return 0
     except OllamaAdapterError as exc:
-        stderr_stream.write(f"Error: {exc}\n")
+        message = str(exc).replace("\r", " ").replace("\n", " ")
+        encoded = message.encode("utf-8", errors="replace")[:256]
+        message = encoded.decode("utf-8", errors="ignore") or "adapter failure"
+        stderr_stream.write(
+            _safe_json({
+                "schema_version": "live-command-error-v1",
+                "kind": exc.kind,
+                "message": message,
+            })
+            + "\n"
+        )
         stderr_stream.flush()
         return 1
     except (BrokenPipeError, OSError):

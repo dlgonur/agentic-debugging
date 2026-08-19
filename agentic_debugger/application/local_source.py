@@ -158,6 +158,7 @@ def run_local_session(
     execution_context: Optional[VerifiedExecutionContext] = None,
     verifier_evaluator: Optional[Callable[[Any, str], Any]] = None,
     verifier_repository_root: Optional[Path] = None,
+    require_external_source_context: bool = False,
 ) -> None:
     """Execute one real local debugging session through the shared pipeline.
 
@@ -238,7 +239,10 @@ def run_local_session(
             controller = DeterministicController(
                 registry,
                 model,
-                ControllerRunConfig(max_model_calls=max_model_calls),
+                ControllerRunConfig(
+                    max_model_calls=max_model_calls,
+                    require_external_source_context=require_external_source_context,
+                ),
                 observer=controller_adapter,
             )
             task = demo_context.task

@@ -412,7 +412,14 @@ def run_live_quixbugs_case(
             evaluation_id=evaluation_id, case_id=case_id, run_id=run_id, trajectory_id=run_id,
         )
         metrics = live_adapter.metrics
-        controller = DeterministicController(registry, live_adapter, ControllerRunConfig(max_model_calls=limits.max_controller_steps))
+        controller = DeterministicController(
+            registry,
+            live_adapter,
+            ControllerRunConfig(
+                max_model_calls=limits.max_controller_steps,
+                require_external_source_context=True,
+            ),
+        )
         try:
             result = controller.run(
         ControllerSnapshot(

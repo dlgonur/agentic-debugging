@@ -217,6 +217,17 @@ def durable_session_evidence(
     if type(baseline_reproduced) is not bool:
         baseline_reproduced = None
     provider_invalid = _provider_invalid(metrics, session_result, provider_failures)
+    setup_error_kinds = _metric(metrics, "setup_error_kinds")
+    if not isinstance(setup_error_kinds, list):
+        setup_error_kinds = []
+    adapter_error_kinds = _metric(metrics, "adapter_error_kinds")
+    if not isinstance(adapter_error_kinds, list):
+        adapter_error_kinds = []
+    invalid_model_responses = _metric(metrics, "invalid_model_response_count")
+    infrastructure_invalid = _runtime_infrastructure_invalid(execution_evidence) or bool(
+        setup_error_kinds
+        or terminal_reason in {"setup_failure", "configuration_failure", "provenance_failure"}
+    )
     cleanup_verified = None
     for kind, event in zip(kinds, events):
         if kind is SessionEventKind.CLEANUP_COMPLETED:
@@ -245,6 +256,10 @@ def durable_session_evidence(
             "fallback_count": _number(fallbacks, integer=True),
             "token_usage": _token_usage(metrics),
             "provider_failures": provider_failures,
+            "provider_error_kinds": _metric(metrics, "provider_error_kinds") or [],
+            "adapter_error_kinds": adapter_error_kinds,
+            "invalid_model_response_count": _number(invalid_model_responses, integer=True),
+            "setup_error_kinds": setup_error_kinds,
         },
         "trajectory": {
             "baseline_reproduced": baseline_reproduced,
@@ -273,7 +288,7 @@ def durable_session_evidence(
             "terminal_reason": terminal_reason,
         },
         "provider_invalid": provider_invalid,
-        "infrastructure_invalid": _runtime_infrastructure_invalid(execution_evidence),
+        "infrastructure_invalid": infrastructure_invalid,
         "cleanup_verified": cleanup_verified,
         "cleanup_invalid": cleanup_invalid,
     }

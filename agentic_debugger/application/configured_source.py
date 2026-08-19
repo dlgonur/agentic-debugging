@@ -371,6 +371,7 @@ def run_configured_session(
                 execution_context=execution_context,
                 verifier_evaluator=_external_verifier,
                 verifier_repository_root=repository_root,
+                require_external_source_context=True,
             )
         else:
             run_local_session(

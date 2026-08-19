@@ -357,12 +357,15 @@ def _resolve_observer_notify(observer: object) -> Callable[..., None]:
 @dataclass(frozen=True)
 class ControllerRunConfig:
     max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
+    require_external_source_context: bool = False
 
     def __post_init__(self) -> None:
         if type(self.max_model_calls) is not int:
             raise ControllerInputError("invalid max_model_calls")
         if not 1 <= self.max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             raise ControllerInputError("invalid max_model_calls")
+        if type(self.require_external_source_context) is not bool:
+            raise ControllerInputError("invalid require_external_source_context")
 
 
 def _validate_action(value: object) -> None:
@@ -841,7 +844,10 @@ class DeterministicController:
         max_model_calls = self.config.max_model_calls
         if type(max_model_calls) is not int or not 1 <= max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             _input("config")
-        canonical_config = ControllerRunConfig(max_model_calls)
+        canonical_config = ControllerRunConfig(
+            max_model_calls,
+            self.config.require_external_source_context,
+        )
         method = _resolve_model_method(self.model_adapter)
         _resolve_observer_notify(self.observer)
         object.__setattr__(self, "config", canonical_config)
@@ -896,6 +902,7 @@ class DeterministicController:
         hypotheses = snapshot.hypotheses
         last_observation = snapshot.last_observation
         candidate_applied = snapshot.candidate_applied
+        source_context_observed = False
         steps: list[ControllerStepResult] = []
         model_calls = 0
         last_request_index = model_call_index
@@ -1220,6 +1227,12 @@ class DeterministicController:
                         and observation.payload.get("reverted") is True
                     ):
                         candidate_applied = False
+                if (
+                    self.config.require_external_source_context
+                    and action_directive.name is ActionName.GET_SOURCE_WINDOW
+                    and observation.status is ObservationStatus.OK
+                ):
+                    source_context_observed = True
                 steps.append(ControllerStepResult(
                     model_call_index=model_call_index - 1,
                     state_before=state_before,
@@ -1251,6 +1264,11 @@ class DeterministicController:
                         state is ControllerState.VALIDATE
                         and transition.target_state is ControllerState.DONE
                         and not candidate_applied
+                    )
+                    or (
+                        self.config.require_external_source_context
+                        and transition.target_state is ControllerState.PATCH
+                        and not source_context_observed
                     )
                 ):
                     _emit(ControllerObservationKind.DIRECTIVE_REJECTED,

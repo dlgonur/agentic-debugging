@@ -57,6 +57,7 @@ from agentic_debugger.evaluation.live import (
     LiveModelConfig,
     LiveTransportError,
     MAX_MODEL_RESPONSE_BYTES,
+    _command_adapter_transport_error,
 )
 
 _POLL_INTERVAL_SECONDS = 0.05
@@ -389,6 +390,9 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                 kind="response_too_large",
             )
         if process.returncode != 0:
+            typed = _command_adapter_transport_error(stderr.text())
+            if typed is not None:
+                raise typed
             raise LiveTransportError("model command failed", kind="process_error")
         try:
             value = json.loads(stdout.text())
