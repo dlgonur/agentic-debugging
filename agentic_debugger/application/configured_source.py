@@ -59,6 +59,7 @@ from agentic_debugger.application.local_source import (
 )
 from agentic_debugger.application.sources import ModelExecutionError
 from agentic_debugger.application.worker_scenarios import (
+    PreModelSetupFailure,
     ScenarioContext,
     ScenarioInputError,
 )
@@ -122,11 +123,11 @@ class ConfiguredSourceError(LocalSourceError):
 def _require_text(params: Mapping[str, Any], key: str, maximum: int) -> str:
     value = params.get(key)
     if type(value) is not str or not value:
-        raise ScenarioInputError(
+        raise PreModelSetupFailure(
             f"configured source param {key!r} must be a non-empty string"
         )
     if len(value.encode("utf-8")) > maximum:
-        raise ScenarioInputError(
+        raise PreModelSetupFailure(
             f"configured source param {key!r} exceeds the byte bound"
         )
     return value
@@ -144,7 +145,7 @@ def _optional_fingerprint(params: Mapping[str, Any]) -> Optional[str]:
     if value is None:
         return None
     if type(value) is not str or _FINGERPRINT_RE.fullmatch(value) is None:
-        raise ScenarioInputError(
+        raise PreModelSetupFailure(
             "configured source param 'expected_fingerprint' must be a "
             "64-character lowercase hex fingerprint"
         )
@@ -156,12 +157,12 @@ def _validate_params(
 ) -> tuple[str, str, str, Optional[str]]:
     extra = set(params.keys()) - _KNOWN_PARAMS
     if extra:
-        raise ScenarioInputError(f"unknown configured source params: {sorted(extra)}")
+        raise PreModelSetupFailure(f"unknown configured source params: {sorted(extra)}")
     config_root = _require_text(params, "config_root", _MAX_CONFIG_ROOT_CHARS)
     profile_id = _require_text(params, "profile_id", _MAX_PROFILE_ID_CHARS)
     policy = _require_text(params, "policy", _MAX_POLICY_CHARS)
     if policy not in {candidate.value for candidate in DemoPolicy}:
-        raise ScenarioInputError(f"unknown demonstration policy: {policy!r}")
+        raise PreModelSetupFailure(f"unknown demonstration policy: {policy!r}")
     expected_fingerprint = _optional_fingerprint(params)
     return config_root, profile_id, policy, expected_fingerprint
 
@@ -182,14 +183,14 @@ def run_configured_session(
         params
     )
     if ctx.emitter is None:
-        raise ScenarioInputError("configured source requires the shared emitter")
+        raise PreModelSetupFailure("configured source requires the shared emitter")
     policy = DemoPolicy(policy_value)
     task_id = ctx.emitter.task_id
 
     try:
         profile = CommandModelConfigStore(Path(config_root)).get(profile_id)
     except CommandConfigError as exc:
-        raise ScenarioInputError(
+        raise PreModelSetupFailure(
             f"configured model profile is unavailable: {exc}"
         ) from exc
 
@@ -204,7 +205,7 @@ def run_configured_session(
         expected_fingerprint is not None
         and profile.configuration_fingerprint != expected_fingerprint
     ):
-        raise ScenarioInputError(
+        raise PreModelSetupFailure(
             "configured model profile changed between selection and launch: "
             f"profile {profile_id!r} fingerprint {expected_fingerprint} "
             f"does not match the loaded configuration "
@@ -307,7 +308,7 @@ def run_configured_session(
             if type(value) is not str or not value
         ]
         if missing:
-            raise ScenarioInputError(
+            raise PreModelSetupFailure(
                 "external configured source is missing required runtime metadata: "
                 + ", ".join(missing)
             )
@@ -315,17 +316,22 @@ def run_configured_session(
         repository_root = Path(str(values["external_repository_root"])).resolve()
         external_root = Path(str(values["external_root"])).resolve()
         if not repository_root.is_dir() or not external_root.is_dir():
-            raise ScenarioInputError("external repository and runtime roots must exist")
+            raise PreModelSetupFailure("external repository and runtime roots must exist")
         bundle = load_private_bundle(Path(str(values["external_bundle_path"])))
-        preflight = json.loads(
-            Path(str(values["external_preflight_path"])).read_text(encoding="utf-8")
-        )
+        try:
+            preflight = json.loads(
+                Path(str(values["external_preflight_path"])).read_text(encoding="utf-8")
+            )
+        except (OSError, ValueError) as exc:
+            raise PreModelSetupFailure(
+                "external preflight record is missing or invalid"
+            ) from exc
         if preflight.get("instance_id") != values["external_instance_id"]:
-            raise ScenarioInputError("external preflight identity does not match the task")
+            raise PreModelSetupFailure("external preflight identity does not match the task")
         if not preflight.get("verifier_baseline_valid"):
-            raise ScenarioInputError("external official verifier baseline is not valid")
+            raise PreModelSetupFailure("external official verifier baseline is not valid")
         if task.task_id != task_id or task.source is None or task.source.kind != "external":
-            raise ScenarioInputError("external task is not bound to the Local Application task")
+            raise PreModelSetupFailure("external task is not bound to the Local Application task")
         execution_context = build_docker_execution_context(
             bundle=bundle,
             external_root=ctx.work_dir.resolve(),

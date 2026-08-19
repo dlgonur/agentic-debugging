@@ -19,6 +19,7 @@ HARNESS_PATHS = (
     "agentic_debugger/swerebench",
     "scripts/ollama_cloud_command_adapter.py",
     "scripts/gpt_oss_swerebench_v2_pilot10.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10.py",
 )
 
 

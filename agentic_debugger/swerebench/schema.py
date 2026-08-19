@@ -141,10 +141,10 @@ def classify_execution_result(
 
     if contaminated:
         return "contaminated"
-    if provider_invalid:
-        return "provider_invalid"
     if runtime_infrastructure_invalid:
         return "infrastructure_invalid"
+    if provider_invalid:
+        return "provider_invalid"
     if not verifier_infrastructure_valid:
         return "infrastructure_invalid"
     if verifier_ran and verifier_resolved:
@@ -265,6 +265,10 @@ def validate_pilot_result(payload: Any) -> dict[str, Any]:
     if invalid_execution and science.get("admissible_model_result"):
         raise PilotResultSchemaError(
             "invalid/provider/contaminated rows must not be admissible model results"
+        )
+    if verification.get("cleanup") is False and execution != "infrastructure_invalid":
+        raise PilotResultSchemaError(
+            "an explicitly unverified cleanup must be infrastructure-invalid"
         )
     if invalid_execution and (science.get("resolved") or science.get("unresolved")):
         raise PilotResultSchemaError("invalid/provider/contaminated rows have no repair outcome")

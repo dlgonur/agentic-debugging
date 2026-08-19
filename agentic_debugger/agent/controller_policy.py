@@ -166,6 +166,12 @@ _ALLOWED_ACTIONS_BY_STATE: Final = MappingProxyType(
                 ActionName.RUN_TESTS,
                 ActionName.RUN_REPRODUCTION,
                 ActionName.GET_FAILURE_TRACE,
+                # Repository-scale external treatments may inspect public
+                # checkout content before selecting a reproduction target.
+                ActionName.SEARCH_CODE,
+                ActionName.FIND_FUNCTION,
+                ActionName.FIND_CLASS,
+                ActionName.GET_SOURCE_WINDOW,
             }
         ),
         ControllerState.UNDERSTAND: frozenset(

@@ -98,7 +98,11 @@ from agentic_debugger.runtime.pdb_session import PdbSession
 from agentic_debugger.runtime.test_runner import TestRunKind, TestRunner
 from agentic_debugger.runtime.workspace import TaskWorkspace
 from agentic_debugger.skills.file_skills import get_source_window
-from agentic_debugger.skills.search_skills import find_function
+from agentic_debugger.skills.search_skills import (
+    find_class,
+    find_function,
+    search_code,
+)
 
 #: Source-window radius used by the demonstration.  Small enough to keep the
 #: observation payload bounded and stable, large enough to show the defect.
@@ -565,7 +569,13 @@ def build_registry(
 
     task = context.task
     isolated = is_external_isolated_task(task)
-    external_interactive = isolated or interactive_debugger_controls
+    # An isolated repository-scale treatment is PDB-disabled unless the
+    # caller explicitly selects a PDB policy.  Omitting the specs is
+    # intentional: disabled actions must not appear in the model request.
+    pdb_enabled = not isolated or (
+        pdb_policy is not None and pdb_policy is not PdbPolicy.DISABLED
+    )
+    external_interactive = (isolated and pdb_enabled) or interactive_debugger_controls
     reproduction_argv = tuple(task.reproduction.argv)
     reproduction_cwd = task.reproduction.cwd
 
@@ -884,12 +894,45 @@ def build_registry(
 
     def handle_find_function(action: Action, arguments: dict[str, object]) -> ToolResult:
         try:
-            match = find_function(context.workspace, arguments["name"], arguments["path"])
+            match = find_function(
+                context.workspace, arguments["name"], arguments.get("path")
+            )
         except (SourceInspectionError, SourceParseError, WorkspaceError) as exc:
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
         if match is None:
             raise ToolExecutionError("declared symbol was not found in the declared file")
         return _ok(_json_safe(match.to_mapping(), "find_function"), "declared symbol located")
+
+    def handle_find_class(action: Action, arguments: dict[str, object]) -> ToolResult:
+        try:
+            match = find_class(
+                context.workspace, arguments["name"], arguments.get("path")
+            )
+        except (SourceInspectionError, SourceParseError, WorkspaceError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        if match is None:
+            raise ToolExecutionError("declared class was not found in the repository")
+        return _ok(_json_safe(match.to_mapping(), "find_class"), "declared class located")
+
+    def handle_search_code(action: Action, arguments: dict[str, object]) -> ToolResult:
+        try:
+            matches, truncated = search_code(
+                context.workspace,
+                arguments["query"],
+                path=arguments.get("path"),
+                max_matches=arguments.get("max_matches", 100),
+                case_sensitive=arguments.get("case_sensitive", True),
+            )
+        except (SourceInspectionError, WorkspaceError) as exc:
+            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        return _ok(
+            {
+                "matches": [item.to_mapping() for item in matches],
+                "match_count": len(matches),
+                "truncated": truncated,
+            },
+            "bounded repository search completed",
+        )
 
     def handle_get_source_window(action: Action, arguments: dict[str, object]) -> ToolResult:
         line = arguments["line"]
@@ -1006,6 +1049,9 @@ def build_registry(
             "patch_sha256": hashlib.sha256(diff.encode("utf-8")).hexdigest(),
             "after_sha256": {key: result.after_sha256[key] for key in sorted(result.after_sha256)},
             "hunk_adjustments": [list(item) for item in result.hunk_adjustments],
+            "hunk_count_adjustments": [
+                list(item) for item in result.hunk_count_adjustments
+            ],
             "reverted_previous": reverted_previous,
         }
         if verifier_feedback is not None:
@@ -1274,8 +1320,7 @@ def build_registry(
         )
 
     repro_validator = _validator(
-        {"phase": str},
-        optional={"public_target": str} if isolated else None,
+        {"phase": str, "public_target": str} if isolated else {"phase": str},
     )
     if isolated:
         start_pdb_validator = _validator(
@@ -1292,13 +1337,26 @@ def build_registry(
         start_pdb_validator = _validator({})
     tool_specs = [
         spec(ActionName.RUN_REPRODUCTION, repro_validator, handle_run_reproduction),
-        spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
         spec(ActionName.RUN_REGRESSION_TESTS, _validator({}), handle_run_regression_tests),
         spec(ActionName.CLASSIFY_OUTCOME, _validator({}), handle_classify_outcome),
         spec(
             ActionName.FIND_FUNCTION,
-            _validator({"name": str, "path": str}),
+            _validator({"name": str}, optional={"path": str}),
             handle_find_function,
+        ),
+        spec(
+            ActionName.FIND_CLASS,
+            _validator({"name": str}, optional={"path": str}),
+            handle_find_class,
+        ),
+        spec(
+            ActionName.SEARCH_CODE,
+            _validator(
+                {"query": str},
+                optional={"path": str, "max_matches": int, "case_sensitive": bool},
+                minimums={"max_matches": 1},
+            ),
+            handle_search_code,
         ),
         spec(
             ActionName.GET_SOURCE_WINDOW,
@@ -1322,25 +1380,27 @@ def build_registry(
             handle_express_hypothesis,
         ),
         spec(ActionName.APPLY_PATCH, _validator({"patch": str}), handle_apply_patch),
-        spec(ActionName.REVERT_PATCH, _validator({}), handle_revert_patch),
-        spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
-        spec(
-            ActionName.START_PDB_SESSION,
-            start_pdb_validator,
-            handle_start_pdb,
-        ),
-        spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
-        spec(
-            ActionName.GET_FRAME_LOCALS,
-            _validator({"frame_id": int, "pause_generation": int}),
-            handle_frame_locals,
-        ),
-        spec(
-            ActionName.SAFE_EVAL_EXPRESSION,
-            _validator({"frame_id": int, "pause_generation": int, "expression": str}),
-            handle_safe_eval,
-        ),
     ]
+    if not isolated or pdb_enabled:
+        tool_specs.extend(
+            [
+                spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
+                spec(ActionName.REVERT_PATCH, _validator({}), handle_revert_patch),
+                spec(ActionName.SYNTAX_CHECK, _validator({}), handle_syntax_check),
+                spec(ActionName.START_PDB_SESSION, start_pdb_validator, handle_start_pdb),
+                spec(ActionName.GET_STACK_SUMMARY, _validator({}), handle_stack_summary),
+                spec(
+                    ActionName.GET_FRAME_LOCALS,
+                    _validator({"frame_id": int, "pause_generation": int}),
+                    handle_frame_locals,
+                ),
+                spec(
+                    ActionName.SAFE_EVAL_EXPRESSION,
+                    _validator({"frame_id": int, "pause_generation": int, "expression": str}),
+                    handle_safe_eval,
+                ),
+            ]
+        )
     if external_interactive:
         control_validator = _validator({})
         tool_specs.extend(
@@ -1354,7 +1414,8 @@ def build_registry(
                 spec(ActionName.NEXT_PDB_SESSION, control_validator, handle_execution_control),
             ]
         )
-    tool_specs.append(spec(ActionName.STOP_PDB_SESSION, _validator({}), handle_stop_pdb))
+    if not isolated or pdb_enabled:
+        tool_specs.append(spec(ActionName.STOP_PDB_SESSION, _validator({}), handle_stop_pdb))
     return ToolRegistry(tuple(tool_specs))
 
 

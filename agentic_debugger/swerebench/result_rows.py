@@ -217,6 +217,23 @@ def durable_session_evidence(
     if type(baseline_reproduced) is not bool:
         baseline_reproduced = None
     provider_invalid = _provider_invalid(metrics, session_result, provider_failures)
+    cleanup_verified = None
+    for kind, event in zip(kinds, events):
+        if kind is SessionEventKind.CLEANUP_COMPLETED:
+            verified = event.payload.get("verified")
+            if type(verified) is bool:
+                cleanup_verified = verified
+    cleanup_invalid = (
+        any(kind is SessionEventKind.SESSION_STARTED for kind in kinds)
+        and (
+            cleanup_verified is False
+            or any(
+                kind is SessionEventKind.SESSION_FAILED
+                and event.payload.get("status") == "cleanup_failed"
+                for kind, event in zip(kinds, events)
+            )
+        )
+    )
     return {
         "journal_state": journal.state.value,
         "journal_error": journal.error,
@@ -257,6 +274,8 @@ def durable_session_evidence(
         },
         "provider_invalid": provider_invalid,
         "infrastructure_invalid": _runtime_infrastructure_invalid(execution_evidence),
+        "cleanup_verified": cleanup_verified,
+        "cleanup_invalid": cleanup_invalid,
     }
 
 

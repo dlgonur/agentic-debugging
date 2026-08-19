@@ -1,0 +1,69 @@
+{
+  "schema_version": "gpt_oss_swerebench_v2_devqual10_v2-execution-contract-v1",
+  "experiment_id": "gpt_oss_swerebench_v2_devqual10_v2",
+  "status": "DEVELOPMENT_QUALIFICATION_ONLY",
+  "qualification_boundary": "Results cannot be promoted into an unseen benchmark capability score.",
+  "runtime_head_policy": "record_at_execution",
+  "historical_v1": {
+    "experiment_id": "gpt-oss-swerebench-v2-pilot10",
+    "status": "diagnostic / infrastructure-invalid, not a capability score",
+    "frozen_harness_content_sha256": "1e643c37fa4c494499b7b0ba8e7670f9ab9a1cb5aebc87a9aa5430400032633d",
+    "external_runtime_root": "%LOCALAPPDATA%/agentic-debugging/gpt-oss-swerebench-v2-pilot10-v1-diagnostic",
+    "immutable": true
+  },
+  "source_ordering_sha256": "599a07b6a527b4f8dffda4120be8e3c524ad608929bb048ea98286f80e0f5061",
+  "source_population_sha256": "36bd31d1470b86db982235153372793455a850ae1fe9c1669bdf8c0e7e68ab8f",
+  "historical_pilot10_manifest_sha256": "4b9b17f8f897e56263f0394e35c06261bc613097f38a1b2e157d4d9a215a963f",
+  "devqual_manifest_sha256": "d4c3683e370e35237c2b7b31a8343df0e312b0e0aaff64f84b902a786c067a88",
+  "first_ten_order_policy": "exact prefix of source full ordering; no resampling or reordering",
+  "provider": {
+    "route": "Ollama Cloud",
+    "profile_id": "ollama-cloud-gpt-oss-20b",
+    "display_name": "Ollama Cloud GPT-OSS 20B",
+    "alias": "gpt-oss:20b-cloud",
+    "upstream": "gpt-oss:20b",
+    "protocol": "1.3",
+    "adapter": "scripts/ollama_cloud_command_adapter.py",
+    "adapter_retry_count": 0,
+    "fallback_count": 0,
+    "retry_layers": {
+      "adapter_provider_retry": 0,
+      "adapter_fallback": 0,
+      "configured_source_live_run_limits_max_retries": 2,
+      "distinction": "adapter/provider retry and fallback are zero; configured source LiveRunLimits permits two controller transport retries"
+    },
+    "profile_fingerprint_policy": "validated 64-hex configuration fingerprint is recorded at authorization and bound to every worker request"
+  },
+  "controller": {
+    "architecture": "single DeterministicController + typed tools + PatchManager",
+    "policy": "pdb-on-uncertainty",
+    "attempts_per_task": 1,
+    "pdb_available": false,
+    "pdb_treatment": "PDB unavailable by treatment contract",
+    "max_controller_steps": 64,
+    "max_model_requests": 64,
+    "max_patch_attempts": 3,
+    "max_test_runs": 12,
+    "max_pdb_observations": 8,
+    "max_active_hypotheses": 3,
+    "max_source_observations": 12
+  },
+  "evaluation": {
+    "correctness_authority": "official SWE-rebench independent verifier via OfficialSWERebenchVerifier",
+    "fresh_external_application_root_per_task": true,
+    "external_runtime_root": "%LOCALAPPDATA%/agentic-debugging/gpt-oss-swerebench-v2-devqual10-v2",
+    "model_workspace": "base commit only; no test_patch; no gold patch",
+    "verifier_workspace": "base commit + hidden test_patch; gold never applied as model input",
+    "no_task_specific_prompt_customization": true,
+    "no_outcome_dependent_retries": true,
+    "runtime_head_policy": "record at execution",
+    "clean_worktree_required": true
+  },
+  "harness": {
+    "parent_baseline": "d2a6de04d9ac0c3ab10b5ff7aba9c395aa1aac9b",
+    "harness_content_sha256": "06011010641493ba42ac30ca7b57a262b111ad88680edf42f81acb9f42256cb6",
+    "runtime_head_policy": "record_at_execution",
+    "working_tree_policy": "must_be_clean_at_execution"
+  },
+  "provider_generation_calls": 0
+}

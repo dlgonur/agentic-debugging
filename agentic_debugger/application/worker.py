@@ -25,7 +25,9 @@ Exit codes: 0 = clean terminal written; 2 = startup failure (error envelope);
 from __future__ import annotations
 
 import os
+import json
 import shutil
+import stat
 import sys
 import threading
 import time
@@ -68,6 +70,7 @@ from agentic_debugger.application.worker_protocol import (
 from agentic_debugger.application.worker_scenarios import (
     SCENARIO_NAMES,
     ScenarioContext,
+    PreModelSetupFailure,
     ScenarioInputError,
     run_scenario,
 )
@@ -371,7 +374,7 @@ def _cleanup_work_dir(work_dir: Path, diagnostics: List[str]) -> bool:
     """Remove the session work directory and verify; never raise."""
     try:
         if work_dir.exists():
-            shutil.rmtree(work_dir)
+            shutil.rmtree(work_dir, onerror=_remove_read_only_and_retry)
         if work_dir.exists():
             diagnostics.append("work directory remains after cleanup")
             return False
@@ -379,6 +382,16 @@ def _cleanup_work_dir(work_dir: Path, diagnostics: List[str]) -> bool:
     except BaseException as exc:  # noqa: BLE001 - cleanup must not raise
         diagnostics.append(_bounded_diagnostic(f"work directory cleanup failed: {exc}"))
         return False
+
+
+def _remove_read_only_and_retry(function, path, exc_info) -> None:
+    """rmtree callback for read-only files in an owned worker directory."""
+
+    try:
+        os.chmod(path, os.stat(path).st_mode | stat.S_IWRITE)
+        function(path)
+    except OSError:
+        raise
 
 
 def _build_result(
@@ -402,6 +415,32 @@ def _build_result(
         cleanup_verified=cleanup_ok,
         diagnostics=tuple(diagnostics[: _MAX_DIAGNOSTICS]),
     )
+
+
+def _persist_setup_failure(request: StartRequest, diagnostic: str) -> None:
+    """Persist a typed pre-transport setup failure for result projection."""
+
+    path = Path(request.journal_path).resolve().parent / "execution.evidence.json"
+    payload = {
+        "schema_version": "execution-evidence-v1",
+        "runtime_infrastructure_failure": True,
+        "setup_failure": True,
+        "setup_failure_kind": "pre_model_setup",
+        "provider_inference_started": False,
+        "transport_attempts": 0,
+        "diagnostic": _bounded_diagnostic(diagnostic),
+    }
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(payload, ensure_ascii=True, sort_keys=True),
+            encoding="utf-8",
+            newline="\n",
+        )
+    except OSError:
+        # Missing evidence is projected as unavailable; never replace it with
+        # a fabricated successful or model-level classification.
+        return
 
 
 def _fatal_journal_exit(
@@ -538,7 +577,12 @@ def run_worker(request: StartRequest) -> int:
         )
     except (JournalError, EmitterFatalError) as exc:
         return _fatal_journal_exit(work_dir, diagnostics, journal, exc)
+    except PreModelSetupFailure as exc:
+        _persist_setup_failure(request, str(exc))
+        diagnostics.append(_bounded_diagnostic(f"pre-model setup failed: {exc}"))
+        outcome = "failed"
     except ScenarioInputError as exc:
+        _persist_setup_failure(request, str(exc))
         diagnostics.append(_bounded_diagnostic(f"scenario input error: {exc}"))
         outcome = "failed"
     except ModelExecutionError as exc:

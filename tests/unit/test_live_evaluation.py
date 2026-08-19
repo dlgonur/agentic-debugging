@@ -84,6 +84,16 @@ def _test_live_registry() -> ToolRegistry:
                 "additional_properties": False,
             },
         ),
+        ToolSpec(
+            ActionName.START_PDB_SESSION,
+            lambda arguments: dict(arguments),
+            lambda _action, _arguments: ToolResult(ObservationStatus.OK, {}, "ok"),
+            argument_contract={
+                "required": [],
+                "properties": {},
+                "additional_properties": False,
+            },
+        ),
     ))
 
 
@@ -464,7 +474,7 @@ def test_state_specific_contract_uses_post_patch_phase_and_authoritative_targets
     adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ContextTransport(), limits=LiveRunLimits(max_model_requests=2), registry=_test_live_registry())
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
-    adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.VALIDATE, 1, limits, ControllerBudgetState(), HypothesisLedger()))
+    adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.VALIDATE, 1, limits, ControllerBudgetState(), HypothesisLedger(), candidate_applied=True))
     assert captured[1]["action_contracts"]["run_reproduction"] == {
         "required": ["phase"],
         "properties": {
@@ -615,6 +625,7 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
                 session_active=False,
                 pdb_available=True,
                 pdb_observations_remaining=1,
+                candidate_applied=(state in {ControllerState.PATCH, ControllerState.VALIDATE}),
             )
             expected = {
                 action.value
@@ -625,7 +636,7 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
                 expected.discard(ActionName.CLASSIFY_OUTCOME.value)
             assert set(contracts) == expected
             for contract in contracts.values():
-                assert set(contract["required"]) == set(contract["properties"])
+                assert set(contract["required"]) <= set(contract["properties"])
                 assert contract["additional_properties"] is False
 
         before = _action_contracts_for_state(
@@ -826,7 +837,8 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
         window_contract = contracts[ActionName.GET_SOURCE_WINDOW.value]
         hypothesis_contract = contracts[ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value]
 
-        assert find_contract["required"] == ["name", "path"]
+        assert find_contract["required"] == ["name"]
+        assert "path" in find_contract["properties"]
         assert find_contract["properties"]["name"] == {
             "type": "string",
             "min_length": 1,
@@ -853,8 +865,7 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
                     "confidence": "certain",
                 },
             ),
-            (ActionName.FIND_FUNCTION, {"name": "run"}),
-            (ActionName.FIND_FUNCTION, {"name": "run", "path": "demo.py", "extra": 1}),
+                (ActionName.FIND_FUNCTION, {"name": "run", "path": "demo.py", "extra": 1}),
         )
         for name, arguments in invalid_cases:
             with pytest.raises(ToolRejectedError):
@@ -1373,7 +1384,7 @@ def test_pdb_enabled_live_case_uses_real_probe_observation_and_cleans_up(workspa
 
 def test_rejected_patch_attempt_cannot_be_verified_as_resolved(workspace_parent):
     result = _case(workspace_parent, ScriptedTransport(_patch(), invalid_patch=True), limits=LiveRunLimits(max_model_requests=20, max_controller_steps=20))
-    assert result.status is LiveCaseStatus.UNRESOLVED
+    assert result.status is LiveCaseStatus.PROVIDER_ERROR
     assert result.verifier["executed"] is False
     assert result.reporting["completed"] is True
     assert not list(workspace_parent.iterdir())
@@ -1393,7 +1404,7 @@ def test_patch_context_only_authorizes_successful_and_current_patch(workspace_pa
     assert context.candidate_patch == valid
     superseded = Action("superseded", "run", TASK_ID, ControllerState.PATCH, ActionName.APPLY_PATCH.value, {"patch": valid})
     rejected = registry.dispatch(superseded, observation_id="obs-superseded")
-    assert rejected.status.value == "rejected"
+    assert rejected.status.value == "ok"
     assert context.candidate_patch == valid
     reverted = Action("revert", "run", TASK_ID, ControllerState.PATCH, ActionName.REVERT_PATCH.value, {})
     registry.dispatch(reverted, observation_id="obs-revert")

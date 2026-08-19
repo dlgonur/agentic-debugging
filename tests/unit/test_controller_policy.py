@@ -33,7 +33,10 @@ EXPECTED_ACTIONS = {
 }
 
 EXPECTED_ALLOWLISTS = {
-    ControllerState.REPRODUCE: {"run_tests", "run_reproduction", "get_failure_trace"},
+    ControllerState.REPRODUCE: {
+        "run_tests", "run_reproduction", "get_failure_trace", "search_code",
+        "find_function", "find_class", "get_source_window",
+    },
     ControllerState.UNDERSTAND: {
         "search_code", "find_function", "find_class", "get_source_window",
         "extract_failing_test", "express_root_cause_hypothesis", "request_more_evidence",

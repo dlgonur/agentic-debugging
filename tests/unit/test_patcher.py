@@ -186,15 +186,19 @@ class TestPatchParser:
         with pytest.raises(PatchValidationError, match="Duplicate"):
             _parse_unified_diff(diff)
 
-    def test_hunk_count_mismatch_old(self):
+    def test_hunk_count_mismatch_old_is_normalized_with_provenance(self):
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1,5 +1,1 @@\n x\n"
-        with pytest.raises(PatchValidationError, match="old_count"):
-            _parse_unified_diff(diff)
+        patch = _parse_unified_diff(diff)[0]
+        assert patch.hunks[0].old_count == 1
+        assert patch.hunks[0].new_count == 1
+        assert patch.hunk_count_adjustments == [(1, 5, 1, 1, 1)]
 
-    def test_hunk_count_mismatch_new(self):
+    def test_hunk_count_mismatch_new_is_normalized_with_provenance(self):
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1,1 +1,5 @@\n x\n"
-        with pytest.raises(PatchValidationError, match="new_count"):
-            _parse_unified_diff(diff)
+        patch = _parse_unified_diff(diff)[0]
+        assert patch.hunks[0].old_count == 1
+        assert patch.hunks[0].new_count == 1
+        assert patch.hunk_count_adjustments == [(1, 1, 1, 5, 1)]
 
     def test_overlapping_hunks(self):
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1,3 +1,3 @@\n a\n b\n c\n@@ -2,3 +2,3 @@\n b\n c\n d\n"
@@ -257,10 +261,12 @@ class TestPatchParser:
         with pytest.raises(PatchValidationError, match="counts satisfied"):
             _parse_unified_diff(diff)
 
-    def test_extra_body_line_after_counts_rejected(self):
+    def test_extra_body_line_after_counts_is_normalized(self):
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1,1 +1,1 @@\n a\n b\n"
-        with pytest.raises(PatchValidationError, match="Extra line"):
-            _parse_unified_diff(diff)
+        patch = _parse_unified_diff(diff)[0]
+        assert patch.hunks[0].old_count == 2
+        assert patch.hunks[0].new_count == 2
+        assert patch.hunk_count_adjustments == [(1, 1, 2, 1, 2)]
 
     def test_duplicate_old_header_before_new(self):
         diff = "--- a/x.py\n--- a/x.py\n+++ a/x.py\n@@ -1 +1 @@\n x\n"
@@ -307,10 +313,12 @@ class TestPatchParser:
         with pytest.raises(PatchValidationError):
             _parse_unified_diff(diff)
 
-    def test_incomplete_final_hunk_rejected(self):
+    def test_incomplete_final_hunk_is_normalized(self):
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1,2 +1,2 @@\n a\n"
-        with pytest.raises(PatchValidationError):
-            _parse_unified_diff(diff)
+        patch = _parse_unified_diff(diff)[0]
+        assert patch.hunks[0].old_count == 1
+        assert patch.hunks[0].new_count == 1
+        assert patch.hunk_count_adjustments == [(1, 2, 1, 2, 1)]
 
     def test_completed_final_hunk_no_trailing_newline(self):
         diff = "--- a/x.py\n+++ b/x.py\n@@ -1,1 +1,1 @@\n-a\n+b"

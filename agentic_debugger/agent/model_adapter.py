@@ -442,6 +442,8 @@ def _validate_snapshot(
         _require_enum(snapshot.state, ControllerState, "state")
         if type(snapshot.model_call_index) is not int or snapshot.model_call_index < 0:
             raise _invalid("model_call_index")
+        if type(snapshot.candidate_applied) is not bool:
+            raise _invalid("candidate_applied")
         _validate_budget_records(snapshot.budget_limits, snapshot.budget_state)
         active_records = _validate_hypothesis_ledger(snapshot.hypotheses)
         if len(active_records) > snapshot.budget_limits.max_active_hypotheses:
@@ -470,9 +472,14 @@ class ControllerSnapshot:
     budget_state: ControllerBudgetState
     hypotheses: HypothesisLedger
     last_observation: Observation | None = None
+    # Authoritative lifecycle fact projected by the controller after the
+    # PatchManager accepts/reverts a candidate.
+    candidate_applied: bool = False
 
     def __post_init__(self) -> None:
         _validate_snapshot(self)
+        if type(self.candidate_applied) is not bool:
+            raise ModelAdapterError("invalid candidate_applied")
 
     @property
     def allowed_actions(self) -> tuple[ActionName, ...]:

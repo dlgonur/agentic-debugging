@@ -6,7 +6,7 @@ import re
 import stat
 import tempfile
 import tokenize
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import Enum, auto
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -47,6 +47,7 @@ class _PolicyRule:
 _MANDATORY_DENIED_RULES: List[_PolicyRule] = [
     _PolicyRule(path="tests", kind=_PolicyKind.DIRECTORY),
     _PolicyRule(path="task.json", kind=_PolicyKind.EXACT_FILE),
+    _PolicyRule(path=".git", kind=_PolicyKind.DIRECTORY),
 ]
 
 
@@ -76,6 +77,9 @@ class PatchApplyResult:
     # (1-based hunk index, line displacement from the declared position).
     # Empty when every hunk applied at its declared position.
     hunk_adjustments: Tuple[Tuple[int, int], ...] = ()
+    # Count-only header normalizations: (path, 1-based hunk index,
+    # declared_old, actual_old, declared_new, actual_new).
+    hunk_count_adjustments: Tuple[Tuple[str, int, int, int, int, int], ...] = ()
 
     def to_mapping(self) -> Dict[str, Any]:
         return {
@@ -88,6 +92,9 @@ class PatchApplyResult:
             "bytes_after": dict(self.bytes_after),
             "error": self.error,
             "hunk_adjustments": [list(item) for item in self.hunk_adjustments],
+            "hunk_count_adjustments": [
+                list(item) for item in self.hunk_count_adjustments
+            ],
         }
 
 
@@ -149,6 +156,7 @@ class _Hunk:
 class _ParsedFilePatch:
     path: str
     hunks: List[_Hunk]
+    hunk_count_adjustments: List[Tuple[int, int, int, int, int]]
 
 
 def _parse_diff_path(header: str) -> str:
@@ -281,19 +289,43 @@ def _parse_unified_diff(diff_text: str) -> List[_ParsedFilePatch]:
     current_path: Optional[str] = None
     current_hunk: Optional[_Hunk] = None
     current_hunks: List[_Hunk] = []
+    current_count_adjustments: List[Tuple[int, int, int, int, int]] = []
     seen_paths: Set[str] = set()
     state = _ParserState.EXPECT_OLD_HEADER
     hunk_remaining_old = 0
     hunk_remaining_new = 0
-
     def _flush_hunk() -> None:
         nonlocal current_hunk
         if current_hunk is not None:
+            actual_old = sum(
+                1 for item in current_hunk.lines if item.prefix in (" ", "-")
+            )
+            actual_new = sum(
+                1 for item in current_hunk.lines if item.prefix in (" ", "+")
+            )
+            if (
+                actual_old != current_hunk.old_count
+                or actual_new != current_hunk.new_count
+            ):
+                current_count_adjustments.append(
+                    (
+                        len(current_hunks) + 1,
+                        current_hunk.old_count,
+                        actual_old,
+                        current_hunk.new_count,
+                        actual_new,
+                    )
+                )
+                current_hunk = replace(
+                    current_hunk,
+                    old_count=actual_old,
+                    new_count=actual_new,
+                )
             current_hunks.append(current_hunk)
         current_hunk = None
 
     def _flush_file() -> None:
-        nonlocal current_path, current_hunks
+        nonlocal current_path, current_hunks, current_count_adjustments
         _flush_hunk()
         if current_path is not None:
             if not current_hunks:
@@ -306,14 +338,16 @@ def _parse_unified_diff(diff_text: str) -> List[_ParsedFilePatch]:
                     f"Duplicate file section: {current_path!r}"
                 )
             file_patches.append(
-                _ParsedFilePatch(path=current_path, hunks=list(current_hunks))
+                _ParsedFilePatch(
+                    path=current_path,
+                    hunks=list(current_hunks),
+                    hunk_count_adjustments=list(current_count_adjustments),
+                )
             )
             seen_paths.add(current_path)
         current_path = None
         current_hunks = []
-
-    def _hunk_complete() -> bool:
-        return hunk_remaining_old <= 0 and hunk_remaining_new <= 0
+        current_count_adjustments = []
 
     def _add_body_line(prefix: str, text: str) -> None:
         nonlocal hunk_remaining_old, hunk_remaining_new
@@ -324,99 +358,66 @@ def _parse_unified_diff(diff_text: str) -> List[_ParsedFilePatch]:
             hunk_remaining_old -= 1
         elif prefix == "+":
             hunk_remaining_new -= 1
-        elif prefix == "\\":
-            pass
         current_hunk.lines.append(_HunkLine(prefix=prefix, text=text))
+
+    def _hunk_complete() -> bool:
+        return hunk_remaining_old <= 0 and hunk_remaining_new <= 0
 
     for i, raw_line in enumerate(raw_lines):
         line = raw_line.rstrip("\n\r")
 
         if state is _ParserState.IN_HUNK:
-                if _hunk_complete():
-                    if line.startswith("\\ "):
-                        text = line[2:].strip()
-                        if text != "No newline at end of file":
-                            raise PatchValidationError(
-                                f"Malformed no-newline marker: {line!r}"
-                            )
-                        _add_body_line("\\", text)
-                    elif line.startswith("@@"):
-                        _flush_hunk()
-                        current_hunk = _parse_hunk_header(line)
-                        hunk_remaining_old = current_hunk.old_count
-                        hunk_remaining_new = current_hunk.new_count
-                    elif line.startswith("--- "):
-                        _flush_hunk()
-                        _flush_file()
-                        last_old_path = _parse_diff_path(line[4:])
-                        state = _ParserState.EXPECT_NEW_HEADER
-                    elif line == "":
-                        pass
-                    elif line.startswith("diff --git"):
-                        raise PatchValidationError(
-                            "Git metadata lines are not supported"
-                        )
-                    elif line.startswith(("new file", "deleted file", "old mode", "new mode", "copy", "rename")):
-                        raise PatchValidationError(
-                            f"Unsupported diff metadata: {line!r}"
-                        )
-                    elif line.startswith("index ") and ".." in line:
-                        pass
-                    elif re.match(r"^---$", line):
-                        pass
-                    elif re.match(r"^\+\+\+$", line):
-                        pass
-                    else:
-                        raise PatchValidationError(
-                            f"Extra line after hunk counts satisfied at {i + 1}: {line!r}"
-                        )
-                else:
-                    if line.startswith("\\ "):
-                        text = line[2:].strip()
-                        if text != "No newline at end of file":
-                            raise PatchValidationError(
-                                f"Malformed no-newline marker: {line!r}"
-                            )
-                        _add_body_line("\\", text)
-                    elif line.startswith(" "):
-                        _add_body_line(" ", line[1:])
-                    elif line.startswith("+"):
-                        _add_body_line("+", line[1:])
-                    elif line.startswith("-"):
-                        _add_body_line("-", line[1:])
-                    elif line.startswith("--- "):
-                        raise PatchValidationError(
-                            f"New file header before hunk counts satisfied at {i + 1}"
-                        )
-                    elif line.startswith("+++ "):
-                        raise PatchValidationError(
-                            f"New file header before hunk counts satisfied at {i + 1}"
-                        )
-                    elif line.startswith("@@"):
-                        raise PatchValidationError(
-                            f"New hunk before previous hunk counts satisfied at {i + 1}"
-                        )
-                    elif line == "":
-                        pass
-                    elif line.startswith("diff --git"):
-                        raise PatchValidationError(
-                            "Git metadata lines are not supported"
-                        )
-                    elif line.startswith(("new file", "deleted file", "old mode", "new mode", "copy", "rename")):
-                        raise PatchValidationError(
-                            f"Unsupported diff metadata: {line!r}"
-                        )
-                    elif line.startswith("index ") and ".." in line:
-                        pass
-                    elif re.match(r"^---$", line):
-                        pass
-                    elif re.match(r"^\+\+\+$", line):
-                        pass
-                    else:
-                        raise PatchValidationError(
-                            f"Unexpected line in diff at {i + 1}: {line!r}"
-                        )
-                continue
+            if line.startswith("@@") and _hunk_complete():
+                _flush_hunk()
+                current_hunk = _parse_hunk_header(line)
+                hunk_remaining_old = current_hunk.old_count
+                hunk_remaining_new = current_hunk.new_count
+            elif line.startswith("--- ") and _hunk_complete():
+                _flush_hunk()
+                _flush_file()
+                last_old_path = _parse_diff_path(line[4:])
+                state = _ParserState.EXPECT_NEW_HEADER
+            elif line.startswith("@@"):
+                raise PatchValidationError(
+                    f"New hunk/file header before hunk counts satisfied at {i + 1}"
+                )
+            elif line.startswith("--- ") and not (
+                i + 2 < len(raw_lines)
+                and raw_lines[i + 1].rstrip("\n\r").startswith("+++ ")
+                and raw_lines[i + 2].rstrip("\n\r").startswith("@@")
+            ):
+                # A removed body line may legitimately begin with the file
+                # header marker; only treat it as a new file when the full
+                # header sequence follows.
+                _add_body_line("-", line[1:])
+            elif line.startswith("--- "):
+                raise PatchValidationError(
+                    f"New file header before hunk counts satisfied at {i + 1}"
+                )
+            elif line.startswith("\\ "):
+                text = line[2:].strip()
+                if text != "No newline at end of file":
+                    raise PatchValidationError(
+                        f"Malformed no-newline marker: {line!r}"
+                    )
+                _add_body_line("\\", text)
+            elif line.startswith(" "):
+                _add_body_line(" ", line[1:])
+            elif line.startswith("+"):
+                _add_body_line("+", line[1:])
+            elif line.startswith("-"):
+                _add_body_line("-", line[1:])
+            elif line == "":
+                pass
+            elif line.startswith("diff --git"):
+                raise PatchValidationError("Git metadata lines are not supported")
+            elif line.startswith(("new file", "deleted file", "old mode", "new mode", "copy", "rename")):
+                raise PatchValidationError(f"Unsupported diff metadata: {line!r}")
+            else:
+                raise PatchValidationError(
+                    f"Unexpected line in diff at {i + 1}: {line!r}"
+                )
+            continue
 
         if state is _ParserState.EXPECT_OLD_HEADER:
             if line.startswith("--- "):
@@ -813,7 +814,7 @@ class PatchManager:
         for p in denied_paths:
             if not p.strip():
                 raise PatchAuthorizationError("Empty policy entry")
-            if p == "tests" or p == "task.json":
+            if p in {"tests", "task.json", ".git"}:
                 continue
             denied_rules.append(_classify_policy_entry(workspace, p))
 
@@ -902,6 +903,12 @@ class PatchManager:
 
         new_contents: Dict[str, bytes] = {}
         hunk_adjustments: List[Tuple[int, int]] = []
+        hunk_count_adjustments: List[Tuple[str, int, int, int, int, int]] = [
+            (fp.path, index, old_declared, old_actual, new_declared, new_actual)
+            for fp in file_patches
+            for index, old_declared, old_actual, new_declared, new_actual
+            in fp.hunk_count_adjustments
+        ]
         for fp in file_patches:
             encoding = encoding_map[fp.path]
             original_bytes = originals[fp.path]
@@ -990,6 +997,7 @@ class PatchManager:
             bytes_after={k: len(v) for k, v in new_contents.items()},
             error=None,
             hunk_adjustments=tuple(hunk_adjustments),
+            hunk_count_adjustments=tuple(hunk_count_adjustments),
         )
 
     def revert_patch(self) -> PatchApplyResult:
@@ -1068,6 +1076,7 @@ class PatchManager:
             },
             error=None,
             hunk_adjustments=(),
+            hunk_count_adjustments=(),
         )
 
     def syntax_check(

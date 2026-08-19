@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import stat
 import shutil
 import tempfile
 import uuid
@@ -125,13 +126,30 @@ class TaskWorkspace:
     def cleanup(self) -> None:
         if getattr(self, "_cleaned", False):
             return
-        self._cleaned = True
         root = getattr(self, "_root", None)
-        if root is not None and os.path.isdir(root):
-            try:
-                shutil.rmtree(root, ignore_errors=False)
-            except Exception:
-                pass
+        if root is None or not os.path.exists(root):
+            self._cleaned = True
+            return
+        try:
+            # Disposable workspaces own every path below this root.  Clear
+            # read-only bits before removal so Windows cleanup is not blocked
+            # by checkout metadata or files created by a test process.
+            _make_owned_tree_removable(root)
+            shutil.rmtree(root, ignore_errors=False)
+        except Exception as exc:
+            # Do not claim cleanup until the root is demonstrably absent.  A
+            # later cleanup call remains a real retry against the same root.
+            if not os.path.exists(root):
+                self._cleaned = True
+                return
+            raise WorkspaceError(
+                f"Failed to remove disposable workspace: {root!r}: {exc}"
+            ) from exc
+        if os.path.exists(root):
+            raise WorkspaceError(
+                f"Disposable workspace remains after cleanup: {root!r}"
+            )
+        self._cleaned = True
 
     def __enter__(self) -> TaskWorkspace:
         return self
@@ -190,6 +208,23 @@ def _workspace_ignore(path: str, names: list[str]) -> set[str]:
         elif name.endswith(".pyc"):
             ignored.add(name)
     return ignored
+
+
+def _make_owned_tree_removable(root: str) -> None:
+    """Clear Windows read-only attributes within an owned disposable root."""
+
+    for dirpath, dirnames, filenames in os.walk(root, topdown=True):
+        try:
+            os.chmod(dirpath, stat.S_IRUSR | stat.S_IWUSR | stat.S_IXUSR)
+        except OSError:
+            pass
+        for name in filenames:
+            path = os.path.join(dirpath, name)
+            try:
+                mode = os.stat(path).st_mode
+                os.chmod(path, mode | stat.S_IWRITE)
+            except OSError:
+                pass
 
 
 def _check_source_has_no_symlinks(source_path: str) -> None:

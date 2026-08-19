@@ -303,6 +303,7 @@ def _canonicalize_initial_snapshot(snapshot: ControllerSnapshot) -> ControllerSn
             budget_state=budget_state,
             hypotheses=ledger,
             last_observation=copied_observation,
+            candidate_applied=_read(snapshot, "candidate_applied"),
         )
     except Exception:
         _input("snapshot")
@@ -894,6 +895,7 @@ class DeterministicController:
         budget_state = snapshot.budget_state
         hypotheses = snapshot.hypotheses
         last_observation = snapshot.last_observation
+        candidate_applied = snapshot.candidate_applied
         steps: list[ControllerStepResult] = []
         model_calls = 0
         last_request_index = model_call_index
@@ -1044,6 +1046,7 @@ class DeterministicController:
                     budget_state=model_budget_state,
                     hypotheses=model_hypotheses,
                     last_observation=model_observation,
+                    candidate_applied=candidate_applied,
                 )
             except Exception:
                 _invariant("snapshot")
@@ -1117,6 +1120,29 @@ class DeterministicController:
                                      state_before=state_before, budget_before=budget_before,
                                      hypotheses_before=hypotheses_before)
                         return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
+                    if (
+                        state in {
+                            ControllerState.PATCH,
+                            ControllerState.VALIDATE,
+                        }
+                        and action_directive.name in {
+                            ActionName.RUN_REPRODUCTION,
+                            ActionName.RUN_REGRESSION_TESTS,
+                            ActionName.CLASSIFY_OUTCOME,
+                            ActionName.SYNTAX_CHECK,
+                            ActionName.REVERT_PATCH,
+                        }
+                        and not candidate_applied
+                    ):
+                        _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
+                              model_call_index=model_call_index - 1,
+                              state_before=state_before,
+                              directive_kind=kind.value,
+                              rejection_category="patch_candidate_required")
+                        failure_step(ControllerStopReason.DIRECTIVE_REJECTED, kind=kind,
+                                     state_before=state_before, budget_before=budget_before,
+                                     hypotheses_before=hypotheses_before)
+                        return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
                     budget_kind = budget_kind_for_action(action_directive.name)
                     if budget_kind is not None and _remaining(snapshot.budget_limits, budget_state, budget_kind) <= 0:
                         _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
@@ -1183,6 +1209,17 @@ class DeterministicController:
                 if budget_kind is not None and reason not in _NO_HANDLER_REASONS:
                     budget_state = _consume_direct(snapshot.budget_limits, budget_state, budget_kind)
                 last_observation = observation
+                if action_directive.name is ActionName.APPLY_PATCH:
+                    candidate_applied = (
+                        observation.status is ObservationStatus.OK
+                        and observation.payload.get("applied") is True
+                    )
+                elif action_directive.name is ActionName.REVERT_PATCH:
+                    if (
+                        observation.status is ObservationStatus.OK
+                        and observation.payload.get("reverted") is True
+                    ):
+                        candidate_applied = False
                 steps.append(ControllerStepResult(
                     model_call_index=model_call_index - 1,
                     state_before=state_before,
@@ -1203,7 +1240,19 @@ class DeterministicController:
                       directive_kind=kind.value)
             elif kind is ModelDirectiveKind.TRANSITION:
                 transition = directive
-                if not is_transition_allowed(state, transition.target_state):
+                if (
+                    not is_transition_allowed(state, transition.target_state)
+                    or (
+                        state is ControllerState.PATCH
+                        and transition.target_state is ControllerState.VALIDATE
+                        and not candidate_applied
+                    )
+                    or (
+                        state is ControllerState.VALIDATE
+                        and transition.target_state is ControllerState.DONE
+                        and not candidate_applied
+                    )
+                ):
                     _emit(ControllerObservationKind.DIRECTIVE_REJECTED,
                           model_call_index=model_call_index - 1, state_before=state_before,
                           directive_kind=kind.value,

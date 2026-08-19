@@ -84,6 +84,7 @@ def _contracts(registry, *, f2p: bool = False, regression: bool = False):
         pdb_observations_remaining=1,
         post_patch_f2p_collected=f2p,
         regression_collected=regression,
+        candidate_applied=True,
     )
 
 
@@ -103,7 +104,7 @@ def _observation(task: DebugTask, name: str, payload: dict, *, run_id: str = "va
     )
 
 
-def _validate_snapshot(task: DebugTask, index: int, last=None, *, run_id: str = "validate-run"):
+def _validate_snapshot(task: DebugTask, index: int, last=None, *, run_id: str = "validate-run", candidate: bool = True):
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     return ControllerSnapshot(
         run_id,
@@ -114,6 +115,7 @@ def _validate_snapshot(task: DebugTask, index: int, last=None, *, run_id: str = 
         ControllerBudgetState(),
         HypothesisLedger(),
         last_observation=last,
+        candidate_applied=candidate,
     )
 
 
@@ -501,6 +503,7 @@ def test_apply_and_revert_forget_stale_validation_evidence(tmp_path):
                 task,
                 0,
                 _observation(task, ActionName.REVERT_PATCH.value, {"reverted": True}),
+                candidate=False,
             )
         )
         assert adapter._post_patch_f2p_collected is False

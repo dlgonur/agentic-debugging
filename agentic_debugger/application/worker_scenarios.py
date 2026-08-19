@@ -64,6 +64,10 @@ class ScenarioInputError(ApplicationInputError):
     """Raised when a scenario receives malformed parameters."""
 
 
+class PreModelSetupFailure(ScenarioInputError):
+    """A bounded runtime setup failure before the model transport boundary."""
+
+
 @dataclass
 class ScenarioContext:
     """Bounded execution context handed to one scenario."""

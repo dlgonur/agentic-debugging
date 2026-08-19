@@ -29,6 +29,7 @@ from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.runner import CURATED_RELATIVE_ROOT, localization_record
 from agentic_debugger.agent.tool_registry import MAX_TOOL_ARGUMENT_BYTES, ToolRegistry, _detach_json_dict
 from agentic_debugger.demo.tools import DemoToolContext, build_registry, legal_reproduction_phases, prepare_pdb_probe
+from agentic_debugger.demo.external_runtime import is_external_isolated_task
 from agentic_debugger.evaluation.runner import bounded_error, load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
@@ -361,6 +362,8 @@ def _action_contracts_for_state(
     pdb_observations_remaining: int | None = None,
     post_patch_f2p_collected: bool = False,
     regression_collected: bool = False,
+    candidate_applied: bool = False,
+    external_discovery: bool | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Return the effective contract derived from the supplied registry."""
 
@@ -369,6 +372,13 @@ def _action_contracts_for_state(
     contracts = registry.argument_contracts()
     registered = set(registry.names())
     effective = set(allowed_actions_for_state(state)) & registered
+    if state is ControllerState.REPRODUCE and external_discovery is False:
+        effective -= {
+            ActionName.SEARCH_CODE,
+            ActionName.FIND_FUNCTION,
+            ActionName.FIND_CLASS,
+            ActionName.GET_SOURCE_WINDOW,
+        }
     if policy is DemoPolicy.STATIC_BASELINE or not pdb_available:
         effective -= _PDB_ACTIONS
     if state is ControllerState.RUNTIME_EVIDENCE:
@@ -391,6 +401,16 @@ def _action_contracts_for_state(
         # required evidence values exist.  Hide it rather than leaving the
         # model to rediscover a deterministic tool error.
         effective.discard(ActionName.CLASSIFY_OUTCOME)
+    if state is ControllerState.PATCH and not candidate_applied:
+        effective.discard(ActionName.SYNTAX_CHECK)
+        effective.discard(ActionName.REVERT_PATCH)
+    if state is ControllerState.VALIDATE and not candidate_applied:
+        effective -= {
+            ActionName.RUN_REPRODUCTION,
+            ActionName.RUN_REGRESSION_TESTS,
+            ActionName.CLASSIFY_OUTCOME,
+            ActionName.REVERT_PATCH,
+        }
     result: dict[str, dict[str, Any]] = {}
     for action in ActionName:
         if action not in effective or action.value not in contracts:
@@ -428,12 +448,23 @@ def _legal_transition_targets(
     state: ControllerState,
     *,
     pdb_transition_allowed: bool = True,
+    candidate_applied: bool = False,
 ) -> list[str]:
     return [
         candidate.value
         for candidate in ControllerState
         if candidate in TRANSITION_GRAPH[state]
         and (candidate is not ControllerState.RUNTIME_EVIDENCE or pdb_transition_allowed)
+        and not (
+            state is ControllerState.PATCH
+            and candidate is ControllerState.VALIDATE
+            and not candidate_applied
+        )
+        and not (
+            state is ControllerState.VALIDATE
+            and candidate is ControllerState.DONE
+            and not candidate_applied
+        )
     ]
 
 def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
@@ -560,6 +591,7 @@ class LiveModelAdapter:
         self._runtime_transition_authorized = False
         self._post_patch_f2p_collected = False
         self._regression_collected = False
+        self._candidate_applied = False
         # Per-logical-call PDB gate cache: ``(model_call_index, decision)``.
         # ``model_call_index`` is constant across the transport retry loop and
         # increments only on the next controller step, so it is the natural
@@ -585,6 +617,16 @@ class LiveModelAdapter:
             # A new or reverted candidate invalidates prior Validate evidence.
             self._post_patch_f2p_collected = False
             self._regression_collected = False
+            if observation.name == ActionName.APPLY_PATCH.value:
+                self._candidate_applied = (
+                    observation.status.value == "ok"
+                    and observation.payload.get("applied") is True
+                )
+            elif (
+                observation.status.value == "ok"
+                and observation.payload.get("reverted") is True
+            ):
+                self._candidate_applied = False
             return
         if observation.status.value != "ok":
             return
@@ -678,9 +720,21 @@ class LiveModelAdapter:
         return decision
 
     def _runtime_transition_allowed(self, snapshot: ControllerSnapshot) -> bool:
-        if self.policy is DemoPolicy.STATIC_BASELINE:
+        if not self._pdb_surface_available or self.policy is DemoPolicy.STATIC_BASELINE:
             return False
         return bool(self._cached_pdb_gate_decision(snapshot).allowed)
+
+    @property
+    def _pdb_surface_available(self) -> bool:
+        """Return whether the effective registry exposes a real PDB entry point.
+
+        The outer policy is only a treatment request.  The registry is the
+        effective capability boundary supplied to this adapter, so a policy
+        cannot advertise RuntimeEvidence when the corresponding debugger
+        surface was not registered.
+        """
+
+        return ActionName.START_PDB_SESSION in set(self.registry.names())
 
     def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
         pdb_observations_remaining = max(
@@ -689,7 +743,8 @@ class LiveModelAdapter:
             - snapshot.budget_state.pdb_observations,
         )
         pdb_available = (
-            self.policy is not DemoPolicy.STATIC_BASELINE
+            self._pdb_surface_available
+            and self.policy is not DemoPolicy.STATIC_BASELINE
             and (
                 snapshot.state is ControllerState.RUNTIME_EVIDENCE
                 and self._runtime_transition_authorized
@@ -705,13 +760,23 @@ class LiveModelAdapter:
             pdb_observations_remaining=pdb_observations_remaining,
             post_patch_f2p_collected=self._post_patch_f2p_collected,
             regression_collected=self._regression_collected,
+            candidate_applied=(snapshot.candidate_applied or self._candidate_applied),
+            external_discovery=is_external_isolated_task(self.task),
         )
     def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
         contracts = self._effective_contract(snapshot)
         runtime_allowed = self._runtime_transition_allowed(snapshot)
         effective_actions = list(contracts)
-        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        run_id = self.run_id
+        external_reproduce_instructions = (
+            "No hidden reproduction target is supplied. In Reproduce, use only "
+            "bounded discovery tools over public checkout files to identify a "
+            "legitimate public pytest target; hidden verifier tests remain "
+            "private. If no legitimate public reproduction is available, "
+            "transition to Understand without claiming reproduction. "
+        ) if snapshot.state is ControllerState.REPRODUCE and is_external_isolated_task(self.task) else ""
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed,candidate_applied=(snapshot.candidate_applied or self._candidate_applied)),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":external_reproduce_instructions+"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
         if self._rag_context is not None:
             payload["retrieved_context"] = self._rag_context.to_request_mapping()
         return payload
@@ -784,6 +849,7 @@ class LiveModelAdapter:
                     and raw_directive.get("target_state") == ControllerState.RUNTIME_EVIDENCE.value
                     and snapshot.state is ControllerState.UNDERSTAND
                     and not self._runtime_transition_authorized
+                    and self._pdb_surface_available
                     and self.policy is not DemoPolicy.STATIC_BASELINE
                     and self._pdb_gate_recorded_for_index != snapshot.model_call_index
                 ):
@@ -791,7 +857,7 @@ class LiveModelAdapter:
                     self._record_pdb_gate_decision(snapshot, gate_decision)
                     self._pdb_gate_recorded_for_index = snapshot.model_call_index
                 contracts = effective_contract
-                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed)))
+                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._runtime_transition_allowed(snapshot),candidate_applied=(snapshot.candidate_applied or self._candidate_applied))))
                 attempt_record["accepted"] = True
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True

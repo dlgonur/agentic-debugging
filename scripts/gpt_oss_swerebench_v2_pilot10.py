@@ -25,7 +25,11 @@ from agentic_debugger.swerebench.authority import (
 )
 from agentic_debugger.swerebench.freeze import EXECUTION_CONTRACT, freeze_population_and_order
 from agentic_debugger.swerebench.hashing import sha256_file
-from agentic_debugger.swerebench.preflight import run_task_preflight, write_json
+from agentic_debugger.swerebench.preflight import (
+    load_preflight_bundle,
+    run_task_preflight,
+    write_json,
+)
 from agentic_debugger.swerebench.preflight import run_zero_provider_authorization_preflight
 from agentic_debugger.swerebench.mapping import build_model_task, product_task_id, production_write_paths
 from agentic_debugger.swerebench.materialize import materialize_base_commit
@@ -93,6 +97,26 @@ def authorization_evidence_path(
             "authorization evidence must resolve outside the repository"
         )
     return path
+
+
+def provider_execution_truth(rows: list[dict]) -> dict[str, int | bool]:
+    """Project provider execution only from durable per-row transport counts."""
+
+    transport_attempts = sum(
+        int((row.get("runtime") or {}).get("transport_attempts") or 0)
+        for row in rows
+    )
+    tasks_with_transport_attempts = sum(
+        int(((row.get("runtime") or {}).get("transport_attempts") or 0) > 0)
+        for row in rows
+    )
+    return {
+        "provider_execution_authorized": True,
+        "provider_inference_started": transport_attempts > 0,
+        "tasks_with_transport_attempts": tasks_with_transport_attempts,
+        "transport_attempts": transport_attempts,
+        "provider_generation_calls": transport_attempts,
+    }
 
 
 def _run_authorization_gate(
@@ -336,6 +360,12 @@ def _run_authorized_pilot10(
     frozen: Path,
     *,
     profile_fingerprint: str,
+    preflight_record_dir: Path | None = None,
+    preflight_evidence_fingerprint: str | None = None,
+    expected_preflight_instance_ids: list[str] | tuple[str, ...] | None = None,
+    run_id_prefix: str = "pilot10",
+    rows_filename: str = "pilot10_rows.json",
+    campaign_metadata: dict | None = None,
 ) -> int:
     """Run the frozen rows through the real Local Application worker path.
 
@@ -348,6 +378,28 @@ def _run_authorized_pilot10(
     pilot = json.loads((frozen / "pilot10_manifest.json").read_text(encoding="utf-8"))
     tasks = [OrderedTask(**row) for row in pilot["tasks"]]
     bundles = load_official_bundles(item.instance_id for item in tasks)
+    authorized_records: dict[str, dict] = {}
+    if preflight_record_dir is not None:
+        summary_path = preflight_record_dir.parent / "summary.json"
+        try:
+            summary, authorized_records, actual_fingerprint = load_preflight_bundle(
+                summary_path,
+                record_dir=preflight_record_dir,
+                expected_instance_ids=expected_preflight_instance_ids
+                or [task.instance_id for task in tasks],
+            )
+        except Exception as exc:
+            raise SystemExit(f"external DEVQUAL preflight evidence is invalid: {exc}") from exc
+        if preflight_evidence_fingerprint != actual_fingerprint:
+            raise SystemExit("external DEVQUAL preflight evidence fingerprint changed")
+        for task in tasks:
+            record = authorized_records.get(task.instance_id)
+            if not isinstance(record, dict):
+                raise SystemExit(f"external DEVQUAL preflight record is missing: {task.instance_id}")
+            if record.get("instance_id") != task.instance_id:
+                raise SystemExit(f"external DEVQUAL preflight identity mismatch: {task.instance_id}")
+            if record.get("verifier_baseline_valid") is not True:
+                raise SystemExit(f"external DEVQUAL preflight is not verifier-ready: {task.instance_id}")
     root = Path(args.external_root) if args.external_root else DEFAULT_EXTERNAL_ROOT
     try:
         root = create_external_execution_root(root)
@@ -356,6 +408,8 @@ def _run_authorized_pilot10(
     sources = root / "sources"
     metadata = root / "metadata"
     sessions = root / "sessions"
+    if campaign_metadata is not None:
+        write_json(root / "campaign_metadata.json", campaign_metadata)
     for path in (sources, metadata, sessions):
         path.mkdir()
     rows: list[dict] = []
@@ -409,7 +463,11 @@ def _run_authorized_pilot10(
                 "external_repository_root": str(checkout),
                 "external_root": str(root),
                 "external_bundle_path": str(bundle_path),
-                "external_preflight_path": str(frozen / "preflight" / f"{ordered.instance_id}.json"),
+                "external_preflight_path": str(
+                    (preflight_record_dir / f"{ordered.instance_id}.json")
+                    if preflight_record_dir is not None
+                    else frozen / "preflight" / f"{ordered.instance_id}.json"
+                ),
                 "external_instance_id": ordered.instance_id,
                 "external_manifest_fingerprint": ordered.assignment_key,
                 "external_authority_revision": ordered.base_commit,
@@ -421,7 +479,7 @@ def _run_authorized_pilot10(
                 session_dir=session_dir,
                 session_id=session_id,
                 spec=spec,
-                run_id=f"pilot10-{ordered.order_index}",
+                run_id=f"{run_id_prefix}-{ordered.order_index}",
                 scenario="configured_command_model",
                 scenario_params=params,
                 max_elapsed_seconds=1800,
@@ -437,8 +495,17 @@ def _run_authorized_pilot10(
             if evaluation_path.is_file():
                 evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
             rows.append(_pilot_row(ordered, task_id, session_id, result_mapping, evaluation, session_dir))
-        write_json(root / "pilot10_rows.json", {"rows": rows})
-        print(json.dumps({"status": "completed", "rows": len(rows), "provider_inference": True}, indent=2))
+        write_json(root / rows_filename, {"rows": rows})
+        print(
+            json.dumps(
+                {
+                    "status": "completed",
+                    "rows": len(rows),
+                    **provider_execution_truth(rows),
+                },
+                indent=2,
+            )
+        )
         return 0
     finally:
         # Session artifacts remain durable under the explicitly external root;
@@ -475,7 +542,9 @@ def _pilot_row(ordered, task_id, session_id, session_result, evaluation, session
         verifier_resolved=verifier_resolved,
         verifier_infrastructure_valid=infra_valid,
         provider_invalid=provider_invalid,
-        runtime_infrastructure_invalid=bool(durable["infrastructure_invalid"]),
+        runtime_infrastructure_invalid=bool(
+            durable["infrastructure_invalid"] or durable["cleanup_invalid"]
+        ),
     )
     row = empty_result_template()
     row["identity"].update(
@@ -511,7 +580,11 @@ def _pilot_row(ordered, task_id, session_id, session_result, evaluation, session
         pass_to_pass=evaluation.get("pass_to_pass"),
         full_suite=evaluation.get("full_suite"),
         verifier_outcome=evaluation.get("verifier_outcome"),
-        cleanup=evaluation.get("cleanup"),
+        cleanup=(
+            durable["cleanup_verified"]
+            if durable["cleanup_verified"] is not None
+            else evaluation.get("cleanup")
+        ),
         official_process_exit_code=evaluation.get("official_process_exit_code"),
     )
     admissible = execution_classification not in {
@@ -638,6 +711,14 @@ def _make_disposable_clean_repo(destination: Path) -> Path:
         repo / "experiments" / EXPERIMENT_ID / "frozen",
         ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
     )
+    # This is a disposable zero-provider smoke checkout, not the historical
+    # V1 identity.  Bind only the copied contract to the copied current
+    # harness so the smoke can exercise the authorization path without
+    # mutating the tracked historical frozen artifact.
+    smoke_contract_path = repo / "experiments" / EXPERIMENT_ID / "frozen" / "execution_contract.json"
+    smoke_contract = json.loads(smoke_contract_path.read_text(encoding="utf-8"))
+    smoke_contract["harness"]["harness_content_sha256"] = harness_content_sha256(repo)
+    write_json(smoke_contract_path, smoke_contract)
     subprocess.run(["git", "init", "--quiet"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.email", "smoke@example.invalid"], cwd=repo, check=True)
     subprocess.run(["git", "config", "user.name", "zero-provider-smoke"], cwd=repo, check=True)

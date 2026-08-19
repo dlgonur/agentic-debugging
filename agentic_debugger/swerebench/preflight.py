@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import runpy
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from agentic_debugger.swerebench.authority import (
     DEFAULT_EXTERNAL_ROOT,
@@ -24,7 +25,12 @@ from agentic_debugger.swerebench.provenance import (
     require_harness_match,
     working_tree_dirty,
 )
-from agentic_debugger.swerebench.hashing import require_sha256
+from agentic_debugger.swerebench.hashing import (
+    canonical_json_bytes,
+    require_sha256,
+    sha256_bytes,
+    sha256_file,
+)
 from agentic_debugger.swerebench.isolation import (
     assert_model_facing_isolated,
     hidden_needles_from_private,
@@ -55,6 +61,128 @@ FROZEN_SELECTION_HASHES = {
     "full_ordering.json": "599a07b6a527b4f8dffda4120be8e3c524ad608929bb048ea98286f80e0f5061",
     "pilot10_manifest.json": "4b9b17f8f897e56263f0394e35c06261bc613097f38a1b2e157d4d9a215a963f",
 }
+
+PREFLIGHT_BUNDLE_SCHEMA_VERSION = "gpt-oss-swerebench-v2-preflight-bundle-v1"
+
+
+def _record_filename(instance_id: str) -> str:
+    """Return the only accepted bounded filename for a task record."""
+
+    if (
+        type(instance_id) is not str
+        or not instance_id
+        or Path(instance_id).name != instance_id
+        or instance_id in {".", ".."}
+        or any(character in instance_id for character in "\\/")
+    ):
+        raise ValueError("preflight instance_id cannot be used as a record filename")
+    return f"{instance_id}.json"
+
+
+def _bundle_fingerprint(summary: Mapping[str, Any]) -> str:
+    """Hash summary metadata and the exact record-file hashes it names."""
+
+    unsigned = dict(summary)
+    unsigned.pop("evidence_fingerprint", None)
+    return sha256_bytes(canonical_json_bytes(unsigned))
+
+
+def write_preflight_bundle(
+    root: Path,
+    *,
+    summary: Mapping[str, Any],
+    records: list[Mapping[str, Any]],
+) -> dict[str, Any]:
+    """Persist bounded per-task records and a hash-bound summary."""
+
+    if len(records) != 10:
+        raise ValueError("a preflight evidence bundle must contain exactly ten records")
+    record_dir = root / "records"
+    record_dir.mkdir(parents=True, exist_ok=True)
+    for stale in record_dir.glob("*.json"):
+        stale.unlink()
+    record_files: list[dict[str, str]] = []
+    for record in records:
+        instance_id = record.get("instance_id")
+        if type(instance_id) is not str:
+            raise ValueError("preflight record is missing instance_id")
+        filename = _record_filename(instance_id)
+        path = record_dir / filename
+        write_json(path, record)
+        record_files.append(
+            {
+                "instance_id": instance_id,
+                "path": f"records/{filename}",
+                "sha256": sha256_file(path),
+            }
+        )
+    bound = dict(summary)
+    bound["schema_version"] = PREFLIGHT_BUNDLE_SCHEMA_VERSION
+    bound["record_files"] = record_files
+    bound["evidence_fingerprint"] = _bundle_fingerprint(bound)
+    write_json(root / "summary.json", bound)
+    return bound
+
+
+def load_preflight_bundle(
+    summary_path: Path,
+    *,
+    record_dir: Path,
+    expected_instance_ids: list[str] | tuple[str, ...] | None = None,
+) -> tuple[dict[str, Any], dict[str, dict[str, Any]], str]:
+    """Load and verify the exact external readiness evidence bundle."""
+
+    summary = json.loads(summary_path.read_text(encoding="utf-8"))
+    if not isinstance(summary, dict):
+        raise ValueError("preflight summary must be a JSON object")
+    if summary.get("schema_version") != PREFLIGHT_BUNDLE_SCHEMA_VERSION:
+        raise ValueError("preflight summary is not a bound evidence bundle")
+    file_entries = summary.get("record_files")
+    if not isinstance(file_entries, list) or len(file_entries) != 10:
+        raise ValueError("preflight evidence bundle must name exactly ten record files")
+    expected = list(expected_instance_ids) if expected_instance_ids is not None else None
+    records: dict[str, dict[str, Any]] = {}
+    normalized_entries: list[dict[str, str]] = []
+    bundle_root = record_dir.resolve()
+    for index, entry in enumerate(file_entries):
+        if not isinstance(entry, Mapping):
+            raise ValueError("preflight record binding is not an object")
+        instance_id = entry.get("instance_id")
+        relative = entry.get("path")
+        expected_hash = entry.get("sha256")
+        if type(instance_id) is not str or type(relative) is not str:
+            raise ValueError("preflight record binding has invalid identity/path")
+        if type(expected_hash) is not str or len(expected_hash) != 64:
+            raise ValueError("preflight record binding has an invalid SHA-256")
+        if expected is not None and instance_id != expected[index]:
+            raise ValueError("preflight record order does not match the authorized selection")
+        relative_path = Path(relative)
+        if relative_path.is_absolute() or ".." in relative_path.parts:
+            raise ValueError("preflight record path escapes the evidence root")
+        path = (summary_path.parent / relative_path).resolve()
+        try:
+            path.relative_to(bundle_root.parent)
+        except ValueError as exc:
+            raise ValueError("preflight record path is outside the evidence root") from exc
+        if path.name != _record_filename(instance_id):
+            raise ValueError("preflight record filename does not match instance_id")
+        if not path.is_file() or sha256_file(path) != expected_hash:
+            raise ValueError(f"preflight record is missing or changed: {instance_id}")
+        record = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(record, dict) or record.get("instance_id") != instance_id:
+            raise ValueError(f"preflight record identity mismatch: {instance_id}")
+        records[instance_id] = record
+        normalized_entries.append(
+            {"instance_id": instance_id, "path": relative, "sha256": expected_hash}
+        )
+    if len(records) != 10:
+        raise ValueError("preflight evidence bundle contains duplicate task identities")
+    if expected is not None and list(records) != expected:
+        raise ValueError("preflight evidence bundle task identities do not match selection")
+    actual_fingerprint = _bundle_fingerprint(summary)
+    if summary.get("evidence_fingerprint") != actual_fingerprint:
+        raise ValueError("preflight evidence fingerprint mismatch")
+    return summary, records, actual_fingerprint
 
 
 def docker_readiness() -> dict[str, Any]:
@@ -100,15 +228,25 @@ def run_zero_provider_authorization_preflight(
     repository_path: Path | None = None,
     provider_metadata_preflight: Any | None = None,
     docker_readiness_probe: Any | None = None,
+    selection_hashes: Mapping[str, str] | None = None,
+    selection_files: Mapping[str, Path] | None = None,
+    preflight_record_dir: Path | None = None,
+    expected_preflight_instance_ids: list[str] | tuple[str, ...] | None = None,
 ) -> dict[str, Any]:
     """Check the exact future execution gate without model generation."""
 
     checks: dict[str, bool] = {}
     reasons: list[str] = []
     project = (repository_path or repository_root()).resolve()
+    preflight_bundle_fingerprint: str | None = None
+    bound_records: dict[str, dict[str, Any]] = {}
     try:
-        for name, expected in FROZEN_SELECTION_HASHES.items():
-            require_sha256(frozen / name, expected, label=name)
+        expected_selection_hashes = selection_hashes or FROZEN_SELECTION_HASHES
+        selected_files = selection_files or {
+            name: frozen / name for name in expected_selection_hashes
+        }
+        for name, expected in expected_selection_hashes.items():
+            require_sha256(selected_files[name], expected, label=name)
         checks["frozen_selection_hashes"] = True
     except Exception as exc:
         checks["frozen_selection_hashes"] = False
@@ -204,6 +342,11 @@ def run_zero_provider_authorization_preflight(
             "executable_ready": executable_ready,
             "registry_upstream": registry_spec.upstream_model,
         }
+        checks["model_profile_fingerprint"] = bool(
+            re.fullmatch(r"[0-9a-f]{64}", profile.configuration_fingerprint)
+        )
+        if not checks["model_profile_fingerprint"]:
+            reasons.append("configured model profile fingerprint is invalid")
         checks["model_profile_metadata"] = (
             profile.profile_id == provider["profile_id"] == profile_id
             and profile.display_name == provider.get("display_name", profile.display_name)
@@ -245,6 +388,32 @@ def run_zero_provider_authorization_preflight(
 
     try:
         summary = json.loads(preflight_summary.read_text(encoding="utf-8"))
+        if preflight_record_dir is not None:
+            if not _repo_escapes_project(preflight_summary, project) or not _repo_escapes_project(
+                preflight_record_dir, project
+            ):
+                raise ValueError("DEVQUAL preflight evidence must be outside the repository")
+            summary, bound_records, preflight_bundle_fingerprint = load_preflight_bundle(
+                preflight_summary,
+                record_dir=preflight_record_dir,
+                expected_instance_ids=expected_preflight_instance_ids,
+            )
+            checks["preflight_evidence_bundle"] = True
+            checks["preflight_records_authorized"] = (
+                len(bound_records) == 10
+                and all(
+                    record.get("instance_id") == instance_id
+                    and record.get("authorization_status")
+                    == "ready-for-authorized-execution"
+                    and record.get("verifier_baseline_valid") is True
+                    for instance_id, record in bound_records.items()
+                )
+            )
+            if not checks["preflight_records_authorized"]:
+                reasons.append("one or more bound preflight records is not authorized")
+        else:
+            checks["preflight_evidence_bundle"] = True
+            checks["preflight_records_authorized"] = True
         checks["all_ten_authorized"] = (
             summary.get("n") == 10
             and summary.get("invalid") == []
@@ -268,6 +437,8 @@ def run_zero_provider_authorization_preflight(
     except Exception as exc:
         checks["all_ten_authorized"] = False
         checks["model_hidden_data_boundary"] = False
+        checks["preflight_evidence_bundle"] = False
+        checks["preflight_records_authorized"] = False
         reasons.append(f"Pilot-10 authorization summary unavailable: {exc}")
 
     checks["provider_generation_calls"] = True
@@ -290,6 +461,14 @@ def run_zero_provider_authorization_preflight(
         "docker_readiness": docker_probe,
         "external_root_lifecycle": lifecycle,
         "external_root": str(root),
+        "preflight_summary": str(preflight_summary.resolve(strict=False)),
+        "preflight_record_dir": (
+            str(preflight_record_dir.resolve(strict=False))
+            if preflight_record_dir is not None
+            else None
+        ),
+        "preflight_evidence_fingerprint": preflight_bundle_fingerprint,
+        "preflight_record_instance_ids": list(bound_records),
     }
 
 
