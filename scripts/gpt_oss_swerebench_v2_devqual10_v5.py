@@ -37,6 +37,11 @@ except ModuleNotFoundError:
         _run_authorized_pilot10,
     )
 
+try:
+    from scripts import ollama_cloud_command_adapter as ollama_adapter
+except ImportError:
+    import ollama_cloud_command_adapter as ollama_adapter  # type: ignore[no-redef]
+
 
 REASONING_EFFORT = "high"
 PARENT_EXPERIMENT_ID = "gpt_oss_swerebench_v2_devqual10_v4"
@@ -83,8 +88,7 @@ def _validate_profile(args: argparse.Namespace, contract: dict) -> str:
         raise SystemExit("V5 configured profile must explicitly set reasoning_effort=high")
     if provider["upstream"] != UPSTREAM_MODEL or provider["protocol"] != PROTOCOL_VERSION:
         raise SystemExit("V5 frozen provider identity is inconsistent")
-    from scripts.ollama_cloud_command_adapter import resolve_cloud_model
-    registry = resolve_cloud_model(configured_alias)
+    registry = ollama_adapter.resolve_cloud_model(configured_alias)
     if registry.upstream_model != UPSTREAM_MODEL:
         raise SystemExit("V5 configured alias resolves to the wrong upstream model")
     fingerprint = profile.configuration_fingerprint
@@ -109,12 +113,11 @@ def _cheap_guards(args: argparse.Namespace) -> tuple[dict, str]:
         raise SystemExit(str(lifecycle.get("reason") or "V5 campaign root is not a fresh safe target"))
     fingerprint = _validate_profile(args, contract)
     envelope = contract["request_envelope"]
-    from scripts import ollama_cloud_command_adapter as adapter
     expected_envelope = {
-        "canonical_public_request_bytes": adapter.MAX_PUBLIC_REQUEST_BYTES,
-        "stdin_request_bytes": adapter.MAX_STDIN_REQUEST_BYTES,
-        "http_request_body_bytes": adapter.MAX_HTTP_REQUEST_BODY_BYTES,
-        "raw_response_bytes": adapter.MAX_RAW_RESPONSE_BYTES,
+        "canonical_public_request_bytes": ollama_adapter.MAX_PUBLIC_REQUEST_BYTES,
+        "stdin_request_bytes": ollama_adapter.MAX_STDIN_REQUEST_BYTES,
+        "http_request_body_bytes": ollama_adapter.MAX_HTTP_REQUEST_BODY_BYTES,
+        "raw_response_bytes": ollama_adapter.MAX_RAW_RESPONSE_BYTES,
     }
     if envelope != expected_envelope:
         raise SystemExit("V5 request-envelope constants differ from the frozen contract")

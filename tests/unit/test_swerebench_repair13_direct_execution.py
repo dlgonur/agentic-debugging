@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -17,6 +19,28 @@ from scripts import ollama_cloud_command_adapter as adapter
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_v5_actual_script_entrypoint_resolves_adapter_before_live_guard(tmp_path):
+    campaign = tmp_path / "campaign"
+    completed = subprocess.run(
+        [
+            sys.executable,
+            "scripts/gpt_oss_swerebench_v2_devqual10_v5.py",
+            "execute",
+            "--config-root", str(tmp_path / "config"),
+            "--external-root", str(campaign),
+        ],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = completed.stdout + completed.stderr
+    assert completed.returncode != 0
+    assert "--live" in output
+    assert "No module named 'scripts.ollama_cloud_command_adapter'" not in output
+    assert not campaign.exists()
 
 
 def test_v5_validate_identity_and_frozen_first_ten_are_zero_provider():
@@ -59,6 +83,8 @@ def test_v5_source_contains_no_prerequisite_readiness_gate():
     assert "run_official_infrastructure_gate" not in source
     assert "preflight_summary" not in source
     assert "preflight_record_dir" not in source
+    assert "from scripts.ollama_cloud_command_adapter import resolve_cloud_model" not in source
+    assert source.count("from scripts import ollama_cloud_command_adapter as ollama_adapter") == 1
 
 
 def test_direct_shared_runner_is_explicit_and_historical_default_remains_preflight():
@@ -69,6 +95,7 @@ def test_direct_shared_runner_is_explicit_and_historical_default_remains_preflig
 def test_v5_identity_profile_reasoning_and_request_envelope_match_v4():
     contract = v5.load_devqual_contract()
     provider = contract["provider"]
+    assert v5.ollama_adapter is adapter
     assert (provider["profile_id"], provider["alias"], provider["upstream"], provider["protocol"]) == (
         "ollama-cloud-gpt-oss-20b", "gpt-oss:20b-cloud", "gpt-oss:20b", "1.3"
     )
