@@ -298,7 +298,10 @@ def test_valid_directive_and_request_contract(fixture_server) -> None:
     rc, stdout, stderr = invoke(endpoint)
     assert rc == 0, stderr
     assert json.loads(stdout) == {"directive": json.loads(valid_content())}
-    assert stderr == ""
+    assert json.loads(stderr) == {
+        "event": "provider_generation_started",
+        "schema_version": "live-command-event-v1",
+    }
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
     payload = chat_payloads(state)[0]
     assert payload["model"] == adapter.MODEL_ID

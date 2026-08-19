@@ -58,6 +58,7 @@ from agentic_debugger.evaluation.live import (
     LiveTransportError,
     MAX_MODEL_RESPONSE_BYTES,
     _command_adapter_transport_error,
+    parse_provider_generation_started,
 )
 
 _POLL_INTERVAL_SECONDS = 0.05
@@ -175,6 +176,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         self._cancel_check = cancel_check
         self._cwd = cwd
         self._environment = validated_environment
+        self.last_provider_generation_started = False
         # NOTE: the worker-lifecycle cleanup ownership for request-owned
         # process groups (the POSIX SIGTERM handler that kills every in-flight
         # group on worker shutdown) is installed by the worker process itself
@@ -205,6 +207,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         if self._cancel_check is not None:
             # Cancellation boundary before any process is spawned.
             self._cancel_check()
+        self.last_provider_generation_started = False
 
         try:
             request_bytes = (
@@ -342,12 +345,14 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     _interrupt_writer()
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+                    self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
                     raise
             if time.monotonic() >= deadline:
                 _terminate_command_tree(process)
                 _interrupt_writer()
                 for thread in threads:
                     thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+                self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
                 raise LiveTransportError(
                     "model request stdin write timed out",
                     kind="request_timeout",
@@ -367,6 +372,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     _terminate_command_tree(process)
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+                    self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
                     raise
             try:
                 process.wait(timeout=_POLL_INTERVAL_SECONDS)
@@ -376,6 +382,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     _terminate_command_tree(process)
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+                    self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
                     raise LiveTransportError(
                         "model request timed out",
                         kind="request_timeout",
@@ -384,6 +391,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
 
         for thread in threads:
             thread.join(timeout=_TERMINATE_JOIN_SECONDS)
+        self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
         if stdout.truncated:
             raise LiveTransportError(
                 "model response exceeded the configured output bound",

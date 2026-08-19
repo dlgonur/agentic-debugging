@@ -188,6 +188,9 @@ def durable_session_evidence(
     transport_attempts = _metric(
         metrics, "model_request_count", "transport_attempts", "provider_process_attempts"
     )
+    provider_generation_calls = _metric(metrics, "provider_generation_calls")
+    if provider_generation_calls is None:
+        provider_generation_calls = 0
     retries = _metric(metrics, "adapter_retry_count", "retry_count", "retries")
     fallbacks = _metric(metrics, "fallback_count", "fallbacks")
     if fallbacks is None:
@@ -252,6 +255,7 @@ def durable_session_evidence(
             "wall_clock_seconds": _number(wall),
             "logical_model_calls": _number(logical_calls, integer=True),
             "transport_attempts": _number(transport_attempts, integer=True),
+            "provider_generation_calls": _number(provider_generation_calls, integer=True),
             "adapter_retry_count": _number(retries, integer=True),
             "fallback_count": _number(fallbacks, integer=True),
             "token_usage": _token_usage(metrics),

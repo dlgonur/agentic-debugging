@@ -1,0 +1,94 @@
+{
+  "schema_version": "gpt_oss_swerebench_v2_devqual10_v6-execution-contract-v1",
+  "experiment_id": "gpt_oss_swerebench_v2_devqual10_v6",
+  "parent_experiment": {
+    "experiment_id": "gpt_oss_swerebench_v2_devqual10_v5",
+    "status": "DEVELOPMENT_QUALIFICATION_ONLY",
+    "frozen": true,
+    "relationship": "V6 is a direct-execution repair child of immutable V5 treatment properties."
+  },
+  "status": "DEVELOPMENT_QUALIFICATION_ONLY",
+  "provider_generation_calls": 0,
+  "qualification_boundary": "Results cannot be promoted into an unseen benchmark capability score.",
+  "source_ordering_sha256": "599a07b6a527b4f8dffda4120be8e3c524ad608929bb048ea98286f80e0f5061",
+  "source_population_sha256": "36bd31d1470b86db982235153372793455a850ae1fe9c1669bdf8c0e7e68ab8f",
+  "historical_pilot10_manifest_sha256": "4b9b17f8f897e56263f0394e35c06261bc613097f38a1b2e157d4d9a215a963f",
+  "devqual_manifest_sha256": "bfe14da81238b652cb32dcc4773bd0026889baa8f4fbe054f80910784672f18d",
+  "first_ten_order_policy": "exact prefix of the immutable source full ordering; no resampling or reordering",
+  "treatment_changes_from_v5": [
+    "direct adapter entrypoint import bootstrap",
+    "generic untyped process_error classified as command-adapter infrastructure",
+    "provider generation counted only from the bounded pre-/api/chat marker"
+  ],
+  "request_envelope": {
+    "canonical_public_request_bytes": 131072,
+    "stdin_request_bytes": 196608,
+    "http_request_body_bytes": 262144,
+    "raw_response_bytes": 65536
+  },
+  "provider": {
+    "route": "Ollama Cloud",
+    "profile_id": "ollama-cloud-gpt-oss-20b",
+    "display_name": "Ollama Cloud GPT-OSS 20B",
+    "alias": "gpt-oss:20b-cloud",
+    "upstream": "gpt-oss:20b",
+    "protocol": "1.3",
+    "reasoning_effort": "high",
+    "adapter": "scripts/ollama_cloud_command_adapter.py",
+    "adapter_retry_count": 0,
+    "fallback_count": 0,
+    "request_timeout_seconds": 60,
+    "configured_source_live_run_limits_max_retries": 2,
+    "provider_generation_calls": 0
+  },
+  "controller": {
+    "architecture": "single DeterministicController + typed tools + PatchManager",
+    "policy": "pdb-on-uncertainty",
+    "attempts_per_task": 1,
+    "pdb_available": false,
+    "pdb_treatment": "PDB unavailable by treatment contract",
+    "external_patch_gate": "successful get_source_window observation required",
+    "max_controller_steps": 64,
+    "max_model_requests": 64,
+    "max_patch_attempts": 3,
+    "max_test_runs": 12,
+    "max_pdb_observations": 8,
+    "max_active_hypotheses": 3,
+    "max_source_observations": 12
+  },
+  "evaluation": {
+    "correctness_authority": "official SWE-rebench independent verifier via OfficialSWERebenchVerifier",
+    "fresh_external_application_root_per_task": true,
+    "external_runtime_root": "%LOCALAPPDATA%/agentic-debugging/gpt-oss-swerebench-v2-devqual10-v6",
+    "readiness_bundle_required": false,
+    "task_readiness_records_required": false,
+    "model_workspace": "base commit only; no test_patch; no gold patch",
+    "verifier_workspace": "base commit + hidden test_patch; gold never applied as model input",
+    "hidden_data_boundary": "intrinsic model task isolation; private bundle consulted only after candidate",
+    "lazy_baseline_check": true,
+    "no_task_specific_prompt_customization": true,
+    "no_outcome_dependent_retries": true,
+    "one_attempt_per_task": true,
+    "clean_worktree_required": true
+  },
+  "harness": {
+    "parent_baseline": "edbaac547babfbd531d32d3a3a82fd884f6d966a",
+    "harness_content_sha256": "a3d1fc56e2b6aa1576b30447e1d98ec9642f9ac0e7e7c4c92f9d92bcb940c18d",
+    "runtime_head_policy": "record_at_execution",
+    "working_tree_policy": "must_be_clean_at_execution"
+  },
+  "provenance": {
+    "v5_external_evidence": "V5 remains immutable historical evidence of command-adapter infrastructure failure.",
+    "repair_provider_inference_allowed": false,
+    "repair_provider_generation_calls": 0
+  },
+  "direct_execution_contract": {
+    "explicit_live_flag": "--live",
+    "execution_mode": "direct",
+    "preflight_command": false,
+    "readiness_command": false,
+    "authorize_command": false,
+    "ten_task_readiness_campaign": false,
+    "official_verifier_sole_correctness_authority": true
+  }
+}

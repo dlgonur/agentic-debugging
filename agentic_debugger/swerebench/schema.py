@@ -318,7 +318,10 @@ def empty_result_template() -> dict[str, Any]:
     return {
         "schema_version": PILOT_RESULT_SCHEMA_VERSION,
         "identity": {key: None for key in REQUIRED_IDENTITY},
-        "runtime": {key: None for key in REQUIRED_RUNTIME},
+        "runtime": {
+            **{key: None for key in REQUIRED_RUNTIME},
+            "provider_generation_calls": None,
+        },
         "trajectory": {key: None for key in REQUIRED_TRAJECTORY},
         "pdb": {key: None for key in REQUIRED_PDB},
         "verification": {key: None for key in REQUIRED_VERIFIER},

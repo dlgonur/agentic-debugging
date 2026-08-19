@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+from pathlib import Path
 import socket
 import sys
 import time
@@ -23,6 +24,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TextIO
 from urllib.parse import urlsplit
+
+if __package__ in (None, ""):
+    repo_root = str(Path(__file__).resolve().parents[1])
+    if repo_root not in sys.path:
+        sys.path.insert(0, repo_root)
+
 from agentic_debugger.evaluation.request_envelope import (
     MAX_HTTP_REQUEST_BODY_BYTES,
     MAX_PUBLIC_REQUEST_BYTES,
@@ -82,6 +89,8 @@ REASONING_EFFORTS = frozenset({"low", "medium", "high"})
 DEFAULT_REASONING_EFFORT = "low"
 
 PREFLIGHT_SCHEMA = "ollama-cloud-preflight-v1"
+GENERATION_EVENT_SCHEMA = "live-command-event-v1"
+GENERATION_EVENT = "provider_generation_started"
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
 PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
 
@@ -659,6 +668,21 @@ def _http_json_request(
     return value
 
 
+def _emit_provider_generation_started(stderr_stream: TextIO) -> None:
+    """Emit the bounded marker immediately before the generation request."""
+
+    stderr_stream.write(
+        _safe_json(
+            {
+                "event": GENERATION_EVENT,
+                "schema_version": GENERATION_EVENT_SCHEMA,
+            }
+        )
+        + "\n"
+    )
+    stderr_stream.flush()
+
+
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
     if type(maximum) is not int or isinstance(maximum, bool) or not 1 <= maximum <= DEFAULT_MAX_LOGICAL_MODEL_CALLS:
         raise OllamaAdapterError("logical-call bound is invalid", kind="configuration")
@@ -825,6 +849,7 @@ def _chat_request(
     *,
     timeout_seconds: float,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    stderr_stream: TextIO | None = None,
 ) -> Mapping[str, Any]:
     reasoning_effort = validate_reasoning_effort(reasoning_effort)
     payload = {
@@ -833,6 +858,17 @@ def _chat_request(
         "stream": False,
         "think": reasoning_effort,
     }
+    # Validate all local request bounds before recording the provider boundary.
+    # The next operation is the actual /api/chat request in _http_json_request.
+    validate_endpoint(endpoint)
+    _validate_timeout_seconds(timeout_seconds)
+    request_bytes = (_safe_json(payload) + "\n").encode("utf-8")
+    if len(request_bytes) > MAX_HTTP_REQUEST_BODY_BYTES:
+        raise OllamaAdapterError(
+            "Ollama request exceeded the configured bound", kind="request_too_large"
+        )
+    if stderr_stream is not None:
+        _emit_provider_generation_started(stderr_stream)
     return _http_json_request(
         endpoint,
         "POST",
@@ -990,6 +1026,7 @@ def run_adapter(
             spec,
             timeout_seconds=_remaining_timeout(deadline),
             reasoning_effort=args.reasoning_effort,
+            stderr_stream=stderr_stream,
         )
         content = _extract_final_content(response, spec)
         directive = parse_directive_content(content, request)

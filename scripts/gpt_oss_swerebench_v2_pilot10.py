@@ -100,7 +100,7 @@ def authorization_evidence_path(
 
 
 def provider_execution_truth(rows: list[dict]) -> dict[str, int | bool]:
-    """Project provider execution only from durable per-row transport counts."""
+    """Project provider execution only from durable generation-boundary evidence."""
 
     transport_attempts = sum(
         int((row.get("runtime") or {}).get("transport_attempts") or 0)
@@ -110,12 +110,16 @@ def provider_execution_truth(rows: list[dict]) -> dict[str, int | bool]:
         int(((row.get("runtime") or {}).get("transport_attempts") or 0) > 0)
         for row in rows
     )
+    provider_generation_calls = sum(
+        int((row.get("runtime") or {}).get("provider_generation_calls") or 0)
+        for row in rows
+    )
     return {
         "provider_execution_authorized": True,
-        "provider_inference_started": transport_attempts > 0,
+        "provider_inference_started": provider_generation_calls > 0,
         "tasks_with_transport_attempts": tasks_with_transport_attempts,
         "transport_attempts": transport_attempts,
-        "provider_generation_calls": transport_attempts,
+        "provider_generation_calls": provider_generation_calls,
     }
 
 
@@ -580,6 +584,7 @@ def _direct_setup_failure_row(ordered, task_id: str, error: Exception) -> dict:
         session_id=None,
         logical_model_calls=0,
         transport_attempts=0,
+        provider_generation_calls=0,
         adapter_retry_count=0,
         fallback_count=0,
         provider_failures=0,

@@ -55,6 +55,8 @@ class LiveTransportError(LiveEvaluationError):
 
 
 COMMAND_ADAPTER_ERROR_SCHEMA_VERSION = "live-command-error-v1"
+COMMAND_ADAPTER_EVENT_SCHEMA_VERSION = "live-command-event-v1"
+PROVIDER_GENERATION_EVENT = "provider_generation_started"
 COMMAND_ADAPTER_ERROR_KINDS = frozenset({
     "adapter_error", "configuration", "http_error", "invalid_completion",
     "invalid_directive", "invalid_request", "invalid_response",
@@ -76,12 +78,29 @@ def parse_command_adapter_error(stderr: str) -> tuple[str, str] | None:
     text = stderr.strip()
     if not text or len(text.encode("utf-8", errors="replace")) > 1024:
         return None
-    try:
-        value = json.loads(text)
-    except (UnicodeError, json.JSONDecodeError):
+    candidates: list[Mapping[str, Any]] = []
+    for line in text.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (UnicodeError, json.JSONDecodeError):
+            return None
+        if not isinstance(value, Mapping):
+            return None
+        if set(value) == {"schema_version", "event"}:
+            if (
+                value.get("schema_version") == COMMAND_ADAPTER_EVENT_SCHEMA_VERSION
+                and value.get("event") == PROVIDER_GENERATION_EVENT
+            ):
+                continue
+            return None
+        if set(value) != {"schema_version", "kind", "message"}:
+            return None
+        candidates.append(value)
+    if len(candidates) != 1:
         return None
-    if not isinstance(value, Mapping) or set(value) != {"schema_version", "kind", "message"}:
-        return None
+    value = candidates[0]
     if value.get("schema_version") != COMMAND_ADAPTER_ERROR_SCHEMA_VERSION:
         return None
     kind = value.get("kind")
@@ -96,6 +115,28 @@ def parse_command_adapter_error(stderr: str) -> tuple[str, str] | None:
     ):
         return None
     return kind, message
+
+
+def parse_provider_generation_started(stderr: str) -> bool:
+    """Recognize only the exact bounded generation-boundary event."""
+
+    if type(stderr) is not str or len(stderr.encode("utf-8", errors="replace")) > 65536:
+        return False
+    for line in stderr.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (UnicodeError, json.JSONDecodeError):
+            continue
+        if (
+            isinstance(value, Mapping)
+            and set(value) == {"schema_version", "event"}
+            and value.get("schema_version") == COMMAND_ADAPTER_EVENT_SCHEMA_VERSION
+            and value.get("event") == PROVIDER_GENERATION_EVENT
+        ):
+            return True
+    return False
 
 
 def _command_adapter_transport_error(stderr: str) -> LiveTransportError | None:
@@ -289,12 +330,14 @@ class JsonlCommandTransport:
     def __init__(self,config,*,max_output_bytes=MAX_MODEL_RESPONSE_BYTES):
         if type(max_output_bytes) is not int or not 1024<=max_output_bytes<=4*1024*1024: raise LiveConfigurationError("max response bytes is invalid")
         self.config=config; self.max_output_bytes=max_output_bytes
+        self.last_provider_generation_started = False
     @staticmethod
     def subprocess_environment():
         environment={"PATH":os.environ.get("PATH",""),"PYTHONIOENCODING":"utf-8"}
         if os.name=="nt" and os.environ.get("SystemRoot"): environment["SystemRoot"]=os.environ["SystemRoot"]
         return environment
     def request(self,payload,timeout_seconds):
+        self.last_provider_generation_started = False
         try: request_bytes=(json.dumps(payload,ensure_ascii=False,allow_nan=False)+"\n").encode("utf-8")
         except (TypeError,ValueError,UnicodeError): raise LiveTransportError("model request could not be serialized",kind="request_serialization") from None
         environment=self.subprocess_environment()
@@ -326,6 +369,7 @@ class JsonlCommandTransport:
             for thread in threads: thread.join(timeout=2)
             raise LiveTransportError("model request timed out",kind="request_timeout",timed_out=True) from None
         for thread in threads: thread.join(timeout=2)
+        self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
         if stdout.truncated: raise LiveTransportError("model response exceeded the configured output bound",kind="response_too_large")
         if process.returncode!=0:
             typed = _command_adapter_transport_error(stderr.text())
@@ -343,7 +387,7 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); adapter_error_kinds:list[str]=field(default_factory=list); invalid_model_responses:int=0; setup_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; max_canonical_public_request_bytes:int=0; rejected_canonical_public_request_bytes:int|None=None; rejected_stdin_request_bytes:int|None=None
+    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); adapter_error_kinds:list[str]=field(default_factory=list); invalid_model_responses:int=0; setup_error_kinds:list[str]=field(default_factory=list); provider_generation_calls:int=0; prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; max_canonical_public_request_bytes:int=0; rejected_canonical_public_request_bytes:int|None=None; rejected_stdin_request_bytes:int|None=None
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
@@ -354,6 +398,9 @@ class LiveModelMetrics:
         if kind is not None: self.adapter_error(kind)
     def setup_error(self, kind: str) -> None:
         if kind not in self.setup_error_kinds: self.setup_error_kinds.append(kind)
+    def observe_provider_generation(self, transport: Any) -> None:
+        if getattr(transport, "last_provider_generation_started", False) is True:
+            self.provider_generation_calls += 1
     def usage(self,value):
         names=("prompt_tokens","completion_tokens","total_tokens")
         if not isinstance(value,Mapping):
@@ -372,7 +419,7 @@ class LiveModelMetrics:
             self.rejected_canonical_public_request_bytes = canonical_bytes
         if stdin_bytes is not None and stdin_bytes > MAX_STDIN_REQUEST_BYTES:
             self.rejected_stdin_request_bytes = stdin_bytes
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"request_size":{"max_canonical_public_request_bytes":self.max_canonical_public_request_bytes,"canonical_public_request_bytes_limit":MAX_PUBLIC_REQUEST_BYTES,"rejected_canonical_public_request_bytes":self.rejected_canonical_public_request_bytes,"stdin_request_bytes_limit":MAX_STDIN_REQUEST_BYTES,"rejected_stdin_request_bytes":self.rejected_stdin_request_bytes,"http_request_body_bytes_limit":MAX_HTTP_REQUEST_BODY_BYTES}}
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"provider_generation_calls":self.provider_generation_calls,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"request_size":{"max_canonical_public_request_bytes":self.max_canonical_public_request_bytes,"canonical_public_request_bytes_limit":MAX_PUBLIC_REQUEST_BYTES,"rejected_canonical_public_request_bytes":self.rejected_canonical_public_request_bytes,"stdin_request_bytes_limit":MAX_STDIN_REQUEST_BYTES,"rejected_stdin_request_bytes":self.rejected_stdin_request_bytes,"http_request_body_bytes_limit":MAX_HTTP_REQUEST_BODY_BYTES}}
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
@@ -1004,6 +1051,21 @@ class LiveModelAdapter:
                     self.metrics.setup_error(exc.kind)
                     self.metrics.termination_reason="setup_failure"
                     raise LiveModelAdapterError("model adapter setup failed", detail="the command adapter failed before a valid model treatment") from None
+                if exc.kind == "process_error":
+                    # A generic child exit is local command infrastructure
+                    # evidence, not proof of a provider outage.  Preserve the
+                    # transport kind in setup evidence and keep the frozen
+                    # retry policy, but fail closed as infrastructure on the
+                    # terminal attempt.
+                    self.metrics.setup_error(exc.kind)
+                    if attempt < self.limits.max_retries:
+                        self.metrics.retries += 1
+                        continue
+                    self.metrics.termination_reason = "setup_failure"
+                    raise LiveModelAdapterError(
+                        "model command adapter infrastructure failed",
+                        detail="the command adapter exited without a typed error envelope",
+                    ) from None
                 self.metrics.error(exc.kind)
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
@@ -1021,6 +1083,7 @@ class LiveModelAdapter:
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                 self.metrics.termination_reason="invalid_model_response"; raise
             finally:
+                self.metrics.observe_provider_generation(self.transport)
                 self.model_phase_elapsed_seconds += max(0.0,self.clock()-phase_started)
     def _remaining(self):
         left=self.limits.max_model_phase_seconds-self.model_phase_elapsed_seconds
