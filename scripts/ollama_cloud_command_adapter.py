@@ -23,6 +23,12 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, TextIO
 from urllib.parse import urlsplit
+from agentic_debugger.evaluation.request_envelope import (
+    MAX_HTTP_REQUEST_BODY_BYTES,
+    MAX_PUBLIC_REQUEST_BYTES,
+    MAX_RAW_RESPONSE_BYTES,
+    MAX_STDIN_REQUEST_BYTES,
+)
 
 
 @dataclass(frozen=True)
@@ -62,9 +68,6 @@ PROTOCOL_NAME = "agentic-debugger-live-jsonl"
 PROTOCOL_VERSION = "1.3"
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
-MAX_PUBLIC_REQUEST_BYTES = 25_000
-MAX_RAW_RESPONSE_BYTES = 64 * 1024
-MAX_STDIN_REQUEST_BYTES = 128 * 1024
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
 MAX_DIRECTIVE_ARGUMENT_BYTES = 32_768
 MAX_DIRECTIVE_REASON_BYTES = 2_048
@@ -173,7 +176,7 @@ def canonical_public_request(request: Mapping[str, Any]) -> str:
         raise OllamaAdapterError("protocol request is not strict JSON", kind="invalid_request") from None
     if size > MAX_PUBLIC_REQUEST_BYTES:
         raise OllamaAdapterError(
-            "canonical public request exceeds the Local Application ceiling",
+            f"canonical public request exceeds the configured bound ({size} > {MAX_PUBLIC_REQUEST_BYTES} bytes)",
             kind="request_too_large",
         )
     return canonical
@@ -627,7 +630,7 @@ def _http_json_request(
     headers = {"Accept": "application/json"}
     if body is not None:
         request_bytes = (_safe_json(body) + "\n").encode("utf-8")
-        if len(request_bytes) > MAX_RAW_RESPONSE_BYTES:
+        if len(request_bytes) > MAX_HTTP_REQUEST_BODY_BYTES:
             raise OllamaAdapterError("Ollama request exceeded the configured bound", kind="request_too_large")
         headers["Content-Type"] = "application/json"
 

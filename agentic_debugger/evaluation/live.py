@@ -35,6 +35,11 @@ from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
 from agentic_debugger.events.schema import RunEvent
 from agentic_debugger.rag.context import PUBLIC_REQUEST_BYTE_BUDGET, RagContext
+from agentic_debugger.evaluation.request_envelope import (
+    MAX_HTTP_REQUEST_BODY_BYTES,
+    MAX_PUBLIC_REQUEST_BYTES,
+    MAX_STDIN_REQUEST_BYTES,
+)
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 class LiveEvaluationError(RuntimeError): pass
@@ -338,7 +343,7 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); adapter_error_kinds:list[str]=field(default_factory=list); invalid_model_responses:int=0; setup_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None
+    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); adapter_error_kinds:list[str]=field(default_factory=list); invalid_model_responses:int=0; setup_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; max_canonical_public_request_bytes:int=0; rejected_canonical_public_request_bytes:int|None=None; rejected_stdin_request_bytes:int|None=None
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
@@ -359,7 +364,15 @@ class LiveModelMetrics:
             if type(number) is int and number >= 0:
                 old=getattr(self,name); setattr(self,name,number if old is None else old+number)
             elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason}
+    def observe_request_size(self, canonical_bytes: int, *, stdin_bytes: int | None = None) -> None:
+        self.max_canonical_public_request_bytes = max(
+            self.max_canonical_public_request_bytes, canonical_bytes
+        )
+        if canonical_bytes > MAX_PUBLIC_REQUEST_BYTES:
+            self.rejected_canonical_public_request_bytes = canonical_bytes
+        if stdin_bytes is not None and stdin_bytes > MAX_STDIN_REQUEST_BYTES:
+            self.rejected_stdin_request_bytes = stdin_bytes
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"request_size":{"max_canonical_public_request_bytes":self.max_canonical_public_request_bytes,"canonical_public_request_bytes_limit":MAX_PUBLIC_REQUEST_BYTES,"rejected_canonical_public_request_bytes":self.rejected_canonical_public_request_bytes,"stdin_request_bytes_limit":MAX_STDIN_REQUEST_BYTES,"rejected_stdin_request_bytes":self.rejected_stdin_request_bytes,"http_request_body_bytes_limit":MAX_HTTP_REQUEST_BODY_BYTES}}
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
@@ -882,8 +895,28 @@ class LiveModelAdapter:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
             except (TypeError,ValueError,UnicodeError):
                 self.metrics.termination_reason="request_serialization"; raise LiveModelAdapterError("live model context could not be serialized") from None
-            if len(request_bytes)>MAX_MODEL_RESPONSE_BYTES:
-                self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context exceeded the configured request bound")
+            try:
+                canonical_request_bytes = len(json.dumps(
+                    request,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                    ensure_ascii=False,
+                    allow_nan=False,
+                ).encode("utf-8"))
+            except (TypeError,ValueError,UnicodeError):
+                self.metrics.termination_reason="request_serialization"; raise LiveModelAdapterError("live model context could not be serialized") from None
+            self.metrics.observe_request_size(
+                canonical_request_bytes,
+                stdin_bytes=len(request_bytes) + 1,
+            )
+            if canonical_request_bytes > MAX_PUBLIC_REQUEST_BYTES:
+                self.metrics.setup_error("request_too_large")
+                self.metrics.termination_reason="setup_failure"
+                raise LiveModelAdapterError("live model context exceeded the configured public request bound")
+            if len(request_bytes) + 1 > MAX_STDIN_REQUEST_BYTES:
+                self.metrics.setup_error("request_too_large")
+                self.metrics.termination_reason="setup_failure"
+                raise LiveModelAdapterError("live model context exceeded the configured stdin request bound")
             # RAG-enabled guard: the canonical public request (which is what
             # the transport serializes and byte-bounds) must stay inside the
             # frozen public-evidence budget even with the retrieved context

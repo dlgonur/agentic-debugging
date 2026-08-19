@@ -1,0 +1,82 @@
+{
+  "schema_version": "gpt_oss_swerebench_v2_devqual10_v4-execution-contract-v1",
+  "experiment_id": "gpt_oss_swerebench_v2_devqual10_v4",
+  "parent_experiment": {
+    "experiment_id": "gpt_oss_swerebench_v2_devqual10_v3",
+    "status": "DEVELOPMENT_QUALIFICATION_ONLY",
+    "frozen": true,
+    "relationship": "V4 is a new GPT-OSS 20B transport-envelope treatment child of immutable V3."
+  },
+  "status": "DEVELOPMENT_QUALIFICATION_ONLY",
+  "provider_generation_calls": 0,
+  "qualification_boundary": "Results cannot be promoted into an unseen benchmark capability score.",
+  "source_ordering_sha256": "599a07b6a527b4f8dffda4120be8e3c524ad608929bb048ea98286f80e0f5061",
+  "source_population_sha256": "36bd31d1470b86db982235153372793455a850ae1fe9c1669bdf8c0e7e68ab8f",
+  "historical_pilot10_manifest_sha256": "4b9b17f8f897e56263f0394e35c06261bc613097f38a1b2e157d4d9a215a963f",
+  "devqual_manifest_sha256": "97cfc4d2e7fb8378dfc8fc5ee819c3b4d9c9652038c150f8dc3b3b33ef0cc62a",
+  "first_ten_order_policy": "exact prefix of the immutable source full ordering; no resampling or reordering",
+  "treatment_changes_from_v3": [
+    "coherent bounded repo-scale command-adapter request envelope",
+    "durable numeric request-size provenance",
+    "repaired preflight CLI plumbing"
+  ],
+  "request_envelope": {
+    "canonical_public_request_bytes": 131072,
+    "stdin_request_bytes": 196608,
+    "http_request_body_bytes": 262144,
+    "raw_response_bytes": 65536
+  },
+  "provider": {
+    "route": "Ollama Cloud",
+    "profile_id": "ollama-cloud-gpt-oss-20b",
+    "display_name": "Ollama Cloud GPT-OSS 20B",
+    "alias": "gpt-oss:20b-cloud",
+    "upstream": "gpt-oss:20b",
+    "protocol": "1.3",
+    "reasoning_effort": "high",
+    "adapter": "scripts/ollama_cloud_command_adapter.py",
+    "adapter_retry_count": 0,
+    "fallback_count": 0,
+    "configured_source_live_run_limits_max_retries": 2,
+    "provider_generation_calls": 0
+  },
+  "controller": {
+    "architecture": "single DeterministicController + typed tools + PatchManager",
+    "policy": "pdb-on-uncertainty",
+    "attempts_per_task": 1,
+    "pdb_available": false,
+    "pdb_treatment": "PDB unavailable by treatment contract",
+    "external_patch_gate": "successful get_source_window observation required",
+    "max_controller_steps": 64,
+    "max_model_requests": 64,
+    "max_patch_attempts": 3,
+    "max_test_runs": 12,
+    "max_pdb_observations": 8,
+    "max_active_hypotheses": 3,
+    "max_source_observations": 12
+  },
+  "evaluation": {
+    "correctness_authority": "official SWE-rebench independent verifier via OfficialSWERebenchVerifier",
+    "fresh_external_application_root_per_task": true,
+    "external_runtime_root": "%LOCALAPPDATA%/agentic-debugging/gpt-oss-swerebench-v2-devqual10-v4",
+    "preflight_root": "%LOCALAPPDATA%/agentic-debugging/gpt-oss-swerebench-v2-devqual10-v4-preflight",
+    "model_workspace": "base commit only; no test_patch; no gold patch",
+    "verifier_workspace": "base commit + hidden test_patch; gold never applied as model input",
+    "no_task_specific_prompt_customization": true,
+    "no_outcome_dependent_retries": true,
+    "one_attempt_per_task": true,
+    "clean_worktree_required": true
+  },
+  "harness": {
+    "parent_baseline": "832670a4842d8a3fe0b9150212644cf11687a496",
+    "harness_content_sha256": "553616df4c80d432085ed0807b9fd48421762dd52df9d59a6786ebe9eb10875f",
+    "runtime_head_policy": "record_at_execution",
+    "working_tree_policy": "must_be_clean_at_execution"
+  },
+  "devqual_v4_zero_provider_contract": {
+    "preflight_generation_calls": 0,
+    "authorize_generation_calls": 0,
+    "provider_inference_allowed_during_repair": false,
+    "hidden_data_isolation": "gold patches, hidden verifier tests, and private oracle fields remain outside model-facing workspace and prompts"
+  }
+}
