@@ -89,6 +89,7 @@ _KNOWN_PARAMS = frozenset(
         "external_root",
         "external_bundle_path",
         "external_preflight_path",
+        "external_readiness_mode",
         "external_instance_id",
         "external_manifest_fingerprint",
         "external_authority_revision",
@@ -290,11 +291,19 @@ def run_configured_session(
 
     external_task_path = params.get("external_task_path")
     if external_task_path is not None:
+        readiness_mode = params.get("external_readiness_mode", "preflight")
+        if readiness_mode not in {"preflight", "direct"}:
+            raise PreModelSetupFailure(
+                "external readiness mode must be 'preflight' or 'direct'"
+            )
+        if readiness_mode == "direct" and "external_preflight_path" in params:
+            raise PreModelSetupFailure(
+                "direct readiness mode does not accept preflight records"
+            )
         required_external = (
             "external_repository_root",
             "external_root",
             "external_bundle_path",
-            "external_preflight_path",
             "external_instance_id",
             "external_manifest_fingerprint",
             "external_authority_revision",
@@ -318,18 +327,24 @@ def run_configured_session(
         if not repository_root.is_dir() or not external_root.is_dir():
             raise PreModelSetupFailure("external repository and runtime roots must exist")
         bundle = load_private_bundle(Path(str(values["external_bundle_path"])))
-        try:
-            preflight = json.loads(
-                Path(str(values["external_preflight_path"])).read_text(encoding="utf-8")
-            )
-        except (OSError, ValueError) as exc:
-            raise PreModelSetupFailure(
-                "external preflight record is missing or invalid"
-            ) from exc
-        if preflight.get("instance_id") != values["external_instance_id"]:
-            raise PreModelSetupFailure("external preflight identity does not match the task")
-        if not preflight.get("verifier_baseline_valid"):
-            raise PreModelSetupFailure("external official verifier baseline is not valid")
+        baseline_valid: bool | None = None
+        if readiness_mode == "preflight":
+            preflight_path = params.get("external_preflight_path")
+            if type(preflight_path) is not str or not preflight_path:
+                raise PreModelSetupFailure(
+                    "external preflight record is required in preflight readiness mode"
+                )
+            try:
+                preflight = json.loads(Path(preflight_path).read_text(encoding="utf-8"))
+            except (OSError, ValueError) as exc:
+                raise PreModelSetupFailure(
+                    "external preflight record is missing or invalid"
+                ) from exc
+            if preflight.get("instance_id") != values["external_instance_id"]:
+                raise PreModelSetupFailure("external preflight identity does not match the task")
+            if not preflight.get("verifier_baseline_valid"):
+                raise PreModelSetupFailure("external official verifier baseline is not valid")
+            baseline_valid = True
         if task.task_id != task_id or task.source is None or task.source.kind != "external":
             raise PreModelSetupFailure("external task is not bound to the Local Application task")
         execution_context = build_docker_execution_context(
@@ -345,7 +360,7 @@ def run_configured_session(
         verifier = OfficialSWERebenchVerifier(
             bundle,
             work_root=external_root,
-            baseline_valid=True,
+            baseline_valid=baseline_valid,
         )
 
         def _external_verifier(_task: Any, candidate: str) -> dict[str, Any]:

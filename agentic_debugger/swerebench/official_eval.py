@@ -338,3 +338,83 @@ def run_official_infrastructure_gate(
             check=False,
         )
     return result
+
+
+def run_official_baseline_check(
+    bundle: OfficialInstanceBundle,
+    *,
+    work_root: Path,
+) -> dict[str, Any]:
+    """Validate one verifier baseline lazily, after a candidate exists.
+
+    Direct execution deliberately does not qualify a task before model
+    inference.  This helper is the narrow baseline portion of the historical
+    readiness gate and never runs the gold patch.
+    """
+
+    result: dict[str, Any] = {
+        "ran": False,
+        "docker_available": _docker_available(),
+        "image_name": bundle.image_name(),
+        "image_pulled": False,
+        "evaluator_commit": OFFICIAL_EVALUATOR_COMMIT,
+        "verifier_environment_valid": False,
+        "verifier_baseline_valid": False,
+        "reason": None,
+    }
+    if not result["docker_available"]:
+        result["reason"] = "docker_unavailable"
+        return result
+    image = bundle.image_name()
+    if not image:
+        result["reason"] = "missing_official_image_name"
+        return result
+    if not bundle.test_patch().strip():
+        result["reason"] = "missing_official_test_patch"
+        return result
+    pulled, pull_detail = _docker_pull(image)
+    result["image_pulled"] = pulled
+    if not pulled:
+        result["reason"] = f"docker_pull_failed: {pull_detail}"
+        return result
+
+    private = work_root / f"official-baseline-private-{bundle.public.instance_id}"
+    private.mkdir(parents=True, exist_ok=True)
+    try:
+        baseline_json = private / "baseline.json"
+        baseline_report = private / "baseline_report.json"
+        _write_isolated_spec(baseline_json, bundle, use_gold=False)
+        baseline = _run_official_eval(baseline_json, baseline_report, private)
+        item = _report_item(baseline.get("report"), bundle.public.instance_id)
+        summary = _summarize_item(
+            item,
+            empty_p2p=not bool(bundle.hidden_tests()[1]),
+            requested_instance_id=bundle.public.instance_id,
+            expected_f2p_count=len(bundle.hidden_tests()[0]),
+            expected_p2p_count=len(bundle.hidden_tests()[1]),
+        )
+        result["ran"] = True
+        result["verifier_environment_valid"] = bool(summary.get("valid_result"))
+        f2p_passing = int(summary.get("f2p_now_passing_count") or 0)
+        p2p_ok = (
+            not bundle.hidden_tests()[1]
+            or int(summary.get("p2p_failed_count") or 0) == 0
+        )
+        result["verifier_baseline_valid"] = bool(
+            summary.get("valid_result")
+            and not summary.get("error")
+            and f2p_passing == 0
+            and p2p_ok
+        )
+        result["summary"] = summary
+        result["process_exit_code"] = baseline.get("exit_code")
+        if not result["verifier_environment_valid"]:
+            result["reason"] = "official_baseline_report_invalid"
+        elif not result["verifier_baseline_valid"]:
+            result["reason"] = "official_baseline_invalid"
+    except Exception as exc:
+        result["reason"] = f"official_baseline_check_failed: {type(exc).__name__}: {exc}"
+    finally:
+        shutil.rmtree(private, ignore_errors=True)
+        subprocess.run(["docker", "rmi", "-f", image], capture_output=True, check=False)
+    return result

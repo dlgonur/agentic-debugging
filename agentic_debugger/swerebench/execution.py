@@ -30,6 +30,7 @@ from agentic_debugger.runtime.execution import (
 )
 from agentic_debugger.swerebench.official_eval import (
     _run_official_eval,
+    run_official_baseline_check,
     _report_item,
     _summarize_item,
     _write_isolated_spec,
@@ -416,11 +417,9 @@ class OfficialSWERebenchVerifier:
         bundle: OfficialInstanceBundle,
         *,
         work_root: Path,
-        baseline_valid: bool,
+        baseline_valid: bool | None,
         evaluate_fn: Callable[[Path, Path, Path], dict[str, Any]] = _run_official_eval,
     ) -> None:
-        if not baseline_valid:
-            raise SWERebenchExecutionError("official baseline is not valid")
         self.bundle = bundle
         self.work_root = work_root.resolve()
         self.baseline_valid = baseline_valid
@@ -438,6 +437,30 @@ class OfficialSWERebenchVerifier:
         # request/task mapping.
         result: dict[str, Any]
         try:
+            if self.baseline_valid is None:
+                baseline = run_official_baseline_check(
+                    self.bundle,
+                    work_root=self.work_root,
+                )
+                if not baseline.get("verifier_baseline_valid"):
+                    result = {
+                        "authority": "official-swerebench-docker-evaluator",
+                        "verifier_ran": True,
+                        "verifier_infrastructure_valid": False,
+                        "baseline_valid": baseline.get("verifier_baseline_valid"),
+                        "fail_to_pass": None,
+                        "pass_to_pass": None,
+                        "full_suite": None,
+                        "verifier_outcome": "UNRESOLVED",
+                        "resolved": False,
+                        "candidate_patch_sha256": hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest(),
+                        "cleanup": True,
+                        "official_error": baseline.get("reason") or "official baseline invalid",
+                        "official_process_exit_code": baseline.get("process_exit_code"),
+                        "official_passed_match": False,
+                    }
+                    return result
+                self.baseline_valid = True
             try:
                 spec = _write_isolated_spec(
                     spec_path,

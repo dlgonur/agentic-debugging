@@ -366,6 +366,7 @@ def _run_authorized_pilot10(
     run_id_prefix: str = "pilot10",
     rows_filename: str = "pilot10_rows.json",
     campaign_metadata: dict | None = None,
+    readiness_mode: str = "preflight",
 ) -> int:
     """Run the frozen rows through the real Local Application worker path.
 
@@ -375,11 +376,18 @@ def _run_authorized_pilot10(
 
     from agentic_debugger.swerebench.selection import OrderedTask
 
+    if readiness_mode not in {"preflight", "direct"}:
+        raise ValueError("readiness_mode must be 'preflight' or 'direct'")
+    if readiness_mode == "direct" and (
+        preflight_record_dir is not None or preflight_evidence_fingerprint is not None
+        or expected_preflight_instance_ids is not None
+    ):
+        raise ValueError("direct readiness mode does not accept preflight evidence")
     pilot = json.loads((frozen / "pilot10_manifest.json").read_text(encoding="utf-8"))
     tasks = [OrderedTask(**row) for row in pilot["tasks"]]
     bundles = load_official_bundles(item.instance_id for item in tasks)
     authorized_records: dict[str, dict] = {}
-    if preflight_record_dir is not None:
+    if readiness_mode == "preflight" and preflight_record_dir is not None:
         summary_path = preflight_record_dir.parent / "summary.json"
         try:
             summary, authorized_records, actual_fingerprint = load_preflight_bundle(
@@ -415,86 +423,123 @@ def _run_authorized_pilot10(
     rows: list[dict] = []
     try:
         for ordered in tasks:
-            bundle = bundles[ordered.instance_id]
-            source_parent = sources / ordered.instance_id
-            source_parent.mkdir()
-            checkout = materialize_base_commit(
-                instance_id=ordered.instance_id,
-                repo=ordered.repo,
-                repo_canonical=ordered.repo_canonical,
-                base_commit=ordered.base_commit,
-                dest_parent=source_parent,
-            )
-            allowed = production_write_paths(checkout)
-            model_task = build_model_task(
-                ordered, bundle, fixture_path=".", allowed_write_paths=allowed
-            )
-            task_path = metadata / f"{ordered.instance_id}.task.json"
-            bundle_path = metadata / f"{ordered.instance_id}.private.json"
-            task_path.write_text(
-                json.dumps(model_task.to_mapping(), ensure_ascii=True, sort_keys=True),
-                encoding="utf-8",
-            )
-            write_private_bundle(bundle_path, bundle)
+            print(f"START {ordered.order_index}/10 {ordered.instance_id}", flush=True)
             task_id = product_task_id(ordered.instance_id)
-            session_dir = sessions / task_id
-            spec = SessionSpec(
-                task_id=task_id,
-                source=ExecutionSourceSpec(
-                    kind=SourceKind.CONFIGURED_MODEL,
-                    task_id=task_id,
-                    policy="pdb-on-uncertainty",
-                    model_config_ref=args.profile_id,
-                ),
-                budgets=SessionBudgets(
-                    max_model_calls=64,
-                    max_controller_steps=64,
-                    max_elapsed_seconds=1800,
-                ),
-                artifact_destination=str(session_dir),
-            )
-            session_id = "sess-20260818-" + uuid.uuid4().hex[:16]
-            params = {
-                "config_root": str(args.config_root),
-                "profile_id": args.profile_id,
-                "expected_fingerprint": profile_fingerprint,
-                "policy": "pdb-on-uncertainty",
-                "external_task_path": str(task_path),
-                "external_repository_root": str(checkout),
-                "external_root": str(root),
-                "external_bundle_path": str(bundle_path),
-                "external_preflight_path": str(
-                    (preflight_record_dir / f"{ordered.instance_id}.json")
-                    if preflight_record_dir is not None
-                    else frozen / "preflight" / f"{ordered.instance_id}.json"
-                ),
-                "external_instance_id": ordered.instance_id,
-                "external_manifest_fingerprint": ordered.assignment_key,
-                "external_authority_revision": ordered.base_commit,
-                "external_project": ordered.repo,
-                "external_bug_id": ordered.instance_id,
-                "external_buggy_revision": ordered.base_commit,
-            }
-            worker = SessionWorkerProcess(
-                session_dir=session_dir,
-                session_id=session_id,
-                spec=spec,
-                run_id=f"{run_id_prefix}-{ordered.order_index}",
-                scenario="configured_command_model",
-                scenario_params=params,
-                max_elapsed_seconds=1800,
-            )
             try:
-                start_result = worker.start()
-                session_result = start_result if start_result is not None else worker.wait()
-                result_mapping = session_result.to_mapping()
-            finally:
-                worker.close()
-            evaluation = {}
-            evaluation_path = session_dir / "evaluation.json"
-            if evaluation_path.is_file():
-                evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
-            rows.append(_pilot_row(ordered, task_id, session_id, result_mapping, evaluation, session_dir))
+                # This try block is deliberately limited to pre-worker setup.
+                # Its exception path may only produce a zero-call setup row.
+                bundle = bundles[ordered.instance_id]
+                source_parent = sources / ordered.instance_id
+                source_parent.mkdir()
+                checkout = materialize_base_commit(
+                    instance_id=ordered.instance_id,
+                    repo=ordered.repo,
+                    repo_canonical=ordered.repo_canonical,
+                    base_commit=ordered.base_commit,
+                    dest_parent=source_parent,
+                )
+                allowed = production_write_paths(checkout)
+                model_task = build_model_task(
+                    ordered, bundle, fixture_path=".", allowed_write_paths=allowed
+                )
+                assert_model_facing_isolated(
+                    model_task.agent_visible_mapping(),
+                    hidden_needles=hidden_needles_from_private({
+                        "patch": bundle.gold_patch(),
+                        "test_patch": bundle.test_patch(),
+                        "FAIL_TO_PASS": list(bundle.hidden_tests()[0]),
+                        "PASS_TO_PASS": list(bundle.hidden_tests()[1]),
+                    }),
+                )
+                task_path = metadata / f"{ordered.instance_id}.task.json"
+                bundle_path = metadata / f"{ordered.instance_id}.private.json"
+                task_path.write_text(
+                    json.dumps(model_task.to_mapping(), ensure_ascii=True, sort_keys=True),
+                    encoding="utf-8",
+                )
+                write_private_bundle(bundle_path, bundle)
+                session_dir = sessions / task_id
+                spec = SessionSpec(
+                    task_id=task_id,
+                    source=ExecutionSourceSpec(
+                        kind=SourceKind.CONFIGURED_MODEL,
+                        task_id=task_id,
+                        policy="pdb-on-uncertainty",
+                        model_config_ref=args.profile_id,
+                    ),
+                    budgets=SessionBudgets(
+                        max_model_calls=64,
+                        max_controller_steps=64,
+                        max_elapsed_seconds=1800,
+                    ),
+                    artifact_destination=str(session_dir),
+                )
+                session_id = "sess-20260818-" + uuid.uuid4().hex[:16]
+                params = {
+                    "config_root": str(args.config_root),
+                    "profile_id": args.profile_id,
+                    "expected_fingerprint": profile_fingerprint,
+                    "policy": "pdb-on-uncertainty",
+                    "external_task_path": str(task_path),
+                    "external_repository_root": str(checkout),
+                    "external_root": str(root),
+                    "external_bundle_path": str(bundle_path),
+                    "external_readiness_mode": readiness_mode,
+                    "external_instance_id": ordered.instance_id,
+                    "external_manifest_fingerprint": ordered.assignment_key,
+                    "external_authority_revision": ordered.base_commit,
+                    "external_project": ordered.repo,
+                    "external_bug_id": ordered.instance_id,
+                    "external_buggy_revision": ordered.base_commit,
+                }
+                if readiness_mode == "preflight":
+                    params["external_preflight_path"] = str(
+                        (preflight_record_dir / f"{ordered.instance_id}.json")
+                        if preflight_record_dir is not None
+                        else frozen / "preflight" / f"{ordered.instance_id}.json"
+                    )
+                worker = SessionWorkerProcess(
+                    session_dir=session_dir,
+                    session_id=session_id,
+                    spec=spec,
+                    run_id=f"{run_id_prefix}-{ordered.order_index}",
+                    scenario="configured_command_model",
+                    scenario_params=params,
+                    max_elapsed_seconds=1800,
+                )
+            except Exception as exc:
+                if readiness_mode != "direct":
+                    raise
+                row = _direct_setup_failure_row(ordered, task_id, exc)
+            else:
+                # Worker startup, model execution, durable evidence loading,
+                # and row projection are intentionally outside the setup
+                # exception boundary.  An unexpected post-start exception
+                # must fail closed rather than becoming a fabricated
+                # zero-provider setup row.
+                try:
+                    start_result = worker.start()
+                    session_result = start_result if start_result is not None else worker.wait()
+                    result_mapping = session_result.to_mapping()
+                finally:
+                    worker.close()
+                evaluation = {}
+                evaluation_path = session_dir / "evaluation.json"
+                if evaluation_path.is_file():
+                    evaluation = json.loads(evaluation_path.read_text(encoding="utf-8"))
+                row = _pilot_row(ordered, task_id, session_id, result_mapping, evaluation, session_dir)
+            rows.append(row)
+            runtime = row.get("runtime") or {}
+            science = row.get("science") or {}
+            print(
+                f"END {ordered.order_index}/10 {ordered.instance_id} "
+                f"classification={science.get('classification')} "
+                f"resolved={science.get('resolved')} "
+                f"model_calls={runtime.get('logical_model_calls') or 0} "
+                f"transport_attempts={runtime.get('transport_attempts') or 0} "
+                f"elapsed_seconds={runtime.get('wall_clock_seconds') or 0}",
+                flush=True,
+            )
         write_json(root / rows_filename, {"rows": rows})
         print(
             json.dumps(
@@ -514,6 +559,63 @@ def _run_authorized_pilot10(
         shutil.rmtree(metadata, ignore_errors=True)
 
 
+def _direct_setup_failure_row(ordered, task_id: str, error: Exception) -> dict:
+    """Persist an honest infrastructure row when direct task setup fails."""
+
+    row = empty_result_template()
+    row["identity"].update(
+        task_id=task_id,
+        instance_id=ordered.instance_id,
+        repository=ordered.repo,
+        base_commit=ordered.base_commit,
+        manifest_order_index=ordered.order_index,
+        harness_commit=current_git_head(repository_root()),
+        model_profile_id=PROFILE_ID,
+        model_alias=MODEL_ALIAS,
+        upstream_model=UPSTREAM_MODEL,
+        policy="pdb-on-uncertainty",
+        protocol=PROTOCOL_VERSION,
+    )
+    row["runtime"].update(
+        session_id=None,
+        logical_model_calls=0,
+        transport_attempts=0,
+        adapter_retry_count=0,
+        fallback_count=0,
+        provider_failures=0,
+    )
+    row["pdb"].update(
+        pdb_eligible=False,
+        pdb_gate_opened=False,
+        pdb_entered=False,
+        debugger_actions=0,
+        debugger_observations=0,
+        runtime_evidence_preceded_patch=False,
+        pdb_not_exercised=True,
+        classification="pdb_unavailable_by_treatment_contract",
+    )
+    row["verification"].update(
+        verifier_ran=False,
+        verifier_infrastructure_valid=False,
+        baseline_valid=None,
+        cleanup=None,
+    )
+    row["science"].update(
+        admissible_model_result=False,
+        infrastructure_invalid=True,
+        contaminated=False,
+        provider_invalid=False,
+        resolved=False,
+        unresolved=False,
+        debugger_assisted_resolved=False,
+        execution_classification="infrastructure_invalid",
+        classification="infrastructure_invalid",
+    )
+    row["notes"] = [f"direct task setup failed: {type(error).__name__}: {str(error)[:400]}"]
+    validate_pilot_result(row)
+    return row
+
+
 def _pilot_row(ordered, task_id, session_id, session_result, evaluation, session_dir):
     session_result = session_result if isinstance(session_result, dict) else {}
     evaluation = evaluation if isinstance(evaluation, dict) else {}
@@ -527,7 +629,7 @@ def _pilot_row(ordered, task_id, session_id, session_result, evaluation, session
     verifier_ran = bool(evaluation.get("verifier_ran"))
     infra_valid = (
         bool(evaluation.get("verifier_infrastructure_valid"))
-        if verifier_ran
+        if verifier_ran or "verifier_infrastructure_valid" in evaluation
         else True
     )
     verifier_resolved = bool(
