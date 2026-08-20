@@ -96,6 +96,7 @@ _KNOWN_PARAMS = frozenset(
         "external_project",
         "external_bug_id",
         "external_buggy_revision",
+        "model_phase_seconds",
     }
 )
 from agentic_debugger.evaluation.task_schema import DebugTask
@@ -114,8 +115,6 @@ _DEFAULT_MAX_MODEL_REQUESTS = 64
 _DEFAULT_MAX_CONTROLLER_STEPS = 64
 _DEFAULT_MAX_RETRIES = 2
 _PROVIDER_METRICS_NAME = "provider.metrics.json"
-
-
 class ConfiguredSourceError(LocalSourceError):
     """Raised when the configured source itself fails (never for scientific
     outcomes; the verifier remains the correctness authority)."""
@@ -155,7 +154,7 @@ def _optional_fingerprint(params: Mapping[str, Any]) -> Optional[str]:
 
 def _validate_params(
     params: Mapping[str, Any]
-) -> tuple[str, str, str, Optional[str]]:
+) -> tuple[str, str, str, Optional[str], Optional[int]]:
     extra = set(params.keys()) - _KNOWN_PARAMS
     if extra:
         raise PreModelSetupFailure(f"unknown configured source params: {sorted(extra)}")
@@ -165,7 +164,14 @@ def _validate_params(
     if policy not in {candidate.value for candidate in DemoPolicy}:
         raise PreModelSetupFailure(f"unknown demonstration policy: {policy!r}")
     expected_fingerprint = _optional_fingerprint(params)
-    return config_root, profile_id, policy, expected_fingerprint
+    model_phase_seconds = params.get("model_phase_seconds")
+    if model_phase_seconds is not None and (
+        type(model_phase_seconds) is not int or not 1 <= model_phase_seconds <= 3600
+    ):
+        raise PreModelSetupFailure(
+            "configured source param 'model_phase_seconds' must be an int in [1, 3600]"
+        )
+    return config_root, profile_id, policy, expected_fingerprint, model_phase_seconds
 
 
 def run_configured_session(
@@ -180,7 +186,13 @@ def run_configured_session(
     ``ctx.token`` at every safe boundary, including inside the model
     transport's request poll.
     """
-    config_root, profile_id, policy_value, expected_fingerprint = _validate_params(
+    (
+        config_root,
+        profile_id,
+        policy_value,
+        expected_fingerprint,
+        model_phase_seconds,
+    ) = _validate_params(
         params
     )
     if ctx.emitter is None:
@@ -236,11 +248,10 @@ def run_configured_session(
     limits = LiveRunLimits(
         max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS,
         max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
-        # The session deadline is enforced by the worker's cancellation
-        # token (deadline + transport poll), never duplicated into a second
-        # model-phase budget that could race the token's timeout
-        # classification.
-        max_elapsed_seconds=None,
+        # The treatment/run supplies this explicitly.  Do not infer a
+        # scientific budget from a transport presentation flag such as
+        # ``--stream``; the worker owns the separate overall task deadline.
+        max_elapsed_seconds=model_phase_seconds,
         max_retries=_DEFAULT_MAX_RETRIES,
         max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
         # Streaming GPT-OSS generations can occupy the full bounded request

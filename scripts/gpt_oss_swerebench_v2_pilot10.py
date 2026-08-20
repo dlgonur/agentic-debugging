@@ -371,11 +371,15 @@ def _run_authorized_pilot10(
     rows_filename: str = "pilot10_rows.json",
     campaign_metadata: dict | None = None,
     readiness_mode: str = "preflight",
+    task_timeout_seconds: int = 1800,
+    model_phase_seconds: int | None = None,
 ) -> int:
     """Run the frozen rows through the real Local Application worker path.
 
-    This function is reachable only through the explicit provider flag after
-    the zero-provider gate.  It is intentionally not called by this repair.
+    ``task_timeout_seconds`` is the overall per-task worker deadline.  When a
+    treatment supplies ``model_phase_seconds``, that value is passed
+    explicitly to the configured source as the aggregate model/controller
+    phase budget; it is never inferred from a streaming command flag.
     """
 
     from agentic_debugger.swerebench.selection import OrderedTask
@@ -474,7 +478,7 @@ def _run_authorized_pilot10(
                     budgets=SessionBudgets(
                         max_model_calls=64,
                         max_controller_steps=64,
-                        max_elapsed_seconds=1800,
+                        max_elapsed_seconds=task_timeout_seconds,
                     ),
                     artifact_destination=str(session_dir),
                 )
@@ -496,6 +500,8 @@ def _run_authorized_pilot10(
                     "external_bug_id": ordered.instance_id,
                     "external_buggy_revision": ordered.base_commit,
                 }
+                if model_phase_seconds is not None:
+                    params["model_phase_seconds"] = model_phase_seconds
                 if readiness_mode == "preflight":
                     params["external_preflight_path"] = str(
                         (preflight_record_dir / f"{ordered.instance_id}.json")
@@ -509,7 +515,7 @@ def _run_authorized_pilot10(
                     run_id=f"{run_id_prefix}-{ordered.order_index}",
                     scenario="configured_command_model",
                     scenario_params=params,
-                    max_elapsed_seconds=1800,
+                    max_elapsed_seconds=task_timeout_seconds,
                 )
             except Exception as exc:
                 if readiness_mode != "direct":

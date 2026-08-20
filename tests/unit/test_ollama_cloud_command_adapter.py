@@ -76,6 +76,12 @@ def valid_content() -> str:
     return json.dumps({"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}, separators=(",", ":"))
 
 
+def test_v10_generation_timeout_is_within_adapter_envelope() -> None:
+    assert adapter._validate_timeout_seconds(1080.0) == 1080.0
+    with pytest.raises(adapter.OllamaAdapterError, match="timeout"):
+        adapter._validate_timeout_seconds(adapter.MAX_REQUEST_TIMEOUT_SECONDS + 0.1)
+
+
 def valid_tags_entry(**overrides: Any) -> dict[str, Any]:
     entry = {
         "name": adapter.MODEL_ID,
@@ -112,6 +118,7 @@ class _FixtureState:
         delay: float = 0.0,
         tags_delay: float = 0.0,
         show_delay: float = 0.0,
+        stream_chunk_delay: float = 0.0,
         tags_payload: bytes | None = None,
         show_payload: bytes | None = None,
     ) -> None:
@@ -121,6 +128,7 @@ class _FixtureState:
         self.delay = delay
         self.tags_delay = tags_delay
         self.show_delay = show_delay
+        self.stream_chunk_delay = stream_chunk_delay
         self.tags_body = tags_payload or encode_tags()
         self.show_body = show_payload or encode_show()
         self.requests: list[tuple[str, dict[str, Any] | None]] = []
@@ -168,13 +176,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.flush()
 
     def _send_stream(self, chunks: list[dict[str, Any]]) -> None:
-        body = b"".join(json.dumps(chunk).encode("utf-8") + b"\n" for chunk in chunks)
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
-        self.send_header("Content-Length", str(len(body)))
         self.end_headers()
-        self.wfile.write(body)
-        self.wfile.flush()
+        for chunk in chunks:
+            self.wfile.write(json.dumps(chunk).encode("utf-8") + b"\n")
+            self.wfile.flush()
+            if self.state.stream_chunk_delay:
+                time.sleep(self.state.stream_chunk_delay)
 
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         self.state.record(self.path, None)
@@ -235,6 +244,7 @@ def invoke(
     timeout: float = 2.0,
     model: str | None = None,
     stream: bool = False,
+    stream_idle_timeout: float | None = None,
 ) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
@@ -243,6 +253,8 @@ def invoke(
         argv.extend(["--model", model])
     if stream:
         argv.append("--stream")
+    if stream_idle_timeout is not None:
+        argv.extend(["--stream-idle-timeout", str(stream_idle_timeout)])
     rc = adapter.run_adapter(
         stdin_stream=io.StringIO(json.dumps(request or sample_request()) + "\n"),
         stdout_stream=stdout,
@@ -351,6 +363,87 @@ def test_streaming_chat_discards_thinking_and_projects_usage(fixture_server) -> 
     assert "thinking" not in stdout
     payload = chat_payloads(state)[0]
     assert payload["stream"] is True
+
+
+def test_stream_wire_bound_excludes_discarded_thinking_from_retained_bound(fixture_server) -> None:
+    thinking = "t" * (adapter.DEFAULT_STREAM_RESPONSE_BYTES // 2)
+    chunks = [
+        {
+            "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            "done": False,
+            "message": {"role": "assistant", "thinking": thinking},
+        },
+        {
+            "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            "done": False,
+            "message": {"role": "assistant", "thinking": thinking},
+        },
+        {
+            "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            "done": True,
+            "done_reason": "stop",
+            "message": {"role": "assistant", "content": valid_content()},
+        },
+    ]
+    _state, _server, endpoint = fixture_server(_FixtureState(stream_chunks=chunks))
+    rc, stdout, stderr = invoke(endpoint, timeout=5.0, stream=True)
+    assert rc == 0, stderr
+    telemetry = [json.loads(line) for line in stderr.splitlines()][1]
+    assert telemetry["retained_content_bytes"] == len(valid_content().encode())
+    assert telemetry["discarded_thinking_bytes"] == len(thinking.encode()) * 2
+    assert telemetry["wire_bytes_observed"] > adapter.DEFAULT_STREAM_RESPONSE_BYTES
+    assert thinking not in stdout and thinking not in stderr
+
+
+def test_stream_idle_timeout_distinguishes_progress_from_stall(fixture_server) -> None:
+    import types
+
+    chunks = [
+        json.dumps(
+            {
+                "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+                "done": False,
+                "message": {"role": "assistant", "content": "{"},
+            }
+        ).encode()
+        + b"\n",
+        json.dumps(
+            {
+                "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+                "done": True,
+                "done_reason": "stop",
+                "message": {"role": "assistant", "content": "\"kind\":null}"},
+            }
+        ).encode()
+        + b"\n",
+    ]
+
+    class SlowResponse:
+        def __init__(self) -> None:
+            self.index = 0
+
+        def readline(self, _limit: int) -> bytes:
+            if self.index == 1:
+                time.sleep(0.2)
+            if self.index >= len(chunks):
+                return b""
+            value = chunks[self.index]
+            self.index += 1
+            return value
+
+    telemetry: dict[str, Any] = {}
+    with pytest.raises(adapter.OllamaAdapterError) as exc_info:
+        adapter._read_stream_response(
+            SlowResponse(),
+            types.SimpleNamespace(sock=None),
+            deadline=time.monotonic() + 2.0,
+            idle_timeout_seconds=0.05,
+            telemetry_sink=telemetry,
+        )
+    assert exc_info.value.kind == "timeout"
+    assert exc_info.value.timeout_phase == "stream_idle"
+    assert telemetry["timeout_phase"] == "stream_idle"
+    assert telemetry["progress_occurred"] is True
 
 
 def test_system_prompt_teaches_exact_validator_field_names() -> None:

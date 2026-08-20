@@ -646,7 +646,7 @@ class TestConfiguredSourceFailures:
         ("mode", "expected_transport"),
         [
             ("malformed", "provider_or_transport_error"),
-            ("fail", "provider_or_transport_error"),
+            ("fail", "setup_failure"),
             ("invalid_directive", "invalid_model_response"),
             ("illegal_action", "invalid_model_response"),
             ("flood_stdout", "provider_or_transport_error"),

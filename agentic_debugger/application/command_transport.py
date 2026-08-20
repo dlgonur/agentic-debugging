@@ -58,6 +58,7 @@ from agentic_debugger.evaluation.live import (
     LiveTransportError,
     MAX_MODEL_RESPONSE_BYTES,
     _command_adapter_transport_error,
+    parse_provider_generation_telemetry,
     parse_provider_generation_started,
 )
 
@@ -177,6 +178,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         self._cwd = cwd
         self._environment = validated_environment
         self.last_provider_generation_started = False
+        self.last_provider_generation_telemetry: Mapping[str, Any] | None = None
         # NOTE: the worker-lifecycle cleanup ownership for request-owned
         # process groups (the POSIX SIGTERM handler that kills every in-flight
         # group on worker shutdown) is installed by the worker process itself
@@ -208,6 +210,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
             # Cancellation boundary before any process is spawned.
             self._cancel_check()
         self.last_provider_generation_started = False
+        self.last_provider_generation_telemetry = None
 
         try:
             request_bytes = (
@@ -345,14 +348,14 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     _interrupt_writer()
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
-                    self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
+                    self._capture_generation_telemetry(stderr.text())
                     raise
             if time.monotonic() >= deadline:
                 _terminate_command_tree(process)
                 _interrupt_writer()
                 for thread in threads:
                     thread.join(timeout=_TERMINATE_JOIN_SECONDS)
-                self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
+                self._capture_generation_telemetry(stderr.text())
                 raise LiveTransportError(
                     "model request stdin write timed out",
                     kind="request_timeout",
@@ -372,7 +375,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     _terminate_command_tree(process)
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
-                    self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
+                    self._capture_generation_telemetry(stderr.text())
                     raise
             try:
                 process.wait(timeout=_POLL_INTERVAL_SECONDS)
@@ -382,7 +385,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     _terminate_command_tree(process)
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
-                    self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
+                    self._capture_generation_telemetry(stderr.text())
                     raise LiveTransportError(
                         "model request timed out",
                         kind="request_timeout",
@@ -391,7 +394,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
 
         for thread in threads:
             thread.join(timeout=_TERMINATE_JOIN_SECONDS)
-        self.last_provider_generation_started = parse_provider_generation_started(stderr.text())
+        self._capture_generation_telemetry(stderr.text())
         if stdout.truncated:
             raise LiveTransportError(
                 "model response exceeded the configured output bound",
@@ -413,6 +416,10 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                 "model response was not an object", kind="invalid_response"
             )
         return value
+
+    def _capture_generation_telemetry(self, stderr: str) -> None:
+        self.last_provider_generation_started = parse_provider_generation_started(stderr)
+        self.last_provider_generation_telemetry = parse_provider_generation_telemetry(stderr)
 
 
 __all__ = [

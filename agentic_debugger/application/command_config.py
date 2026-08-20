@@ -103,7 +103,11 @@ _MAX_ENV_VALUE_CHARS = 512
 _MAX_PROTOCOL_CHARS = 64
 _MAX_TOOL_VERSION_CHARS = 64
 _MIN_TIMEOUT_SECONDS = 1.0
-_MAX_TIMEOUT_SECONDS = 300.0
+# The next fixed high-reasoning treatment permits a 60 s metadata phase plus
+# a 1080 s generation maximum and a 60 s process margin.  Keep the bound
+# finite and shared by every configured command profile; individual profiles
+# still declare their exact timeout in the frozen treatment contract.
+_MAX_TIMEOUT_SECONDS = 1200.0
 _MAX_CONFIG_FILE_BYTES = 256 * 1024
 #: Explicit UTF-8 byte bound for every user-visible / worker-propagated
 #: command-model configuration diagnostic.  Consistent with the

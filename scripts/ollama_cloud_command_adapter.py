@@ -75,9 +75,22 @@ PROTOCOL_NAME = "agentic-debugger-live-jsonl"
 PROTOCOL_VERSION = "1.3"
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
+# The request envelope is finite but must accommodate the V10+ high-reasoning
+# treatment (metadata 60s, generation 1080s, and a 45s idle bound).  Keep one
+# adapter-side ceiling so CLI validation cannot reject an otherwise frozen
+# treatment before a provider request is attempted.
+MAX_REQUEST_TIMEOUT_SECONDS = 1200.0
 # V7/live profiles pass an explicit larger timeout.  The historical default is
 # intentionally retained so frozen V1-V6 evidence remains reproducible.
 DEFAULT_STREAM_RESPONSE_BYTES = 4 * 1024 * 1024
+# Wire input and retained controller content have different semantics.  Private
+# reasoning may be large, but it is discarded and must not consume the retained
+# response budget.  The wire and per-item bounds remain finite and fail closed.
+DEFAULT_STREAM_WIRE_BYTES = 8 * 1024 * 1024
+DEFAULT_STREAM_LINE_BYTES = 4 * 1024 * 1024
+DEFAULT_STREAM_RETAINED_CONTENT_BYTES = MAX_RAW_RESPONSE_BYTES
+DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS = 45.0
+PROGRESS_RECENCY_SECONDS = 5.0
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
 MAX_DIRECTIVE_ARGUMENT_BYTES = 32_768
 MAX_DIRECTIVE_REASON_BYTES = 2_048
@@ -94,6 +107,8 @@ DEFAULT_REASONING_EFFORT = "low"
 PREFLIGHT_SCHEMA = "ollama-cloud-preflight-v1"
 GENERATION_EVENT_SCHEMA = "live-command-event-v1"
 GENERATION_EVENT = "provider_generation_started"
+GENERATION_TELEMETRY_SCHEMA = "live-command-telemetry-v1"
+GENERATION_TELEMETRY_EVENT = "provider_generation_telemetry"
 PUBLIC_REQUEST_START = "=== BEGIN PUBLIC REQUEST ==="
 PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
 
@@ -129,9 +144,18 @@ DIRECTIVE_TOP_LEVEL_FIELDS = {
 class OllamaAdapterError(RuntimeError):
     """Safe, bounded adapter failure with no provider response content."""
 
-    def __init__(self, message: str, *, kind: str = "adapter_error") -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str = "adapter_error",
+        timeout_phase: str | None = None,
+        telemetry: Mapping[str, Any] | None = None,
+    ) -> None:
         super().__init__(message)
         self.kind = kind
+        self.timeout_phase = timeout_phase
+        self.telemetry = dict(telemetry) if isinstance(telemetry, Mapping) else None
 
 
 def resolve_cloud_model(model_id: Any) -> CloudModelSpec:
@@ -611,6 +635,8 @@ def _read_stream_response(
     connection: http.client.HTTPConnection,
     *,
     deadline: float,
+    idle_timeout_seconds: float = DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS,
+    telemetry_sink: dict[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """Read Ollama chat NDJSON without persisting the thinking trace.
 
@@ -621,57 +647,132 @@ def _read_stream_response(
     returned in the same shape as the non-streaming API.
     """
 
+    started = time.monotonic()
+    last_progress = started
     total = 0
+    retained_bytes = 0
+    discarded_thinking_bytes = 0
+    discarded_thinking_chunks = 0
+    chunks_observed = 0
     content_parts: list[str] = []
     final: dict[str, Any] | None = None
     done = False
+
+    def snapshot(*, timeout_phase: str | None = None, completed: bool = False) -> dict[str, Any]:
+        now = time.monotonic()
+        telemetry = {
+            "first_response_chunk_latency_seconds": (
+                first_chunk_at - started if first_chunk_at is not None else None
+            ),
+            "last_chunk_elapsed_seconds": (
+                last_progress - started if chunks_observed else None
+            ),
+            "completion_elapsed_seconds": now - started if completed else None,
+            "timeout_phase": timeout_phase,
+            "progress_occurred": chunks_observed > 0,
+            "progress_before_timeout": (
+                timeout_phase is not None
+                and chunks_observed > 0
+                and now - last_progress <= PROGRESS_RECENCY_SECONDS
+            ),
+            "wire_bytes_observed": total,
+            "retained_content_bytes": retained_bytes,
+            "discarded_thinking_bytes": discarded_thinking_bytes,
+            "discarded_thinking_chunks": discarded_thinking_chunks,
+            "stream_chunks_observed": chunks_observed,
+        }
+        if telemetry_sink is not None:
+            telemetry_sink.clear()
+            telemetry_sink.update(telemetry)
+        return telemetry
+
+    def fail(message: str, *, kind: str, timeout_phase: str | None = None) -> None:
+        telemetry = snapshot(timeout_phase=timeout_phase)
+        raise OllamaAdapterError(
+            message,
+            kind=kind,
+            timeout_phase=timeout_phase,
+            telemetry=telemetry,
+        )
+
+    first_chunk_at: float | None = None
     while True:
         remaining = deadline - time.monotonic()
         if remaining <= 0:
-            raise OllamaAdapterError("Ollama response timed out", kind="timeout")
+            fail("Ollama response timed out", kind="timeout", timeout_phase="generation")
+        idle_remaining = idle_timeout_seconds - (time.monotonic() - last_progress)
+        if idle_remaining <= 0:
+            fail("Ollama response stream went idle", kind="timeout", timeout_phase="stream_idle")
         if connection.sock is not None:
-            connection.sock.settimeout(remaining)
+            connection.sock.settimeout(min(remaining, idle_remaining))
         try:
-            line = response.readline(DEFAULT_STREAM_RESPONSE_BYTES - total + 1)
+            line = response.readline(DEFAULT_STREAM_LINE_BYTES + 1)
         except (socket.timeout, TimeoutError):
-            raise OllamaAdapterError("Ollama response timed out", kind="timeout") from None
+            now = time.monotonic()
+            if idle_timeout_seconds - (now - last_progress) <= 0:
+                fail("Ollama response stream went idle", kind="timeout", timeout_phase="stream_idle")
+            fail("Ollama response timed out", kind="timeout", timeout_phase="generation")
         except (OSError, http.client.IncompleteRead):
-            raise OllamaAdapterError("Ollama response could not be read", kind="http_error") from None
+            fail("Ollama response could not be read", kind="http_error")
+        if time.monotonic() - last_progress > idle_timeout_seconds:
+            fail("Ollama response stream went idle", kind="timeout", timeout_phase="stream_idle")
         if not line:
             break
+        if len(line) > DEFAULT_STREAM_LINE_BYTES or (
+            len(line) == DEFAULT_STREAM_LINE_BYTES and not line.endswith(b"\n")
+        ):
+            fail(
+                "Ollama streamed response item exceeded the configured bound",
+                kind="response_too_large",
+            )
         total += len(line)
-        if total > DEFAULT_STREAM_RESPONSE_BYTES:
-            raise OllamaAdapterError(
+        if total > DEFAULT_STREAM_WIRE_BYTES:
+            fail(
                 "Ollama streamed response exceeded the configured bound",
                 kind="response_too_large",
             )
         if not line.endswith(b"\n"):
-            raise OllamaAdapterError("Ollama streamed response line is incomplete", kind="invalid_response")
+            fail("Ollama streamed response line is incomplete", kind="invalid_response")
+        now = time.monotonic()
+        chunks_observed += 1
+        last_progress = now
+        if first_chunk_at is None:
+            first_chunk_at = now
         try:
             chunk = json.loads(line.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError):
-            raise OllamaAdapterError("Ollama streamed response was not valid JSON", kind="invalid_response") from None
+            fail("Ollama streamed response was not valid JSON", kind="invalid_response")
         if not isinstance(chunk, Mapping):
-            raise OllamaAdapterError("Ollama streamed response item is not an object", kind="invalid_response")
+            fail("Ollama streamed response item is not an object", kind="invalid_response")
         message = chunk.get("message")
         if message is not None:
             if not isinstance(message, Mapping) or message.get("role") not in (None, "assistant"):
-                raise OllamaAdapterError("Ollama streamed assistant message is invalid", kind="invalid_response")
+                fail("Ollama streamed assistant message is invalid", kind="invalid_response")
             if "tool_calls" in message:
-                raise OllamaAdapterError("Ollama tool-call activity is not permitted", kind="tool_call_rejected")
+                fail("Ollama tool-call activity is not permitted", kind="tool_call_rejected")
             thinking = message.get("thinking")
             if thinking is not None and type(thinking) is not str:
-                raise OllamaAdapterError("Ollama thinking field is invalid", kind="invalid_response")
+                fail("Ollama thinking field is invalid", kind="invalid_response")
+            if thinking is not None:
+                discarded_thinking_bytes += len(thinking.encode("utf-8"))
+                discarded_thinking_chunks += 1
             piece = message.get("content", "")
             if type(piece) is not str:
-                raise OllamaAdapterError("Ollama streamed content is invalid", kind="invalid_response")
+                fail("Ollama streamed content is invalid", kind="invalid_response")
+            piece_bytes = len(piece.encode("utf-8"))
+            retained_bytes += piece_bytes
+            if retained_bytes > DEFAULT_STREAM_RETAINED_CONTENT_BYTES:
+                fail(
+                    "Ollama retained assistant content exceeded the configured bound",
+                    kind="response_too_large",
+                )
             content_parts.append(piece)
         if chunk.get("done") is True:
             final = dict(chunk)
             done = True
             break
     if not done or final is None:
-        raise OllamaAdapterError("Ollama streamed response is incomplete", kind="invalid_completion")
+        fail("Ollama streamed response is incomplete", kind="invalid_completion")
     final_message = final.get("message")
     if not isinstance(final_message, Mapping):
         final_message = {"role": "assistant"}
@@ -679,11 +780,12 @@ def _read_stream_response(
         "role": "assistant",
         "content": "".join(content_parts),
     }
+    snapshot(completed=True)
     return final
 
 
 def _validate_timeout_seconds(timeout_seconds: float) -> float:
-    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 300:
+    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
         raise OllamaAdapterError("Ollama request timeout is invalid", kind="configuration")
     return float(timeout_seconds)
 
@@ -754,6 +856,8 @@ def _http_stream_request(
     *,
     body: Mapping[str, Any] | None = None,
     timeout_seconds: float,
+    idle_timeout_seconds: float = DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS,
+    telemetry_sink: dict[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     """Perform one bounded HTTP request whose response is Ollama NDJSON."""
 
@@ -778,7 +882,13 @@ def _http_stream_request(
             raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
         if response.status < 200 or response.status >= 300:
             raise OllamaAdapterError("Ollama HTTP request returned an error", kind="http_error")
-        return _read_stream_response(response, connection, deadline=deadline)
+        return _read_stream_response(
+            response,
+            connection,
+            deadline=deadline,
+            idle_timeout_seconds=idle_timeout_seconds,
+            telemetry_sink=telemetry_sink,
+        )
     finally:
         connection.close()
 
@@ -791,6 +901,39 @@ def _emit_provider_generation_started(stderr_stream: TextIO) -> None:
             {
                 "event": GENERATION_EVENT,
                 "schema_version": GENERATION_EVENT_SCHEMA,
+            }
+        )
+        + "\n"
+    )
+    stderr_stream.flush()
+
+
+def _emit_provider_generation_telemetry(
+    stderr_stream: TextIO,
+    telemetry: Mapping[str, Any],
+) -> None:
+    """Emit bounded numeric progress telemetry without response content."""
+
+    allowed = {
+        "first_response_chunk_latency_seconds",
+        "last_chunk_elapsed_seconds",
+        "completion_elapsed_seconds",
+        "timeout_phase",
+        "progress_occurred",
+        "progress_before_timeout",
+        "wire_bytes_observed",
+        "retained_content_bytes",
+        "discarded_thinking_bytes",
+        "discarded_thinking_chunks",
+        "stream_chunks_observed",
+    }
+    bounded = {key: telemetry.get(key) for key in allowed}
+    stderr_stream.write(
+        _safe_json(
+            {
+                "schema_version": GENERATION_TELEMETRY_SCHEMA,
+                "event": GENERATION_TELEMETRY_EVENT,
+                **bounded,
             }
         )
         + "\n"
@@ -966,6 +1109,8 @@ def _chat_request(
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
     stream: bool = False,
     stderr_stream: TextIO | None = None,
+    stream_idle_timeout_seconds: float = DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS,
+    telemetry_sink: dict[str, Any] | None = None,
 ) -> Mapping[str, Any]:
     reasoning_effort = validate_reasoning_effort(reasoning_effort)
     payload = {
@@ -986,6 +1131,16 @@ def _chat_request(
     if stderr_stream is not None:
         _emit_provider_generation_started(stderr_stream)
     request_fn = _http_stream_request if stream else _http_json_request
+    if stream:
+        return request_fn(
+            endpoint,
+            "POST",
+            "/chat",
+            body=payload,
+            timeout_seconds=timeout_seconds,
+            idle_timeout_seconds=stream_idle_timeout_seconds,
+            telemetry_sink=telemetry_sink,
+        )
     return request_fn(endpoint, "POST", "/chat", body=payload, timeout_seconds=timeout_seconds)
 
 
@@ -1105,7 +1260,15 @@ def run_adapter(
     parser = argparse.ArgumentParser(description="Ollama Cloud Local Application V1 command adapter")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=None,
+        help="legacy alias: use one value for metadata and generation deadlines",
+    )
+    parser.add_argument("--metadata-timeout", type=float, default=60.0)
+    parser.add_argument("--generation-timeout", type=float, default=240.0)
+    parser.add_argument("--stream-idle-timeout", type=float, default=DEFAULT_STREAM_IDLE_TIMEOUT_SECONDS)
     parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT, choices=sorted(REASONING_EFFORTS))
@@ -1120,12 +1283,17 @@ def run_adapter(
     try:
         spec = resolve_cloud_model(args.model)
         validate_endpoint(args.endpoint)
+        metadata_timeout = args.timeout if args.timeout is not None else args.metadata_timeout
+        generation_timeout = args.timeout if args.timeout is not None else args.generation_timeout
+        metadata_timeout = _validate_timeout_seconds(metadata_timeout)
+        generation_timeout = _validate_timeout_seconds(generation_timeout)
+        stream_idle_timeout = _validate_timeout_seconds(args.stream_idle_timeout)
         if args.preflight:
             result = run_preflight(
                 endpoint=args.endpoint,
                 model=spec,
                 expected_version=args.expected_version,
-                timeout_seconds=args.timeout,
+                timeout_seconds=metadata_timeout,
             )
             stdout_stream.write(_safe_json(result) + "\n")
             stdout_stream.flush()
@@ -1134,17 +1302,34 @@ def run_adapter(
         request = _read_request(stdin_stream)
         validate_logical_call_index(request, args.max_logical_model_calls)
         canonical_public_request(request)
-        deadline = time.monotonic() + _validate_timeout_seconds(args.timeout)
-        _read_cloud_metadata(args.endpoint, spec, deadline=deadline)
-        response = _chat_request(
-            args.endpoint,
-            request,
-            spec,
-            timeout_seconds=_remaining_timeout(deadline),
-            reasoning_effort=args.reasoning_effort,
-            stream=args.stream,
-            stderr_stream=stderr_stream,
-        )
+        metadata_deadline = time.monotonic() + metadata_timeout
+        try:
+            _read_cloud_metadata(args.endpoint, spec, deadline=metadata_deadline)
+        except OllamaAdapterError as exc:
+            if exc.kind == "timeout" and exc.timeout_phase is None:
+                exc.timeout_phase = "metadata"
+            raise
+        telemetry: dict[str, Any] = {}
+        try:
+            response = _chat_request(
+                args.endpoint,
+                request,
+                spec,
+                timeout_seconds=generation_timeout,
+                reasoning_effort=args.reasoning_effort,
+                stream=args.stream,
+                stderr_stream=stderr_stream,
+                stream_idle_timeout_seconds=stream_idle_timeout,
+                telemetry_sink=telemetry,
+            )
+        except OllamaAdapterError as exc:
+            if exc.telemetry:
+                telemetry.update(exc.telemetry)
+            if args.stream and telemetry:
+                _emit_provider_generation_telemetry(stderr_stream, telemetry)
+            raise
+        if args.stream and telemetry:
+            _emit_provider_generation_telemetry(stderr_stream, telemetry)
         content = _extract_final_content(response, spec)
         directive = parse_directive_content(content, request)
         usage: dict[str, Any] = {}
@@ -1161,6 +1346,20 @@ def run_adapter(
         stdout_stream.flush()
         return 0
     except OllamaAdapterError as exc:
+        if exc.timeout_phase is not None and exc.telemetry is None:
+            _emit_provider_generation_telemetry(
+                stderr_stream,
+                {
+                    "timeout_phase": exc.timeout_phase,
+                    "progress_occurred": False,
+                    "progress_before_timeout": False,
+                    "wire_bytes_observed": 0,
+                    "retained_content_bytes": 0,
+                    "discarded_thinking_bytes": 0,
+                    "discarded_thinking_chunks": 0,
+                    "stream_chunks_observed": 0,
+                },
+            )
         message = str(exc).replace("\r", " ").replace("\n", " ")
         encoded = message.encode("utf-8", errors="replace")[:256]
         message = encoded.decode("utf-8", errors="ignore") or "adapter failure"

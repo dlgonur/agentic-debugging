@@ -57,6 +57,8 @@ class LiveTransportError(LiveEvaluationError):
 COMMAND_ADAPTER_ERROR_SCHEMA_VERSION = "live-command-error-v1"
 COMMAND_ADAPTER_EVENT_SCHEMA_VERSION = "live-command-event-v1"
 PROVIDER_GENERATION_EVENT = "provider_generation_started"
+COMMAND_ADAPTER_TELEMETRY_SCHEMA_VERSION = "live-command-telemetry-v1"
+PROVIDER_GENERATION_TELEMETRY_EVENT = "provider_generation_telemetry"
 COMMAND_ADAPTER_ERROR_KINDS = frozenset({
     "adapter_error", "configuration", "http_error", "invalid_completion",
     "invalid_directive", "invalid_request", "invalid_response",
@@ -95,6 +97,11 @@ def parse_command_adapter_error(stderr: str) -> tuple[str, str] | None:
             ):
                 continue
             return None
+        if (
+            value.get("schema_version") == COMMAND_ADAPTER_TELEMETRY_SCHEMA_VERSION
+            and value.get("event") == PROVIDER_GENERATION_TELEMETRY_EVENT
+        ):
+            continue
         if set(value) != {"schema_version", "kind", "message"}:
             return None
         candidates.append(value)
@@ -137,6 +144,76 @@ def parse_provider_generation_started(stderr: str) -> bool:
         ):
             return True
     return False
+
+
+_GENERATION_TELEMETRY_FIELDS = frozenset({
+    "schema_version",
+    "event",
+    "first_response_chunk_latency_seconds",
+    "last_chunk_elapsed_seconds",
+    "completion_elapsed_seconds",
+    "timeout_phase",
+    "progress_occurred",
+    "progress_before_timeout",
+    "wire_bytes_observed",
+    "retained_content_bytes",
+    "discarded_thinking_bytes",
+    "discarded_thinking_chunks",
+    "stream_chunks_observed",
+})
+
+
+def parse_provider_generation_telemetry(stderr: str) -> dict[str, Any] | None:
+    """Parse one bounded, numeric-only generation progress record."""
+
+    if type(stderr) is not str or len(stderr.encode("utf-8", errors="replace")) > 65536:
+        return None
+    found: dict[str, Any] | None = None
+    for line in stderr.splitlines():
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+        except (UnicodeError, json.JSONDecodeError):
+            continue
+        if not isinstance(value, Mapping):
+            continue
+        if (
+            value.get("schema_version") != COMMAND_ADAPTER_TELEMETRY_SCHEMA_VERSION
+            or value.get("event") != PROVIDER_GENERATION_TELEMETRY_EVENT
+            or set(value) != _GENERATION_TELEMETRY_FIELDS
+        ):
+            continue
+        numeric_fields = (
+            "first_response_chunk_latency_seconds",
+            "last_chunk_elapsed_seconds",
+            "completion_elapsed_seconds",
+        )
+        count_fields = (
+            "wire_bytes_observed",
+            "retained_content_bytes",
+            "discarded_thinking_bytes",
+            "discarded_thinking_chunks",
+            "stream_chunks_observed",
+        )
+        if any(
+            value[field] is not None
+            and (type(value[field]) not in (int, float) or value[field] < 0)
+            for field in numeric_fields
+        ):
+            continue
+        if any(type(value[field]) is not int or value[field] < 0 for field in count_fields):
+            continue
+        if type(value["progress_occurred"]) is not bool or type(value["progress_before_timeout"]) is not bool:
+            continue
+        if value["timeout_phase"] not in {None, "metadata", "generation", "stream_idle"}:
+            continue
+        found = {
+            key: value[key]
+            for key in _GENERATION_TELEMETRY_FIELDS
+            if key not in {"schema_version", "event"}
+        }
+    return found
 
 
 def _command_adapter_transport_error(stderr: str) -> LiveTransportError | None:
@@ -193,6 +270,7 @@ class LiveModelAdapterError(ModelAdapterError):
 
 LIVE_SCHEMA_VERSION = "1.0"
 LIVE_PROTOCOL_VERSION = "1.3"
+MAX_LIVE_REQUEST_TIMEOUT_SECONDS = 1200.0
 LIVE_CONFIG_SCHEMA_VERSION = "1.0"
 MAX_MODEL_RESPONSE_BYTES = 1_048_576
 MAX_COMMAND_ARGUMENTS = 32
@@ -243,7 +321,7 @@ class LiveModelConfig:
         if type(self.model_name) is not str or not self.model_name.strip(): raise LiveConfigurationError("live model name is missing")
         if _SECRET_VALUE.search(self.model_name): raise LiveConfigurationError("live model name contains a credential-shaped value")
         _command(self.command)
-        if type(self.request_timeout_seconds) not in (int,float) or not 0<self.request_timeout_seconds<=300: raise LiveConfigurationError("live request timeout is invalid")
+        if type(self.request_timeout_seconds) not in (int,float) or not 0<self.request_timeout_seconds<=MAX_LIVE_REQUEST_TIMEOUT_SECONDS: raise LiveConfigurationError("live request timeout is invalid")
         if type(self.tool_version) is not str or not self.tool_version.strip() or _SECRET_VALUE.search(self.tool_version): raise LiveConfigurationError("live tool version is invalid")
     @classmethod
     def from_mapping(cls,value):
@@ -399,9 +477,14 @@ class LiveModelMetrics:
         if kind is not None: self.adapter_error(kind)
     def setup_error(self, kind: str) -> None:
         if kind not in self.setup_error_kinds: self.setup_error_kinds.append(kind)
+    generation_telemetry:list[dict[str,Any]]=field(default_factory=list)
     def observe_provider_generation(self, transport: Any) -> None:
         if getattr(transport, "last_provider_generation_started", False) is True:
             self.provider_generation_calls += 1
+        telemetry = getattr(transport, "last_provider_generation_telemetry", None)
+        if isinstance(telemetry, Mapping):
+            self.generation_telemetry.append(dict(telemetry))
+            del self.generation_telemetry[:-64]
     def usage(self,value):
         names=("prompt_tokens","completion_tokens","total_tokens")
         if not isinstance(value,Mapping):
@@ -420,7 +503,7 @@ class LiveModelMetrics:
             self.rejected_canonical_public_request_bytes = canonical_bytes
         if stdin_bytes is not None and stdin_bytes > MAX_STDIN_REQUEST_BYTES:
             self.rejected_stdin_request_bytes = stdin_bytes
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"provider_generation_calls":self.provider_generation_calls,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"request_size":{"max_canonical_public_request_bytes":self.max_canonical_public_request_bytes,"canonical_public_request_bytes_limit":MAX_PUBLIC_REQUEST_BYTES,"rejected_canonical_public_request_bytes":self.rejected_canonical_public_request_bytes,"stdin_request_bytes_limit":MAX_STDIN_REQUEST_BYTES,"rejected_stdin_request_bytes":self.rejected_stdin_request_bytes,"http_request_body_bytes_limit":MAX_HTTP_REQUEST_BODY_BYTES}}
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"adapter_error_kinds":self.adapter_error_kinds,"invalid_model_response_count":self.invalid_model_responses,"setup_error_kinds":self.setup_error_kinds,"provider_generation_calls":self.provider_generation_calls,"generation_telemetry":self.generation_telemetry,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"request_size":{"max_canonical_public_request_bytes":self.max_canonical_public_request_bytes,"canonical_public_request_bytes_limit":MAX_PUBLIC_REQUEST_BYTES,"rejected_canonical_public_request_bytes":self.rejected_canonical_public_request_bytes,"stdin_request_bytes_limit":MAX_STDIN_REQUEST_BYTES,"rejected_stdin_request_bytes":self.rejected_stdin_request_bytes,"http_request_body_bytes_limit":MAX_HTTP_REQUEST_BODY_BYTES}}
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
@@ -1609,7 +1692,7 @@ def _validate_configuration_metadata(value: Any):
     _string(value["tool_version"],"report.configuration.tool_version")
     if type(value["configuration_fingerprint"]) is not str or not re.fullmatch(r"[0-9a-f]{64}",value["configuration_fingerprint"]):
         _schema_error("report.configuration fingerprint is invalid")
-    if type(value["request_timeout_seconds"]) not in (int,float) or not 0 < value["request_timeout_seconds"] <= 300:
+    if type(value["request_timeout_seconds"]) not in (int,float) or not 0 < value["request_timeout_seconds"] <= MAX_LIVE_REQUEST_TIMEOUT_SECONDS:
         _schema_error("report.configuration request timeout is invalid")
     _boolean(value["continue_on_task_failure"],"report.configuration.continue_on_task_failure")
     limits=value["limits"]

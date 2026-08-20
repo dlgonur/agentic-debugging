@@ -197,7 +197,7 @@ class TestProfileValidation:
         with pytest.raises(CommandConfigError):
             CommandModelProfile.from_mapping(make_profile(request_timeout_seconds=0))
         with pytest.raises(CommandConfigError):
-            CommandModelProfile.from_mapping(make_profile(request_timeout_seconds=301))
+            CommandModelProfile.from_mapping(make_profile(request_timeout_seconds=1201))
         with pytest.raises(CommandConfigError):
             CommandModelProfile.from_mapping(make_profile(request_timeout_seconds="60"))
 

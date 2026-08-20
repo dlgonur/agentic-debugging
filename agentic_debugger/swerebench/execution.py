@@ -457,6 +457,14 @@ class OfficialSWERebenchVerifier:
                         "cleanup": True,
                         "official_error": baseline.get("reason") or "official baseline invalid",
                         "official_process_exit_code": baseline.get("process_exit_code"),
+                        "official_failure_kind": baseline.get("failure_kind"),
+                        "official_elapsed_seconds": baseline.get("elapsed_seconds"),
+                        "official_stderr_tail": baseline.get("stderr_tail"),
+                        "official_watchdog_seconds": baseline.get("evaluator_watchdog_seconds"),
+                        "official_docker_timeout_seconds": baseline.get("docker_timeout_seconds"),
+                        "official_timeout_semantics": baseline.get("evaluator_timeout_semantics"),
+                        "official_timeout_stage": baseline.get("timeout_stage"),
+                        "official_stage_evidence": baseline.get("stage_evidence", []),
                         "official_passed_match": False,
                     }
                     return result
@@ -488,6 +496,14 @@ class OfficialSWERebenchVerifier:
                     "cleanup": False,
                     "official_error": f"{type(exc).__name__}: {str(exc)[:400]}",
                     "official_process_exit_code": None,
+                    "official_failure_kind": "verifier_exception",
+                    "official_elapsed_seconds": None,
+                    "official_stderr_tail": None,
+                    "official_watchdog_seconds": None,
+                    "official_docker_timeout_seconds": None,
+                    "official_timeout_semantics": None,
+                    "official_timeout_stage": None,
+                    "official_stage_evidence": [],
                     "official_passed_match": False,
                 }
             else:
@@ -507,6 +523,9 @@ class OfficialSWERebenchVerifier:
                 p2p_total = len(self.bundle.hidden_tests()[1])
                 resolved = bool(summary.get("passed_match"))
                 report_valid = bool(summary.get("valid_result"))
+                official_error = summary.get("error") or raw_mapping.get("report_error")
+                if not official_error and raw_mapping.get("failure_kind"):
+                    official_error = raw_mapping.get("stderr_tail") or raw_mapping.get("failure_kind")
                 result = {
                 "authority": "official-swerebench-docker-evaluator",
                 "verifier_ran": True,
@@ -529,8 +548,16 @@ class OfficialSWERebenchVerifier:
                 "resolved": resolved,
                 "candidate_patch_sha256": hashlib.sha256(candidate_patch.encode("utf-8")).hexdigest(),
                 "cleanup": True,
-                "official_error": summary.get("error") or raw_mapping.get("report_error"),
+                "official_error": official_error,
                 "official_process_exit_code": raw_mapping.get("exit_code"),
+                "official_failure_kind": raw_mapping.get("failure_kind"),
+                "official_elapsed_seconds": raw_mapping.get("elapsed_seconds"),
+                "official_stderr_tail": raw_mapping.get("stderr_tail"),
+                "official_watchdog_seconds": raw_mapping.get("evaluator_watchdog_seconds"),
+                "official_docker_timeout_seconds": raw_mapping.get("docker_timeout_seconds"),
+                "official_timeout_semantics": raw_mapping.get("evaluator_timeout_semantics"),
+                "official_timeout_stage": raw_mapping.get("timeout_stage"),
+                "official_stage_evidence": raw_mapping.get("stage_evidence", []),
                     "official_passed_match": summary.get("official_passed_match"),
                 }
         finally:

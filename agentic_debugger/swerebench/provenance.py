@@ -21,6 +21,10 @@ HARNESS_PATHS = (
     "scripts/gpt_oss_swerebench_v2_pilot10.py",
     "scripts/gpt_oss_swerebench_v2_devqual10.py",
     "scripts/gpt_oss_swerebench_v2_devqual10_v7.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10_v8.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10_v9.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10_v10.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10_v11.py",
 )
 
 # These hashes belong to completed immutable V1-V5 treatments. Their
@@ -35,6 +39,12 @@ HISTORICAL_FROZEN_HARNESS_SHA256 = frozenset({
     # V6's frozen hash remains accepted as historical evidence after V7
     # extends the live harness path set.
     "a3d1fc56e2b6aa1576b30447e1d98ec9642f9ac0e7e7c4c92f9d92bcb940c18d",
+    # V7's executed harness remains immutable after the V8 evidence-projection
+    # repair changes the live source.
+    "ae194495d9200eeb7dbd23a1be621231c3affb11b50eb732d7760da2361d0884",
+    # V10's single zero-generation configuration attempt remains immutable
+    # after widening the adapter ceiling for the next treatment.
+    "1cdbc266345d00c5f8760cf493aab3cccec4273ba9cc747d8364eb3ee6ea5ff7",
 })
 
 
@@ -79,13 +89,64 @@ def current_git_head(root: Path | None = None) -> str | None:
 def working_tree_dirty(root: Path | None = None) -> bool:
     repo = root or repository_root()
     completed = subprocess.run(
-        ["git", "status", "--porcelain"],
+        # Override repository-local status.showUntrackedFiles settings.  The
+        # live-treatment guard must see non-ignored untracked treatment files,
+        # even when a prior operator checkout hid them from ordinary status.
+        ["git", "status", "--porcelain=v1", "--untracked-files=all", "--ignored=no"],
         cwd=str(repo),
         capture_output=True,
         text=True,
         check=False,
     )
     return bool(completed.stdout.strip())
+
+
+def require_committed_harness(root: Path | None = None) -> dict[str, str]:
+    """Require the exact relevant harness inventory to live in the current commit.
+
+    ``git status`` alone is insufficient when an operator has hidden
+    untracked files or marked tracked paths ``assume-unchanged``.  The next
+    live treatment therefore requires a named branch, a clean status with
+    untracked files forced on, every hashed harness file tracked, and no
+    assume-unchanged or index/worktree drift on those paths.
+    """
+
+    repo = (root or repository_root()).resolve()
+    if working_tree_dirty(repo):
+        raise ValueError("repository working tree or untracked inventory is dirty")
+    branch = subprocess.run(
+        ["git", "symbolic-ref", "--quiet", "--short", "HEAD"],
+        cwd=str(repo), capture_output=True, text=True, check=False,
+    ).stdout.strip()
+    if not branch:
+        raise ValueError("live treatment requires a named feature branch")
+    files = _iter_harness_files(repo)
+    rels = [path.relative_to(repo).as_posix() for path in files]
+    if not rels:
+        raise ValueError("relevant harness inventory is empty")
+    tracked = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", *rels],
+        cwd=str(repo), capture_output=True, text=True, check=False,
+    )
+    if tracked.returncode != 0:
+        raise ValueError("relevant harness/treatment source contains untracked files")
+    flags = subprocess.run(
+        ["git", "ls-files", "-v", "--", *rels],
+        cwd=str(repo), capture_output=True, text=True, check=False,
+    )
+    if any(line and line[0] != "H" for line in flags.stdout.splitlines()):
+        raise ValueError("relevant harness source contains assume-unchanged or skip-worktree paths")
+    for index_args in (("diff", "--quiet", "HEAD"), ("diff", "--cached", "--quiet", "HEAD")):
+        drift = subprocess.run(
+            ["git", *index_args],
+            cwd=str(repo), capture_output=True, text=True, check=False,
+        )
+        if drift.returncode != 0:
+            raise ValueError("committed harness source differs from HEAD or index")
+    head = current_git_head(repo)
+    if not head:
+        raise ValueError("current Git HEAD could not be recorded")
+    return {"branch": branch, "head": head}
 
 
 def harness_identity(root: Path | None = None) -> dict[str, object]:

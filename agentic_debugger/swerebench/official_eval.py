@@ -7,15 +7,21 @@ workspace. Tracked readiness records receive only counts and booleans.
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from pathlib import Path
 from typing import Any
 
 from agentic_debugger.swerebench.authority import DEFAULT_EXTERNAL_ROOT
 from agentic_debugger.swerebench.records import OfficialInstanceBundle
+from agentic_debugger.application.process_tree import (
+    terminate_process_group,
+    terminate_request_process_group,
+)
 
 OFFICIAL_EVALUATOR_COMMIT = "c71902a8cf8d2b725f63d51f199f4d3e56f68d2d"
 OFFICIAL_EVALUATOR_URL = "https://github.com/SWE-rebench/SWE-rebench-V2.git"
@@ -26,7 +32,25 @@ new file mode 100644
 @@ -0,0 +1 @@
 +baseline-noop
 """
-OFFICIAL_COMMAND_TIMEOUT_SECONDS = 120.0
+# The pinned evaluator has no container/test subprocess timeout: its
+# ``docker run`` call is unbounded.  Keep the project task budget (300s) as
+# the semantic reference and use a small, fixed outer startup/collection
+# margin.  Image acquisition is a separate operation and is never delegated
+# to Docker's implicit pull path.
+OFFICIAL_TASK_TIMEOUT_SECONDS = 300.0
+OFFICIAL_EVALUATOR_STARTUP_MARGIN_SECONDS = 60.0
+OFFICIAL_EVALUATOR_WATCHDOG_SECONDS = (
+    OFFICIAL_TASK_TIMEOUT_SECONDS + OFFICIAL_EVALUATOR_STARTUP_MARGIN_SECONDS
+)
+OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS = 300.0
+# A pull that has already consumed its 300-second Docker bound gets one short
+# cache probe.  Repeating another full 300-second inspect was the reason a
+# missing image could consume the entire historical 600-second evaluator
+# watchdog without ever starting a container.
+OFFICIAL_DOCKER_POST_TIMEOUT_PROBE_SECONDS = 5.0
+OFFICIAL_GIT_COMMAND_TIMEOUT_SECONDS = 90.0
+# Compatibility name for existing focused tests and historical callers.
+OFFICIAL_COMMAND_TIMEOUT_SECONDS = OFFICIAL_GIT_COMMAND_TIMEOUT_SECONDS
 
 
 def official_evaluator_root() -> Path:
@@ -109,12 +133,12 @@ def _run(args: list[str], cwd: Path) -> str:
             capture_output=True,
             text=True,
             check=False,
-            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+            timeout=OFFICIAL_GIT_COMMAND_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
         raise RuntimeError(
             f"{' '.join(args)} timed out after "
-            f"{OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds"
+            f"{OFFICIAL_GIT_COMMAND_TIMEOUT_SECONDS:g} seconds"
         ) from None
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
@@ -126,7 +150,34 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
-def _docker_image_available(image: str) -> tuple[bool, str]:
+def _stage_record(
+    evidence: list[dict[str, Any]] | None,
+    *,
+    stage: str,
+    started: float,
+    status: str,
+    detail: str | None = None,
+    **extra: Any,
+) -> None:
+    if evidence is None:
+        return
+    item: dict[str, Any] = {
+        "stage": stage,
+        "status": status,
+        "elapsed_seconds": max(0.0, time.monotonic() - started),
+    }
+    if detail:
+        item["detail"] = detail[-400:]
+    item.update(extra)
+    evidence.append(item)
+
+
+def _docker_image_available(
+    image: str,
+    *,
+    stage_evidence: list[dict[str, Any]] | None = None,
+    timeout_seconds: float = OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS,
+) -> tuple[bool, str]:
     """Check the local daemon before spending the bounded pull budget.
 
     A locally cached evaluator image must not be classified as an infrastructure
@@ -135,39 +186,88 @@ def _docker_image_available(image: str) -> tuple[bool, str]:
     evaluator commands.
     """
 
+    started = time.monotonic()
     try:
         completed = subprocess.run(
             ["docker", "image", "inspect", image],
             capture_output=True,
             text=True,
             check=False,
-            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+            timeout=timeout_seconds,
         )
     except subprocess.TimeoutExpired:
-        return False, f"docker image inspect timed out after {OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds"
+        detail = f"docker image inspect timed out after {timeout_seconds:g} seconds"
+        _stage_record(
+            stage_evidence,
+            stage="repository_image_preparation",
+            started=started,
+            status="timeout",
+            detail=detail,
+            operation="docker_image_inspect",
+        )
+        return False, detail
     detail = (completed.stderr or completed.stdout or "").strip()
+    _stage_record(
+        stage_evidence,
+        stage="repository_image_preparation",
+        started=started,
+        status="completed" if completed.returncode == 0 else "missing",
+        detail=detail,
+        operation="docker_image_inspect",
+        return_code=completed.returncode,
+    )
     return completed.returncode == 0, detail[-400:]
 
 
-def _docker_pull(image: str) -> tuple[bool, str]:
-    cached, cache_detail = _docker_image_available(image)
+def _docker_pull(
+    image: str,
+    *,
+    stage_evidence: list[dict[str, Any]] | None = None,
+) -> tuple[bool, str]:
+    cached, cache_detail = _docker_image_available(
+        image,
+        stage_evidence=stage_evidence,
+    )
     if cached:
         return True, "local image already present"
+    started = time.monotonic()
     try:
         completed = subprocess.run(
             ["docker", "pull", image],
             capture_output=True,
             text=True,
             check=False,
-            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+            timeout=OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS,
         )
     except subprocess.TimeoutExpired:
+        _stage_record(
+            stage_evidence,
+            stage="docker_image_pull",
+            started=started,
+            status="timeout",
+            detail=f"docker pull timed out after {OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS:g} seconds",
+            operation="docker_pull",
+        )
         # A daemon can finish a pull after the client-side wait expires.  Probe
-        # once more before declaring the infrastructure invalid.
-        cached_after_timeout, detail_after_timeout = _docker_image_available(image)
+        # once more, briefly, before declaring the infrastructure invalid.  A
+        # second full Docker bound would hide the actual missing-image stage.
+        cached_after_timeout, detail_after_timeout = _docker_image_available(
+            image,
+            stage_evidence=stage_evidence,
+            timeout_seconds=OFFICIAL_DOCKER_POST_TIMEOUT_PROBE_SECONDS,
+        )
         if cached_after_timeout:
             return True, "local image became available after bounded pull wait"
-        return False, f"docker pull timed out after {OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds"
+        return False, f"docker pull timed out after {OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS:g} seconds"
+    _stage_record(
+        stage_evidence,
+        stage="docker_image_pull",
+        started=started,
+        status="completed" if completed.returncode == 0 else "failed",
+        detail=(completed.stderr or completed.stdout or ""),
+        operation="docker_pull",
+        return_code=completed.returncode,
+    )
     if completed.returncode == 0:
         return True, (completed.stderr or completed.stdout or "")[-400:]
     return False, (completed.stderr or completed.stdout or cache_detail)[-400:]
@@ -204,35 +304,153 @@ def _write_isolated_spec(
     return dest
 
 
-def _run_official_eval(spec_path: Path, report_path: Path, workdir: Path) -> dict[str, Any]:
+def _terminate_official_process(process: subprocess.Popen[str]) -> None:
+    """Boundedly terminate the evaluator and its Docker descendants."""
+
+    if os.name == "nt":
+        terminate_process_group(process)
+    else:
+        terminate_request_process_group(process)
+
+
+def _timeout_stage(
+    *,
+    image: str | None,
+    report_path: Path,
+    stage_evidence: list[dict[str, Any]],
+) -> str:
+    """Classify a pinned-evaluator watchdog from bounded host evidence.
+
+    The pinned ``eval.py`` deliberately remains untouched.  At the watchdog
+    boundary we inspect only the report and Docker state, so the evidence says
+    whether the child was still preparing an image, running a container/test,
+    collecting a report, or waiting without a visible child.  This is stage
+    evidence, never a correctness result.
+    """
+
+    if report_path.is_file():
+        return "result_collection"
+    if image:
+        started = time.monotonic()
+        try:
+            running = subprocess.run(
+                [
+                    "docker",
+                    "ps",
+                    "--filter",
+                    f"ancestor={image}",
+                    "--format",
+                    "{{.ID}} {{.Status}} {{.Image}}",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=5.0,
+            )
+            detail = (running.stdout or running.stderr or "").strip()
+            _stage_record(
+                stage_evidence,
+                stage="test_execution" if detail else "container_startup",
+                started=started,
+                status="observed" if detail else "not_observed",
+                detail=detail,
+                operation="docker_ps_running",
+            )
+            if detail:
+                return "test_execution"
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            _stage_record(
+                stage_evidence,
+                stage="container_startup",
+                started=started,
+                status="evidence_unavailable",
+                detail=type(exc).__name__,
+                operation="docker_ps_running",
+            )
+        started = time.monotonic()
+        try:
+            cached, detail = _docker_image_available(
+                image,
+                stage_evidence=stage_evidence,
+                timeout_seconds=5.0,
+            )
+            if not cached:
+                return "docker_image_pull"
+        except Exception:
+            return "repository_image_preparation"
+    return "child_process_wait"
+
+
+def _run_official_eval(
+    spec_path: Path,
+    report_path: Path,
+    workdir: Path,
+    *,
+    stage_evidence: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
     evaluator = ensure_official_evaluator()
     script = evaluator / "scripts" / "eval.py"
+    started = time.monotonic()
+    evidence = stage_evidence if stage_evidence is not None else []
+    image: str | None = None
     try:
-        completed = subprocess.run(
-            [
-                sys.executable,
-                str(script),
-                "--json",
-                str(spec_path),
-                "--max-workers",
-                "1",
-                "--golden-eval",
-                "--report-json",
-                str(report_path),
-            ],
-            cwd=str(workdir),
-            capture_output=True,
-            text=True,
-            check=False,
-            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+        spec_data = json.loads(spec_path.read_text(encoding="utf-8"))
+        if isinstance(spec_data, list) and spec_data and isinstance(spec_data[0], dict):
+            raw_image = spec_data[0].get("image_name")
+            image = raw_image if isinstance(raw_image, str) and raw_image else None
+    except (OSError, UnicodeError, ValueError):
+        evidence.append({"stage": "evaluator_startup", "status": "spec_unreadable"})
+    process_started = time.monotonic()
+    _stage_record(
+        evidence,
+        stage="evaluator_startup",
+        started=process_started,
+        status="started",
+        operation="pinned_eval_process",
+    )
+    process = subprocess.Popen(
+        [
+            sys.executable,
+            str(script),
+            "--json",
+            str(spec_path),
+            "--max-workers",
+            "1",
+            "--golden-eval",
+            "--report-json",
+            str(report_path),
+        ],
+        cwd=str(workdir),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=os.name != "nt",
+        creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=OFFICIAL_EVALUATOR_WATCHDOG_SECONDS)
+    except subprocess.TimeoutExpired:
+        timeout_stage = _timeout_stage(
+            image=image,
+            report_path=report_path,
+            stage_evidence=evidence,
         )
-    except subprocess.TimeoutExpired as exc:
+        _terminate_official_process(process)
+        try:
+            stdout, stderr = process.communicate(timeout=5.0)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            stdout, stderr = process.communicate(timeout=5.0)
         return {
             "exit_code": None,
-            "stdout_tail": "",
-            "stderr_tail": f"official evaluator timed out after {OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds",
+            "stdout_tail": (stdout or "")[-600:],
             "report": {},
             "report_error": None,
+            "failure_kind": "timeout",
+            "elapsed_seconds": time.monotonic() - started,
+            "stderr_tail": f"official evaluator watchdog timed out after {OFFICIAL_EVALUATOR_WATCHDOG_SECONDS:g} seconds",
+            "timeout_stage": timeout_stage,
+            "stage_evidence": evidence,
         }
     report: dict[str, Any] = {}
     report_error: str | None = None
@@ -241,12 +459,25 @@ def _run_official_eval(spec_path: Path, report_path: Path, workdir: Path) -> dic
             report = json.loads(report_path.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             report_error = f"{type(exc).__name__}: {exc}"
+    _stage_record(
+        evidence,
+        stage="result_collection" if report_path.is_file() else "child_process_wait",
+        started=started,
+        status="completed" if process.returncode == 0 else "process_failure",
+        detail=report_error,
+        operation="pinned_eval_report",
+        report_present=report_path.is_file(),
+    )
     return {
-        "exit_code": completed.returncode,
-        "stdout_tail": (completed.stdout or "")[-600:],
-        "stderr_tail": (completed.stderr or "")[-600:],
+        "exit_code": process.returncode,
+        "stdout_tail": (stdout or "")[-600:],
+        "stderr_tail": (stderr or "")[-600:],
         "report": report,
         "report_error": report_error,
+        "failure_kind": "process_failure" if process.returncode != 0 else None,
+        "elapsed_seconds": time.monotonic() - started,
+        "timeout_stage": None,
+        "stage_evidence": evidence,
     }
 
 
@@ -333,12 +564,16 @@ def run_official_infrastructure_gate(
         "image_name": bundle.image_name(),
         "image_pulled": False,
         "evaluator_commit": OFFICIAL_EVALUATOR_COMMIT,
+        "docker_timeout_seconds": OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS,
+        "evaluator_watchdog_seconds": OFFICIAL_EVALUATOR_WATCHDOG_SECONDS,
+        "evaluator_timeout_semantics": "pinned evaluator has no container/test timeout; stage evidence and the 360-second outer watchdog are safety bounds; 300 seconds is the semantic task reference",
         "baseline": {"ran": False},
         "gold": {"ran": False},
         "verifier_environment_ready": False,
         "verifier_baseline_valid": False,
         "verifier_gold_valid": False,
         "reason": None,
+        "stage_evidence": [],
     }
     if not result["docker_available"]:
         result["reason"] = "docker_unavailable"
@@ -350,7 +585,7 @@ def run_official_infrastructure_gate(
     if not bundle.test_patch().strip() or not bundle.gold_patch().strip():
         result["reason"] = "missing_official_patch_or_test_patch"
         return result
-    pulled, pull_detail = _docker_pull(image)
+    pulled, pull_detail = _docker_pull(image, stage_evidence=result["stage_evidence"])
     reused_local_image = pull_detail == "local image already present"
     result["image_pulled"] = pulled
     if not pulled:
@@ -368,8 +603,18 @@ def run_official_infrastructure_gate(
         _write_isolated_spec(gold_json, bundle, use_gold=True)
         baseline_report = private / "baseline_report.json"
         gold_report = private / "gold_report.json"
-        baseline = _run_official_eval(baseline_json, baseline_report, private)
-        gold = _run_official_eval(gold_json, gold_report, private)
+        baseline = _run_official_eval(
+            baseline_json,
+            baseline_report,
+            private,
+            stage_evidence=result["stage_evidence"],
+        )
+        gold = _run_official_eval(
+            gold_json,
+            gold_report,
+            private,
+            stage_evidence=result["stage_evidence"],
+        )
         baseline_item = None
         gold_item = None
         baseline_item = _report_item(baseline.get("report"), bundle.public.instance_id)
@@ -384,6 +629,11 @@ def run_official_infrastructure_gate(
                 expected_p2p_count=len(bundle.hidden_tests()[1]),
             ),
             "process_exit_code": baseline["exit_code"],
+            "failure_kind": baseline.get("failure_kind"),
+            "elapsed_seconds": baseline.get("elapsed_seconds"),
+            "stderr_tail": baseline.get("stderr_tail"),
+            "timeout_stage": baseline.get("timeout_stage"),
+            "stage_evidence": baseline.get("stage_evidence", []),
         }
         result["gold"] = {
             "ran": True,
@@ -395,6 +645,11 @@ def run_official_infrastructure_gate(
                 expected_p2p_count=len(bundle.hidden_tests()[1]),
             ),
             "process_exit_code": gold["exit_code"],
+            "failure_kind": gold.get("failure_kind"),
+            "elapsed_seconds": gold.get("elapsed_seconds"),
+            "stderr_tail": gold.get("stderr_tail"),
+            "timeout_stage": gold.get("timeout_stage"),
+            "stage_evidence": gold.get("stage_evidence", []),
         }
         # Baseline is valid when hidden F2P are not all passing (bug still present)
         # and official P2P either empty or not all failed as an environment crash.
@@ -431,7 +686,7 @@ def run_official_infrastructure_gate(
                     ["docker", "rmi", "-f", image],
                     capture_output=True,
                     check=False,
-                    timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+                    timeout=OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS,
                 )
         except subprocess.TimeoutExpired:
             # Cleanup is best effort here; the bounded evaluator result above
@@ -459,9 +714,13 @@ def run_official_baseline_check(
         "image_name": bundle.image_name(),
         "image_pulled": False,
         "evaluator_commit": OFFICIAL_EVALUATOR_COMMIT,
+        "docker_timeout_seconds": OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS,
+        "evaluator_watchdog_seconds": OFFICIAL_EVALUATOR_WATCHDOG_SECONDS,
+        "evaluator_timeout_semantics": "pinned evaluator has no container/test timeout; stage evidence and the 360-second outer watchdog are safety bounds; 300 seconds is the semantic task reference",
         "verifier_environment_valid": False,
         "verifier_baseline_valid": False,
         "reason": None,
+        "stage_evidence": [],
     }
     if not result["docker_available"]:
         result["reason"] = "docker_unavailable"
@@ -473,7 +732,7 @@ def run_official_baseline_check(
     if not bundle.test_patch().strip():
         result["reason"] = "missing_official_test_patch"
         return result
-    pulled, pull_detail = _docker_pull(image)
+    pulled, pull_detail = _docker_pull(image, stage_evidence=result["stage_evidence"])
     reused_local_image = pull_detail == "local image already present"
     result["image_pulled"] = pulled
     if not pulled:
@@ -486,7 +745,12 @@ def run_official_baseline_check(
         baseline_json = private / "baseline.json"
         baseline_report = private / "baseline_report.json"
         _write_isolated_spec(baseline_json, bundle, use_gold=False)
-        baseline = _run_official_eval(baseline_json, baseline_report, private)
+        baseline = _run_official_eval(
+            baseline_json,
+            baseline_report,
+            private,
+            stage_evidence=result["stage_evidence"],
+        )
         item = _report_item(baseline.get("report"), bundle.public.instance_id)
         summary = _summarize_item(
             item,
@@ -510,8 +774,18 @@ def run_official_baseline_check(
         )
         result["summary"] = summary
         result["process_exit_code"] = baseline.get("exit_code")
+        result["failure_kind"] = baseline.get("failure_kind")
+        result["elapsed_seconds"] = baseline.get("elapsed_seconds")
+        result["stderr_tail"] = baseline.get("stderr_tail")
+        result["timeout_stage"] = baseline.get("timeout_stage")
+        result["stage_evidence"] = baseline.get("stage_evidence", result["stage_evidence"])
         if not result["verifier_environment_valid"]:
-            result["reason"] = "official_baseline_report_invalid"
+            if baseline.get("failure_kind") == "timeout":
+                result["reason"] = "official_evaluator_timeout"
+            elif baseline.get("failure_kind") == "process_failure":
+                result["reason"] = "official_evaluator_process_failure"
+            else:
+                result["reason"] = "official_baseline_report_invalid"
         elif not result["verifier_baseline_valid"]:
             result["reason"] = "official_baseline_invalid"
     except Exception as exc:
@@ -524,7 +798,7 @@ def run_official_baseline_check(
                     ["docker", "rmi", "-f", image],
                     capture_output=True,
                     check=False,
-                    timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+                    timeout=OFFICIAL_DOCKER_COMMAND_TIMEOUT_SECONDS,
                 )
             except subprocess.TimeoutExpired:
                 pass

@@ -1,0 +1,41 @@
+{
+  "algorithm": "historical-full-ordering-prefix-v1",
+  "distinct_repos": 10,
+  "experiment_id": "gpt_oss_swerebench_v2_devqual10_v10",
+  "frozen": true,
+  "n": 10,
+  "notes": [
+    "Development qualification only; not a clean model-capability score.",
+    "V10 is the next qualification treatment after immutable incomplete V9; task order and task treatment remain unchanged.",
+    "Provider generation, idle, model-phase, task, and official evaluator stage timeout semantics are explicit.",
+    "No preflight/readiness campaign, task resampling, or reordering is permitted."
+  ],
+  "population_sha256": "36bd31d1470b86db982235153372793455a850ae1fe9c1669bdf8c0e7e68ab8f",
+  "schema_version": "gpt_oss_swerebench_v2_devqual10_v10-manifest-v1",
+  "seed": "historical-pilot10-prefix",
+  "selected_instance_ids": [
+    "oscal-compass__compliance-trestle-1834",
+    "scoutapp__scout_apm_python-709",
+    "ploomber__jupysql-361",
+    "gammapy__gammapy-5342",
+    "audreyr__cookiecutter-967",
+    "yukinarit__pyserde-354",
+    "cta-observatory__ctapipe-1883",
+    "robotframework__seleniumlibrary-1269",
+    "d0c-s4vage__pfp-128",
+    "jax-ml__jax-25957"
+  ],
+  "source_full_ordering_sha256": "599a07b6a527b4f8dffda4120be8e3c524ad608929bb048ea98286f80e0f5061",
+  "tasks": [
+    {"age_bin":"newer","assignment_key":"0848268ed5d3e7977da0d0b2e4360a8ec6273af5c6df315666ee71aae005fe81","base_commit":"b643059ba0afa85b3dae71daf0a12d507d2bac2b","difficulty":"medium","first_repo_occurrence":true,"instance_id":"oscal-compass__compliance-trestle-1834","license":"Apache-2.0","order_index":1,"patch_bin":"large","repo":"oscal-compass/compliance-trestle","repo_canonical":"oscal-compass/compliance-trestle"},
+    {"age_bin":"older","assignment_key":"099e21b2682d21a7938bc5e1a0fd085950cd137dde182c257ed55575b7f0c12f","base_commit":"10255d134e9582b34d6c42c80b2289bf84816443","difficulty":"easy","first_repo_occurrence":true,"instance_id":"scoutapp__scout_apm_python-709","license":"MIT","order_index":2,"patch_bin":"medium","repo":"scoutapp/scout_apm_python","repo_canonical":"scoutapp/scout_apm_python"},
+    {"age_bin":"middle","assignment_key":"0c897fb4c2c239ec7476b52a71abe9d6ed7160b247860c75578543053cd26392","base_commit":"d721d56d0975d3a6e78dce366a0c5bfa1deeead1","difficulty":"medium","first_repo_occurrence":true,"instance_id":"ploomber__jupysql-361","license":"Apache-2.0","order_index":3,"patch_bin":"large","repo":"ploomber/jupysql","repo_canonical":"ploomber/jupysql"},
+    {"age_bin":"newer","assignment_key":"0d51deffa84e3839380138696cd35743142af27cbbb3aa767ad07b7082de306b","base_commit":"c9521d576c83bd5485fee9de7462e1fdd73a7aa2","difficulty":"medium","first_repo_occurrence":true,"instance_id":"gammapy__gammapy-5342","license":"BSD-3-Clause","order_index":4,"patch_bin":"medium","repo":"gammapy/gammapy","repo_canonical":"gammapy/gammapy"},
+    {"age_bin":"older","assignment_key":"0f561bcf53878e2ff26cba1c7a46d06a3623d2d674ecb67cb84328f738b4b9be","base_commit":"ba5ba8c78e97f5dc7fb4e16c588d7be037e6e5e7","difficulty":"medium","first_repo_occurrence":true,"instance_id":"audreyr__cookiecutter-967","license":"BSD-3-Clause","order_index":5,"patch_bin":"medium","repo":"audreyr/cookiecutter","repo_canonical":"audreyr/cookiecutter"},
+    {"age_bin":"middle","assignment_key":"126d58bf0c7a997c14e013145efba5241c291106a0426b51d6ab7195caed6342","base_commit":"a9f44d52d109144a4c3bb93965f831e91d13960b","difficulty":"easy","first_repo_occurrence":true,"instance_id":"yukinarit__pyserde-354","license":"MIT","order_index":6,"patch_bin":"medium","repo":"yukinarit/pyserde","repo_canonical":"yukinarit/pyserde"},
+    {"age_bin":"middle","assignment_key":"127376f581c06af6e4ce4dd14ee2b920395d06ddffd8fe30c674e8e541229882","base_commit":"0612a333c87cbb7c39b3a82c4663082e77eceb72","difficulty":"easy","first_repo_occurrence":true,"instance_id":"cta-observatory__ctapipe-1883","license":"BSD-3-Clause","order_index":7,"patch_bin":"medium","repo":"cta-observatory/ctapipe","repo_canonical":"cta-observatory/ctapipe"},
+    {"age_bin":"older","assignment_key":"1284d6e41a876b4b7ce7eb95adba8f24abaac11f5233234fc91ae6177448d122","base_commit":"85ab54ea2da02bd3d2f79d1fc2c7de069986e7b6","difficulty":"easy","first_repo_occurrence":true,"instance_id":"robotframework__seleniumlibrary-1269","license":"Apache-2.0","order_index":8,"patch_bin":"medium","repo":"robotframework/SeleniumLibrary","repo_canonical":"robotframework/seleniumlibrary"},
+    {"age_bin":"older","assignment_key":"129644de4d96b3d05054660557fc37dd7e1d547c385fd8791d637c1357307133","base_commit":"ef63e743d09cdad66f99637cfc982dd9b3dc68e5","difficulty":"medium","first_repo_occurrence":true,"instance_id":"d0c-s4vage__pfp-128","license":"MIT","order_index":9,"patch_bin":"medium","repo":"d0c-s4vage/pfp","repo_canonical":"d0c-s4vage/pfp"},
+    {"age_bin":"newer","assignment_key":"192be3a0bf6409f8dd517f9f28a292b09c3519d6d4fdc21ac59795035d7d8cdc","base_commit":"a4a657bc432a1825af505a892e9ff0cb49a969e1","difficulty":"medium","first_repo_occurrence":true,"instance_id":"jax-ml__jax-25957","license":"Apache-2.0","order_index":10,"patch_bin":"medium","repo":"jax-ml/jax","repo_canonical":"jax-ml/jax"}
+  ]
+}
