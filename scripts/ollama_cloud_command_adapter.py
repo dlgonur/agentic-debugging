@@ -75,6 +75,9 @@ PROTOCOL_NAME = "agentic-debugger-live-jsonl"
 PROTOCOL_VERSION = "1.3"
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
+# V7/live profiles pass an explicit larger timeout.  The historical default is
+# intentionally retained so frozen V1-V6 evidence remains reproducible.
+DEFAULT_STREAM_RESPONSE_BYTES = 4 * 1024 * 1024
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
 MAX_DIRECTIVE_ARGUMENT_BYTES = 32_768
 MAX_DIRECTIVE_REASON_BYTES = 2_048
@@ -603,6 +606,82 @@ def _read_http_body(
     return b"".join(chunks)
 
 
+def _read_stream_response(
+    response: http.client.HTTPResponse,
+    connection: http.client.HTTPConnection,
+    *,
+    deadline: float,
+) -> Mapping[str, Any]:
+    """Read Ollama chat NDJSON without persisting the thinking trace.
+
+    The REST stream contains partial ``message.thinking`` and
+    ``message.content`` chunks followed by a ``done`` envelope.  Thinking is
+    deliberately discarded as it is not part of the controller protocol;
+    content is accumulated under a hard byte bound and the final envelope is
+    returned in the same shape as the non-streaming API.
+    """
+
+    total = 0
+    content_parts: list[str] = []
+    final: dict[str, Any] | None = None
+    done = False
+    while True:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise OllamaAdapterError("Ollama response timed out", kind="timeout")
+        if connection.sock is not None:
+            connection.sock.settimeout(remaining)
+        try:
+            line = response.readline(DEFAULT_STREAM_RESPONSE_BYTES - total + 1)
+        except (socket.timeout, TimeoutError):
+            raise OllamaAdapterError("Ollama response timed out", kind="timeout") from None
+        except (OSError, http.client.IncompleteRead):
+            raise OllamaAdapterError("Ollama response could not be read", kind="http_error") from None
+        if not line:
+            break
+        total += len(line)
+        if total > DEFAULT_STREAM_RESPONSE_BYTES:
+            raise OllamaAdapterError(
+                "Ollama streamed response exceeded the configured bound",
+                kind="response_too_large",
+            )
+        if not line.endswith(b"\n"):
+            raise OllamaAdapterError("Ollama streamed response line is incomplete", kind="invalid_response")
+        try:
+            chunk = json.loads(line.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise OllamaAdapterError("Ollama streamed response was not valid JSON", kind="invalid_response") from None
+        if not isinstance(chunk, Mapping):
+            raise OllamaAdapterError("Ollama streamed response item is not an object", kind="invalid_response")
+        message = chunk.get("message")
+        if message is not None:
+            if not isinstance(message, Mapping) or message.get("role") not in (None, "assistant"):
+                raise OllamaAdapterError("Ollama streamed assistant message is invalid", kind="invalid_response")
+            if "tool_calls" in message:
+                raise OllamaAdapterError("Ollama tool-call activity is not permitted", kind="tool_call_rejected")
+            thinking = message.get("thinking")
+            if thinking is not None and type(thinking) is not str:
+                raise OllamaAdapterError("Ollama thinking field is invalid", kind="invalid_response")
+            piece = message.get("content", "")
+            if type(piece) is not str:
+                raise OllamaAdapterError("Ollama streamed content is invalid", kind="invalid_response")
+            content_parts.append(piece)
+        if chunk.get("done") is True:
+            final = dict(chunk)
+            done = True
+            break
+    if not done or final is None:
+        raise OllamaAdapterError("Ollama streamed response is incomplete", kind="invalid_completion")
+    final_message = final.get("message")
+    if not isinstance(final_message, Mapping):
+        final_message = {"role": "assistant"}
+    final["message"] = {
+        "role": "assistant",
+        "content": "".join(content_parts),
+    }
+    return final
+
+
 def _validate_timeout_seconds(timeout_seconds: float) -> float:
     if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 300:
         raise OllamaAdapterError("Ollama request timeout is invalid", kind="configuration")
@@ -666,6 +745,42 @@ def _http_json_request(
     if not isinstance(value, Mapping):
         raise OllamaAdapterError("Ollama response was not an object", kind="invalid_response")
     return value
+
+
+def _http_stream_request(
+    endpoint: str,
+    method: str,
+    suffix: str,
+    *,
+    body: Mapping[str, Any] | None = None,
+    timeout_seconds: float,
+) -> Mapping[str, Any]:
+    """Perform one bounded HTTP request whose response is Ollama NDJSON."""
+
+    host, port, base_path = validate_endpoint(endpoint)
+    timeout_seconds = _validate_timeout_seconds(timeout_seconds)
+    request_bytes = None
+    headers = {"Accept": "application/x-ndjson"}
+    if body is not None:
+        request_bytes = (_safe_json(body) + "\n").encode("utf-8")
+        if len(request_bytes) > MAX_HTTP_REQUEST_BODY_BYTES:
+            raise OllamaAdapterError("Ollama request exceeded the configured bound", kind="request_too_large")
+        headers["Content-Type"] = "application/json"
+    deadline = time.monotonic() + float(timeout_seconds)
+    connection = http.client.HTTPConnection(host, port, timeout=float(timeout_seconds))
+    try:
+        try:
+            connection.request(method, _path(base_path, suffix), body=request_bytes, headers=headers)
+            response = connection.getresponse()
+        except (socket.timeout, TimeoutError):
+            raise OllamaAdapterError("Ollama request timed out", kind="timeout") from None
+        except (OSError, http.client.HTTPException):
+            raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
+        if response.status < 200 or response.status >= 300:
+            raise OllamaAdapterError("Ollama HTTP request returned an error", kind="http_error")
+        return _read_stream_response(response, connection, deadline=deadline)
+    finally:
+        connection.close()
 
 
 def _emit_provider_generation_started(stderr_stream: TextIO) -> None:
@@ -849,13 +964,14 @@ def _chat_request(
     *,
     timeout_seconds: float,
     reasoning_effort: str = DEFAULT_REASONING_EFFORT,
+    stream: bool = False,
     stderr_stream: TextIO | None = None,
 ) -> Mapping[str, Any]:
     reasoning_effort = validate_reasoning_effort(reasoning_effort)
     payload = {
         "model": spec.local_alias,
         "messages": build_chat_messages(request),
-        "stream": False,
+        "stream": bool(stream),
         "think": reasoning_effort,
     }
     # Validate all local request bounds before recording the provider boundary.
@@ -869,13 +985,8 @@ def _chat_request(
         )
     if stderr_stream is not None:
         _emit_provider_generation_started(stderr_stream)
-    return _http_json_request(
-        endpoint,
-        "POST",
-        "/chat",
-        body=payload,
-        timeout_seconds=timeout_seconds,
-    )
+    request_fn = _http_stream_request if stream else _http_json_request
+    return request_fn(endpoint, "POST", "/chat", body=payload, timeout_seconds=timeout_seconds)
 
 
 def _preflight_model_entry(tags: Mapping[str, Any], spec: CloudModelSpec) -> Mapping[str, Any]:
@@ -998,6 +1109,11 @@ def run_adapter(
     parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
     parser.add_argument("--reasoning-effort", default=DEFAULT_REASONING_EFFORT, choices=sorted(REASONING_EFFORTS))
+    parser.add_argument(
+        "--stream",
+        action="store_true",
+        help="consume bounded Ollama NDJSON chat output with thinking discarded",
+    )
     parser.add_argument("--preflight", action="store_true")
     args = parser.parse_args(argv)
 
@@ -1026,11 +1142,22 @@ def run_adapter(
             spec,
             timeout_seconds=_remaining_timeout(deadline),
             reasoning_effort=args.reasoning_effort,
+            stream=args.stream,
             stderr_stream=stderr_stream,
         )
         content = _extract_final_content(response, spec)
         directive = parse_directive_content(content, request)
-        stdout_stream.write(_safe_json({"directive": directive}) + "\n")
+        usage: dict[str, Any] = {}
+        for source, target in (("prompt_eval_count", "prompt_tokens"), ("eval_count", "completion_tokens")):
+            value = response.get(source)
+            if type(value) is int and value >= 0:
+                usage[target] = value
+        if "prompt_tokens" in usage and "completion_tokens" in usage:
+            usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        output: dict[str, Any] = {"directive": directive}
+        if usage:
+            output["usage"] = usage
+        stdout_stream.write(_safe_json(output) + "\n")
         stdout_stream.flush()
         return 0
     except OllamaAdapterError as exc:

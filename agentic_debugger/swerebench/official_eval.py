@@ -26,10 +26,37 @@ new file mode 100644
 @@ -0,0 +1 @@
 +baseline-noop
 """
+OFFICIAL_COMMAND_TIMEOUT_SECONDS = 120.0
 
 
 def official_evaluator_root() -> Path:
     return DEFAULT_EXTERNAL_ROOT / "official-evaluator"
+
+
+def _pinned_checkout_head(root: Path) -> str | None:
+    """Read a local checkout's HEAD without spawning Git or touching network."""
+
+    git_dir = root / ".git"
+    try:
+        head = (git_dir / "HEAD").read_text(encoding="utf-8").strip()
+        if head.startswith("ref: "):
+            ref = head[5:].strip()
+            if not ref or ".." in ref or ref.startswith("/"):
+                return None
+            ref_path = git_dir / ref
+            if ref_path.is_file():
+                return ref_path.read_text(encoding="utf-8").strip()
+            packed = git_dir / "packed-refs"
+            if packed.is_file():
+                for line in packed.read_text(encoding="utf-8").splitlines():
+                    if line and not line.startswith("#") and not line.startswith("^"):
+                        commit, packed_ref = line.split(" ", 1)
+                        if packed_ref == ref:
+                            return commit
+            return None
+        return head or None
+    except (OSError, UnicodeError, ValueError):
+        return None
 
 
 def ensure_official_evaluator() -> Path:
@@ -49,6 +76,13 @@ def ensure_official_evaluator() -> Path:
             ],
             root.parent,
         )
+    else:
+        # The evaluator checkout is immutable at the pinned commit.  Avoid a
+        # network fetch on every task when the existing external checkout is
+        # already exact; repeated fetches were the source of unbounded waits
+        # even though the required commit was locally available.
+        if _pinned_checkout_head(root) == OFFICIAL_EVALUATOR_COMMIT:
+            return root
     _run(
         [
             "git",
@@ -68,9 +102,20 @@ def ensure_official_evaluator() -> Path:
 
 
 def _run(args: list[str], cwd: Path) -> str:
-    completed = subprocess.run(
-        args, cwd=str(cwd), capture_output=True, text=True, check=False
-    )
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise RuntimeError(
+            f"{' '.join(args)} timed out after "
+            f"{OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds"
+        ) from None
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         raise RuntimeError(f"{' '.join(args)} failed: {detail[:400]}")
@@ -81,14 +126,51 @@ def _docker_available() -> bool:
     return shutil.which("docker") is not None
 
 
+def _docker_image_available(image: str) -> tuple[bool, str]:
+    """Check the local daemon before spending the bounded pull budget.
+
+    A locally cached evaluator image must not be classified as an infrastructure
+    failure merely because the registry is slow or unreachable.  The inspect
+    command is bounded by the same subprocess contract as all official
+    evaluator commands.
+    """
+
+    try:
+        completed = subprocess.run(
+            ["docker", "image", "inspect", image],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        return False, f"docker image inspect timed out after {OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds"
+    detail = (completed.stderr or completed.stdout or "").strip()
+    return completed.returncode == 0, detail[-400:]
+
+
 def _docker_pull(image: str) -> tuple[bool, str]:
-    completed = subprocess.run(
-        ["docker", "pull", image],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    return completed.returncode == 0, (completed.stderr or completed.stdout or "")[-400:]
+    cached, cache_detail = _docker_image_available(image)
+    if cached:
+        return True, "local image already present"
+    try:
+        completed = subprocess.run(
+            ["docker", "pull", image],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        # A daemon can finish a pull after the client-side wait expires.  Probe
+        # once more before declaring the infrastructure invalid.
+        cached_after_timeout, detail_after_timeout = _docker_image_available(image)
+        if cached_after_timeout:
+            return True, "local image became available after bounded pull wait"
+        return False, f"docker pull timed out after {OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds"
+    if completed.returncode == 0:
+        return True, (completed.stderr or completed.stdout or "")[-400:]
+    return False, (completed.stderr or completed.stdout or cache_detail)[-400:]
 
 
 def _write_isolated_spec(
@@ -125,23 +207,33 @@ def _write_isolated_spec(
 def _run_official_eval(spec_path: Path, report_path: Path, workdir: Path) -> dict[str, Any]:
     evaluator = ensure_official_evaluator()
     script = evaluator / "scripts" / "eval.py"
-    completed = subprocess.run(
-        [
-            sys.executable,
-            str(script),
-            "--json",
-            str(spec_path),
-            "--max-workers",
-            "1",
-            "--golden-eval",
-            "--report-json",
-            str(report_path),
-        ],
-        cwd=str(workdir),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(script),
+                "--json",
+                str(spec_path),
+                "--max-workers",
+                "1",
+                "--golden-eval",
+                "--report-json",
+                str(report_path),
+            ],
+            cwd=str(workdir),
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired as exc:
+        return {
+            "exit_code": None,
+            "stdout_tail": "",
+            "stderr_tail": f"official evaluator timed out after {OFFICIAL_COMMAND_TIMEOUT_SECONDS:g} seconds",
+            "report": {},
+            "report_error": None,
+        }
     report: dict[str, Any] = {}
     report_error: str | None = None
     if report_path.is_file():
@@ -259,6 +351,7 @@ def run_official_infrastructure_gate(
         result["reason"] = "missing_official_patch_or_test_patch"
         return result
     pulled, pull_detail = _docker_pull(image)
+    reused_local_image = pull_detail == "local image already present"
     result["image_pulled"] = pulled
     if not pulled:
         result["reason"] = f"docker_pull_failed: {pull_detail}"
@@ -332,11 +425,19 @@ def run_official_infrastructure_gate(
     except Exception as exc:
         result["reason"] = f"official_eval_failed: {exc}"
     finally:
-        subprocess.run(
-            ["docker", "rmi", "-f", image],
-            capture_output=True,
-            check=False,
-        )
+        try:
+            if not reused_local_image:
+                subprocess.run(
+                    ["docker", "rmi", "-f", image],
+                    capture_output=True,
+                    check=False,
+                    timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+                )
+        except subprocess.TimeoutExpired:
+            # Cleanup is best effort here; the bounded evaluator result above
+            # remains authoritative and the timeout is not allowed to hang the
+            # worker indefinitely.
+            pass
     return result
 
 
@@ -373,6 +474,7 @@ def run_official_baseline_check(
         result["reason"] = "missing_official_test_patch"
         return result
     pulled, pull_detail = _docker_pull(image)
+    reused_local_image = pull_detail == "local image already present"
     result["image_pulled"] = pulled
     if not pulled:
         result["reason"] = f"docker_pull_failed: {pull_detail}"
@@ -416,5 +518,14 @@ def run_official_baseline_check(
         result["reason"] = f"official_baseline_check_failed: {type(exc).__name__}: {exc}"
     finally:
         shutil.rmtree(private, ignore_errors=True)
-        subprocess.run(["docker", "rmi", "-f", image], capture_output=True, check=False)
+        if not reused_local_image:
+            try:
+                subprocess.run(
+                    ["docker", "rmi", "-f", image],
+                    capture_output=True,
+                    check=False,
+                    timeout=OFFICIAL_COMMAND_TIMEOUT_SECONDS,
+                )
+            except subprocess.TimeoutExpired:
+                pass
     return result

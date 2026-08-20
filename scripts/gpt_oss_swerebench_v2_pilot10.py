@@ -545,6 +545,18 @@ def _run_authorized_pilot10(
                 flush=True,
             )
         write_json(root / rows_filename, {"rows": rows})
+        if campaign_metadata is not None:
+            # The metadata written before the first task is a contract
+            # declaration, not an observation.  Replace its provisional
+            # provider fields only after durable per-session rows exist so a
+            # live run can never retain a fabricated zero-call claim.
+            observed = provider_execution_truth(rows)
+            campaign_metadata = dict(campaign_metadata)
+            campaign_metadata.update(observed)
+            campaign_metadata["provider_generation_calls_source"] = (
+                "durable_session_rows"
+            )
+            write_json(root / "campaign_metadata.json", campaign_metadata)
         print(
             json.dumps(
                 {

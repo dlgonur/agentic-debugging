@@ -243,6 +243,12 @@ def run_configured_session(
         max_elapsed_seconds=None,
         max_retries=_DEFAULT_MAX_RETRIES,
         max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
+        # Streaming GPT-OSS generations can occupy the full bounded request
+        # window; repeating an already-started provider generation multiplies
+        # the wall-clock budget without adding evidence.  V7 opts out via the
+        # explicit --stream treatment flag while legacy profiles retain the
+        # historical retry policy.
+        retry_provider_timeouts="--stream" not in profile.live_command(),
     )
 
     def _initial_patch(workspace: Any) -> str:

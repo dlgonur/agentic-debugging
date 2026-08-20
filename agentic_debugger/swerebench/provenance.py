@@ -20,6 +20,7 @@ HARNESS_PATHS = (
     "scripts/ollama_cloud_command_adapter.py",
     "scripts/gpt_oss_swerebench_v2_pilot10.py",
     "scripts/gpt_oss_swerebench_v2_devqual10.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10_v7.py",
 )
 
 # These hashes belong to completed immutable V1-V5 treatments. Their
@@ -31,6 +32,9 @@ HISTORICAL_FROZEN_HARNESS_SHA256 = frozenset({
     "f3af71913cbe2c9e3792a8b9d5e253b2715855670806b67837e1d1ffe59c34f7",
     "553616df4c80d432085ed0807b9fd48421762dd52df9d59a6786ebe9eb10875f",
     "16faa5c53f8086a74692aea7349380dc68d6410791f593cdd4bada18eb305d7e",
+    # V6's frozen hash remains accepted as historical evidence after V7
+    # extends the live harness path set.
+    "a3d1fc56e2b6aa1576b30447e1d98ec9642f9ac0e7e7c4c92f9d92bcb940c18d",
 })
 
 

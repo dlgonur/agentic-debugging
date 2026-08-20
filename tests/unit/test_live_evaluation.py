@@ -324,6 +324,30 @@ def test_timeout_classification_and_measurements_survive_adapter_failure():
     assert adapter.metrics.termination_reason == "request_timeout"
 
 
+def test_stream_treatment_does_not_retry_an_already_started_timeout():
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    calls = []
+    def timed_out(payload, timeout_seconds):
+        calls.append(timeout_seconds)
+        raise LiveTransportError("timeout", kind="request_timeout", timed_out=True)
+    transport = FakeTransport(failures=0)
+    transport.request = timed_out
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=transport,
+        limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=2, retry_provider_timeouts=False),
+        registry=_test_live_registry(),
+    )
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+    with pytest.raises(Exception):
+        adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.REPRODUCE, 0, ControllerBudgetLimits.from_task_constraints(task.constraints), ControllerBudgetState(), HypothesisLedger()))
+    assert len(calls) == 1
+    assert adapter.metrics.retries == 0
+
+
 def test_process_output_is_bounded_before_serialization():
     command = (sys.executable, "-c", "import sys; sys.stdout.write('x' * 100000); sys.stderr.write('y' * 100000)")
     transport = JsonlCommandTransport(LiveModelConfig("local", command), max_output_bytes=1024)

@@ -20,6 +20,9 @@ class MaterializationError(RuntimeError):
     """Source checkout could not be created honestly."""
 
 
+GIT_COMMAND_TIMEOUT_SECONDS = 90.0
+
+
 def load_repo_cache_index(path: Path | None = None) -> dict[str, Path]:
     csv_path = path or (b14_v3_dir() / B14_REPO_MATERIALIZATION_NAME)
     index: dict[str, Path] = {}
@@ -36,14 +39,21 @@ def _run_git(args: list[str], cwd: Path) -> str:
     env = dict(os.environ)
     env["GIT_TERMINAL_PROMPT"] = "0"
     env["GCM_INTERACTIVE"] = "Never"
-    completed = subprocess.run(
-        ["git", "-c", "credential.helper=", *args],
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-        env=env,
-    )
+    try:
+        completed = subprocess.run(
+            ["git", "-c", "credential.helper=", *args],
+            cwd=str(cwd),
+            capture_output=True,
+            text=True,
+            check=False,
+            env=env,
+            timeout=GIT_COMMAND_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        raise MaterializationError(
+            f"git {' '.join(args)} timed out after "
+            f"{GIT_COMMAND_TIMEOUT_SECONDS:g} seconds"
+        ) from None
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout or "").strip()
         raise MaterializationError(f"git {' '.join(args)} failed: {detail[:400]}")

@@ -277,7 +277,7 @@ class LiveExecutionAuthorization:
 
 @dataclass(frozen=True)
 class LiveRunLimits:
-    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None
+    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None; retry_provider_timeouts:bool=True
     def __post_init__(self):
         if self.max_elapsed_seconds is not None:
             if type(self.max_elapsed_seconds) is not int:
@@ -286,8 +286,9 @@ class LiveRunLimits:
         for name,value,low,high in (("max_model_requests",self.max_model_requests,1,512),("max_controller_steps",self.max_controller_steps,1,256),("max_model_phase_seconds",self.max_model_phase_seconds,1,3600),("max_retries",self.max_retries,0,8),("max_response_bytes",self.max_response_bytes,1024,4*1024*1024)):
             if type(value) is not int or not low<=value<=high: raise LiveConfigurationError(name+" is invalid")
         if type(self.continue_on_task_failure) is not bool: raise LiveConfigurationError("continue_on_task_failure is invalid")
+        if type(self.retry_provider_timeouts) is not bool: raise LiveConfigurationError("retry_provider_timeouts is invalid")
     def to_mapping(self) -> dict[str,Any]:
-        return {"max_model_requests":self.max_model_requests,"max_controller_steps":self.max_controller_steps,"max_model_phase_seconds":self.max_model_phase_seconds,"max_retries":self.max_retries,"max_response_bytes":self.max_response_bytes,"continue_on_task_failure":self.continue_on_task_failure}
+        return {"max_model_requests":self.max_model_requests,"max_controller_steps":self.max_controller_steps,"max_model_phase_seconds":self.max_model_phase_seconds,"max_retries":self.max_retries,"max_response_bytes":self.max_response_bytes,"continue_on_task_failure":self.continue_on_task_failure,"retry_provider_timeouts":self.retry_provider_timeouts}
 
 _SAFE_RUN_LABEL=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 def _new_evaluation_identity(run_label: str|None) -> tuple[str,str|None]:
@@ -1045,7 +1046,10 @@ class LiveModelAdapter:
                         raise LiveModelAdapterError("model output was rejected by the command adapter", detail="the command adapter rejected the model output") from None
                     if exc.kind in PROVIDER_ADAPTER_ERROR_KINDS:
                         self.metrics.error(exc.kind)
-                        if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
+                        if attempt<self.limits.max_retries and not (
+                            exc.kind == "timeout" and not self.limits.retry_provider_timeouts
+                        ):
+                            self.metrics.retries+=1; continue
                         self.metrics.termination_reason="request_timeout" if exc.kind == "timeout" else "provider_or_transport_error"
                         raise LiveModelAdapterError("model transport failed") from None
                     self.metrics.setup_error(exc.kind)
@@ -1067,7 +1071,10 @@ class LiveModelAdapter:
                         detail="the command adapter exited without a typed error envelope",
                     ) from None
                 self.metrics.error(exc.kind)
-                if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
+                if attempt<self.limits.max_retries and not (
+                    exc.timed_out and not self.limits.retry_provider_timeouts
+                ):
+                    self.metrics.retries+=1; continue
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
             except LiveModelAdapterError as exc:
                 rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt+1}

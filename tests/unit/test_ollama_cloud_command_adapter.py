@@ -107,6 +107,7 @@ class _FixtureState:
         self,
         *,
         chat_body: bytes | None = None,
+        stream_chunks: list[dict[str, Any]] | None = None,
         chat_status: int = 200,
         delay: float = 0.0,
         tags_delay: float = 0.0,
@@ -115,6 +116,7 @@ class _FixtureState:
         show_payload: bytes | None = None,
     ) -> None:
         self.chat_body = chat_body or self._chat_envelope(valid_content())
+        self.stream_chunks = stream_chunks
         self.chat_status = chat_status
         self.delay = delay
         self.tags_delay = tags_delay
@@ -165,6 +167,15 @@ class _Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
         self.wfile.flush()
 
+    def _send_stream(self, chunks: list[dict[str, Any]]) -> None:
+        body = b"".join(json.dumps(chunk).encode("utf-8") + b"\n" for chunk in chunks)
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+        self.wfile.flush()
+
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         self.state.record(self.path, None)
         if self.path == "/api/version":
@@ -193,6 +204,9 @@ class _Handler(BaseHTTPRequestHandler):
         self.state.chat_started.set()
         if self.state.delay:
             time.sleep(self.state.delay)
+        if payload.get("stream") is True and self.state.stream_chunks is not None:
+            self._send_stream(self.state.stream_chunks)
+            return
         self._send(self.state.chat_status, self.state.chat_body)
 
 
@@ -220,12 +234,15 @@ def invoke(
     *,
     timeout: float = 2.0,
     model: str | None = None,
+    stream: bool = False,
 ) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     argv = ["--endpoint", endpoint, "--timeout", str(timeout)]
     if model is not None:
         argv.extend(["--model", model])
+    if stream:
+        argv.append("--stream")
     rc = adapter.run_adapter(
         stdin_stream=io.StringIO(json.dumps(request or sample_request()) + "\n"),
         stdout_stream=stdout,
@@ -314,6 +331,26 @@ def test_valid_directive_and_request_contract(fixture_server) -> None:
     assert [message["role"] for message in messages] == ["system", "user"]
     assert adapter.ADAPTER_RETRY_COUNT == 0
     assert adapter.FALLBACK_COUNT == 0
+
+
+def test_streaming_chat_discards_thinking_and_projects_usage(fixture_server) -> None:
+    state = _FixtureState(
+        stream_chunks=[
+            {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": False, "message": {"role": "assistant", "thinking": "private trace"}},
+            {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": False, "message": {"role": "assistant", "content": '{"kind":"action",'}},
+            {"model": adapter.EXPECTED_CLOUD_REMOTE_MODEL, "done": True, "done_reason": "stop", "prompt_eval_count": 11, "eval_count": 7, "message": {"role": "assistant", "content": "\"name\":\"run_reproduction\",\"arguments\":{\"phase\":\"baseline\"}}"}},
+        ]
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, stderr = invoke(endpoint, timeout=2.0, stream=True)
+    assert rc == 0, stderr
+    assert json.loads(stdout) == {
+        "directive": json.loads(valid_content()),
+        "usage": {"prompt_tokens": 11, "completion_tokens": 7, "total_tokens": 18},
+    }
+    assert "thinking" not in stdout
+    payload = chat_payloads(state)[0]
+    assert payload["stream"] is True
 
 
 def test_system_prompt_teaches_exact_validator_field_names() -> None:
@@ -764,12 +801,11 @@ def test_zero_context_hunk_is_accepted_by_unchanged_real_patch_manager(tmp_path:
         workspace.cleanup()
 
 
-def test_second_session_count_mismatch_remains_rejected_by_real_patch_manager() -> None:
-    with pytest.raises(
-        PatchValidationError,
-        match="old_count=2 but body has 3 context/removed lines",
-    ):
-        _parse_unified_diff(SECOND_SESSION_COUNT_MISMATCH_DIFF)
+def test_second_session_count_mismatch_is_normalized_and_audited() -> None:
+    parsed = _parse_unified_diff(SECOND_SESSION_COUNT_MISMATCH_DIFF)
+    hunk = parsed[0].hunks[0]
+    assert (hunk.old_count, hunk.new_count) == (3, 5)
+    assert parsed[0].hunk_count_adjustments == [(1, 2, 3, 6, 5)]
 
 
 def test_adapter_does_not_normalize_or_rewrite_patches() -> None:
@@ -794,7 +830,6 @@ def test_adapter_does_not_normalize_or_rewrite_patches() -> None:
         "--- a/display_name.py\n+++ b/display_name.py\n@@\n",
         "--- a/example.py\n",
         "--- a/example.py\n-value = 1\n+value = 2\n",
-        SECOND_SESSION_COUNT_MISMATCH_DIFF,
     ],
 )
 def test_malformed_unified_diffs_remain_rejected_without_normalization(diff: str) -> None:
