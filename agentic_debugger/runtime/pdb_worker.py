@@ -29,6 +29,7 @@ from agentic_debugger.runtime.exceptions import PdbProtocolError
 _MAX_SCRIPT_PATH_UTF8 = 4096
 _MAX_ARGV_ENTRY_UTF8 = 1024
 _BINARY_OPEN_FLAG = getattr(os, "O_BINARY", 0)
+_DISCARD_FD = os.open(os.devnull, os.O_WRONLY)
 _MAX_TARGET_SOURCE_BYTES = 16 * 1024 * 1024
 _MAX_STACK_FRAMES = 64
 _MAX_LOCAL_NAMES = 128
@@ -223,6 +224,9 @@ class _PdbPersistentRunner(pdb.Pdb):
 
 
 class _DiscardStdout:
+    encoding = "utf-8"
+    errors = "replace"
+
     def write(self, s: str) -> int:
         return len(s) if s else 0
 
@@ -233,10 +237,13 @@ class _DiscardStdout:
         return False
 
     def fileno(self) -> int:
-        raise io.UnsupportedOperation("fileno")
+        return _DISCARD_FD
 
 
 class _DiscardStderr:
+    encoding = "utf-8"
+    errors = "replace"
+
     def write(self, s: str) -> int:
         return len(s) if s else 0
 
@@ -247,7 +254,7 @@ class _DiscardStderr:
         return False
 
     def fileno(self) -> int:
-        raise io.UnsupportedOperation("fileno")
+        return _DISCARD_FD
 
 
 class _NullReader:
@@ -1754,7 +1761,15 @@ class PdbWorker:
         self._running = True
         self._target_started = False
         self._protocol_stdin = sys.stdin
-        self._protocol_stdout = sys.stdout
+        # Pytest's fd-level capture redirects descriptor 1 inside an
+        # in-process target.  Keep the JSON protocol on a protected duplicate
+        # so exact pytest reproductions cannot redirect or close the channel.
+        self._protocol_stdout = os.fdopen(
+            os.dup(sys.stdout.fileno()),
+            "w",
+            encoding="utf-8",
+            newline="",
+        )
         self._condition = threading.Condition()
         self._lifecycle: Dict[str, Any] = {
             'state': 'idle',
@@ -2026,6 +2041,8 @@ class PdbWorker:
         saved_stdin = sys.stdin
         saved_stdout = sys.stdout
         saved_stderr = sys.stderr
+        saved_dunder_stdout = sys.__stdout__
+        saved_dunder_stderr = sys.__stderr__
         saved_cwd = os.getcwd()
 
         try:
@@ -2035,6 +2052,8 @@ class PdbWorker:
             sys.stdin = _NullReader()
             sys.stdout = _DiscardStdout()
             sys.stderr = _DiscardStderr()
+            sys.__stdout__ = sys.stdout
+            sys.__stderr__ = sys.stderr
 
             try:
                 code = compile(source_bytes, script_abs, 'exec')
@@ -2164,6 +2183,8 @@ class PdbWorker:
             sys.stdin = saved_stdin
             sys.stdout = saved_stdout
             sys.stderr = saved_stderr
+            sys.__stdout__ = saved_dunder_stdout
+            sys.__stderr__ = saved_dunder_stderr
             os.chdir(saved_cwd)
 
     def _capture_post_mortem_evidence(
@@ -2431,6 +2452,8 @@ class PdbWorker:
         saved_stdin = sys.stdin
         saved_stdout = sys.stdout
         saved_stderr = sys.stderr
+        saved_dunder_stdout = sys.__stdout__
+        saved_dunder_stderr = sys.__stderr__
         saved_cwd = os.getcwd()
         saved_trace = sys.gettrace()
 
@@ -2441,6 +2464,8 @@ class PdbWorker:
             sys.stdin = _NullReader()
             sys.stdout = _DiscardStdout()
             sys.stderr = _DiscardStderr()
+            sys.__stdout__ = sys.stdout
+            sys.__stderr__ = sys.stderr
 
             try:
                 code = compile(source_bytes, script_abs, 'exec')
@@ -2559,6 +2584,8 @@ class PdbWorker:
             sys.stdin = saved_stdin
             sys.stdout = saved_stdout
             sys.stderr = saved_stderr
+            sys.__stdout__ = saved_dunder_stdout
+            sys.__stderr__ = saved_dunder_stderr
             os.chdir(saved_cwd)
             sys.settrace(None)
             sys.settrace(saved_trace)
@@ -2639,6 +2666,8 @@ class PdbWorker:
         saved_stdin = sys.stdin
         saved_stdout = sys.stdout
         saved_stderr = sys.stderr
+        saved_dunder_stdout = sys.__stdout__
+        saved_dunder_stderr = sys.__stderr__
         saved_cwd = os.getcwd()
         saved_trace = sys.gettrace()
 
@@ -2653,6 +2682,8 @@ class PdbWorker:
             sys.stdin = _NullReader()
             sys.stdout = _DiscardStdout()
             sys.stderr = _DiscardStderr()
+            sys.__stdout__ = sys.stdout
+            sys.__stderr__ = sys.stderr
 
             try:
                 code = compile(source_bytes, script_abs, 'exec')
@@ -2709,6 +2740,8 @@ class PdbWorker:
             sys.stdin = saved_stdin
             sys.stdout = saved_stdout
             sys.stderr = saved_stderr
+            sys.__stdout__ = saved_dunder_stdout
+            sys.__stderr__ = saved_dunder_stderr
             os.chdir(saved_cwd)
             sys.settrace(None)
             sys.settrace(saved_trace)

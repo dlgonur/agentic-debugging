@@ -82,6 +82,8 @@ class RuntimeProbe:
     call_source: str
     anchor: str
     inspect_expressions: tuple[str, ...]
+    exact_public_reproduction: bool = False
+    breakpoint_line: int = 0
 
     def __post_init__(self) -> None:
         if not self.module_path.endswith(".py"):
@@ -98,6 +100,12 @@ class RuntimeProbe:
             )
         if len(set(self.inspect_expressions)) != len(self.inspect_expressions):
             raise DemoCatalogError("inspect_expressions must be unique")
+        if type(self.exact_public_reproduction) is not bool:
+            raise DemoCatalogError("exact_public_reproduction must be boolean")
+        if type(self.breakpoint_line) is not int or self.breakpoint_line < 0:
+            raise DemoCatalogError("breakpoint_line must be a non-negative integer")
+        if self.exact_public_reproduction and self.breakpoint_line <= 0:
+            raise DemoCatalogError("exact probes must declare a breakpoint line")
 
     def to_mapping(self) -> dict[str, object]:
         return {
@@ -106,6 +114,8 @@ class RuntimeProbe:
             "call_source": self.call_source,
             "anchor": self.anchor,
             "inspect_expressions": list(self.inspect_expressions),
+            "exact_public_reproduction": self.exact_public_reproduction,
+            "breakpoint_line": self.breakpoint_line,
         }
 
 
@@ -263,6 +273,29 @@ _SCENARIOS: tuple[DemoScenario, ...] = (
             inspect_expressions=("caller_amount", "caller_representation"),
         ),
     ),
+    DemoScenario(
+        task_id="pdb-required-boundary-006",
+        hypothesis_id="proof-boundary-006",
+        root_cause_statement=(
+            "tail_window applies an unnecessary boundary adjustment when the "
+            "requested window covers the complete sequence."
+        ),
+        localization=LocalizationClaim("window_tail.py", "tail_window"),
+        reference_repair=ReferenceRepair(
+            "window_tail.py",
+            "selected = values[start_index:end_index - (1 if requested_size == item_count else 0)]",
+            "selected = values[start_index:end_index]",
+        ),
+        runtime_probe=RuntimeProbe(
+            module_path="window_tail.py",
+            focus_function="tail_window",
+            call_source="tail_window([10, 20, 30, 40], 4)",
+            anchor="selected = values[",
+            inspect_expressions=("requested_size",),
+            exact_public_reproduction=True,
+            breakpoint_line=9,
+        ),
+    ),
 )
 
 
@@ -414,6 +447,62 @@ def probe_driver_source(probe: RuntimeProbe) -> str:
     )
 
 
+def exact_pytest_driver_source(probe: RuntimeProbe, pytest_args: tuple[str, ...]) -> str:
+    """Return a guarded driver that runs the declared pytest node in-place."""
+
+    if type(probe) is not RuntimeProbe or not probe.exact_public_reproduction:
+        raise DemoCatalogError("exact pytest driver requires an exact probe")
+    if type(pytest_args) is not tuple or not pytest_args or any(
+        type(item) is not str or not item for item in pytest_args
+    ):
+        raise DemoCatalogError("pytest_args must be a non-empty string tuple")
+    return (
+        f"\n\ndef {PROBE_DRIVER_FUNCTION}():\n"
+        "    import os\n"
+        "    import sys\n"
+        "    import threading\n"
+        "    sys.path.insert(0, os.path.dirname(__file__))\n"
+        "    os.environ[\"PYTEST_DISABLE_PLUGIN_AUTOLOAD\"] = \"1\"\n"
+        "    # Keep pytest's fd capture off so it cannot redirect the bounded PDB protocol.\n"
+        "    os.environ[\"PYTEST_ADDOPTS\"] = \"-s\"\n"
+        "    saved_trace = sys.gettrace()\n"
+        "    def restore_pdb_trace():\n"
+        "        if saved_trace is not None:\n"
+        "            sys.settrace(saved_trace)\n"
+        "            threading.settrace(saved_trace)\n"
+        "    import pytest\n"
+        "    import functools\n"
+        "    import importlib\n"
+        f"    target_module = importlib.import_module({repr(probe.module_path[:-3].replace('/', '.'))})\n"
+        f"    original_function = getattr(target_module, {probe.focus_function!r})\n"
+        "    @functools.wraps(original_function)\n"
+        "    def traced_production_call(*args, **kwargs):\n"
+        "        restore_pdb_trace()\n"
+        "        return original_function(*args, **kwargs)\n"
+        f"    setattr(target_module, {probe.focus_function!r}, traced_production_call)\n"
+        "    class _RestorePdbTrace:\n"
+        "        def pytest_runtest_call(self, item):\n"
+        "            restore_pdb_trace()\n"
+        "        def pytest_collection_modifyitems(self, session, config, items):\n"
+        "            for item in items:\n"
+        f"                module_function = getattr(item.module, {probe.focus_function!r}, None)\n"
+        "                if module_function is not None:\n"
+        "                    @functools.wraps(module_function)\n"
+        "                    def traced_test_binding(*args, __original=module_function, **kwargs):\n"
+        "                        restore_pdb_trace()\n"
+        "                        return __original(*args, **kwargs)\n"
+        f"                    setattr(item.module, {probe.focus_function!r}, traced_test_binding)\n"
+        "                original = item.obj\n"
+        "                @functools.wraps(original)\n"
+        "                def wrapped(*args, __original=original, **kwargs):\n"
+        "                    restore_pdb_trace()\n"
+        "                    return __original(*args, **kwargs)\n"
+        "                item.obj = wrapped\n"
+        f"    return pytest.main({repr(list(pytest_args))}, plugins=[_RestorePdbTrace()])\n\n\n"
+        f"if __name__ == \"__main__\":\n    {PROBE_DRIVER_FUNCTION}()\n"
+    )
+
+
 __all__ = [
     "MAX_PROBE_EXPRESSIONS",
     "PROBE_DRIVER_FUNCTION",
@@ -423,6 +512,7 @@ __all__ = [
     "ReferenceRepair",
     "RuntimeProbe",
     "build_reference_patch",
+    "exact_pytest_driver_source",
     "probe_driver_source",
     "reference_repair_snippets",
     "resolve_probe_breakpoint",

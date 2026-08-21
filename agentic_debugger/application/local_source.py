@@ -208,13 +208,22 @@ def run_local_session(
         with guard:
             workspace = TaskWorkspace(str(fixture_dir), parent_dir=str(case_parent))
             patch_text = initial_patch(workspace)
+            task = load_task(str(fixture_dir / "task.json"))
+            if scenario.runtime_probe.exact_public_reproduction:
+                # The controller/model workspace is public task state.  The
+                # verifier retains the canonical task separately.
+                (Path(workspace.root) / "task.json").write_text(
+                    json.dumps(task.agent_visible_mapping(), sort_keys=True, indent=2) + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
             probe = (
-                prepare_pdb_probe(fixture_dir, scenario, case_parent)
+                prepare_pdb_probe(fixture_dir, scenario, case_parent, task=task)
                 if pdb_mode is not PdbPolicy.DISABLED
                 else None
             )
             demo_context = DemoToolContext(
-                task=load_task(str(fixture_dir / "task.json")),
+                task=task,
                 workspace=workspace,
                 patch=patch_text,
                 probe=probe,
@@ -223,12 +232,20 @@ def run_local_session(
             registry = build_registry(
                 demo_context,
                 pdb_policy=registry_pdb_policy,
+                interactive_debugger_controls=(
+                    scenario.runtime_probe.exact_public_reproduction
+                ),
             )
             model = model_factory(demo_context, registry)
             controller = DeterministicController(
                 registry,
                 model,
-                ControllerRunConfig(max_model_calls=max_model_calls),
+                ControllerRunConfig(
+                    max_model_calls=max_model_calls,
+                    require_pdb_evidence_before_patch=(
+                        scenario.runtime_probe.exact_public_reproduction
+                    ),
+                ),
                 observer=controller_adapter,
             )
             task = demo_context.task

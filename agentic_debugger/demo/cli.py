@@ -148,7 +148,7 @@ def write_outputs(report: DemoReport, output_dir: Path, entry_point: str) -> dic
 
 
 def render_reproduction(report: DemoReport, entry_point: str) -> str:
-    """Render clean-checkout reproduction instructions for this exact run."""
+    """Render truthful candidate-checkout reproduction instructions."""
 
     environment = report.environment
     return "\n".join(
@@ -165,12 +165,14 @@ def render_reproduction(report: DemoReport, entry_point: str) -> str:
             "* No network access and no model-provider credentials are needed "
             "or used",
             "",
-            "## Steps from a clean checkout",
+            "## Steps from the reviewed candidate",
             "",
             "```powershell",
             "git clone <repository-url> agentic-debugging-internship",
             "cd agentic-debugging-internship",
             f"git checkout {environment.get('git_head') or '<commit>'}",
+            "# Apply the uncommitted candidate from the FirstMate package if starting from that base:",
+            "git apply <path-to-review-package>/candidate.patch",
             "python -m pip install -e .[test]",
             entry_point,
             "```",

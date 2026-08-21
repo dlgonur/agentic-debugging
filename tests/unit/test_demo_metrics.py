@@ -287,6 +287,18 @@ class TestRuntimeEvidenceScoring:
         for forbidden in ("USEFUL", "CONFIRM", "REFUT", "CHANGED", "MISREAD"):
             assert forbidden not in vocabulary
 
+    def test_exact_proof_reports_collected_evidence_without_policy_gate(self) -> None:
+        assert (
+            classify_runtime_evidence(
+                gate_reached=False,
+                gate_allowed=False,
+                session_started=True,
+                evidence_collected=True,
+                proof_required=True,
+            )
+            is RuntimeEvidenceOutcome.PDB_EVIDENCE_COLLECTED
+        )
+
 
 class TestReportDocument:
     def _report(self) -> DemoReport:

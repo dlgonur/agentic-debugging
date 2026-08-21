@@ -24,6 +24,7 @@ from agentic_debugger.agent.controller_policy import (
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
 from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
+from agentic_debugger.agent.proof_gate import validate_pdb_patch_evidence
 from agentic_debugger.demo.catalog import scenario_for
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.runner import CURATED_RELATIVE_ROOT, localization_record
@@ -32,7 +33,7 @@ from agentic_debugger.demo.tools import DemoToolContext, build_registry, legal_r
 from agentic_debugger.evaluation.runner import bounded_error, load_task
 from agentic_debugger.evaluation.verifier import EvaluationVerifier
 from agentic_debugger.events.logger import JsonlEventLogger
-from agentic_debugger.events.schema import RunEvent
+from agentic_debugger.events.schema import Observation, RunEvent
 from agentic_debugger.rag.context import PUBLIC_REQUEST_BYTE_BUDGET, RagContext
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
@@ -276,7 +277,7 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None
+    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
@@ -290,7 +291,7 @@ class LiveModelMetrics:
             if type(number) is int and number >= 0:
                 old=getattr(self,name); setattr(self,name,number if old is None else old+number)
             elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason}
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
@@ -361,6 +362,7 @@ def _action_contracts_for_state(
     pdb_observations_remaining: int | None = None,
     post_patch_f2p_collected: bool = False,
     regression_collected: bool = False,
+    patch_allowed: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Return the effective contract derived from the supplied registry."""
 
@@ -391,6 +393,8 @@ def _action_contracts_for_state(
         # required evidence values exist.  Hide it rather than leaving the
         # model to rediscover a deterministic tool error.
         effective.discard(ActionName.CLASSIFY_OUTCOME)
+    if not patch_allowed:
+        effective.discard(ActionName.APPLY_PATCH)
     result: dict[str, dict[str, Any]] = {}
     for action in ActionName:
         if action not in effective or action.value not in contracts:
@@ -428,12 +432,14 @@ def _legal_transition_targets(
     state: ControllerState,
     *,
     pdb_transition_allowed: bool = True,
+    patch_allowed: bool = True,
 ) -> list[str]:
     return [
         candidate.value
         for candidate in ControllerState
         if candidate in TRANSITION_GRAPH[state]
         and (candidate is not ControllerState.RUNTIME_EVIDENCE or pdb_transition_allowed)
+        and (candidate is not ControllerState.PATCH or patch_allowed)
     ]
 
 def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
@@ -544,10 +550,10 @@ def _parse(
     raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized or missing directive 'kind'")
 
 class LiveModelAdapter:
-    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None):
+    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
-        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]; self.directive_attempts=[]
+        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]; self.directive_attempts=[]; self.proof_required=bool(proof_required); self._proof_observations=[]
         # Optional RAG context: when None (the default) the public request is
         # byte-for-byte unchanged and ``retrieved_context`` is never emitted.
         # When supplied it must be a validated RagContext; arbitrary
@@ -578,6 +584,9 @@ class LiveModelAdapter:
         observation = snapshot.last_observation
         if observation is None:
             return
+        if self.proof_required and type(observation) is Observation:
+            if not any(item.observation_id == observation.observation_id for item in self._proof_observations):
+                self._proof_observations.append(observation)
         if observation.name in {
             ActionName.APPLY_PATCH.value,
             ActionName.REVERT_PATCH.value,
@@ -682,6 +691,11 @@ class LiveModelAdapter:
             return False
         return bool(self._cached_pdb_gate_decision(snapshot).allowed)
 
+    def _proof_patch_allowed(self) -> bool:
+        if not self.proof_required:
+            return True
+        return validate_pdb_patch_evidence(self._proof_observations)[0]
+
     def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
         pdb_observations_remaining = max(
             0,
@@ -705,18 +719,19 @@ class LiveModelAdapter:
             pdb_observations_remaining=pdb_observations_remaining,
             post_patch_f2p_collected=self._post_patch_f2p_collected,
             regression_collected=self._regression_collected,
+            patch_allowed=self._proof_patch_allowed(),
         )
-    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, rejection: Mapping[str, Any] | None = None):
+    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, contracts, legal_targets, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
-        contracts = self._effective_contract(snapshot)
         runtime_allowed = self._runtime_transition_allowed(snapshot)
         effective_actions = list(contracts)
-        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":_legal_transition_targets(snapshot.state,pdb_transition_allowed=runtime_allowed),"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
         if self._rag_context is not None:
             payload["retrieved_context"] = self._rag_context.to_request_mapping()
         return payload
     def next_directive(self,snapshot):
         self._observe_snapshot(snapshot)
+        self.metrics.logical_model_calls += 1
         # The gate is consumed from ``UNDERSTAND``.  ``_runtime_transition_authorized``
         # marks that the controller is already inside an authorized RUNTIME_EVIDENCE
         # visit; it is reset to ``False`` whenever the controller has left that
@@ -728,6 +743,7 @@ class LiveModelAdapter:
         if snapshot.state is ControllerState.RUNTIME_EVIDENCE and not self._runtime_transition_authorized:
             self._runtime_transition_authorized = self._runtime_transition_allowed(snapshot)
         effective_contract = self._effective_contract(snapshot)
+        legal_targets = _legal_transition_targets(snapshot.state, pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed, patch_allowed=self._proof_patch_allowed())
         logical_request_index = snapshot.model_call_index
         history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
         self.history.append(history_entry)
@@ -735,7 +751,7 @@ class LiveModelAdapter:
         rejection: dict[str, Any] | None = None
         for attempt in range(self.limits.max_retries+1):
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
-            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,rejection=rejection))
+            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,contracts=effective_contract,legal_targets=legal_targets,rejection=rejection))
             try:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
             except (TypeError,ValueError,UnicodeError):
@@ -751,6 +767,9 @@ class LiveModelAdapter:
             if self._rag_context is not None and len(request_bytes)>PUBLIC_REQUEST_BYTE_BUDGET:
                 self.metrics.termination_reason="request_too_large"; raise LiveModelAdapterError("live model context plus RAG context exceeded the public request bound")
             self.metrics.model_requests+=1
+            self.metrics.transport_attempts+=1
+            self.metrics.cumulative_request_bytes += len(request_bytes)
+            self.metrics.max_request_bytes = max(self.metrics.max_request_bytes, len(request_bytes))
             timeout_seconds=min(self.config.request_timeout_seconds,self._remaining())
             phase_started=self.clock()
             try:
@@ -791,7 +810,7 @@ class LiveModelAdapter:
                     self._record_pdb_gate_decision(snapshot, gate_decision)
                     self._pdb_gate_recorded_for_index = snapshot.model_call_index
                 contracts = effective_contract
-                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(_legal_transition_targets(snapshot.state,pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed)))
+                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(legal_targets))
                 attempt_record["accepted"] = True
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True
@@ -956,11 +975,14 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     if result is not None and context is not None and result.final_state is ControllerState.DONE and context.patch_applied and context.candidate_patch:
         try:
             verifier_started=True
+            verifier_clock_started = time.monotonic()
             verifier=verify()
         except KeyboardInterrupt:
             interrupted=True; diagnostics.append("verifier interrupted by operator")
         except Exception as exc:
             verifier_failed=True; diagnostics.append(redact_for_recording(bounded_error(exc)))
+        finally:
+            metrics.verifier_wall_duration_ms = int((time.monotonic() - verifier_clock_started) * 1000)
     elif result is not None and result.final_state is ControllerState.DONE:
         diagnostics.append("controller completed without an accepted patch")
     if result is not None:
@@ -1082,32 +1104,55 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
     )
 
 def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False):
-    repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve(); task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
+    repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve(); scenario=scenario_for(task_id); task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
     case_id=f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"; run_id=f"live-{case_id}"; started=time.monotonic()
     case_dir=None; workspace=None; context=None; result=None; live_adapter=None; metrics=LiveModelMetrics(); diagnostics=[]; interrupted=False; controller_failed=False
     try:
         case_dir=_owned_case_dir(parent)
         workspace=TaskWorkspace(str(repo/CURATED_RELATIVE_ROOT/task_id),parent_dir=str(case_dir))
+        if scenario.runtime_probe.exact_public_reproduction:
+            (Path(workspace.root) / "task.json").write_text(
+                json.dumps(task.agent_visible_mapping(), sort_keys=True, indent=2) + "\n",
+                encoding="utf-8",
+                newline="\n",
+            )
         probe=prepare_pdb_probe(
             repo/CURATED_RELATIVE_ROOT/task_id,
-            scenario_for(task_id),
+            scenario,
             case_dir,
             model_selects_breakpoint=interactive_debugger_controls,
+            task=task,
         ) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
         context=DemoToolContext(task=task,workspace=workspace,patch="",probe=probe)
         registry=build_registry(
             context,
             pdb_policy=pdb_policy_for(policy),
-            interactive_debugger_controls=interactive_debugger_controls,
+            interactive_debugger_controls=(
+                interactive_debugger_controls
+                or scenario.runtime_probe.exact_public_reproduction
+            ),
         )
-        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id)
+        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction)
         metrics=live_adapter.metrics
-        controller=DeterministicController(registry,live_adapter,ControllerRunConfig(max_model_calls=limits.max_controller_steps))
+        controller=DeterministicController(
+            registry,
+            live_adapter,
+            ControllerRunConfig(
+                max_model_calls=limits.max_controller_steps,
+                require_pdb_evidence_before_patch=(
+                    scenario.runtime_probe.exact_public_reproduction
+                ),
+            ),
+        )
         try:
+            controller_clock_started = time.monotonic()
             result=controller.run(ControllerSnapshot(run_id,task_id,ControllerState.REPRODUCE,0,ControllerBudgetLimits.from_task_constraints(task.constraints),ControllerBudgetState(),HypothesisLedger()))
+            metrics.controller_wall_duration_ms = int((time.monotonic() - controller_clock_started) * 1000)
         except KeyboardInterrupt:
             interrupted=True; diagnostics.append("controller interrupted by operator")
         except Exception as exc:
+            if 'controller_clock_started' in locals():
+                metrics.controller_wall_duration_ms = int((time.monotonic() - controller_clock_started) * 1000)
             controller_failed=True; diagnostics.append(redact_for_recording(bounded_error(exc)))
     except KeyboardInterrupt:
         interrupted=True; diagnostics.append("run interrupted by operator")

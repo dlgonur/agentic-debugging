@@ -356,12 +356,15 @@ def _resolve_observer_notify(observer: object) -> Callable[..., None]:
 @dataclass(frozen=True)
 class ControllerRunConfig:
     max_model_calls: int = DEFAULT_MAX_MODEL_CALLS
+    require_pdb_evidence_before_patch: bool = False
 
     def __post_init__(self) -> None:
         if type(self.max_model_calls) is not int:
             raise ControllerInputError("invalid max_model_calls")
         if not 1 <= self.max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             raise ControllerInputError("invalid max_model_calls")
+        if type(self.require_pdb_evidence_before_patch) is not bool:
+            raise ControllerInputError("invalid require_pdb_evidence_before_patch")
 
 
 def _validate_action(value: object) -> None:
@@ -831,6 +834,7 @@ class DeterministicController:
     _canonical_registry: ToolRegistry = field(init=False, repr=False, compare=False)
     _model_method: Callable[..., object] = field(init=False, repr=False, compare=False)
     _canonical_max_model_calls: int = field(init=False, repr=False, compare=False)
+    _canonical_require_pdb_evidence_before_patch: bool = field(init=False, repr=False, compare=False)
     _canonical_observer: ControllerObserver = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
@@ -840,13 +844,21 @@ class DeterministicController:
         max_model_calls = self.config.max_model_calls
         if type(max_model_calls) is not int or not 1 <= max_model_calls <= MAX_CONTROLLER_MODEL_CALLS:
             _input("config")
-        canonical_config = ControllerRunConfig(max_model_calls)
+        canonical_config = ControllerRunConfig(
+            max_model_calls,
+            self.config.require_pdb_evidence_before_patch,
+        )
         method = _resolve_model_method(self.model_adapter)
         _resolve_observer_notify(self.observer)
         object.__setattr__(self, "config", canonical_config)
         object.__setattr__(self, "_canonical_registry", canonical_registry)
         object.__setattr__(self, "_model_method", method)
         object.__setattr__(self, "_canonical_max_model_calls", max_model_calls)
+        object.__setattr__(
+            self,
+            "_canonical_require_pdb_evidence_before_patch",
+            self.config.require_pdb_evidence_before_patch,
+        )
         object.__setattr__(self, "_canonical_observer", self.observer)
 
     def _validate_controller(self) -> None:
@@ -894,6 +906,9 @@ class DeterministicController:
         budget_state = snapshot.budget_state
         hypotheses = snapshot.hypotheses
         last_observation = snapshot.last_observation
+        tool_observations: list[Observation] = []
+        if last_observation is not None:
+            tool_observations.append(last_observation)
         steps: list[ControllerStepResult] = []
         model_calls = 0
         last_request_index = model_call_index
@@ -1163,6 +1178,7 @@ class DeterministicController:
                     observation, reason = _canonical_observation(
                         observation_raw, record_action, observation_id
                     )
+                    tool_observations.append(observation)
                     _emit(ControllerObservationKind.TOOL_COMPLETED,
                           model_call_index=model_call_index - 1, state_before=state_before,
                           tool_name=action_directive.name.value,
@@ -1214,6 +1230,31 @@ class DeterministicController:
                                  state_before=state_before, budget_before=budget_before,
                                  hypotheses_before=hypotheses_before)
                     return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
+                if (
+                    transition.target_state is ControllerState.PATCH
+                    and self._canonical_require_pdb_evidence_before_patch
+                ):
+                    from agentic_debugger.agent.proof_gate import validate_pdb_patch_evidence
+
+                    allowed, reason = validate_pdb_patch_evidence(tool_observations)
+                    if not allowed:
+                        _emit(
+                            ControllerObservationKind.DIRECTIVE_REJECTED,
+                            model_call_index=model_call_index - 1,
+                            state_before=state_before,
+                            directive_kind=kind.value,
+                            rejection_category="pdb_evidence_required",
+                            transition_reason=reason,
+                        )
+                        failure_step(
+                            ControllerStopReason.DIRECTIVE_REJECTED,
+                            kind=kind,
+                            transition_reason=reason,
+                            state_before=state_before,
+                            budget_before=budget_before,
+                            hypotheses_before=hypotheses_before,
+                        )
+                        return result(ControllerStopReason.DIRECTIVE_REJECTED, state)
                 _emit(ControllerObservationKind.DIRECTIVE_ACCEPTED,
                       model_call_index=model_call_index - 1, state_before=state_before,
                       directive_kind=kind.value, target_state=transition.target_state,

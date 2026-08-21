@@ -21,6 +21,7 @@ EXPECTED_FIXTURES = {
     "curated-wrong-branch-003": ("access_branch.py", "tests/test_access_branch.py"),
     "curated-mutation-alias-004": ("labels.py", "tests/test_labels.py"),
     "curated-caller-callee-005": ("price.py", "tests/test_price.py"),
+    "pdb-required-boundary-006": ("window_tail.py", "tests/test_window_tail.py"),
 }
 SUMMARY_TOKEN = re.compile(
     r"(?P<count>\d+)\s+(?P<label>failed|passed|skipped|error|errors|xfailed|xpassed)\b"

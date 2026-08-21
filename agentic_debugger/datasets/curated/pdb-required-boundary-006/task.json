@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "task_id": "pdb-required-boundary-006",
+  "title": "Keep the complete boundary window",
+  "description": "A deterministic sequence-window helper should preserve the final value when the requested window reaches the sequence boundary while retaining its ordinary-window behavior.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/pdb-required-boundary-006",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_window_tail.py::test_full_window_keeps_the_boundary_value", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_window_tail.py::test_full_window_keeps_the_boundary_value"],
+    "pass_to_pass": ["tests/test_window_tail.py::test_smaller_window_returns_the_recent_values"],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["window_tail.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 4,
+    "max_pdb_observations": 6
+  },
+  "oracle": {
+    "bug_category": "boundary / off-by-one",
+    "target_files": ["window_tail.py"],
+    "target_symbols": ["tail_window"],
+    "root_cause_summary": "The boundary slice excludes one value when the requested window covers the complete sequence.",
+    "runtime_evidence_hint": "The production frame exposes the sequence length, requested size, boundary indexes, and selected result."
+  },
+  "tags": ["proof", "curated", "runtime-state", "boundary", "isolated"]
+}
