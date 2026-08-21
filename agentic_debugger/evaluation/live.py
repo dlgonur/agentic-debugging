@@ -648,7 +648,15 @@ class LiveModelAdapter:
         observation = snapshot.last_observation
         if observation is None:
             return
-        if self.proof_required and type(observation) is Observation:
+        # Failed/rejected attempts remain in the authoritative event stream, but
+        # they are not proof.  Keeping only successful observations here lets a
+        # model recover from a rejected debugger action without either erasing
+        # the failed event or poisoning the later exact proof chain.
+        if (
+            self.proof_required
+            and type(observation) is Observation
+            and observation.status.value == "ok"
+        ):
             if not any(item.observation_id == observation.observation_id for item in self._proof_observations):
                 self._proof_observations.append(observation)
         if observation.name in {
@@ -672,6 +680,14 @@ class LiveModelAdapter:
         elif observation.name == ActionName.RUN_REGRESSION_TESTS.value:
             self._regression_collected = True
         elif observation.name == ActionName.START_PDB_SESSION.value:
+            self._pdb_session_active = payload.get("state") == "paused"
+        elif observation.name in {
+            ActionName.CONTINUE_PDB_SESSION.value,
+            ActionName.STEP_PDB_SESSION.value,
+            ActionName.NEXT_PDB_SESSION.value,
+        }:
+            # Execution control may either pause again or exit the target.  The
+            # next request must not advertise session-only tools after exit.
             self._pdb_session_active = payload.get("state") == "paused"
         elif observation.name == ActionName.STOP_PDB_SESSION.value:
             self._pdb_session_active = payload.get("stopped") is True
@@ -789,6 +805,56 @@ class LiveModelAdapter:
         ]
         return len(control_matches) == 1 and control_matches[0].status.value == "ok"
 
+    def _proof_runtime_progress(self) -> dict[str, Any]:
+        """Expose the exact proof's next bounded action without oracle data."""
+
+        successful_names = [
+            observation.name
+            for observation in self._proof_observations
+            if observation.status.value == "ok"
+        ]
+        counts = {name: successful_names.count(name) for name in set(successful_names)}
+        start_ready = counts.get(ActionName.START_PDB_SESSION.value, 0) == 1
+        stack_ready = counts.get(ActionName.GET_STACK_SUMMARY.value, 0) == 1
+        locals_ready = counts.get(ActionName.GET_FRAME_LOCALS.value, 0) == 1
+        control_count = sum(
+            counts.get(name.value, 0)
+            for name in (ActionName.STEP_PDB_SESSION, ActionName.NEXT_PDB_SESSION)
+        )
+        diagnosis_ready = start_ready and stack_ready and locals_ready and control_count == 1
+
+        if not start_ready:
+            next_actions = [
+                ActionName.GET_SOURCE_WINDOW.value,
+                ActionName.START_PDB_SESSION.value,
+            ]
+        elif not stack_ready:
+            next_actions = [ActionName.GET_STACK_SUMMARY.value]
+        elif not locals_ready:
+            next_actions = [ActionName.GET_FRAME_LOCALS.value]
+        elif control_count != 1:
+            next_actions = [
+                ActionName.STEP_PDB_SESSION.value,
+                ActionName.NEXT_PDB_SESSION.value,
+            ]
+        elif self._pdb_session_active:
+            next_actions = [ActionName.STOP_PDB_SESSION.value]
+        else:
+            next_actions = []
+
+        return {
+            "required_order": [
+                ActionName.START_PDB_SESSION.value,
+                ActionName.GET_STACK_SUMMARY.value,
+                ActionName.GET_FRAME_LOCALS.value,
+                "step_pdb_session|next_pdb_session",
+                ActionName.STOP_PDB_SESSION.value,
+            ],
+            "next_required_actions": next_actions,
+            "pre_diagnosis_ready": diagnosis_ready,
+            "session_active": self._pdb_session_active,
+        }
+
     def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
         pdb_observations_remaining = max(
             0,
@@ -803,7 +869,7 @@ class LiveModelAdapter:
                 or snapshot.state is not ControllerState.RUNTIME_EVIDENCE
             )
         )
-        return _action_contracts_for_state(
+        result = _action_contracts_for_state(
             snapshot.state,
             registry=self.registry,
             policy=self.policy,
@@ -816,6 +882,19 @@ class LiveModelAdapter:
             diagnosis_allowed=self._proof_diagnosis_ready(),
             failure_trace_allowed=self._failure_reproduced,
         )
+        if self.proof_required and snapshot.state is ControllerState.RUNTIME_EVIDENCE:
+            # The lowest-rung proof is intentionally a narrow debugger
+            # lifecycle.  Advertising unrelated execution controls caused the
+            # live model to spend its bounded run on legal but proof-irrelevant
+            # actions.  The event/controller path stays model-driven, while the
+            # request surface exposes only the next evidence-producing choice.
+            next_actions = set(self._proof_runtime_progress()["next_required_actions"])
+            result = {
+                name: contract
+                for name, contract in result.items()
+                if name in next_actions
+            }
+        return result
     def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, contracts, legal_targets, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
         runtime_allowed = self._runtime_transition_allowed(snapshot)
@@ -823,7 +902,8 @@ class LiveModelAdapter:
         history_window = PROOF_HISTORY_WINDOW if self.proof_required else MODEL_HISTORY_WINDOW
         payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-history_window:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
         if self.proof_required:
-            payload["instructions"] += " Exact-proof workflow: add a hypothesis with requires_runtime_evidence=true, transition to RuntimeEvidence, collect the advertised bounded PDB observations, return to Understand, revise the hypothesis using prior evidence references, and express a diagnosis only when that action is advertised. Patch is legal only after the complete proof gate succeeds."
+            payload["proof_gate"] = self._proof_runtime_progress()
+            payload["instructions"] += " Exact-proof workflow: inspect enough target source to choose an executable statement inside the target function (never a def, import, or module-level line), add a hypothesis with requires_runtime_evidence=true, and transition to RuntimeEvidence. In RuntimeEvidence follow proof_gate.next_required_actions: start the PDB session, collect exactly one stack, locals, and step-or-next observation, then stop the session. Do not use continue_pdb_session for this proof. Return to Understand only after proof_gate.pre_diagnosis_ready is true and proof_gate.session_active is false; revise the hypothesis using the recorded observation ids and express a diagnosis only when that action is advertised. Patch is legal only after the complete proof gate succeeds."
         if self._rag_context is not None:
             payload["retrieved_context"] = self._rag_context.to_request_mapping()
         return payload
@@ -842,6 +922,19 @@ class LiveModelAdapter:
             self._runtime_transition_authorized = self._runtime_transition_allowed(snapshot)
         effective_contract = self._effective_contract(snapshot)
         legal_targets = _legal_transition_targets(snapshot.state, pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed, patch_allowed=self._proof_patch_allowed())
+        if (
+            self.proof_required
+            and snapshot.state is ControllerState.RUNTIME_EVIDENCE
+            and (
+                not self._proof_diagnosis_ready()
+                or self._pdb_session_active
+            )
+        ):
+            legal_targets = [
+                target
+                for target in legal_targets
+                if target != ControllerState.UNDERSTAND.value
+            ]
         logical_request_index = snapshot.model_call_index
         history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
         self.history.append(history_entry)

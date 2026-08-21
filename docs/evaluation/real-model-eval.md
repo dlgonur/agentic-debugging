@@ -116,6 +116,16 @@ cleanup. Directive kinds are likewise
 state-scoped: hypothesis add/revise/status directives appear only where the
 controller can apply them.
 
+The opt-in exact-PDB proof adds a narrower `proof_gate` object to the public
+request. In `RuntimeEvidence`, `next_required_actions` exposes only the next
+evidence-producing surface: source inspection/start, stack, locals,
+step-or-next, then stop. `continue_pdb_session` is not part of this proof.
+`Understand` remains unavailable until the unique successful pre-diagnosis
+observations exist and the session has stopped. A rejected debugger action is
+retained in the event stream but is not counted as proof, so a corrected action
+can proceed without turning the earlier failure into evidence. Execution
+control that exits the target immediately clears the active-session contract.
+
 `RuntimeEvidence` is not a model-selected shortcut. The live adapter calls the
 accepted `decide_pdb_access` policy function before permitting a transition
 into that state. The static policy always denies it. The uncertainty policy

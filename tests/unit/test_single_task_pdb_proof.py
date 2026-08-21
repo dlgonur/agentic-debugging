@@ -228,6 +228,85 @@ def test_exact_probe_preserves_canonical_fixture_and_uses_a_disposable_identity(
     assert "private" not in json.dumps(public_manifest).lower()
 
 
+def test_exact_interactive_start_rejects_wrong_frame_and_allows_corrected_breakpoint(
+    tmp_path: Path,
+) -> None:
+    task = load_task(str(FIXTURE / "task.json"))
+    probe = prepare_pdb_probe(
+        FIXTURE,
+        scenario_for(TASK_ID),
+        tmp_path,
+        model_selects_breakpoint=True,
+        task=task,
+    )
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(FIXTURE), parent_dir=str(case_dir))
+
+    class FakeSession:
+        def __init__(self, _workspace):
+            self.stopped = False
+
+        def start(self):
+            return None
+
+        def start_paused_target(self, script, breakpoints):
+            line = breakpoints[0]
+            return {
+                "state": "paused",
+                "script": script,
+                "line": line,
+                "function": "<module>" if line == 1 else "tail_window",
+            }
+
+        def stop(self):
+            self.stopped = True
+
+    context = DemoToolContext(
+        task=task,
+        workspace=workspace,
+        patch="",
+        probe=probe,
+        pdb_session_factory=FakeSession,
+    )
+    registry = build_registry(
+        context,
+        pdb_policy=PdbPolicy.ON_UNCERTAINTY,
+        interactive_debugger_controls=True,
+    )
+
+    def dispatch(index: int, line: int) -> Observation:
+        return registry.dispatch(
+            Action(
+                f"action-{index:09d}",
+                "run-proof",
+                TASK_ID,
+                ControllerState.RUNTIME_EVIDENCE,
+                "start_pdb_session",
+                {"breakpoint_line": line},
+            ),
+            observation_id=f"observation-{index:09d}",
+        )
+
+    try:
+        wrong = dispatch(1, 1)
+        assert wrong.status is ObservationStatus.REJECTED
+        assert context.pdb_session is None
+        assert context.pdb_workspace is None
+        assert context.interactive_pdb_session_started is False
+
+        corrected = dispatch(2, 2)
+        assert corrected.status is ObservationStatus.OK, context.tool_errors
+        assert corrected.payload["function"] == "tail_window"
+        assert corrected.payload["proof"]["breakpoint_line"] == 2
+        assert context.interactive_pdb_session_started is True
+    finally:
+        context.release_pdb()
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)
+
+
 def test_default_pdb_worker_keeps_site_packages_out_of_isolation(tmp_path: Path) -> None:
     workspace = TaskWorkspace(str(FIXTURE), parent_dir=str(tmp_path))
     try:

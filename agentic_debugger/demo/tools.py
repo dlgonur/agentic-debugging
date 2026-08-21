@@ -1164,8 +1164,6 @@ def build_registry(
         try:
             session.start()
             context.pdb_session_started = True
-            if interactive_debugger_controls:
-                context.interactive_pdb_session_started = True
             started = session.start_paused_target(probe.script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
             context.release_pdb()
@@ -1177,6 +1175,20 @@ def build_registry(
                 "runtime probe did not reach the declared breakpoint",
                 safe_diagnostic="runtime probe did not reach the declared breakpoint",
             )
+        if probe.exact_public_reproduction and (
+            started.get("script") != probe.script
+            or started.get("function") != probe.focus_function
+            or started.get("line") != breakpoint_line
+        ):
+            context.release_pdb()
+            raise _safe_rejection(
+                "breakpoint_line must pause on an executable statement inside the target function"
+            )
+        if interactive_debugger_controls:
+            # A semantically invalid breakpoint is rejected above and may be
+            # corrected.  Only a valid production-frame pause consumes the
+            # single interactive-session allowance.
+            context.interactive_pdb_session_started = True
         context.pdb_pause_generation = 1
         context.observe(
             lambda: context.observability.debugger_started(

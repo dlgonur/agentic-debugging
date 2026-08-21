@@ -1058,6 +1058,66 @@ def test_positive_pdb_budget_preserves_start_observe_stop_lifecycle(tmp_path):
         workspace.cleanup()
 
 
+def test_execution_control_exit_clears_stale_active_session_contract(tmp_path):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    task, workspace, registry = _pdb_registry_case(tmp_path)
+    captured = []
+
+    class ExitTransport:
+        def request(self, payload, timeout_seconds):
+            del timeout_seconds
+            captured.append(payload)
+            return {
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "Failed",
+                    "reason": "session-state check",
+                }
+            }
+
+    exited = Observation(
+        "observation-session-exited",
+        "action-session-exited",
+        "runtime-session-run",
+        task.task_id,
+        ActionName.CONTINUE_PDB_SESSION.value,
+        ObservationStatus.OK,
+        {"state": "exited", "exit_code": 0},
+        "target exited",
+        False,
+    )
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=ExitTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+            registry=registry,
+        )
+        adapter._runtime_transition_authorized = True
+        adapter._pdb_session_active = True
+        adapter.next_directive(
+            ControllerSnapshot(
+                "runtime-session-run",
+                task.task_id,
+                ControllerState.RUNTIME_EVIDENCE,
+                0,
+                ControllerBudgetLimits.from_task_constraints(task.constraints),
+                ControllerBudgetState(pdb_observations=1),
+                HypothesisLedger(),
+                exited,
+            )
+        )
+        actions = set(captured[0]["action_contracts"])
+        assert ActionName.START_PDB_SESSION.value in actions
+        assert ActionName.GET_STACK_SUMMARY.value not in actions
+        assert ActionName.STOP_PDB_SESSION.value not in actions
+    finally:
+        workspace.cleanup()
+
+
 def test_exhausted_pdb_observation_is_illegal_action_and_recovers_to_stop(tmp_path):
     task, workspace, registry = _pdb_registry_case(tmp_path)
     captured = []

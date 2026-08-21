@@ -57,13 +57,20 @@ Local Application protocol 1.3
 
 The request uses the selected accepted Cloud alias as `model`, plus
 `stream: false` and `think: "low"`; it does not send `format`, `tools`, or
-function definitions. Chat messages use a `system` role for the stable
+function definitions. Ollama Cloud does not currently support structured
+outputs, so request-bound validation remains in this adapter rather than being
+misrepresented as a provider-enforced schema. Chat messages use a `system` role for the stable
 directive-schema contract and a `user` role for the bounded canonical public
 request plus request-specific legal shapes. The system prompt states that the
 top-level type field is always `kind` and gives the exact action,
 transition, and hypothesis objects enforced by the adapter validator. The
 user message derives illustrative legal action JSON from the current
 `allowed_actions` and `action_contracts`; it does not grant provider tools.
+For the opt-in exact-PDB proof, the same guidance renders the current
+`proof_gate.next_required_actions`. A generated integer in the
+`start_pdb_session` shape is explicitly structural, not a suggested
+breakpoint: the model must substitute a visible executable statement inside
+the target function, never a definition, import, or module-level line.
 When `apply_patch` is legal, that user guidance also states the exact
 unified-diff form accepted by the existing PatchManager: both
 `--- a/<path>` and `+++ b/<same-path>` headers; a complete numeric hunk

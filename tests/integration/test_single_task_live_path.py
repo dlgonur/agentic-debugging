@@ -289,6 +289,32 @@ def test_real_live_case_uses_zero_provider_and_completes_exact_pdb_proof(tmp_pat
     assert measurements["controller_wall_duration_ms"] >= 0
     assert measurements["verifier_wall_duration_ms"] >= 0
 
+    runtime_requests = [
+        request
+        for request in transport.requests
+        if request["controller"]["state"] == "RuntimeEvidence"
+    ]
+    assert [set(request["controller"]["allowed_actions"]) for request in runtime_requests] == [
+        {"get_source_window", "start_pdb_session"},
+        {"get_stack_summary"},
+        {"get_frame_locals"},
+        {"step_pdb_session", "next_pdb_session"},
+        {"stop_pdb_session"},
+        set(),
+    ]
+    assert all("proof_gate" in request for request in runtime_requests)
+    assert all(
+        "continue_pdb_session" not in request["controller"]["allowed_actions"]
+        for request in runtime_requests
+    )
+    assert all(
+        "Understand" not in request["controller"]["legal_transition_targets"]
+        for request in runtime_requests[:-1]
+    )
+    assert runtime_requests[-1]["proof_gate"]["pre_diagnosis_ready"] is True
+    assert runtime_requests[-1]["proof_gate"]["session_active"] is False
+    assert "Understand" in runtime_requests[-1]["controller"]["legal_transition_targets"]
+
     transition_request_pairs = [
         (request, request.get("controller", {}).get("legal_transition_targets", []), directive)
         for request, directive in zip(transport.requests, [entry.get("directive") for entry in result.evidence["observable_model_directives"]])

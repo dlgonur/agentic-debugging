@@ -424,6 +424,15 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
         "Do not invent keys named action, payload, or transition.",
         "Do not combine an action and a transition.",
     ]
+    proof_gate = request.get("proof_gate")
+    if isinstance(proof_gate, Mapping):
+        next_actions = proof_gate.get("next_required_actions")
+        if isinstance(next_actions, list) and all(type(item) is str for item in next_actions):
+            lines.append(
+                "Exact-proof next required actions: "
+                + (", ".join(next_actions) if next_actions else "none; use a legal transition")
+                + "."
+            )
     allowed = controller.get("allowed_actions")
     contracts = request.get("action_contracts")
     if "action" in kinds and isinstance(allowed, list):
@@ -435,6 +444,10 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
                 "Legal action representation: "
                 + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
             )
+            if name == "start_pdb_session":
+                lines.append(
+                    "For start_pdb_session, the numeric value above is structural only: replace it with a positive executable statement line visibly inside the target function; never use the function definition, an import, or a module-level line."
+                )
             if name == "apply_patch":
                 lines.append(build_apply_patch_guidance(request))
     targets = controller.get("legal_transition_targets")

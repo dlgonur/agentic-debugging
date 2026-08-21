@@ -76,6 +76,31 @@ def valid_content() -> str:
     return json.dumps({"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}, separators=(",", ":"))
 
 
+def test_exact_proof_guidance_marks_breakpoint_example_as_structural_only() -> None:
+    request = sample_request()
+    request["proof_gate"] = {
+        "required_order": ["start_pdb_session"],
+        "next_required_actions": ["start_pdb_session"],
+        "pre_diagnosis_ready": False,
+        "session_active": False,
+    }
+    request["action_contracts"] = {
+        "start_pdb_session": {
+            "properties": {"breakpoint_line": {"type": "integer", "minimum": 1}},
+            "required": ["breakpoint_line"],
+            "additional_properties": False,
+        }
+    }
+    request["controller"]["allowed_actions"] = ["start_pdb_session"]
+
+    guidance = adapter.build_request_guidance(request)
+
+    assert "Exact-proof next required actions: start_pdb_session." in guidance
+    assert "numeric value above is structural only" in guidance
+    assert "executable statement line visibly inside the target function" in guidance
+    assert "module-level line" in guidance
+
+
 def valid_tags_entry(**overrides: Any) -> dict[str, Any]:
     entry = {
         "name": adapter.MODEL_ID,
