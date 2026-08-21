@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -61,6 +62,7 @@ from agentic_debugger.application.source_snapshots import (
     capture_source_snapshot,
 )
 from agentic_debugger.demo.catalog import (
+    PROBE_DRIVER_FUNCTION,
     DemoScenario,
     exact_pytest_driver_source,
     probe_driver_source,
@@ -498,6 +500,7 @@ class DemoToolContext:
         self.pdb_pause_generation: Optional[int] = None
         self.pdb_observation_names: list[str] = []
         self.pdb_session_started = False
+        self.interactive_pdb_session_started = False
         self.pdb_proof_contract: Optional[dict[str, Any]] = None
         self.pdb_proof_observations: dict[str, dict[str, Any]] = {}
 
@@ -827,7 +830,7 @@ def build_registry(
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
         context.pdb_workspace = workspace
         try:
-            session = context.pdb_session_factory(workspace)
+            session = create_pdb_session(workspace)
         except Exception as exc:
             cleanup_errors = context.release_pdb()
             if cleanup_errors:
@@ -878,6 +881,10 @@ def build_registry(
         post_mortem = response.result.get("post_mortem") is True
         if status not in {"post_mortem", "exited"}:
             raise ToolExecutionError("post-mortem PDB response has invalid status")
+        if exact_pytest_bootstrap_failure(response.result):
+            raise ToolExecutionError(
+                "exact public pytest probe failed before reaching the target"
+            )
         context.pdb_observation_names.append("get_failure_trace")
         return _ok(
             {
@@ -1090,6 +1097,40 @@ def build_registry(
 
     # -- bounded runtime evidence -----------------------------------------
 
+    def create_pdb_session(workspace: TaskWorkspace) -> PdbSession:
+        """Construct the probe session without bypassing injected containment."""
+
+        probe = context.probe
+        if (
+            probe is not None
+            and probe.exact_public_reproduction
+            and context.pdb_session_factory is PdbSession
+        ):
+            return context.pdb_session_factory(
+                workspace,
+                startup_timeout=15.0,
+                request_timeout=30.0,
+                proof_pytest_dependencies=True,
+            )
+        return context.pdb_session_factory(workspace)
+
+    def exact_pytest_bootstrap_failure(result: object) -> bool:
+        """Recognize only the structured exact-probe bootstrap failure."""
+
+        if context.probe is None or not context.probe.exact_public_reproduction:
+            return False
+        if not isinstance(result, Mapping):
+            return False
+        exception = result.get("exception")
+        innermost = result.get("innermost_frame")
+        return (
+            isinstance(exception, Mapping)
+            and exception.get("type") == "ModuleNotFoundError"
+            and exception.get("message") == "Target raised ModuleNotFoundError: No module named 'pytest'"
+            and isinstance(innermost, Mapping)
+            and innermost.get("function") == PROBE_DRIVER_FUNCTION
+        )
+
     def handle_start_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
         if pdb_policy is PdbPolicy.DISABLED:
             raise _safe_rejection("PDB access is disabled by evaluation policy")
@@ -1098,7 +1139,7 @@ def build_registry(
             raise _safe_rejection("no runtime probe is configured for this task")
         if context.pdb_session is not None:
             raise _safe_rejection("a PDB session is already active")
-        if interactive_debugger_controls and context.pdb_session_started:
+        if interactive_debugger_controls and context.interactive_pdb_session_started:
             raise _safe_rejection(
                 "interactive debugger pilot permits one PDB session per case"
             )
@@ -1110,15 +1151,7 @@ def build_registry(
         context.pdb_workspace = workspace
         # Register the session before starting it so a failed start is still
         # stopped and its workspace removed by release_pdb().
-        if probe.exact_public_reproduction and context.pdb_session_factory is PdbSession:
-            session = context.pdb_session_factory(
-                workspace,
-                startup_timeout=15.0,
-                request_timeout=30.0,
-                proof_pytest_dependencies=True,
-            )
-        else:
-            session = context.pdb_session_factory(workspace)
+        session = create_pdb_session(workspace)
         context.pdb_session = session
         breakpoint_line = (
             int(arguments["breakpoint_line"])
@@ -1131,6 +1164,8 @@ def build_registry(
         try:
             session.start()
             context.pdb_session_started = True
+            if interactive_debugger_controls:
+                context.interactive_pdb_session_started = True
             started = session.start_paused_target(probe.script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
             context.release_pdb()

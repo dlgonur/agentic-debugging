@@ -92,6 +92,8 @@ LIVE_SCHEMA_VERSION = "1.0"
 LIVE_PROTOCOL_VERSION = "1.3"
 LIVE_CONFIG_SCHEMA_VERSION = "1.0"
 MAX_MODEL_RESPONSE_BYTES = 1_048_576
+MODEL_HISTORY_WINDOW = 32
+PROOF_HISTORY_WINDOW = 12
 MAX_COMMAND_ARGUMENTS = 32
 LIVE_DIRECTIVE_SCHEMA={
     "action":{"kind":"action","required":["name","arguments"]},
@@ -363,6 +365,7 @@ def _action_contracts_for_state(
     post_patch_f2p_collected: bool = False,
     regression_collected: bool = False,
     patch_allowed: bool = True,
+    diagnosis_allowed: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Return the effective contract derived from the supplied registry."""
 
@@ -395,6 +398,8 @@ def _action_contracts_for_state(
         effective.discard(ActionName.CLASSIFY_OUTCOME)
     if not patch_allowed:
         effective.discard(ActionName.APPLY_PATCH)
+    if not diagnosis_allowed:
+        effective.discard(ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS)
     result: dict[str, dict[str, Any]] = {}
     for action in ActionName:
         if action not in effective or action.value not in contracts:
@@ -696,6 +701,35 @@ class LiveModelAdapter:
             return True
         return validate_pdb_patch_evidence(self._proof_observations)[0]
 
+    def _proof_diagnosis_ready(self) -> bool:
+        """Return whether the pre-diagnosis exact-PDB observations are ready."""
+
+        if not self.proof_required:
+            return True
+        required = {
+            ActionName.START_PDB_SESSION.value,
+            ActionName.GET_STACK_SUMMARY.value,
+            ActionName.GET_FRAME_LOCALS.value,
+        }
+        for name in required:
+            matches = [
+                observation
+                for observation in self._proof_observations
+                if observation.name == name
+            ]
+            if len(matches) != 1 or matches[0].status.value != "ok":
+                return False
+        control_matches = [
+            observation
+            for observation in self._proof_observations
+            if observation.name
+            in {
+                ActionName.STEP_PDB_SESSION.value,
+                ActionName.NEXT_PDB_SESSION.value,
+            }
+        ]
+        return len(control_matches) == 1 and control_matches[0].status.value == "ok"
+
     def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
         pdb_observations_remaining = max(
             0,
@@ -720,12 +754,16 @@ class LiveModelAdapter:
             post_patch_f2p_collected=self._post_patch_f2p_collected,
             regression_collected=self._regression_collected,
             patch_allowed=self._proof_patch_allowed(),
+            diagnosis_allowed=self._proof_diagnosis_ready(),
         )
     def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, contracts, legal_targets, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
         runtime_allowed = self._runtime_transition_allowed(snapshot)
         effective_actions = list(contracts)
-        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-32:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        history_window = PROOF_HISTORY_WINDOW if self.proof_required else MODEL_HISTORY_WINDOW
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-history_window:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        if self.proof_required:
+            payload["instructions"] += " Exact-proof workflow: add a hypothesis with requires_runtime_evidence=true, transition to RuntimeEvidence, collect the advertised bounded PDB observations, return to Understand, revise the hypothesis using prior evidence references, and express a diagnosis only when that action is advertised. Patch is legal only after the complete proof gate succeeds."
         if self._rag_context is not None:
             payload["retrieved_context"] = self._rag_context.to_request_mapping()
         return payload
@@ -747,7 +785,7 @@ class LiveModelAdapter:
         logical_request_index = snapshot.model_call_index
         history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
         self.history.append(history_entry)
-        del self.history[:-32]
+        del self.history[:-MODEL_HISTORY_WINDOW]
         rejection: dict[str, Any] | None = None
         for attempt in range(self.limits.max_retries+1):
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")

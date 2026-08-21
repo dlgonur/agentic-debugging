@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from pathlib import Path
 
 import pytest
@@ -20,12 +21,13 @@ from agentic_debugger.agent.controller_policy import (
     ControllerBudgetLimits,
     ControllerBudgetState,
     HypothesisLedger,
+    PdbPolicy,
 )
 from agentic_debugger.agent.proof_gate import validate_pdb_patch_evidence
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolRegistry
 from agentic_debugger.demo.catalog import exact_pytest_driver_source, scenario_for
-from agentic_debugger.demo.tools import prepare_pdb_probe
+from agentic_debugger.demo.tools import DemoToolContext, build_registry, prepare_pdb_probe
 from agentic_debugger.evaluation.private_checks import _PRIVATE_SOURCE
 from agentic_debugger.evaluation.runner import load_task
 from agentic_debugger.events.schema import Action, Observation, ObservationStatus
@@ -237,3 +239,118 @@ def test_default_pdb_worker_keeps_site_packages_out_of_isolation(tmp_path: Path)
         assert "getsitepackages" not in proof
     finally:
         workspace.cleanup()
+
+
+def test_exact_public_get_failure_trace_uses_pytest_dependency_session(tmp_path: Path) -> None:
+    before = (FIXTURE / "window_tail.py").read_bytes()
+    task = load_task(str(FIXTURE / "task.json"))
+    probe = prepare_pdb_probe(FIXTURE, scenario_for(TASK_ID), tmp_path, task=task)
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(FIXTURE), parent_dir=str(case_dir))
+    context = DemoToolContext(task=task, workspace=workspace, patch="", probe=probe)
+    context.baseline_failure_reproduced = True
+    try:
+        observation = build_registry(
+            context, pdb_policy=PdbPolicy.ON_UNCERTAINTY
+        ).dispatch(
+            Action(
+                "action-get-failure-trace",
+                "run-proof",
+                TASK_ID,
+                ControllerState.REPRODUCE,
+                "get_failure_trace",
+                {},
+            ),
+            observation_id="observation-get-failure-trace",
+        )
+        assert observation.status is ObservationStatus.OK
+        response = observation.payload["pdb_response"]
+        assert response["result"]["status"] == "exited"
+        assert response["result"]["post_mortem"] is False
+        assert "exception" not in response["result"]
+        assert context.pdb_session is None
+        assert context.pdb_workspace is None
+        assert (FIXTURE / "window_tail.py").read_bytes() == before
+    finally:
+        context.release_pdb()
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)
+
+
+def test_exact_public_get_failure_trace_rejects_structured_pytest_bootstrap_failure(
+    tmp_path: Path,
+) -> None:
+    task = load_task(str(FIXTURE / "task.json"))
+    probe = prepare_pdb_probe(FIXTURE, scenario_for(TASK_ID), tmp_path, task=task)
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(FIXTURE), parent_dir=str(case_dir))
+
+    class FakeResponse:
+        success = True
+        result = {
+            "status": "post_mortem",
+            "post_mortem": True,
+            "script": "window_tail.py",
+            "exception": {
+                "type": "ModuleNotFoundError",
+                "message": "Target raised ModuleNotFoundError: No module named 'pytest'",
+            },
+            "innermost_frame": {"function": "_demo_runtime_probe"},
+        }
+
+        def to_mapping(self):
+            return {
+                "protocol_version": 1,
+                "request_id": 1,
+                "success": True,
+                "result": self.result,
+                "error": "",
+            }
+
+    class FakeSession:
+        def __init__(self, _workspace):
+            self.stopped = False
+
+        def start(self):
+            return None
+
+        def run_post_mortem(self, _script):
+            return FakeResponse()
+
+        def stop(self):
+            self.stopped = True
+
+    context = DemoToolContext(
+        task=task,
+        workspace=workspace,
+        patch="",
+        probe=probe,
+        pdb_session_factory=FakeSession,
+    )
+    context.baseline_failure_reproduced = True
+    try:
+        observation = build_registry(
+            context, pdb_policy=PdbPolicy.ON_UNCERTAINTY
+        ).dispatch(
+            Action(
+                "action-get-failure-trace",
+                "run-proof",
+                TASK_ID,
+                ControllerState.REPRODUCE,
+                "get_failure_trace",
+                {},
+            ),
+            observation_id="observation-get-failure-trace",
+        )
+        assert observation.status is ObservationStatus.ERROR
+        assert context.pdb_session is None
+        assert context.pdb_workspace is None
+        assert context.pdb_observation_names == []
+    finally:
+        context.release_pdb()
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)

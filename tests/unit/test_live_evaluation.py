@@ -24,9 +24,11 @@ from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolRejectedError, ToolRegistry, ToolResult, ToolSpec
 from agentic_debugger.demo.catalog import build_reference_patch, scenario_for
 from agentic_debugger.demo.policies import DemoPolicy
-from agentic_debugger.demo.tools import DemoToolContext, build_registry
+from agentic_debugger.demo.tools import DemoToolContext, build_registry, prepare_pdb_probe
 from agentic_debugger.evaluation.live import (
     MAX_REJECTION_DETAIL_CHARS,
+    MODEL_HISTORY_WINDOW,
+    PROOF_HISTORY_WINDOW,
     DirectiveRejectionCategory,
     JsonlCommandTransport,
     LiveCaseStatus,
@@ -377,6 +379,38 @@ def test_model_request_context_is_complete_bounded_and_identity_scoped():
     assert isinstance(captured["history"], list)
 
 
+def test_proof_request_compacts_only_provider_history_and_normal_history_is_unchanged():
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    contracts = _test_live_registry().argument_contracts()
+    seeded_history = [{"request_index": index} for index in range(40)]
+    for proof_required, expected_window in (
+        (False, MODEL_HISTORY_WINDOW),
+        (True, PROOF_HISTORY_WINDOW),
+    ):
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.STATIC_BASELINE,
+            config=config(),
+            transport=FakeTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+            registry=_test_live_registry(),
+            proof_required=proof_required,
+        )
+        adapter.history = list(seeded_history)
+        request = adapter._request_context(
+            _snapshot(task, ControllerState.REPRODUCE, model_call_index=40),
+            logical_request_index=40,
+            transport_attempt_index=1,
+            contracts=contracts,
+            legal_targets=["Understand", "Failed"],
+        )
+        assert [entry["request_index"] for entry in request["history"]] == list(
+            range(40 - expected_window, 40)
+        )
+
+
 def test_current_request_reports_protocol_13():
     task = DebugTask.from_mapping(
         json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
@@ -652,6 +686,110 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
         assert ActionName.STOP_PDB_SESSION.value in active
     finally:
         workspace.cleanup()
+
+
+def test_exact_proof_diagnosis_contract_requires_unique_successful_pdb_observations(tmp_path):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    fixture = ROOT / "agentic_debugger/datasets/curated/pdb-required-boundary-006"
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    probe = prepare_pdb_probe(fixture, scenario_for(task.task_id), tmp_path, task=task)
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(case_dir))
+
+    class StopTransport:
+        def __init__(self):
+            self.payloads = []
+
+        def request(self, payload, timeout_seconds):
+            del timeout_seconds
+            self.payloads.append(payload)
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "contract check"}}
+
+    def observation(name, index, status=ObservationStatus.OK):
+        return Observation(
+            f"proof-observation-{index}",
+            f"proof-action-{index}",
+            "proof-contract-run",
+            task.task_id,
+            name,
+            status,
+            {},
+            name,
+            False,
+        )
+
+    required = [
+        observation(ActionName.START_PDB_SESSION.value, 1),
+        observation(ActionName.GET_STACK_SUMMARY.value, 2),
+        observation(ActionName.GET_FRAME_LOCALS.value, 3),
+        observation(ActionName.STEP_PDB_SESSION.value, 4),
+    ]
+
+    def request_for(proof_observations):
+        transport = StopTransport()
+        context = DemoToolContext(
+            task=task,
+            workspace=workspace,
+            patch="",
+            probe=probe,
+        )
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=transport,
+            limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+            registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
+            proof_required=True,
+        )
+        adapter._proof_observations = list(proof_observations)
+        adapter.next_directive(
+            ControllerSnapshot(
+                "proof-contract-run",
+                task.task_id,
+                ControllerState.UNDERSTAND,
+                0,
+                ControllerBudgetLimits.from_task_constraints(task.constraints),
+                ControllerBudgetState(),
+                HypothesisLedger(),
+                observation("run_reproduction", 0),
+            )
+        )
+        return transport.payloads[0]
+
+    try:
+        assert "express_root_cause_hypothesis" not in request_for([])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            observation("get_failure_trace", 10),
+        ])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            *required[:3],
+            observation(ActionName.STEP_PDB_SESSION.value, 4, ObservationStatus.REJECTED),
+        ])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            *required[:3],
+            observation(ActionName.SAFE_EVAL_EXPRESSION.value, 7),
+        ])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            *required,
+            observation(ActionName.GET_STACK_SUMMARY.value, 5),
+        ])["controller"]["allowed_actions"]
+        ready = request_for(required)
+        assert "express_root_cause_hypothesis" in ready["controller"]["allowed_actions"]
+        next_ready = request_for([
+            *required[:3],
+            observation(ActionName.NEXT_PDB_SESSION.value, 6),
+        ])
+        assert "express_root_cause_hypothesis" in next_ready["controller"]["allowed_actions"]
+        assert "Exact-proof workflow" in ready["instructions"]
+        assert "oracle" not in json.dumps(ready).lower()
+        assert "gold patch" not in json.dumps(ready).lower()
+    finally:
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)
 
 
 def _runtime_budget_snapshot(task, pdb_observations: int):
