@@ -1127,6 +1127,13 @@ class LiveModelAdapter:
                         if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
                         self.metrics.termination_reason="invalid_model_response"
                         raise LiveModelAdapterError("model output was rejected by the command adapter", detail="the command adapter rejected the model output") from None
+                    if exc.kind == "response_too_large":
+                        # The 8 MiB wire guard is a provider-response bound,
+                        # not a local setup failure. Keep the bound unchanged
+                        # but make the terminal subtype durable and distinct.
+                        self.metrics.error("provider_response_bound_exceeded")
+                        self.metrics.termination_reason = "provider_response_bound_exceeded"
+                        raise LiveModelAdapterError("provider response exceeded the configured bound", detail="provider response exceeded the configured wire bound") from None
                     if exc.kind in PROVIDER_ADAPTER_ERROR_KINDS:
                         self.metrics.error(exc.kind)
                         if attempt<self.limits.max_retries and not (
@@ -1361,7 +1368,7 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         else:
             status=LiveCaseStatus.PDB_NOT_REACHED
     elif metrics.termination_reason in {"request_timeout","elapsed_time_limit"}: status=LiveCaseStatus.TIMED_OUT
-    elif metrics.termination_reason in {"provider_or_transport_error","invalid_model_response"}: status=LiveCaseStatus.PROVIDER_ERROR
+    elif metrics.termination_reason in {"provider_or_transport_error","invalid_model_response","provider_response_bound_exceeded"}: status=LiveCaseStatus.PROVIDER_ERROR
     elif controller_failed: status=LiveCaseStatus.CONTROLLER_FAILED
     elif result is None: status=LiveCaseStatus.HARNESS_ERROR
     elif result.stop_reason is ControllerStopReason.DIRECTIVE_REJECTED: status=LiveCaseStatus.CONTROLLER_REJECTED
@@ -1670,7 +1677,7 @@ def _validate_case(case: Any):
         _schema_error("cleanup-failed case state is inconsistent")
     if reporting["interrupted"] and status != LiveCaseStatus.INCOMPLETE.value:
         _schema_error("interrupted case has a non-incomplete status")
-    if status == LiveCaseStatus.PROVIDER_ERROR and not (measurements["provider_error_count"] > 0 and measurements["termination_reason"] in {"provider_or_transport_error","invalid_model_response"}):
+    if status == LiveCaseStatus.PROVIDER_ERROR and not (measurements["provider_error_count"] > 0 and measurements["termination_reason"] in {"provider_or_transport_error","invalid_model_response","provider_response_bound_exceeded"}):
         _schema_error("provider-error case measurements are inconsistent")
     if status == LiveCaseStatus.TIMED_OUT and measurements["termination_reason"] not in {"request_timeout","elapsed_time_limit"}:
         _schema_error("timed-out case termination is inconsistent")

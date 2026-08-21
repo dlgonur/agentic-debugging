@@ -7,6 +7,7 @@ workspace. Tracked readiness records receive only counts and booleans.
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import shutil
 import subprocess
@@ -15,6 +16,11 @@ import tempfile
 import time
 from pathlib import Path
 from typing import Any
+
+try:
+    import psutil
+except ImportError:  # pragma: no cover - optional forensic enhancement
+    psutil = None  # type: ignore[assignment]
 
 from agentic_debugger.swerebench.authority import DEFAULT_EXTERNAL_ROOT
 from agentic_debugger.swerebench.records import OfficialInstanceBundle
@@ -381,6 +387,133 @@ def _timeout_stage(
     return "child_process_wait"
 
 
+def _process_snapshot(pid: int | None) -> dict[str, Any]:
+    """Return bounded process/descendant evidence without command-line data."""
+    if type(pid) is not int or pid <= 0:
+        return {"status": "unavailable", "evaluator_alive": None, "descendants": []}
+    if psutil is not None:
+        try:
+            process = psutil.Process(pid)
+            descendants = []
+            for child in process.children(recursive=True)[:32]:
+                try:
+                    descendants.append({
+                        "pid": child.pid,
+                        "ppid": child.ppid(),
+                        "alive": child.is_running(),
+                        "name": str(child.name())[:96],
+                    })
+                except (psutil.Error, OSError):
+                    continue
+            return {
+                "status": "observed",
+                "evaluator_alive": process.is_running(),
+                "descendants": descendants,
+            }
+        except (psutil.Error, OSError):
+            return {"status": "observed", "evaluator_alive": False, "descendants": []}
+    try:
+        if os.name == "nt":
+            completed = subprocess.run(
+                ["tasklist", "/FO", "CSV", "/NH", "/FI", f"PID eq {pid}"],
+                capture_output=True, text=True, check=False, timeout=2.0,
+            )
+            alive = any(line and "INFO:" not in line for line in (completed.stdout or "").splitlines())
+            return {"status": "evaluator_only", "evaluator_alive": alive, "descendants": [], "descendant_observation": "unavailable"}
+        completed = subprocess.run(
+            ["ps", "-eo", "pid=,ppid=,comm="],
+            capture_output=True, text=True, check=False, timeout=2.0,
+        )
+        rows = []
+        for line in (completed.stdout or "").splitlines():
+            parts = line.split(None, 2)
+            if len(parts) >= 2 and parts[1] == str(pid):
+                rows.append({"pid": int(parts[0]), "ppid": int(parts[1]), "command": parts[2][:120] if len(parts) > 2 else ""})
+        return {"status": "evaluator_only", "evaluator_alive": None, "descendants": rows[:32], "descendant_observation": "direct_children_only"}
+    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired):
+        return {"status": "unavailable", "evaluator_alive": None, "descendants": []}
+
+
+def _docker_probe() -> dict[str, Any]:
+    """Capture bounded docker ps/ps-a state; event stream remains authoritative."""
+    result: dict[str, Any] = {}
+    for label, args in (("ps", ["docker", "ps"]), ("ps_all", ["docker", "ps", "-a"])):
+        try:
+            completed = subprocess.run(args, capture_output=True, text=True, check=False, timeout=5.0)
+            result[label] = {"exit_code": completed.returncode, "stdout_tail": (completed.stdout or "")[-1200:], "stderr_tail": (completed.stderr or "")[-400:]}
+        except subprocess.TimeoutExpired:
+            result[label] = {"timed_out": True}
+        except (OSError, TypeError) as exc:
+            result[label] = {"error": type(exc).__name__}
+    return result
+
+
+def _docker_events(image: str | None, started_wall: float) -> dict[str, Any]:
+    """Collect bounded Docker history covering the complete evaluator call."""
+    finished_wall = time.time()
+    args = ["docker", "events", "--since", f"{started_wall:.6f}", "--until", f"{finished_wall:.6f}", "--format", "{{json .}}", "--filter", "type=container"]
+    if image:
+        args.extend(["--filter", f"image={image}"])
+    try:
+        completed = subprocess.run(args, capture_output=True, text=True, check=False, timeout=8.0)
+        events: list[dict[str, Any]] = []
+        raw_lines = (completed.stdout or "").splitlines()
+        truncated = len(raw_lines) > 64
+        selected_lines = raw_lines[:32] + raw_lines[-32:] if truncated else raw_lines
+        for line in selected_lines:
+            try:
+                value = json.loads(line)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(value, dict):
+                actor = value.get("Actor") if isinstance(value.get("Actor"), dict) else {}
+                attrs = actor.get("Attributes") if isinstance(actor, dict) and isinstance(actor.get("Attributes"), dict) else {}
+                event = {
+                    "timestamp": value.get("timeNano") or value.get("time"),
+                    "action": value.get("Action") or value.get("status"),
+                    "container_id": str(value.get("id") or actor.get("ID") or "")[:128],
+                    "image": str(attrs.get("image") or "")[:160],
+                    "name": str(attrs.get("name") or "")[:96],
+                    "exit_code": str(attrs.get("exitCode") or "")[:32],
+                }
+                events.append(event)
+        status = "completed" if completed.returncode == 0 else "unknown"
+        return {
+            "status": status,
+            "exit_code": completed.returncode,
+            "events": events,
+            "event_count": len(raw_lines),
+            "observed_event_count": len(events),
+            "truncated": truncated,
+            "stderr_tail": (completed.stderr or "")[-400:],
+        }
+    except subprocess.TimeoutExpired as exc:
+        raw = exc.stdout if isinstance(exc.stdout, str) else ""
+        return {"status": "unknown", "reason": "timeout", "events": [], "event_count": None, "observed_event_count": 0, "truncated": None, "stdout_tail": raw[-1200:]}
+    except (OSError, TypeError) as exc:
+        return {"status": "unknown", "reason": type(exc).__name__, "events": [], "event_count": None, "observed_event_count": 0, "truncated": None}
+
+
+def _collect_official_report(report_path: Path) -> tuple[dict[str, Any], str | None, str | None]:
+    """Read and hash a report before private-workspace cleanup."""
+    if not report_path.is_file():
+        return {}, None, None
+    report: dict[str, Any] = {}
+    report_error: str | None = None
+    try:
+        report = json.loads(report_path.read_text(encoding="utf-8"))
+        if not isinstance(report, dict):
+            report = {}
+            report_error = "official report is not a JSON object"
+    except (OSError, ValueError) as exc:
+        report_error = f"{type(exc).__name__}: {exc}"
+    try:
+        report_sha256 = hashlib.sha256(report_path.read_bytes()).hexdigest()
+    except OSError:
+        report_sha256 = None
+    return report, report_error, report_sha256
+
+
 def _run_official_eval(
     spec_path: Path,
     report_path: Path,
@@ -401,6 +534,7 @@ def _run_official_eval(
     except (OSError, UnicodeError, ValueError):
         evidence.append({"stage": "evaluator_startup", "status": "spec_unreadable"})
     process_started = time.monotonic()
+    prelaunch_docker = _docker_probe()
     _stage_record(
         evidence,
         stage="evaluator_startup",
@@ -408,6 +542,11 @@ def _run_official_eval(
         status="started",
         operation="pinned_eval_process",
     )
+    # Start the Docker event window at the evaluator launch boundary, not at
+    # spec parsing or the pre-launch daemon probe.  This keeps telemetry
+    # scoped to the actual pinned evaluator invocation.
+    started_wall = time.time()
+    launch_started = time.monotonic()
     process = subprocess.Popen(
         [
             sys.executable,
@@ -427,9 +566,22 @@ def _run_official_eval(
         start_new_session=os.name != "nt",
         creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0,
     )
+    evaluator_pid = getattr(process, "pid", None)
+    lifecycle: dict[str, Any] = {
+        "evaluator_pid": evaluator_pid,
+        "process_snapshots": [],
+        "docker_daemon": prelaunch_docker,
+        "docker_event_window": {"since_wall_clock": started_wall, "until_wall_clock": None},
+        "report_present_observed": report_path.is_file(),
+        "watchdog_expired": False,
+        "cleanup": "owned_private_workspace_cleanup_by_verifier",
+    }
     try:
-        stdout, stderr = process.communicate(timeout=OFFICIAL_EVALUATOR_WATCHDOG_SECONDS)
+        remaining = max(0.0, OFFICIAL_EVALUATOR_WATCHDOG_SECONDS - (time.monotonic() - launch_started))
+        stdout, stderr = process.communicate(timeout=remaining)
     except subprocess.TimeoutExpired:
+        lifecycle["watchdog_expired"] = True
+        lifecycle["process_snapshots"].append({"phase": "watchdog_observed", "processes": _process_snapshot(evaluator_pid)})
         timeout_stage = _timeout_stage(
             image=image,
             report_path=report_path,
@@ -441,24 +593,34 @@ def _run_official_eval(
         except subprocess.TimeoutExpired:
             process.kill()
             stdout, stderr = process.communicate(timeout=5.0)
+        lifecycle["process_snapshots"].append({"phase": "watchdog", "processes": _process_snapshot(evaluator_pid)})
+        lifecycle["docker_event_window"]["until_wall_clock"] = time.time()
+        lifecycle["docker_events"] = _docker_events(image, started_wall)
+        lifecycle["docker_daemon_after"] = _docker_probe()
+        report, report_error, report_sha256 = _collect_official_report(report_path)
+        lifecycle["report_present_observed"] = report_path.is_file()
+        lifecycle["report_sha256"] = report_sha256
         return {
             "exit_code": None,
             "stdout_tail": (stdout or "")[-600:],
-            "report": {},
-            "report_error": None,
+            "report": report,
+            "report_error": report_error,
             "failure_kind": "timeout",
             "elapsed_seconds": time.monotonic() - started,
             "stderr_tail": f"official evaluator watchdog timed out after {OFFICIAL_EVALUATOR_WATCHDOG_SECONDS:g} seconds",
             "timeout_stage": timeout_stage,
             "stage_evidence": evidence,
+            "report_sha256": report_sha256,
+            "lifecycle": lifecycle,
         }
-    report: dict[str, Any] = {}
-    report_error: str | None = None
-    if report_path.is_file():
-        try:
-            report = json.loads(report_path.read_text(encoding="utf-8"))
-        except (OSError, ValueError) as exc:
-            report_error = f"{type(exc).__name__}: {exc}"
+    report, report_error, report_sha256 = _collect_official_report(report_path)
+    lifecycle["process_snapshots"].append({"phase": "exited", "processes": _process_snapshot(evaluator_pid)})
+    lifecycle["evaluator_exit_code"] = process.returncode
+    lifecycle["report_present_observed"] = report_path.is_file()
+    lifecycle["report_sha256"] = report_sha256
+    lifecycle["docker_event_window"]["until_wall_clock"] = time.time()
+    lifecycle["docker_events"] = _docker_events(image, started_wall)
+    lifecycle["docker_daemon_after"] = _docker_probe()
     _stage_record(
         evidence,
         stage="result_collection" if report_path.is_file() else "child_process_wait",
@@ -478,6 +640,8 @@ def _run_official_eval(
         "elapsed_seconds": time.monotonic() - started,
         "timeout_stage": None,
         "stage_evidence": evidence,
+        "report_sha256": report_sha256,
+        "lifecycle": lifecycle,
     }
 
 
@@ -633,6 +797,8 @@ def run_official_infrastructure_gate(
             "elapsed_seconds": baseline.get("elapsed_seconds"),
             "stderr_tail": baseline.get("stderr_tail"),
             "timeout_stage": baseline.get("timeout_stage"),
+            "report_sha256": baseline.get("report_sha256"),
+            "lifecycle": baseline.get("lifecycle", {}),
             "stage_evidence": baseline.get("stage_evidence", []),
         }
         result["gold"] = {
@@ -649,6 +815,8 @@ def run_official_infrastructure_gate(
             "elapsed_seconds": gold.get("elapsed_seconds"),
             "stderr_tail": gold.get("stderr_tail"),
             "timeout_stage": gold.get("timeout_stage"),
+            "report_sha256": gold.get("report_sha256"),
+            "lifecycle": gold.get("lifecycle", {}),
             "stage_evidence": gold.get("stage_evidence", []),
         }
         # Baseline is valid when hidden F2P are not all passing (bug still present)
@@ -778,6 +946,8 @@ def run_official_baseline_check(
         result["elapsed_seconds"] = baseline.get("elapsed_seconds")
         result["stderr_tail"] = baseline.get("stderr_tail")
         result["timeout_stage"] = baseline.get("timeout_stage")
+        result["report_sha256"] = baseline.get("report_sha256")
+        result["lifecycle"] = baseline.get("lifecycle", {})
         result["stage_evidence"] = baseline.get("stage_evidence", result["stage_evidence"])
         if not result["verifier_environment_valid"]:
             if baseline.get("failure_kind") == "timeout":

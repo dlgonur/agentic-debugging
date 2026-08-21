@@ -24,6 +24,7 @@ _PROVIDER_TERMINATIONS = {
     "request_timeout",
     "transport_error",
     "provider_error",
+    "provider_response_bound_exceeded",
 }
 _SOURCE_OPERATIONS = {
     ActionName.SEARCH_CODE.value,
@@ -227,8 +228,11 @@ def durable_session_evidence(
     if not isinstance(adapter_error_kinds, list):
         adapter_error_kinds = []
     invalid_model_responses = _metric(metrics, "invalid_model_response_count")
+    response_bound = "response_too_large" in setup_error_kinds or terminal_reason == "provider_response_bound_exceeded"
+    # A response bound is provider-invalid by itself, but it never erases an
+    # independently recorded runtime/setup/provenance infrastructure failure.
     infrastructure_invalid = _runtime_infrastructure_invalid(execution_evidence) or bool(
-        setup_error_kinds
+        [kind for kind in setup_error_kinds if kind != "response_too_large"]
         or terminal_reason in {"setup_failure", "configuration_failure", "provenance_failure"}
     )
     cleanup_verified = None
@@ -264,6 +268,7 @@ def durable_session_evidence(
             "adapter_error_kinds": adapter_error_kinds,
             "invalid_model_response_count": _number(invalid_model_responses, integer=True),
             "setup_error_kinds": setup_error_kinds,
+            "provider_response_bound_exceeded": response_bound,
         },
         "trajectory": {
             "baseline_reproduced": baseline_reproduced,

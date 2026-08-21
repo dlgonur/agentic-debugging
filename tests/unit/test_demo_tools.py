@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import difflib
 import hashlib
+import json
 from pathlib import Path
 from typing import Iterator
+from types import SimpleNamespace
 
 import pytest
 
@@ -30,6 +32,10 @@ from agentic_debugger.demo.tools import (
     prepare_pdb_probe,
     pytest_argv,
 )
+from agentic_debugger.demo import tools as demo_tools_module
+from agentic_debugger.application import local_source
+from agentic_debugger.runtime.command_runner import CommandResult
+from agentic_debugger.runtime.test_runner import TestRunKind, TestRunResult
 from agentic_debugger.evaluation.runner import load_task
 from agentic_debugger.events.schema import Action, Observation, ObservationStatus
 from agentic_debugger.runtime.workspace import TaskWorkspace
@@ -130,6 +136,33 @@ class TestArgumentValidation:
         assert observation.status is ObservationStatus.REJECTED
         assert _reason(observation) == ToolDispatchReason.TOOL_REJECTED.value
         assert observation.payload["diagnostic"] == "phase must be baseline or post_patch"
+
+    def test_isolated_public_runtime_evidence_belongs_to_context_and_persists(
+        self, context: DemoToolContext, monkeypatch, tmp_path: Path
+    ) -> None:
+        monkeypatch.setattr(demo_tools_module, "is_external_isolated_task", lambda task: True)
+        monkeypatch.setattr(demo_tools_module, "validate_public_runtime_target", lambda workspace, target: target)
+        command = CommandResult(
+            argv=["python", "-m", "pytest"], cwd=".", exit_code=None,
+            timed_out=False, duration_ms=1250, stdout="", stderr="missing dependency",
+            stdout_truncated=False, stderr_truncated=False,
+        )
+        context.test_runner.run_tests = lambda *args, **kwargs: TestRunResult(
+            command_result=command, kind=TestRunKind.REPRODUCTION, passed=False,
+            reproduction_match=None, timed_out=False, launch_error=True,
+        )
+        observation = _dispatch(
+            context, "run_reproduction", ControllerState.REPRODUCE,
+            {"phase": "baseline", "public_target": "tests/test_public.py"},
+        )
+        assert observation.status is ObservationStatus.OK
+        assert context.public_runtime_evidence["operation"] == "public_pytest"
+        assert not hasattr(observation, "public_runtime_evidence")
+        session_dir = tmp_path / "session"
+        local_source._persist_execution_evidence(SimpleNamespace(session_dir=session_dir), context)
+        persisted = json.loads((session_dir / "execution.evidence.json").read_text(encoding="utf-8"))
+        assert persisted["public_runtime_evidence"]["exit_code"] is None
+        assert persisted["public_runtime_evidence"]["stderr_tail"] == "missing dependency"
 
 
 class TestStatePolicyEnforcement:

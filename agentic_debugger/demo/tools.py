@@ -439,6 +439,9 @@ class DemoToolContext:
         # Durable external-runtime classification: a Docker/dependency launch
         # failure is infrastructure evidence, not a model-reproduced bug.
         self.runtime_infrastructure_failure = False
+        # Bounded typed evidence for public-runtime launch failures. These
+        # fields are observational and do not alter command semantics.
+        self.public_runtime_evidence: dict[str, Any] = {}
         self.patch_applied = False
         self.patch_changed_files: tuple[str, ...] = ()
         self.syntax_passed: Optional[bool] = None
@@ -642,6 +645,18 @@ def build_registry(
         runtime_classification = (
             classify_public_runtime_result(result) if isolated else None
         )
+        if isolated:
+            command = result.command_result
+            context.public_runtime_evidence = {
+                "operation": "public_pytest",
+                "stage": "execution",
+                "exit_code": command.exit_code,
+                "timed_out": bool(result.timed_out),
+                "process_failure": bool(result.launch_error),
+                "elapsed_seconds": max(0.0, float(command.duration_ms) / 1000.0),
+                "stderr_tail": str(command.stderr or "")[-600:],
+                "stdout_tail": str(command.stdout or "")[-600:],
+            }
         if runtime_classification is PublicRuntimeClassification.DEPENDENCY_FAILURE:
             context.runtime_infrastructure_failure = True
         if result.timed_out:

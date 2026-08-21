@@ -465,6 +465,8 @@ class OfficialSWERebenchVerifier:
                         "official_timeout_semantics": baseline.get("evaluator_timeout_semantics"),
                         "official_timeout_stage": baseline.get("timeout_stage"),
                         "official_stage_evidence": baseline.get("stage_evidence", []),
+                        "official_lifecycle": baseline.get("lifecycle", {}),
+                        "official_report_sha256": baseline.get("report_sha256"),
                         "official_passed_match": False,
                     }
                     return result
@@ -504,6 +506,8 @@ class OfficialSWERebenchVerifier:
                     "official_timeout_semantics": None,
                     "official_timeout_stage": None,
                     "official_stage_evidence": [],
+                    "official_lifecycle": {},
+                    "official_report_sha256": None,
                     "official_passed_match": False,
                 }
             else:
@@ -521,8 +525,16 @@ class OfficialSWERebenchVerifier:
                 p2p_failed = int(summary.get("p2p_failed_count") or 0)
                 f2p_total = len(self.bundle.hidden_tests()[0])
                 p2p_total = len(self.bundle.hidden_tests()[1])
-                resolved = bool(summary.get("passed_match"))
+                lifecycle = raw_mapping.get("lifecycle")
+                docker_events = lifecycle.get("docker_events") if isinstance(lifecycle, dict) else None
+                lifecycle_evidence_status = (
+                    "available" if isinstance(docker_events, dict) and docker_events.get("status") == "completed"
+                    else "unknown"
+                )
+                # Lifecycle telemetry is supplemental forensic evidence. The
+                # official report remains the sole correctness authority.
                 report_valid = bool(summary.get("valid_result"))
+                resolved = bool(summary.get("passed_match"))
                 official_error = summary.get("error") or raw_mapping.get("report_error")
                 if not official_error and raw_mapping.get("failure_kind"):
                     official_error = raw_mapping.get("stderr_tail") or raw_mapping.get("failure_kind")
@@ -558,6 +570,9 @@ class OfficialSWERebenchVerifier:
                 "official_timeout_semantics": raw_mapping.get("evaluator_timeout_semantics"),
                 "official_timeout_stage": raw_mapping.get("timeout_stage"),
                 "official_stage_evidence": raw_mapping.get("stage_evidence", []),
+                "official_lifecycle": raw_mapping.get("lifecycle", {}),
+                "official_report_sha256": raw_mapping.get("report_sha256"),
+                "official_lifecycle_evidence_status": lifecycle_evidence_status,
                     "official_passed_match": summary.get("official_passed_match"),
                 }
         finally:

@@ -419,6 +419,9 @@ def _persist_execution_evidence(
         "runtime_infrastructure_failure": bool(
             demo_context.runtime_infrastructure_failure
         ),
+        "public_runtime_evidence": dict(
+            getattr(demo_context, "public_runtime_evidence", {})
+        ),
     }
     try:
         ctx.session_dir.mkdir(parents=True, exist_ok=True)

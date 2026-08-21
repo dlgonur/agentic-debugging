@@ -25,6 +25,7 @@ HARNESS_PATHS = (
     "scripts/gpt_oss_swerebench_v2_devqual10_v9.py",
     "scripts/gpt_oss_swerebench_v2_devqual10_v10.py",
     "scripts/gpt_oss_swerebench_v2_devqual10_v11.py",
+    "scripts/gpt_oss_swerebench_v2_devqual10_v12.py",
 )
 
 # These hashes belong to completed immutable V1-V5 treatments. Their
