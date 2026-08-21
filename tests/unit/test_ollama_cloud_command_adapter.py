@@ -817,6 +817,25 @@ def test_final_content_must_be_one_json_object(fixture_server, content: str) -> 
     assert len(chat_payloads(state)) == 1
 
 
+def test_adapter_failure_uses_bounded_typed_command_error_envelope(fixture_server) -> None:
+    invalid_content = '{"kind":"action","name":"not-advertised","arguments":{}}'
+    state = _FixtureState(chat_body=_FixtureState._chat_envelope(invalid_content))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 1
+    assert stdout == ""
+    evidence = json.loads(stderr)
+    assert evidence == {
+        "schema_version": "command-error-v1",
+        "kind": "invalid_directive",
+        "message": "directive action is not allowed",
+    }
+    assert invalid_content not in stderr
+    assert len(chat_payloads(state)) == 1
+
+
 def test_observed_alias_payload_shape_remains_rejected(fixture_server) -> None:
     content = '{"action":"run_reproduction","transition":"Understand","payload":{"phase":"baseline"}}'
     state = _FixtureState(chat_body=_FixtureState._chat_envelope(content))

@@ -95,6 +95,23 @@ MAX_MODEL_RESPONSE_BYTES = 1_048_576
 MODEL_HISTORY_WINDOW = 32
 PROOF_HISTORY_WINDOW = 12
 MAX_COMMAND_ARGUMENTS = 32
+COMMAND_ERROR_SCHEMA_VERSION = "command-error-v1"
+_TYPED_COMMAND_ERROR_KINDS = frozenset({
+    "adapter_error",
+    "configuration",
+    "http_error",
+    "invalid_completion",
+    "invalid_directive",
+    "invalid_request",
+    "invalid_response",
+    "logical_call_limit",
+    "model_mismatch",
+    "preflight_failed",
+    "request_too_large",
+    "response_too_large",
+    "timeout",
+    "tool_call_rejected",
+})
 LIVE_DIRECTIVE_SCHEMA={
     "action":{"kind":"action","required":["name","arguments"]},
     "transition":{"kind":"transition","required":["target_state","reason"]},
@@ -225,6 +242,39 @@ def _terminate_process(process:subprocess.Popen):
         try: process.kill(); process.wait(timeout=2)
         except Exception: pass
 
+def _typed_command_error_kind(stderr_text: str) -> str | None:
+    """Read only the closed, provider-safe command error envelope.
+
+    Arbitrary configured-command stderr is intentionally ignored.  A command
+    may contribute a typed failure kind only by emitting one strict JSON
+    object with the accepted schema and closed vocabulary; its free-form
+    message is validated for bounded shape but is never retained in reports.
+    """
+
+    if type(stderr_text) is not str or not stderr_text:
+        return None
+    try:
+        value = json.loads(stderr_text)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping) or set(value) != {
+        "schema_version",
+        "kind",
+        "message",
+    }:
+        return None
+    kind = value.get("kind")
+    message = value.get("message")
+    if value.get("schema_version") != COMMAND_ERROR_SCHEMA_VERSION:
+        return None
+    if type(kind) is not str or kind not in _TYPED_COMMAND_ERROR_KINDS:
+        return None
+    if type(message) is not str or not message or len(message) > MAX_REJECTION_DETAIL_CHARS:
+        return None
+    if any(ord(char) < 0x20 and char not in "\t\r\n" for char in message):
+        return None
+    return kind
+
 class JsonlCommandTransport:
     def __init__(self,config,*,max_output_bytes=MAX_MODEL_RESPONSE_BYTES):
         if type(max_output_bytes) is not int or not 1024<=max_output_bytes<=4*1024*1024: raise LiveConfigurationError("max response bytes is invalid")
@@ -267,7 +317,12 @@ class JsonlCommandTransport:
             raise LiveTransportError("model request timed out",kind="request_timeout",timed_out=True) from None
         for thread in threads: thread.join(timeout=2)
         if stdout.truncated: raise LiveTransportError("model response exceeded the configured output bound",kind="response_too_large")
-        if process.returncode!=0: raise LiveTransportError("model command failed",kind="process_error")
+        if process.returncode!=0:
+            typed_kind = _typed_command_error_kind(stderr.text())
+            raise LiveTransportError(
+                "model command failed",
+                kind=typed_kind or "process_error",
+            )
         try: value=json.loads(stdout.text())
         except (UnicodeError,json.JSONDecodeError): raise LiveTransportError("model response was invalid JSON",kind="invalid_response") from None
         if not isinstance(value,Mapping): raise LiveTransportError("model response was not an object",kind="invalid_response")
@@ -305,6 +360,7 @@ def _require_field(value: Mapping[str, Any], key: str) -> Any:
         raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, f"missing '{key}'") from None
 
 _PDB_ACTIONS = frozenset({
+    ActionName.GET_FAILURE_TRACE,
     ActionName.START_PDB_SESSION,
     ActionName.GET_STACK_SUMMARY,
     ActionName.GET_FRAME,
@@ -366,6 +422,7 @@ def _action_contracts_for_state(
     regression_collected: bool = False,
     patch_allowed: bool = True,
     diagnosis_allowed: bool = True,
+    failure_trace_allowed: bool = True,
 ) -> dict[str, dict[str, Any]]:
     """Return the effective contract derived from the supplied registry."""
 
@@ -400,6 +457,8 @@ def _action_contracts_for_state(
         effective.discard(ActionName.APPLY_PATCH)
     if not diagnosis_allowed:
         effective.discard(ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS)
+    if not failure_trace_allowed:
+        effective.discard(ActionName.GET_FAILURE_TRACE)
     result: dict[str, dict[str, Any]] = {}
     for action in ActionName:
         if action not in effective or action.value not in contracts:
@@ -755,6 +814,7 @@ class LiveModelAdapter:
             regression_collected=self._regression_collected,
             patch_allowed=self._proof_patch_allowed(),
             diagnosis_allowed=self._proof_diagnosis_ready(),
+            failure_trace_allowed=self._failure_reproduced,
         )
     def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, contracts, legal_targets, rejection: Mapping[str, Any] | None = None):
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"

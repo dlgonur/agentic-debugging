@@ -57,7 +57,8 @@ ALLOWED_MODEL_IDENTIFIERS = frozenset(CLOUD_MODELS)
 EXPECTED_CLOUD_REMOTE_MODEL = CLOUD_MODELS[MODEL_ID].upstream_model
 EXPECTED_CLOUD_REMOTE_HOST = "https://ollama.com"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434/api"
-EXPECTED_OLLAMA_VERSION = "0.32.14"
+EXPECTED_OLLAMA_VERSION = "0.32.15"
+COMMAND_ERROR_SCHEMA_VERSION = "command-error-v1"
 PROTOCOL_NAME = "agentic-debugger-live-jsonl"
 PROTOCOL_VERSION = "1.3"
 
@@ -961,7 +962,16 @@ def run_adapter(
         stdout_stream.flush()
         return 0
     except OllamaAdapterError as exc:
-        stderr_stream.write(f"Error: {exc}\n")
+        stderr_stream.write(
+            _safe_json(
+                {
+                    "schema_version": COMMAND_ERROR_SCHEMA_VERSION,
+                    "kind": exc.kind,
+                    "message": str(exc),
+                }
+            )
+            + "\n"
+        )
         stderr_stream.flush()
         return 1
     except (BrokenPipeError, OSError):

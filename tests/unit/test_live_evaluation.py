@@ -322,6 +322,67 @@ def test_process_output_is_bounded_before_serialization():
     with pytest.raises(LiveTransportError, match="output bound"):
         transport.request({}, 5)
 
+
+def test_typed_command_error_kind_survives_and_arbitrary_stderr_is_discarded():
+    envelope = json.dumps(
+        {
+            "schema_version": "command-error-v1",
+            "kind": "invalid_directive",
+            "message": "provider completion did not satisfy the directive contract",
+        },
+        separators=(",", ":"),
+    )
+    typed_command = (
+        sys.executable,
+        "-c",
+        f"import sys; sys.stdin.read(); sys.stderr.write({envelope!r}); raise SystemExit(1)",
+    )
+    with pytest.raises(LiveTransportError) as typed_error:
+        JsonlCommandTransport(
+            LiveModelConfig("local", typed_command), max_output_bytes=1024
+        ).request({}, 5)
+    assert typed_error.value.kind == "invalid_directive"
+    assert "provider completion" not in str(typed_error.value)
+
+    task = DebugTask.from_mapping(
+        json.loads(
+            (
+                ROOT
+                / "agentic_debugger/datasets/curated"
+                / TASK_ID
+                / "task.json"
+            ).read_text()
+        )
+    )
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=LiveModelConfig("local", typed_command),
+        transport=JsonlCommandTransport(
+            LiveModelConfig("local", typed_command), max_output_bytes=1024
+        ),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.to_mapping()["provider_error_kinds"] == [
+        "invalid_directive"
+    ]
+
+    secret = "token=super-secret-value"
+    arbitrary_command = (
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write(sys.stdin.read()); raise SystemExit(1)",
+    )
+    with pytest.raises(LiveTransportError) as arbitrary_error:
+        JsonlCommandTransport(
+            LiveModelConfig("local", arbitrary_command), max_output_bytes=1024
+        ).request({"diagnostic": secret}, 5)
+    assert arbitrary_error.value.kind == "process_error"
+    assert secret not in str(arbitrary_error.value)
+
 def test_process_stdin_and_wait_share_the_declared_timeout():
     command = (sys.executable, "-c", "import time; time.sleep(5)")
     transport = JsonlCommandTransport(LiveModelConfig("local", command), max_output_bytes=1024)
@@ -634,6 +695,7 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
     registry = build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY)
     registered = {name.value for name in registry.names()}
     pdb_names = {
+        ActionName.GET_FAILURE_TRACE.value,
         ActionName.START_PDB_SESSION.value,
         ActionName.GET_STACK_SUMMARY.value,
         ActionName.GET_FRAME_LOCALS.value,
@@ -686,6 +748,87 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
         assert ActionName.STOP_PDB_SESSION.value in active
     finally:
         workspace.cleanup()
+
+
+def test_failure_trace_is_advertised_only_after_successful_baseline(tmp_path):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    fixture = ROOT / "agentic_debugger/datasets/curated/pdb-required-boundary-006"
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    probe = prepare_pdb_probe(fixture, scenario_for(task.task_id), tmp_path, task=task)
+    case_dir = tmp_path / "failure-trace-case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(case_dir))
+
+    class CaptureTransport:
+        def __init__(self):
+            self.payload = None
+
+        def request(self, payload, timeout_seconds):
+            del timeout_seconds
+            self.payload = payload
+            return {
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "Failed",
+                    "reason": "contract captured",
+                }
+            }
+
+    def advertised(last_observation):
+        transport = CaptureTransport()
+        context = DemoToolContext(task=task, workspace=workspace, patch="", probe=probe)
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=transport,
+            limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+            registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
+            proof_required=True,
+        )
+        adapter.next_directive(
+            ControllerSnapshot(
+                "failure-trace-run",
+                task.task_id,
+                ControllerState.REPRODUCE,
+                0,
+                ControllerBudgetLimits.from_task_constraints(task.constraints),
+                ControllerBudgetState(),
+                HypothesisLedger(),
+                last_observation,
+            )
+        )
+        return set(transport.payload["controller"]["allowed_actions"])
+
+    def baseline(status, failure_reproduced):
+        return Observation(
+            "baseline-observation",
+            "baseline-action",
+            "failure-trace-run",
+            task.task_id,
+            ActionName.RUN_REPRODUCTION.value,
+            status,
+            {"phase": "baseline", "failure_reproduced": failure_reproduced},
+            "baseline",
+            False,
+        )
+
+    try:
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(None)
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(
+            baseline(ObservationStatus.REJECTED, True)
+        )
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(
+            baseline(ObservationStatus.OK, False)
+        )
+        assert ActionName.GET_FAILURE_TRACE.value in advertised(
+            baseline(ObservationStatus.OK, True)
+        )
+    finally:
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)
 
 
 def test_exact_proof_diagnosis_contract_requires_unique_successful_pdb_observations(tmp_path):

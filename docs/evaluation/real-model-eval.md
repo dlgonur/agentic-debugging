@@ -47,6 +47,13 @@ transport timeout. Command timeout, provider failure, controller rejection,
 controller failure, verifier failure, event/reporting failure, interruption,
 and cleanup result are retained separately.
 
+A nonzero configured-command exit is generic `process_error` unless stderr is
+one strict `command-error-v1` JSON object with an accepted closed error kind.
+Only that kind is retained in measurements; the message and all arbitrary raw
+stderr are discarded. Provider-specific adapters may therefore expose safe
+typed failure evidence without making configured-command stderr a report or
+prompt data channel.
+
 The transport does not fabricate token counts. Prompt, completion, and total
 tokens remain null with explicit missing-field markers unless the transport
 reports them. Monetary cost is not calculated.

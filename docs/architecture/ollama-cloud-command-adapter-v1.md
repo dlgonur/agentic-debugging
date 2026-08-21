@@ -106,7 +106,7 @@ The `/api/chat` response is not a provenance document. For a selected Cloud
 alias it must have `model` exactly equal to that alias's expected upstream
 model, be complete, contain a completed assistant message, and contain
 bounded string `message.content`. Chat `remote_model` and `remote_host` are
-not required and are not used; the installed Ollama 0.32.14 local Cloud
+not required and are not used; the installed Ollama 0.32.15 local Cloud
 proxy omits them. Returning the local Cloud alias as `model` is
 metadata/chat disagreement and fails.
 Tool/function-call activity is rejected. `message.thinking` is discarded and
@@ -131,10 +131,26 @@ not call `/api/chat` or `/api/generate` and does not establish that Cloud
 inference will succeed. Each later adapter invocation revalidates `/api/tags`
 and `/api/show` under the same request timeout before it may call `/api/chat`.
 
-The verified owner environment for this contract is Ollama `0.32.14`. The
+The current verified owner environment for this contract is Ollama `0.32.15`.
+The accepted 2026-08-17 product-runtime proof used `0.32.14`; the exact pin is
+kept explicit rather than relaxed across versions. The
 accepted product default requires `gpt-oss:20b-cloud` available. The
 experimental Nemotron profile requires `nemotron-3-nano:30b-cloud`
 available. A version mismatch fails closed.
+
+## Typed command failures
+
+Successful adapter stdout remains the one-directive JSON envelope. On a
+nonzero adapter exit, stderr contains exactly one bounded `command-error-v1`
+JSON object with `schema_version`, a closed `kind`, and a provider-safe
+message. The provider-neutral command transport accepts only that exact
+schema and closed vocabulary, retains only the kind, and discards the
+free-form message. Arbitrary configured-command stderr, malformed envelopes,
+and credential-shaped output remain unrecorded and collapse to the generic
+`process_error` kind. This preserves enough evidence to distinguish an HTTP
+or metadata failure, a bounded request/response failure, and a
+provider-completed invalid directive without persisting raw provider content
+or thinking.
 
 Local Application selects a model by launching the same adapter through a
 `command-models-v1` profile whose `argv` includes `--model <accepted
