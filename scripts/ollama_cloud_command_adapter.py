@@ -229,8 +229,8 @@ SYSTEM_PROMPT = (
     "kind must literally be \"action\". name must come from controller.allowed_actions. arguments must satisfy that action's supplied action_contracts. Do not use top-level keys named action or payload.\n"
     "Transition: {\"kind\":\"transition\",\"target_state\":\"<legal target>\",\"reason\":\"<bounded reason>\"}\n"
     "kind must literally be \"transition\". target_state must come from controller.legal_transition_targets. Do not use a top-level key named transition.\n"
-    "add_hypothesis: {\"kind\":\"add_hypothesis\",\"hypothesis_id\":\"<id>\",\"statement\":\"<statement>\",\"confidence\":\"low|medium|high\",\"evidence_refs\":[],\"requires_runtime_evidence\":false}\n"
-    "revise_hypothesis: {\"kind\":\"revise_hypothesis\",\"hypothesis_id\":\"<id>\",\"statement\":\"<statement>\",\"confidence\":\"low|medium|high\",\"evidence_refs\":[],\"requires_runtime_evidence\":false}\n"
+    "add_hypothesis and revise_hypothesis use exactly these fields: \"kind\", \"hypothesis_id\", \"statement\", \"confidence\", \"evidence_refs\", and \"requires_runtime_evidence\".\n"
+    "For either hypothesis kind, copy the current user message's Legal hypothesis representation and obey every current directive_schema constraint; especially do not guess or invert the required requires_runtime_evidence boolean.\n"
     "set_hypothesis_status: {\"kind\":\"set_hypothesis_status\",\"hypothesis_id\":\"<id>\",\"status\":\"supported|rejected|discarded\"}\n"
     "confidence must be exactly one of low, medium, high. status must be exactly one of supported, rejected, discarded. evidence_refs is a list of strings. requires_runtime_evidence is a boolean."
 )
@@ -247,15 +247,23 @@ def _directive_kinds(request: Mapping[str, Any]) -> list[str]:
 
 def _illustrative_argument_value(field: str, spec: Mapping[str, Any] | None) -> Any:
     if isinstance(spec, Mapping):
+        if "example" in spec:
+            return spec["example"]
         enum = spec.get("enum")
-        if isinstance(enum, list) and enum and type(enum[0]) in (str, int, float, bool):
+        if isinstance(enum, list) and enum:
             return enum[0]
         type_name = spec.get("type")
         if type_name == "boolean":
             return True
         if type_name == "integer":
+            minimum = spec.get("minimum")
+            if type(minimum) is int and not isinstance(minimum, bool):
+                return minimum
             return 0
         if type_name == "number":
+            minimum = spec.get("minimum")
+            if type(minimum) in (int, float) and not isinstance(minimum, bool):
+                return minimum
             return 0
         if type_name == "array":
             return []
@@ -324,6 +332,48 @@ def _patch_budget_remaining(controller: Mapping[str, Any]) -> str | None:
     return "Patch-attempt budget for this request is exhausted."
 
 
+def _public_breakpoint_source(request: Mapping[str, Any]) -> tuple[str, int, str] | None:
+    """Return a source line already visible in the current exact-PDB history."""
+
+    controller = request.get("controller")
+    observations = [
+        entry.get("last_observation")
+        for entry in request.get("history", [])
+        if isinstance(entry, Mapping)
+    ]
+    if isinstance(controller, Mapping):
+        observations.append(controller.get("last_observation"))
+    breakpoint_line: int | None = None
+    source_lines: dict[tuple[str, int], str] = {}
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        payload = observation.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        proof = payload.get("proof")
+        if isinstance(proof, Mapping) and type(proof.get("breakpoint_line")) is int:
+            breakpoint_line = proof["breakpoint_line"]
+        lines = payload.get("lines")
+        if isinstance(lines, list):
+            for entry in lines:
+                if not isinstance(entry, Mapping):
+                    continue
+                path = entry.get("path")
+                number = entry.get("line_number")
+                text = entry.get("text")
+                if type(path) is str and type(number) is int and type(text) is str:
+                    source_lines[(path, number)] = text
+    if breakpoint_line is None:
+        return None
+    matches = [
+        (path, number, text)
+        for (path, number), text in source_lines.items()
+        if number == breakpoint_line
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
     """PatchManager-derived apply_patch format and recovery rules."""
 
@@ -353,6 +403,7 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         "Hunk body prefixes are significant: one leading space for unchanged/context, - for removed, + for added.",
         "Use repository-relative paths only.",
         "Do not wrap the patch string in Markdown fences.",
+        "The complete response is JSON: encode every patch line break as the JSON escape \\n inside arguments.patch; never place a literal unescaped newline inside that quoted JSON string.",
         "Do not include unsupported Git metadata such as diff --git, new file, deleted file, rename, or copy lines.",
         f"The entire patch remains the value of {APPLY_PATCH_DIRECTIVE_SHAPE}",
         "Neutral arithmetic example. For this body, OLD_COUNT = 1 context + 2 removed = 3 and NEW_COUNT = 1 context + 3 added = 4:",
@@ -370,6 +421,20 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         "A rejected apply_patch does not create an active patch and does not mutate the workspace.",
         "After a rejected patch, do not call revert_patch merely to undo that rejected patch.",
     ]
+    breakpoint_source = _public_breakpoint_source(request)
+    if breakpoint_source is not None:
+        path, line_number, old_line = breakpoint_source
+        lines.extend(
+            [
+                f"Current public PDB/source evidence binds the diagnosed line to {path}:{line_number}.",
+                "If the repair replaces only that visible line, use a zero-context one-line hunk with these exact fixed parts:",
+                f"--- a/{path}",
+                f"+++ b/{path}",
+                f"@@ -{line_number},1 +{line_number},1 @@",
+                f"-{old_line}",
+                "Then add exactly one '+' line containing your corrected replacement; do not copy a symbolic placeholder.",
+            ]
+        )
     if _syntax_check_advertises_path(contracts):
         lines.append(
             "Do not call patch-dependent syntax_check without an active successfully applied patch unless using the advertised path argument."
@@ -433,6 +498,53 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
                 + (", ".join(next_actions) if next_actions else "none; use a legal transition")
                 + "."
             )
+    directive_schema = request.get("directive_schema")
+    if isinstance(directive_schema, Mapping):
+        for hypothesis_kind in ("add_hypothesis", "revise_hypothesis"):
+            if hypothesis_kind not in kinds:
+                continue
+            schema = directive_schema.get(hypothesis_kind)
+            constraints = schema.get("constraints") if isinstance(schema, Mapping) else None
+            runtime_constraint = (
+                constraints.get("requires_runtime_evidence")
+                if isinstance(constraints, Mapping)
+                else None
+            )
+            runtime_values = (
+                runtime_constraint.get("enum")
+                if isinstance(runtime_constraint, Mapping)
+                else None
+            )
+            runtime_value = (
+                runtime_values[0]
+                if isinstance(runtime_values, list)
+                and len(runtime_values) == 1
+                and type(runtime_values[0]) is bool
+                else False
+            )
+            def constrained_value(field: str, fallback: Any) -> Any:
+                constraint = constraints.get(field) if isinstance(constraints, Mapping) else None
+                if isinstance(constraint, Mapping) and "example" in constraint:
+                    return constraint["example"]
+                values = constraint.get("enum") if isinstance(constraint, Mapping) else None
+                return values[0] if isinstance(values, list) and len(values) == 1 else fallback
+
+            example = {
+                "kind": hypothesis_kind,
+                "hypothesis_id": constrained_value("hypothesis_id", "hypothesis-1"),
+                "statement": "bounded hypothesis",
+                "confidence": constrained_value("confidence", "low"),
+                "evidence_refs": constrained_value("evidence_refs", []),
+                "requires_runtime_evidence": runtime_value,
+            }
+            lines.append(
+                "Legal hypothesis representation: "
+                + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+            )
+            if hypothesis_kind == "revise_hypothesis":
+                lines.append(
+                    "For revise_hypothesis, replace evidence_refs with actual observation_id values from current history."
+                )
     allowed = controller.get("allowed_actions")
     contracts = request.get("action_contracts")
     if "action" in kinds and isinstance(allowed, list):
@@ -444,20 +556,40 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
                 "Legal action representation: "
                 + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
             )
+            if any(
+                type(value) is str and value.startswith("<") and value.endswith(">")
+                for value in example.get("arguments", {}).values()
+            ):
+                lines.append(
+                    "Every angle-bracket value in that action shape is structural; replace it with a substantive current value and never copy the placeholder literally."
+                )
             if name == "start_pdb_session":
                 lines.append(
-                    "For start_pdb_session, the numeric value above is structural only: replace it with a positive executable statement line visibly inside the target function; never use the function definition, an import, or a module-level line."
+                    "The shown breakpoint number is only a shape. Replace it with a visible executable target-function line; not def/import/module code."
                 )
             if name == "apply_patch":
                 lines.append(build_apply_patch_guidance(request))
     targets = controller.get("legal_transition_targets")
     if "transition" in kinds and isinstance(targets, list) and targets:
-        legal = ", ".join(target for target in targets if type(target) is str)
-        if legal:
+        legal_targets = [target for target in targets if type(target) is str]
+        if len(legal_targets) == 1:
+            lines.append(
+                "Legal transition representation: "
+                + json.dumps(
+                    {
+                        "kind": "transition",
+                        "target_state": legal_targets[0],
+                        "reason": "advance using the sole legal target",
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        elif legal_targets:
             lines.append(
                 "Legal transition representation: "
                 '{"kind":"transition","target_state":"<one of '
-                + legal
+                + ", ".join(legal_targets)
                 + '>","reason":"<bounded reason>"}'
             )
     return "\n".join(lines)
@@ -692,6 +824,16 @@ def _validate_action_arguments(name: str, arguments: Any, contracts: Mapping[str
         }.get(type_name, True)
         if not valid:
             raise OllamaAdapterError("directive argument has the wrong type", kind="invalid_directive")
+        minimum = spec.get("minimum")
+        if (
+            type_name in {"integer", "number"}
+            and type(minimum) in (int, float)
+            and not isinstance(minimum, bool)
+            and type(value) in (int, float)
+            and not isinstance(value, bool)
+            and value < minimum
+        ):
+            raise OllamaAdapterError("directive argument is below its minimum", kind="invalid_directive")
         enum = spec.get("enum")
         if isinstance(enum, list) and value not in enum:
             raise OllamaAdapterError("directive argument is outside its enum", kind="invalid_directive")
@@ -703,6 +845,38 @@ def _validate_action_arguments(name: str, arguments: Any, contracts: Mapping[str
         raise OllamaAdapterError("directive arguments are not finite JSON", kind="invalid_directive") from None
     if len(serialized.encode("utf-8")) > MAX_DIRECTIVE_ARGUMENT_BYTES:
         raise OllamaAdapterError("directive arguments exceed the configured bound", kind="invalid_directive")
+
+
+def _validate_directive_schema_constraints(
+    candidate: Mapping[str, Any], request: Mapping[str, Any], kind: str
+) -> None:
+    schemas = request.get("directive_schema")
+    schema = schemas.get(kind) if isinstance(schemas, Mapping) else None
+    constraints = schema.get("constraints") if isinstance(schema, Mapping) else None
+    if not isinstance(constraints, Mapping):
+        return
+    for field, constraint in constraints.items():
+        if field not in candidate or not isinstance(constraint, Mapping):
+            continue
+        value = candidate[field]
+        type_name = constraint.get("type")
+        valid = {
+            "string": type(value) is str,
+            "boolean": type(value) is bool,
+            "array": type(value) is list,
+            "object": type(value) is dict,
+        }.get(type_name, True)
+        if not valid:
+            raise OllamaAdapterError(
+                "directive field violates its current type constraint",
+                kind="invalid_directive",
+            )
+        enum = constraint.get("enum")
+        if isinstance(enum, list) and value not in enum:
+            raise OllamaAdapterError(
+                "directive field violates its current enum constraint",
+                kind="invalid_directive",
+            )
 
 
 def validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> None:
@@ -725,6 +899,7 @@ def validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> 
         raise OllamaAdapterError("directive kind is not allowed", kind="invalid_directive")
     if set(candidate) - DIRECTIVE_TOP_LEVEL_FIELDS[kind]:
         raise OllamaAdapterError("directive contains unknown fields", kind="invalid_directive")
+    _validate_directive_schema_constraints(candidate, request, kind)
     controller = request.get("controller")
     if not isinstance(controller, Mapping):
         raise OllamaAdapterError("request carries no controller contract", kind="invalid_request")

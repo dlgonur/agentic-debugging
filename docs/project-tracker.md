@@ -139,6 +139,19 @@ Rules:
   shared application architecture. Provider marketplaces/SDKs, credential
   management, arbitrary-repository IDE behavior, GPU/model hosting, browser UI,
   and campaign orchestration remain explicit non-goals.
+- [x] **Exact-PDB single-task live repair proof** — COMPLETE (2026-08-21).
+  Ollama Cloud `gpt-oss:20b-cloud` completed the curated
+  `pdb-required-boundary-006` case through the existing Local Application
+  controller, typed tools, real bounded PDB lifecycle, PatchManager, event
+  stream/replay, and independent verifier. The model executed source →
+  runtime-required hypothesis → PDB start/stack/locals/next/stop →
+  evidence-bound revision/diagnosis → one-line unified diff → validation.
+  Verifier: `COMPLETED/RESOLVED`, F2P 1/1, P2P 1/1, correct target symbol,
+  cleanup true, canonical fixture unchanged. Runtime: 21 logical calls and 21
+  transport attempts, zero retries/provider errors, 55.758 s controller,
+  12.427 s verifier, 68.233 s case elapsed; 54-event replay terminated `Done`.
+  Scope is intentionally one simple task and proves the lowest rung only; no
+  multi-task rate, generalization, or PDB-versus-static causal claim follows.
 
 ## 0. Daily Requirement
 

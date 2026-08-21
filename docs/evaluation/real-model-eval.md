@@ -116,10 +116,35 @@ cleanup. Directive kinds are likewise
 state-scoped: hypothesis add/revise/status directives appear only where the
 controller can apply them.
 
-The opt-in exact-PDB proof adds a narrower `proof_gate` object to the public
-request. In `RuntimeEvidence`, `next_required_actions` exposes only the next
-evidence-producing surface: source inspection/start, stack, locals,
-step-or-next, then stop. `continue_pdb_session` is not part of this proof.
+The opt-in exact-PDB proof adds a narrower `proof_gate` object only to public
+requests in `RuntimeEvidence`; it is absent in other controller states so it
+cannot conflict with their legal action surface. Exact `Understand` requires
+the bounded full source observation before the runtime hypothesis. After the
+transition, `next_required_actions` exposes only the next RuntimeEvidence
+surface: start, stack, locals, step-or-next, then stop.
+`continue_pdb_session` is not part of this proof.
+The exact proof also accepts one unique baseline reproduction: after it is
+recorded, reproduction and optional failure-trace actions disappear and
+`Understand` is the sole legal transition, preserving test/PDB budget for the
+required proof and validation lifecycle.
+Within `Understand`, the current request narrows the directive kind by phase:
+the pre-PDB hypothesis must set `requires_runtime_evidence=true`; after the
+debugger lifecycle, the same active hypothesis is revised with
+`requires_runtime_evidence=false` and current observation IDs before the bound
+diagnosis action appears. Runtime argument examples are derived only from
+already-visible observations: the current stack frame and pause generation for
+locals, followed by the exact evidence IDs and one observed-local example for
+diagnosis. The source-window line contract is one-based, matching its handler,
+and the exact small fixture exposes the complete target function for breakpoint
+selection.
+
+The 2026-08-21 authorized single-task run demonstrated this path end to end on
+`pdb-required-boundary-006` with Ollama Cloud `gpt-oss:20b-cloud`: 21 logical
+calls/transport attempts, zero retries/provider errors, PDB
+start/stack/locals/next/stop, an evidence-bound diagnosis, and a one-hunk model
+patch. The verifier completed RESOLVED with F2P 1/1 and P2P 1/1; cleanup and
+canonical immutability were true; replay ended in Done. This is a bounded
+one-task proof, not a success-rate or causal-comparison result.
 `Understand` remains unavailable until the unique successful pre-diagnosis
 observations exist and the session has stopped. A rejected debugger action is
 retained in the event stream but is not counted as proof, so a corrected action

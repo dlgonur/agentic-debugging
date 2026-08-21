@@ -24,6 +24,15 @@ the execution tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
   verifier **RESOLVED**; fail-to-pass **1/1**; pass-to-pass **2/2**; PDB
   **NOT EXERCISED** (not PASS, not a failure). Product success: YES;
   debugging success: YES. The R1–R3 PDB scientific milestones are unchanged.
+- **Exact-PDB single-task live repair proof** (2026-08-21): COMPLETE via
+  `gpt-oss:20b-cloud` on `pdb-required-boundary-006`. The model followed the
+  bounded source → hypothesis → PDB start/stack/locals/next/stop → evidence-bound
+  diagnosis → unified-diff patch lifecycle. The independent verifier reported
+  **RESOLVED** (F2P **1/1**, P2P **1/1**), cleanup and canonical immutability
+  were true, and event replay ended in `Done`. The run used 21 logical calls,
+  21 transport attempts, zero retries, and zero provider errors. This is a
+  one-task lowest-rung capability proof, not a multi-task performance claim or
+  a causal PDB-versus-static comparison.
 - **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
   evidence. After the multi-model Ollama Cloud generalization, selected
   `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated

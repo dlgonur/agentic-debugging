@@ -79,7 +79,6 @@ def valid_content() -> str:
 def test_exact_proof_guidance_marks_breakpoint_example_as_structural_only() -> None:
     request = sample_request()
     request["proof_gate"] = {
-        "required_order": ["start_pdb_session"],
         "next_required_actions": ["start_pdb_session"],
         "pre_diagnosis_ready": False,
         "session_active": False,
@@ -96,9 +95,50 @@ def test_exact_proof_guidance_marks_breakpoint_example_as_structural_only() -> N
     guidance = adapter.build_request_guidance(request)
 
     assert "Exact-proof next required actions: start_pdb_session." in guidance
-    assert "numeric value above is structural only" in guidance
-    assert "executable statement line visibly inside the target function" in guidance
-    assert "module-level line" in guidance
+    assert "shown breakpoint number is only a shape" in guidance
+    assert "visible executable target-function line" in guidance
+    assert "not def/import/module code" in guidance
+    assert '"breakpoint_line":1' in guidance
+    assert '"breakpoint_line":0' not in guidance
+
+
+def test_exact_proof_hypothesis_runtime_flag_is_guided_and_enforced() -> None:
+    request = sample_request()
+    request["directive_schema"] = {
+        "add_hypothesis": {
+            "kind": "add_hypothesis",
+            "required": [
+                "hypothesis_id",
+                "statement",
+                "confidence",
+                "evidence_refs",
+                "requires_runtime_evidence",
+            ],
+            "constraints": {
+                "confidence": {"type": "string", "enum": ["low", "medium", "high"]},
+                "requires_runtime_evidence": {"type": "boolean", "enum": [True]},
+            },
+        }
+    }
+    request["controller"]["allowed_actions"] = []
+    request["controller"]["legal_transition_targets"] = []
+    candidate = {
+        "kind": "add_hypothesis",
+        "hypothesis_id": "hypothesis-1",
+        "statement": "runtime evidence is required",
+        "confidence": "low",
+        "evidence_refs": [],
+        "requires_runtime_evidence": True,
+    }
+
+    guidance = adapter.build_request_guidance(request)
+
+    assert '"requires_runtime_evidence":true' in guidance
+    adapter.validate_directive_candidate(candidate, request)
+    candidate["requires_runtime_evidence"] = False
+    with pytest.raises(adapter.OllamaAdapterError, match="enum constraint") as exc_info:
+        adapter.validate_directive_candidate(candidate, request)
+    assert exc_info.value.kind == "invalid_directive"
 
 
 def valid_tags_entry(**overrides: Any) -> dict[str, Any]:
@@ -350,6 +390,8 @@ def test_system_prompt_teaches_exact_validator_field_names() -> None:
             assert f'"{field}"' in system
     assert "Do not use top-level keys named action, payload, or transition." in system
     assert "Never combine an action and a transition" in system
+    assert '"requires_runtime_evidence":false' not in system
+    assert "copy the current user message's Legal hypothesis representation" in system
 
 
 def test_request_guidance_uses_exact_run_reproduction_shape() -> None:

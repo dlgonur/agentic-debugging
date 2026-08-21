@@ -98,6 +98,9 @@ from agentic_debugger.skills.search_skills import find_function
 #: Source-window radius used by the demonstration.  Small enough to keep the
 #: observation payload bounded and stable, large enough to show the defect.
 SOURCE_WINDOW_RADIUS = 6
+#: The exact lowest-rung proof exposes one complete small target function so
+#: breakpoint selection and diagnosis are based on public source, not guesses.
+EXACT_PROOF_SOURCE_WINDOW_RADIUS = 12
 
 
 def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
@@ -918,7 +921,13 @@ def build_registry(
             raise _safe_rejection("line must be positive")
         try:
             window = get_source_window(
-                context.workspace, arguments["path"], line, SOURCE_WINDOW_RADIUS
+                context.workspace,
+                arguments["path"],
+                line,
+                EXACT_PROOF_SOURCE_WINDOW_RADIUS
+                if context.probe is not None
+                and context.probe.exact_public_reproduction
+                else SOURCE_WINDOW_RADIUS,
             )
         except (SourceInspectionError, WorkspaceError) as exc:
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
@@ -1377,7 +1386,7 @@ def build_registry(
         ),
         spec(
             ActionName.GET_SOURCE_WINDOW,
-            _validator({"path": str, "line": int}),
+            _validator({"path": str, "line": int}, minimums={"line": 1}),
             handle_get_source_window,
         ),
         spec(
@@ -1438,6 +1447,7 @@ def build_registry(
 
 __all__ = [
     "MAX_DIAGNOSTIC_CHARS",
+    "EXACT_PROOF_SOURCE_WINDOW_RADIUS",
     "SOURCE_WINDOW_RADIUS",
     "DemoToolContext",
     "DemoToolError",

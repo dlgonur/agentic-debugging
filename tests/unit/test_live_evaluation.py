@@ -767,15 +767,16 @@ def test_failure_trace_is_advertised_only_after_successful_baseline(tmp_path):
         def request(self, payload, timeout_seconds):
             del timeout_seconds
             self.payload = payload
+            target = payload["controller"]["legal_transition_targets"][0]
             return {
                 "directive": {
                     "kind": "transition",
-                    "target_state": "Failed",
+                    "target_state": target,
                     "reason": "contract captured",
                 }
             }
 
-    def advertised(last_observation):
+    def advertised(last_observation, *, proof_required=True):
         transport = CaptureTransport()
         context = DemoToolContext(task=task, workspace=workspace, patch="", probe=probe)
         adapter = LiveModelAdapter(
@@ -785,7 +786,7 @@ def test_failure_trace_is_advertised_only_after_successful_baseline(tmp_path):
             transport=transport,
             limits=LiveRunLimits(max_model_requests=1, max_retries=0),
             registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
-            proof_required=True,
+            proof_required=proof_required,
         )
         adapter.next_directive(
             ControllerSnapshot(
@@ -822,8 +823,11 @@ def test_failure_trace_is_advertised_only_after_successful_baseline(tmp_path):
         assert ActionName.GET_FAILURE_TRACE.value not in advertised(
             baseline(ObservationStatus.OK, False)
         )
-        assert ActionName.GET_FAILURE_TRACE.value in advertised(
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(
             baseline(ObservationStatus.OK, True)
+        )
+        assert ActionName.GET_FAILURE_TRACE.value in advertised(
+            baseline(ObservationStatus.OK, True), proof_required=False
         )
     finally:
         workspace.cleanup()
@@ -848,7 +852,32 @@ def test_exact_proof_diagnosis_contract_requires_unique_successful_pdb_observati
         def request(self, payload, timeout_seconds):
             del timeout_seconds
             self.payloads.append(payload)
-            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "contract check"}}
+            allowed = payload["controller"]["allowed_actions"]
+            if ActionName.GET_SOURCE_WINDOW.value in allowed:
+                return {
+                    "directive": {
+                        "kind": "action",
+                        "name": ActionName.GET_SOURCE_WINDOW.value,
+                        "arguments": {"path": "window_tail.py", "line": 1},
+                    }
+                }
+            if ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value in allowed:
+                return {
+                    "directive": {
+                        "kind": "action",
+                        "name": ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value,
+                        "arguments": {
+                            "hypothesis_id": "contract-check",
+                            "statement": "contract check",
+                            "target_file": "window_tail.py",
+                            "target_symbol": "tail_window",
+                            "confidence": "low",
+                            "evidence_refs": [],
+                            "observed_values": {},
+                        },
+                    }
+                }
+            raise AssertionError("test request exposed no inspectable action")
 
     def observation(name, index, status=ObservationStatus.OK):
         return Observation(
@@ -926,7 +955,7 @@ def test_exact_proof_diagnosis_contract_requires_unique_successful_pdb_observati
             observation(ActionName.NEXT_PDB_SESSION.value, 6),
         ])
         assert "express_root_cause_hypothesis" in next_ready["controller"]["allowed_actions"]
-        assert "Exact-proof workflow" in ready["instructions"]
+        assert "afterward revise from observation ids, then diagnose" in ready["instructions"]
         assert "oracle" not in json.dumps(ready).lower()
         assert "gold patch" not in json.dumps(ready).lower()
     finally:
@@ -1175,7 +1204,7 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
         assert find_contract["additional_properties"] is False
         assert window_contract["properties"]["line"] == {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 1,
         }
         assert hypothesis_contract["properties"]["confidence"]["enum"] == [
             item.value for item in HypothesisConfidence
@@ -1183,7 +1212,7 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
 
         invalid_cases = (
             (ActionName.FIND_FUNCTION, {"name": "", "path": "demo.py"}),
-            (ActionName.GET_SOURCE_WINDOW, {"path": "demo.py", "line": -1}),
+            (ActionName.GET_SOURCE_WINDOW, {"path": "demo.py", "line": 0}),
             (
                 ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
                 {
@@ -1205,8 +1234,8 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
             {"name": "run", "path": "demo.py"}
         ) == {"name": "run", "path": "demo.py"}
         assert registry.get(ActionName.GET_SOURCE_WINDOW).argument_validator(
-            {"path": "demo.py", "line": 0}
-        ) == {"path": "demo.py", "line": 0}
+            {"path": "demo.py", "line": 1}
+        ) == {"path": "demo.py", "line": 1}
         assert registry.get(ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS).argument_validator(
             {
                 "hypothesis_id": "h1",

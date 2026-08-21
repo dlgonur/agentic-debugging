@@ -24,6 +24,17 @@ session. That proof used `gpt-oss:20b-cloud`. See `docs/project-tracker.md`
 (Local Application V1 real remote route proof, 2026-08-17) for the full
 record. The later multi-model generalization does not replace that proof.
 
+**2026-08-21:** a separate exact-PDB single-task live proof completed on
+`pdb-required-boundary-006` with `gpt-oss:20b-cloud` through Ollama 0.32.15.
+The model used the real bounded PDB start/stack/locals/next/stop lifecycle,
+revised its hypothesis from current observation IDs, recorded a diagnosis
+bound to an observed local value, and emitted a one-hunk unified diff. The
+independent verifier returned RESOLVED (F2P 1/1, P2P 1/1); cleanup and canonical
+immutability passed; replay ended in Done. The run used 21 logical calls and 21
+transport attempts with zero retries and zero provider errors. This supplements
+the earlier product-route proof by exercising PDB; it remains a one-task
+lowest-rung proof rather than a comparative or generalization result.
+
 **2026-08-18:** the experimental Nemotron profile has a completed
 five-task Harness V2 capability probe (**1/5 RESOLVED**). That result is
 closed evidence at

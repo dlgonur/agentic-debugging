@@ -2,6 +2,20 @@
 
 ## Durum notu
 
+**2026-08-21 exact-PDB single-task live repair proof — COMPLETE.** The accepted
+product runtime route (`gpt-oss:20b-cloud` through Ollama 0.32.15 and Local
+Application protocol 1.3) completed `pdb-required-boundary-006` under
+`pdb-on-uncertainty`: one source observation, a runtime-required hypothesis,
+real PDB start/stack/locals/next/stop, observation-ID-bound revision and
+diagnosis, model-authored one-hunk unified diff, controller validation, and the
+independent verifier. Result: **RESOLVED**, F2P 1/1, P2P 1/1, correct target
+symbol, cleanup true, canonical fixture unchanged, replay terminal `Done`;
+21 logical calls / 21 transport attempts, 0 retries, 0 provider errors, 68.233 s
+case elapsed. This closes the deliberately simple one-task proof only. It does
+not establish generalization, model-limit location, PDB causal benefit, or
+SWE-rebench capability; task difficulty should be increased one task at a time
+under separately recorded contracts.
+
 **2026-08-18 Nemotron 3 Nano capability probe — COMPLETE as closed
 evidence.** After the multi-model Ollama Cloud generalization, selected
 `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated

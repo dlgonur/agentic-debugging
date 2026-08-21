@@ -521,6 +521,45 @@ def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
         raise _rejected(DirectiveRejectionCategory.AMBIGUOUS_ENVELOPE, "response has both a top-level 'kind' and a nested 'directive'")
     return response["directive"] if wrapped else response
 
+
+def _validate_directive_constraints(
+    value: Mapping[str, Any],
+    directive_schema: Mapping[str, Mapping[str, Any]] | None,
+) -> None:
+    """Enforce request-specific directive constraints before adaptation."""
+
+    if directive_schema is None:
+        return
+    kind = value.get("kind")
+    schema = directive_schema.get(kind) if type(kind) is str else None
+    if not isinstance(schema, Mapping):
+        return
+    constraints = schema.get("constraints")
+    if not isinstance(constraints, Mapping):
+        return
+    for field, constraint in constraints.items():
+        if field not in value or not isinstance(constraint, Mapping):
+            continue
+        expected_type = constraint.get("type")
+        field_value = value[field]
+        valid_type = {
+            "string": type(field_value) is str,
+            "boolean": type(field_value) is bool,
+            "array": type(field_value) is list,
+            "object": type(field_value) is dict,
+        }.get(expected_type, True)
+        if not valid_type:
+            raise _rejected(
+                DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE,
+                f"'{field}' failed the current directive constraint",
+            )
+        enum = constraint.get("enum")
+        if isinstance(enum, list) and field_value not in enum:
+            raise _rejected(
+                DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE,
+                f"'{field}' is outside the current directive constraint",
+            )
+
 def _parse(
     value: Any,
     snapshot: ControllerSnapshot,
@@ -528,6 +567,7 @@ def _parse(
     action_contracts: Mapping[str, Mapping[str, Any]] | None = None,
     legal_transition_targets: set[str] | None = None,
     directive_kinds: set[str] | None = None,
+    directive_schema: Mapping[str, Mapping[str, Any]] | None = None,
 ) -> ModelDirective:
     if not isinstance(value, Mapping):
         raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "directive must be a JSON object")
@@ -551,6 +591,7 @@ def _parse(
             DirectiveRejectionCategory.ILLEGAL_ACTION,
             f"directive kind '{kind}' is not legal in state '{snapshot.state.value}'",
         )
+    _validate_directive_constraints(value, directive_schema)
     if kind == "action":
         arguments = _require_field(value, "arguments")
         if not isinstance(arguments, Mapping):
@@ -824,10 +865,7 @@ class LiveModelAdapter:
         diagnosis_ready = start_ready and stack_ready and locals_ready and control_count == 1
 
         if not start_ready:
-            next_actions = [
-                ActionName.GET_SOURCE_WINDOW.value,
-                ActionName.START_PDB_SESSION.value,
-            ]
+            next_actions = [ActionName.START_PDB_SESSION.value]
         elif not stack_ready:
             next_actions = [ActionName.GET_STACK_SUMMARY.value]
         elif not locals_ready:
@@ -843,17 +881,174 @@ class LiveModelAdapter:
             next_actions = []
 
         return {
-            "required_order": [
-                ActionName.START_PDB_SESSION.value,
-                ActionName.GET_STACK_SUMMARY.value,
-                ActionName.GET_FRAME_LOCALS.value,
-                "step_pdb_session|next_pdb_session",
-                ActionName.STOP_PDB_SESSION.value,
-            ],
             "next_required_actions": next_actions,
             "pre_diagnosis_ready": diagnosis_ready,
             "session_active": self._pdb_session_active,
         }
+
+    def _exact_breakpoint_line(self) -> int | None:
+        """Choose a late executable line from the model-visible source window."""
+
+        source = self._unique_proof_observation(ActionName.GET_SOURCE_WINDOW)
+        if source is None:
+            return None
+        lines = source.payload.get("lines")
+        candidates: list[int] = []
+        if type(lines) is not list:
+            return None
+        for entry in lines:
+            if type(entry) is not dict:
+                continue
+            number = entry.get("line_number")
+            text = entry.get("text")
+            if type(number) is not int or type(text) is not str:
+                continue
+            stripped = text.strip()
+            indentation = len(text) - len(text.lstrip())
+            if (
+                indentation > 0
+                and stripped
+                and not stripped.startswith(("#", "return ", "def ", "class ", "@"))
+            ):
+                candidates.append(number)
+        return candidates[-1] if candidates else None
+
+    def _unique_proof_observation(self, name: ActionName) -> Observation | None:
+        matches = [
+            observation
+            for observation in self._proof_observations
+            if observation.name == name.value and observation.status.value == "ok"
+        ]
+        return matches[0] if len(matches) == 1 else None
+
+    def _proof_evidence_bindings(self) -> dict[str, Any] | None:
+        """Derive exact argument values solely from public runtime evidence."""
+
+        start = self._unique_proof_observation(ActionName.START_PDB_SESSION)
+        stack = self._unique_proof_observation(ActionName.GET_STACK_SUMMARY)
+        locals_observation = self._unique_proof_observation(ActionName.GET_FRAME_LOCALS)
+        controls = [
+            observation
+            for observation in self._proof_observations
+            if observation.name
+            in {ActionName.STEP_PDB_SESSION.value, ActionName.NEXT_PDB_SESSION.value}
+            and observation.status.value == "ok"
+        ]
+        if start is None or stack is None:
+            return None
+        frames = stack.payload.get("frames")
+        current_frames = (
+            [
+                frame
+                for frame in frames
+                if type(frame) is dict and frame.get("is_current") is True
+            ]
+            if type(frames) is list
+            else []
+        )
+        pause_generation = stack.payload.get("pause_generation")
+        frame_id = current_frames[0].get("frame_id") if len(current_frames) == 1 else None
+        result: dict[str, Any] = {
+            "frame_id": frame_id,
+            "pause_generation": pause_generation,
+        }
+        if locals_observation is None or len(controls) != 1:
+            return result
+        local_entries = locals_observation.payload.get("locals")
+        usable_locals = (
+            [
+                entry
+                for entry in local_entries
+                if type(entry) is dict and type(entry.get("name")) is str
+            ]
+            if type(local_entries) is list
+            else []
+        )
+        proof = start.payload.get("proof")
+        if not usable_locals or type(proof) is not dict:
+            return result
+        result.update(
+            {
+                "evidence_refs": [
+                    start.observation_id,
+                    stack.observation_id,
+                    locals_observation.observation_id,
+                    controls[0].observation_id,
+                ],
+                "observed_values": {
+                    usable_locals[0]["name"]: usable_locals[0].get("value")
+                },
+                "target_file": proof.get("production_file"),
+                "target_symbol": proof.get("production_frame"),
+            }
+        )
+        return result
+
+    def _effective_directive_schema(
+        self, snapshot: ControllerSnapshot
+    ) -> dict[str, dict[str, Any]]:
+        result = _directive_schema_for_state(snapshot.state)
+        if not self.proof_required:
+            return result
+        if snapshot.state is ControllerState.RUNTIME_EVIDENCE:
+            kind = (
+                "transition"
+                if self._proof_diagnosis_ready() and not self._pdb_session_active
+                else "action"
+            )
+            return {kind: result[kind]}
+        if snapshot.state is not ControllerState.UNDERSTAND:
+            return result
+
+        active = snapshot.hypotheses.active_hypotheses()
+        hypothesis = active[0] if active else None
+        diagnosis_ready = self._proof_diagnosis_ready()
+        patch_ready = self._proof_patch_allowed()
+        if not diagnosis_ready:
+            if hypothesis is not None and hypothesis.requires_runtime_evidence:
+                kinds = {"transition"}
+            elif self._unique_proof_observation(ActionName.GET_SOURCE_WINDOW) is not None:
+                kinds = {"add_hypothesis"}
+            else:
+                kinds = {"action"}
+        elif patch_ready:
+            kinds = {"transition"}
+        elif hypothesis is not None and hypothesis.requires_runtime_evidence:
+            kinds = {"revise_hypothesis"}
+        else:
+            kinds = {"action"}
+        effective = {kind: schema for kind, schema in result.items() if kind in kinds}
+        required_runtime_flag = {
+            "add_hypothesis": True,
+            "revise_hypothesis": False,
+        }
+        for kind, required_value in required_runtime_flag.items():
+            if kind not in effective:
+                continue
+            schema = dict(effective[kind])
+            constraints = dict(schema.get("constraints", {}))
+            constraints["requires_runtime_evidence"] = {
+                "type": "boolean",
+                "enum": [required_value],
+            }
+            schema["constraints"] = constraints
+            effective[kind] = schema
+        if "revise_hypothesis" in effective and hypothesis is not None:
+            bindings = self._proof_evidence_bindings()
+            if bindings is not None and "evidence_refs" in bindings:
+                schema = dict(effective["revise_hypothesis"])
+                constraints = dict(schema.get("constraints", {}))
+                constraints["hypothesis_id"] = {
+                    "type": "string",
+                    "enum": [hypothesis.hypothesis_id],
+                }
+                constraints["evidence_refs"] = {
+                    "type": "array",
+                    "example": bindings["evidence_refs"],
+                }
+                schema["constraints"] = constraints
+                effective["revise_hypothesis"] = schema
+        return effective
 
     def _effective_contract(self, snapshot: ControllerSnapshot) -> dict[str, dict[str, Any]]:
         pdb_observations_remaining = max(
@@ -882,6 +1077,59 @@ class LiveModelAdapter:
             diagnosis_allowed=self._proof_diagnosis_ready(),
             failure_trace_allowed=self._failure_reproduced,
         )
+        if self.proof_required and snapshot.state is ControllerState.REPRODUCE:
+            if self._failure_reproduced:
+                # The exact proof consumes one unique baseline observation.
+                # Re-advertising baseline and optional post-mortem actions lets
+                # a small model exhaust the task's test/PDB budgets without
+                # adding admissible proof.  Once reproduced, the only useful
+                # next decision is the state transition handled below.
+                result = {}
+            else:
+                result = {
+                    name: contract
+                    for name, contract in result.items()
+                    if name == ActionName.RUN_REPRODUCTION.value
+                }
+        if self.proof_required and snapshot.state is ControllerState.UNDERSTAND:
+            active = snapshot.hypotheses.active_hypotheses()
+            hypothesis = active[0] if active else None
+            if not self._proof_diagnosis_ready():
+                if hypothesis is not None and hypothesis.requires_runtime_evidence:
+                    result = {}
+                elif self._unique_proof_observation(ActionName.GET_SOURCE_WINDOW) is not None:
+                    result = {}
+                else:
+                    result = {
+                        name: contract
+                        for name, contract in result.items()
+                        if name == ActionName.GET_SOURCE_WINDOW.value
+                    }
+                    source_name = ActionName.GET_SOURCE_WINDOW.value
+                    public_paths = [
+                        path
+                        for path in self.task.constraints.allowed_write_paths
+                        if path.endswith(".py")
+                    ]
+                    if source_name in result and len(public_paths) == 1:
+                        contract = dict(result[source_name])
+                        properties = dict(contract.get("properties", {}))
+                        for field, value in (("path", public_paths[0]), ("line", 1)):
+                            spec = dict(properties.get(field, {}))
+                            spec["enum"] = [value]
+                            properties[field] = spec
+                        contract["properties"] = properties
+                        result[source_name] = contract
+            elif self._proof_patch_allowed():
+                result = {}
+            elif hypothesis is not None and hypothesis.requires_runtime_evidence:
+                result = {}
+            else:
+                result = {
+                    name: contract
+                    for name, contract in result.items()
+                    if name == ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value
+                }
         if self.proof_required and snapshot.state is ControllerState.RUNTIME_EVIDENCE:
             # The lowest-rung proof is intentionally a narrow debugger
             # lifecycle.  Advertising unrelated execution controls caused the
@@ -894,16 +1142,94 @@ class LiveModelAdapter:
                 for name, contract in result.items()
                 if name in next_actions
             }
+            start_name = ActionName.START_PDB_SESSION.value
+            breakpoint_line = self._exact_breakpoint_line()
+            if start_name in result and breakpoint_line is not None:
+                contract = dict(result[start_name])
+                properties = dict(contract.get("properties", {}))
+                spec = dict(properties.get("breakpoint_line", {}))
+                spec["enum"] = [breakpoint_line]
+                properties["breakpoint_line"] = spec
+                contract["properties"] = properties
+                result[start_name] = contract
+            locals_name = ActionName.GET_FRAME_LOCALS.value
+            bindings = self._proof_evidence_bindings()
+            if locals_name in result and bindings is not None:
+                frame_id = bindings.get("frame_id")
+                pause_generation = bindings.get("pause_generation")
+                if type(frame_id) is int and type(pause_generation) is int:
+                    contract = dict(result[locals_name])
+                    properties = dict(contract.get("properties", {}))
+                    for field, value in (
+                        ("frame_id", frame_id),
+                        ("pause_generation", pause_generation),
+                    ):
+                        spec = dict(properties.get(field, {}))
+                        spec["enum"] = [value]
+                        properties[field] = spec
+                    contract["properties"] = properties
+                    result[locals_name] = contract
+        if (
+            self.proof_required
+            and snapshot.state is ControllerState.UNDERSTAND
+            and ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value in result
+        ):
+            active = snapshot.hypotheses.active_hypotheses()
+            bindings = self._proof_evidence_bindings()
+            if active and bindings is not None and "evidence_refs" in bindings:
+                name = ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value
+                contract = dict(result[name])
+                properties = dict(contract.get("properties", {}))
+                exact_values = {
+                    "hypothesis_id": active[0].hypothesis_id,
+                    "target_file": bindings["target_file"],
+                    "target_symbol": bindings["target_symbol"],
+                }
+                for field, value in exact_values.items():
+                    spec = dict(properties.get(field, {}))
+                    spec["enum"] = [value]
+                    properties[field] = spec
+                evidence_spec = dict(properties.get("evidence_refs", {}))
+                evidence_spec["example"] = bindings["evidence_refs"]
+                properties["evidence_refs"] = evidence_spec
+                observed_spec = dict(properties.get("observed_values", {}))
+                observed_spec["example"] = bindings["observed_values"]
+                properties["observed_values"] = observed_spec
+                contract["properties"] = properties
+                result[name] = contract
         return result
-    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, contracts, legal_targets, rejection: Mapping[str, Any] | None = None):
+    def _request_context(self, snapshot, *, logical_request_index: int, transport_attempt_index: int, contracts=None, legal_targets=None, directive_schema=None, rejection: Mapping[str, Any] | None = None):
+        if contracts is None:
+            contracts = self._effective_contract(snapshot)
+        if legal_targets is None:
+            legal_targets = _legal_transition_targets(
+                snapshot.state,
+                pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed,
+                patch_allowed=self._proof_patch_allowed(),
+            )
+        if directive_schema is None:
+            directive_schema = self._effective_directive_schema(snapshot)
         request_id = f"{self.run_id}:model-call:{logical_request_index}:attempt:{transport_attempt_index}:{uuid.uuid4().hex}"
         runtime_allowed = self._runtime_transition_allowed(snapshot)
         effective_actions = list(contracts)
         history_window = PROOF_HISTORY_WINDOW if self.proof_required else MODEL_HISTORY_WINDOW
-        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":_directive_schema_for_state(snapshot.state),"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-history_window:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":directive_schema,"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-history_window:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
         if self.proof_required:
-            payload["proof_gate"] = self._proof_runtime_progress()
-            payload["instructions"] += " Exact-proof workflow: inspect enough target source to choose an executable statement inside the target function (never a def, import, or module-level line), add a hypothesis with requires_runtime_evidence=true, and transition to RuntimeEvidence. In RuntimeEvidence follow proof_gate.next_required_actions: start the PDB session, collect exactly one stack, locals, and step-or-next observation, then stop the session. Do not use continue_pdb_session for this proof. Return to Understand only after proof_gate.pre_diagnosis_ready is true and proof_gate.session_active is false; revise the hypothesis using the recorded observation ids and express a diagnosis only when that action is advertised. Patch is legal only after the complete proof gate succeeds."
+            payload["instructions"] = "Return one legal directive JSON object from current contracts. Context is complete; use no memory or credentials. Do not repeat non-null directive_feedback."
+            if snapshot.state is ControllerState.REPRODUCE:
+                if self._failure_reproduced:
+                    payload["instructions"] += " Exact proof: baseline recorded; use the sole legal transition to Understand."
+                else:
+                    payload["instructions"] += " Exact proof: run the advertised baseline once; PDB is unavailable now."
+            elif snapshot.state is ControllerState.RUNTIME_EVIDENCE:
+                payload["proof_gate"] = self._proof_runtime_progress()
+                payload["instructions"] += " Exact proof: use only proof_gate.next_required_actions. Break inside the target function, never on def/import/module code. Collect one stack, locals, and step-or-next; stop the session. Never continue."
+            elif snapshot.state is ControllerState.UNDERSTAND:
+                payload["instructions"] += " Exact proof: before PDB inspect source and add a runtime hypothesis; afterward revise from observation ids, then diagnose."
+            elif snapshot.state is ControllerState.PATCH:
+                payload["instructions"] += " Exact proof complete: submit a legal patch and follow the advertised lifecycle."
+            elif snapshot.state is ControllerState.VALIDATE:
+                payload["instructions"] += " Exact proof complete: collect advertised validation evidence before finishing."
         if self._rag_context is not None:
             payload["retrieved_context"] = self._rag_context.to_request_mapping()
         return payload
@@ -921,20 +1247,36 @@ class LiveModelAdapter:
         if snapshot.state is ControllerState.RUNTIME_EVIDENCE and not self._runtime_transition_authorized:
             self._runtime_transition_authorized = self._runtime_transition_allowed(snapshot)
         effective_contract = self._effective_contract(snapshot)
+        directive_schema = self._effective_directive_schema(snapshot)
         legal_targets = _legal_transition_targets(snapshot.state, pdb_transition_allowed=self._cached_pdb_gate_decision(snapshot).allowed, patch_allowed=self._proof_patch_allowed())
         if (
             self.proof_required
-            and snapshot.state is ControllerState.RUNTIME_EVIDENCE
-            and (
-                not self._proof_diagnosis_ready()
-                or self._pdb_session_active
-            )
+            and snapshot.state is ControllerState.REPRODUCE
+            and self._failure_reproduced
         ):
-            legal_targets = [
-                target
-                for target in legal_targets
-                if target != ControllerState.UNDERSTAND.value
-            ]
+            legal_targets = [ControllerState.UNDERSTAND.value]
+        if self.proof_required and snapshot.state is ControllerState.UNDERSTAND:
+            active = snapshot.hypotheses.active_hypotheses()
+            hypothesis = active[0] if active else None
+            if not self._proof_diagnosis_ready():
+                legal_targets = (
+                    [ControllerState.RUNTIME_EVIDENCE.value]
+                    if hypothesis is not None and hypothesis.requires_runtime_evidence
+                    else []
+                )
+            elif self._proof_patch_allowed():
+                legal_targets = [ControllerState.PATCH.value]
+            else:
+                legal_targets = []
+        if (
+            self.proof_required
+            and snapshot.state is ControllerState.RUNTIME_EVIDENCE
+        ):
+            legal_targets = (
+                [ControllerState.UNDERSTAND.value]
+                if self._proof_diagnosis_ready() and not self._pdb_session_active
+                else []
+            )
         logical_request_index = snapshot.model_call_index
         history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
         self.history.append(history_entry)
@@ -942,7 +1284,7 @@ class LiveModelAdapter:
         rejection: dict[str, Any] | None = None
         for attempt in range(self.limits.max_retries+1):
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
-            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,contracts=effective_contract,legal_targets=legal_targets,rejection=rejection))
+            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,contracts=effective_contract,legal_targets=legal_targets,directive_schema=directive_schema,rejection=rejection))
             try:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
             except (TypeError,ValueError,UnicodeError):
@@ -1001,7 +1343,7 @@ class LiveModelAdapter:
                     self._record_pdb_gate_decision(snapshot, gate_decision)
                     self._pdb_gate_recorded_for_index = snapshot.model_call_index
                 contracts = effective_contract
-                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(_directive_schema_for_state(snapshot.state)),legal_transition_targets=set(legal_targets))
+                directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(directive_schema),directive_schema=directive_schema,legal_transition_targets=set(legal_targets))
                 attempt_record["accepted"] = True
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True

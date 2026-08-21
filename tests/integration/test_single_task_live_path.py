@@ -30,7 +30,6 @@ class DeterministicConfiguredTransport:
         directives = [
             {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}},
             {"kind": "transition", "target_state": "Understand", "reason": "baseline reproduced"},
-            {"kind": "action", "name": "find_function", "arguments": {"name": "tail_window", "path": "window_tail.py"}},
             {"kind": "action", "name": "get_source_window", "arguments": {"path": "window_tail.py", "line": 1}},
             {"kind": "add_hypothesis", "hypothesis_id": "proof-boundary-006", "statement": scenario_for(TASK_ID).root_cause_statement, "confidence": "low", "evidence_refs": ["observation:find_function", "observation:get_source_window"], "requires_runtime_evidence": True},
             {"kind": "transition", "target_state": "RuntimeEvidence", "reason": "exact PDB proof is required"},
@@ -76,7 +75,7 @@ class DeterministicConfiguredTransport:
             if entry.get("name") in {"start_pdb_session", "get_stack_summary", "get_frame_locals", "step_pdb_session"}
         ]
         refs = [entry["observation_id"] for entry in proof_observations]
-        if logical_index == 12:
+        if logical_index == 11:
             return {"kind": "revise_hypothesis", "hypothesis_id": "proof-boundary-006", "statement": scenario_for(TASK_ID).root_cause_statement, "confidence": "low", "evidence_refs": refs, "requires_runtime_evidence": False}
         locals_observation = next(entry for entry in proof_observations if entry["name"] == "get_frame_locals")
         requested = next(item for item in locals_observation["payload"]["locals"] if item["name"] == "requested_size")
@@ -90,6 +89,7 @@ class AdversarialConfiguredTransport:
         self.requests: list[dict[str, object]] = []
         self.legacy_branch_seen = False
         self._phase = 0
+        self._source_seen = False
         fixture = ROOT / "agentic_debugger" / "datasets" / "curated" / TASK_ID
         scenario = scenario_for(TASK_ID)
         self.patch = build_reference_patch(
@@ -123,15 +123,15 @@ class AdversarialConfiguredTransport:
             self._phase += 1
             return {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}
         if self._phase == 1:
-            self._phase += 1
-            return {"kind": "action", "name": "get_failure_trace", "arguments": {}}
-        if self._phase == 2:
-            self._phase += 1
+            self._phase = 3
             return {"kind": "transition", "target_state": "Understand", "reason": "baseline evidence is recorded"}
 
         if state == "Understand" and "express_root_cause_hypothesis" in allowed and self._phase == 3:
             self.legacy_branch_seen = True
             return {"kind": "action", "name": "express_root_cause_hypothesis", "arguments": {"hypothesis_id": "adversarial", "statement": "boundary behavior requires runtime confirmation", "target_file": "window_tail.py", "target_symbol": "tail_window", "confidence": "low", "evidence_refs": [], "observed_values": {}}}
+        if self._phase == 3 and "get_source_window" in allowed and not self._source_seen:
+            self._source_seen = True
+            return {"kind": "action", "name": "get_source_window", "arguments": {"path": "window_tail.py", "line": 1}}
         if self._phase == 3:
             self._phase += 1
             return {"kind": "add_hypothesis", "hypothesis_id": "adversarial", "statement": "boundary behavior requires runtime confirmation", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": True}
@@ -267,8 +267,8 @@ def test_real_live_case_uses_zero_provider_and_completes_exact_pdb_proof(tmp_pat
     assert result.verifier["canonical_fixture_unchanged"] is True
     assert result.verifier["workspace_cleaned"] is True
     measurements = result.measurements
-    assert measurements["logical_model_call_count"] == 22
-    assert measurements["transport_attempt_count"] == 22
+    assert measurements["logical_model_call_count"] == 21
+    assert measurements["transport_attempt_count"] == 21
     assert measurements["logical_model_call_count"] == len(transport.requests)
     assert measurements["logical_model_call_count"] <= 24
     assert measurements["transport_attempt_count"] <= 24
@@ -279,8 +279,8 @@ def test_real_live_case_uses_zero_provider_and_completes_exact_pdb_proof(tmp_pat
         canonical = ollama_cloud_command_adapter.canonical_public_request(request)
         provider_messages.append(ollama_cloud_command_adapter.build_chat_messages(request))
         canonical_sizes.append(len(canonical.encode("utf-8")))
-    assert len(canonical_sizes) == 22
-    assert len(provider_messages) == 22
+    assert len(canonical_sizes) == 21
+    assert len(provider_messages) == 21
     assert max(canonical_sizes) <= ollama_cloud_command_adapter.MAX_PUBLIC_REQUEST_BYTES
     assert measurements["max_request_bytes"] == max(len(json.dumps(request, ensure_ascii=False, allow_nan=False).encode("utf-8")) for request in transport.requests)
     assert measurements["retry_count"] == 0
@@ -294,8 +294,73 @@ def test_real_live_case_uses_zero_provider_and_completes_exact_pdb_proof(tmp_pat
         for request in transport.requests
         if request["controller"]["state"] == "RuntimeEvidence"
     ]
+    assert all(
+        ("proof_gate" in request)
+        == (request["controller"]["state"] == "RuntimeEvidence")
+        for request in transport.requests
+    )
+    assert "run the advertised baseline once" in transport.requests[0]["instructions"]
+    assert transport.requests[1]["controller"]["state"] == "Reproduce"
+    assert transport.requests[1]["controller"]["allowed_actions"] == []
+    assert transport.requests[1]["controller"]["legal_transition_targets"] == ["Understand"]
+    assert "baseline recorded" in transport.requests[1]["instructions"]
+    assert list(transport.requests[2]["directive_schema"]) == ["action"]
+    source_contract = transport.requests[2]["action_contracts"]["get_source_window"][
+        "properties"
+    ]
+    assert source_contract["path"]["enum"] == ["window_tail.py"]
+    assert source_contract["line"]["enum"] == [1]
+    assert transport.requests[2]["controller"]["allowed_actions"] == ["get_source_window"]
+    assert list(transport.requests[3]["directive_schema"]) == ["add_hypothesis"]
+    assert transport.requests[3]["controller"]["allowed_actions"] == []
+    assert transport.requests[3]["directive_schema"]["add_hypothesis"]["constraints"][
+        "requires_runtime_evidence"
+    ]["enum"] == [True]
+    assert list(transport.requests[4]["directive_schema"]) == ["transition"]
+    assert transport.requests[4]["controller"]["allowed_actions"] == []
+    assert transport.requests[4]["controller"]["legal_transition_targets"] == ["RuntimeEvidence"]
+    assert list(transport.requests[11]["directive_schema"]) == ["revise_hypothesis"]
+    assert transport.requests[11]["directive_schema"]["revise_hypothesis"]["constraints"][
+        "requires_runtime_evidence"
+    ]["enum"] == [False]
+    revise_constraints = transport.requests[11]["directive_schema"]["revise_hypothesis"][
+        "constraints"
+    ]
+    assert revise_constraints["hypothesis_id"]["enum"] == ["proof-boundary-006"]
+    assert len(revise_constraints["evidence_refs"]["example"]) == 4
+    assert transport.requests[11]["controller"]["allowed_actions"] == []
+    assert transport.requests[11]["controller"]["legal_transition_targets"] == []
+    assert list(transport.requests[12]["directive_schema"]) == ["action"]
+    assert transport.requests[12]["controller"]["allowed_actions"] == ["express_root_cause_hypothesis"]
+    assert transport.requests[12]["controller"]["legal_transition_targets"] == []
+    locals_contract = transport.requests[7]["action_contracts"]["get_frame_locals"][
+        "properties"
+    ]
+    assert locals_contract["frame_id"]["enum"] == [0]
+    assert locals_contract["pause_generation"]["enum"] == [1]
+    diagnosis_contract = transport.requests[12]["action_contracts"][
+        "express_root_cause_hypothesis"
+    ]["properties"]
+    assert diagnosis_contract["hypothesis_id"]["enum"] == ["proof-boundary-006"]
+    assert len(diagnosis_contract["evidence_refs"]["example"]) == 4
+    assert diagnosis_contract["observed_values"]["example"]
+    assert list(transport.requests[13]["directive_schema"]) == ["transition"]
+    assert transport.requests[13]["controller"]["allowed_actions"] == []
+    assert transport.requests[13]["controller"]["legal_transition_targets"] == ["Patch"]
+    patch_transition_guidance = ollama_cloud_command_adapter.build_request_guidance(
+        transport.requests[13]
+    )
+    assert '"target_state":"Patch"' in patch_transition_guidance
+    assert '"target_state":"<one of Patch>"' not in patch_transition_guidance
+    patch_guidance = ollama_cloud_command_adapter.build_request_guidance(
+        transport.requests[14]
+    )
+    assert "JSON escape \\n" in patch_guidance
+    assert "Current public PDB/source evidence binds the diagnosed line to window_tail.py:9." in patch_guidance
+    assert "@@ -9,1 +9,1 @@" in patch_guidance
+    assert "-    selected = values[start_index:end_index - (1 if requested_size == item_count else 0)]" in patch_guidance
     assert [set(request["controller"]["allowed_actions"]) for request in runtime_requests] == [
-        {"get_source_window", "start_pdb_session"},
+        {"start_pdb_session"},
         {"get_stack_summary"},
         {"get_frame_locals"},
         {"step_pdb_session", "next_pdb_session"},
@@ -303,17 +368,29 @@ def test_real_live_case_uses_zero_provider_and_completes_exact_pdb_proof(tmp_pat
         set(),
     ]
     assert all("proof_gate" in request for request in runtime_requests)
+    assert [list(request["directive_schema"]) for request in runtime_requests] == [
+        ["action"],
+        ["action"],
+        ["action"],
+        ["action"],
+        ["action"],
+        ["transition"],
+    ]
+    assert runtime_requests[0]["action_contracts"]["start_pdb_session"]["properties"][
+        "breakpoint_line"
+    ]["enum"] == [9]
     assert all(
         "continue_pdb_session" not in request["controller"]["allowed_actions"]
         for request in runtime_requests
     )
     assert all(
-        "Understand" not in request["controller"]["legal_transition_targets"]
+        request["controller"]["legal_transition_targets"] == []
         for request in runtime_requests[:-1]
     )
     assert runtime_requests[-1]["proof_gate"]["pre_diagnosis_ready"] is True
     assert runtime_requests[-1]["proof_gate"]["session_active"] is False
     assert "Understand" in runtime_requests[-1]["controller"]["legal_transition_targets"]
+    assert runtime_requests[-1]["controller"]["legal_transition_targets"] == ["Understand"]
 
     transition_request_pairs = [
         (request, request.get("controller", {}).get("legal_transition_targets", []), directive)
