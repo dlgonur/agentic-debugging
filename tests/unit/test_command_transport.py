@@ -86,6 +86,18 @@ class TestRequestSuccess:
         response = transport.request({}, 30.0)
         assert response["kind"] == "action"
 
+    def test_stderr_activity_refreshes_idle_watchdog(self):
+        code = (
+            "import sys,time; "
+            "[(sys.stderr.write('\\n'),sys.stderr.flush(),time.sleep(.12)) for _ in range(6)]; "
+            + VALID_RESPONSE
+        )
+        transport = transport_for(py(code))
+        started = time.monotonic()
+        response = transport.request({}, 0.25)
+        assert response["kind"] == "action"
+        assert time.monotonic() - started > 0.6
+
     def test_environment_overrides_are_applied(self):
         code = (
             "import os,sys,json; "

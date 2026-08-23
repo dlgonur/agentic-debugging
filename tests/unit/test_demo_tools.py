@@ -549,6 +549,32 @@ def test_interactive_debugger_registry_is_opt_in_and_model_selectable(
     assert start_contract["properties"]["breakpoint_line"] == {"type": "integer", "minimum": 1}
 
 
+def test_interactive_breakpoint_argument_boundary_rejects_missing_and_wrong_type(
+    context: DemoToolContext,
+) -> None:
+    registry = build_registry(context, interactive_debugger_controls=True)
+
+    def dispatch(arguments: dict[str, object]) -> Observation:
+        return registry.dispatch(
+            Action(
+                "action-breakpoint-boundary",
+                "run-breakpoint-boundary",
+                context.task.task_id,
+                ControllerState.RUNTIME_EVIDENCE,
+                "start_pdb_session",
+                arguments,
+            ),
+            observation_id="observation-breakpoint-boundary",
+        )
+
+    missing = dispatch({})
+    wrong_type = dispatch({"breakpoint_line": "58"})
+    assert missing.status is ObservationStatus.REJECTED
+    assert wrong_type.status is ObservationStatus.REJECTED
+    assert _reason(missing) == ToolDispatchReason.INVALID_ARGUMENTS.value
+    assert _reason(wrong_type) == ToolDispatchReason.INVALID_ARGUMENTS.value
+
+
 def test_interactive_execution_control_dispatches_typed_session_methods(
     context: DemoToolContext,
 ) -> None:

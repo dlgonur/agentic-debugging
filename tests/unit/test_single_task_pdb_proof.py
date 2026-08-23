@@ -88,7 +88,13 @@ def _complete_observations() -> list[Observation]:
         ),
         _observation(
             "start_pdb_session",
-            {**proof, "state": "paused", "script": "window_tail.py", "function": "tail_window"},
+            {
+                **proof,
+                "state": "paused",
+                "script": "window_tail.py",
+                "function": "tail_window",
+                "line": contract["breakpoint_line"],
+            },
             1,
         ),
         _observation(
@@ -131,6 +137,96 @@ def _complete_observations() -> list[Observation]:
             5,
         ),
     ]
+
+
+def _failed_observation(name: str, index: int, status: ObservationStatus) -> Observation:
+    return Observation(
+        observation_id=f"observation-{index:09d}",
+        action_id=f"action-{index:09d}",
+        run_id="run-proof",
+        task_id=TASK_ID,
+        name=name,
+        status=status,
+        payload={
+            "dispatch_reason": "tool_rejected" if status is ObservationStatus.REJECTED else "tool_error",
+        },
+        summary="failed proof attempt",
+        truncated=False,
+    )
+
+
+def _copied_observation(observation: Observation, index: int) -> Observation:
+    return Observation(
+        observation_id=f"observation-{index:09d}",
+        action_id=f"action-{index:09d}",
+        run_id=observation.run_id,
+        task_id=observation.task_id,
+        name=observation.name,
+        status=observation.status,
+        payload=json.loads(json.dumps(observation.payload)),
+        summary=observation.summary,
+        truncated=observation.truncated,
+    )
+
+
+@pytest.mark.parametrize("status", [ObservationStatus.REJECTED, ObservationStatus.ERROR])
+@pytest.mark.parametrize(
+    "role,insert_at",
+    [("start_pdb_session", 1), ("express_root_cause_hypothesis", 5)],
+)
+def test_unsuccessful_proof_attempt_does_not_poison_later_success(
+    status: ObservationStatus,
+    role: str,
+    insert_at: int,
+) -> None:
+    observations = _complete_observations()
+    failed = _failed_observation(role, 20 + insert_at, status)
+    observations.insert(insert_at, failed)
+
+    allowed, reason = validate_pdb_patch_evidence(observations)
+
+    assert allowed, reason
+    assert failed in observations
+    assert observations[insert_at].status is status
+
+
+@pytest.mark.parametrize("role_index", [1, 5])
+def test_two_successful_required_roles_fail_closed(role_index: int) -> None:
+    observations = _complete_observations()
+    observations.insert(role_index + 1, _copied_observation(observations[role_index], 20 + role_index))
+
+    allowed, reason = validate_pdb_patch_evidence(observations)
+
+    assert allowed is False
+    assert reason == "proof chain has missing or duplicate required observations"
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [("run_id", "other-run"), ("task_id", "other-task")],
+)
+def test_cross_run_or_task_proof_evidence_fails_closed(field: str, value: str) -> None:
+    observations = _complete_observations()
+    target = observations[2]
+    object.__setattr__(target, field, value)
+
+    allowed, reason = validate_pdb_patch_evidence(observations)
+
+    assert allowed is False
+    assert reason
+
+
+def test_cross_workspace_and_runtime_contract_proof_evidence_fails_closed() -> None:
+    observations = _complete_observations()
+    observations[2].payload["proof"] = {
+        **observations[2].payload["proof"],
+        "workspace_id": "other-workspace",
+    }
+
+    allowed, reason = validate_pdb_patch_evidence(observations)
+
+    assert allowed is False
+    assert reason == "proof observations cross runtime identity"
 
 
 def test_patch_is_rejected_before_the_opt_in_proof_gate() -> None:

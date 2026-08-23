@@ -7,8 +7,12 @@ Ollama and never generate model tokens.
 from __future__ import annotations
 
 import io
+import hashlib
 import json
+import os
+import subprocess
 import sys
+import tempfile
 import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -20,6 +24,11 @@ import pytest
 from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
 from agentic_debugger.cancellation import CancellationError, CancellationToken
 from agentic_debugger.evaluation.live import LiveModelConfig
+from agentic_debugger.evaluation.transport_qualification import (
+    main as transport_qualification_main,
+    run_transport_qualification,
+    TransportQualificationError,
+)
 from agentic_debugger.runtime.exceptions import PatchValidationError
 from agentic_debugger.runtime.patcher import PatchManager, _parse_unified_diff
 from agentic_debugger.runtime.workspace import TaskWorkspace
@@ -74,6 +83,34 @@ def sample_request(*, logical_call_index: int = 1) -> dict[str, Any]:
 
 def valid_content() -> str:
     return json.dumps({"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}, separators=(",", ":"))
+
+
+def stream_body(*frames: dict[str, Any]) -> bytes:
+    return b"".join(
+        json.dumps(frame, ensure_ascii=False, separators=(",", ":")).encode("utf-8") + b"\n"
+        for frame in frames
+    )
+
+
+def stream_frame(
+    *,
+    content: str = "",
+    thinking: str = "",
+    done: bool = False,
+    frame_model: str | None = None,
+) -> dict[str, Any]:
+    frame: dict[str, Any] = {
+        "model": frame_model or adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+        "done": done,
+        "message": {
+            "role": "assistant",
+            "thinking": thinking,
+            "content": content,
+        },
+    }
+    if done:
+        frame["done_reason"] = "stop"
+    return frame
 
 
 def test_exact_proof_guidance_marks_breakpoint_example_as_structural_only() -> None:
@@ -134,11 +171,11 @@ def test_exact_proof_hypothesis_runtime_flag_is_guided_and_enforced() -> None:
     guidance = adapter.build_request_guidance(request)
 
     assert '"requires_runtime_evidence":true' in guidance
-    adapter.validate_directive_candidate(candidate, request)
-    candidate["requires_runtime_evidence"] = False
-    with pytest.raises(adapter.OllamaAdapterError, match="enum constraint") as exc_info:
-        adapter.validate_directive_candidate(candidate, request)
-    assert exc_info.value.kind == "invalid_directive"
+    # Acceptance belongs to the live adapter's typed parser.  The command
+    # adapter only forwards final content and transport telemetry.
+    assert json.dumps(candidate, separators=(",", ":"))
+    assert not hasattr(adapter, "parse_directive_content")
+    assert not hasattr(adapter, "validate_directive_candidate")
 
 
 def valid_tags_entry(**overrides: Any) -> dict[str, Any]:
@@ -178,6 +215,8 @@ class _FixtureState:
         show_delay: float = 0.0,
         tags_payload: bytes | None = None,
         show_payload: bytes | None = None,
+        version: str | None = None,
+        chat_chunks: tuple[tuple[float, bytes], ...] | None = None,
     ) -> None:
         self.chat_body = chat_body or self._chat_envelope(valid_content())
         self.chat_status = chat_status
@@ -186,6 +225,8 @@ class _FixtureState:
         self.show_delay = show_delay
         self.tags_body = tags_payload or encode_tags()
         self.show_body = show_payload or encode_show()
+        self.version = version or adapter.EXPECTED_OLLAMA_VERSION
+        self.chat_chunks = chat_chunks
         self.requests: list[tuple[str, dict[str, Any] | None]] = []
         self.chat_started = threading.Event()
         self.lock = threading.Lock()
@@ -233,7 +274,7 @@ class _Handler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:  # noqa: N802 - stdlib handler API
         self.state.record(self.path, None)
         if self.path == "/api/version":
-            self._send(200, json.dumps({"version": adapter.EXPECTED_OLLAMA_VERSION}).encode())
+            self._send(200, json.dumps({"version": self.state.version}).encode())
             return
         if self.path == "/api/tags":
             if self.state.tags_delay:
@@ -256,6 +297,18 @@ class _Handler(BaseHTTPRequestHandler):
             self._send(404, b"{}")
             return
         self.state.chat_started.set()
+        if self.state.chat_chunks is not None:
+            body_length = sum(len(chunk) for _delay, chunk in self.state.chat_chunks)
+            self.send_response(self.state.chat_status)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Content-Length", str(body_length))
+            self.end_headers()
+            for delay, chunk in self.state.chat_chunks:
+                if delay:
+                    time.sleep(delay)
+                self.wfile.write(chunk)
+                self.wfile.flush()
+            return
         if self.state.delay:
             time.sleep(self.state.delay)
         self._send(self.state.chat_status, self.state.chat_body)
@@ -308,6 +361,23 @@ def chat_payloads(state: _FixtureState) -> list[dict[str, Any]]:
     return [payload for path, payload in state.requests if path == "/api/chat" and payload is not None]
 
 
+def assert_success_envelope(stdout: str, *, thinking_bytes: int = 0, frame_count: int = 1) -> None:
+    value = json.loads(stdout)
+    assert value["provider_completion_schema_version"] == "provider-completion-v1"
+    assert value["directive_content"] == valid_content()
+    activity = value["transport_activity"]
+    assert activity["schema_version"] == adapter.CONTENT_FRAGMENT_OBSERVABILITY_SCHEMA_VERSION
+    assert activity["stream_frame_count"] == frame_count
+    assert activity["thinking_bytes"] == thinking_bytes
+    assert activity["content_bytes"] == len(valid_content().encode("utf-8"))
+    assert activity["first_content_frame_index"] == frame_count - 1
+    assert activity["last_content_frame_index"] == frame_count - 1
+    assert activity["content_frame_count"] == 1
+    assert activity["final_content_byte_length"] == len(valid_content().encode("utf-8"))
+    assert activity["final_content_sha256"] == hashlib.sha256(valid_content().encode("utf-8")).hexdigest()
+    assert activity["content_frame_diagnostics_truncated"] is False
+
+
 NEMOTRON_ALIAS = "nemotron-3-nano:30b-cloud"
 NEMOTRON_UPSTREAM = "nemotron-3-nano:30b"
 
@@ -343,13 +413,32 @@ def nemotron_state(*, chat_model: str = NEMOTRON_UPSTREAM, **overrides: Any) -> 
     )
 
 
+SEVENTEEN_ALIASES = [
+    "gpt-oss:20b-cloud",
+    "gpt-oss:120b-cloud",
+    "glm-5.1:cloud",
+    "glm-5.2:cloud",
+    "deepseek-v4-flash:cloud",
+    "deepseek-v4-pro:cloud",
+    "kimi-k2.6:cloud",
+    "kimi-k2.7-code:cloud",
+    "kimi-k3:cloud",
+    "minimax-m2.7:cloud",
+    "minimax-m3:cloud",
+    "nemotron-3-nano:30b-cloud",
+    "nemotron-3-super:cloud",
+    "nemotron-3-ultra:cloud",
+    "qwen3.5:cloud",
+    "gemma4:31b-cloud",
+    "mistral-large-3:675b-cloud",
+]
+
+
 def test_registry_keeps_gpt_oss_default_and_accepted_aliases() -> None:
     assert adapter.DEFAULT_MODEL_ID == "gpt-oss:20b-cloud"
     assert adapter.MODEL_ID == "gpt-oss:20b-cloud"
     assert adapter.EXPECTED_CLOUD_REMOTE_MODEL == "gpt-oss:20b"
-    assert adapter.ALLOWED_MODEL_IDENTIFIERS == frozenset(
-        {"gpt-oss:20b-cloud", "nemotron-3-nano:30b-cloud"}
-    )
+    assert adapter.ALLOWED_MODEL_IDENTIFIERS == frozenset(SEVENTEEN_ALIASES)
     gpt = adapter.resolve_cloud_model("gpt-oss:20b-cloud")
     nemotron = adapter.resolve_cloud_model("nemotron-3-nano:30b-cloud")
     assert gpt.local_alias == "gpt-oss:20b-cloud"
@@ -358,17 +447,303 @@ def test_registry_keeps_gpt_oss_default_and_accepted_aliases() -> None:
     assert nemotron.upstream_model == NEMOTRON_UPSTREAM
 
 
+def test_registry_contains_all_17_aliases_with_verified_upstream():
+    assert set(adapter.CLOUD_MODELS) == set(SEVENTEEN_ALIASES)
+    assert len(adapter.CLOUD_MODELS) == 17
+    for alias in SEVENTEEN_ALIASES:
+        spec = adapter.resolve_cloud_model(alias)
+        assert spec.local_alias == alias
+        assert type(spec.upstream_model) is str and spec.upstream_model
+        assert spec.effective_tags_remote_model  # never empty
+        assert isinstance(spec.capabilities, tuple)
+        assert type(spec.transport_verified) is bool
+        assert type(spec.transport_profile_declared) is bool
+        assert spec.readiness in ("catalog", "profile_declared", "live_verified")
+    # Catalog: every alias is selectable.
+    # Profile_declared: same-family streaming intent (gpt-oss 120b) but not yet live qualified.
+    # Live_verified: empirically streaming-qualified with recorded /api/chat exercise.
+    assert adapter.CLOUD_MODELS["gpt-oss:20b-cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["nemotron-3-nano:30b-cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["gpt-oss:120b-cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["kimi-k2.6:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["qwen3.5:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["gemma4:31b-cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["nemotron-3-super:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["minimax-m2.7:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["glm-5.1:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["glm-5.2:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].readiness == "profile_declared"
+    assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].readiness == "live_verified"
+    assert all(adapter.CLOUD_MODELS[a].readiness == "catalog" for a in SEVENTEEN_ALIASES if a not in {"gpt-oss:20b-cloud", "gpt-oss:120b-cloud", "kimi-k2.6:cloud", "qwen3.5:cloud", "gemma4:31b-cloud", "nemotron-3-nano:30b-cloud", "nemotron-3-super:cloud", "nemotron-3-ultra:cloud", "minimax-m2.7:cloud", "deepseek-v4-flash:cloud", "mistral-large-3:675b-cloud", "glm-5.1:cloud", "glm-5.2:cloud", "kimi-k2.7-code:cloud", "deepseek-v4-pro:cloud", "minimax-m3:cloud"})
+    assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["gpt-oss:20b-cloud"]) is True
+    assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["gpt-oss:120b-cloud"]) is True
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["gpt-oss:120b-cloud"]) is True
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["kimi-k2.6:cloud"]) is True
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["qwen3.5:cloud"]) is True
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["gemma4:31b-cloud"]) is True
+    # 120b declares the same high-thinking profile as 20b and is now
+    # empirically live verified by the retained qualification artifact.
+    assert adapter.CLOUD_MODELS["gpt-oss:120b-cloud"].thinking_level == "high"
+    assert adapter.CLOUD_MODELS["gpt-oss:120b-cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["kimi-k2.6:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["kimi-k2.6:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["qwen3.5:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["qwen3.5:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["gemma4:31b-cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["gemma4:31b-cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["nemotron-3-super:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["nemotron-3-super:cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["nemotron-3-super:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["nemotron-3-super:cloud"].idle_timeout_seconds == 45.0
+    assert adapter.CLOUD_MODELS["nemotron-3-super:cloud"].request_timeout_seconds == 75.0
+    assert adapter.CLOUD_MODELS["minimax-m2.7:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["minimax-m2.7:cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["minimax-m2.7:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].idle_timeout_seconds == 45.0
+    assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].request_timeout_seconds == 75.0
+    assert adapter.CLOUD_MODELS["glm-5.1:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["glm-5.1:cloud"].transport_verified is True
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["glm-5.1:cloud"]) is True
+    assert adapter.CLOUD_MODELS["glm-5.1:cloud"].thinking_level is None
+    glm52 = adapter.CLOUD_MODELS["glm-5.2:cloud"]
+    assert glm52.local_alias == "glm-5.2:cloud"
+    assert glm52.upstream_model == "glm-5.2"
+    assert glm52.effective_tags_remote_model == "glm-5.2"
+    assert glm52.family == "glm5.2"
+    assert glm52.parameter_count == 756162687872
+    assert glm52.context_length == 1000000
+    assert glm52.capabilities == ("completion", "thinking", "tools")
+    assert glm52.transport_profile_declared is True
+    assert glm52.transport_verified is True
+    assert glm52.readiness == "live_verified"
+    assert adapter.is_live_transport_ready(glm52) is True
+    assert adapter.is_treatment_eligible(glm52) is True
+    assert glm52.thinking_level is None
+    assert glm52.idle_timeout_seconds == 20.0
+    assert glm52.request_timeout_seconds == 60.0
+    assert adapter.transport_config_fingerprint(glm52) == (
+        "0685fad3a22efa7ba8a4776729f2f552e89d66f1032c9ad1fcb344557759dad9"
+    )
+    assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].transport_verified is False
+    assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].thinking_level is None
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"]) is True
+    assert adapter.transport_config_fingerprint(adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"]) == (
+        "43d64e327b205ec770eb91cf25bcd98eab9b1fef035cfd52687d26b46b6d0994"
+    )
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].thinking_level is None
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].effective_tags_remote_model == "minimax-m3"
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].idle_timeout_seconds == 20.0
+    assert adapter.CLOUD_MODELS["minimax-m3:cloud"].request_timeout_seconds == 60.0
+    assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["minimax-m3:cloud"]) is True
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["minimax-m3:cloud"]) is True
+    assert adapter.transport_config_fingerprint(adapter.CLOUD_MODELS["minimax-m3:cloud"]) == (
+        "27eedd82055634fd1c3d2ec733f1f4445e52a3db6c6c3e500ed3a80a952cb6e0"
+    )
+    assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].transport_profile_declared is True
+    assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].transport_verified is True
+    assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].thinking_level is None
+
+
+def test_minimax_m3_promotion_preserves_identity_and_fingerprint():
+    spec = adapter.resolve_cloud_model("minimax-m3:cloud")
+    assert spec.local_alias == "minimax-m3:cloud"
+    assert spec.upstream_model == "minimax-m3"
+    assert spec.effective_tags_remote_model == "minimax-m3"
+    assert spec.family == "minimax-m3"
+    assert spec.parameter_count == 0
+    assert spec.context_length == 524288
+    assert spec.capabilities == ("completion", "thinking", "tools", "vision")
+    assert spec.transport_profile_declared is True
+    assert spec.transport_verified is True
+    assert spec.thinking_level is None
+    assert spec.idle_timeout_seconds == 20.0
+    assert spec.request_timeout_seconds == 60.0
+    assert spec.readiness == "live_verified"
+    assert adapter.is_live_transport_ready(spec) is True
+    assert adapter.is_treatment_eligible(spec) is True
+    assert adapter.transport_config_fingerprint(spec) == (
+        "27eedd82055634fd1c3d2ec733f1f4445e52a3db6c6c3e500ed3a80a952cb6e0"
+    )
+
+
+def test_minimax_m3_registry_and_qualification_artifact_are_stable():
+    from scripts import run_cookiecutter_967_pdb_proof as operator
+
+    assert operator.PREPARED_TREATMENT_REVISIONS.get("minimax-m3:cloud") is None
+    assert operator._treatment_id_for_model("minimax-m3:cloud") == (
+        "pdb-capability-level32-cookiecutter-967-minimax-m3-cloud-v1"
+    )
+    assert operator._treatment_fingerprint("minimax-m3:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
+        "0be03e9fd06a27a90bf1def4dde74b64e0bee9639aed88cfb819f0a6b0d3662f"
+    )
+
+    artifact = REPO_ROOT / "experiments" / "pdb_capability_ladder" / "transport_qualifications" / "minimax-m3-v1.json"
+    assert hashlib.sha256(artifact.read_bytes()).hexdigest() == (
+        "7f59f50a02903f1c13c6d46ef04e4bba3df6daf5b0082a7c08375ed4c12db14f"
+    )
+    payload = json.loads(artifact.read_text(encoding="utf-8"))
+    assert payload["expected_model"] == "minimax-m3:cloud"
+    assert payload["expected_remote_model"] == "minimax-m3"
+    assert payload["expected_tags_remote_model"] == "minimax-m3"
+    assert payload["model_tag_digest"].startswith("8cd948b96f47")
+    assert payload["provider_inference_started"] is False
+
+
+def test_tags_remote_model_divergence_is_explicit():
+    assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].effective_tags_remote_model == "deepseek-v4-flash:0731"
+    assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].effective_tags_remote_model == "deepseek-v4-pro:0813"
+    assert adapter.CLOUD_MODELS["qwen3.5:cloud"].effective_tags_remote_model == "qwen3.5:397b"
+    assert adapter.CLOUD_MODELS["gpt-oss:20b-cloud"].effective_tags_remote_model == "gpt-oss:20b"
+
+
+def test_transport_fingerprint_varies_per_model():
+    fps = {alias: adapter.transport_config_fingerprint(adapter.resolve_cloud_model(alias)) for alias in SEVENTEEN_ALIASES}
+    assert all(len(fp) == 64 for fp in fps.values())
+    assert len(set(fps.values())) == 17
+    assert fps["gpt-oss:20b-cloud"] != fps["gpt-oss:120b-cloud"]
+
+
+def test_public_request_ceiling_admits_observed_kimi_level32_request():
+    assert adapter.MAX_PUBLIC_REQUEST_BYTES == 32_768
+
+
+def test_transport_fingerprint_covers_all_material_fields():
+    # Every material field must affect the fingerprint. We prove it by mutating
+    # a copy of a known spec and verifying inequality.
+    import dataclasses
+
+    base = adapter.CLOUD_MODELS["gpt-oss:20b-cloud"]
+    original = adapter.transport_config_fingerprint(base)
+    for field, replacement in [
+        ("local_alias", "gpt-oss:20b-cloud-mut"),
+        ("upstream_model", "gpt-oss:20b-mut"),
+        ("tags_remote_model", "gpt-oss:20b:0000"),
+        ("thinking_level", "low"),
+        ("transport_profile_declared", False),
+        ("transport_verified", False),
+        ("family", "other"),
+        ("parameter_count", 999),
+        ("context_length", 999),
+        ("capabilities", ("completion",)),
+    ]:
+        mutated = dataclasses.replace(base, **{field: replacement})
+        assert adapter.transport_config_fingerprint(mutated) != original, f"fingerprint must change when {field} changes"
+
+
+def test_list_models_projection_is_complete():
+    import io
+
+    out = io.StringIO()
+    rc = adapter.run_adapter(stdin_stream=io.StringIO(""), stdout_stream=out, stderr_stream=io.StringIO(), argv=["--list-models"])
+    assert rc == 0
+    text = out.getvalue()
+    for alias in SEVENTEEN_ALIASES:
+        assert alias in text
+    assert "live_verified" in text
+    assert "catalog" in text
+    assert "catalog" in text
+
+    out2 = io.StringIO()
+    rc = adapter.run_adapter(stdin_stream=io.StringIO(""), stdout_stream=out2, stderr_stream=io.StringIO(), argv=["--list-models", "--json"])
+    assert rc == 0
+    payload = json.loads(out2.getvalue())
+    assert set(payload) == set(SEVENTEEN_ALIASES)
+    for alias in SEVENTEEN_ALIASES:
+        assert payload[alias]["transport_config_fingerprint"]
+        assert payload[alias]["readiness"] in ("catalog", "profile_declared", "live_verified")
+    assert payload["gpt-oss:20b-cloud"]["readiness"] == "live_verified"
+    assert payload["gpt-oss:120b-cloud"]["readiness"] == "live_verified"
+    assert payload["kimi-k2.6:cloud"]["readiness"] == "live_verified"
+    assert payload["qwen3.5:cloud"]["readiness"] == "live_verified"
+    assert payload["gemma4:31b-cloud"]["readiness"] == "live_verified"
+    assert payload["glm-5.1:cloud"]["readiness"] == "live_verified"
+
+
+def test_preflight_provenance_includes_config_fingerprint(fixture_server):
+    tags_entry = {
+        "name": "gpt-oss:120b-cloud",
+        "model": "gpt-oss:120b-cloud",
+        "remote_model": "gpt-oss:120b",
+        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
+        "digest": "syn-120b",
+    }
+    show_payload = json.dumps(
+        {"details": {"family": "gptoss", "parent_model": "gpt-oss:120b"}, "capabilities": ["completion", "tools", "thinking"], "model_info": {"gptoss.context_length": 131072}}
+    ).encode()
+    state = _FixtureState(
+        tags_payload=json.dumps({"models": [tags_entry]}).encode(),
+        show_payload=show_payload,
+    )
+    _state, _server, endpoint = fixture_server(state)
+    out = io.StringIO()
+    rc = adapter.run_adapter(stdin_stream=io.StringIO(""), stdout_stream=out, stderr_stream=io.StringIO(), argv=["--endpoint", endpoint, "--model", "gpt-oss:120b-cloud", "--preflight"])
+    assert rc == 0, out.getvalue()
+    result = json.loads(out.getvalue())
+    assert result["expected_model"] == "gpt-oss:120b-cloud"
+    assert result["expected_remote_model"] == "gpt-oss:120b"
+    assert result["expected_tags_remote_model"] == "gpt-oss:120b"
+    assert result["readiness"] == "live_verified"
+    assert result["transport_profile_declared"] is True
+    assert result["model_transport_verified"] is True
+    assert result["live_transport_ready"] is True
+    assert result["treatment_eligible"] is True
+    assert result["model_thinking_level"] == "high"
+    assert len(result["transport_config_fingerprint"]) == 64
+    assert result["provider_inference_started"] is False
+
+
+def test_catalog_model_omits_think_from_chat_payload(fixture_server):
+    # Synthetic check: a catalog model with thinking_level=None must omit "think"
+    # from the chat request, yet still succeed through provenance.
+    tags_entry = {
+        "name": "qwen3.5:cloud",
+        "model": "qwen3.5:cloud",
+        "remote_model": "qwen3.5:397b",
+        "remote_host": adapter.EXPECTED_CLOUD_REMOTE_HOST,
+        "digest": "synthetic",
+    }
+    show_payload = json.dumps({"details": {"family": "qwen3.5", "parent_model": "qwen3.5"}, "capabilities": ["completion", "thinking", "tools", "vision"], "model_info": {"qwen3.5.context_length": 262144}}).encode()
+    tags_payload = json.dumps({"models": [tags_entry]}).encode()
+    state = _FixtureState(
+        tags_payload=tags_payload,
+        show_payload=show_payload,
+        chat_body=_FixtureState._chat_envelope(valid_content(), model="qwen3.5"),
+    )
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, stderr = invoke(endpoint, model="qwen3.5:cloud")
+    assert rc == 0, stderr
+    payload = chat_payloads(state)[0]
+    assert "think" not in payload
+    assert payload["model"] == "qwen3.5:cloud"
+
+
 def test_valid_directive_and_request_contract(fixture_server) -> None:
     state, _server, endpoint = fixture_server()
     rc, stdout, stderr = invoke(endpoint)
     assert rc == 0, stderr
-    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
-    assert stderr == ""
+    assert_success_envelope(stdout)
+    assert stderr == "\n"
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
     payload = chat_payloads(state)[0]
     assert payload["model"] == adapter.MODEL_ID
-    assert payload["stream"] is False
-    assert payload["think"] == "low"
+    assert payload["stream"] is True
+    assert payload["think"] == "high"
     assert "tools" not in payload
     assert "functions" not in payload
     assert "format" not in payload
@@ -422,7 +797,7 @@ def test_real_cloud_chat_shape_without_remote_fields_succeeds(fixture_server) ->
     rc, stdout, stderr = invoke(endpoint)
 
     assert rc == 0, stderr
-    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert_success_envelope(stdout)
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
     assert chat_payloads(state)[0]["model"] == adapter.MODEL_ID
 
@@ -477,7 +852,7 @@ def test_explicit_gpt_oss_model_flag_remains_compatible(fixture_server) -> None:
     state, _server, endpoint = fixture_server()
     rc, stdout, stderr = invoke(endpoint, model="gpt-oss:20b-cloud")
     assert rc == 0, stderr
-    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert_success_envelope(stdout)
     assert chat_payloads(state)[0]["model"] == "gpt-oss:20b-cloud"
 
 
@@ -486,12 +861,12 @@ def test_nemotron_model_is_passed_to_chat_and_validates_provenance(fixture_serve
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, stderr = invoke(endpoint, model=NEMOTRON_ALIAS)
     assert rc == 0, stderr
-    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert_success_envelope(stdout)
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
     payload = chat_payloads(state)[0]
     assert payload["model"] == NEMOTRON_ALIAS
-    assert payload["stream"] is False
-    assert payload["think"] == "low"
+    assert payload["stream"] is True
+    assert payload["think"] == "high"
     assert "tools" not in payload
     assert [message["role"] for message in payload["messages"]] == ["system", "user"]
 
@@ -603,7 +978,7 @@ def test_metadata_host_accepts_default_https_port(fixture_server) -> None:
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, stderr = invoke(endpoint)
     assert rc == 0, stderr
-    assert json.loads(stdout) == {"directive": json.loads(valid_content())}
+    assert_success_envelope(stdout)
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
@@ -629,7 +1004,7 @@ def test_legal_repository_action_is_a_local_application_directive(fixture_server
     rc, stdout, stderr = invoke(endpoint, request)
 
     assert rc == 0, stderr
-    assert json.loads(stdout)["directive"]["name"] == "apply_patch"
+    assert json.loads(json.loads(stdout)["directive_content"])["name"] == "apply_patch"
     payload = chat_payloads(state)[0]
     assert "tools" not in payload
     assert "functions" not in payload
@@ -839,6 +1214,8 @@ def test_second_session_count_mismatch_remains_rejected_by_real_patch_manager() 
 def test_adapter_does_not_normalize_or_rewrite_patches() -> None:
     source = Path(adapter.__file__).read_text(encoding="utf-8")
     assert "agentic_debugger.runtime.patcher" not in source
+    assert "from agentic_debugger" not in source
+    assert "import agentic_debugger" not in source
     assert "_parse_unified_diff" not in source
     assert "def normalize_patch" not in source
     assert "def rewrite_patch" not in source
@@ -866,51 +1243,37 @@ def test_malformed_unified_diffs_remain_rejected_without_normalization(diff: str
         _parse_unified_diff(diff)
 
 
-@pytest.mark.parametrize("content", [
-    "{not-json}",
-    "```json\n" + valid_content() + "\n```",
-    "Here is the directive: " + valid_content(),
-    valid_content() + " trailing prose",
-    valid_content() + " " + valid_content(),
-    "[]",
-])
-def test_final_content_must_be_one_json_object(fixture_server, content: str) -> None:
+@pytest.mark.parametrize("content", ["{not-json}", "[]", '{"kind":"unknown"}'])
+def test_final_content_is_forwarded_for_canonical_downstream_parsing(fixture_server, content: str) -> None:
     state = _FixtureState(chat_body=_FixtureState._chat_envelope(content))
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, _stderr = invoke(endpoint)
-    assert rc == 1
-    assert stdout == ""
+    assert rc == 0
+    assert json.loads(stdout)["directive_content"] == content
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
     assert len(chat_payloads(state)) == 1
 
 
-def test_adapter_failure_uses_bounded_typed_command_error_envelope(fixture_server) -> None:
+def test_provider_completed_invalid_content_is_not_adapter_failure(fixture_server) -> None:
     invalid_content = '{"kind":"action","name":"not-advertised","arguments":{}}'
     state = _FixtureState(chat_body=_FixtureState._chat_envelope(invalid_content))
     _state, _server, endpoint = fixture_server(state)
 
     rc, stdout, stderr = invoke(endpoint)
 
-    assert rc == 1
-    assert stdout == ""
-    evidence = json.loads(stderr)
-    assert evidence == {
-        "schema_version": "command-error-v1",
-        "kind": "invalid_directive",
-        "message": "directive action is not allowed",
-    }
-    assert invalid_content not in stderr
+    assert rc == 0
+    assert json.loads(stdout)["directive_content"] == invalid_content
+    assert stderr == "\n"
     assert len(chat_payloads(state)) == 1
 
 
-def test_observed_alias_payload_shape_remains_rejected(fixture_server) -> None:
+def test_observed_alias_payload_shape_is_forwarded_for_downstream_rejection(fixture_server) -> None:
     content = '{"action":"run_reproduction","transition":"Understand","payload":{"phase":"baseline"}}'
     state = _FixtureState(chat_body=_FixtureState._chat_envelope(content))
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, stderr = invoke(endpoint)
-    assert rc == 1
-    assert stdout == ""
-    assert "directive kind is not allowed" in stderr
+    assert rc == 0
+    assert json.loads(stdout)["directive_content"] == content
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
@@ -918,12 +1281,12 @@ def test_observed_alias_payload_shape_remains_rejected(fixture_server) -> None:
     "{\"kind\":\"unknown\"}",
     "{\"kind\":\"action\",\"name\":\"apply_patch\",\"arguments\":{}}",
 ])
-def test_illegal_directive_is_rejected_before_success(fixture_server, content: str) -> None:
+def test_illegal_directive_is_forwarded_before_success(fixture_server, content: str) -> None:
     state = _FixtureState(chat_body=_FixtureState._chat_envelope(content))
     _state, _server, endpoint = fixture_server(state)
     rc, stdout, _stderr = invoke(endpoint)
-    assert rc == 1
-    assert stdout == ""
+    assert rc == 0
+    assert json.loads(stdout)["directive_content"] == content
 
 
 @pytest.mark.parametrize("response", [
@@ -957,7 +1320,432 @@ def test_thinking_is_discarded_and_not_emitted(fixture_server) -> None:
     assert rc == 0
     assert secret not in stdout
     assert secret not in stderr
-    assert json.loads(stdout)["directive"] == json.loads(valid_content())
+    assert_success_envelope(
+        stdout,
+        thinking_bytes=len(secret.encode("utf-8")),
+    )
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+
+
+def test_streamed_thinking_is_progress_but_only_content_has_authority(fixture_server) -> None:
+    secret = "private-reasoning-must-not-cross-the-boundary"
+    content = valid_content()
+    frames = [
+        {
+            "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            "done": False,
+            "message": {"role": "assistant", "thinking": secret, "content": ""},
+        },
+        {
+            "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+            "done": True,
+            "done_reason": "stop",
+            "message": {"role": "assistant", "thinking": "", "content": content},
+        },
+    ]
+    state = _FixtureState(
+        chat_body=b"".join(
+            json.dumps(frame, separators=(",", ":")).encode("utf-8") + b"\n"
+            for frame in frames
+        )
+    )
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0
+    assert secret not in stdout
+    assert secret not in stderr
+    assert stderr == "\n\n"
+    assert_success_envelope(
+        stdout,
+        thinking_bytes=len(secret.encode("utf-8")),
+        frame_count=2,
+    )
+    activity = json.loads(stdout)["transport_activity"]
+    assert activity["first_content_frame_index"] == 1
+    assert activity["last_content_frame_index"] == 1
+    assert activity["content_frame_count"] == 1
+    assert activity["content_frame_diagnostics"][0]["content_text"] == ""
+    assert activity["content_frame_diagnostics"][0]["thinking_present"] is True
+    assert secret not in json.dumps(activity)
+
+
+def test_content_fragments_preserve_exact_order_and_first_prefix(fixture_server) -> None:
+    content = valid_content()
+    frames = [
+        stream_frame(content=content[:6]),
+        stream_frame(content=content[6:], done=True),
+    ]
+    state = _FixtureState(chat_body=stream_body(*frames))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    payload = json.loads(stdout)
+    assert payload["directive_content"] == content[:6] + content[6:]
+    activity = payload["transport_activity"]
+    assert activity["content_frame_count"] == 2
+    assert [item["frame_index"] for item in activity["content_frame_diagnostics"]] == [0, 1]
+    assert [item["content_text"] for item in activity["content_frame_diagnostics"]] == [content[:6], content[6:]]
+    assert activity["content_frame_diagnostics"][0]["content_sha256"] == hashlib.sha256(content[:6].encode()).hexdigest()
+
+
+def test_punctuation_sensitive_content_fragments_preserve_exact_text_lengths_hashes_and_aggregate(fixture_server) -> None:
+    fragments = [
+        '{"', "kind", '\":\"', "action", '\",\"', "name", '\":\"',
+        "run", "_re", "production", '\",\"', "arguments", '\":{"',
+        "phase", '\":\"', "baseline", '"}}',
+    ]
+    content = "".join(fragments)
+    frames = [stream_frame(content=fragment, done=index == len(fragments) - 1) for index, fragment in enumerate(fragments)]
+    state = _FixtureState(chat_body=stream_body(*frames))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    payload = json.loads(stdout)
+    activity = payload["transport_activity"]
+    diagnostics = activity["content_frame_diagnostics"]
+    assert [item["content_text"] for item in diagnostics] == fragments
+    for fragment, item in zip(fragments, diagnostics):
+        encoded = fragment.encode("utf-8")
+        assert item["content_byte_length"] == len(encoded)
+        assert item["content_sha256"] == hashlib.sha256(encoded).hexdigest()
+        assert item["content_text_byte_length"] == len(encoded)
+        assert item["content_text_sha256"] == hashlib.sha256(encoded).hexdigest()
+        assert item["content_text_redacted"] is False
+        assert item["content_text_truncated"] is False
+    assert payload["directive_content"] == content
+    assert activity["final_content_byte_length"] == len(content.encode("utf-8"))
+    assert activity["final_content_sha256"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def test_truncated_content_observability_exposes_original_and_retained_semantics(fixture_server) -> None:
+    content = "x" * (adapter.MAX_CONTENT_FRAGMENT_TEXT_BYTES + 17)
+    state = _FixtureState(chat_body=stream_body(stream_frame(content=content, done=True)))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    record = json.loads(stdout)["transport_activity"]["content_frame_diagnostics"][0]
+    assert record["content_text_truncated"] is True
+    assert record["content_byte_length"] == len(content.encode("utf-8"))
+    assert record["content_sha256"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+    assert record["content_text_byte_length"] == len(record["content_text"].encode("utf-8"))
+    assert record["content_text_sha256"] == hashlib.sha256(record["content_text"].encode("utf-8")).hexdigest()
+    assert record["content_text"].endswith("...")
+
+
+def test_thinking_and_content_same_frame_are_separately_observed(fixture_server) -> None:
+    secret = "private-thinking-must-not-persist"
+    frames = [stream_frame(content=valid_content(), thinking=secret, done=True)]
+    state = _FixtureState(chat_body=stream_body(*frames))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    activity = json.loads(stdout)["transport_activity"]
+    record = activity["content_frame_diagnostics"][0]
+    assert record["both_channels_nonempty"] is True
+    assert record["thinking_byte_length"] == len(secret.encode())
+    assert secret not in stdout
+    assert secret not in stderr
+    assert secret not in json.dumps(activity)
+
+
+def test_empty_content_fragments_and_done_content_are_retained_in_aggregate(fixture_server) -> None:
+    content = valid_content()
+    frames = [
+        stream_frame(content="", thinking="progress"),
+        stream_frame(content=content, done=True),
+    ]
+    state = _FixtureState(chat_body=stream_body(*frames))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    payload = json.loads(stdout)
+    assert payload["directive_content"] == content
+    activity = payload["transport_activity"]
+    assert activity["stream_frame_count"] == 2
+    assert activity["content_frame_count"] == 1
+    assert activity["content_frame_diagnostics"][0]["content_byte_length"] == 0
+    assert activity["content_frame_diagnostics"][1]["done"] is True
+
+
+def test_unicode_content_is_not_sliced_and_uses_utf8_lengths(fixture_server) -> None:
+    content = '{"kind":"action","name":"run_reproduction","arguments":{"phase":"baseline","note":"日本語🙂"}}'
+    frames = [stream_frame(content=content[:30]), stream_frame(content=content[30:], done=True)]
+    state = _FixtureState(chat_body=stream_body(*frames))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    payload = json.loads(stdout)
+    assert payload["directive_content"] == content
+    assert payload["transport_activity"]["final_content_byte_length"] == len(content.encode("utf-8"))
+    assert payload["transport_activity"]["final_content_sha256"] == hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def test_content_fragment_diagnostics_are_bounded_without_changing_content(fixture_server) -> None:
+    fragments = [stream_frame(content="x") for _ in range(adapter.MAX_RETAINED_CONTENT_FRAME_DIAGNOSTICS + 1)]
+    state = _FixtureState(chat_body=stream_body(*fragments, stream_frame(done=True)))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 0, stderr
+    payload = json.loads(stdout)
+    assert payload["directive_content"] == "x" * (adapter.MAX_RETAINED_CONTENT_FRAME_DIAGNOSTICS + 1)
+    activity = payload["transport_activity"]
+    assert len(activity["content_frame_diagnostics"]) == adapter.MAX_RETAINED_CONTENT_FRAME_DIAGNOSTICS
+    assert activity["content_frame_diagnostics_truncated"] is True
+    assert activity["content_frame_count"] == adapter.MAX_RETAINED_CONTENT_FRAME_DIAGNOSTICS + 1
+
+
+def test_malformed_ndjson_frame_fails_without_prefix_repair(fixture_server) -> None:
+    state = _FixtureState(chat_body=b'{"model":"gpt-oss:20b"\n')
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, _stderr = invoke(endpoint)
+
+    assert rc == 1
+    assert stdout == ""
+
+
+def test_transport_qualification_v2_separates_stream_and_protocol_results(fixture_server) -> None:
+    state, _server, endpoint = fixture_server()
+    with tempfile.TemporaryDirectory() as isolated_cwd:
+        result = run_transport_qualification(
+            endpoint=endpoint,
+            model="gpt-oss:20b-cloud",
+            adapter_command=(sys.executable, str(ADAPTER_SCRIPT)),
+            cwd=isolated_cwd,
+        )
+
+    assert result["qualification_schema_version"] == "transport-qualification-v2"
+    assert result["measurement_completed"] is True
+    assert result["preflight_ok"] is True
+    assert result["stream_transport_ok"] is True
+    assert result["directive_protocol_ok"] is True
+    assert result["directive_protocol"]["category"] == "DIRECTIVE_PROTOCOL_VERIFIED"
+    assert result["effective_idle_timeout_seconds"] == 20.0
+    assert result["effective_request_timeout_seconds"] == 60.0
+    assert result["qualification"]["provider_completion"]["directive_content"] == valid_content()
+    assert [path for path, _payload in state.requests] == [
+        "/api/version",
+        "/api/tags",
+        "/api/show",
+        "/api/tags",
+        "/api/show",
+        "/api/chat",
+    ]
+    preflight = result["qualification"]["preflight"]
+    assert preflight["schema_version"] == "ollama-cloud-preflight-v1"
+    assert preflight["ollama_version"] == adapter.EXPECTED_OLLAMA_VERSION
+    assert preflight["expected_model"] == adapter.MODEL_ID
+    assert preflight["expected_remote_model"] == adapter.EXPECTED_CLOUD_REMOTE_MODEL
+    assert preflight["expected_tags_remote_model"] == adapter.EXPECTED_CLOUD_REMOTE_MODEL
+    assert preflight["expected_remote_host"] == adapter.EXPECTED_CLOUD_REMOTE_HOST
+    assert preflight["model_tag_digest"] == "synthetic-digest"
+    assert preflight["model_capabilities"] == ["completion", "thinking", "tools"]
+    assert preflight["readiness"] == "live_verified"
+    assert preflight["transport_profile_declared"] is True
+    assert preflight["model_transport_verified"] is True
+    assert preflight["live_transport_ready"] is True
+    assert preflight["treatment_eligible"] is True
+    assert preflight["model_thinking_level"] == "high"
+    assert preflight["idle_timeout_seconds"] == 20.0
+    assert preflight["request_timeout_seconds"] == 60.0
+    assert len(preflight["transport_config_fingerprint"]) == 64
+    assert preflight["provider_inference_started"] is False
+    assert preflight["cloud_inference_verified"] is False
+    assert "private-thinking" not in json.dumps(result)
+
+
+def test_transport_qualification_v2_rejects_historical_minimax_suffix_without_repair(fixture_server) -> None:
+    rejected = '\":\"action\",\"name\":\"run_reproduction\",\"arguments\":{\"phase\":\"baseline\"}}'
+    state = _FixtureState(chat_body=_FixtureState._chat_envelope(rejected, thinking="private-thinking"))
+    _state, _server, endpoint = fixture_server(state)
+    with tempfile.TemporaryDirectory() as isolated_cwd:
+        result = run_transport_qualification(
+            endpoint=endpoint,
+            model="gpt-oss:20b-cloud",
+            adapter_command=(sys.executable, str(ADAPTER_SCRIPT)),
+            cwd=isolated_cwd,
+        )
+
+    assert result["measurement_completed"] is True
+    assert result["preflight_ok"] is True
+    assert result["stream_transport_ok"] is True
+    assert result["directive_protocol_ok"] is False
+    assert result["directive_protocol"]["category"] == "DIRECTIVE_INVALID_JSON"
+    assert result["qualification"]["provider_completion"]["directive_content"] == rejected
+    assert '{"kind' not in result["qualification"]["provider_completion"]["directive_content"]
+    assert [path for path, _payload in state.requests] == [
+        "/api/version",
+        "/api/tags",
+        "/api/show",
+        "/api/tags",
+        "/api/show",
+        "/api/chat",
+    ]
+    assert "private-thinking" not in json.dumps(result)
+
+
+def test_transport_qualification_preflight_failures_prevent_chat(fixture_server) -> None:
+    wrong_tags = valid_tags_entry(remote_model="wrong-remote-model")
+    cases = [
+        _FixtureState(version="0.0.0"),
+        _FixtureState(show_payload=encode_show(parent_model="wrong-parent-model")),
+        _FixtureState(tags_payload=encode_tags(wrong_tags)),
+        _FixtureState(tags_payload=b"not-json"),
+    ]
+    for state in cases:
+        _state, _server, endpoint = fixture_server(state)
+        with tempfile.TemporaryDirectory() as isolated_cwd:
+            with pytest.raises(TransportQualificationError, match="preflight"):
+                run_transport_qualification(
+                    endpoint=endpoint,
+                    model="gpt-oss:20b-cloud",
+                    adapter_command=(sys.executable, str(ADAPTER_SCRIPT)),
+                    cwd=isolated_cwd,
+                )
+        assert "/api/chat" not in request_paths(state)
+
+
+def test_preflight_reports_canonical_timeout_profiles(fixture_server) -> None:
+    profiles = [
+        ("minimax-m3:cloud", "minimax-m3", 20.0, 60.0, "minimax-m3-digest"),
+        ("nemotron-3-super:cloud", "nemotron-3-super", 45.0, 75.0, "nemotron-super-digest"),
+    ]
+    for alias, upstream, expected_idle, expected_request, digest in profiles:
+        state = _FixtureState(
+            tags_payload=encode_tags(
+                valid_tags_entry(
+                    name=alias,
+                    model=alias,
+                    remote_model=upstream,
+                    digest=digest,
+                )
+            ),
+            show_payload=encode_show(parent_model=upstream),
+        )
+        _state, _server, endpoint = fixture_server(state)
+        stdout = io.StringIO()
+        rc = adapter.run_adapter(
+            stdin_stream=io.StringIO(""),
+            stdout_stream=stdout,
+            stderr_stream=io.StringIO(),
+            argv=["--endpoint", endpoint, "--model", alias, "--preflight"],
+        )
+        assert rc == 0
+        result = json.loads(stdout.getvalue())
+        assert result["idle_timeout_seconds"] == expected_idle
+        assert result["request_timeout_seconds"] == expected_request
+        assert result["transport_config_fingerprint"] == adapter.transport_config_fingerprint(
+            adapter.CLOUD_MODELS[alias]
+        )
+
+
+def test_standalone_adapter_process_boundary_returns_raw_completion_and_activity(fixture_server) -> None:
+    sentinel = "private-thinking-process-boundary"
+    content = valid_content()
+    state = _FixtureState(chat_body=_FixtureState._chat_envelope(content, thinking=sentinel))
+    _state, _server, endpoint = fixture_server(state)
+    request = sample_request()
+    environment = os.environ.copy()
+    environment.pop("PYTHONPATH", None)
+
+    with tempfile.TemporaryDirectory() as isolated_cwd:
+        completed = subprocess.run(
+            [
+                sys.executable,
+                str(ADAPTER_SCRIPT),
+                "--endpoint",
+                endpoint,
+                "--model",
+                "gpt-oss:20b-cloud",
+            ],
+            input=(json.dumps(request) + "\n").encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            cwd=isolated_cwd,
+            env=environment,
+            check=False,
+        )
+
+    assert completed.returncode == 0
+    assert sentinel.encode() not in completed.stdout
+    assert sentinel.encode() not in completed.stderr
+    provider_completion = json.loads(completed.stdout.decode("utf-8"))
+    assert provider_completion["directive_content"] == content
+    assert provider_completion["transport_activity"]["thinking_bytes"] == len(sentinel.encode("utf-8"))
+    assert provider_completion["transport_activity"]["content_frame_diagnostics"]
+
+
+def test_qualification_cli_zero_means_measurement_completed_not_protocol_pass(fixture_server, capsys) -> None:
+    rejected = '\":\"action\",\"name\":\"run_reproduction\",\"arguments\":{\"phase\":\"baseline\"}}'
+    state = _FixtureState(chat_body=_FixtureState._chat_envelope(rejected, thinking="private-thinking-cli"))
+    _state, _server, endpoint = fixture_server(state)
+    with tempfile.TemporaryDirectory() as isolated_cwd:
+        rc = transport_qualification_main(
+            [
+                "--endpoint",
+                endpoint,
+                "--model",
+                "gpt-oss:20b-cloud",
+                "--adapter-script",
+                str(ADAPTER_SCRIPT),
+                "--adapter-cwd",
+                isolated_cwd,
+                "--confirm-live",
+                "--json",
+            ]
+        )
+    captured = capsys.readouterr()
+    assert rc == 0
+    result = json.loads(captured.out)
+    assert result["measurement_completed"] is True
+    assert result["stream_transport_ok"] is True
+    assert result["directive_protocol_ok"] is False
+    assert "private-thinking-cli" not in captured.out
+    assert "private-thinking-cli" not in captured.err
+
+
+def test_completed_thinking_only_stream_fails_closed_without_exposing_thinking(fixture_server) -> None:
+    secret = "private-thinking-with-no-directive-content"
+    frame = {
+        "model": adapter.EXPECTED_CLOUD_REMOTE_MODEL,
+        "done": True,
+        "done_reason": "stop",
+        "message": {"role": "assistant", "thinking": secret, "content": ""},
+    }
+    state = _FixtureState(
+        chat_body=json.dumps(frame, separators=(",", ":")).encode("utf-8") + b"\n"
+    )
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 1
+    assert stdout == ""
+    assert secret not in stderr
+    errors = [json.loads(line) for line in stderr.splitlines() if line.strip().startswith("{")]
+    assert errors == [
+        {
+            "kind": "invalid_response",
+            "message": "Ollama assistant content is missing",
+            "schema_version": "command-error-v1",
+        }
+    ]
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
@@ -990,6 +1778,25 @@ def test_timeout_is_bounded_and_no_retry_occurs(fixture_server) -> None:
     assert len(chat_payloads(state)) == 1
     assert adapter.ADAPTER_RETRY_COUNT == 0
     assert adapter.FALLBACK_COUNT == 0
+
+
+def test_idle_inactivity_fails_before_outer_request_deadline(fixture_server) -> None:
+    first = (
+        json.dumps(stream_frame(content="partial"), separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    final = (
+        json.dumps(stream_frame(done=True), separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    state = _FixtureState(chat_chunks=((0.0, first), (0.08, final)))
+    _state, _server, endpoint = fixture_server(state)
+    rc, stdout, stderr = invoke(endpoint, timeout=0.05)
+    assert rc == 1
+    assert stdout == ""
+    errors = [json.loads(line) for line in stderr.splitlines() if line.strip().startswith("{")]
+    assert errors[0]["kind"] == "timeout"
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
 
 
 def test_shared_deadline_includes_metadata_cost(fixture_server) -> None:

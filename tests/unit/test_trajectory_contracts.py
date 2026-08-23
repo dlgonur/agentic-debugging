@@ -10,6 +10,21 @@ sys.path.insert(0, str(Path(__file__).parent))
 from test_event_replay import valid_events
 
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.controller import ControllerRunConfig, DeterministicController
+from agentic_debugger.agent.controller_policy import (
+    ControllerBudgetLimits,
+    ControllerBudgetState,
+    HypothesisLedger,
+)
+from agentic_debugger.agent.model_adapter import (
+    ControllerSnapshot,
+    ScriptedModelAdapter,
+    ScriptedModelStep,
+    TransitionDirective,
+)
+from agentic_debugger.agent.tool_registry import ToolRegistry
+from agentic_debugger.agent.trajectory import project_controller_run
+from agentic_debugger.events.schema import EventType
 from agentic_debugger.events.replay import ReplayValidationError, compare_trajectories, replay_events, semantic_projection
 
 
@@ -51,6 +66,94 @@ def test_first_transition_must_start_from_reproduce_and_direct_failed_is_rejecte
     ]
     with pytest.raises(ReplayValidationError, match="establish Reproduce"):
         replay_events(direct_failed)
+
+
+def test_model_call_limit_projects_terminal_transition_before_final() -> None:
+    initial = ControllerSnapshot(
+        "run-limit",
+        "task-limit",
+        ControllerState.REPRODUCE,
+        0,
+        ControllerBudgetLimits(1, 1, 1),
+        ControllerBudgetState(),
+        HypothesisLedger(),
+        None,
+    )
+    adapter = ScriptedModelAdapter(
+        (
+            ScriptedModelStep(
+                ControllerState.REPRODUCE,
+                TransitionDirective(ControllerState.UNDERSTAND, "continue"),
+            ),
+        )
+    )
+    result = DeterministicController(
+        ToolRegistry(),
+        adapter,
+        ControllerRunConfig(max_model_calls=1),
+    ).run(initial)
+
+    events = project_controller_run(
+        result,
+        tool_version="test",
+        model="scripted",
+    )
+    assert events[-2].event_type is EventType.TRANSITION
+    assert events[-2].payload == {
+        "source_state": "Understand",
+        "target_state": "Failed",
+        "reason": "model_call_limit",
+    }
+    assert replay_events(events).events[-1].payload["stop_reason"] == "model_call_limit"
+
+    without_transition = [
+        *events[:-2],
+        replace(
+            events[-1],
+            sequence=events[-2].sequence,
+            event_id=events[-2].event_id,
+        ),
+    ]
+    with pytest.raises(
+        ReplayValidationError,
+        match="final event does not match current controller state",
+    ):
+        replay_events(without_transition)
+
+
+def test_existing_failure_step_does_not_gain_duplicate_terminal_transition() -> None:
+    class InvalidAdapter:
+        def next_directive(self, snapshot):
+            return object()
+
+    initial = ControllerSnapshot(
+        "run-error",
+        "task-error",
+        ControllerState.REPRODUCE,
+        0,
+        ControllerBudgetLimits(1, 1, 1),
+        ControllerBudgetState(),
+        HypothesisLedger(),
+        None,
+    )
+    result = DeterministicController(
+        ToolRegistry(),
+        InvalidAdapter(),
+        ControllerRunConfig(max_model_calls=1),
+    ).run(initial)
+    events = project_controller_run(
+        result,
+        tool_version="test",
+        model="invalid",
+    )
+    failed_transitions = [
+        event
+        for event in events
+        if event.event_type is EventType.TRANSITION
+        and event.payload["target_state"] == "Failed"
+    ]
+    assert len(failed_transitions) == 1
+    assert replay_events(events).events[-1].state == "Failed"
 
 
 def test_nested_material_diagnostics_are_retained() -> None:

@@ -164,6 +164,41 @@ class TestPdbSessionIntegration:
         finally:
             session.stop()
 
+    def test_package_target_supports_relative_imports(self):
+        root = Path(tempfile.mkdtemp())
+        try:
+            package = root / "sample_package"
+            package.mkdir()
+            (package / "__init__.py").write_text("", encoding="utf-8")
+            (package / "dependency.py").write_text(
+                "VALUE = 41\n", encoding="utf-8"
+            )
+            target_lines = [
+                "from .dependency import VALUE",
+                "def main():",
+                "    result = VALUE + 1",
+                "    return result",
+                "if __name__ == '__main__':",
+                "    main()",
+            ]
+            (package / "target.py").write_text(
+                "\n".join(target_lines) + "\n", encoding="utf-8"
+            )
+            with TaskWorkspace(str(root)) as workspace:
+                session = PdbSession(workspace)
+                session.start()
+                try:
+                    started = session.start_paused_target(
+                        "sample_package/target.py", [3]
+                    )
+                    assert started["state"] == "paused"
+                    assert started["function"] == "main"
+                    assert session.continue_paused_target()["state"] == "exited"
+                finally:
+                    session.stop()
+        finally:
+            shutil.rmtree(str(root), ignore_errors=True)
+
 
 # =====================================================================
 # Task 4D - Safe evaluation and PDB integration hardening v1
