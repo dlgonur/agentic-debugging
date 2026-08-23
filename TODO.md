@@ -2,6 +2,70 @@
 
 ## Durum notu
 
+**2026-08-22 autonomous Level-32 continuation — ACTIVE.** A new owner-authorized
+goal reopens the unchanged `audreyr__cookiecutter-967` rung until authoritative
+official acceptance. Gemma V2 was forensically reclassified as
+`PARSER_COMPATIBILITY_FAILURE`; provider-neutral `directive-normalization-v2`
+was validated and independently approved. Fresh Gemma V3 completed real PDB,
+controller, local verifier, and official evaluation, then was cleanly rejected
+(official F2P 0/5; P2P failed 9/9), so it is a clean semantic model-capability
+failure. The deterministic post-Gemma queue is frozen in
+`_ai-review/level32-autonomous-campaign/MODEL_QUEUE.md`; GLM 5.2 is penultimate
+and Kimi K3 final. Campaign remains active; no official success yet.
+
+**2026-08-22 frozen Level-32 model escalation — COMPLETE / NO OFFICIAL
+SUCCESS.** The authorized four-model sequence processed GPT-OSS 120B,
+Kimi K2.6, Qwen3.5, and Gemma4 31B on the unchanged
+`audreyr__cookiecutter-967` exact-PDB contract. GPT-OSS 120B completed a fair
+run but official F2P was 0/5 and P2P failures were 9/9. Kimi exposed a
+request-size defect and an active-timeout defect that were repaired in fresh
+revisions, then failed on a strict invalid directive. Qwen3.5 exhausted the
+unchanged two-patch budget and official F2P was 0/5. Gemma4 31B V2 completed
+start/stack/locals/next/stop, then its otherwise-valid hypothesis revision was
+rejected only because it was wrapped in one exact Markdown JSON fence; later
+forensics classify V2 as `PARSER_COMPATIBILITY_FAILURE`. No hidden result informed later prompts or
+task semantics; no fifth model is authorized in this goal. Full evidence is
+in `experiments/pdb_capability_ladder/` and `_ai-review/level32-model-
+escalation-v1/`.
+
+**2026-08-21 exact-PDB 32/100 boundary — COMPLETE / NOT ACCEPTED.** The frozen
+SWE-rebench V2 `audreyr__cookiecutter-967` task was executed with the same
+`gpt-oss:20b-cloud` route. V1 and V2 are retained infrastructure-invalid
+treatments. V3 completed the real exact-PDB path, 24 calls/attempts, zero
+retries/provider errors, controller `Done`, local verifier `RESOLVED`, cleanup,
+immutability, and replay. The pinned official Docker verifier rejected the
+model-authored patch: F2P 0/5 and P2P not passed 9/9. No hidden-informed V4 was
+run. The current model's descriptive single-task boundary is therefore between
+accepted 18/100 and failed 32/100. A stronger-model comparison on the same
+frozen rung is the next optional experiment and requires a new identity.
+
+**2026-08-21 exact-PDB capability ladder through 18/100 — COMPLETE.** After the
+accepted 6/100 and 12/100 rungs, the same `gpt-oss:20b-cloud` route completed
+the single `pdb-required-multistage-units-008` task. Result: **RESOLVED**, F2P
+1/1, P2P 2/2, verifier-only private checks true, 21 calls / 21 attempts, zero
+retries/provider errors, 3 successful and 0 failed PDB observations,
+cleanup/immutability true, and 54-event replay terminal `Done`. The model used
+real start/stack/locals/next/stop evidence and repaired a stale raw value in a
+three-function normalize/convert/retry-expand pipeline. Its 26,821 activity
+frames and 121,411 thinking bytes were progress only; thinking text was not
+stored or granted action authority. Tracked raw evidence and state hashes are
+under `experiments/pdb_capability_ladder/`. The later 32/100 rung located the
+first valid failure boundary for this treatment.
+
+**2026-08-21 exact-PDB single-task live repair proof — COMPLETE.** The accepted
+product runtime route (`gpt-oss:20b-cloud` through Ollama 0.32.15 and Local
+Application protocol 1.3) completed `pdb-required-boundary-006` under
+`pdb-on-uncertainty`: one source observation, a runtime-required hypothesis,
+real PDB start/stack/locals/next/stop, observation-ID-bound revision and
+diagnosis, model-authored one-hunk unified diff, controller validation, and the
+independent verifier. Result: **RESOLVED**, F2P 1/1, P2P 1/1, correct target
+symbol, cleanup true, canonical fixture unchanged, replay terminal `Done`;
+21 logical calls / 21 transport attempts, 0 retries, 0 provider errors, 68.233 s
+case elapsed. This closes the deliberately simple one-task proof only. It does
+not establish generalization, model-limit location, PDB causal benefit, or
+SWE-rebench capability; task difficulty should be increased one task at a time
+under separately recorded contracts.
+
 **2026-08-18 Nemotron 3 Nano capability probe — COMPLETE as closed
 evidence.** After the multi-model Ollama Cloud generalization, selected
 `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated

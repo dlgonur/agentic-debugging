@@ -357,6 +357,7 @@ class EvaluationResult:
     verification_selected_test_count: int
     timeout: bool
     diagnostic: Optional[str] = None
+    private_checks_passed: Optional[bool] = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.post_patch_f2p, (list, tuple)) or not isinstance(self.post_patch_p2p, (list, tuple)):
@@ -375,6 +376,8 @@ class EvaluationResult:
             raise EvaluationInputError("candidate_patch_attempt_count must be 0 or 1")
         if type(self.timeout) is not bool:
             raise EvaluationInputError("timeout must be boolean")
+        if self.private_checks_passed is not None and type(self.private_checks_passed) is not bool:
+            raise EvaluationInputError("private_checks_passed must be boolean or null")
         if not isinstance(self.boundary, ExecutionBoundary) or not isinstance(self.status, EvaluationStatus):
             raise EvaluationInputError("boundary and status must be typed enums")
         if self.outcome is not None and not isinstance(self.outcome, SemanticOutcome):
@@ -408,7 +411,10 @@ class EvaluationResult:
         object.__setattr__(self, "diagnostic", _optional_bounded(self.diagnostic))
 
     def to_mapping(self) -> dict[str, Any]:
-        return {"task_id": self.task_id, "boundary": self.boundary.value, "status": self.status.value, "stop_reason": self.stop_reason, "outcome": self.outcome.value if self.outcome else None, "workspace": self.workspace.to_mapping(), "baseline": self.baseline.to_mapping(), "patch_application": self.patch_application.to_mapping(), "syntax": self.syntax.to_mapping(), "post_patch_reproduction": self.post_patch_reproduction.to_mapping() if self.post_patch_reproduction else None, "post_patch_f2p": [record.to_mapping() for record in self.post_patch_f2p], "post_patch_p2p": [record.to_mapping() for record in self.post_patch_p2p], "full_suite": self.full_suite.to_mapping() if self.full_suite else None, "f2p_total": self.f2p_total, "f2p_passed": self.f2p_passed, "p2p_total": self.p2p_total, "p2p_passed": self.p2p_passed, "candidate_patch_attempt_count": self.candidate_patch_attempt_count, "task_max_test_runs": self.task_max_test_runs, "verification_command_count": self.verification_command_count, "verification_selected_test_count": self.verification_selected_test_count, "timeout": self.timeout, "diagnostic": self.diagnostic}
+        result = {"task_id": self.task_id, "boundary": self.boundary.value, "status": self.status.value, "stop_reason": self.stop_reason, "outcome": self.outcome.value if self.outcome else None, "workspace": self.workspace.to_mapping(), "baseline": self.baseline.to_mapping(), "patch_application": self.patch_application.to_mapping(), "syntax": self.syntax.to_mapping(), "post_patch_reproduction": self.post_patch_reproduction.to_mapping() if self.post_patch_reproduction else None, "post_patch_f2p": [record.to_mapping() for record in self.post_patch_f2p], "post_patch_p2p": [record.to_mapping() for record in self.post_patch_p2p], "full_suite": self.full_suite.to_mapping() if self.full_suite else None, "f2p_total": self.f2p_total, "f2p_passed": self.f2p_passed, "p2p_total": self.p2p_total, "p2p_passed": self.p2p_passed, "candidate_patch_attempt_count": self.candidate_patch_attempt_count, "task_max_test_runs": self.task_max_test_runs, "verification_command_count": self.verification_command_count, "verification_selected_test_count": self.verification_selected_test_count, "timeout": self.timeout, "diagnostic": self.diagnostic}
+        if self.private_checks_passed is not None:
+            result["private_checks_passed"] = self.private_checks_passed
+        return result
 
     def semantic_mapping(self) -> dict[str, Any]:
         mapping = self.to_mapping()
@@ -429,6 +435,8 @@ def _validate_completed_result(result: EvaluationResult) -> None:
     require(result.outcome is not None, "completed result must have an outcome")
     require(result.timeout is False, "completed result cannot be timed out")
     require(result.candidate_patch_attempt_count == 1, "completed result must attempt the candidate patch")
+    if result.private_checks_passed is not None:
+        require(result.private_checks_passed is True, "completed proof result must pass private checks")
 
     workspace = result.workspace
     require(workspace.lifecycle is LifecycleStatus.CLEANED, "completed workspace must be CLEANED")

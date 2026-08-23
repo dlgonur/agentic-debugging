@@ -205,6 +205,11 @@ class VerifierSessionEventAdapter:
                 "workspace_cleaned": getattr(
                     getattr(evaluation, "workspace", None), "cleaned", None
                 ),
+                **(
+                    {"private_checks_passed": evaluation.private_checks_passed}
+                    if getattr(evaluation, "private_checks_passed", None) is not None
+                    else {}
+                ),
             },
         )
 

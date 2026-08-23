@@ -3,7 +3,9 @@ from __future__ import annotations
 import hashlib
 import os
 import re
+import shutil
 import stat
+import subprocess
 import tempfile
 import tokenize
 from dataclasses import dataclass
@@ -800,14 +802,122 @@ def _classify_policy_entry(
     )
 
 
+def _check_official_patch_compatibility(workspace_root: str, diff_text: str) -> None:
+    """Require the same direct Git patch semantics used by the official evaluator.
+
+    The repository PatchManager intentionally supports bounded context fuzz for
+    ordinary debugger workflows.  The official SWE-rebench evaluator does not:
+    after its optional three-way attempt, it falls back to direct ``git apply``.
+    Live treatments that will be judged by that evaluator must therefore reject
+    a candidate before the permissive local applier mutates the workspace.
+    ``--check`` keeps this probe side-effect free.
+    """
+
+    git = shutil.which("git")
+    if git is None:
+        raise PatchValidationError(
+            "official patch compatibility check unavailable: git executable not found"
+        )
+
+    probe_root: Optional[str] = None
+    patch_path: Optional[str] = None
+    try:
+        # TaskWorkspace intentionally does not require a Git checkout.  Build
+        # a disposable index so the check has the same direct-application
+        # semantics as the official evaluator without mutating the live
+        # workspace or creating repository state in it.
+        probe_root = tempfile.mkdtemp(
+            prefix=f"{_TEMP_PREFIX}git-check-",
+            dir=os.path.dirname(workspace_root),
+        )
+        shutil.copytree(
+            workspace_root,
+            probe_root,
+            dirs_exist_ok=True,
+            ignore=shutil.ignore_patterns(
+                ".git", "__pycache__", "*.pyc", f"{_TEMP_PREFIX}*"
+            ),
+        )
+        initialized = subprocess.run(
+            [git, "init", "--quiet"],
+            cwd=probe_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+        if initialized.returncode != 0:
+            diagnostic = (initialized.stderr or initialized.stdout or "git init failed").strip()
+            raise PatchValidationError(
+                f"official patch compatibility check could not initialize probe: {diagnostic}"
+            )
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            prefix=_TEMP_PREFIX,
+            suffix=".patch",
+            dir=probe_root,
+            delete=False,
+        ) as handle:
+            # The official operator adds this harmless serialization newline
+            # before invoking its evaluator; mirror that normalization here.
+            handle.write(diff_text if diff_text.endswith("\n") else diff_text + "\n")
+            patch_path = handle.name
+        checked = subprocess.run(
+            [
+                git,
+                "apply",
+                "--check",
+                "--recount",
+                "--ignore-space-change",
+                "--whitespace=nowarn",
+                patch_path,
+            ],
+            cwd=probe_root,
+            capture_output=True,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PatchValidationError(
+            f"official patch compatibility check failed to run: {exc}"
+        ) from exc
+    finally:
+        if patch_path is not None:
+            try:
+                os.unlink(patch_path)
+            except OSError:
+                pass
+        if probe_root is not None:
+            def _remove_readonly(_function, path, _exc_info):
+                try:
+                    os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+                    _function(path)
+                except OSError:
+                    pass
+
+            shutil.rmtree(probe_root, onerror=_remove_readonly)
+
+    if checked.returncode != 0:
+        diagnostic = (checked.stderr or checked.stdout or "git apply rejected the patch").strip()
+        raise PatchValidationError(
+            f"patch is not compatible with official git apply: {diagnostic}"
+        )
+
+
 class PatchManager:
     def __init__(
         self,
         workspace: TaskWorkspace,
         allowed_paths: List[str],
         denied_paths: List[str],
+        *,
+        official_patch_compatibility: bool = False,
     ) -> None:
         self._workspace = workspace
+        self._official_patch_compatibility = official_patch_compatibility
 
         denied_rules: List[_PolicyRule] = []
         for p in denied_paths:
@@ -874,6 +984,9 @@ class PatchManager:
 
         for fp in file_patches:
             self._authorize_path(fp.path)
+
+        if self._official_patch_compatibility:
+            _check_official_patch_compatibility(self._workspace.root, diff_text)
 
         originals: Dict[str, bytes] = {}
         encoding_map: Dict[str, str] = {}

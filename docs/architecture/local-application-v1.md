@@ -89,6 +89,12 @@ There is no general observer, subscriber, async iterator, or session cancellatio
 - `TRANSITION` when controller state changes;
 - one terminal `FINAL` event.
 
+If a bounded controller stop occurs between model decisions (for example,
+`model_call_limit`), the projection emits the explicit legal transition from
+the last projected state to `Failed` before the final event. It does not
+fabricate a model decision or tool step. Replay continues to reject a final
+state that lacks this lifecycle transition.
+
 The canonical events are therefore not currently available as a live stream during the normal controller run.
 
 ### 2.3 The canonical schema and replay behavior are strict contracts

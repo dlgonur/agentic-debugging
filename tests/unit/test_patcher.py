@@ -107,6 +107,44 @@ class TestPatchParser:
         assert patches[0].path == "profile.py"
         assert len(patches[0].hunks) == 1
 
+
+class TestOfficialPatchCompatibility:
+    def test_contextful_patch_passes_official_direct_apply_check(self, patcher_workspace):
+        if shutil.which("git") is None:
+            pytest.skip("git is required for official patch compatibility coverage")
+        pm = PatchManager(
+            patcher_workspace,
+            allowed_paths=["profile.py"],
+            denied_paths=["tests", "task.json"],
+            official_patch_compatibility=True,
+        )
+        result = pm.apply_patch(VALID_DIFF)
+        assert result.success is True
+
+    def test_local_only_fuzzy_patch_is_rejected_before_mutation(self, patcher_workspace):
+        if shutil.which("git") is None:
+            pytest.skip("git is required for official patch compatibility coverage")
+        local_only_diff = (
+            "--- a/profile.py\n"
+            "+++ b/profile.py\n"
+            "@@ -1,1 +1,1 @@\n"
+            "-def format_name(first, last):\n"
+            "+def format_name(first, last, title=None):\n"
+        )
+        permissive = make_pm(patcher_workspace)
+        assert permissive.apply_patch(local_only_diff).success is True
+        permissive.revert_patch()
+
+        strict = PatchManager(
+            patcher_workspace,
+            allowed_paths=["profile.py"],
+            denied_paths=["tests", "task.json"],
+            official_patch_compatibility=True,
+        )
+        with pytest.raises(PatchValidationError, match="official git apply"):
+            strict.apply_patch(local_only_diff)
+        assert strict.has_active_patch is False
+
     def test_valid_multi_file(self):
         patches = _parse_unified_diff(MULTI_FILE_DIFF)
         assert len(patches) == 2

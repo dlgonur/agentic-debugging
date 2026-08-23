@@ -38,6 +38,7 @@ import hashlib
 import json
 import os
 import shutil
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
@@ -61,7 +62,9 @@ from agentic_debugger.application.source_snapshots import (
     capture_source_snapshot,
 )
 from agentic_debugger.demo.catalog import (
+    PROBE_DRIVER_FUNCTION,
     DemoScenario,
+    exact_pytest_driver_source,
     probe_driver_source,
     resolve_probe_breakpoint,
 )
@@ -95,6 +98,9 @@ from agentic_debugger.skills.search_skills import find_function
 #: Source-window radius used by the demonstration.  Small enough to keep the
 #: observation payload bounded and stable, large enough to show the defect.
 SOURCE_WINDOW_RADIUS = 6
+#: The exact lowest-rung proof exposes one complete small target function so
+#: breakpoint selection and diagnosis are based on public source, not guesses.
+EXACT_PROOF_SOURCE_WINDOW_RADIUS = 12
 
 
 def legal_reproduction_phases(state: ControllerState) -> tuple[str, ...]:
@@ -138,6 +144,18 @@ def _safe_rejection(message: str) -> ToolRejectedError:
 
 class DemoToolError(RuntimeError):
     """Raised for demonstration harness misuse rather than tool failure."""
+
+
+def _observation_id_for_action(action: Action) -> str:
+    """Derive the controller's detached observation id for this action."""
+
+    prefix = "action-"
+    if not action.action_id.startswith(prefix):
+        raise DemoToolError("controller action id is not canonical")
+    suffix = action.action_id[len(prefix):]
+    if not suffix.isdigit():
+        raise DemoToolError("controller action id has no numeric observation index")
+    return "observation-" + suffix
 
 
 def bounded_diagnostic(exc: BaseException, workspace_root: Optional[str] = None) -> str:
@@ -319,6 +337,19 @@ class PdbProbe:
     script: str
     breakpoint_line: int
     focus_function: str
+    exact_public_reproduction: bool = False
+    reproduction_argv: tuple[str, ...] = ()
+    reproduction_node: str = ""
+    workspace_id: str = ""
+    production_file_sha256: str = ""
+
+
+def opaque_workspace_id(workspace: TaskWorkspace) -> str:
+    """Return a provider-safe identity derived from the actual workspace root."""
+
+    return hashlib.sha256(
+        str(Path(workspace.root).resolve()).encode("utf-8")
+    ).hexdigest()[:24]
 
 
 def prepare_pdb_probe(
@@ -327,6 +358,8 @@ def prepare_pdb_probe(
     parent_dir: Path,
     *,
     model_selects_breakpoint: bool = False,
+    task: Optional[DebugTask] = None,
+    model_visible_task_mapping: Optional[Mapping[str, Any]] = None,
 ) -> PdbProbe:
     """Copy the canonical fixture and append one module-level probe driver.
 
@@ -349,13 +382,59 @@ def prepare_pdb_probe(
     breakpoint_line = (
         0 if model_selects_breakpoint else resolve_probe_breakpoint(original, probe)
     )
-    module.write_text(original + probe_driver_source(probe), encoding="utf-8", newline="\n")
+    exact = probe.exact_public_reproduction
+    if exact and task is not None:
+        # The probe workspace is provider-visible execution state.  Keep the
+        # evaluator oracle and fixed revision out of it while retaining the
+        # public task contract needed by tooling.
+        visible_task = (
+            model_visible_task_mapping
+            if model_visible_task_mapping is not None
+            else task.agent_visible_mapping()
+        )
+        (source_dir / "task.json").write_text(
+            json.dumps(visible_task, sort_keys=True, indent=2) + "\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+    reproduction_argv: tuple[str, ...] = ()
+    reproduction_node = ""
+    if exact:
+        if task is None:
+            raise DemoToolError("exact PDB probe requires the loaded task")
+        reproduction_argv = tuple(task.reproduction.argv)
+        nodes = tuple(task.tests.fail_to_pass)
+        if len(nodes) != 1:
+            raise DemoToolError("exact PDB proof requires one public failing pytest node")
+        reproduction_node = nodes[0]
+        marker = ("-m", "pytest")
+        try:
+            marker_index = next(
+                index for index in range(len(reproduction_argv) - 1)
+                if reproduction_argv[index:index + 2] == marker
+            )
+        except StopIteration as exc:
+            raise DemoToolError("exact PDB reproduction must use python -m pytest") from exc
+        pytest_args = reproduction_argv[marker_index + 2:]
+        if reproduction_node not in pytest_args:
+            raise DemoToolError("exact PDB reproduction argv does not name the public failing node")
+        driver = exact_pytest_driver_source(probe, tuple(pytest_args))
+    else:
+        driver = probe_driver_source(probe)
+    module.write_text(original + driver, encoding="utf-8", newline="\n")
+    production_file_sha256 = hashlib.sha256(module.read_bytes()).hexdigest()
+    workspace_id = hashlib.sha256(str(source_dir.resolve()).encode("utf-8")).hexdigest()[:24]
     return PdbProbe(
         source_dir=source_dir,
         parent_dir=parent_dir,
         script=probe.module_path,
         breakpoint_line=breakpoint_line,
         focus_function=probe.focus_function,
+        exact_public_reproduction=exact,
+        reproduction_argv=reproduction_argv,
+        reproduction_node=reproduction_node,
+        workspace_id=workspace_id,
+        production_file_sha256=production_file_sha256,
     )
 
 
@@ -373,6 +452,7 @@ class DemoToolContext:
         pdb_session_factory: Callable[[TaskWorkspace], PdbSession] = PdbSession,
         verifier_feedback_fn: Optional[Callable[[DebugTask, str], dict[str, Any]]] = None,
         observability: Any = None,
+        official_patch_compatibility: bool = False,
     ) -> None:
         self.task = task
         self.workspace = workspace
@@ -399,6 +479,7 @@ class DemoToolContext:
             workspace,
             list(task.constraints.allowed_write_paths),
             list(task.constraints.denied_write_paths),
+            official_patch_compatibility=official_patch_compatibility,
         )
         # Optional Task-4 observability producer (``SessionObservability`` or
         # an object with the same emit methods).  When set, the tool handlers
@@ -430,6 +511,64 @@ class DemoToolContext:
         self.pdb_pause_generation: Optional[int] = None
         self.pdb_observation_names: list[str] = []
         self.pdb_session_started = False
+        self.interactive_pdb_session_started = False
+        self.pdb_proof_contract: Optional[dict[str, Any]] = None
+        self.pdb_proof_observations: dict[str, dict[str, Any]] = {}
+
+    def record_pdb_proof_observation(
+        self, action: Action, payload: dict[str, Any], *, proof: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Attach exact-runtime identity to a model-visible tool result."""
+
+        if self.probe is None or not self.probe.exact_public_reproduction:
+            return payload
+        observation_id = _observation_id_for_action(action)
+        detached = _json_safe(payload, action.name)
+        detached["proof"] = _json_safe(proof, "pdb proof")
+        self.pdb_proof_observations[observation_id] = detached
+        return detached
+
+    def validate_bound_diagnosis(
+        self, action: Action, evidence_refs: object, observed_values: object
+    ) -> dict[str, Any]:
+        if self.probe is None or not self.probe.exact_public_reproduction:
+            return {}
+        if type(evidence_refs) is not list or not evidence_refs:
+            raise _safe_rejection("exact PDB diagnosis requires evidence_refs")
+        if any(type(item) is not str or not item for item in evidence_refs):
+            raise _safe_rejection("evidence_refs must contain observation ids")
+        if type(observed_values) is not dict or not observed_values:
+            raise _safe_rejection("exact PDB diagnosis requires observed_values")
+        if self.pdb_proof_contract is None:
+            raise _safe_rejection("exact PDB evidence is not available")
+        referenced = [self.pdb_proof_observations.get(item) for item in evidence_refs]
+        if any(item is None for item in referenced):
+            raise _safe_rejection("diagnosis references a stale or nonexistent observation")
+        locals_payload = next(
+            (item for item in referenced if item and item.get("locals") is not None),
+            None,
+        )
+        if locals_payload is None:
+            raise _safe_rejection("diagnosis must reference frame locals")
+        locals_by_name = {
+            item.get("name"): item.get("value")
+            for item in locals_payload.get("locals", [])
+            if type(item) is dict and type(item.get("name")) is str
+        }
+        if any(name not in locals_by_name or locals_by_name[name] != value for name, value in observed_values.items()):
+            raise _safe_rejection("diagnosis runtime value is absent from referenced locals")
+        step_seen = any(
+            item and item.get("proof") == self.pdb_proof_contract
+            and item.get("state") == "paused"
+            for item in referenced
+        )
+        if not step_seen:
+            raise _safe_rejection("diagnosis must reference a paused step or next observation")
+        return {
+            "evidence_refs": list(evidence_refs),
+            "observed_values": _json_safe(observed_values, "observed_values"),
+            "proof_contract": _json_safe(self.pdb_proof_contract, "proof contract"),
+        }
 
     def validation_evidence_ready(self) -> bool:
         """Return whether classify_outcome has both required evidence values."""
@@ -616,6 +755,8 @@ def build_registry(
                 result, context.workspace.root
             ) if not result.passed else "",
         }
+        if context.probe is not None and context.probe.exact_public_reproduction:
+            payload["reproduction_argv"] = list(task.reproduction.argv)
         if phase == "baseline":
             context.baseline_failure_reproduced = reproduced
             summary = "baseline reproduction executed"
@@ -700,7 +841,7 @@ def build_registry(
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
         context.pdb_workspace = workspace
         try:
-            session = context.pdb_session_factory(workspace)
+            session = create_pdb_session(workspace)
         except Exception as exc:
             cleanup_errors = context.release_pdb()
             if cleanup_errors:
@@ -751,6 +892,10 @@ def build_registry(
         post_mortem = response.result.get("post_mortem") is True
         if status not in {"post_mortem", "exited"}:
             raise ToolExecutionError("post-mortem PDB response has invalid status")
+        if exact_pytest_bootstrap_failure(response.result):
+            raise ToolExecutionError(
+                "exact public pytest probe failed before reaching the target"
+            )
         context.pdb_observation_names.append("get_failure_trace")
         return _ok(
             {
@@ -784,7 +929,13 @@ def build_registry(
             raise _safe_rejection("line must be positive")
         try:
             window = get_source_window(
-                context.workspace, arguments["path"], line, SOURCE_WINDOW_RADIUS
+                context.workspace,
+                arguments["path"],
+                line,
+                EXACT_PROOF_SOURCE_WINDOW_RADIUS
+                if context.probe is not None
+                and context.probe.exact_public_reproduction
+                else SOURCE_WINDOW_RADIUS,
             )
         except (SourceInspectionError, WorkspaceError) as exc:
             raise ToolExecutionError(bounded_diagnostic(exc)) from exc
@@ -798,6 +949,11 @@ def build_registry(
             "target_symbol": str(arguments["target_symbol"]),
             "confidence": str(arguments["confidence"]),
         }
+        bound = context.validate_bound_diagnosis(
+            action,
+            arguments.get("evidence_refs"),
+            arguments.get("observed_values"),
+        )
         context.declared_localization = {
             "file_path": declared["target_file"],
             "symbol": declared["target_symbol"],
@@ -812,9 +968,12 @@ def build_registry(
                 file_path=declared["target_file"],
                 symbol=declared["target_symbol"],
                 confidence=declared["confidence"],
+                evidence_refs=bound.get("evidence_refs"),
+                observed_values=bound.get("observed_values"),
+                proof_contract=bound.get("proof_contract"),
             )
         )
-        return _ok(dict(declared), "root-cause hypothesis recorded")
+        return _ok({**declared, **bound}, "root-cause hypothesis recorded")
 
     # -- patch lifecycle ---------------------------------------------------
 
@@ -823,6 +982,8 @@ def build_registry(
         # any earlier Validate evidence is no longer about the workspace.
         context.clear_validation_evidence()
         diff = arguments["patch"]
+        if context.patch_manager.has_active_patch and context.candidate_patch == diff:
+            raise _safe_rejection("the candidate patch is already active")
         attempt_index = context.patch_attempt_index
         context.patch_attempt_index += 1
         patch_sha256 = hashlib.sha256(diff.encode("utf-8")).hexdigest()
@@ -953,6 +1114,40 @@ def build_registry(
 
     # -- bounded runtime evidence -----------------------------------------
 
+    def create_pdb_session(workspace: TaskWorkspace) -> PdbSession:
+        """Construct the probe session without bypassing injected containment."""
+
+        probe = context.probe
+        if (
+            probe is not None
+            and probe.exact_public_reproduction
+            and context.pdb_session_factory is PdbSession
+        ):
+            return context.pdb_session_factory(
+                workspace,
+                startup_timeout=15.0,
+                request_timeout=30.0,
+                proof_pytest_dependencies=True,
+            )
+        return context.pdb_session_factory(workspace)
+
+    def exact_pytest_bootstrap_failure(result: object) -> bool:
+        """Recognize only the structured exact-probe bootstrap failure."""
+
+        if context.probe is None or not context.probe.exact_public_reproduction:
+            return False
+        if not isinstance(result, Mapping):
+            return False
+        exception = result.get("exception")
+        innermost = result.get("innermost_frame")
+        return (
+            isinstance(exception, Mapping)
+            and exception.get("type") == "ModuleNotFoundError"
+            and exception.get("message") == "Target raised ModuleNotFoundError: No module named 'pytest'"
+            and isinstance(innermost, Mapping)
+            and innermost.get("function") == PROBE_DRIVER_FUNCTION
+        )
+
     def handle_start_pdb(action: Action, arguments: dict[str, object]) -> ToolResult:
         if pdb_policy is PdbPolicy.DISABLED:
             raise _safe_rejection("PDB access is disabled by evaluation policy")
@@ -961,7 +1156,11 @@ def build_registry(
             raise _safe_rejection("no runtime probe is configured for this task")
         if context.pdb_session is not None:
             raise _safe_rejection("a PDB session is already active")
-        if interactive_debugger_controls and context.pdb_session_started:
+        if (
+            interactive_debugger_controls
+            and context.interactive_pdb_session_started
+            and not probe.exact_public_reproduction
+        ):
             raise _safe_rejection(
                 "interactive debugger pilot permits one PDB session per case"
             )
@@ -973,7 +1172,7 @@ def build_registry(
         context.pdb_workspace = workspace
         # Register the session before starting it so a failed start is still
         # stopped and its workspace removed by release_pdb().
-        session = context.pdb_session_factory(workspace)
+        session = create_pdb_session(workspace)
         context.pdb_session = session
         breakpoint_line = (
             int(arguments["breakpoint_line"])
@@ -997,6 +1196,22 @@ def build_registry(
                 "runtime probe did not reach the declared breakpoint",
                 safe_diagnostic="runtime probe did not reach the declared breakpoint",
             )
+        if probe.exact_public_reproduction and (
+            started.get("script") != probe.script
+            or started.get("function") != probe.focus_function
+            or started.get("line") != breakpoint_line
+        ):
+            context.release_pdb()
+            raise _safe_rejection(
+                "breakpoint_line must pause on an executable statement inside the target function"
+            )
+        if interactive_debugger_controls:
+            # A semantically invalid breakpoint is rejected above and may be
+            # corrected.  Record a valid production-frame pause. Non-proof
+            # interactive pilots remain one-shot; exact-public proof may start
+            # a fresh controller-budgeted cycle only after the prior target
+            # exits and its session/workspace are released.
+            context.interactive_pdb_session_started = True
         context.pdb_pause_generation = 1
         context.observe(
             lambda: context.observability.debugger_started(
@@ -1015,6 +1230,24 @@ def build_registry(
             "function": started["function"],
             "breakpoint_line": breakpoint_line,
         }
+        if probe.exact_public_reproduction:
+            production_path = Path(workspace.resolve_path(probe.script, must_exist=True))
+            context.pdb_proof_contract = {
+                "exact_reproduction": True,
+                "task_id": context.task.task_id,
+                "reproduction_argv": list(probe.reproduction_argv),
+                "pytest_node": probe.reproduction_node,
+                "workspace_id": opaque_workspace_id(workspace),
+                "production_file": probe.script,
+                "production_file_sha256": hashlib.sha256(
+                    production_path.read_bytes()
+                ).hexdigest(),
+                "breakpoint_line": breakpoint_line,
+                "production_frame": probe.focus_function,
+            }
+            payload = context.record_pdb_proof_observation(
+                action, payload, proof=context.pdb_proof_contract
+            )
         if not interactive_debugger_controls:
             payload["focus_function"] = probe.focus_function
         return _ok(
@@ -1037,10 +1270,15 @@ def build_registry(
             )
         context.pdb_pause_generation = generation
         context.pdb_observation_names.append("get_stack_summary")
+        stack_payload = _json_safe(dict(stack), "get_stack_summary")
+        if context.pdb_proof_contract is not None:
+            stack_payload = context.record_pdb_proof_observation(
+                action, stack_payload, proof=context.pdb_proof_contract
+            )
         context.observe(
             lambda: context.observability.stack_observed(dict(stack))
         )
-        return _ok(_json_safe(dict(stack), "get_stack_summary"), "bounded stack summary collected")
+        return _ok(stack_payload, "bounded stack summary collected")
 
     def handle_frame_locals(action: Action, arguments: dict[str, object]) -> ToolResult:
         session = context.require_session("get_frame_locals")
@@ -1052,10 +1290,15 @@ def build_registry(
             diag = bounded_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         context.pdb_observation_names.append("get_frame_locals")
+        locals_payload = _json_safe(dict(result), "get_frame_locals")
+        if context.pdb_proof_contract is not None:
+            locals_payload = context.record_pdb_proof_observation(
+                action, locals_payload, proof=context.pdb_proof_contract
+            )
         context.observe(
             lambda: context.observability.locals_observed(dict(result))
         )
-        return _ok(_json_safe(dict(result), "get_frame_locals"), "bounded frame locals collected")
+        return _ok(locals_payload, "bounded frame locals collected")
 
     def handle_safe_eval(action: Action, arguments: dict[str, object]) -> ToolResult:
         session = context.require_session("safe_eval_expression")
@@ -1104,8 +1347,20 @@ def build_registry(
                 )
             )
         context.pdb_observation_names.append(action.name)
+        control_payload = _json_safe(dict(result), action.name)
+        if context.pdb_proof_contract is not None:
+            control_payload["operation"] = action.name
+            control_payload = context.record_pdb_proof_observation(
+                action, control_payload, proof=context.pdb_proof_contract
+            )
+        if result.get("state") != "paused":
+            errors = context.release_pdb()
+            if errors:
+                diag = bounded_diagnostic(errors[0], context.workspace.root)
+                raise ToolExecutionError(diag, safe_diagnostic=diag)
+            control_payload["session_released"] = True
         return _ok(
-            _json_safe(dict(result), action.name),
+            control_payload,
             f"debugger execution control completed: {action.name}",
         )
 
@@ -1129,6 +1384,16 @@ def build_registry(
             "PDB session stopped and its workspace released",
         )
 
+    diagnosis_required = {
+        "hypothesis_id": str,
+        "statement": str,
+        "target_file": str,
+        "target_symbol": str,
+        "confidence": str,
+    }
+    if context.probe is not None and context.probe.exact_public_reproduction:
+        diagnosis_required.update({"evidence_refs": list, "observed_values": dict})
+
     tool_specs = [
         spec(ActionName.RUN_REPRODUCTION, _validator({"phase": str}), handle_run_reproduction),
         spec(ActionName.GET_FAILURE_TRACE, _validator({}), handle_get_failure_trace),
@@ -1141,19 +1406,13 @@ def build_registry(
         ),
         spec(
             ActionName.GET_SOURCE_WINDOW,
-            _validator({"path": str, "line": int}),
+            _validator({"path": str, "line": int}, minimums={"line": 1}),
             handle_get_source_window,
         ),
         spec(
             ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
             _validator(
-                {
-                    "hypothesis_id": str,
-                    "statement": str,
-                    "target_file": str,
-                    "target_symbol": str,
-                    "confidence": str,
-                },
+                diagnosis_required,
                 enums={
                     "confidence": tuple(item.value for item in HypothesisConfidence)
                 },
@@ -1187,7 +1446,9 @@ def build_registry(
             handle_safe_eval,
         ),
     ]
-    if interactive_debugger_controls:
+    if interactive_debugger_controls or (
+        context.probe is not None and context.probe.exact_public_reproduction
+    ):
         control_validator = _validator({})
         tool_specs.extend(
             [
@@ -1206,6 +1467,7 @@ def build_registry(
 
 __all__ = [
     "MAX_DIAGNOSTIC_CHARS",
+    "EXACT_PROOF_SOURCE_WINDOW_RADIUS",
     "SOURCE_WINDOW_RADIUS",
     "DemoToolContext",
     "DemoToolError",

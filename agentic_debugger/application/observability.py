@@ -587,6 +587,9 @@ class SessionObservability:
         file_path: Optional[str] = None,
         symbol: Optional[str] = None,
         confidence: Optional[str] = None,
+        evidence_refs: Optional[Sequence[str]] = None,
+        observed_values: Optional[Mapping[str, Any]] = None,
+        proof_contract: Optional[Mapping[str, Any]] = None,
     ) -> SessionEvent:
         """One explicitly recorded diagnosis artifact (never chain-of-thought).
 
@@ -594,18 +597,25 @@ class SessionObservability:
         the bounded ``text`` is the recorded diagnosis claim, not raw model
         output or private reasoning.
         """
+        payload: dict[str, Any] = {
+            "text": _multiline_text_or_none(text, "text", 4096),
+            "file_path": _bounded_text_or_none(
+                file_path, "file_path", _MAX_SHORT_TEXT_BYTES
+            ),
+            "symbol": _bounded_text_or_none(symbol, "symbol", _MAX_NAME_BYTES),
+            "confidence": _bounded_text_or_none(
+                confidence, "confidence", _MAX_SHORT_TEXT_BYTES
+            ),
+        }
+        if evidence_refs is not None:
+            payload["evidence_refs"] = tuple(evidence_refs)
+        if observed_values is not None:
+            payload["observed_values"] = dict(observed_values)
+        if proof_contract is not None:
+            payload["proof_contract"] = dict(proof_contract)
         return self._emit(
             SessionEventKind.DIAGNOSIS_RECORDED,
-            {
-                "text": _multiline_text_or_none(text, "text", 4096),
-                "file_path": _bounded_text_or_none(
-                    file_path, "file_path", _MAX_SHORT_TEXT_BYTES
-                ),
-                "symbol": _bounded_text_or_none(symbol, "symbol", _MAX_NAME_BYTES),
-                "confidence": _bounded_text_or_none(
-                    confidence, "confidence", _MAX_SHORT_TEXT_BYTES
-                ),
-            },
+            payload,
         )
 
 

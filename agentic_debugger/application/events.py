@@ -1094,9 +1094,10 @@ def _payload_diagnosis_recorded(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("diagnosis.recorded payload must be a mapping")
     required = {"text", "file_path", "symbol", "confidence"}
+    optional = {"evidence_refs", "observed_values", "proof_contract"}
     _check_required(payload, required, "diagnosis.recorded payload")
-    _check_no_unknown(payload, required, "diagnosis.recorded payload")
-    return {
+    _check_no_unknown(payload, required | optional, "diagnosis.recorded payload")
+    result = {
         "text": _multiline_text_or_none(payload["text"], "text", MAX_TEXT_CHARS),
         "file_path": _bounded_text_or_none(
             payload["file_path"], "file_path", MAX_SHORT_TEXT_CHARS
@@ -1106,6 +1107,44 @@ def _payload_diagnosis_recorded(payload: Mapping[str, Any]) -> dict[str, Any]:
             payload["confidence"], "confidence", MAX_SHORT_TEXT_CHARS
         ),
     }
+    if "evidence_refs" in payload:
+        result["evidence_refs"] = _string_tuple(
+            payload["evidence_refs"], "evidence_refs", max_items=32
+        )
+    if "observed_values" in payload:
+        values = payload["observed_values"]
+        if not isinstance(values, Mapping):
+            raise SchemaValidationError("observed_values must be a mapping")
+        try:
+            validate_json_compatible(values)
+            if len(json.dumps(values, ensure_ascii=False, separators=(",", ":"))) > MAX_TEXT_CHARS:
+                raise ValueError
+        except (TypeError, ValueError, OverflowError):
+            raise SchemaValidationError("observed_values must be bounded JSON") from None
+        result["observed_values"] = dict(values)
+    if "proof_contract" in payload:
+        contract = payload["proof_contract"]
+        if not isinstance(contract, Mapping):
+            raise SchemaValidationError("proof_contract must be a mapping")
+        required_contract = {
+            "exact_reproduction", "task_id", "reproduction_argv", "pytest_node",
+            "workspace_id", "production_file", "production_file_sha256",
+            "breakpoint_line", "production_frame",
+        }
+        _check_required(contract, required_contract, "proof_contract")
+        _check_no_unknown(contract, required_contract, "proof_contract")
+        result["proof_contract"] = {
+            "exact_reproduction": _bool(contract["exact_reproduction"], "exact_reproduction"),
+            "task_id": _bounded_text(contract["task_id"], "task_id", MAX_IDENTIFIER_CHARS),
+            "reproduction_argv": _string_tuple(contract["reproduction_argv"], "reproduction_argv", max_items=32),
+            "pytest_node": _bounded_text(contract["pytest_node"], "pytest_node", MAX_SHORT_TEXT_CHARS),
+            "workspace_id": _bounded_text(contract["workspace_id"], "workspace_id", MAX_SHORT_TEXT_CHARS),
+            "production_file": _bounded_text(contract["production_file"], "production_file", MAX_SHORT_TEXT_CHARS),
+            "production_file_sha256": _sha256_hex(contract["production_file_sha256"], "production_file_sha256"),
+            "breakpoint_line": _nonneg_int(contract["breakpoint_line"], "breakpoint_line"),
+            "production_frame": _bounded_text(contract["production_frame"], "production_frame", MAX_IDENTIFIER_CHARS),
+        }
+    return result
 
 
 def _payload_verifier_stage(payload: Mapping[str, Any], label: str, *, completed: bool) -> dict[str, Any]:
@@ -1127,15 +1166,16 @@ def _payload_verifier_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
         "status", "outcome", "f2p_passed", "f2p_total",
         "p2p_passed", "p2p_total", "workspace_cleaned",
     }
+    optional = {"private_checks_passed"}
     _check_required(payload, required, "verifier.completed payload")
-    _check_no_unknown(payload, required, "verifier.completed payload")
+    _check_no_unknown(payload, required | optional, "verifier.completed payload")
     status = payload["status"]
     if status is not None:
         status = _enum(status, "status", EvaluationStatus).value
     outcome = payload["outcome"]
     if outcome is not None:
         outcome = _enum(outcome, "outcome", SemanticOutcome).value
-    return {
+    result = {
         "status": status,
         "outcome": outcome,
         "f2p_passed": _int_or_none(payload["f2p_passed"], "f2p_passed"),
@@ -1144,6 +1184,9 @@ def _payload_verifier_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
         "p2p_total": _int_or_none(payload["p2p_total"], "p2p_total"),
         "workspace_cleaned": _bool_or_none(payload["workspace_cleaned"], "workspace_cleaned"),
     }
+    if "private_checks_passed" in payload:
+        result["private_checks_passed"] = _bool(payload["private_checks_passed"], "private_checks_passed")
+    return result
 
 
 def _payload_cleanup_completed(payload: Mapping[str, Any]) -> dict[str, Any]:

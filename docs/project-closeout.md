@@ -80,6 +80,38 @@ INCOMPLETE_HARDWARE_STOP boundary, DPO, fine-tuned+RAG correctness, or
 BugsInPy execution. Canonical carrier:
 `experiments/nemotron_3_nano_model_capability_probe/`.
 
+**2026-08-21 status update:** the exact-PDB capability ladder is accepted
+through its 18/100 ordinal rung. First, `gpt-oss:20b-cloud` resolved the
+deliberately simple `pdb-required-boundary-006` rung. The next authorized
+single task, `pdb-required-caller-callee-007`, added a two-function unit
+contract, normalized input, two public P2P checks, and verifier-only private
+checks. The activity-aware high-thinking stream completed 22 logical calls /
+22 attempts with zero retries/provider errors; real PDB start/stack/locals/
+next/stop evidence preceded the model-authored one-hunk patch. Independent
+verifier: `COMPLETED/RESOLVED`, F2P 1/1, P2P 2/2, private checks true;
+cleanup/canonical immutability true; 57-event replay terminal `Done`. Thinking
+text was discarded and only aggregate activity was retained. Canonical tracked
+carrier: `experiments/pdb_capability_ladder/`. The third rung,
+`pdb-required-multistage-units-008`, raised the task to a three-function
+normalize/convert/retry-expand pipeline. GPT-OSS again completed the exact-PDB
+path and authored the verified one-line repair: 21 calls/attempts, zero
+retries/provider errors, F2P 1/1, P2P 2/2, private checks true, cleanup and
+immutability true, 54-event replay `Done`. These are three single-task rung
+results, not a success rate, generalization claim, matched model comparison,
+or causal PDB-effectiveness result.
+
+The subsequently frozen 32/100 rung used SWE-rebench V2
+`audreyr__cookiecutter-967`. V1 and V2 are retained infrastructure-invalid
+treatments. V3 completed exact PDB, evidence-bound diagnosis, patching,
+controller `Done`, local verifier `RESOLVED`, cleanup, and replay in 24
+calls/attempts with zero retries/provider errors. The official pinned Docker
+verifier then rejected the model patch (F2P 0/5; P2P not passed 9/9). This is a
+valid negative model result and locates a descriptive one-task boundary between
+accepted 18/100 and failed 32/100. It is not a success rate, generalization
+claim, matched-model comparison, or causal PDB result. No hidden-informed task
+mutation or V4 followed; canonical evidence is under
+`experiments/pdb_capability_ladder/`.
+
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
 ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT

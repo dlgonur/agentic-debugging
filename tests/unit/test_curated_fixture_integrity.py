@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ast
+import hashlib
 import json
 import os
 import re
@@ -15,12 +16,19 @@ from agentic_debugger.evaluation.task_schema import DebugTask
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 CURATED_ROOT = REPO_ROOT / "agentic_debugger" / "datasets" / "curated"
+R6_SPLIT_MANIFEST = (
+    REPO_ROOT / "experiments" / "r6_debugger_training" / "split_manifest.json"
+)
+R6_GENERATED_PREFIX = "quixbugs-"
 EXPECTED_FIXTURES = {
     "curated-none-handling-001": ("display_name.py", "tests/test_display_name.py"),
     "curated-off-by-one-002": ("recent_window.py", "tests/test_recent_window.py"),
     "curated-wrong-branch-003": ("access_branch.py", "tests/test_access_branch.py"),
     "curated-mutation-alias-004": ("labels.py", "tests/test_labels.py"),
     "curated-caller-callee-005": ("price.py", "tests/test_price.py"),
+    "pdb-required-boundary-006": ("window_tail.py", "tests/test_window_tail.py"),
+    "pdb-required-caller-callee-007": ("price_pipeline.py", "tests/test_price_pipeline.py"),
+    "pdb-required-multistage-units-008": ("deadline_pipeline.py", "tests/test_deadline_pipeline.py"),
 }
 SUMMARY_TOKEN = re.compile(
     r"(?P<count>\d+)\s+(?P<label>failed|passed|skipped|error|errors|xfailed|xpassed)\b"
@@ -29,6 +37,83 @@ SUMMARY_TOKEN = re.compile(
 
 def _fixture_dir(task_id: str) -> Path:
     return CURATED_ROOT / task_id
+
+
+def _r6_manifest_entries(
+    manifest_path: Path = R6_SPLIT_MANIFEST,
+) -> dict[str, dict[str, str]]:
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == "r6-debugger-sft-split-v1"
+    entries = [*manifest["train_tasks"], *manifest["validation_tasks"]]
+    task_ids = [entry["task_id"] for entry in entries]
+    assert len(task_ids) == len(set(task_ids)), "R6 manifest contains duplicate task IDs"
+    return {entry["task_id"]: entry for entry in entries}
+
+
+def _assert_generated_r6_corpus(
+    root: Path,
+    *,
+    manifest_path: Path = R6_SPLIT_MANIFEST,
+    require_complete: bool = True,
+) -> None:
+    generated = {
+        path.name: path
+        for path in root.iterdir()
+        if path.is_dir() and path.name.startswith(R6_GENERATED_PREFIX)
+    }
+    if not generated:
+        return
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    entries = _r6_manifest_entries(manifest_path)
+    present_ids = set(generated)
+    expected_ids = set(entries)
+    unknown_ids = present_ids - expected_ids
+    assert not unknown_ids, (
+        f"unexpected generated QuixBugs fixture directories: "
+        f"{sorted(unknown_ids)}"
+    )
+    if require_complete:
+        assert present_ids == expected_ids, (
+            "generated QuixBugs corpus must be complete when materialized: "
+            f"missing={sorted(expected_ids - present_ids)}, "
+            f"unexpected={sorted(present_ids - expected_ids)}"
+        )
+
+    for task_id, fixture in generated.items():
+        entry = entries[task_id]
+        algorithm = entry["algo"]
+        source = fixture / f"{algorithm}.py"
+        assert source.is_file(), f"missing generated QuixBugs source: {source}"
+        actual_hash = hashlib.sha256(source.read_bytes()).hexdigest()
+        assert actual_hash == entry["source_sha256"], (
+            f"generated QuixBugs source hash mismatch for {task_id}: "
+            f"expected {entry['source_sha256']}, got {actual_hash}"
+        )
+
+        task_path = fixture / "task.json"
+        assert task_path.is_file(), f"missing generated QuixBugs task manifest: {task_path}"
+        task = json.loads(task_path.read_text(encoding="utf-8"))
+        assert task["task_id"] == task_id
+        assert task["fixture_path"] == (
+            f"agentic_debugger/datasets/curated/{task_id}"
+        )
+        provenance = task["source"]["provenance"]
+        assert provenance["dataset"] == "QuixBugs"
+        assert provenance["upstream_revision"] == manifest["quixbugs_revision"]
+        assert provenance["bug_id"] == algorithm
+
+
+def _assert_curated_directory_set(root: Path) -> None:
+    assert root.is_dir()
+    directory_names = {
+        path.name for path in root.iterdir() if path.is_dir()
+    }
+    generated_names = {
+        name for name in directory_names if name.startswith(R6_GENERATED_PREFIX)
+    }
+    assert directory_names - generated_names == set(EXPECTED_FIXTURES)
+    _assert_generated_r6_corpus(root)
 
 
 def _snapshot(directory: Path) -> dict[str, bytes]:
@@ -239,10 +324,51 @@ def _assert_individual_node(
 
 
 def test_curated_directory_set_is_exact() -> None:
-    assert CURATED_ROOT.is_dir()
-    assert {
-        path.name for path in CURATED_ROOT.iterdir() if path.is_dir()
-    } == set(EXPECTED_FIXTURES)
+    _assert_curated_directory_set(CURATED_ROOT)
+
+
+def test_generated_r6_corpus_is_optional_on_clean_checkout(tmp_path: Path) -> None:
+    for task_id in EXPECTED_FIXTURES:
+        (tmp_path / task_id).mkdir()
+
+    _assert_curated_directory_set(tmp_path)
+
+
+def test_generated_r6_corpus_rejects_unknown_task_id(tmp_path: Path) -> None:
+    (tmp_path / "quixbugs-not-in-manifest").mkdir()
+
+    with pytest.raises(AssertionError, match="unexpected generated QuixBugs"):
+        _assert_generated_r6_corpus(tmp_path, require_complete=False)
+
+
+def test_generated_r6_corpus_rejects_corrupted_source(tmp_path: Path) -> None:
+    entries = _r6_manifest_entries()
+    task_id, entry = next(iter(entries.items()))
+    fixture = tmp_path / task_id
+    fixture.mkdir()
+    (fixture / f"{entry['algo']}.py").write_text(
+        "# deliberately corrupted source\n", encoding="utf-8"
+    )
+
+    with pytest.raises(AssertionError, match="source hash mismatch"):
+        _assert_generated_r6_corpus(tmp_path, require_complete=False)
+
+
+def test_generated_r6_corpus_rejects_partial_materialization(tmp_path: Path) -> None:
+    task_id = next(iter(_r6_manifest_entries()))
+    (tmp_path / task_id).mkdir()
+
+    with pytest.raises(AssertionError, match="must be complete"):
+        _assert_generated_r6_corpus(tmp_path)
+
+
+def test_curated_directory_set_rejects_unrelated_directory(tmp_path: Path) -> None:
+    for task_id in EXPECTED_FIXTURES:
+        (tmp_path / task_id).mkdir()
+    (tmp_path / "random-junk").mkdir()
+
+    with pytest.raises(AssertionError):
+        _assert_curated_directory_set(tmp_path)
 
 
 def test_canonical_payload_rejects_arbitrary_extra_file(tmp_path: Path) -> None:

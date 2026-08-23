@@ -1,0 +1,40 @@
+{
+  "schema_version": "1.0",
+  "task_id": "pdb-required-caller-callee-007",
+  "title": "Convert the caller unit at the rendering boundary",
+  "description": "A price pipeline normalizes a public representation label, then must convert the numeric value into the cents unit required by its private renderer without changing existing cents behavior.",
+  "language": "python",
+  "fixture_path": "agentic_debugger/datasets/curated/pdb-required-caller-callee-007",
+  "reproduction": {
+    "argv": ["python", "-m", "pytest", "tests/test_price_pipeline.py::test_dollar_value_is_converted_at_the_callee_boundary", "-q", "-p", "no:cacheprovider"],
+    "cwd": ".",
+    "timeout_seconds": 10,
+    "expected_exit_code": 1
+  },
+  "tests": {
+    "fail_to_pass": ["tests/test_price_pipeline.py::test_dollar_value_is_converted_at_the_callee_boundary"],
+    "pass_to_pass": [
+      "tests/test_price_pipeline.py::test_zero_dollars_remains_zero",
+      "tests/test_price_pipeline.py::test_cents_value_keeps_its_existing_unit"
+    ],
+    "full_suite_argv": ["python", "-m", "pytest", "-q", "-p", "no:cacheprovider"],
+    "timeout_seconds": 20
+  },
+  "constraints": {
+    "allowed_write_paths": ["price_pipeline.py"],
+    "denied_write_paths": ["tests", "task.json"],
+    "network_allowed": false,
+    "external_services_allowed": false,
+    "max_patch_attempts": 2,
+    "max_test_runs": 5,
+    "max_pdb_observations": 6
+  },
+  "oracle": {
+    "bug_category": "caller/callee unit contract mismatch",
+    "target_files": ["price_pipeline.py"],
+    "target_symbols": ["format_price"],
+    "root_cause_summary": "The caller normalizes the representation but forwards the numeric amount unchanged to a renderer whose input unit is cents.",
+    "runtime_evidence_hint": "The production caller frame shows a normalized dollars label alongside an unchanged numeric value at the callee boundary."
+  },
+  "tags": ["proof", "curated", "runtime-state", "caller-callee", "unit-conversion", "isolated", "capability-ladder-12"]
+}

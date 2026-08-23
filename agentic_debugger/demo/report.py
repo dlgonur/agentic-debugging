@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
+from agentic_debugger.demo.catalog import scenario_for, scenario_ids
 from agentic_debugger.demo.runner import (
     NONDETERMINISTIC_RESULT_KEYS,
     RUNTIME_ATTRIBUTION_NOTE,
@@ -81,6 +82,37 @@ def _flag(value: Any) -> str:
 
 def _text(value: Any) -> str:
     return "n/a" if value is None else str(value)
+
+
+def _task_aware_limitations(cases: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
+    """Keep historical limitations truthful for mixed or proof-task reports."""
+
+    exact_task_ids = {
+        task_id
+        for task_id in scenario_ids()
+        if scenario_for(task_id).runtime_probe.exact_public_reproduction
+    }
+    exact = tuple(
+        case.get("task_id")
+        for case in cases
+        if case.get("task_id") in exact_task_ids
+    )
+    if not exact:
+        return STANDING_LIMITATIONS
+    values = list(STANDING_LIMITATIONS)
+    values[2] = (
+        f"This report covers {len(cases)} executed case(s), including the opt-in "
+        "single-task exact-runtime proof fixture. It does not generalize to "
+        "repository-scale tasks, multi-file repairs or SWE-bench."
+    )
+    values[7] = (
+        "For the exact-runtime proof fixture, the bounded PDB worker executes "
+        "the declared public failing pytest node in the same disposable task "
+        "workspace. Other legacy catalog tasks, if present, retain the older "
+        "appended-driver probe and must not be interpreted as exact-test PDB "
+        "evidence."
+    )
+    return tuple(values)
 
 
 def render_summary(results: Mapping[str, Any], *, entry_point: str) -> str:
@@ -338,7 +370,7 @@ def render_summary(results: Mapping[str, Any], *, entry_point: str) -> str:
     lines += _render_problems(cases)
 
     lines += ["", "## 6. Limitations, assumptions and deferred work", ""]
-    lines += [f"* {item}" for item in STANDING_LIMITATIONS]
+    lines += [f"* {item}" for item in _task_aware_limitations(cases)]
     lines += [
         "",
         "Deliberately deferred: real-model execution, the always-on and "

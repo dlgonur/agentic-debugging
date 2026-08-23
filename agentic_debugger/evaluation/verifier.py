@@ -18,6 +18,7 @@ from typing import Any, Callable, Optional, Protocol, Sequence
 
 from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.evaluation.outcome_taxonomy import classify_outcome
+from agentic_debugger.evaluation.private_checks import run_private_checks
 from agentic_debugger.evaluation.runner import (
     BaselineRecord,
     CollectionRecord,
@@ -128,6 +129,7 @@ class _EvaluationState:
     outcome: Any = None
     diagnostic: Optional[str] = None
     canonical_hash_error: Optional[str] = None
+    private_checks_passed: Optional[bool] = None
 
 
 class EvaluationVerifier:
@@ -458,6 +460,14 @@ class EvaluationVerifier:
             state.stop_reason = "full_suite_contradicts_declared_nodes"
             return
         self._checkpoint()
+        private = run_private_checks(task, runner, workspace)
+        state.private_checks_passed = private.passed
+        if private.applicable and private.passed is not True:
+            state.status = EvaluationStatus.TEST_EXECUTION_FAILED
+            state.stop_reason = "private_verifier_checks_failed"
+            state.diagnostic = private.diagnostic or "private verifier checks failed"
+            return
+        self._checkpoint()
         self._notify_stage_started(STAGE_CLASSIFICATION)
         state.outcome = classify_outcome([record.passed for record in state.post_f2p], [record.passed for record in state.post_p2p])
         state.status = EvaluationStatus.COMPLETED
@@ -669,4 +679,4 @@ def _tree_hash(path: str) -> Optional[str]:
 def _state_result(task: DebugTask, state: _EvaluationState) -> EvaluationResult:
     baseline = BaselineRecord(state.baseline_valid, state.baseline_reason, state.collection, state.reproduction, tuple(state.baseline_f2p), tuple(state.baseline_p2p))
     workspace = state.workspace_record or WorkspaceRecord(LifecycleStatus.NOT_ATTEMPTED, False, False, False, False, None, None, None)
-    return EvaluationResult(task.task_id, ExecutionBoundary.TRUSTED_LOCAL_WORKSPACE, state.status, state.stop_reason, state.outcome, workspace, baseline, state.patch, state.syntax, state.post_reproduction, tuple(state.post_f2p), tuple(state.post_p2p), state.full_suite, len(state.post_f2p), sum(record.passed for record in state.post_f2p), len(state.post_p2p), sum(record.passed for record in state.post_p2p), 1 if state.patch.attempted else 0, state.task_max_test_runs, state.verification_command_count, state.verification_selected_test_count, state.timeout, state.diagnostic)
+    return EvaluationResult(task.task_id, ExecutionBoundary.TRUSTED_LOCAL_WORKSPACE, state.status, state.stop_reason, state.outcome, workspace, baseline, state.patch, state.syntax, state.post_reproduction, tuple(state.post_f2p), tuple(state.post_p2p), state.full_suite, len(state.post_f2p), sum(record.passed for record in state.post_f2p), len(state.post_p2p), sum(record.passed for record in state.post_p2p), 1 if state.patch.attempted else 0, state.task_max_test_runs, state.verification_command_count, state.verification_selected_test_count, state.timeout, state.diagnostic, state.private_checks_passed)

@@ -14,8 +14,10 @@ but does not claim to cancel work already accepted by Ollama Cloud.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.client
 import json
+import re
 import socket
 import sys
 import time
@@ -30,24 +32,338 @@ class CloudModelSpec:
     """One accepted Ollama Cloud alias and its fail-closed provenance contract.
 
     ``local_alias`` is the Ollama CLI / ``/api/chat`` request identity.
-    ``upstream_model`` is the observed Cloud provenance: ``/api/tags``
-    ``remote_model``, ``/api/show`` ``details.parent_model``, and the
-    ``/api/chat`` response ``model``.  Those three fields share one
-    expected value for every currently accepted alias.
+    ``upstream_model`` is the observed Cloud chat/parent identity:
+    ``/api/show`` ``details.parent_model`` and the ``/api/chat`` response
+    ``model``.  For most aliases ``/api/tags`` ``remote_model`` equals the
+    same value, but a small number of Cloud aliases expose a versioned
+    ``remote_model`` (e.g. ``deepseek-v4-flash:0731``) while ``show`` and
+    chat use the unversioned parent.  ``tags_remote_model`` holds that
+    versioned value when it diverges; otherwise it defaults to
+    ``upstream_model``.  Capabilities, family and parameter metadata are
+    recorded from ``/api/show``/``/api/tags`` where exposed and are never
+    fabricated.
     """
 
     local_alias: str
     upstream_model: str
+    tags_remote_model: str | None = None
+    family: str | None = None
+    parameter_count: int | None = None
+    context_length: int | None = None
+    capabilities: tuple[str, ...] = ()
+    # Readiness is three-state: every alias is catalogued/selectable, a
+    # subset declares a provisional transport profile (same-family ``think``
+    # and streaming contract), and only empirically qualified models are
+    # live-transport verified.  ``transport_profile_declared`` means the
+    # registry carries an explicit ``thinking_level`` and intends the GPT-OSS
+    # streaming path; ``transport_verified`` means a bounded live
+    # qualification (real /api/chat streaming) has been recorded.  A model
+    # whose live transport has never been exercised is not verified, even
+    # if it shares a family with a verified sibling.
+    transport_profile_declared: bool = False
+    transport_verified: bool = False
+    thinking_level: str | None = None
+    idle_timeout_seconds: float = 20.0
+    request_timeout_seconds: float = 60.0
+
+    @property
+    def effective_tags_remote_model(self) -> str:
+        return self.tags_remote_model if self.tags_remote_model is not None else self.upstream_model
+
+    @property
+    def readiness(self) -> str:
+        if self.transport_verified:
+            return "live_verified"
+        if self.transport_profile_declared:
+            return "profile_declared"
+        return "catalog"
 
 
 CLOUD_MODELS: dict[str, CloudModelSpec] = {
     "gpt-oss:20b-cloud": CloudModelSpec(
         local_alias="gpt-oss:20b-cloud",
         upstream_model="gpt-oss:20b",
+        family="gptoss",
+        parameter_count=20914757184,
+        context_length=131072,
+        capabilities=("completion", "thinking", "tools"),
+        transport_profile_declared=True,
+        transport_verified=True,
+        thinking_level="high",
+    ),
+    "gpt-oss:120b-cloud": CloudModelSpec(
+        local_alias="gpt-oss:120b-cloud",
+        upstream_model="gpt-oss:120b",
+        family="gptoss",
+        parameter_count=116829156672,
+        context_length=131072,
+        capabilities=("completion", "thinking", "tools"),
+        transport_profile_declared=True,
+        # Promoted from profile_declared after the immutable bounded
+        # qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # gpt-oss-120b-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level="high",
+    ),
+    "glm-5.1:cloud": CloudModelSpec(
+        local_alias="glm-5.1:cloud",
+        upstream_model="glm-5.1",
+        family="glm5.1",
+        parameter_count=756162687872,
+        context_length=202752,
+        capabilities=("completion", "thinking", "tools"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after independent review of the retained bounded
+        # qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # glm-5.1-v1.json.
+        transport_verified=True,
+        thinking_level=None,
+    ),
+    "glm-5.2:cloud": CloudModelSpec(
+        local_alias="glm-5.2:cloud",
+        upstream_model="glm-5.2",
+        family="glm5.2",
+        parameter_count=756162687872,
+        context_length=1000000,
+        capabilities=("completion", "thinking", "tools"),
+        # Promoted from the accepted immutable Qualification V2 artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # glm-5.2-v2.json.  Preserve its measured no-thinking, 20/60 profile.
+        transport_profile_declared=True,
+        transport_verified=True,
+        thinking_level=None,
+        idle_timeout_seconds=20.0,
+        request_timeout_seconds=60.0,
+    ),
+    "deepseek-v4-flash:cloud": CloudModelSpec(
+        local_alias="deepseek-v4-flash:cloud",
+        upstream_model="deepseek-v4-flash",
+        tags_remote_model="deepseek-v4-flash:0731",
+        family="deepseek4",
+        parameter_count=304180418494,
+        context_length=1048576,
+        capabilities=("completion", "thinking", "tools"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # deepseek-v4-flash-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+    ),
+    "deepseek-v4-pro:cloud": CloudModelSpec(
+        local_alias="deepseek-v4-pro:cloud",
+        upstream_model="deepseek-v4-pro",
+        tags_remote_model="deepseek-v4-pro:0813",
+        family="deepseek4",
+        parameter_count=1650497936906,
+        context_length=1048576,
+        capabilities=("completion", "thinking", "tools"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after independent review of the retained bounded
+        # qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # deepseek-v4-pro-v1.json.
+        transport_verified=True,
+        thinking_level=None,
+    ),
+    "kimi-k2.6:cloud": CloudModelSpec(
+        local_alias="kimi-k2.6:cloud",
+        upstream_model="kimi-k2.6",
+        family="kimi-k2",
+        parameter_count=1042000000000,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        # Ollama metadata exposes thinking and tools, so qualify the generic
+        # streaming path without imposing a GPT-OSS-specific think level.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # kimi-k2.6-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+        # Kimi v2 produced continuous valid stream activity for 439 seconds
+        # and reached Validate before the inherited 20-second idle watchdog
+        # ended its final decision. Keep the repair model-specific and
+        # bounded; the outer request limit remains above the idle limit.
+        idle_timeout_seconds=45.0,
+        request_timeout_seconds=75.0,
+    ),
+    "kimi-k2.7-code:cloud": CloudModelSpec(
+        local_alias="kimi-k2.7-code:cloud",
+        upstream_model="kimi-k2.7-code",
+        family="kimi-k2",
+        parameter_count=1042000000000,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        transport_verified=False,
+        thinking_level=None,
+    ),
+    "kimi-k3:cloud": CloudModelSpec(
+        local_alias="kimi-k3:cloud",
+        upstream_model="kimi-k3",
+        family="kimi-k3",
+        parameter_count=2812000000000,
+        context_length=1048576,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        transport_verified=False,
+        thinking_level=None,
+    ),
+    "minimax-m2.7:cloud": CloudModelSpec(
+        local_alias="minimax-m2.7:cloud",
+        upstream_model="minimax-m2.7",
+        family="minimax-m2",
+        parameter_count=229000000000,
+        context_length=196608,
+        capabilities=("completion", "thinking", "tools"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # minimax-m2.7-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+    ),
+    "minimax-m3:cloud": CloudModelSpec(
+        local_alias="minimax-m3:cloud",
+        upstream_model="minimax-m3",
+        family="minimax-m3",
+        parameter_count=0,
+        context_length=524288,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after inspection of the retained bounded qualification
+        # artifact at experiments/pdb_capability_ladder/transport_qualifications/
+        # minimax-m3-v1.json.
+        transport_verified=True,
+        thinking_level=None,
     ),
     "nemotron-3-nano:30b-cloud": CloudModelSpec(
         local_alias="nemotron-3-nano:30b-cloud",
         upstream_model="nemotron-3-nano:30b",
+        family="nemotron-3-nano",
+        parameter_count=32000000000,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools"),
+        transport_profile_declared=True,
+        transport_verified=True,
+        thinking_level="high",
+    ),
+    "nemotron-3-super:cloud": CloudModelSpec(
+        local_alias="nemotron-3-super:cloud",
+        upstream_model="nemotron-3-super",
+        family="nemotron_h_moe",
+        parameter_count=120000000000,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # nemotron-3-super-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+        # Level-32 V1 produced 7,864 valid stream frames over 318 seconds,
+        # reached Validate, and then lost its seventeenth decision to the
+        # inherited 20-second idle watchdog.  Keep the infrastructure repair
+        # model-specific and bounded; the outer request limit remains above
+        # the idle limit.
+        idle_timeout_seconds=45.0,
+        request_timeout_seconds=75.0,
+    ),
+    "nemotron-3-ultra:cloud": CloudModelSpec(
+        local_alias="nemotron-3-ultra:cloud",
+        upstream_model="nemotron-3-ultra",
+        family="",
+        parameter_count=550000000000,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # Qualification determines transport viability without assuming a
+        # model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # nemotron-3-ultra-v1.json was independently inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+        # Level-32 V1 completed 14 valid decisions, exact PDB, and an
+        # evidence-bound diagnosis, then lost its first Patch decision to the
+        # inherited 20-second idle watchdog. Keep the bounded repair specific
+        # to Ultra; retries and all semantic/action budgets remain unchanged.
+        idle_timeout_seconds=45.0,
+        request_timeout_seconds=75.0,
+    ),
+    "qwen3.5:cloud": CloudModelSpec(
+        local_alias="qwen3.5:cloud",
+        upstream_model="qwen3.5",
+        tags_remote_model="qwen3.5:397b",
+        family="qwen3.5",
+        parameter_count=397000000000,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        # Ollama metadata exposes thinking and tools; qualify streaming
+        # without assuming a model-specific think-level vocabulary.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # qwen3.5-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+    ),
+    "gemma4:31b-cloud": CloudModelSpec(
+        local_alias="gemma4:31b-cloud",
+        upstream_model="gemma4:31b",
+        family="gemma4",
+        parameter_count=32682372656,
+        context_length=262144,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        # Ollama metadata exposes thinking and tools; qualify generic
+        # streaming without forcing a model-specific think level.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # gemma4-31b-v1.json was inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
+    ),
+    "mistral-large-3:675b-cloud": CloudModelSpec(
+        local_alias="mistral-large-3:675b-cloud",
+        upstream_model="mistral-large-3:675b",
+        family="mistral3",
+        parameter_count=675000000000,
+        context_length=262144,
+        capabilities=("completion", "tools", "vision"),
+        # Generic streaming profile declared for the frozen Level-32 queue.
+        # This model exposes no thinking capability, so qualification must
+        # exercise the NDJSON path without a fabricated `think` setting.
+        transport_profile_declared=True,
+        # Promoted after the retained bounded qualification artifact at
+        # experiments/pdb_capability_ladder/transport_qualifications/
+        # mistral-large-3-675b-v1.json was independently inspected and accepted.
+        transport_verified=True,
+        thinking_level=None,
     ),
 }
 
@@ -57,15 +373,32 @@ ALLOWED_MODEL_IDENTIFIERS = frozenset(CLOUD_MODELS)
 EXPECTED_CLOUD_REMOTE_MODEL = CLOUD_MODELS[MODEL_ID].upstream_model
 EXPECTED_CLOUD_REMOTE_HOST = "https://ollama.com"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434/api"
-EXPECTED_OLLAMA_VERSION = "0.32.14"
+EXPECTED_OLLAMA_VERSION = "0.32.15"
+COMMAND_ERROR_SCHEMA_VERSION = "command-error-v1"
 PROTOCOL_NAME = "agentic-debugger-live-jsonl"
 PROTOCOL_VERSION = "1.3"
+PROVIDER_COMPLETION_ENVELOPE_SCHEMA = "provider-completion-v1"
+CONTENT_FRAGMENT_OBSERVABILITY_SCHEMA_VERSION = (
+    "ollama-content-fragment-observability-v2"
+)
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
-MAX_PUBLIC_REQUEST_BYTES = 25_000
+DEFAULT_THINKING_LEVEL = "high"
+# The inherited 25,000-byte ceiling rejected Kimi's otherwise valid frozen
+# Level-32 request at 26,622 bytes after successful PDB evidence.  32 KiB is
+# the smallest bounded repair that admits the observed request while staying
+# below MAX_RAW_RESPONSE_BYTES and preserving the same public task contract.
+MAX_PUBLIC_REQUEST_BYTES = 32_768
 MAX_RAW_RESPONSE_BYTES = 64 * 1024
+MAX_STREAM_FRAME_BYTES = 1024 * 1024
+MAX_RETAINED_CONTENT_FRAME_DIAGNOSTICS = 128
+MAX_CONTENT_FRAGMENT_TEXT_BYTES = 4096
+_SECRET_CONTENT = re.compile(
+    r"(?i)(?:bearer\s+\S+|basic\s+\S+|(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token|private[_-]?key)\s*[:=]\s*\S+)"
+)
 MAX_STDIN_REQUEST_BYTES = 128 * 1024
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 25
+MAX_CONFIGURED_LOGICAL_MODEL_CALLS = 512
 MAX_DIRECTIVE_ARGUMENT_BYTES = 32_768
 MAX_DIRECTIVE_REASON_BYTES = 2_048
 MAX_DIRECTIVE_STATEMENT_BYTES = 4_096
@@ -117,6 +450,80 @@ class OllamaAdapterError(RuntimeError):
         self.kind = kind
 
 
+def is_live_transport_ready(spec: CloudModelSpec) -> bool:
+    """Return whether ``spec`` has passed the bounded live qualification gate."""
+
+    return bool(spec.transport_verified)
+
+
+def is_treatment_eligible(spec: CloudModelSpec) -> bool:
+    """Return whether ``spec`` may enter the Level-32 scientific treatment."""
+
+    return is_live_transport_ready(spec)
+
+
+TRANSPORT_QUALIFICATION_COMMAND = (
+    "python -m agentic_debugger.evaluation.transport_qualification "
+    "--endpoint http://127.0.0.1:11434/api "
+    "--model <alias> --confirm-live --json"
+)
+
+
+def transport_config_fingerprint(spec: CloudModelSpec) -> str:
+    """Bounded fingerprint of the model-relevant execution configuration.
+
+    Covers every execution parameter that can materially change transport
+    behavior.  Two treatments whose fingerprints differ must not silently
+    reuse the same treatment identity.
+    """
+
+    payload = {
+        "local_alias": spec.local_alias,
+        "upstream_model": spec.upstream_model,
+        "effective_tags_remote_model": spec.effective_tags_remote_model,
+        "capabilities": list(spec.capabilities),
+        "family": spec.family,
+        "parameter_count": spec.parameter_count,
+        "context_length": spec.context_length,
+        "readiness": spec.readiness,
+        "transport_profile_declared": spec.transport_profile_declared,
+        "transport_verified": spec.transport_verified,
+        "thinking_level": spec.thinking_level,
+        "idle_timeout_seconds": spec.idle_timeout_seconds,
+        "request_timeout_seconds": spec.request_timeout_seconds,
+        "protocol_version": PROTOCOL_VERSION,
+        "protocol_name": PROTOCOL_NAME,
+        "expected_ollama_version": EXPECTED_OLLAMA_VERSION,
+        "expected_cloud_remote_host": EXPECTED_CLOUD_REMOTE_HOST,
+        "default_timeout_seconds": DEFAULT_TIMEOUT_SECONDS,
+        "max_public_request_bytes": MAX_PUBLIC_REQUEST_BYTES,
+        "max_raw_response_bytes": MAX_RAW_RESPONSE_BYTES,
+        "max_stream_frame_bytes": MAX_STREAM_FRAME_BYTES,
+        "max_stdin_request_bytes": MAX_STDIN_REQUEST_BYTES,
+        "max_directive_argument_bytes": MAX_DIRECTIVE_ARGUMENT_BYTES,
+        "max_directive_reason_bytes": MAX_DIRECTIVE_REASON_BYTES,
+        "max_directive_statement_bytes": MAX_DIRECTIVE_STATEMENT_BYTES,
+        "max_directive_hypothesis_id_bytes": MAX_DIRECTIVE_HYPOTHESIS_ID_BYTES,
+        "max_directive_evidence_ref_bytes": MAX_DIRECTIVE_EVIDENCE_REF_BYTES,
+        "max_directive_evidence_ref_count": MAX_DIRECTIVE_EVIDENCE_REF_COUNT,
+        "default_max_logical_model_calls": DEFAULT_MAX_LOGICAL_MODEL_CALLS,
+        "max_configured_logical_model_calls": MAX_CONFIGURED_LOGICAL_MODEL_CALLS,
+        "adapter_retry_count": ADAPTER_RETRY_COUNT,
+        "fallback_count": FALLBACK_COUNT,
+        "stream_mode": True,
+        "provider_completion_envelope_schema": PROVIDER_COMPLETION_ENVELOPE_SCHEMA,
+        "observability_schema": "directive-observability-v1",
+    }
+    canonical = json.dumps(
+        payload,
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
 def resolve_cloud_model(model_id: Any) -> CloudModelSpec:
     """Return the accepted Cloud spec for ``model_id`` or fail closed."""
 
@@ -126,6 +533,21 @@ def resolve_cloud_model(model_id: Any) -> CloudModelSpec:
     if spec is None:
         raise OllamaAdapterError("requested Ollama Cloud model is not supported", kind="configuration")
     return spec
+
+
+def effective_thinking_level(spec: CloudModelSpec, requested: str | None) -> str | None:
+    """Return the stream ``think`` value for ``spec``, validating explicit overrides."""
+
+    if requested is not None:
+        if requested not in {"low", "medium", "high"}:
+            raise OllamaAdapterError("Ollama thinking level is invalid", kind="configuration")
+        if spec.transport_profile_declared and requested != spec.thinking_level:
+            raise OllamaAdapterError(
+                "declared transport profile does not accept a different thinking level",
+                kind="configuration",
+            )
+        return requested
+    return spec.thinking_level
 
 
 def _safe_json(value: Any) -> str:
@@ -228,8 +650,8 @@ SYSTEM_PROMPT = (
     "kind must literally be \"action\". name must come from controller.allowed_actions. arguments must satisfy that action's supplied action_contracts. Do not use top-level keys named action or payload.\n"
     "Transition: {\"kind\":\"transition\",\"target_state\":\"<legal target>\",\"reason\":\"<bounded reason>\"}\n"
     "kind must literally be \"transition\". target_state must come from controller.legal_transition_targets. Do not use a top-level key named transition.\n"
-    "add_hypothesis: {\"kind\":\"add_hypothesis\",\"hypothesis_id\":\"<id>\",\"statement\":\"<statement>\",\"confidence\":\"low|medium|high\",\"evidence_refs\":[],\"requires_runtime_evidence\":false}\n"
-    "revise_hypothesis: {\"kind\":\"revise_hypothesis\",\"hypothesis_id\":\"<id>\",\"statement\":\"<statement>\",\"confidence\":\"low|medium|high\",\"evidence_refs\":[],\"requires_runtime_evidence\":false}\n"
+    "add_hypothesis and revise_hypothesis use exactly these fields: \"kind\", \"hypothesis_id\", \"statement\", \"confidence\", \"evidence_refs\", and \"requires_runtime_evidence\".\n"
+    "For either hypothesis kind, copy the current user message's Legal hypothesis representation and obey every current directive_schema constraint; especially do not guess or invert the required requires_runtime_evidence boolean.\n"
     "set_hypothesis_status: {\"kind\":\"set_hypothesis_status\",\"hypothesis_id\":\"<id>\",\"status\":\"supported|rejected|discarded\"}\n"
     "confidence must be exactly one of low, medium, high. status must be exactly one of supported, rejected, discarded. evidence_refs is a list of strings. requires_runtime_evidence is a boolean."
 )
@@ -246,15 +668,23 @@ def _directive_kinds(request: Mapping[str, Any]) -> list[str]:
 
 def _illustrative_argument_value(field: str, spec: Mapping[str, Any] | None) -> Any:
     if isinstance(spec, Mapping):
+        if "example" in spec:
+            return spec["example"]
         enum = spec.get("enum")
-        if isinstance(enum, list) and enum and type(enum[0]) in (str, int, float, bool):
+        if isinstance(enum, list) and enum:
             return enum[0]
         type_name = spec.get("type")
         if type_name == "boolean":
             return True
         if type_name == "integer":
+            minimum = spec.get("minimum")
+            if type(minimum) is int and not isinstance(minimum, bool):
+                return minimum
             return 0
         if type_name == "number":
+            minimum = spec.get("minimum")
+            if type(minimum) in (int, float) and not isinstance(minimum, bool):
+                return minimum
             return 0
         if type_name == "array":
             return []
@@ -323,6 +753,48 @@ def _patch_budget_remaining(controller: Mapping[str, Any]) -> str | None:
     return "Patch-attempt budget for this request is exhausted."
 
 
+def _public_breakpoint_source(request: Mapping[str, Any]) -> tuple[str, int, str] | None:
+    """Return a source line already visible in the current exact-PDB history."""
+
+    controller = request.get("controller")
+    observations = [
+        entry.get("last_observation")
+        for entry in request.get("history", [])
+        if isinstance(entry, Mapping)
+    ]
+    if isinstance(controller, Mapping):
+        observations.append(controller.get("last_observation"))
+    breakpoint_line: int | None = None
+    source_lines: dict[tuple[str, int], str] = {}
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        payload = observation.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        proof = payload.get("proof")
+        if isinstance(proof, Mapping) and type(proof.get("breakpoint_line")) is int:
+            breakpoint_line = proof["breakpoint_line"]
+        lines = payload.get("lines")
+        if isinstance(lines, list):
+            for entry in lines:
+                if not isinstance(entry, Mapping):
+                    continue
+                path = entry.get("path")
+                number = entry.get("line_number")
+                text = entry.get("text")
+                if type(path) is str and type(number) is int and type(text) is str:
+                    source_lines[(path, number)] = text
+    if breakpoint_line is None:
+        return None
+    matches = [
+        (path, number, text)
+        for (path, number), text in source_lines.items()
+        if number == breakpoint_line
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
 def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
     """PatchManager-derived apply_patch format and recovery rules."""
 
@@ -331,7 +803,7 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         controller = {}
     contracts = request.get("action_contracts")
     lines = [
-        "apply_patch arguments.patch must be a complete unified diff accepted by Local Application's PatchManager.",
+        "apply_patch arguments.patch must be a complete unified diff accepted by Local Application's PatchManager and the official evaluator's direct git apply check.",
         "File headers must contain both lines, in this order:",
         "--- a/<relative-path>",
         "+++ b/<same-relative-path>",
@@ -348,10 +820,11 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         'Context lines beginning with exactly one space count toward both OLD_COUNT and NEW_COUNT.',
         "Hunk counts must exactly match the hunk body.",
         "If the header counts do not equal the body counts, correct the header before output.",
-        "Prefer the smallest valid hunk that uniquely expresses the edit. Zero-context hunks, with no lines beginning with a single space, are accepted when the removed and added lines uniquely locate the edit.",
+        "Prefer the smallest valid hunk that uniquely expresses the edit, but include at least one unchanged context line in every hunk. Zero-context hunks are rejected because the official evaluator's direct git apply path requires contextual unified diffs.",
         "Hunk body prefixes are significant: one leading space for unchanged/context, - for removed, + for added.",
         "Use repository-relative paths only.",
         "Do not wrap the patch string in Markdown fences.",
+        "The complete response is JSON: encode every patch line break as the JSON escape \\n inside arguments.patch; never place a literal unescaped newline inside that quoted JSON string.",
         "Do not include unsupported Git metadata such as diff --git, new file, deleted file, rename, or copy lines.",
         f"The entire patch remains the value of {APPLY_PATCH_DIRECTIVE_SHAPE}",
         "Neutral arithmetic example. For this body, OLD_COUNT = 1 context + 2 removed = 3 and NEW_COUNT = 1 context + 3 added = 4:",
@@ -369,6 +842,20 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         "A rejected apply_patch does not create an active patch and does not mutate the workspace.",
         "After a rejected patch, do not call revert_patch merely to undo that rejected patch.",
     ]
+    breakpoint_source = _public_breakpoint_source(request)
+    if breakpoint_source is not None:
+        path, line_number, old_line = breakpoint_source
+        lines.extend(
+            [
+                f"Current public PDB/source evidence binds the diagnosed line to {path}:{line_number}.",
+                "If the repair replaces only that visible line, use a zero-context one-line hunk with these exact fixed parts:",
+                f"--- a/{path}",
+                f"+++ b/{path}",
+                f"@@ -{line_number},1 +{line_number},1 @@",
+                f"-{old_line}",
+                "Then add exactly one '+' line containing your corrected replacement; do not copy a symbolic placeholder.",
+            ]
+        )
     if _syntax_check_advertises_path(contracts):
         lines.append(
             "Do not call patch-dependent syntax_check without an active successfully applied patch unless using the advertised path argument."
@@ -423,6 +910,62 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
         "Do not invent keys named action, payload, or transition.",
         "Do not combine an action and a transition.",
     ]
+    proof_gate = request.get("proof_gate")
+    if isinstance(proof_gate, Mapping):
+        next_actions = proof_gate.get("next_required_actions")
+        if isinstance(next_actions, list) and all(type(item) is str for item in next_actions):
+            lines.append(
+                "Exact-proof next required actions: "
+                + (", ".join(next_actions) if next_actions else "none; use a legal transition")
+                + "."
+            )
+    directive_schema = request.get("directive_schema")
+    if isinstance(directive_schema, Mapping):
+        for hypothesis_kind in ("add_hypothesis", "revise_hypothesis"):
+            if hypothesis_kind not in kinds:
+                continue
+            schema = directive_schema.get(hypothesis_kind)
+            constraints = schema.get("constraints") if isinstance(schema, Mapping) else None
+            runtime_constraint = (
+                constraints.get("requires_runtime_evidence")
+                if isinstance(constraints, Mapping)
+                else None
+            )
+            runtime_values = (
+                runtime_constraint.get("enum")
+                if isinstance(runtime_constraint, Mapping)
+                else None
+            )
+            runtime_value = (
+                runtime_values[0]
+                if isinstance(runtime_values, list)
+                and len(runtime_values) == 1
+                and type(runtime_values[0]) is bool
+                else False
+            )
+            def constrained_value(field: str, fallback: Any) -> Any:
+                constraint = constraints.get(field) if isinstance(constraints, Mapping) else None
+                if isinstance(constraint, Mapping) and "example" in constraint:
+                    return constraint["example"]
+                values = constraint.get("enum") if isinstance(constraint, Mapping) else None
+                return values[0] if isinstance(values, list) and len(values) == 1 else fallback
+
+            example = {
+                "kind": hypothesis_kind,
+                "hypothesis_id": constrained_value("hypothesis_id", "hypothesis-1"),
+                "statement": "bounded hypothesis",
+                "confidence": constrained_value("confidence", "low"),
+                "evidence_refs": constrained_value("evidence_refs", []),
+                "requires_runtime_evidence": runtime_value,
+            }
+            lines.append(
+                "Legal hypothesis representation: "
+                + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+            )
+            if hypothesis_kind == "revise_hypothesis":
+                lines.append(
+                    "For revise_hypothesis, replace evidence_refs with actual observation_id values from current history."
+                )
     allowed = controller.get("allowed_actions")
     contracts = request.get("action_contracts")
     if "action" in kinds and isinstance(allowed, list):
@@ -434,16 +977,40 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
                 "Legal action representation: "
                 + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
             )
+            if any(
+                type(value) is str and value.startswith("<") and value.endswith(">")
+                for value in example.get("arguments", {}).values()
+            ):
+                lines.append(
+                    "Every angle-bracket value in that action shape is structural; replace it with a substantive current value and never copy the placeholder literally."
+                )
+            if name == "start_pdb_session":
+                lines.append(
+                    "The shown breakpoint number is only a shape. Replace it with a visible executable target-function line; not def/import/module code."
+                )
             if name == "apply_patch":
                 lines.append(build_apply_patch_guidance(request))
     targets = controller.get("legal_transition_targets")
     if "transition" in kinds and isinstance(targets, list) and targets:
-        legal = ", ".join(target for target in targets if type(target) is str)
-        if legal:
+        legal_targets = [target for target in targets if type(target) is str]
+        if len(legal_targets) == 1:
+            lines.append(
+                "Legal transition representation: "
+                + json.dumps(
+                    {
+                        "kind": "transition",
+                        "target_state": legal_targets[0],
+                        "reason": "advance using the sole legal target",
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        elif legal_targets:
             lines.append(
                 "Legal transition representation: "
                 '{"kind":"transition","target_state":"<one of '
-                + legal
+                + ", ".join(legal_targets)
                 + '>","reason":"<bounded reason>"}'
             )
     return "\n".join(lines)
@@ -628,7 +1195,7 @@ def _http_json_request(
 
 
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
-    if type(maximum) is not int or isinstance(maximum, bool) or not 1 <= maximum <= DEFAULT_MAX_LOGICAL_MODEL_CALLS:
+    if type(maximum) is not int or isinstance(maximum, bool) or not 1 <= maximum <= MAX_CONFIGURED_LOGICAL_MODEL_CALLS:
         raise OllamaAdapterError("logical-call bound is invalid", kind="configuration")
     protocol = request.get("protocol")
     if not isinstance(protocol, Mapping):
@@ -639,120 +1206,7 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
     # The live Local Application controller uses zero-based model-call
     # indices: the first request is 0 and the 25-call envelope is 0..24.
     if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
-        raise OllamaAdapterError("logical model call is outside the 25-call bound", kind="logical_call_limit")
-
-
-def _validate_text(value: Any, maximum: int, label: str) -> None:
-    _bounded_utf8(value, maximum, label)
-    if value != value.strip():
-        raise OllamaAdapterError(f"{label} has surrounding whitespace", kind="invalid_directive")
-
-
-def _validate_action_arguments(name: str, arguments: Any, contracts: Mapping[str, Any]) -> None:
-    if not isinstance(arguments, Mapping):
-        raise OllamaAdapterError("directive arguments are invalid", kind="invalid_directive")
-    contract = contracts.get(name)
-    if not isinstance(contract, Mapping):
-        raise OllamaAdapterError("directive action is not contracted", kind="invalid_directive")
-    properties = contract.get("properties")
-    if not isinstance(properties, Mapping):
-        properties = contract
-    required = contract.get("required")
-    if isinstance(required, list) and any(field not in arguments for field in required):
-        raise OllamaAdapterError("directive action is missing an argument", kind="invalid_directive")
-    if contract.get("additional_properties") is False and set(arguments) - set(properties):
-        raise OllamaAdapterError("directive action contains an unknown argument", kind="invalid_directive")
-    for field, spec in properties.items():
-        if field not in arguments or not isinstance(spec, Mapping):
-            continue
-        value = arguments[field]
-        type_name = spec.get("type")
-        valid = {
-            "string": type(value) is str,
-            "integer": type(value) is int and not isinstance(value, bool),
-            "number": type(value) in (int, float) and not isinstance(value, bool),
-            "boolean": type(value) is bool,
-            "array": type(value) is list,
-            "object": type(value) is dict,
-            "null": value is None,
-        }.get(type_name, True)
-        if not valid:
-            raise OllamaAdapterError("directive argument has the wrong type", kind="invalid_directive")
-        enum = spec.get("enum")
-        if isinstance(enum, list) and value not in enum:
-            raise OllamaAdapterError("directive argument is outside its enum", kind="invalid_directive")
-        if type_name == "string" and isinstance(spec.get("min_length"), int) and len(value) < spec["min_length"]:
-            raise OllamaAdapterError("directive argument is too short", kind="invalid_directive")
-    try:
-        serialized = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"), allow_nan=False)
-    except (TypeError, ValueError, UnicodeError):
-        raise OllamaAdapterError("directive arguments are not finite JSON", kind="invalid_directive") from None
-    if len(serialized.encode("utf-8")) > MAX_DIRECTIVE_ARGUMENT_BYTES:
-        raise OllamaAdapterError("directive arguments exceed the configured bound", kind="invalid_directive")
-
-
-def validate_directive_candidate(candidate: Any, request: Mapping[str, Any]) -> None:
-    """Apply the request-bound Local Application directive contract.
-
-    ``LiveModelAdapter`` repeats this validation downstream with its typed
-    snapshot.  This first gate prevents an invalid provider completion from
-    becoming a successful adapter response.
-    """
-
-    if not isinstance(candidate, Mapping):
-        raise OllamaAdapterError("directive must be a JSON object", kind="invalid_directive")
-    kinds = request.get("directive_schema")
-    if isinstance(kinds, Mapping):
-        kinds = list(kinds)
-    if not isinstance(kinds, list) or not kinds:
-        raise OllamaAdapterError("request carries no directive schema", kind="invalid_request")
-    kind = candidate.get("kind")
-    if type(kind) is not str or kind not in kinds or kind not in DIRECTIVE_TOP_LEVEL_FIELDS:
-        raise OllamaAdapterError("directive kind is not allowed", kind="invalid_directive")
-    if set(candidate) - DIRECTIVE_TOP_LEVEL_FIELDS[kind]:
-        raise OllamaAdapterError("directive contains unknown fields", kind="invalid_directive")
-    controller = request.get("controller")
-    if not isinstance(controller, Mapping):
-        raise OllamaAdapterError("request carries no controller contract", kind="invalid_request")
-
-    if kind == "action":
-        name = candidate.get("name")
-        allowed = controller.get("allowed_actions")
-        if type(name) is not str or not isinstance(allowed, list) or name not in allowed:
-            raise OllamaAdapterError("directive action is not allowed", kind="invalid_directive")
-        contracts = request.get("action_contracts")
-        if not isinstance(contracts, Mapping):
-            raise OllamaAdapterError("request carries no action contracts", kind="invalid_request")
-        _validate_action_arguments(name, candidate.get("arguments"), contracts)
-        return
-    if kind == "transition":
-        targets = controller.get("legal_transition_targets")
-        if not isinstance(targets, list) or candidate.get("target_state") not in targets:
-            raise OllamaAdapterError("directive transition is not legal", kind="invalid_directive")
-        _validate_text(candidate.get("reason"), MAX_DIRECTIVE_REASON_BYTES, "directive reason")
-        return
-    hypothesis_id = candidate.get("hypothesis_id")
-    _validate_text(hypothesis_id, MAX_DIRECTIVE_HYPOTHESIS_ID_BYTES, "hypothesis id")
-    if any(char not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_." for char in hypothesis_id):
-        raise OllamaAdapterError("hypothesis id is invalid", kind="invalid_directive")
-    if kind in {"add_hypothesis", "revise_hypothesis"}:
-        _validate_text(candidate.get("statement"), MAX_DIRECTIVE_STATEMENT_BYTES, "hypothesis statement")
-        if candidate.get("confidence") not in {"low", "medium", "high"}:
-            raise OllamaAdapterError("hypothesis confidence is invalid", kind="invalid_directive")
-        references = candidate.get("evidence_refs")
-        if type(references) is not list or len(references) > MAX_DIRECTIVE_EVIDENCE_REF_COUNT:
-            raise OllamaAdapterError("hypothesis evidence references are invalid", kind="invalid_directive")
-        seen: set[str] = set()
-        for reference in references:
-            _validate_text(reference, MAX_DIRECTIVE_EVIDENCE_REF_BYTES, "evidence reference")
-            if reference in seen:
-                raise OllamaAdapterError("hypothesis evidence references are duplicated", kind="invalid_directive")
-            seen.add(reference)
-        if type(candidate.get("requires_runtime_evidence")) is not bool:
-            raise OllamaAdapterError("hypothesis runtime-evidence flag is invalid", kind="invalid_directive")
-        return
-    if candidate.get("status") not in {"supported", "rejected", "discarded"}:
-        raise OllamaAdapterError("hypothesis status is invalid", kind="invalid_directive")
+        raise OllamaAdapterError("logical model call is outside the configured bound", kind="logical_call_limit")
 
 
 def _extract_final_content(response: Mapping[str, Any], spec: CloudModelSpec) -> str:
@@ -775,15 +1229,312 @@ def _extract_final_content(response: Mapping[str, Any], spec: CloudModelSpec) ->
     return content
 
 
-def parse_directive_content(content: str, request: Mapping[str, Any]) -> dict[str, Any]:
+def _bounded_content_fragment(content: str) -> dict[str, Any]:
+    """Apply the adapter's local bounded/redacted content policy.
+
+    The command adapter is also launched from an isolated temporary working
+    directory, so this small policy helper must not depend on importing the
+    repository package merely to collect passive stream diagnostics.
+    """
+
+    secret_shaped = bool(_SECRET_CONTENT.search(content))
+    sanitized = _SECRET_CONTENT.sub("<redacted>", content)
+    raw = sanitized.encode("utf-8")
+    truncated = len(raw) > MAX_CONTENT_FRAGMENT_TEXT_BYTES
+    if truncated:
+        raw = raw[: MAX_CONTENT_FRAGMENT_TEXT_BYTES - 3]
+        while True:
+            try:
+                text = raw.decode("utf-8") + "..."
+                break
+            except UnicodeDecodeError:
+                raw = raw[:-1]
+    else:
+        text = sanitized
+    retained = text.encode("utf-8")
+    return {
+        "content_sha256": (
+            None
+            if secret_shaped
+            else hashlib.sha256(content.encode("utf-8")).hexdigest()
+        ),
+        "content_text_byte_length": len(retained),
+        "content_text_sha256": hashlib.sha256(retained).hexdigest(),
+        "content_text": text,
+        "content_text_redacted": secret_shaped,
+        "content_text_truncated": truncated,
+    }
+
+
+def _validate_content_frame_diagnostic(
+    *,
+    diagnostic: Mapping[str, Any],
+    original_content: str,
+) -> None:
+    """Fail closed when retained content evidence is internally inconsistent."""
+
+    original_bytes = original_content.encode("utf-8")
+    retained_text = diagnostic.get("content_text")
+    retained_bytes = retained_text.encode("utf-8") if type(retained_text) is str else None
+    if diagnostic.get("content_byte_length") != len(original_bytes):
+        raise OllamaAdapterError(
+            "content observability original byte length is inconsistent",
+            kind="observability_error",
+        )
+    if type(diagnostic.get("content_text_byte_length")) is not int or retained_bytes is None:
+        raise OllamaAdapterError(
+            "content observability retained byte length is missing",
+            kind="observability_error",
+        )
+    if diagnostic["content_text_byte_length"] != len(retained_bytes):
+        raise OllamaAdapterError(
+            "content observability retained byte length is inconsistent",
+            kind="observability_error",
+        )
+    if diagnostic.get("content_text_sha256") != hashlib.sha256(retained_bytes).hexdigest():
+        raise OllamaAdapterError(
+            "content observability retained hash is inconsistent",
+            kind="observability_error",
+        )
+    redacted = diagnostic.get("content_text_redacted") is True
+    truncated = diagnostic.get("content_text_truncated") is True
+    if not redacted and not truncated:
+        if retained_text != original_content:
+            raise OllamaAdapterError(
+                "non-truncated content observability text is not exact",
+                kind="observability_error",
+            )
+        if diagnostic.get("content_sha256") != hashlib.sha256(original_bytes).hexdigest():
+            raise OllamaAdapterError(
+                "content observability original hash is inconsistent",
+                kind="observability_error",
+            )
+
+
+def _validate_content_fragment_aggregate(
+    *,
+    final_content: str,
+    diagnostics: Sequence[Mapping[str, Any]],
+    diagnostics_truncated: bool,
+) -> None:
+    """Verify exact retained fragments reconstruct the parser-authorized content."""
+
+    if diagnostics_truncated:
+        return
+    parts: list[str] = []
+    for diagnostic in diagnostics:
+        if diagnostic.get("content_present") is not True:
+            continue
+        if diagnostic.get("content_text_redacted") or diagnostic.get("content_text_truncated"):
+            return
+        parts.append(diagnostic["content_text"])
+    reconstructed = "".join(parts)
+    if reconstructed != final_content:
+        raise OllamaAdapterError(
+            "content observability fragments do not reconstruct final content",
+            kind="observability_error",
+        )
+    if hashlib.sha256(reconstructed.encode("utf-8")).hexdigest() != hashlib.sha256(final_content.encode("utf-8")).hexdigest():
+        raise OllamaAdapterError(
+            "content observability aggregate hash is inconsistent",
+            kind="observability_error",
+        )
+
+
+def _content_frame_diagnostic(
+    *,
+    frame_index: int,
+    done: bool,
+    thinking: str,
+    content: str,
+) -> dict[str, Any]:
+    """Build bounded diagnostics for one authorized content-channel frame.
+
+    Thinking text is intentionally represented only by length and presence
+    metadata.
+    """
+
+    bounded = _bounded_content_fragment(content)
+    diagnostic = {
+        "frame_index": frame_index,
+        "done": done,
+        "thinking_byte_length": len(thinking.encode("utf-8")),
+        "content_byte_length": len(content.encode("utf-8")),
+        "thinking_present": bool(thinking),
+        "content_present": bool(content),
+        "both_channels_nonempty": bool(thinking and content),
+        **bounded,
+    }
+    _validate_content_frame_diagnostic(diagnostic=diagnostic, original_content=content)
+    return diagnostic
+
+
+def _stream_chat_request(
+    endpoint: str,
+    request: Mapping[str, Any],
+    spec: CloudModelSpec,
+    *,
+    idle_timeout_seconds: float,
+    thinking_level: str | None,
+    activity_stream: TextIO,
+ ) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Read Ollama NDJSON while treating every frame as progress.
+
+    Thinking is a progress channel, never directive authority.  Its text is
+    counted and immediately discarded.  Only ``message.content`` is retained
+    under the directive-content bound.  Bounded frame diagnostics retain only
+    authorized content text and safe thinking metadata.  One whitespace
+    heartbeat per frame lets the parent command transport refresh its idle
+    watchdog without ever receiving or persisting private reasoning text.
+    """
+
+    if thinking_level is not None and thinking_level not in {"low", "medium", "high"}:
+        raise OllamaAdapterError("Ollama thinking level is invalid", kind="configuration")
+    host, port, base_path = validate_endpoint(endpoint)
+    idle_timeout_seconds = _validate_timeout_seconds(idle_timeout_seconds)
+    payload: dict[str, Any] = {
+        "model": spec.local_alias,
+        "messages": build_chat_messages(request),
+        "stream": True,
+    }
+    if thinking_level is not None:
+        payload["think"] = thinking_level
+    request_bytes = (_safe_json(payload) + "\n").encode("utf-8")
+    if len(request_bytes) > MAX_RAW_RESPONSE_BYTES:
+        raise OllamaAdapterError("Ollama request exceeded the configured bound", kind="request_too_large")
+
+    connection = http.client.HTTPConnection(host, port, timeout=idle_timeout_seconds)
+    content_parts: list[str] = []
+    content_bytes = 0
+    thinking_bytes = 0
+    frame_count = 0
+    content_frame_count = 0
+    first_content_frame_index: int | None = None
+    last_content_frame_index: int | None = None
+    content_frame_diagnostics: list[dict[str, Any]] = []
+    content_frame_diagnostics_truncated = False
+    final: Mapping[str, Any] | None = None
     try:
-        candidate = json.loads(content)
-    except (TypeError, json.JSONDecodeError):
-        raise OllamaAdapterError("Ollama content was not exactly one JSON document", kind="invalid_directive") from None
-    if not isinstance(candidate, dict):
-        raise OllamaAdapterError("Ollama content was not a JSON object", kind="invalid_directive")
-    validate_directive_candidate(candidate, request)
-    return dict(candidate)
+        try:
+            connection.request(
+                "POST",
+                _path(base_path, "/chat"),
+                body=request_bytes,
+                headers={
+                    "Accept": "application/x-ndjson",
+                    "Content-Type": "application/json",
+                },
+            )
+            response = connection.getresponse()
+        except (socket.timeout, TimeoutError):
+            raise OllamaAdapterError("Ollama request was idle for too long", kind="timeout") from None
+        except (OSError, http.client.HTTPException):
+            raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
+        if response.status < 200 or response.status >= 300:
+            raise OllamaAdapterError("Ollama HTTP request returned an error", kind="http_error")
+
+        while True:
+            if connection.sock is not None:
+                connection.sock.settimeout(idle_timeout_seconds)
+            try:
+                raw_line = response.readline(MAX_STREAM_FRAME_BYTES + 1)
+            except (socket.timeout, TimeoutError):
+                raise OllamaAdapterError("Ollama stream was idle for too long", kind="timeout") from None
+            except (OSError, http.client.IncompleteRead):
+                raise OllamaAdapterError("Ollama stream could not be read", kind="http_error") from None
+            if not raw_line:
+                break
+            if len(raw_line) > MAX_STREAM_FRAME_BYTES:
+                raise OllamaAdapterError("Ollama stream frame exceeded the configured bound", kind="response_too_large")
+            if not raw_line.strip():
+                continue
+            try:
+                frame = json.loads(raw_line.decode("utf-8"))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                raise OllamaAdapterError("Ollama stream frame was invalid", kind="invalid_response") from None
+            if not isinstance(frame, Mapping):
+                raise OllamaAdapterError("Ollama stream frame was not an object", kind="invalid_response")
+            if frame.get("model") != spec.upstream_model:
+                raise OllamaAdapterError("Ollama returned an unexpected model", kind="model_mismatch")
+            done = frame.get("done")
+            if type(done) is not bool:
+                raise OllamaAdapterError("Ollama stream completion flag is invalid", kind="invalid_completion")
+            message = frame.get("message")
+            if not isinstance(message, Mapping) or message.get("role") != "assistant":
+                raise OllamaAdapterError("Ollama assistant message is invalid", kind="invalid_response")
+            if "tool_calls" in message:
+                raise OllamaAdapterError("Ollama tool-call activity is not permitted", kind="tool_call_rejected")
+            thinking = message.get("thinking", "")
+            content = message.get("content", "")
+            if type(thinking) is not str or type(content) is not str:
+                raise OllamaAdapterError("Ollama stream message fields are invalid", kind="invalid_response")
+
+            thinking_bytes += len(thinking.encode("utf-8"))
+            content_bytes += len(content.encode("utf-8"))
+            if content_bytes > MAX_RAW_RESPONSE_BYTES:
+                raise OllamaAdapterError("Ollama directive content exceeded the configured bound", kind="response_too_large")
+            content_parts.append(content)
+            if content:
+                content_frame_count += 1
+                if first_content_frame_index is None:
+                    first_content_frame_index = frame_count
+                last_content_frame_index = frame_count
+            if thinking or content or done:
+                if len(content_frame_diagnostics) < MAX_RETAINED_CONTENT_FRAME_DIAGNOSTICS:
+                    content_frame_diagnostics.append(
+                        _content_frame_diagnostic(
+                            frame_index=frame_count,
+                            done=done,
+                            thinking=thinking,
+                            content=content,
+                        )
+                    )
+                else:
+                    content_frame_diagnostics_truncated = True
+            frame_count += 1
+            activity_stream.write("\n")
+            activity_stream.flush()
+            if done:
+                if type(frame.get("done_reason")) is not str or not frame["done_reason"]:
+                    raise OllamaAdapterError("Ollama completion metadata is invalid", kind="invalid_completion")
+                final = frame
+                break
+
+        if final is None:
+            raise OllamaAdapterError("Ollama stream ended without completion", kind="invalid_completion")
+    finally:
+        connection.close()
+
+    final_content = "".join(content_parts)
+    if not final_content.strip():
+        raise OllamaAdapterError("Ollama assistant content is missing", kind="invalid_response")
+    _validate_content_fragment_aggregate(
+        final_content=final_content,
+        diagnostics=content_frame_diagnostics,
+        diagnostics_truncated=content_frame_diagnostics_truncated,
+    )
+    usage: dict[str, Any] = {}
+    prompt_tokens = final.get("prompt_eval_count")
+    completion_tokens = final.get("eval_count")
+    if type(prompt_tokens) is int and prompt_tokens >= 0:
+        usage["prompt_tokens"] = prompt_tokens
+    if type(completion_tokens) is int and completion_tokens >= 0:
+        usage["completion_tokens"] = completion_tokens
+    if "prompt_tokens" in usage and "completion_tokens" in usage:
+        usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+    return final_content, usage, {
+        "schema_version": CONTENT_FRAGMENT_OBSERVABILITY_SCHEMA_VERSION,
+        "stream_frame_count": frame_count,
+        "thinking_bytes": thinking_bytes,
+        "content_bytes": content_bytes,
+        "first_content_frame_index": first_content_frame_index,
+        "last_content_frame_index": last_content_frame_index,
+        "content_frame_count": content_frame_count,
+        "final_content_byte_length": len(final_content.encode("utf-8")),
+        "final_content_sha256": hashlib.sha256(final_content.encode("utf-8")).hexdigest(),
+        "content_frame_diagnostics": content_frame_diagnostics,
+        "content_frame_diagnostics_truncated": content_frame_diagnostics_truncated,
+    }
 
 
 def _chat_request(
@@ -793,12 +1544,14 @@ def _chat_request(
     *,
     timeout_seconds: float,
 ) -> Mapping[str, Any]:
-    payload = {
+    payload: dict[str, Any] = {
         "model": spec.local_alias,
         "messages": build_chat_messages(request),
         "stream": False,
-        "think": "low",
     }
+    thinking = effective_thinking_level(spec, None)
+    if thinking is not None:
+        payload["think"] = thinking
     return _http_json_request(
         endpoint,
         "POST",
@@ -816,7 +1569,7 @@ def _preflight_model_entry(tags: Mapping[str, Any], spec: CloudModelSpec) -> Map
         if not isinstance(entry, Mapping):
             continue
         if entry.get("name") == spec.local_alias and entry.get("model") == spec.local_alias:
-            if entry.get("remote_model") != spec.upstream_model:
+            if entry.get("remote_model") != spec.effective_tags_remote_model:
                 raise OllamaAdapterError("configured Ollama model has unexpected remote model", kind="preflight_failed")
             _normalize_cloud_remote_host(entry.get("remote_host"))
             return entry
@@ -887,12 +1640,22 @@ def run_preflight(
         "expected_model": spec.local_alias,
         "expected_remote_model": spec.upstream_model,
         "expected_remote_host": EXPECTED_CLOUD_REMOTE_HOST,
+        "expected_tags_remote_model": spec.effective_tags_remote_model,
         "model_available": True,
         "model_metadata_readable": True,
         "model_remote_model": tag["remote_model"],
         "model_remote_host": _normalize_cloud_remote_host(tag["remote_host"]),
         "model_capabilities": sorted(capabilities),
         "model_tag_digest": tag.get("digest") if type(tag.get("digest")) is str else None,
+        "readiness": spec.readiness,
+        "transport_profile_declared": spec.transport_profile_declared,
+        "model_transport_verified": spec.transport_verified,
+        "live_transport_ready": is_live_transport_ready(spec),
+        "treatment_eligible": is_treatment_eligible(spec),
+        "model_thinking_level": spec.thinking_level,
+        "idle_timeout_seconds": spec.idle_timeout_seconds,
+        "request_timeout_seconds": spec.request_timeout_seconds,
+        "transport_config_fingerprint": transport_config_fingerprint(spec),
         "provider_inference_started": False,
         "cloud_inference_verified": False,
     }
@@ -927,10 +1690,53 @@ def run_adapter(
     parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
     parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
+    parser.add_argument(
+        "--thinking-level",
+        choices=("low", "medium", "high"),
+        default=None,
+    )
     parser.add_argument("--preflight", action="store_true")
+    parser.add_argument("--list-models", action="store_true")
+    parser.add_argument("--json", action="store_true", dest="json_output")
     args = parser.parse_args(argv)
 
     try:
+        if args.list_models:
+            if args.json_output:
+                payload = {
+                    spec.local_alias: {
+                        "local_alias": spec.local_alias,
+                        "upstream_model": spec.upstream_model,
+                        "effective_tags_remote_model": spec.effective_tags_remote_model,
+                        "family": spec.family,
+                        "parameter_count": spec.parameter_count,
+                        "context_length": spec.context_length,
+                        "capabilities": list(spec.capabilities),
+                        "readiness": spec.readiness,
+                        "transport_profile_declared": spec.transport_profile_declared,
+                        "transport_verified": spec.transport_verified,
+                        "live_transport_ready": is_live_transport_ready(spec),
+                        "treatment_eligible": is_treatment_eligible(spec),
+                        "thinking_level": spec.thinking_level,
+                        "transport_config_fingerprint": transport_config_fingerprint(spec),
+                    }
+                    for spec in sorted(CLOUD_MODELS.values(), key=lambda s: s.local_alias)
+                }
+                stdout_stream.write(_safe_json(payload) + "\n")
+            else:
+                for spec in sorted(CLOUD_MODELS.values(), key=lambda s: s.local_alias):
+                    if spec.transport_verified:
+                        flag = "live_verified"
+                    elif spec.transport_profile_declared:
+                        flag = "profile_declared"
+                    else:
+                        flag = "catalog"
+                    think = spec.thinking_level if spec.thinking_level is not None else "default"
+                    stdout_stream.write(
+                        f"{spec.local_alias:30} -> {spec.upstream_model:25} [{flag}] think={think}\n"
+                    )
+            stdout_stream.flush()
+            return 0
         spec = resolve_cloud_model(args.model)
         validate_endpoint(args.endpoint)
         if args.preflight:
@@ -949,19 +1755,36 @@ def run_adapter(
         canonical_public_request(request)
         deadline = time.monotonic() + _validate_timeout_seconds(args.timeout)
         _read_cloud_metadata(args.endpoint, spec, deadline=deadline)
-        response = _chat_request(
+        thinking = effective_thinking_level(spec, args.thinking_level)
+        content, usage, activity = _stream_chat_request(
             args.endpoint,
             request,
             spec,
-            timeout_seconds=_remaining_timeout(deadline),
+            idle_timeout_seconds=_remaining_timeout(deadline),
+            thinking_level=thinking,
+            activity_stream=stderr_stream,
         )
-        content = _extract_final_content(response, spec)
-        directive = parse_directive_content(content, request)
-        stdout_stream.write(_safe_json({"directive": directive}) + "\n")
+        result: dict[str, Any] = {
+            "provider_completion_schema_version": PROVIDER_COMPLETION_ENVELOPE_SCHEMA,
+            "directive_content": content,
+            "transport_activity": activity,
+        }
+        if usage:
+            result["usage"] = usage
+        stdout_stream.write(_safe_json(result) + "\n")
         stdout_stream.flush()
         return 0
     except OllamaAdapterError as exc:
-        stderr_stream.write(f"Error: {exc}\n")
+        stderr_stream.write(
+            _safe_json(
+                {
+                    "schema_version": COMMAND_ERROR_SCHEMA_VERSION,
+                    "kind": exc.kind,
+                    "message": str(exc),
+                }
+            )
+            + "\n"
+        )
         stderr_stream.flush()
         return 1
     except (BrokenPipeError, OSError):

@@ -23,6 +23,14 @@ outputs/
 artifacts/
 checkpoints/
 models/
+logs/
+continuation-v9/
+
+# Local Level-32 live-run trees; publish conclusions in tracked docs/reports,
+# keep raw provider transcripts and evaluator output local.
+experiments/level32-cookiecutter-967-*/
+experiments/pdb_capability_ladder/level*-*/
+experiments/pdb_capability_ladder/transport_qualifications/*.json
 
 # Task 10A review evidence (working-only, never commit)
 _ai-review/task-10a-real-model-evaluation-harness-v1/

@@ -12,6 +12,32 @@ Rules:
 
 ---
 
+## Autonomous Level-32 continuation (2026-08-22)
+
+- [ ] **Official Level-32 acceptance — ACTIVE.** Gemma V2 was a parser-
+  compatibility failure; `directive-normalization-v2` is provider-free
+  validated and independently approved. Fresh Gemma V3 completed the full
+  exact-PDB/local/official path but the official evaluator rejected its
+  candidate (F2P 0/5; P2P failed 9/9), establishing a clean semantic failure.
+  The remaining 12-model Ollama queue is frozen with GLM 5.2 penultimate and
+  Kimi K3 final. Durable evidence is under
+  `_ai-review/level32-autonomous-campaign/`.
+
+## Frozen Level-32 model escalation (2026-08-22)
+
+- [x] **Authorized four-model escalation — COMPLETE / NO OFFICIAL SUCCESS.**
+  The frozen `audreyr__cookiecutter-967` exact-PDB contract was preserved.
+  GPT-OSS 120B completed a valid treatment but the official evaluator rejected
+  its patch (F2P 0/5, P2P failures 9/9). Kimi K2.6 had a retained request-size
+  failure, a bounded timeout repair, and a final strict invalid-directive
+  incompatibility. Qwen3.5 exhausted the unchanged two-patch budget and its
+  official candidate failed F2P 0/5. Gemma4 31B V2 completed the required PDB
+  lifecycle, then an otherwise-valid hypothesis revision was rejected solely
+  because one exact Markdown JSON fence surrounded it; later forensics classify
+  V2 as `PARSER_COMPATIBILITY_FAILURE`. No hidden result was used to tune later prompts, public tests,
+  PDB probes, or task wording. Chronology and evidence are in
+  `_ai-review/level32-model-escalation-v1/` and the ladder directory.
+
 ## Local Application V1
 
 - [x] **Task 1 — Establish application contracts** — ACCEPTED (2026-08-14).
@@ -139,6 +165,55 @@ Rules:
   shared application architecture. Provider marketplaces/SDKs, credential
   management, arbitrary-repository IDE behavior, GPU/model hosting, browser UI,
   and campaign orchestration remain explicit non-goals.
+- [x] **Exact-PDB single-task live repair proof** — COMPLETE (2026-08-21).
+  Ollama Cloud `gpt-oss:20b-cloud` completed the curated
+  `pdb-required-boundary-006` case through the existing Local Application
+  controller, typed tools, real bounded PDB lifecycle, PatchManager, event
+  stream/replay, and independent verifier. The model executed source →
+  runtime-required hypothesis → PDB start/stack/locals/next/stop →
+  evidence-bound revision/diagnosis → one-line unified diff → validation.
+  Verifier: `COMPLETED/RESOLVED`, F2P 1/1, P2P 1/1, correct target symbol,
+  cleanup true, canonical fixture unchanged. Runtime: 21 logical calls and 21
+  transport attempts, zero retries/provider errors, 55.758 s controller,
+  12.427 s verifier, 68.233 s case elapsed; 54-event replay terminated `Done`.
+  Scope is intentionally one simple task and proves the lowest rung only; no
+  multi-task rate, generalization, or PDB-versus-static causal claim follows.
+- [x] **Exact-PDB capability ladder — 12/100 rung** — COMPLETE (2026-08-21).
+  The same `gpt-oss:20b-cloud` model repaired
+  `pdb-required-caller-callee-007`, a two-function caller/callee unit-contract
+  fixture with normalized input, F2P 1/1, P2P 2/2, and verifier-only
+  generalization checks. The activity-aware stream separated thinking from
+  action authority: 40,168 frames / 181,326 discarded thinking bytes did not
+  trip the 300-second inactivity watchdog, while only 2,644 action-content
+  bytes entered strict directive parsing. Result: 22 calls/attempts, zero
+  retries/provider errors, 3 successful/0 failed PDB observations,
+  `COMPLETED/RESOLVED`, private checks true, cleanup/immutability true, replay
+  `Done`, 391.289 s elapsed. Raw report, patch, state hashes, and recheck are
+  tracked at `experiments/pdb_capability_ladder/level12-gpt-oss-v1/`. The
+  result does not yet locate GPT-OSS's failure boundary.
+- [x] **Exact-PDB capability ladder — 18/100 rung** — COMPLETE (2026-08-21).
+  `gpt-oss:20b-cloud` repaired `pdb-required-multistage-units-008`, a
+  three-function normalize/convert/retry-expand/grace pipeline with one public
+  F2P, two P2P, and verifier-only unit/generalization checks. PDB exposed
+  `value=2`, `base_delay_ms=2000`, and `retry_count=2`; the model's one-line
+  patch preserved the converted value into retry expansion. Result: 21
+  calls/attempts, zero retries/provider errors, 3 successful/0 failed PDB
+  observations, `COMPLETED/RESOLVED`, private checks true,
+  cleanup/immutability true, 54-event replay `Done`, 165.463 s elapsed. Frozen
+  evidence is at `experiments/pdb_capability_ladder/level18-gpt-oss-v1/`.
+  This remains one ordinal task; the later 32/100 rung located the first valid
+  failure boundary for this treatment.
+- [x] **Exact-PDB capability ladder — 32/100 boundary characterization** —
+  COMPLETE / NOT ACCEPTED (2026-08-21). On frozen SWE-rebench V2
+  `audreyr__cookiecutter-967`, V1 stopped on duplicated provider context and V2
+  on an arbitrary host-path local binding; both are infrastructure-invalid and
+  separately retained. V3 completed 24 calls/attempts, zero retries/provider
+  errors, exact PDB proof, model patch, controller `Done`, local verifier
+  `RESOLVED`, cleanup/immutability, and 63-event replay. The official pinned
+  Docker verifier rejected the candidate (F2P 0/5; P2P not passed 9/9), making
+  V3 a genuine model repair failure rather than a harness failure. No task
+  mutation or hidden-informed V4 followed. Canonical evidence is under
+  `experiments/pdb_capability_ladder/level32-cookiecutter-967-gpt-oss-v3/`.
 
 ## 0. Daily Requirement
 

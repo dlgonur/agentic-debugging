@@ -255,6 +255,7 @@ class PdbSession:
         shutdown_timeout: float = _DEFAULT_SHUTDOWN_TIMEOUT,
         max_diagnostics: int = _DEFAULT_MAX_DIAGNOSTICS,
         max_line: int = _DEFAULT_MAX_LINE,
+        proof_pytest_dependencies: bool = False,
     ) -> None:
         self._validate_timeout(startup_timeout, "startup_timeout")
         self._validate_timeout(request_timeout, "request_timeout")
@@ -274,6 +275,12 @@ class PdbSession:
         self._shutdown_timeout = shutdown_timeout
         self._max_diagnostics = max_diagnostics
         self._max_line = max_line
+        # The normal worker remains isolated from site packages.  The exact
+        # public pytest proof opts into the single dependency root it needs;
+        # this flag is never enabled by the default controller path.
+        if type(proof_pytest_dependencies) is not bool:
+            raise PdbSessionError("proof_pytest_dependencies must be a boolean")
+        self._proof_pytest_dependencies = proof_pytest_dependencies
 
         self._state = PdbSessionState.NEW
         self._proc: Optional[subprocess.Popen] = None
@@ -347,12 +354,22 @@ class PdbSession:
 
     def _get_worker_argv(self) -> List[str]:
         project_root = self._compute_project_root().replace("\\", "/")
-        bootstrap = (
-            "import sys; import runpy; "
-            "sys.path.insert(0, " + repr(project_root) + "); "
-            "runpy.run_module("
-            "'agentic_debugger.runtime.pdb_worker', run_name='__main__')"
-        )
+        if self._proof_pytest_dependencies:
+            bootstrap = (
+                "import sys; import site; import runpy; "
+                "sys.path.append(site.getusersitepackages()); "
+                "sys.path.insert(0, __import__('os').getcwd()); "
+                "sys.path.insert(0, " + repr(project_root) + "); "
+                "runpy.run_module("
+                "'agentic_debugger.runtime.pdb_worker', run_name='__main__')"
+            )
+        else:
+            bootstrap = (
+                "import sys; import runpy; "
+                "sys.path.insert(0, " + repr(project_root) + "); "
+                "runpy.run_module("
+                "'agentic_debugger.runtime.pdb_worker', run_name='__main__')"
+            )
         return [
             sys.executable,
             "-I",
@@ -2657,7 +2674,8 @@ class PdbSession:
         if line_data is None:
             self._fail_and_cleanup(
                 PdbWorkerExitedError(
-                    "Worker closed stdout while waiting for response"
+                    "Worker closed stdout while waiting for response "
+                    f"(exit code: {proc.poll()})"
                 )
             )
 

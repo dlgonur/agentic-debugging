@@ -24,9 +24,11 @@ from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolRejectedError, ToolRegistry, ToolResult, ToolSpec
 from agentic_debugger.demo.catalog import build_reference_patch, scenario_for
 from agentic_debugger.demo.policies import DemoPolicy
-from agentic_debugger.demo.tools import DemoToolContext, build_registry
+from agentic_debugger.demo.tools import DemoToolContext, build_registry, prepare_pdb_probe
 from agentic_debugger.evaluation.live import (
     MAX_REJECTION_DETAIL_CHARS,
+    MODEL_HISTORY_WINDOW,
+    PROOF_HISTORY_WINDOW,
     DirectiveRejectionCategory,
     JsonlCommandTransport,
     LiveCaseStatus,
@@ -42,11 +44,13 @@ from agentic_debugger.evaluation.live import (
     render_live_report,
     run_live_case,
     run_live_evaluation,
+    validate_synthetic_qualification_content,
     validate_live_report,
 )
 from agentic_debugger.evaluation.live_cli import main as live_main
 from agentic_debugger.evaluation.task_schema import DebugTask
 from agentic_debugger.events.schema import Action, Observation, ObservationStatus
+from agentic_debugger.events.replay import replay_events
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 
@@ -215,7 +219,7 @@ def _single_case_report(case):
     limits = LiveRunLimits(max_model_requests=32, max_controller_steps=32)
     evaluation_id = "single-case-validation"
     return {
-        "schema_version": "1.0",
+        "schema_version": "1.1",
         "report_id": evaluation_id,
         "evaluation_id": evaluation_id,
         "run_label": "single-case-validation",
@@ -320,6 +324,101 @@ def test_process_output_is_bounded_before_serialization():
     with pytest.raises(LiveTransportError, match="output bound"):
         transport.request({}, 5)
 
+
+def test_typed_command_error_kind_survives_and_arbitrary_stderr_is_discarded():
+    envelope = json.dumps(
+        {
+            "schema_version": "command-error-v1",
+            "kind": "invalid_directive",
+            "message": "provider completion did not satisfy the directive contract",
+        },
+        separators=(",", ":"),
+    )
+
+
+    typed_command = (
+        sys.executable,
+        "-c",
+        f"import sys; sys.stdin.read(); sys.stderr.write({envelope!r}); raise SystemExit(1)",
+    )
+    with pytest.raises(LiveTransportError) as typed_error:
+        JsonlCommandTransport(
+            LiveModelConfig("local", typed_command), max_output_bytes=1024
+        ).request({}, 5)
+    assert typed_error.value.kind == "invalid_directive"
+    assert "provider completion" not in str(typed_error.value)
+
+    task = DebugTask.from_mapping(
+        json.loads(
+            (
+                ROOT
+                / "agentic_debugger/datasets/curated"
+                / TASK_ID
+                / "task.json"
+            ).read_text()
+        )
+    )
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=LiveModelConfig("local", typed_command),
+        transport=JsonlCommandTransport(
+            LiveModelConfig("local", typed_command), max_output_bytes=1024
+        ),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.to_mapping()["provider_error_kinds"] == [
+        "invalid_directive"
+    ]
+
+    secret = "token=super-secret-value"
+    arbitrary_command = (
+        sys.executable,
+        "-c",
+        "import sys; sys.stderr.write(sys.stdin.read()); raise SystemExit(1)",
+    )
+    with pytest.raises(LiveTransportError) as arbitrary_error:
+        JsonlCommandTransport(
+            LiveModelConfig("local", arbitrary_command), max_output_bytes=1024
+        ).request({"diagnostic": secret}, 5)
+    assert arbitrary_error.value.kind == "process_error"
+    assert secret not in str(arbitrary_error.value)
+
+
+def _synthetic_qualification_contract() -> dict[str, dict[str, object]]:
+    return {
+        "run_reproduction": {
+            "properties": {
+                "phase": {"type": "string", "enum": ["baseline"]},
+            },
+            "required": ["phase"],
+            "additional_properties": False,
+        },
+    }
+
+
+def test_synthetic_qualification_reuses_live_parser_and_normalization_policy() -> None:
+    content = '{"kind":"action","name":"run_reproduction","arguments":{"phase":"baseline"}}'
+
+    accepted = validate_synthetic_qualification_content(
+        content + "}",
+        action_contracts=_synthetic_qualification_contract(),
+    )
+    rejected = validate_synthetic_qualification_content(
+        '\":\"action\",\"name\":\"run_reproduction\",\"arguments\":{\"phase\":\"baseline\"}}',
+        action_contracts=_synthetic_qualification_contract(),
+    )
+
+    assert accepted["directive_protocol_ok"] is True
+    assert accepted["category"] == "DIRECTIVE_PROTOCOL_VERIFIED"
+    assert accepted["normalization_applied"] is True
+    assert rejected["directive_protocol_ok"] is False
+    assert rejected["category"] == "DIRECTIVE_INVALID_JSON"
+    assert rejected["reason_code"] == "invalid_json"
+
 def test_process_stdin_and_wait_share_the_declared_timeout():
     command = (sys.executable, "-c", "import time; time.sleep(5)")
     transport = JsonlCommandTransport(LiveModelConfig("local", command), max_output_bytes=1024)
@@ -375,6 +474,217 @@ def test_model_request_context_is_complete_bounded_and_identity_scoped():
     assert captured["controller"]["legal_transition_targets"] == ["Understand", "Failed"]
     assert set(captured["directive_schema"]) == {"action", "transition"}
     assert isinstance(captured["history"], list)
+
+
+def test_proof_request_compacts_only_provider_history_and_normal_history_is_unchanged():
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    contracts = _test_live_registry().argument_contracts()
+    seeded_history = [{"request_index": index} for index in range(40)]
+    for proof_required, expected_window in (
+        (False, MODEL_HISTORY_WINDOW),
+        (True, PROOF_HISTORY_WINDOW),
+    ):
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.STATIC_BASELINE,
+            config=config(),
+            transport=FakeTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+            registry=_test_live_registry(),
+            proof_required=proof_required,
+        )
+        adapter.history = list(seeded_history)
+        request = adapter._request_context(
+            _snapshot(task, ControllerState.REPRODUCE, model_call_index=40),
+            logical_request_index=40,
+            transport_attempt_index=1,
+            contracts=contracts,
+            legal_targets=["Understand", "Failed"],
+        )
+        assert [entry["request_index"] for entry in request["history"]] == list(
+            range(40 - expected_window, 40)
+        )
+
+
+def test_proof_request_compacts_large_locals_without_mutating_audit_evidence():
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+
+    def scalar(value):
+        return {
+            "kind": "str",
+            "type": "builtins.str",
+            "value": value,
+            "special": None,
+            "size": len(value),
+            "items": [],
+            "entries": [],
+            "truncated": False,
+        }
+
+    mapping_value = {
+        "kind": "dict",
+        "type": "builtins.dict",
+        "value": None,
+        "special": None,
+        "size": 12,
+        "items": [],
+        "entries": [
+            {"key": scalar(f"key-{index}"), "value": scalar("x" * 120)}
+            for index in range(12)
+        ],
+        "truncated": False,
+    }
+    observation = Observation(
+        "observation-locals",
+        "action-locals",
+        "proof-run",
+        task.task_id,
+        ActionName.GET_FRAME_LOCALS.value,
+        ObservationStatus.OK,
+        {
+            "state": "paused",
+            "frame_id": 0,
+            "pause_generation": 1,
+            "locals": [
+                {"name": f"local_{index}", "value": mapping_value}
+                for index in range(4)
+            ],
+            "proof": {
+                "exact_reproduction": True,
+                "task_id": task.task_id,
+                "reproduction_argv": ["python", "-m", "pytest", "public::node"],
+                "pytest_node": "public::node",
+                "workspace_id": "workspace-id",
+                "production_file": "target.py",
+                "production_file_sha256": "a" * 64,
+                "breakpoint_line": 12,
+                "production_frame": "target",
+            },
+        },
+        "bounded frame locals collected",
+        False,
+    )
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=config(),
+        transport=FakeTransport(),
+        limits=LiveRunLimits(max_model_requests=1),
+        registry=_test_live_registry(),
+        proof_required=True,
+    )
+    adapter.history = [
+        {
+            "request_index": 8,
+            "state": ControllerState.RUNTIME_EVIDENCE.value,
+            "allowed_actions": [ActionName.NEXT_PDB_SESSION.value],
+            "last_observation": observation.to_mapping(),
+        }
+    ]
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    snapshot = ControllerSnapshot(
+        "proof-run",
+        task.task_id,
+        ControllerState.RUNTIME_EVIDENCE,
+        8,
+        limits,
+        ControllerBudgetState(),
+        HypothesisLedger(),
+        observation,
+    )
+    request = adapter._request_context(
+        snapshot,
+        logical_request_index=8,
+        transport_attempt_index=1,
+        contracts={},
+        legal_targets=[],
+        directive_schema={},
+    )
+
+    assert request["history"] == []
+    projected = request["controller"]["last_observation"]
+    assert set(projected["payload"]["proof"]) == {
+        "exact_reproduction",
+        "production_file",
+        "production_frame",
+        "breakpoint_line",
+    }
+    assert projected["payload"]["locals"][0]["value"] == mapping_value
+    assert len(json.dumps(request, separators=(",", ":")).encode("utf-8")) <= 25_000
+    assert observation.payload["proof"]["production_file_sha256"] == "a" * 64
+    assert observation.payload["locals"][0]["value"]["type"] == "builtins.dict"
+
+
+def test_proof_binding_prefers_scenario_declared_observed_local():
+    task = DebugTask.from_mapping(
+        json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text())
+    )
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=config(),
+        transport=FakeTransport(),
+        limits=LiveRunLimits(max_model_requests=1),
+        registry=_test_live_registry(),
+        proof_required=True,
+        proof_observed_local_names=("yaml_dict", "config_dict"),
+    )
+
+    def proof_observation(index, name, payload):
+        return Observation(
+            f"observation-{index}",
+            f"action-{index}",
+            "proof-run",
+            task.task_id,
+            name,
+            ObservationStatus.OK,
+            payload,
+            name,
+            False,
+        )
+
+    adapter._proof_observations = [
+        proof_observation(
+            1,
+            ActionName.START_PDB_SESSION.value,
+            {
+                "proof": {
+                    "production_file": "target.py",
+                    "production_frame": "target",
+                }
+            },
+        ),
+        proof_observation(
+            2,
+            ActionName.GET_STACK_SUMMARY.value,
+            {
+                "pause_generation": 1,
+                "frames": [{"frame_id": 0, "is_current": True}],
+            },
+        ),
+        proof_observation(
+            3,
+            ActionName.GET_FRAME_LOCALS.value,
+            {
+                "locals": [
+                    {"name": "config_dict", "value": {"host_path": "C:/host"}},
+                    {"name": "yaml_dict", "value": {"abbreviations": {"local": "url"}}},
+                ]
+            },
+        ),
+        proof_observation(4, ActionName.NEXT_PDB_SESSION.value, {"state": "paused"}),
+    ]
+
+    bindings = adapter._proof_evidence_bindings()
+    assert bindings["observed_values"] == {
+        "yaml_dict": {"abbreviations": {"local": "url"}}
+    }
 
 
 def test_current_request_reports_protocol_13():
@@ -600,6 +910,7 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
     registry = build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY)
     registered = {name.value for name in registry.names()}
     pdb_names = {
+        ActionName.GET_FAILURE_TRACE.value,
         ActionName.START_PDB_SESSION.value,
         ActionName.GET_STACK_SUMMARY.value,
         ActionName.GET_FRAME_LOCALS.value,
@@ -652,6 +963,267 @@ def test_actual_live_registry_is_the_source_of_effective_contract_coherence(tmp_
         assert ActionName.STOP_PDB_SESSION.value in active
     finally:
         workspace.cleanup()
+
+
+def test_failure_trace_is_advertised_only_after_successful_baseline(tmp_path):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    fixture = ROOT / "agentic_debugger/datasets/curated/pdb-required-boundary-006"
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    probe = prepare_pdb_probe(fixture, scenario_for(task.task_id), tmp_path, task=task)
+    case_dir = tmp_path / "failure-trace-case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(case_dir))
+
+    class CaptureTransport:
+        def __init__(self):
+            self.payload = None
+
+        def request(self, payload, timeout_seconds):
+            del timeout_seconds
+            self.payload = payload
+            target = payload["controller"]["legal_transition_targets"][0]
+            return {
+                "directive": {
+                    "kind": "transition",
+                    "target_state": target,
+                    "reason": "contract captured",
+                }
+            }
+
+    def advertised(last_observation, *, proof_required=True):
+        transport = CaptureTransport()
+        context = DemoToolContext(task=task, workspace=workspace, patch="", probe=probe)
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=transport,
+            limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+            registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
+            proof_required=proof_required,
+        )
+        adapter.next_directive(
+            ControllerSnapshot(
+                "failure-trace-run",
+                task.task_id,
+                ControllerState.REPRODUCE,
+                0,
+                ControllerBudgetLimits.from_task_constraints(task.constraints),
+                ControllerBudgetState(),
+                HypothesisLedger(),
+                last_observation,
+            )
+        )
+        return set(transport.payload["controller"]["allowed_actions"])
+
+    def baseline(status, failure_reproduced):
+        return Observation(
+            "baseline-observation",
+            "baseline-action",
+            "failure-trace-run",
+            task.task_id,
+            ActionName.RUN_REPRODUCTION.value,
+            status,
+            {"phase": "baseline", "failure_reproduced": failure_reproduced},
+            "baseline",
+            False,
+        )
+
+    try:
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(None)
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(
+            baseline(ObservationStatus.REJECTED, True)
+        )
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(
+            baseline(ObservationStatus.OK, False)
+        )
+        assert ActionName.GET_FAILURE_TRACE.value not in advertised(
+            baseline(ObservationStatus.OK, True)
+        )
+        assert ActionName.GET_FAILURE_TRACE.value in advertised(
+            baseline(ObservationStatus.OK, True), proof_required=False
+        )
+    finally:
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)
+
+
+def test_exact_proof_diagnosis_contract_requires_unique_successful_pdb_observations(tmp_path):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    fixture = ROOT / "agentic_debugger/datasets/curated/pdb-required-boundary-006"
+    task = DebugTask.from_mapping(json.loads((fixture / "task.json").read_text()))
+    probe = prepare_pdb_probe(fixture, scenario_for(task.task_id), tmp_path, task=task)
+    case_dir = tmp_path / "case"
+    case_dir.mkdir()
+    workspace = TaskWorkspace(str(fixture), parent_dir=str(case_dir))
+
+    class StopTransport:
+        def __init__(self):
+            self.payloads = []
+
+        def request(self, payload, timeout_seconds):
+            del timeout_seconds
+            self.payloads.append(payload)
+            allowed = payload["controller"]["allowed_actions"]
+            if ActionName.GET_SOURCE_WINDOW.value in allowed:
+                return {
+                    "directive": {
+                        "kind": "action",
+                        "name": ActionName.GET_SOURCE_WINDOW.value,
+                        "arguments": {"path": "window_tail.py", "line": 1},
+                    }
+                }
+            if ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value in allowed:
+                return {
+                    "directive": {
+                        "kind": "action",
+                        "name": ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS.value,
+                        "arguments": {
+                            "hypothesis_id": "contract-check",
+                            "statement": "contract check",
+                            "target_file": "window_tail.py",
+                            "target_symbol": "tail_window",
+                            "confidence": "low",
+                            "evidence_refs": [],
+                            "observed_values": {},
+                        },
+                    }
+                }
+            raise AssertionError("test request exposed no inspectable action")
+
+    proof_contract = {
+        "exact_reproduction": True,
+        "task_id": task.task_id,
+        "reproduction_argv": list(probe.reproduction_argv),
+        "pytest_node": probe.reproduction_node,
+        "workspace_id": probe.workspace_id,
+        "production_file": probe.script,
+        "production_file_sha256": probe.production_file_sha256,
+        "breakpoint_line": probe.breakpoint_line,
+        "production_frame": probe.focus_function,
+    }
+
+    def observation(name, index, status=ObservationStatus.OK, payload=None):
+        return Observation(
+            f"proof-observation-{index}",
+            f"proof-action-{index}",
+            "proof-contract-run",
+            task.task_id,
+            name,
+            status,
+            dict(payload or {}),
+            name,
+            False,
+        )
+
+    required = [
+        observation(ActionName.START_PDB_SESSION.value, 1, payload={
+            "state": "paused",
+            "script": probe.script,
+            "function": probe.focus_function,
+            "line": probe.breakpoint_line,
+            "proof": proof_contract,
+        }),
+        observation(ActionName.GET_STACK_SUMMARY.value, 2, payload={
+            "frames": [{
+                "frame_id": 0,
+                "is_current": True,
+                "script": probe.script,
+                "function": probe.focus_function,
+            }],
+            "proof": proof_contract,
+        }),
+        observation(ActionName.GET_FRAME_LOCALS.value, 3, payload={
+            "state": "paused",
+            "frame_id": 0,
+            "locals": [{"name": "values", "value": "[1, 2, 3]"}],
+            "proof": proof_contract,
+        }),
+        observation(ActionName.STEP_PDB_SESSION.value, 4, payload={
+            "state": "paused",
+            "script": probe.script,
+            "function": probe.focus_function,
+            "proof": proof_contract,
+        }),
+    ]
+    baseline = observation("run_reproduction", 0, payload={
+        "phase": "baseline",
+        "failure_reproduced": True,
+        "node_id": probe.reproduction_node,
+        "reproduction_argv": list(probe.reproduction_argv),
+    })
+
+    def request_for(proof_observations):
+        transport = StopTransport()
+        context = DemoToolContext(
+            task=task,
+            workspace=workspace,
+            patch="",
+            probe=probe,
+        )
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=transport,
+            limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+            registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
+            proof_required=True,
+        )
+        adapter._proof_observations = [baseline, *proof_observations]
+        adapter.next_directive(
+            ControllerSnapshot(
+                "proof-contract-run",
+                task.task_id,
+                ControllerState.UNDERSTAND,
+                0,
+                ControllerBudgetLimits.from_task_constraints(task.constraints),
+                ControllerBudgetState(),
+                HypothesisLedger(),
+                    baseline,
+            )
+        )
+        return transport.payloads[0]
+
+    try:
+        assert "express_root_cause_hypothesis" not in request_for([])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            observation("get_failure_trace", 10),
+        ])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            *required[:3],
+            observation(ActionName.STEP_PDB_SESSION.value, 4, ObservationStatus.REJECTED),
+        ])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            *required[:3],
+            observation(ActionName.SAFE_EVAL_EXPRESSION.value, 7),
+        ])["controller"]["allowed_actions"]
+        assert "express_root_cause_hypothesis" not in request_for([
+            *required,
+            observation(ActionName.GET_STACK_SUMMARY.value, 5),
+        ])["controller"]["allowed_actions"]
+        ready = request_for(required)
+        assert "express_root_cause_hypothesis" in ready["controller"]["allowed_actions"]
+        next_ready = request_for([
+            *required[:3],
+            observation(ActionName.NEXT_PDB_SESSION.value, 6, payload={
+                "state": "paused",
+                "script": probe.script,
+                "function": probe.focus_function,
+                "proof": proof_contract,
+            }),
+        ])
+        assert "express_root_cause_hypothesis" in next_ready["controller"]["allowed_actions"]
+        assert "afterward revise from observation ids, then diagnose" in ready["instructions"]
+        assert "oracle" not in json.dumps(ready).lower()
+        assert "gold patch" not in json.dumps(ready).lower()
+    finally:
+        workspace.cleanup()
+        if probe.source_dir.exists():
+            shutil.rmtree(probe.source_dir)
 
 
 def _runtime_budget_snapshot(task, pdb_observations: int):
@@ -777,6 +1349,66 @@ def test_positive_pdb_budget_preserves_start_observe_stop_lifecycle(tmp_path):
         workspace.cleanup()
 
 
+def test_execution_control_exit_clears_stale_active_session_contract(tmp_path):
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    task, workspace, registry = _pdb_registry_case(tmp_path)
+    captured = []
+
+    class ExitTransport:
+        def request(self, payload, timeout_seconds):
+            del timeout_seconds
+            captured.append(payload)
+            return {
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "Failed",
+                    "reason": "session-state check",
+                }
+            }
+
+    exited = Observation(
+        "observation-session-exited",
+        "action-session-exited",
+        "runtime-session-run",
+        task.task_id,
+        ActionName.CONTINUE_PDB_SESSION.value,
+        ObservationStatus.OK,
+        {"state": "exited", "exit_code": 0},
+        "target exited",
+        False,
+    )
+    try:
+        adapter = LiveModelAdapter(
+            task=task,
+            policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+            config=config(),
+            transport=ExitTransport(),
+            limits=LiveRunLimits(max_model_requests=1),
+            registry=registry,
+        )
+        adapter._runtime_transition_authorized = True
+        adapter._pdb_session_active = True
+        adapter.next_directive(
+            ControllerSnapshot(
+                "runtime-session-run",
+                task.task_id,
+                ControllerState.RUNTIME_EVIDENCE,
+                0,
+                ControllerBudgetLimits.from_task_constraints(task.constraints),
+                ControllerBudgetState(pdb_observations=1),
+                HypothesisLedger(),
+                exited,
+            )
+        )
+        actions = set(captured[0]["action_contracts"])
+        assert ActionName.START_PDB_SESSION.value in actions
+        assert ActionName.GET_STACK_SUMMARY.value not in actions
+        assert ActionName.STOP_PDB_SESSION.value not in actions
+    finally:
+        workspace.cleanup()
+
+
 def test_exhausted_pdb_observation_is_illegal_action_and_recovers_to_stop(tmp_path):
     task, workspace, registry = _pdb_registry_case(tmp_path)
     captured = []
@@ -834,7 +1466,7 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
         assert find_contract["additional_properties"] is False
         assert window_contract["properties"]["line"] == {
             "type": "integer",
-            "minimum": 0,
+            "minimum": 1,
         }
         assert hypothesis_contract["properties"]["confidence"]["enum"] == [
             item.value for item in HypothesisConfidence
@@ -842,7 +1474,7 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
 
         invalid_cases = (
             (ActionName.FIND_FUNCTION, {"name": "", "path": "demo.py"}),
-            (ActionName.GET_SOURCE_WINDOW, {"path": "demo.py", "line": -1}),
+            (ActionName.GET_SOURCE_WINDOW, {"path": "demo.py", "line": 0}),
             (
                 ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
                 {
@@ -864,8 +1496,8 @@ def test_registry_argument_contract_matches_validator_constraints(tmp_path):
             {"name": "run", "path": "demo.py"}
         ) == {"name": "run", "path": "demo.py"}
         assert registry.get(ActionName.GET_SOURCE_WINDOW).argument_validator(
-            {"path": "demo.py", "line": 0}
-        ) == {"path": "demo.py", "line": 0}
+            {"path": "demo.py", "line": 1}
+        ) == {"path": "demo.py", "line": 1}
         assert registry.get(ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS).argument_validator(
             {
                 "hypothesis_id": "h1",
@@ -951,6 +1583,40 @@ def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and
     assert captured[1]["directive_feedback"] == {"category": "malformed_directive", "message": "unrecognized target_state", "rejected_transport_attempt": 1}
 
 
+def test_stream_activity_is_aggregated_without_reasoning_content():
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+
+    class ActivityTransport:
+        def request(self, payload, timeout_seconds):
+            return {
+                "directive": {
+                    "kind": "transition",
+                    "target_state": "Failed",
+                    "reason": "bounded test",
+                },
+                "transport_activity": {
+                    "stream_frame_count": 7,
+                    "thinking_bytes": 1234,
+                    "content_bytes": 81,
+                },
+            }
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=config(),
+        transport=ActivityTransport(),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        registry=_test_live_registry(),
+    )
+    directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert directive.target_state is ControllerState.FAILED
+    metrics = adapter.metrics.to_mapping()
+    assert metrics["stream_frame_count"] == 7
+    assert metrics["thinking_bytes"] == 1234
+    assert metrics["action_content_bytes"] == 81
+
+
 @pytest.mark.parametrize(
     "bad_kind",
     [[], {}, None, True, 1, "unknown-kind"],
@@ -1031,7 +1697,9 @@ def test_non_string_directive_kind_terminates_without_retry_and_retains_usage():
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
 
-    assert adapter.metrics.termination_reason == "invalid_model_response"
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.provider_errors == 0
+    assert adapter.metrics.directive_rejections == 1
     assert adapter.metrics.model_requests == 1
     assert adapter.metrics.model_responses == 1
     assert adapter.metrics.retries == 0
@@ -1043,6 +1711,65 @@ def _snapshot(task, state, model_call_index=0):
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     return ControllerSnapshot("category-run", task.task_id, state, model_call_index, limits, ControllerBudgetState(), HypothesisLedger())
+
+
+def test_model_selected_breakpoint_is_positive_integer_without_source_line_steering():
+    task = DebugTask.from_mapping(
+        json.loads(
+            (ROOT / "agentic_debugger/datasets/curated/pdb-required-boundary-006/task.json")
+            .read_text()
+        )
+    )
+    registry = ToolRegistry(
+        (
+            ToolSpec(
+                ActionName.START_PDB_SESSION,
+                lambda arguments: dict(arguments),
+                lambda _action, _arguments: ToolResult(ObservationStatus.OK, {}, "ok"),
+                argument_contract={
+                    "required": ["breakpoint_line"],
+                    "properties": {
+                        "breakpoint_line": {"type": "integer", "minimum": 1},
+                    },
+                    "additional_properties": False,
+                },
+            ),
+        )
+    )
+
+    class Transport:
+        def request(self, payload, timeout_seconds):
+            assert payload["action_contracts"]["start_pdb_session"]["properties"]["breakpoint_line"] == {
+                "type": "integer",
+                "minimum": 1,
+            }
+            return {
+                "directive": {
+                    "kind": "action",
+                    "name": "start_pdb_session",
+                    "arguments": {"breakpoint_line": 58},
+                }
+            }
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.PDB_ON_UNCERTAINTY,
+        config=config(),
+        transport=Transport(),
+        limits=LiveRunLimits(max_model_requests=1),
+        registry=registry,
+        proof_required=True,
+    )
+    snapshot = _snapshot(task, ControllerState.RUNTIME_EVIDENCE)
+    adapter._runtime_transition_authorized = True
+    contract = adapter._effective_contract(snapshot)
+    assert contract["start_pdb_session"]["properties"]["breakpoint_line"] == {
+        "type": "integer",
+        "minimum": 1,
+    }
+    directive = adapter.next_directive(snapshot)
+    assert directive.name is ActionName.START_PDB_SESSION
+    assert directive.arguments == {"breakpoint_line": 58}
 
 
 def test_illegal_action_rejection_carries_category_and_recovers_on_retry():
@@ -1298,7 +2025,9 @@ def test_repeating_an_illegal_action_after_feedback_is_measurable_and_terminates
     adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AlwaysIllegalActionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2), registry=_test_live_registry())
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
-    assert adapter.metrics.termination_reason == "invalid_model_response"
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.provider_errors == 0
+    assert adapter.metrics.directive_rejections == 3
     assert adapter.metrics.model_requests == 3
     assert adapter.metrics.retries == 2
     assert captured[0]["directive_feedback"] is None
@@ -1315,7 +2044,7 @@ def test_rejection_detail_is_bounded_to_max_chars():
     assert LiveModelAdapterError("invalid model directive", detail=short_detail).detail == short_detail
 
 
-def test_all_provider_completed_invalid_directives_terminate_as_invalid_model_response():
+def test_all_provider_completed_invalid_directives_terminate_as_model_directive_rejected():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
     class InvalidTransport:
         def request(self, payload, timeout_seconds):
@@ -1326,11 +2055,94 @@ def test_all_provider_completed_invalid_directives_terminate_as_invalid_model_re
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(ControllerSnapshot("invalid-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
-    assert adapter.metrics.termination_reason == "invalid_model_response"
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.provider_errors == 0
+    assert adapter.metrics.directive_rejections == 2
     assert adapter.metrics.model_requests == 2
     assert adapter.metrics.model_responses == 2
     assert adapter.metrics.retries == 1
     assert adapter.metrics.to_mapping()["token_usage"]["total_tokens"] == 10
+
+
+def _run_single_taxonomy_case(response=None, *, failure=None):
+    class Transport:
+        def request(self, payload, timeout_seconds):
+            if failure is not None:
+                raise failure
+            return response
+
+    parent = Path(tempfile.mkdtemp(prefix="live-directive-taxonomy-"))
+    try:
+        return run_live_case(
+            repository_root=str(ROOT),
+            task_id=TASK_ID,
+            policy=DemoPolicy.STATIC_BASELINE,
+            repetition=1,
+            workspace_parent=str(parent),
+            config=config(),
+            limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0, continue_on_task_failure=False),
+            transport=Transport(),
+            retain_observable_model_directives=True,
+        )
+    finally:
+        shutil.rmtree(parent, ignore_errors=True)
+
+
+def test_actual_transport_failure_is_provider_error_not_directive_rejection():
+    result = _run_single_taxonomy_case(failure=LiveTransportError("provider unavailable", kind="provider_failure"))
+    assert result.status is LiveCaseStatus.PROVIDER_ERROR
+    assert result.measurements["provider_error_count"] == 1
+    assert result.measurements["directive_rejection_count"] == 0
+    assert result.measurements["termination_reason"] == "provider_or_transport_error"
+
+
+def test_live_model_call_limit_is_budget_limited_with_replayable_terminal_transition():
+    result = _run_single_taxonomy_case(
+        {
+            "directive": {
+                "kind": "action",
+                "name": "run_reproduction",
+                "arguments": {"phase": "baseline"},
+            }
+        }
+    )
+    assert result.status is LiveCaseStatus.BUDGET_LIMITED
+    assert result.controller["stop_reason"] == "model_call_limit"
+    trajectory = replay_events(result.events_jsonl)
+    assert trajectory.events[-2].payload == {
+        "source_state": "Reproduce",
+        "target_state": "Failed",
+        "reason": "model_call_limit",
+    }
+    assert trajectory.events[-1].payload["stop_reason"] == "model_call_limit"
+
+
+@pytest.mark.parametrize("response", [
+    {"provider_completion_schema_version": "provider-completion-v1", "directive_content": "not-json", "transport_activity": {"thinking_bytes": 17}},
+    {"directive": {"kind": "action", "name": "extract_failing_test", "arguments": {}}},
+    {"directive": {"kind": "action", "name": "run_reproduction", "arguments": {"phase": 3}}},
+])
+def test_provider_completed_rejection_is_non_provider_terminal_taxonomy(response):
+    result = _run_single_taxonomy_case(response)
+    assert result.status is LiveCaseStatus.MODEL_DIRECTIVE_REJECTED
+    assert result.measurements["provider_error_count"] == 0
+    assert result.measurements["directive_rejection_count"] == 1
+    assert result.measurements["directive_rejection_categories"]
+    assert result.measurements["termination_reason"] == "directive_rejected"
+    assert result.evidence is not None
+    evidence = result.evidence["observable_model_rejection_evidence"]
+    assert evidence
+    if "directive_content" in response:
+        assert evidence[0]["content_representation"]["text"] == "not-json"
+    assert "thinking_bytes" not in json.dumps(evidence)
+
+
+def test_provider_completed_accepted_directive_has_no_rejection_or_provider_error():
+    result = _run_single_taxonomy_case({"directive": {"kind": "transition", "target_state": "Failed", "reason": "accepted terminal transition"}})
+    assert result.status is LiveCaseStatus.CONTROLLER_FAILED
+    assert result.measurements["provider_error_count"] == 0
+    assert result.measurements["directive_rejection_count"] == 0
+    assert result.evidence["observable_model_rejection_evidence"] == []
 
 
 def test_jsonl_wrapper_convention_keeps_provider_completed_invalid_directive_on_success_exit():
@@ -1430,7 +2242,7 @@ def test_pdb_enabled_policy_keeps_accepted_runtime_boundary(workspace_parent):
 def test_case_and_trajectory_identity_are_unique_across_policy_and_repetition(workspace_parent):
     report = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE, DemoPolicy.PDB_ON_UNCERTAINTY), repetitions=2, workspace_parent=workspace_parent, transport_factory=lambda task_id, policy, repetition: FailAfterFirstTransport(), evaluation_id="identity-test")
     cases = report["cases"]
-    assert report["schema_version"] == "1.0"
+    assert report["schema_version"] == "1.1"
     assert len({case["case_id"] for case in cases}) == 4
     assert len({case["trajectory_id"] for case in cases}) == 4
     assert len({event["run_id"] for case in cases for event in (json.loads(line) for line in case["events_jsonl"].splitlines())}) == 4

@@ -570,9 +570,14 @@ def classify_runtime_evidence(
     gate_allowed: bool,
     session_started: bool,
     evidence_collected: bool,
+    proof_required: bool = False,
 ) -> RuntimeEvidenceOutcome:
     """Classify debugger use with only the categories this demo can support."""
 
+    if proof_required:
+        if not session_started or not evidence_collected:
+            return RuntimeEvidenceOutcome.PDB_TOOL_FAILURE
+        return RuntimeEvidenceOutcome.PDB_EVIDENCE_COLLECTED
     if not gate_reached:
         return RuntimeEvidenceOutcome.PDB_NOT_REACHED
     if not gate_allowed:
@@ -772,12 +777,20 @@ def run_demo_case(
     try:
         with guard:
             workspace = TaskWorkspace(str(fixture_dir), parent_dir=str(case_parent))
+            if scenario.runtime_probe.exact_public_reproduction:
+                (Path(workspace.root) / "task.json").write_text(
+                    json.dumps(task.agent_visible_mapping(), sort_keys=True, indent=2) + "\n",
+                    encoding="utf-8",
+                    newline="\n",
+                )
             source_path = Path(workspace.root) / scenario.reference_repair.target_path
             patch_text = build_reference_patch(
                 source_path.read_text(encoding="utf-8"), scenario.reference_repair
             )
             if pdb_mode is not PdbPolicy.DISABLED:
-                probe = prepare_pdb_probe(fixture_dir, scenario, case_parent)
+                probe = prepare_pdb_probe(
+                    fixture_dir, scenario, case_parent, task=task
+                )
 
             context = DemoToolContext(
                 task=task,
@@ -792,9 +805,19 @@ def run_demo_case(
                 rag_context=rag_context,
             )
             controller = DeterministicController(
-                build_registry(context),
+                build_registry(
+                    context,
+                    interactive_debugger_controls=(
+                        scenario.runtime_probe.exact_public_reproduction
+                    ),
+                ),
                 model,
-                ControllerRunConfig(max_model_calls=DEMO_MAX_MODEL_CALLS),
+                ControllerRunConfig(
+                    max_model_calls=DEMO_MAX_MODEL_CALLS,
+                    require_pdb_evidence_before_patch=(
+                        scenario.runtime_probe.exact_public_reproduction
+                    ),
+                ),
             )
             snapshot = ControllerSnapshot(
                 f"{task_id}--{policy.value}",
@@ -964,6 +987,11 @@ def _assemble_case(
         gate_allowed=gate_allowed,
         session_started=session_started,
         evidence_collected=evidence_collected,
+        proof_required=bool(
+            context
+            and context.probe is not None
+            and context.probe.exact_public_reproduction
+        ),
     )
 
     controller_record = (

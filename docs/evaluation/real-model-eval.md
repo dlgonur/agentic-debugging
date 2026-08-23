@@ -24,6 +24,46 @@ Both live selection and explicit confirmation are mandatory. Without them, the
 CLI writes an attempted-but-rejected report without reading the config. Missing
 or invalid configuration is rejected before any command is launched.
 
+## Frozen Level-32 escalation evidence (2026-08-22)
+
+The explicitly authorized escalation used the existing one-task operator on
+`audreyr__cookiecutter-967` with the same public contract and exact-PDB proof
+requirements for four distinct Ollama Cloud aliases. GPT-OSS 120B completed
+the product path but failed the official Docker authority (F2P 0/5; P2P 9/9).
+Kimi K2.6 exposed two bounded transport defects before a final invalid-
+directive incompatibility; Qwen3.5 exhausted the frozen two-patch budget and
+failed official F2P 0/5. Gemma4 31B V2 completed the required PDB observations
+but its otherwise-valid `revise_hypothesis` object was rejected because the
+provider wrapped it in one exact Markdown JSON fence. A later forensic review
+therefore preserves runtime `MODEL_DIRECTIVE_REJECTED` while scientifically
+reclassifying V2 as `PARSER_COMPATIBILITY_FAILURE`; it is not a clean semantic
+model failure. No model had solved this frozen rung at that historical
+boundary. This is descriptive one-task evidence, not a model ranking, success
+rate, or PDB causal claim. See
+`experiments/pdb_capability_ladder/` and the detailed `_ai-review` report.
+
+The provider-neutral follow-up is `directive-normalization-v2` /
+`redundant-trailing-brace-v1-or-exact-json-markdown-fence-v1`. Strict JSON is
+still first. The added branch accepts only a full lowercase `json`, LF-delimited
+fence containing one strict top-level Mapping, with optional outer JSON
+whitespace and no prose, second value, semantic repair, composed normalization,
+retry, feedback, or reserialization. The same canonical semantic parser then
+validates the recovered Mapping. This receiver-policy change alters both the
+configured transport fingerprint and Level-32 treatment fingerprint.
+
+The follow-up provider-neutral breakpoint policy is versioned as
+`pdb-breakpoint-selection-v1` / `model-selected-runtime-validated-v1`. The
+model-visible `start_pdb_session.breakpoint_line` is a positive integer with no
+source-window enum or value rewrite. The PDB tool validates the requested line
+against the production file and focus function; only a valid pause creates
+proof evidence. A runtime-invalid positive line is therefore an ordinary typed
+tool outcome, so the controller can issue a corrected start in the same bounded
+run. If a later control exits before producing admissible proof, exact-public
+mode releases that session and may start a fresh cycle within the same PDB
+budget; non-proof interactive pilots retain their one-session limit. The runtime
+probe/source-window anchor remains distinct from the model-selected breakpoint,
+and the proof contract records the actual validated line.
+
 ## Runtime and limits
 
 Each case loads the curated manifest, creates a disposable workspace, runs the
@@ -33,8 +73,12 @@ cleanup runs on success and failure.
 
 Supported limits are selected fixtures, policies, repetitions, model requests,
 controller steps, model-phase seconds, retries, response bytes, and
-stop/continue after task failure. max-model-phase-seconds bounds the model
-adapter/transport phase for each case; it is not a whole-case deadline.
+stop/continue after task failure. `request_timeout_seconds` is an inactivity
+watchdog: stdout or stderr activity refreshes it. A streaming adapter can
+therefore report progress without granting that progress channel directive
+authority. `max-model-phase-seconds` is a broad cumulative emergency guard
+checked before starting each request; it does not terminate an actively
+progressing response and is not a whole-case deadline.
 Tool, PDB, verifier, event, and cleanup phases retain their existing
 component-specific bounds and are observed in case_elapsed_duration_ms.
 model_phase_elapsed_duration_ms and model_transport_duration_ms accumulate only
@@ -43,9 +87,16 @@ work between requests and verifier/event/cleanup work after the final request
 are excluded from model-phase timing and the max-model-phase-seconds budget.
 Requests and retries are counted separately. Model stdout and stderr are
 drained through bounded buffers; stdin writing and process wait share the
-transport timeout. Command timeout, provider failure, controller rejection,
+inactivity watchdog. Command timeout, provider failure, controller rejection,
 controller failure, verifier failure, event/reporting failure, interruption,
 and cleanup result are retained separately.
+
+A nonzero configured-command exit is generic `process_error` unless stderr is
+one strict `command-error-v1` JSON object with an accepted closed error kind.
+Only that kind is retained in measurements; the message and all arbitrary raw
+stderr are discarded. Provider-specific adapters may therefore expose safe
+typed failure evidence without making configured-command stderr a report or
+prompt data channel.
 
 The transport does not fabricate token counts. Prompt, completion, and total
 tokens remain null with explicit missing-field markers unless the transport
@@ -65,8 +116,9 @@ unresolved, controller failure or rejection, timeout, provider failure,
 verifier failure, event/reporting failure, cleanup failure, harness failure,
 and incomplete execution. Reports contain task, policy, repetition, model name,
 controller and verifier outcomes, localization, request/response/retry/tool/
-PDB counts, elapsed time, token availability, termination reason, and cleanup
-evidence.
+PDB counts, elapsed time, token availability, termination reason, cleanup
+evidence, and—when supplied by a streaming adapter—aggregate frame, thinking
+byte, and action-content byte counts. Reasoning text is not retained.
 
 An interrupted run is marked interrupted; completed preceding cases and the
 interrupted case are retained when possible. Unstarted cases are counted but
@@ -108,6 +160,77 @@ from the contract; an active session still exposes `stop_pdb_session` for
 cleanup. Directive kinds are likewise
 state-scoped: hypothesis add/revise/status directives appear only where the
 controller can apply them.
+
+The opt-in exact-PDB proof adds a narrower `proof_gate` object only to public
+requests in `RuntimeEvidence`; it is absent in other controller states so it
+cannot conflict with their legal action surface. Exact `Understand` requires
+the bounded full source observation before the runtime hypothesis. After the
+transition, `next_required_actions` exposes only the next RuntimeEvidence
+surface: start, stack, locals, next, then stop. Exact proof uses `next` rather
+than `step` so a call expression cannot descend out of the declared production
+frame and invalidate otherwise genuine runtime evidence.
+`continue_pdb_session` is not part of this proof.
+The exact proof also accepts one unique baseline reproduction: after it is
+recorded, reproduction and optional failure-trace actions disappear and
+`Understand` is the sole legal transition, preserving test/PDB budget for the
+required proof and validation lifecycle.
+Within `Understand`, the current request narrows the directive kind by phase:
+the pre-PDB hypothesis must set `requires_runtime_evidence=true`; after the
+debugger lifecycle, the same active hypothesis is revised with
+`requires_runtime_evidence=false` and current observation IDs before the bound
+diagnosis action appears. Runtime argument examples are derived only from
+already-visible observations: the current stack frame and pause generation for
+locals, followed by the exact evidence IDs and one observed-local example for
+diagnosis. The source-window line contract is one-based, matching its handler,
+and the exact small fixture exposes the complete target function for breakpoint
+selection.
+
+The 2026-08-21 authorized single-task run demonstrated this path end to end on
+`pdb-required-boundary-006` with Ollama Cloud `gpt-oss:20b-cloud`: 21 logical
+calls/transport attempts, zero retries/provider errors, PDB
+start/stack/locals/next/stop, an evidence-bound diagnosis, and a one-hunk model
+patch. The verifier completed RESOLVED with F2P 1/1 and P2P 1/1; cleanup and
+canonical immutability were true; replay ended in Done. This is a bounded
+one-task proof, not a success-rate or causal-comparison result.
+
+The next single-task ladder rung used the same model on
+`pdb-required-caller-callee-007` under the activity-aware streaming contract.
+It completed in 22 logical calls/attempts with zero retries/provider errors,
+three successful and zero failed PDB observations, and independent-verifier
+`RESOLVED` (F2P 1/1, P2P 2/2, verifier-only private checks true). The 40,168
+stream frames and 181,326 thinking bytes were progress telemetry only; no
+thinking text entered directive authority or persisted evidence. Frozen raw
+evidence is in `experiments/pdb_capability_ladder/level12-gpt-oss-v1/`.
+The subsequent 18/100 single-task rung,
+`pdb-required-multistage-units-008`, also completed `RESOLVED`: 21 logical
+calls/attempts, zero retries/provider errors, three successful and zero failed
+PDB observations, F2P 1/1, P2P 2/2, verifier-only private checks true, cleanup
+and canonical immutability true, and 54-event replay terminal `Done`. Its
+26,821 frames and 121,411 thinking bytes remained non-authoritative activity.
+Frozen evidence is in
+`experiments/pdb_capability_ladder/level18-gpt-oss-v1/`.
+
+The frozen 32/100 SWE-rebench V2 rung, `audreyr__cookiecutter-967`, produced
+the first valid failure boundary. V1 and V2 stopped on provider-context and
+proof-binding harness defects and are not model results. V3 completed 24
+provider calls with zero retries/errors, the exact PDB lifecycle, an
+evidence-bound diagnosis, model patch, controller `Done`, and local verifier
+`RESOLVED`. The official pinned Docker evaluator rejected the candidate (F2P
+0/5; P2P not passed 9/9). The raw model diff required only terminal-newline
+serialization normalization for Git; after that normalization the official
+failure was an ordinary candidate failure. Hidden identities and patches were
+never model-visible, and the task was not changed after the hidden outcome.
+`Understand` remains unavailable until the unique successful pre-diagnosis
+observations satisfy the same paused-production-frame checks as the
+authoritative patch gate and the session has stopped. A rejected debugger
+action is retained in the event stream but is not counted as proof, so a
+corrected action can proceed without turning the earlier failure into evidence.
+An execution-control observation that pauses outside the declared production
+frame is retained but not selected as proof. If execution exits, the event is
+retained, the tool session/workspace is released, and the selected runtime
+cycle is reset; the next bounded request may start a fresh exact-public PDB
+session and recollect stack, locals, and control evidence within the unchanged
+controller PDB budget. Non-proof interactive pilots remain one-session cases.
 
 `RuntimeEvidence` is not a model-selected shortcut. The live adapter calls the
 accepted `decide_pdb_access` policy function before permitting a transition

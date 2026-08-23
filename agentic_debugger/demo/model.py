@@ -124,6 +124,9 @@ class DemoPolicyModel:
         self._runtime_failure: Optional[str] = None
         self._static_refs: tuple[str, ...] = ()
         self._collected_refs: list[str] = []
+        self._runtime_refs: list[str] = []
+        self._observed_values: dict[str, Any] = {}
+        self._proof_contract: Optional[dict[str, Any]] = None
 
         self.calls = 0
         self.gate_records: list[GateRecord] = []
@@ -274,6 +277,16 @@ class DemoPolicyModel:
                 True,
             )
         if self._phase == "understand-declare":
+            if self._scenario.runtime_probe.exact_public_reproduction:
+                # The exact proof path must create its diagnosis only after
+                # the real PDB observations.  The active hypothesis already
+                # exists, so the controller's authoritative runtime gate can
+                # be consumed without a deliberately rejected diagnosis.
+                self._phase = "runtime-start"
+                return TransitionDirective(
+                    ControllerState.RUNTIME_EVIDENCE,
+                    "exact-runtime proof requires PDB evidence before diagnosis",
+                )
             self._phase = "understand-gate"
             return ActionDirective(
                 ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
@@ -286,6 +299,12 @@ class DemoPolicyModel:
                 },
             )
         if self._phase == "understand-gate":
+            if self._scenario.runtime_probe.exact_public_reproduction:
+                self._phase = "runtime-start"
+                return TransitionDirective(
+                    ControllerState.RUNTIME_EVIDENCE,
+                    "exact-runtime proof requires PDB evidence before diagnosis",
+                )
             decision = self._consult_gate(snapshot)
             if decision.allowed:
                 self._phase = "runtime-start"
@@ -304,13 +323,31 @@ class DemoPolicyModel:
             # it asked for has now been collected. The statement is unchanged
             # and the confidence is NOT raised, because nothing in this
             # demonstration evaluates the evidence against the diagnosis.
-            self._phase = "understand-runtime-collected"
+            self._phase = (
+                "understand-diagnose"
+                if self._scenario.runtime_probe.exact_public_reproduction
+                else "understand-runtime-collected"
+            )
             return ReviseHypothesisDirective(
                 self._scenario.hypothesis_id,
                 self._scenario.root_cause_statement,
                 HypothesisConfidence.LOW,
-                tuple(self._static_refs) + tuple(self._collected_refs),
+                tuple(self._static_refs) + tuple(self._collected_refs) + tuple(self._runtime_refs),
                 False,
+            )
+        if self._phase == "understand-diagnose":
+            self._phase = "understand-runtime-collected"
+            return ActionDirective(
+                ActionName.EXPRESS_ROOT_CAUSE_HYPOTHESIS,
+                {
+                    "hypothesis_id": self._scenario.hypothesis_id,
+                    "statement": self._scenario.root_cause_statement,
+                    "target_file": self._scenario.localization.file_path,
+                    "target_symbol": self._scenario.localization.symbol,
+                    "confidence": HypothesisConfidence.LOW.value,
+                    "evidence_refs": list(self._runtime_refs),
+                    "observed_values": dict(self._observed_values),
+                },
             )
         if self._phase == "understand-runtime-collected":
             self._phase = "patch-apply"
@@ -330,16 +367,27 @@ class DemoPolicyModel:
         probe = self._scenario.runtime_probe
         if self._phase == "runtime-start":
             self._phase = "runtime-stack"
-            return ActionDirective(ActionName.START_PDB_SESSION, {})
+            arguments = (
+                {"breakpoint_line": probe.breakpoint_line}
+                if probe.exact_public_reproduction
+                else {}
+            )
+            return ActionDirective(ActionName.START_PDB_SESSION, arguments)
         if self._phase == "runtime-stack":
             if not self._observation_ok(snapshot):
                 return self._abandon_runtime("pdb session did not reach the breakpoint")
+            if probe.exact_public_reproduction:
+                self._remember_runtime_observation(snapshot)
+                self._proof_contract = dict(self._payload(snapshot).get("proof") or {})
             self._phase = "runtime-locals"
             return ActionDirective(ActionName.GET_STACK_SUMMARY, {})
         if self._phase == "runtime-locals":
             if not self._observation_ok(snapshot):
                 return self._abandon_runtime("stack summary was not available")
-            self._record_collected("get_stack_summary")
+            if probe.exact_public_reproduction:
+                self._remember_runtime_observation(snapshot)
+            else:
+                self._record_collected("get_stack_summary")
             generation = self._payload(snapshot).get("pause_generation")
             if type(generation) is int and generation > 0:
                 self._pause_generation = generation
@@ -357,6 +405,16 @@ class DemoPolicyModel:
                     if self._eval_index == 0
                     else "restricted expression evaluation failed"
                 )
+            if probe.exact_public_reproduction:
+                self._remember_runtime_observation(snapshot)
+                for item in self._payload(snapshot).get("locals", []):
+                    if (
+                        type(item) is dict
+                        and item.get("name") in probe.inspect_expressions
+                    ):
+                        self._observed_values[item["name"]] = item.get("value")
+                self._phase = "runtime-step"
+                return ActionDirective(ActionName.NEXT_PDB_SESSION, {})
             self._record_collected(
                 "get_frame_locals" if self._eval_index == 0 else "safe_eval_expression"
             )
@@ -371,6 +429,13 @@ class DemoPolicyModel:
                         "expression": expression,
                     },
                 )
+            self.runtime_evidence_collected = True
+            self._phase = "runtime-exit"
+            return ActionDirective(ActionName.STOP_PDB_SESSION, {})
+        if self._phase == "runtime-step":
+            if not self._observation_ok(snapshot):
+                return self._abandon_runtime("step did not produce a valid runtime pause")
+            self._remember_runtime_observation(snapshot)
             self.runtime_evidence_collected = True
             self._phase = "runtime-exit"
             return ActionDirective(ActionName.STOP_PDB_SESSION, {})
@@ -391,6 +456,11 @@ class DemoPolicyModel:
         reference = f"observation:{name}"
         if reference not in self._collected_refs:
             self._collected_refs.append(reference)
+
+    def _remember_runtime_observation(self, snapshot: ControllerSnapshot) -> None:
+        observation = snapshot.last_observation
+        if observation is not None and observation.observation_id not in self._runtime_refs:
+            self._runtime_refs.append(observation.observation_id)
 
     def _abandon_runtime(self, reason: str) -> ModelDirective:
         """Always release the debugger before leaving RuntimeEvidence."""

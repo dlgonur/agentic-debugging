@@ -4,13 +4,18 @@ import json
 import os
 import re
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Mapping, Optional
 
 from agentic_debugger import SchemaValidationError
 
 TASK_SCHEMA_VERSION = "1.0"
 TASK_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9-]{2,63}$")
 FIXTURE_PATH_PREFIX = "agentic_debugger/datasets/curated/"
+_MODEL_VISIBLE_RESOURCE_FIELDS = frozenset({
+    "max_patch_attempts",
+    "max_test_runs",
+    "max_pdb_observations",
+})
 
 
 def _ensure_non_empty_str(v: Any, label: str) -> str:
@@ -600,9 +605,34 @@ class DebugTask:
             result["source"] = self.source.to_mapping()
         return result
 
-    def agent_visible_mapping(self) -> Dict[str, Any]:
+    def agent_visible_mapping(
+        self,
+        *,
+        resource_limits: Optional[Mapping[str, int]] = None,
+    ) -> Dict[str, Any]:
+        """Return the single provider/workspace task projection.
+
+        The canonical task remains immutable.  A treatment may replace only
+        the three resource-count fields that the controller actually enforces;
+        all semantic, safety, reproduction, test, source, and task identity
+        fields are copied from the same frozen projection.  Callers use this
+        exact mapping both in model requests and in disposable ``task.json``.
+        """
         result = self.to_mapping()
         del result["oracle"]
         if self.source is not None:
             result["source"] = self.source.agent_visible_mapping()
+        if resource_limits is not None:
+            if not isinstance(resource_limits, Mapping):
+                raise SchemaValidationError("model-visible resource limits must be a mapping")
+            if set(resource_limits) != _MODEL_VISIBLE_RESOURCE_FIELDS:
+                raise SchemaValidationError("model-visible resource limits contain unsupported fields")
+            for field, value in resource_limits.items():
+                if type(value) is not int or value < 1:
+                    raise SchemaValidationError(
+                        f"model-visible resource limit {field!r} must be a positive integer"
+                    )
+            constraints = dict(result["constraints"])
+            constraints.update(dict(resource_limits))
+            result["constraints"] = constraints
         return result
