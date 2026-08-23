@@ -24,6 +24,7 @@ R6 frozen evidence capsule is the exception: it is tracked under
 | `tuned_debugger_pilot_v1/` | Earlier frozen tuned-vs-RAW debugger pilot contract | [README](tuned_debugger_pilot_v1/README.md) |
 | `local_inference_perf/` | Efficient-SDPA local inference packaging | [README](local_inference_perf/README.md) |
 | `nemotron_3_nano_model_capability_probe/` | Selected Nemotron 3 Nano product-path capability probe; Harness V2 five-task 1/5 | [README](nemotron_3_nano_model_capability_probe/README.md) |
+| `pdb_capability_ladder/` | One-task-at-a-time exact-PDB ladder; GPT-OSS accepted through 18/100 and validly failed the frozen 32/100 SWE-rebench rung | [README](pdb_capability_ladder/README.md) |
 
 Related tracked synthesis (not runners):
 [`analysis/s5_final_controlled_comparison/`](../analysis/s5_final_controlled_comparison/README.md),

@@ -3,17 +3,49 @@
 **Status:** bounded implementation contract for one shared Ollama Cloud
 adapter with accepted model profiles
 
-**Accepted profiles:**
+**Accepted profiles (17 selectable aliases; 15 live-verified, 1 profile-declared, 1 catalog):**
 
-| Local Application / Ollama CLI alias | Upstream Cloud provenance | Role |
-| --- | --- | --- |
-| `gpt-oss:20b-cloud` | `gpt-oss:20b` | accepted product-runtime default |
-| `nemotron-3-nano:30b-cloud` | `nemotron-3-nano:30b` | experimental candidate |
+| Local Application / Ollama CLI alias | Upstream (`/api/show` parent / chat `model`) | `/api/tags` remote_model | Readiness |
+| --- | --- | --- | --- |
+| `gpt-oss:20b-cloud` | `gpt-oss:20b` | `gpt-oss:20b` | live_verified — historically qualified streaming `think: high` |
+| `gpt-oss:120b-cloud` | `gpt-oss:120b` | `gpt-oss:120b` | live_verified — retained bounded qualification, `think: high` |
+| `nemotron-3-nano:30b-cloud` | `nemotron-3-nano:30b` | `nemotron-3-nano:30b` | live_verified — prior streamed qualification (task success not required) |
+| `glm-5.1:cloud` | `glm-5.1` | `glm-5.1` | live_verified — retained bounded generic-stream qualification |
+| `glm-5.2:cloud` | `glm-5.2` | `glm-5.2` | live_verified — accepted Transport Qualification V2; no-thinking 20/60 profile; Level-32 eligible, treatment not yet run |
+| `deepseek-v4-flash:cloud` | `deepseek-v4-flash` | `deepseek-v4-flash:0731` | live_verified — retained bounded generic-stream qualification |
+| `deepseek-v4-pro:cloud` | `deepseek-v4-pro` | `deepseek-v4-pro:0813` | live_verified — retained bounded generic-stream qualification |
+| `kimi-k2.6:cloud` | `kimi-k2.6` | `kimi-k2.6` | live_verified — retained bounded qualification |
+| `kimi-k2.7-code:cloud` | `kimi-k2.7-code` | `kimi-k2.7-code` | profile_declared — generic streaming qualification pending, not Level-32 eligible |
+| `kimi-k3:cloud` | `kimi-k3` | `kimi-k3` | catalog — selectable, not Level-32 eligible |
+| `minimax-m2.7:cloud` | `minimax-m2.7` | `minimax-m2.7` | live_verified — retained bounded generic-stream qualification |
+| `minimax-m3:cloud` | `minimax-m3` | `minimax-m3` | live_verified — retained bounded generic-stream qualification |
+| `nemotron-3-super:cloud` | `nemotron-3-super` | `nemotron-3-super` | live_verified — retained bounded generic-stream qualification |
+| `nemotron-3-ultra:cloud` | `nemotron-3-ultra` | `nemotron-3-ultra` | live_verified — retained bounded generic-stream qualification |
+| `qwen3.5:cloud` | `qwen3.5` | `qwen3.5:397b` | live_verified — retained bounded qualification |
+| `gemma4:31b-cloud` | `gemma4:31b` | `gemma4:31b` | live_verified — retained bounded qualification |
+| `mistral-large-3:675b-cloud` | `mistral-large-3:675b` | `mistral-large-3:675b` | live_verified — retained bounded no-thinking stream qualification |
 
-`--model` selects one accepted alias. The default remains
-`gpt-oss:20b-cloud`. The OpenCode display name
-`ollama-cloud/nemotron-3-nano:30b` is not an Ollama CLI identifier and is
-rejected. Other Ollama Cloud models visible in OpenCode are not accepted.
+`--model` selects one accepted alias; unknown aliases fail closed (`configuration`). The default remains `gpt-oss:20b-cloud`. The OpenCode display name `ollama-cloud/nemotron-3-nano:30b` is not an Ollama CLI identifier and is rejected. `--list-models` / `--list-models --json` project the canonical adapter registry (including `readiness` and `transport_config_fingerprint`) without adding a second source of truth. All 17 share host `https://ollama.com`; versioned `remote_model` divergences are explicit and asserted separately against `/api/tags` vs `/api/show`/chat.
+
+Readiness is three-state: `catalog` (selectable + provenance-validated, no transport profile), `profile_declared` (same-family streaming intent carried, live exercise pending), `live_verified` (bounded live `/api/chat` streaming qualification recorded). `live_verified` historically means V1 stream transport qualification; it is not by itself a claim of directive-protocol compatibility. The Level-32 operator (`run_cookiecutter_967_pdb_proof.py`) fails closed before any preflight/Docker work unless `treatment_eligible` (`live_verified`) holds. There is no `--force` bypass; the intended sequencing is: (1) run the repo-aware `python -m agentic_debugger.evaluation.transport_qualification --endpoint http://127.0.0.1:11434/api --model gpt-oss:120b-cloud --confirm-live --json`, which first launches the standalone adapter with `--preflight` and then launches it once for the synthetic `/api/chat`, retaining the canonical preflight record, (2) review/promote `transport_verified`, (3) only then run Level-32. The adapter itself emits only the provider-completion envelope and bounded stream telemetry; it has no runtime dependency on the repository package. Qualification V2 distinguishes `preflight_ok`, `stream_transport_ok`, and `directive_protocol_ok` without mass-demoting existing profiles. A completed measurement returns process exit code 0 even when `directive_protocol_ok` is false; promotion must inspect the typed result field rather than exit code alone.
+
+`transport_config_fingerprint` covers every material execution parameter (alias, upstream, effective tags remote, capabilities, family, parameter count, context length, readiness/profile/verified/thinking, protocol name+version, Ollama version, host, all byte/frame/timeout bounds, retry/fallback counts, stream mode). Any material difference yields a different persisted fingerprint.
+
+Nemotron 3 Super's first Level-32 treatment produced 7,864 streamed frames,
+reached `Validate`, and then lost its seventeenth decision to the inherited
+20-second inactivity watchdog. That incomplete treatment is infrastructure
+evidence, not a semantic model result. Its fresh treatment profile uses the
+same bounded, model-specific 45-second idle and 75-second outer request limits
+already established for a continuously streaming Level-32 route; the changed
+limits produce a new transport and treatment fingerprint.
+
+Nemotron 3 Ultra's first Level-32 treatment likewise ended at the inherited
+20-second inactivity watchdog: 14 valid responses completed exact PDB and an
+evidence-bound diagnosis, but the fifteenth request produced no directive
+after entering `Patch`. No patch or verifier result exists, so V1 is retained
+as incomplete transport evidence rather than a semantic result. Ultra's fresh
+V2 uses its own bounded 45-second idle and 75-second outer request limits with
+zero retries and unchanged task, action, and decision budgets.
 
 **2026-08-17:** the first real remote product proof through this adapter is
 COMPLETE — session `sess-20260817-103258-3d1193` (task
@@ -35,6 +67,28 @@ transport attempts with zero retries and zero provider errors. This supplements
 the earlier product-route proof by exercising PDB; it remains a one-task
 lowest-rung proof rather than a comparative or generalization result.
 
+Later on 2026-08-21, the activity-aware streaming contract completed the next
+12/100 ladder rung, `pdb-required-caller-callee-007`: 22 calls/attempts, zero
+retries/provider errors, verifier `RESOLVED`, private checks true, and 40,168
+stream frames whose thinking text was discarded. Frozen evidence is under
+`experiments/pdb_capability_ladder/`.
+
+The same day, the 18/100 `pdb-required-multistage-units-008` rung completed in
+21 calls/attempts with zero retries/provider errors. Exact PDB evidence exposed
+the converted intermediate value before the stale raw input crossed the later
+retry-expansion stage; the model's one-line patch was independently
+`RESOLVED`, including verifier-only private checks. The run produced 26,821
+activity frames and discarded 121,411 thinking bytes.
+
+The later frozen 32/100 `audreyr__cookiecutter-967` rung reached a valid model
+boundary. After two separately retained infrastructure-invalid treatments, V3
+completed 24 calls/attempts with zero retries/provider errors and real exact
+PDB evidence. The local verifier resolved the public contract, but the official
+SWE-rebench Docker evaluator rejected the candidate (F2P 0/5; P2P not passed
+9/9). This confirms the activity-aware adapter can carry a larger package task
+through the full action lifecycle; it does not convert the candidate into a
+successful repair or establish PDB causality.
+
 **2026-08-18:** the experimental Nemotron profile has a completed
 five-task Harness V2 capability probe (**1/5 RESOLVED**). That result is
 closed evidence at
@@ -53,7 +107,7 @@ The configured profile launches
 `scripts/ollama_cloud_command_adapter.py`. For every protocol-1.3 request,
 the adapter establishes Cloud provenance from zero-inference local metadata
 and then sends exactly one generation request to the signed-in local Ollama
-daemon. Metadata and chat share the same adapter timeout budget.
+daemon. Metadata and chat use the same bounded inactivity setting.
 
 ```text
 Local Application protocol 1.3
@@ -61,13 +115,13 @@ Local Application protocol 1.3
   -> GET  http://127.0.0.1:11434/api/tags
   -> POST http://127.0.0.1:11434/api/show
   -> POST http://127.0.0.1:11434/api/chat
-  -> final assistant content
+  -> streamed thinking/activity plus final assistant content
   -> strict JSON and request-bound directive validation
   -> existing LiveModelAdapter/controller/verifier path
 ```
 
 The request uses the selected accepted Cloud alias as `model`, plus
-`stream: false` and `think: "low"`; it does not send `format`, `tools`, or
+`stream: true` and `think: "high"`; it does not send `format`, `tools`, or
 function definitions. Ollama Cloud does not currently support structured
 outputs, so request-bound validation remains in this adapter rather than being
 misrepresented as a provider-enforced schema. Chat messages use a `system` role for the stable
@@ -127,20 +181,39 @@ bounded string `message.content`. Chat `remote_model` and `remote_host` are
 not required and are not used; the installed Ollama 0.32.15 local Cloud
 proxy omits them. Returning the local Cloud alias as `model` is
 metadata/chat disagreement and fails.
-Tool/function-call activity is rejected. `message.thinking` is discarded and
-never enters adapter stdout, Local Application protocol data, events, history,
-diagnostics, validation evidence, or review artifacts.
+Tool/function-call activity is rejected. Every valid NDJSON frame refreshes
+the inactivity watchdog. `message.thinking` is progress telemetry rather than
+directive authority: its byte count is accumulated, but its text is discarded
+immediately and never enters adapter stdout, Local Application protocol data,
+events, history, diagnostics, validation evidence, or review artifacts. Only
+the accumulated `message.content` string can become a directive. Its separate
+64 KiB bound therefore does not reject a continuously progressing response
+merely because the model used a long internal reasoning stream.
 
-The complete content string must be one JSON object. Markdown fences, prose,
-concatenated JSON values, malformed JSON, non-object JSON, ambiguous output,
-and directives that do not satisfy the request's embedded action/transition
-contracts are rejected. The existing `LiveModelAdapter` validates the
-directive again downstream and remains authoritative.
+The `ollama-content-fragment-observability-v2` diagnostics retain bounded
+authorized content fragments, their original and retained UTF-8 lengths and
+hashes, frame indices, done flags, and channel-presence metadata. They retain
+no thinking text and do not alter the ordered content concatenation. The
+adapter fails closed when an unredacted, untruncated diagnostic cannot be
+reconciled with its original frame or when the retained fragments cannot
+reconstruct the parser-authorized content.
+
+The complete content string normally must be one JSON object. Receiver policy
+`directive-normalization-v3` first attempts strict JSON, retains the earlier
+one-redundant-trailing-brace and exact lowercase-JSON LF-fence recoveries, and
+adds one ordered composition: unwrap that exact whole-response fence, then
+remove exactly one redundant trailing closing brace from its inner mapping.
+The composed branch records raw, intermediate, and final hashes. It does not
+search Markdown, accept prose, accept alternate fences, remove multiple
+braces, concatenate objects, reverse or generally chain repairs, infer fields
+or values, reserialize bytes, retry, or send feedback. Directives still enter
+the unchanged `LiveModelAdapter` semantic parser, which remains authoritative.
 
 ## Zero-inference preflight
 
-`--preflight` is an operator diagnostic, not the provenance authority for later
-disposable adapter processes. It performs only local metadata checks:
+`--preflight` remains an operator diagnostic and is also the canonical nested
+provenance record retained by repo-aware Qualification V2. It performs only
+local metadata checks:
 `/api/version`, `/api/tags`, and `/api/show` for the exact model. It requires
 the same alias-to-upstream mapping as the normal request path. It reports
 local API readiness, expected version, model availability, readable metadata,
@@ -148,6 +221,16 @@ the validated provenance, and `provider_inference_started: false`. It does
 not call `/api/chat` or `/api/generate` and does not establish that Cloud
 inference will succeed. Each later adapter invocation revalidates `/api/tags`
 and `/api/show` under the same request timeout before it may call `/api/chat`.
+
+Qualification V2 keeps three timeout concepts distinct: the repo-aware
+metadata preflight process bound is a bounded 30-second infrastructure limit;
+the resolved model profile's `idle_timeout_seconds` is passed to the adapter's
+stream inactivity watchdog; and the resolved `request_timeout_seconds` is the
+outer completion-process deadline, with only a small shutdown grace. Thus an
+active stream may exceed its idle timeout in total elapsed time while each
+progress interval remains below the idle timeout, but a silent stream still
+fails at the adapter watchdog and any completion exceeding the outer request
+deadline fails as an infrastructure measurement error.
 
 The current verified owner environment for this contract is Ollama `0.32.15`.
 The accepted 2026-08-17 product-runtime proof used `0.32.14`; the exact pin is
@@ -158,7 +241,10 @@ available. A version mismatch fails closed.
 
 ## Typed command failures
 
-Successful adapter stdout remains the one-directive JSON envelope. On a
+Successful adapter stdout contains the one directive plus bounded aggregate
+and content-fragment stream activity (`stream_frame_count`, `thinking_bytes`,
+content lengths/hashes, and bounded authorized fragments); it never contains
+thinking text. On a
 nonzero adapter exit, stderr contains exactly one bounded `command-error-v1`
 JSON object with `schema_version`, a closed `kind`, and a provider-safe
 message. The provider-neutral command transport accepts only that exact
