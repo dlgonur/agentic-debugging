@@ -17,6 +17,7 @@ from agentic_debugger.runtime.exceptions import (
     PatchRevertError,
 )
 from agentic_debugger.runtime.patcher import (
+    CanonicalPatchArtifact,
     PatchManager,
     _check_python_syntax,
     _parse_unified_diff,
@@ -24,6 +25,7 @@ from agentic_debugger.runtime.patcher import (
     _MANDATORY_DENIED_RULES,
     _PolicyRule,
     _PolicyKind,
+    materialize_and_canonicalize_patch,
 )
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
@@ -98,6 +100,61 @@ def make_pm(ws, allowed=None, denied=None):
     if denied is None:
         denied = ["tests", "task.json"]
     return PatchManager(ws, allowed_paths=allowed, denied_paths=denied)
+
+
+class TestCanonicalPatchArtifact:
+    def test_zero_context_raw_patch_round_trips_through_strict_git(self, tmp_path):
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "example.py").write_bytes(b"keep = True\nold_a = 1\nold_b = 2\n")
+        raw = (
+            "--- a/example.py\n+++ b/example.py\n"
+            "@@ -2,2 +2,3 @@\n-old_a = 1\n-old_b = 2\n"
+            "+new_a = 1\n+new_b = 2\n+new_c = 3\n"
+        )
+        artifact = materialize_and_canonicalize_patch(
+            str(source), raw, ["example.py"], []
+        )
+        assert isinstance(artifact, CanonicalPatchArtifact)
+        assert artifact.semantic_equivalent is True
+        assert artifact.changed_paths == ("example.py",)
+        assert artifact.raw_patch_sha256 == hashlib.sha256(raw.encode()).hexdigest()
+        assert artifact.canonical_patch_sha256 != artifact.raw_patch_sha256
+        assert artifact.patch.startswith("diff --git a/example.py b/example.py\n")
+
+    def test_stale_hunk_location_is_materialized_without_changing_semantics(self, tmp_path):
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "example.py").write_text(
+            "keep = True\nold_a = 1\nold_b = 2\n", encoding="utf-8"
+        )
+        raw = (
+            "--- a/example.py\n+++ b/example.py\n"
+            "@@ -3,1 +3,1 @@\n-old_a = 1\n+new_a = 1\n"
+        )
+        artifact = materialize_and_canonicalize_patch(
+            str(source), raw, ["example.py"], []
+        )
+        assert artifact.raw_apply.hunk_adjustments
+        assert artifact.after_sha256["example.py"]
+
+    def test_unauthorized_paths_fail_before_canonicalization(self, tmp_path):
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "example.py").write_text("old\n", encoding="utf-8")
+        (source / "secret.py").write_text("secret\n", encoding="utf-8")
+        raw = "--- a/secret.py\n+++ b/secret.py\n@@ -1,1 +1,1 @@\n-secret\n+exposed\n"
+        with pytest.raises(PatchAuthorizationError):
+            materialize_and_canonicalize_patch(str(source), raw, ["example.py"], [])
+
+    def test_malformed_raw_candidate_fails_closed(self, tmp_path):
+        source = tmp_path / "source"
+        source.mkdir()
+        (source / "example.py").write_text("old\n", encoding="utf-8")
+        with pytest.raises(PatchValidationError):
+            materialize_and_canonicalize_patch(
+                str(source), "not a unified diff", ["example.py"], []
+            )
 
 
 class TestPatchParser:

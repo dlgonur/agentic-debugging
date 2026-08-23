@@ -12,16 +12,34 @@ Rules:
 
 ---
 
+## Level-32 candidate-artifact boundary (2026-08-23)
+
+- [x] **`workspace-derived-official-git-diff-v1` — COMPLETE / no repaired-
+  treatment authoritative success.** The raw model patch remains immutable
+  provenance in `candidate.patch`; after tolerant authorized materialization,
+  the operator derives `candidate-official.patch` from the actual pristine to
+  patched workspace delta. Strict Git application, changed-path authorization,
+  and byte-for-byte equivalence are required before the official evaluator is
+  invoked. Provider-free replay covered 18 retained candidates: 16 reached
+  official tests, two failed closed during raw materialization, and none
+  resolved 5/5 F2P plus 0 P2P failures. Historical `0/5, 9/9` summaries are
+  retained and are not treated as semantic failures without proven test
+  execution. Durable replay evidence is tracked in
+  `analysis/level32_candidate_artifact_replay_20260823.md`; the local review
+  package is under `_ai-review/L32-ARTIFACT-01/`.
+
 ## Autonomous Level-32 continuation (2026-08-22)
 
-- [ ] **Official Level-32 acceptance — ACTIVE.** Gemma V2 was a parser-
-  compatibility failure; `directive-normalization-v2` is provider-free
-  validated and independently approved. Fresh Gemma V3 completed the full
-  exact-PDB/local/official path but the official evaluator rejected its
-  candidate (F2P 0/5; P2P failed 9/9), establishing a clean semantic failure.
-  The remaining 12-model Ollama queue is frozen with GLM 5.2 penultimate and
-  Kimi K3 final. Durable evidence is under
-  `_ai-review/level32-autonomous-campaign/`.
+- [x] **CLOSED / SUPERSEDED AS AN ACTIVE CAMPAIGN.** The original autonomous
+  continuation and its artifacts remain immutable historical evidence. Its old
+  aggregate `0/5 F2P, 9/9 P2P failed` interpretation was later corrected by
+  the candidate-artifact forensic repair because official test execution was
+  not proven for that raw serialization. The retained Gemma4 31B V3 candidate,
+  replayed under the repaired `workspace-derived-official-git-diff-v1`
+  candidate-transport treatment, reached official execution at F2P 4/5 with
+  P2P failed 1/9. No remaining model queue from that historical campaign is
+  currently active or authorized. Current repaired-treatment replay results
+  are in `analysis/level32_candidate_artifact_replay_20260823.md`.
 
 ## Frozen Level-32 model escalation (2026-08-22)
 

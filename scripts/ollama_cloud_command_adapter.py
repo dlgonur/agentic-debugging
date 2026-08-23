@@ -803,7 +803,7 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         controller = {}
     contracts = request.get("action_contracts")
     lines = [
-        "apply_patch arguments.patch must be a complete unified diff accepted by Local Application's PatchManager and the official evaluator's direct git apply check.",
+        "apply_patch arguments.patch must be a complete unified diff accepted by Local Application's PatchManager. The Level-32 operator derives the strict official Git artifact from the accepted workspace state.",
         "File headers must contain both lines, in this order:",
         "--- a/<relative-path>",
         "+++ b/<same-relative-path>",
@@ -820,7 +820,7 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         'Context lines beginning with exactly one space count toward both OLD_COUNT and NEW_COUNT.',
         "Hunk counts must exactly match the hunk body.",
         "If the header counts do not equal the body counts, correct the header before output.",
-        "Prefer the smallest valid hunk that uniquely expresses the edit, but include at least one unchanged context line in every hunk. Zero-context hunks are rejected because the official evaluator's direct git apply path requires contextual unified diffs.",
+        "Prefer the smallest valid hunk that uniquely expresses the edit. Include unchanged context lines when available; do not rely on manual hunk serialization for official evaluation.",
         "Hunk body prefixes are significant: one leading space for unchanged/context, - for removed, + for added.",
         "Use repository-relative paths only.",
         "Do not wrap the patch string in Markdown fences.",
@@ -848,12 +848,7 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         lines.extend(
             [
                 f"Current public PDB/source evidence binds the diagnosed line to {path}:{line_number}.",
-                "If the repair replaces only that visible line, use a zero-context one-line hunk with these exact fixed parts:",
-                f"--- a/{path}",
-                f"+++ b/{path}",
-                f"@@ -{line_number},1 +{line_number},1 @@",
-                f"-{old_line}",
-                "Then add exactly one '+' line containing your corrected replacement; do not copy a symbolic placeholder.",
+                "Use that source line as the removed line in a normal context-bearing hunk when possible; the operator will serialize the accepted workspace state for official Git evaluation.",
             ]
         )
     if _syntax_check_advertises_path(contracts):

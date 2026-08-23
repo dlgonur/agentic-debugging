@@ -24,6 +24,23 @@ Both live selection and explicit confirmation are mandatory. Without them, the
 CLI writes an attempted-but-rejected report without reading the config. Missing
 or invalid configuration is rejected before any command is launched.
 
+## Level-32 candidate artifact boundary (2026-08-23)
+
+The repaired Level-32 treatment is identified as
+`workspace-derived-official-git-diff-v1`. It keeps the model-authored
+`candidate.patch` unchanged as provenance. After the authorized tolerant
+PatchManager materializes that raw patch in a disposable workspace, the
+operator derives `candidate-official.patch` from the pristine-to-patched
+workspace delta using Git. The canonical artifact must strictly apply to a
+pristine equivalent baseline and produce the same changed-path set and file
+bytes before the official Docker evaluator runs. A raw candidate that cannot
+be materialized, or whose canonical artifact cannot be proven equivalent, is
+not a semantic evaluator result. The official result also records whether
+test execution was proven, so pre-test application failures cannot be inferred
+from aggregate `0/5` counts alone. The durable provider-free replay summary is
+tracked in `../../analysis/level32_candidate_artifact_replay_20260823.md`; its local
+FirstMate package is `_ai-review/L32-ARTIFACT-01/`.
+
 ## Frozen Level-32 escalation evidence (2026-08-22)
 
 The explicitly authorized escalation used the existing one-task operator on

@@ -587,10 +587,11 @@ def test_minimax_m3_registry_and_qualification_artifact_are_stable():
 
     assert operator.PREPARED_TREATMENT_REVISIONS.get("minimax-m3:cloud") is None
     assert operator._treatment_id_for_model("minimax-m3:cloud") == (
-        "pdb-capability-level32-cookiecutter-967-minimax-m3-cloud-v1"
+        "pdb-capability-level32-cookiecutter-967-minimax-m3-cloud-v1-"
+        "workspace-derived-official-git-diff-v1"
     )
     assert operator._treatment_fingerprint("minimax-m3:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
-        "0be03e9fd06a27a90bf1def4dde74b64e0bee9639aed88cfb819f0a6b0d3662f"
+        "551a0b4ec74878bea5eba90bede31503823b0f046871b5d05f2516fa12faecb0"
     )
 
     artifact = REPO_ROOT / "experiments" / "pdb_capability_ladder" / "transport_qualifications" / "minimax-m3-v1.json"
@@ -1107,7 +1108,8 @@ def test_apply_patch_guidance_teaches_exact_unified_diff_requirements() -> None:
     assert "Hunk counts must exactly match the hunk body." in guidance
     assert "If the header counts do not equal the body counts, correct the header before output." in guidance
     assert "Prefer the smallest valid hunk that uniquely expresses the edit." in guidance
-    assert "Zero-context hunks" in guidance
+    assert "Zero-context hunks" not in guidance
+    assert "official evaluator's direct git apply check" not in guidance
     assert "one leading space for unchanged/context" in guidance
     assert "repository-relative paths" in guidance
     assert "Do not wrap the patch string in Markdown fences." in guidance

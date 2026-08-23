@@ -27,6 +27,8 @@ from agentic_debugger.runtime.patcher import (
     SyntaxFileResult,
     SyntaxCheckResult,
     PatchManager,
+    CanonicalPatchArtifact,
+    materialize_and_canonicalize_patch,
 )
 from agentic_debugger.runtime.pdb_protocol import (
     PROTOCOL_VERSION,
@@ -75,6 +77,8 @@ __all__ = [
     "SyntaxFileResult",
     "SyntaxCheckResult",
     "PatchManager",
+    "CanonicalPatchArtifact",
+    "materialize_and_canonicalize_patch",
     "PROTOCOL_VERSION",
     "SUPPORTED_OPERATIONS",
     "MAX_LINE_LENGTH",

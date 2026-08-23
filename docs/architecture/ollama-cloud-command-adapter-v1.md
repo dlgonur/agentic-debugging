@@ -80,14 +80,18 @@ retry-expansion stage; the model's one-line patch was independently
 `RESOLVED`, including verifier-only private checks. The run produced 26,821
 activity frames and discarded 121,411 thinking bytes.
 
-The later frozen 32/100 `audreyr__cookiecutter-967` rung reached a valid model
-boundary. After two separately retained infrastructure-invalid treatments, V3
-completed 24 calls/attempts with zero retries/provider errors and real exact
-PDB evidence. The local verifier resolved the public contract, but the official
-SWE-rebench Docker evaluator rejected the candidate (F2P 0/5; P2P not passed
-9/9). This confirms the activity-aware adapter can carry a larger package task
-through the full action lifecycle; it does not convert the candidate into a
-successful repair or establish PDB causality.
+The historical frozen 32/100 `audreyr__cookiecutter-967` V3 rung reached a
+valid local model/controller/PDB boundary, but its raw candidate serialization
+was not proven compatible with the official Git application path. Its original
+`0/5, 9/9` summary remains historical and is not a clean semantic rejection.
+The repaired Level-32 treatment is separately identified as
+`workspace-derived-official-git-diff-v1`: raw `candidate.patch` is preserved,
+the accepted workspace delta produces `candidate-official.patch`, and strict
+Git application plus byte equality are verified before official evaluation.
+This changes candidate transport only; the task, hidden tests, PDB proof, and
+official evaluator authority remain unchanged. The durable provider-free
+replay summary is tracked in
+`../../analysis/level32_candidate_artifact_replay_20260823.md`.
 
 **2026-08-18:** the experimental Nemotron profile has a completed
 five-task Harness V2 capability probe (**1/5 RESOLVED**). That result is

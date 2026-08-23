@@ -319,10 +319,11 @@ def test_candidate_selection_tracks_replacement_and_successful_revert(monkeypatc
 
 
 def test_recovery_refuses_mismatched_candidate_without_overwriting_or_evaluating(tmp_path, monkeypatch):
-    output = tmp_path / "recovery"
-    output.mkdir()
-    (output / "live-results.json").write_text("{}\n", encoding="utf-8")
-    patch_path = output / "candidate.patch"
+    source = tmp_path / "historical"
+    output = tmp_path / "repaired"
+    source.mkdir()
+    (source / "live-results.json").write_text("{}\n", encoding="utf-8")
+    patch_path = source / "candidate.patch"
     patch_path.write_text("historical mismatch", encoding="utf-8")
     monkeypatch.setattr(operator, "_load_official_row", lambda: {})
     monkeypatch.setattr(operator, "_verify_image", lambda: None)
@@ -340,7 +341,7 @@ def test_recovery_refuses_mismatched_candidate_without_overwriting_or_evaluating
 
     monkeypatch.setattr(operator, "_official_evaluate", fail_if_evaluated)
 
-    with pytest.raises(operator.ProofError, match="use a fresh recovery directory"):
+    with pytest.raises(operator.ProofError, match="disagrees with replayed tool-success evidence"):
         operator.main(
             [
                 "--model",
@@ -350,25 +351,116 @@ def test_recovery_refuses_mismatched_candidate_without_overwriting_or_evaluating
                 "--output-dir",
                 str(output),
                 "--recover-existing",
+                "--recovery-source-dir",
+                str(source),
             ]
         )
 
     assert patch_path.read_text(encoding="utf-8") == "historical mismatch"
+    assert not output.exists()
     assert evaluated is False
 
 
+def test_recovery_success_writes_only_fresh_destination_and_assigns_new_treatment(tmp_path, monkeypatch):
+    source = tmp_path / "historical"
+    output = tmp_path / "repaired"
+    source.mkdir()
+    live_bytes = b'{"historical": true}\n'
+    raw_patch = "tool-accepted patch\n"
+    (source / "live-results.json").write_bytes(live_bytes)
+    (source / "candidate.patch").write_bytes(raw_patch.encode("utf-8"))
+    (source / "historical-result.json").write_bytes(b"historical evidence\n")
+    before = {path.relative_to(source).as_posix(): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+
+    class FakeArtifact:
+        patch = "canonical official patch\n"
+
+        def to_mapping(self):
+            return {"artifact_name": "candidate-official.patch", "patch": self.patch}
+
+    monkeypatch.setattr(operator, "_resolve_model_or_fail", lambda model: (model, None))
+    monkeypatch.setattr(operator, "_load_official_row", lambda: {"problem_statement": "public"})
+    monkeypatch.setattr(
+        operator,
+        "_candidate_patch_record",
+        lambda _case: {"patch": raw_patch, "patch_sha256": "raw-hash"},
+    )
+    monkeypatch.setattr(operator, "_verify_image_and_record", lambda destination: (destination / "image-verification.json").write_text("{}\n"))
+    monkeypatch.setattr(operator, "_copy_image_source", lambda _destination: None)
+    monkeypatch.setattr(operator, "_write_public_scaffold", lambda *_args: None)
+    monkeypatch.setattr(operator, "_canonicalize_level32_candidate", lambda *_args, **_kwargs: FakeArtifact())
+    monkeypatch.setattr(
+        operator,
+        "_official_evaluate",
+        lambda _row, patch, _private, **kwargs: {
+            "all_ok": False,
+            "official_test_execution_proven": True,
+            "evaluated_patch": patch,
+            "raw_patch": kwargs["raw_patch"],
+        },
+    )
+    monkeypatch.setattr(
+        operator,
+        "_result_summary",
+        lambda _case, _official, _patch, **kwargs: {
+            "accepted": False,
+            "treatment_id": kwargs["treatment_id"],
+        },
+    )
+
+    assert operator.main(
+        [
+            "--model",
+            "mistral-large-3:675b-cloud",
+            "--treatment-revision",
+            "2",
+            "--output-dir",
+            str(output),
+            "--recover-existing",
+            "--recovery-source-dir",
+            str(source),
+        ]
+    ) == 1
+
+    after = {path.relative_to(source).as_posix(): path.read_bytes() for path in source.rglob("*") if path.is_file()}
+    assert after == before
+    assert (output / "candidate.patch").read_bytes() == raw_patch.encode("utf-8")
+    assert (output / "candidate-official.patch").read_text(encoding="utf-8") == "canonical official patch\n"
+    assert json.loads((output / "result.json").read_text(encoding="utf-8"))["treatment_id"] == (
+        "pdb-capability-level32-cookiecutter-967-mistral-large-3-675b-cloud-v2-"
+        "workspace-derived-official-git-diff-v1"
+    )
+    assert (output / "official-verifier-summary.json").is_file()
+
+
 def test_selectable_model_default_and_treatment_identity():
-    # Default alias and frozen treatment must not drift.
+    # Default alias and repaired candidate-transport treatment must not drift.
     assert operator.MODEL == operator.DEFAULT_MODEL == "gpt-oss:20b-cloud"
-    assert operator._treatment_id_for_model("gpt-oss:20b-cloud") == operator.FROZEN_TREATMENT_ID_LEGACY
-    assert operator._treatment_id_for_model("gpt-oss:120b-cloud") == "pdb-capability-level32-cookiecutter-967-gpt-oss-120b-v1"
-    assert operator._treatment_id_for_model("qwen3.5:cloud") == "pdb-capability-level32-cookiecutter-967-qwen3.5-cloud-v1"
+    assert operator._treatment_id_for_model("gpt-oss:20b-cloud") == operator.TREATMENT_ID
+    assert operator.CANDIDATE_TRANSPORT_ID in operator.TREATMENT_ID
+    assert operator._treatment_id_for_model("gpt-oss:120b-cloud") == (
+        "pdb-capability-level32-cookiecutter-967-gpt-oss-120b-v1-"
+        "workspace-derived-official-git-diff-v1"
+    )
+    assert operator._treatment_id_for_model("qwen3.5:cloud") == (
+        "pdb-capability-level32-cookiecutter-967-qwen3.5-cloud-v1-"
+        "workspace-derived-official-git-diff-v1"
+    )
     # Treatment identity is distinct per model.
     assert operator._treatment_id_for_model("gpt-oss:120b-cloud") != operator._treatment_id_for_model("gpt-oss:20b-cloud")
     assert operator._treatment_id_for_model("gpt-oss:120b-cloud") != operator._treatment_id_for_model("qwen3.5:cloud")
-    assert operator._treatment_id_for_model("gpt-oss:120b-cloud", 2) == "pdb-capability-level32-cookiecutter-967-gpt-oss-120b-v2"
-    assert operator._treatment_id_for_model("qwen3.5:cloud", 3) == "pdb-capability-level32-cookiecutter-967-qwen3.5-cloud-v3"
-    assert operator._treatment_id_for_model("minimax-m3:cloud", 2) == "pdb-capability-level32-cookiecutter-967-minimax-m3-cloud-v2"
+    assert operator._treatment_id_for_model("gpt-oss:120b-cloud", 2) == (
+        "pdb-capability-level32-cookiecutter-967-gpt-oss-120b-v2-"
+        "workspace-derived-official-git-diff-v1"
+    )
+    assert operator._treatment_id_for_model("qwen3.5:cloud", 3) == (
+        "pdb-capability-level32-cookiecutter-967-qwen3.5-cloud-v3-"
+        "workspace-derived-official-git-diff-v1"
+    )
+    assert operator._treatment_id_for_model("minimax-m3:cloud", 2) == (
+        "pdb-capability-level32-cookiecutter-967-minimax-m3-cloud-v2-"
+        "workspace-derived-official-git-diff-v1"
+    )
 
 
 def test_shared_image_gate_runs_before_model_adapter_setup(tmp_path, monkeypatch):
@@ -542,10 +634,11 @@ def test_glm_5_2_promotion_preserves_qualified_profile_and_prepares_v1_treatment
         "0685fad3a22efa7ba8a4776729f2f552e89d66f1032c9ad1fcb344557759dad9"
     )
     assert operator._treatment_id_for_model("glm-5.2:cloud", 1) == (
-        "pdb-capability-level32-cookiecutter-967-glm-5.2-cloud-v1"
+        "pdb-capability-level32-cookiecutter-967-glm-5.2-cloud-v1-"
+        "workspace-derived-official-git-diff-v1"
     )
     assert operator._treatment_fingerprint("glm-5.2:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
-        "f56fd8293f41ddfc2b9e0ada885f4d25477de7eb55a7eb4cd64ded2a5c2da359"
+        "633bb6885072229b999e9dd4da7de496e6bb20cb495359a9560a637937f1025c"
     )
     artifact = REPOSITORY_ROOT / "experiments/pdb_capability_ladder/transport_qualifications/glm-5.2-v2.json"
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == (
@@ -757,6 +850,46 @@ def test_official_patch_application_failure_is_not_called_semantic():
     )
 
 
+def test_unproven_official_execution_is_not_called_semantic_rejection():
+    case = {
+        "status": operator.LiveCaseStatus.RESOLVED.value,
+        "measurements": {"provider_error_kinds": [], "model_request_count": 1, "model_response_count": 1},
+    }
+    assert operator._classify_level32_case(
+        case,
+        {
+            "all_ok": False,
+            "error_present": False,
+            "fail_to_pass_passed": 0,
+            "pass_to_pass_failed": 9,
+            "official_test_execution_proven": False,
+        },
+    ) == "official_test_execution_unproven"
+
+
+def test_proven_official_execution_is_a_semantic_rejection():
+    case = {
+        "status": operator.LiveCaseStatus.RESOLVED.value,
+        "measurements": {"provider_error_kinds": [], "model_request_count": 1, "model_response_count": 1},
+    }
+    assert operator._classify_level32_case(
+        case,
+        {"all_ok": False, "error_present": False, "official_test_execution_proven": True},
+    ) == "official_rejection_semantic"
+
+
+@pytest.mark.parametrize(
+    ("field", "expected"),
+    [
+        ("candidate_materialization_failure", "candidate_not_materialized"),
+        ("candidate_canonicalization_failure", "canonical_official_patch_unavailable"),
+    ],
+)
+def test_pretest_candidate_boundaries_have_distinct_classifications(field, expected):
+    case = {field: True, "measurements": {"provider_error_kinds": []}}
+    assert operator._classify_level32_case(case, None) == expected
+
+
 def test_level32_fixture_classification_distinguishes_glm_and_deepseek_without_provider_calls(monkeypatch):
     glm = json.loads(
         (REPOSITORY_ROOT / "experiments/pdb_capability_ladder/level32-cookiecutter-967-glm-5.2-cloud-v1/result.json").read_text(encoding="utf-8")
@@ -766,7 +899,7 @@ def test_level32_fixture_classification_distinguishes_glm_and_deepseek_without_p
     )
     monkeypatch.setattr(operator, "_run", lambda *_args, **_kwargs: (_ for _ in ()).throw(AssertionError("provider/evaluator call")))
     assert operator._classify_level32_case(glm, glm["official_verifier"]) == (
-        "official_rejection_semantic_root_cause_unproven"
+        "official_test_execution_unproven"
     )
     assert operator._classify_level32_case(deepseek, deepseek["official_verifier"]) == (
         "incomplete_provider_model_transport_failure"

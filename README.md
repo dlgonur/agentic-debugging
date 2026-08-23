@@ -13,10 +13,9 @@ interactive debugger-assisted agents.
 ## Current status
 
 **Authority:** [`docs/project-closeout.md`](docs/project-closeout.md) for the
-accepted project closeout. A separately authorized autonomous Level-32 model
-campaign is active until official evaluator acceptance; its live ledger is
-under `_ai-review/level32-autonomous-campaign/`. Roadmap notes live in [`TODO.md`](TODO.md);
-the execution tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
+accepted project closeout. Level-32 artifact-boundary work is recorded as a
+new treatment and does not rewrite historical runs. Roadmap notes live in
+[`TODO.md`](TODO.md); the execution tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
 
 - **Local Application V1** (2026-08-16): COMPLETE — Tasks 1–8 accepted
   ([`docs/architecture/local-application-v1.md`](docs/architecture/local-application-v1.md)).
@@ -52,15 +51,18 @@ the execution tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
   Verifier: **RESOLVED**, F2P **1/1**, P2P **2/2**, private checks true;
   21 calls/attempts, zero retries/provider errors, cleanup/immutability true,
   replay `Done`. Frozen evidence is in the same ladder directory.
-- **Exact-PDB capability ladder, 32/100 boundary** (2026-08-21): COMPLETE as
-  a negative model-capability result on frozen SWE-rebench V2
-  `audreyr__cookiecutter-967`. After two retained infrastructure-invalid
-  treatments, V3 completed 24 calls/attempts with zero retries/provider
-  errors, real PDB proof, controller `Done`, local verifier `RESOLVED`, cleanup
-  and replay. The official Docker authority rejected the model patch (F2P
-  **0/5**, P2P not passed **9/9**). This locates a descriptive one-task boundary
-  between accepted 18/100 and failed 32/100; it is not a success rate or causal
-  PDB claim. Evidence: [`experiments/pdb_capability_ladder/`](experiments/pdb_capability_ladder/README.md).
+- **Level-32 candidate-artifact boundary** (2026-08-23): COMPLETE as a
+  provider-free harness repair. The new
+  `workspace-derived-official-git-diff-v1` treatment preserves raw model
+  patches and derives `candidate-official.patch` from the accepted workspace,
+  then proves strict Git application and byte equality before Docker. Replay
+  covered 18 retained candidates: 16 reached official tests, two failed closed
+  during raw materialization, and none reached authoritative 5/5 F2P plus 0
+  P2P failures. The historical V3 `0/5, 9/9` result is no longer treated as a
+  clean semantic model failure without proven test execution; its original
+  artifact remains unchanged. Durable replay evidence is in
+  `analysis/level32_candidate_artifact_replay_20260823.md`; the local review
+  package is `_ai-review/L32-ARTIFACT-01/`.
 - **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
   evidence. After the multi-model Ollama Cloud generalization, selected
   `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated

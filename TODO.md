@@ -2,16 +2,18 @@
 
 ## Durum notu
 
-**2026-08-22 autonomous Level-32 continuation — ACTIVE.** A new owner-authorized
-goal reopens the unchanged `audreyr__cookiecutter-967` rung until authoritative
-official acceptance. Gemma V2 was forensically reclassified as
-`PARSER_COMPATIBILITY_FAILURE`; provider-neutral `directive-normalization-v2`
-was validated and independently approved. Fresh Gemma V3 completed real PDB,
-controller, local verifier, and official evaluation, then was cleanly rejected
-(official F2P 0/5; P2P failed 9/9), so it is a clean semantic model-capability
-failure. The deterministic post-Gemma queue is frozen in
-`_ai-review/level32-autonomous-campaign/MODEL_QUEUE.md`; GLM 5.2 is penultimate
-and Kimi K3 final. Campaign remains active; no official success yet.
+**2026-08-23 Level-32 candidate-artifact boundary — COMPLETE.** The new
+`workspace-derived-official-git-diff-v1` treatment preserves raw model patches,
+materializes them through the authorized tolerant PatchManager, derives a
+strict canonical Git patch from the resulting workspace, and fail-closes unless
+strict application and byte-for-byte equivalence are proven. Provider-free
+replay covered 18 retained candidates: 16 reached official tests, two were
+unmaterializable, and none reached authoritative 5/5 F2P plus 0 P2P failures.
+Historical raw artifacts and their original summaries remain unchanged; the
+old `0/5, 9/9` shape is not called a semantic model failure without proven test
+execution. Durable replay evidence is tracked in
+`analysis/level32_candidate_artifact_replay_20260823.md`; the local review
+package is under `_ai-review/L32-ARTIFACT-01/`.
 
 **2026-08-22 frozen Level-32 model escalation — COMPLETE / NO OFFICIAL
 SUCCESS.** The authorized four-model sequence processed GPT-OSS 120B,

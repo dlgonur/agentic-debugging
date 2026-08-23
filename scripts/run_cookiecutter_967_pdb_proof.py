@@ -46,6 +46,10 @@ from agentic_debugger.evaluation.live import (
     run_live_case,
 )
 from agentic_debugger.events.replay import replay_events
+from agentic_debugger.runtime.patcher import (
+    CanonicalPatchArtifact,
+    materialize_and_canonicalize_patch,
+)
 
 
 INSTANCE_ID = "audreyr__cookiecutter-967"
@@ -69,8 +73,9 @@ IMAGE_INSPECT_FORMAT = (
     "\"labels\":{{json .Config.Labels}}}"
 )
 IMAGE_DIAGNOSTIC_LIMIT = 2048
-TREATMENT_ID = "pdb-capability-level32-cookiecutter-967-v3"
-FROZEN_TREATMENT_ID_LEGACY = TREATMENT_ID
+CANDIDATE_TRANSPORT_ID = "workspace-derived-official-git-diff-v1"
+FROZEN_TREATMENT_ID_LEGACY = "pdb-capability-level32-cookiecutter-967-v3"
+TREATMENT_ID = f"pdb-capability-level32-cookiecutter-967-{CANDIDATE_TRANSPORT_ID}"
 # New treatments allow one bounded transport/directive retry. Historical v1
 # artifacts retain their original zero-retry identity; this changed budget is
 # intentionally captured by the treatment fingerprint for fresh reruns.
@@ -108,12 +113,12 @@ def _treatment_id_for_model(model: str, revision: int = 1) -> str:
         raise ProofError("treatment revision must be a positive integer")
     if model == "gpt-oss:20b-cloud":
         if revision != 1:
-            raise ProofError("the frozen GPT-OSS 20B V3 treatment cannot be revised")
-        return FROZEN_TREATMENT_ID_LEGACY
+            raise ProofError("the frozen GPT-OSS 20B treatment accepts only revision 1")
+        return TREATMENT_ID
     slug = model.replace(":", "-").replace("/", "-")
     if model == "gpt-oss:120b-cloud":
         slug = "gpt-oss-120b"
-    return f"pdb-capability-level32-cookiecutter-967-{slug}-v{revision}"
+    return f"pdb-capability-level32-cookiecutter-967-{slug}-v{revision}-{CANDIDATE_TRANSPORT_ID}"
 
 
 def _resolve_model_or_fail(model: str) -> tuple[str, Any]:
@@ -773,6 +778,54 @@ def _normalize_candidate_patch_for_official(patch: str) -> tuple[str, str]:
     return patch + "\n", "terminal-newline-added"
 
 
+def _canonicalize_level32_candidate(
+    pristine_source: Path,
+    raw_patch: str,
+    *,
+    parent_dir: Path | None = None,
+) -> CanonicalPatchArtifact:
+    """Materialize the raw model patch and prove its official Git artifact."""
+
+    try:
+        return materialize_and_canonicalize_patch(
+            str(pristine_source),
+            raw_patch,
+            ["cookiecutter/config.py"],
+            ["tests", "task.json"],
+            parent_dir=str(parent_dir) if parent_dir is not None else None,
+        )
+    except Exception as exc:
+        raise ProofError(
+            f"candidate canonicalization failed closed: {type(exc).__name__}: {exc}"
+        ) from exc
+
+
+def _write_candidate_artifacts(
+    output: Path,
+    raw_patch: str,
+    artifact: CanonicalPatchArtifact,
+) -> dict[str, Any]:
+    """Persist raw provenance and the distinct canonical official artifact."""
+
+    # candidate.patch remains the exact model-authored text for historical
+    # compatibility.  The evaluator never consumes this file in the repaired
+    # treatment.
+    (output / "candidate.patch").write_text(raw_patch, encoding="utf-8", newline="\n")
+    (output / "candidate-official.patch").write_text(
+        artifact.patch,
+        encoding="utf-8",
+        newline="\n",
+    )
+    mapping = artifact.to_mapping()
+    mapping.pop("patch", None)
+    mapping["official_patch_path"] = "candidate-official.patch"
+    (output / "candidate-artifact.json").write_text(
+        json.dumps(mapping, indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    return mapping
+
+
 def _redacted_test_summary(
     item: dict[str, Any], *, f2p_total: int, p2p_total: int,
     candidate_patch_application_failure: bool = False,
@@ -825,6 +878,8 @@ def _official_evaluate(
     private_dir: Path,
     *,
     expose_candidate_hashes: bool = True,
+    raw_patch: str | None = None,
+    candidate_artifact: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     _validate_official_row(row)
     evaluator_root = (
@@ -889,11 +944,21 @@ def _official_evaluate(
                     "corrupt patch",
                 )
             )
+    # The pinned evaluator exits before pytest with 128 when candidate patch
+    # application fails. Keep this top-level flag aligned with the redacted
+    # result projection even when the evaluator log path is unavailable.
+    patch_application_failure = patch_application_failure or item.get("exit_code") == 128
     redacted_tests = _redacted_test_summary(
         item,
         f2p_total=F2P_COUNT,
         p2p_total=P2P_COUNT,
         candidate_patch_application_failure=patch_application_failure,
+    )
+    test_execution_proven = bool(
+        not patch_application_failure
+        and not item.get("error")
+        and "from_fail_to_pass" in item
+        and "failed_from_pass_to_pass" in item
     )
     safe = {
         "schema_version": "level32-official-result-v2",
@@ -918,6 +983,8 @@ def _official_evaluate(
         "pass_to_pass_failed": len(item.get("failed_from_pass_to_pass") or ()),
         "error_present": bool(item.get("error")),
         "candidate_patch_application_failure": patch_application_failure,
+        "official_test_execution_proven": test_execution_proven,
+        "candidate_patch_artifact": "candidate-official.patch" if candidate_artifact else None,
         "redacted_test_summary": redacted_tests,
         "private_artifacts_removed": True,
         "candidate_patch_normalization": normalization,
@@ -929,12 +996,18 @@ def _official_evaluate(
                 "evaluated_candidate_patch_sha256": hashlib.sha256(evaluated_patch.encode("utf-8")).hexdigest(),
             }
         )
+        if raw_patch is not None:
+            safe["raw_candidate_patch_sha256"] = hashlib.sha256(raw_patch.encode("utf-8")).hexdigest()
     return safe
 
 
 def _classify_level32_case(case: dict[str, Any], official: dict[str, Any] | None = None) -> str:
     """Classify observed execution boundaries without inferring model success."""
 
+    if case.get("candidate_materialization_failure"):
+        return "candidate_not_materialized"
+    if case.get("candidate_canonicalization_failure"):
+        return "canonical_official_patch_unavailable"
     measurements = case.get("measurements") or {}
     kinds = set(measurements.get("provider_error_kinds") or ())
     requests = measurements.get("model_request_count")
@@ -948,7 +1021,9 @@ def _classify_level32_case(case: dict[str, Any], official: dict[str, Any] | None
     if official and official.get("candidate_patch_application_failure"):
         return "official_candidate_patch_application_failure"
     if official and official.get("all_ok") is False and not official.get("error_present"):
-        return "official_rejection_semantic_root_cause_unproven"
+        if official.get("official_test_execution_proven") is not True:
+            return "official_test_execution_unproven"
+        return "official_rejection_semantic"
     if case.get("status") not in {LiveCaseStatus.RESOLVED.value}:
         return "incomplete_run"
     return "unclassified"
@@ -1098,7 +1173,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--recover-existing",
         action="store_true",
-        help="rebuild verification/summary from an existing provider-complete output",
+        help="rebuild verification/summary from an immutable provider-complete source",
+    )
+    parser.add_argument(
+        "--recovery-source-dir",
+        default=None,
+        help="immutable historical directory used as the source for --recover-existing",
     )
     return parser
 
@@ -1155,6 +1235,13 @@ def _treatment_fingerprint(model: str, budget: LiveTreatmentBudget) -> str:
         "pdb_breakpoint_selection_schema_version": PDB_BREAKPOINT_SELECTION_SCHEMA_VERSION,
         "pdb_breakpoint_selection_policy_id": PDB_BREAKPOINT_SELECTION_POLICY_ID,
         "proof_role_selection": PROOF_ROLE_SELECTION_POLICY,
+        "candidate_transport_id": CANDIDATE_TRANSPORT_ID,
+        "candidate_transport_contract": {
+            "raw_patch_preserved": True,
+            "official_patch_source": "pristine-to-patched-workspace-git-diff",
+            "semantic_equivalence_required": True,
+            "strict_git_apply_required": True,
+        },
         "retry_count": 0,
         "fallback_count": 0,
     }
@@ -1254,20 +1341,52 @@ def main(argv: list[str] | None = None) -> int:
     if args.recover_existing:
         if args.live or args.confirm_live_model_access:
             raise ProofError("recovery must remain provider-free")
-        live_path = output / "live-results.json"
-        patch_path = output / "candidate.patch"
-        if not output.is_dir() or not live_path.is_file():
+        if args.recovery_source_dir is None:
+            raise ProofError("recovery requires --recovery-source-dir and a fresh --output-dir")
+        if args.output_dir is None:
+            raise ProofError("recovery requires --recovery-source-dir and a fresh --output-dir")
+        recovery_source = Path(args.recovery_source_dir).resolve()
+        if recovery_source == output:
+            raise ProofError("recovery source and destination must be different paths")
+        if output.exists():
+            raise ProofError("recovery destination directory already exists; choose a fresh output directory")
+        live_path = recovery_source / "live-results.json"
+        patch_path = recovery_source / "candidate.patch"
+        if not recovery_source.is_dir() or not live_path.is_file() or not patch_path.is_file():
             raise ProofError("provider-complete recovery artifacts are missing")
         row = _load_official_row()
-        image_verification = _verify_image_and_record(output)
-        case = json.loads(live_path.read_text(encoding="utf-8"))
+        try:
+            live_bytes = live_path.read_bytes()
+            raw_patch_bytes = patch_path.read_bytes()
+            case = json.loads(live_bytes.decode("utf-8"))
+            source_patch = raw_patch_bytes.decode("utf-8")
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ProofError(f"provider-complete recovery artifacts are unreadable: {exc}") from exc
         candidate = _candidate_patch_record(case)
         patch = candidate["patch"]
-        if patch_path.exists() and patch_path.read_text(encoding="utf-8") != patch:
-            raise ProofError("existing candidate.patch disagrees with replayed tool-success evidence; use a fresh recovery directory")
-        patch_path.write_text(patch, encoding="utf-8", newline="\n")
-        with tempfile.TemporaryDirectory(prefix="cookiecutter-967-private-eval-") as private:
-            official = _official_evaluate(row, patch, Path(private))
+        if source_patch != patch:
+            raise ProofError("historical candidate.patch disagrees with replayed tool-success evidence")
+        output.mkdir(parents=True)
+        # Preserve the historical live case as source provenance, but never
+        # mutate the source directory with repaired-treatment artifacts.
+        (output / "live-results.json").write_bytes(live_bytes)
+        image_verification = _verify_image_and_record(output)
+        # Keep the disposable export path short enough for the pinned image's
+        # long fixture paths on Windows before Git indexes the baseline.
+        with tempfile.TemporaryDirectory(prefix="l32-r-") as source_temp:
+            fixture = Path(source_temp) / "fixture"
+            _copy_image_source(fixture)
+            _write_public_scaffold(fixture, str(row["problem_statement"]))
+            artifact = _canonicalize_level32_candidate(fixture, patch, parent_dir=Path(source_temp))
+            artifact_mapping = _write_candidate_artifacts(output, patch, artifact)
+            with tempfile.TemporaryDirectory(prefix="cookiecutter-967-private-eval-") as private:
+                official = _official_evaluate(
+                    row,
+                    artifact.patch,
+                    Path(private),
+                    raw_patch=patch,
+                    candidate_artifact=artifact_mapping,
+                )
         (output / "official-verifier-summary.json").write_text(
             json.dumps(official, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -1277,7 +1396,10 @@ def main(argv: list[str] | None = None) -> int:
             patch,
             model=requested_model,
             treatment_id=treatment_id,
-            candidate_provenance={key: value for key, value in candidate.items() if key != "patch"},
+            candidate_provenance={
+                **{key: value for key, value in candidate.items() if key != "patch"},
+                "candidate_artifact": artifact_mapping,
+            },
         )
         (output / "result.json").write_text(
             json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
@@ -1344,9 +1466,16 @@ def main(argv: list[str] | None = None) -> int:
         )
         candidate = _candidate_patch_record(case)
         patch = candidate["patch"]
-        (output / "candidate.patch").write_text(patch, encoding="utf-8", newline="\n")
+        artifact = _canonicalize_level32_candidate(fixture, patch, parent_dir=Path(temporary))
+        artifact_mapping = _write_candidate_artifacts(output, patch, artifact)
         with tempfile.TemporaryDirectory(prefix="cookiecutter-967-private-eval-") as private:
-            official = _official_evaluate(row, patch, Path(private))
+            official = _official_evaluate(
+                row,
+                artifact.patch,
+                Path(private),
+                raw_patch=patch,
+                candidate_artifact=artifact_mapping,
+            )
         (output / "official-verifier-summary.json").write_text(
             json.dumps(official, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -1357,7 +1486,10 @@ def main(argv: list[str] | None = None) -> int:
         patch,
         model=requested_model,
         treatment_id=treatment_id,
-        candidate_provenance={key: value for key, value in candidate.items() if key != "patch"},
+        candidate_provenance={
+            **{key: value for key, value in candidate.items() if key != "patch"},
+            "candidate_artifact": artifact_mapping,
+        },
     )
     (output / "result.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"

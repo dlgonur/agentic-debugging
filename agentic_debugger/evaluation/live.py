@@ -2491,7 +2491,10 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
             workspace=workspace,
             patch="",
             probe=probe,
-            official_patch_compatibility=True,
+            # Level-32 model patches are first materialized by the tolerant
+            # authorized PatchManager.  Its operator derives the strict
+            # official Git artifact from that accepted workspace delta.
+            official_patch_compatibility=False,
         )
         registry=build_registry(
             context,

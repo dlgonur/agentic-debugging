@@ -94,6 +94,33 @@ class PatchApplyResult:
 
 
 @dataclass(frozen=True)
+class CanonicalPatchArtifact:
+    """A deterministic Git serialization of an accepted workspace state."""
+
+    patch: str
+    changed_paths: Tuple[str, ...]
+    before_sha256: Dict[str, str]
+    after_sha256: Dict[str, str]
+    raw_patch_sha256: str
+    canonical_patch_sha256: str
+    raw_apply: PatchApplyResult
+    semantic_equivalent: bool
+
+    def to_mapping(self) -> Dict[str, Any]:
+        return {
+            "artifact_name": "candidate-official.patch",
+            "patch": self.patch,
+            "changed_paths": list(self.changed_paths),
+            "before_sha256": dict(self.before_sha256),
+            "after_sha256": dict(self.after_sha256),
+            "raw_patch_sha256": self.raw_patch_sha256,
+            "canonical_patch_sha256": self.canonical_patch_sha256,
+            "raw_apply": self.raw_apply.to_mapping(),
+            "semantic_equivalent": self.semantic_equivalent,
+        }
+
+
+@dataclass(frozen=True)
 class PatchSnapshot:
     files: Dict[str, bytes]
     before_hashes: Dict[str, str]
@@ -1258,4 +1285,228 @@ def _check_python_syntax(
             message=str(e),
             line=None,
             column=None,
+        )
+
+
+def _snapshot_workspace_files(root: str) -> Dict[str, bytes]:
+    """Return a complete, deterministic snapshot of regular workspace files."""
+
+    snapshot: Dict[str, bytes] = {}
+    for directory, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames[:] = sorted(dirnames)
+        for name in sorted(filenames):
+            path = os.path.join(directory, name)
+            if os.path.islink(path):
+                raise PatchValidationError(
+                    f"workspace snapshot encountered a symlink: {path!r}"
+                )
+            relative = os.path.relpath(path, root).replace(os.sep, "/")
+            with open(path, "rb") as handle:
+                snapshot[relative] = handle.read()
+    return snapshot
+
+
+def _copy_workspace_contents(source: str, destination: str) -> None:
+    """Copy a symlink-free workspace tree without copying repository metadata."""
+
+    for name in os.listdir(destination):
+        if name == ".git":
+            continue
+        target = os.path.join(destination, name)
+        if os.path.isdir(target) and not os.path.islink(target):
+            shutil.rmtree(target)
+        else:
+            os.unlink(target)
+    for name in os.listdir(source):
+        source_path = os.path.join(source, name)
+        destination_path = os.path.join(destination, name)
+        if os.path.islink(source_path):
+            raise PatchValidationError(
+                f"workspace canonicalization encountered a symlink: {source_path!r}"
+            )
+        if os.path.isdir(source_path):
+            shutil.copytree(source_path, destination_path, symlinks=False)
+        else:
+            shutil.copy2(source_path, destination_path)
+            # copy2 preserves the source mtime.  Refreshing the worktree
+            # timestamp ensures Git does not trust a stale index stat cache
+            # when a same-sized file changed in the disposable tree.
+            os.utime(destination_path, None)
+
+
+def _run_git_checked(argv: List[str], *, cwd: str, timeout: float = 30.0) -> subprocess.CompletedProcess[bytes]:
+    try:
+        result = subprocess.run(
+            argv,
+            cwd=cwd,
+            capture_output=True,
+            timeout=timeout,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise PatchValidationError(
+            f"canonical Git operation could not run: {exc}"
+        ) from exc
+    return result
+
+
+def materialize_and_canonicalize_patch(
+    pristine_source: str,
+    raw_patch: str,
+    allowed_paths: List[str],
+    denied_paths: List[str],
+    *,
+    parent_dir: Optional[str] = None,
+) -> CanonicalPatchArtifact:
+    """Materialize a raw candidate, then prove its canonical Git equivalent.
+
+    The raw text is never rewritten.  A tolerant ``PatchManager`` is the only
+    component allowed to interpret it; Git is used solely to serialize and
+    strictly re-apply the resulting workspace state.
+    """
+
+    if type(raw_patch) is not str or not raw_patch.strip():
+        raise PatchValidationError("raw candidate patch must be a non-empty string")
+    if "\x00" in raw_patch:
+        raise PatchValidationError("raw candidate patch contains a NUL byte")
+    if parent_dir is not None and not os.path.isdir(parent_dir):
+        raise PatchValidationError("canonicalization parent directory is unavailable")
+
+    with tempfile.TemporaryDirectory(
+        prefix=f"{_TEMP_PREFIX}canonical-",
+        dir=parent_dir,
+    ) as temporary:
+        raw_workspace = TaskWorkspace(pristine_source, parent_dir=temporary)
+        strict_workspace = TaskWorkspace(pristine_source, parent_dir=temporary)
+        manager = PatchManager(
+            raw_workspace,
+            allowed_paths,
+            denied_paths,
+            official_patch_compatibility=False,
+        )
+        applied = manager.apply_patch(raw_patch)
+        before = _snapshot_workspace_files(strict_workspace.root)
+        materialized = _snapshot_workspace_files(raw_workspace.root)
+        changed_paths = tuple(
+            sorted(
+                path
+                for path in set(before) | set(materialized)
+                if before.get(path) != materialized.get(path)
+            )
+        )
+        if not changed_paths:
+            raise PatchValidationError("raw candidate produced no material workspace delta")
+        if set(changed_paths) != {item.path for item in applied.changed_files}:
+            raise PatchValidationError(
+                "raw candidate changed-path evidence disagrees with the workspace delta"
+            )
+        for path in changed_paths:
+            manager._authorize_path(path)
+
+        repo_root = os.path.join(temporary, "canonical-git-repo")
+        shutil.copytree(strict_workspace.root, repo_root)
+        initialized = _run_git_checked(["git", "init", "--quiet"], cwd=repo_root)
+        if initialized.returncode != 0:
+            raise PatchValidationError(
+                "canonical Git repository initialization failed: "
+                + (initialized.stderr or initialized.stdout).decode("utf-8", "replace").strip()
+            )
+        for key, value in (
+            ("user.name", "agentic-debugger"),
+            ("user.email", "agentic-debugger@localhost"),
+            ("core.autocrlf", "false"),
+        ):
+            configured = _run_git_checked(["git", "config", key, value], cwd=repo_root)
+            if configured.returncode != 0:
+                raise PatchValidationError("canonical Git identity configuration failed")
+        added = _run_git_checked(["git", "add", "--all"], cwd=repo_root)
+        if added.returncode != 0:
+            detail = (added.stderr or added.stdout).decode("utf-8", "replace").strip()
+            raise PatchValidationError(
+                "canonical Git baseline indexing failed" + (f": {detail}" if detail else "")
+            )
+        committed = _run_git_checked(
+            ["git", "commit", "--quiet", "-m", "pristine baseline"],
+            cwd=repo_root,
+        )
+        if committed.returncode != 0:
+            raise PatchValidationError("canonical Git baseline commit failed")
+        _copy_workspace_contents(raw_workspace.root, repo_root)
+        diff_result = _run_git_checked(
+            [
+                "git", "diff", "--binary", "--full-index", "--no-ext-diff",
+                "--no-renames", "--unified=3", "--src-prefix=a/", "--dst-prefix=b/", "--",
+            ],
+            cwd=repo_root,
+        )
+        if diff_result.returncode not in (0, 1):
+            raise PatchValidationError(
+                "canonical Git diff failed: "
+                + (diff_result.stderr or diff_result.stdout).decode("utf-8", "replace").strip()
+            )
+        try:
+            canonical = diff_result.stdout.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise PatchValidationError("canonical Git diff is not UTF-8 text") from exc
+        if not canonical.strip():
+            raise PatchValidationError("canonical Git diff is empty")
+
+        patch_path = os.path.join(temporary, "candidate-official.patch")
+        with open(patch_path, "wb") as handle:
+            handle.write(canonical.encode("utf-8"))
+        checked = _run_git_checked(
+            ["git", "-c", "core.autocrlf=false", "apply", "--check", patch_path],
+            cwd=str(strict_workspace.root),
+        )
+        if checked.returncode != 0:
+            raise PatchValidationError(
+                "canonical patch failed strict Git apply --check: "
+                + (checked.stderr or checked.stdout).decode("utf-8", "replace").strip()
+            )
+        applied_strictly = _run_git_checked(
+            ["git", "-c", "core.autocrlf=false", "apply", patch_path],
+            cwd=str(strict_workspace.root),
+        )
+        if applied_strictly.returncode != 0:
+            raise PatchValidationError(
+                "canonical patch failed strict Git apply: "
+                + (applied_strictly.stderr or applied_strictly.stdout).decode("utf-8", "replace").strip()
+            )
+        strict_after = _snapshot_workspace_files(strict_workspace.root)
+        if strict_after != materialized:
+            raise PatchValidationError(
+                "canonical patch is not byte-for-byte equivalent to raw materialization"
+            )
+        canonical_paths = _run_git_checked(
+            ["git", "diff", "--name-only", "--no-renames", "--"],
+            cwd=repo_root,
+        )
+        if canonical_paths.returncode != 0:
+            raise PatchValidationError("canonical changed-path inspection failed")
+        serialized_paths = tuple(
+            sorted(
+                line.strip()
+                for line in canonical_paths.stdout.decode("utf-8").splitlines()
+                if line.strip()
+            )
+        )
+        if serialized_paths != changed_paths:
+            raise PatchValidationError(
+                "canonical patch changed-path set differs from raw materialization"
+            )
+        before_hashes = {
+            path: hashlib.sha256(before[path]).hexdigest() for path in changed_paths
+        }
+        after_hashes = {
+            path: hashlib.sha256(materialized[path]).hexdigest() for path in changed_paths
+        }
+        return CanonicalPatchArtifact(
+            patch=canonical,
+            changed_paths=changed_paths,
+            before_sha256=before_hashes,
+            after_sha256=after_hashes,
+            raw_patch_sha256=hashlib.sha256(raw_patch.encode("utf-8")).hexdigest(),
+            canonical_patch_sha256=hashlib.sha256(canonical.encode("utf-8")).hexdigest(),
+            raw_apply=applied,
+            semantic_equivalent=True,
         )

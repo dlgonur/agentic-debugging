@@ -1385,18 +1385,23 @@ def test_prepared_revisions_include_kimi_v7_and_fresh_gemma_v3():
     assert level32_operator.PREPARED_TREATMENT_REVISIONS["kimi-k2.6:cloud"] == 7
     assert level32_operator.PREPARED_TREATMENT_REVISIONS["gemma4:31b-cloud"] == 3
     assert level32_operator._treatment_id_for_model("gemma4:31b-cloud", 3) == (
-        "pdb-capability-level32-cookiecutter-967-gemma4-31b-cloud-v3"
+        "pdb-capability-level32-cookiecutter-967-gemma4-31b-cloud-v3-"
+        "workspace-derived-official-git-diff-v1"
     )
     assert level32_operator._treatment_fingerprint(
         "gemma4:31b-cloud", LiveTreatmentBudget()
     ) != "f8471e129c786978f32498072db3872a82fad5ee09338b0e1615d39167dd2378"
     assert level32_operator._treatment_id_for_model("kimi-k2.6:cloud", 7) == (
-        "pdb-capability-level32-cookiecutter-967-kimi-k2.6-cloud-v7"
+        "pdb-capability-level32-cookiecutter-967-kimi-k2.6-cloud-v7-"
+        "workspace-derived-official-git-diff-v1"
     )
     assert level32_operator._treatment_id_for_model("kimi-k2.6:cloud", 6) == (
-        "pdb-capability-level32-cookiecutter-967-kimi-k2.6-cloud-v6"
+        "pdb-capability-level32-cookiecutter-967-kimi-k2.6-cloud-v6-"
+        "workspace-derived-official-git-diff-v1"
     )
-    assert level32_operator._treatment_id_for_model("kimi-k2.6:cloud", 5).endswith("-v5")
+    assert level32_operator._treatment_id_for_model("kimi-k2.6:cloud", 5).endswith(
+        "-v5-workspace-derived-official-git-diff-v1"
+    )
     assert len(level32_operator._treatment_fingerprint("kimi-k2.6:cloud", LiveTreatmentBudget())) == 64
 
 

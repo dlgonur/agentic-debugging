@@ -641,8 +641,8 @@ def test_real_live_case_uses_zero_provider_and_completes_exact_pdb_proof(tmp_pat
     )
     assert "JSON escape \\n" in patch_guidance
     assert "Current public PDB/source evidence binds the diagnosed line to window_tail.py:9." in patch_guidance
-    assert "@@ -9,1 +9,1 @@" in patch_guidance
-    assert "-    selected = values[start_index:end_index - (1 if requested_size == item_count else 0)]" in patch_guidance
+    assert "normal context-bearing hunk" in patch_guidance
+    assert "zero-context one-line hunk" not in patch_guidance
     assert [set(request["controller"]["allowed_actions"]) for request in runtime_requests] == [
         {"start_pdb_session"},
         {"get_stack_summary"},
