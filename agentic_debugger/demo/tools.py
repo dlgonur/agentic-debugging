@@ -359,6 +359,7 @@ def prepare_pdb_probe(
     *,
     model_selects_breakpoint: bool = False,
     task: Optional[DebugTask] = None,
+    model_visible_task_mapping: Optional[Mapping[str, Any]] = None,
 ) -> PdbProbe:
     """Copy the canonical fixture and append one module-level probe driver.
 
@@ -386,8 +387,13 @@ def prepare_pdb_probe(
         # The probe workspace is provider-visible execution state.  Keep the
         # evaluator oracle and fixed revision out of it while retaining the
         # public task contract needed by tooling.
+        visible_task = (
+            model_visible_task_mapping
+            if model_visible_task_mapping is not None
+            else task.agent_visible_mapping()
+        )
         (source_dir / "task.json").write_text(
-            json.dumps(task.agent_visible_mapping(), sort_keys=True, indent=2) + "\n",
+            json.dumps(visible_task, sort_keys=True, indent=2) + "\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -446,6 +452,7 @@ class DemoToolContext:
         pdb_session_factory: Callable[[TaskWorkspace], PdbSession] = PdbSession,
         verifier_feedback_fn: Optional[Callable[[DebugTask, str], dict[str, Any]]] = None,
         observability: Any = None,
+        official_patch_compatibility: bool = False,
     ) -> None:
         self.task = task
         self.workspace = workspace
@@ -472,6 +479,7 @@ class DemoToolContext:
             workspace,
             list(task.constraints.allowed_write_paths),
             list(task.constraints.denied_write_paths),
+            official_patch_compatibility=official_patch_compatibility,
         )
         # Optional Task-4 observability producer (``SessionObservability`` or
         # an object with the same emit methods).  When set, the tool handlers
@@ -1148,7 +1156,11 @@ def build_registry(
             raise _safe_rejection("no runtime probe is configured for this task")
         if context.pdb_session is not None:
             raise _safe_rejection("a PDB session is already active")
-        if interactive_debugger_controls and context.interactive_pdb_session_started:
+        if (
+            interactive_debugger_controls
+            and context.interactive_pdb_session_started
+            and not probe.exact_public_reproduction
+        ):
             raise _safe_rejection(
                 "interactive debugger pilot permits one PDB session per case"
             )
@@ -1195,8 +1207,10 @@ def build_registry(
             )
         if interactive_debugger_controls:
             # A semantically invalid breakpoint is rejected above and may be
-            # corrected.  Only a valid production-frame pause consumes the
-            # single interactive-session allowance.
+            # corrected.  Record a valid production-frame pause. Non-proof
+            # interactive pilots remain one-shot; exact-public proof may start
+            # a fresh controller-budgeted cycle only after the prior target
+            # exits and its session/workspace are released.
             context.interactive_pdb_session_started = True
         context.pdb_pause_generation = 1
         context.observe(
@@ -1339,6 +1353,12 @@ def build_registry(
             control_payload = context.record_pdb_proof_observation(
                 action, control_payload, proof=context.pdb_proof_contract
             )
+        if result.get("state") != "paused":
+            errors = context.release_pdb()
+            if errors:
+                diag = bounded_diagnostic(errors[0], context.workspace.root)
+                raise ToolExecutionError(diag, safe_diagnostic=diag)
+            control_payload["session_released"] = True
         return _ok(
             control_payload,
             f"debugger execution control completed: {action.name}",

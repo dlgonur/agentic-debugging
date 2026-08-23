@@ -33,15 +33,60 @@ def test_private_zero_window_is_empty() -> None:
     assert tail_window([2, 4, 6], 0) == []
 '''
 
+_PRIVATE_CALLER_CALLEE_SOURCE = '''
+from price_pipeline import format_price
+
+
+def test_private_nonzero_dollars_are_converted() -> None:
+    assert format_price(3, "dollars") == "$3.00"
+
+
+def test_private_small_cents_are_not_converted_again() -> None:
+    assert format_price(7, "cents") == "$0.07"
+'''
+
+_PRIVATE_MULTISTAGE_UNITS_SOURCE = '''
+from deadline_pipeline import request_deadline
+
+
+def test_private_seconds_without_retries_still_convert() -> None:
+    assert request_deadline(1, "seconds", 0, 10) == 1010
+
+
+def test_private_mixed_case_seconds_expand_after_conversion() -> None:
+    assert request_deadline(3, "Seconds", 1, 5) == 6005
+
+
+def test_private_milliseconds_expand_without_double_conversion() -> None:
+    assert request_deadline(15, "milliseconds", 2, 5) == 50
+'''
+
+_PRIVATE_CHECKS = {
+    "pdb-required-boundary-006": (
+        "test_boundary_contract.py",
+        _PRIVATE_SOURCE,
+    ),
+    "pdb-required-caller-callee-007": (
+        "test_caller_callee_contract.py",
+        _PRIVATE_CALLER_CALLEE_SOURCE,
+    ),
+    "pdb-required-multistage-units-008": (
+        "test_multistage_units_contract.py",
+        _PRIVATE_MULTISTAGE_UNITS_SOURCE,
+    ),
+}
+
 
 def run_private_checks(task: Any, runner: TestRunner, workspace: Any) -> PrivateCheckResult:
-    if getattr(task, "task_id", None) != "pdb-required-boundary-006":
+    private_check = _PRIVATE_CHECKS.get(getattr(task, "task_id", None))
+    if private_check is None:
         return PrivateCheckResult(False, None)
+    filename, source = private_check
     root = Path(workspace.root)
-    relative = Path("__private_verifier__") / "test_boundary_contract.py"
+    relative = Path("__private_verifier__") / filename
     hidden_path = root / relative
     hidden_path.parent.mkdir(parents=True, exist_ok=False)
-    hidden_path.write_text(_PRIVATE_SOURCE, encoding="utf-8", newline="\n")
+    hidden_path.write_text(source, encoding="utf-8", newline="\n")
     raw = runner.run_tests(
         ["python", "-m", "pytest", relative.as_posix(), "-q", "-p", "no:cacheprovider"],
         task.reproduction.cwd,

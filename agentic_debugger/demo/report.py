@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Iterable, Mapping, Sequence
 
+from agentic_debugger.demo.catalog import scenario_for, scenario_ids
 from agentic_debugger.demo.runner import (
     NONDETERMINISTIC_RESULT_KEYS,
     RUNTIME_ATTRIBUTION_NOTE,
@@ -86,10 +87,15 @@ def _text(value: Any) -> str:
 def _task_aware_limitations(cases: Sequence[Mapping[str, Any]]) -> tuple[str, ...]:
     """Keep historical limitations truthful for mixed or proof-task reports."""
 
+    exact_task_ids = {
+        task_id
+        for task_id in scenario_ids()
+        if scenario_for(task_id).runtime_probe.exact_public_reproduction
+    }
     exact = tuple(
         case.get("task_id")
         for case in cases
-        if case.get("task_id") == "pdb-required-boundary-006"
+        if case.get("task_id") in exact_task_ids
     )
     if not exact:
         return STANDING_LIMITATIONS

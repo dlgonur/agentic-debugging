@@ -14,7 +14,7 @@ def build_parser():
     p.add_argument("--repository-root",default="."); p.add_argument("--config",required=True); p.add_argument("--output",default="live-results.json"); p.add_argument("--human-output")
     p.add_argument("--live",action="store_true"); p.add_argument("--confirm-live-model-access",action="store_true")
     p.add_argument("--task-id",action="append"); p.add_argument("--policy",choices=[x.value for x in DemoPolicy],action="append"); p.add_argument("--run-label",help="safe report-visible label; a unique execution identity is appended")
-    p.add_argument("--repetitions",type=int,default=1); p.add_argument("--max-model-requests",type=int,default=64); p.add_argument("--max-controller-steps",type=int,default=64); p.add_argument("--max-model-phase-seconds","--max-elapsed-seconds",dest="max_model_phase_seconds",type=int,default=900,help="per-case model adapter/transport deadline; not a whole-case deadline"); p.add_argument("--max-retries",type=int,default=2); p.add_argument("--max-response-bytes",type=int,default=1048576); p.add_argument("--stop-on-task-failure",action="store_true")
+    p.add_argument("--repetitions",type=int,default=1); p.add_argument("--max-model-requests",type=int,default=64); p.add_argument("--max-controller-steps",type=int,default=64); p.add_argument("--max-model-phase-seconds","--max-elapsed-seconds",dest="max_model_phase_seconds",type=int,default=900,help="per-case cumulative model-phase emergency guard checked between requests; not an active-response or whole-case deadline"); p.add_argument("--max-retries",type=int,default=2); p.add_argument("--max-response-bytes",type=int,default=1048576); p.add_argument("--stop-on-task-failure",action="store_true")
     return p
 
 def main(argv=None):

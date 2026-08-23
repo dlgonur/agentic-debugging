@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Mapping, Protocol
+from typing import Any, Callable, Mapping, Protocol
 from agentic_debugger.agent.controller import ControllerRunConfig, ControllerRunResult, ControllerStopReason, DeterministicController
 from agentic_debugger.agent.controller_policy import (
     ActionName,
@@ -24,8 +24,11 @@ from agentic_debugger.agent.controller_policy import (
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
 from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
-from agentic_debugger.agent.proof_gate import validate_pdb_patch_evidence
-from agentic_debugger.demo.catalog import scenario_for
+from agentic_debugger.agent.proof_gate import (
+    validate_pdb_patch_evidence,
+    validate_pdb_runtime_evidence,
+)
+from agentic_debugger.demo.catalog import DemoScenario, scenario_for
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.demo.runner import CURATED_RELATIVE_ROOT, localization_record
 from agentic_debugger.agent.tool_registry import MAX_TOOL_ARGUMENT_BYTES, ToolRegistry, _detach_json_dict
@@ -36,6 +39,7 @@ from agentic_debugger.events.logger import JsonlEventLogger
 from agentic_debugger.events.schema import Observation, RunEvent
 from agentic_debugger.rag.context import PUBLIC_REQUEST_BYTE_BUDGET, RagContext
 from agentic_debugger.runtime.workspace import TaskWorkspace
+from agentic_debugger.evaluation.directive_observability import serialize_rejection_evidence, validate_rejection_evidence
 
 class LiveEvaluationError(RuntimeError): pass
 class LiveOptInError(LiveEvaluationError): pass
@@ -82,20 +86,116 @@ class DirectiveRejectionCategory(str, Enum):
 MAX_REJECTION_DETAIL_CHARS = 200
 
 class LiveModelAdapterError(ModelAdapterError):
-    def __init__(self, message: str, *, category: "DirectiveRejectionCategory" = DirectiveRejectionCategory.MALFORMED_DIRECTIVE, detail: str = ""):
+    def __init__(self, message: str, *, category: "DirectiveRejectionCategory" = DirectiveRejectionCategory.MALFORMED_DIRECTIVE, detail: str = "", stage: str | None = None, reason_code: str | None = None, content: str | None = None, directive_rejection: bool = False):
         super().__init__(message)
         self.category = category
         text = str(detail)
         self.detail = text if len(text) <= MAX_REJECTION_DETAIL_CHARS else text[:MAX_REJECTION_DETAIL_CHARS - 3] + "..."
+        default_stages = {
+            DirectiveRejectionCategory.ILLEGAL_ACTION: ("illegal_action", "illegal_action"),
+            DirectiveRejectionCategory.ILLEGAL_TRANSITION: ("illegal_transition", "illegal_transition"),
+            DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE: ("invalid_arguments", "invalid_argument"),
+            DirectiveRejectionCategory.AMBIGUOUS_ENVELOPE: ("envelope_failure", "ambiguous_envelope"),
+            DirectiveRejectionCategory.MALFORMED_DIRECTIVE: ("schema_failure", "malformed_directive"),
+        }
+        default_stage, default_reason = default_stages[category]
+        self.stage = stage or default_stage
+        self.reason_code = reason_code or default_reason
+        self.content = content if type(content) is str else None
+        self.directive_rejection = directive_rejection
 
-LIVE_SCHEMA_VERSION = "1.0"
+LIVE_SCHEMA_VERSION = "1.1"
 LIVE_PROTOCOL_VERSION = "1.3"
 LIVE_CONFIG_SCHEMA_VERSION = "1.0"
 MAX_MODEL_RESPONSE_BYTES = 1_048_576
 MODEL_HISTORY_WINDOW = 32
-PROOF_HISTORY_WINDOW = 12
+DIRECTIVE_NORMALIZATION_SCHEMA_VERSION = "directive-normalization-v3"
+DIRECTIVE_NORMALIZATION_POLICY_ID = (
+    "redundant-trailing-brace-v1-or-exact-json-markdown-fence-v1-or-"
+    "exact-json-markdown-fence-then-redundant-trailing-brace-v1-or-"
+    "unterminated-exact-json-markdown-fence-v1-or-"
+    "prose-wrapped-exact-json-markdown-fence-v1-or-"
+    "prose-wrapped-exact-json-object-v1"
+)
+DIRECTIVE_NORMALIZATION_POLICY = {
+    "enabled": True,
+    "schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+    "policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+    "strict_json_first": True,
+    "leading_json_whitespace_allowed": True,
+    "trailing_json_whitespace_allowed": True,
+    "exactly_one_redundant_trailing_closing_brace": True,
+    "exact_json_markdown_fence": {
+        "enabled": True,
+        "policy_id": "exact-lowercase-json-lf-fence-v1",
+        "opening": "```json\\n",
+        "closing": "\\n```",
+        "optional_outer_json_whitespace": True,
+        "top_level_mapping_required": True,
+        "strict_inner_json_whitespace_allowed": True,
+        "composed_repairs": {
+            "only_ordered_branch": "exact_json_markdown_fence_then_one_redundant_trailing_closing_brace",
+            "general_chaining_rejected": True,
+            "reverse_order_rejected": True,
+        },
+    },
+    "unterminated_exact_json_markdown_fence": {
+        "enabled": True,
+        "policy_id": "unterminated-exact-lowercase-json-lf-fence-v1",
+        "opening": "```json\\n",
+        "closing": "absent",
+        "optional_outer_json_whitespace": True,
+        "top_level_mapping_required": True,
+        "strict_inner_json_whitespace_allowed": True,
+        "trailing_prose_rejected": True,
+    },
+    "prose_wrapped_exact_json_markdown_fence": {
+        "enabled": True,
+        "policy_id": "prose-wrapped-exact-lowercase-json-lf-fence-v1",
+        "opening": "```json\\n",
+        "closing": "\\n```",
+        "exactly_one_fence_pair_required": True,
+        "top_level_mapping_required": True,
+        "prose_ignored_outside_fence": True,
+        "nested_fences_rejected": True,
+    },
+    "prose_wrapped_exact_json_object": {
+        "enabled": True,
+        "policy_id": "prose-wrapped-exact-json-object-v1",
+        "top_level_mapping_required": True,
+        "prefix_and_suffix_braces_rejected": True,
+        "multiple_objects_rejected": True,
+    },
+    "multiple_redundant_delimiters_rejected": True,
+    "trailing_prose_rejected": True,
+    "multiple_objects_rejected": True,
+    "semantic_repair_disabled": True,
+}
+PDB_BREAKPOINT_SELECTION_SCHEMA_VERSION = "pdb-breakpoint-selection-v1"
+PDB_BREAKPOINT_SELECTION_POLICY_ID = "model-selected-runtime-validated-v1"
+PDB_BREAKPOINT_SELECTION_POLICY = {
+    "schema_version": PDB_BREAKPOINT_SELECTION_SCHEMA_VERSION,
+    "policy_id": PDB_BREAKPOINT_SELECTION_POLICY_ID,
+    "model_selects": "positive_integer",
+    "minimum": 1,
+    "exact_line_enum": False,
+    "model_value_rewrite": False,
+    "runtime_validation_authority": "start_pdb_session",
+    "target_scope": "configured_production_file_and_focus_function",
+    "proof_line_binding": "actual_runtime_pause_line",
+    "failed_start": {
+        "proof_observation": False,
+        "valid_session_allowance": False,
+        "provider_retry": False,
+    },
+}
+# Ten entries retain the complete bounded exact-PDB sequence at diagnosis and
+# patch time while dropping repeated early baseline/source payloads before the
+# 25 KiB Local Application request boundary.
+PROOF_HISTORY_WINDOW = 10
 MAX_COMMAND_ARGUMENTS = 32
 COMMAND_ERROR_SCHEMA_VERSION = "command-error-v1"
+PROVIDER_COMPLETION_ENVELOPE_SCHEMA = "provider-completion-v1"
 _TYPED_COMMAND_ERROR_KINDS = frozenset({
     "adapter_error",
     "configuration",
@@ -120,7 +220,7 @@ LIVE_DIRECTIVE_SCHEMA={
     "set_hypothesis_status":{"kind":"set_hypothesis_status","required":["hypothesis_id","status"],"constraints":{"status":{"type":"string","enum":[item.value for item in HypothesisStatus if item is not HypothesisStatus.ACTIVE]}}},
 }
 class LiveCaseStatus(str, Enum):
-    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; VALIDATION_NOT_REACHED="VALIDATION_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
+    RESOLVED="RESOLVED"; UNRESOLVED="UNRESOLVED"; BUDGET_LIMITED="BUDGET_LIMITED"; PDB_NOT_REACHED="PDB_NOT_REACHED"; VALIDATION_NOT_REACHED="VALIDATION_NOT_REACHED"; CONTROLLER_FAILED="CONTROLLER_FAILED"; CONTROLLER_REJECTED="CONTROLLER_REJECTED"; MODEL_DIRECTIVE_REJECTED="MODEL_DIRECTIVE_REJECTED"; TIMED_OUT="TIMED_OUT"; PROVIDER_ERROR="PROVIDER_ERROR"; VERIFIER_FAILED="VERIFIER_FAILED"; EVENT_REPORTING_FAILED="EVENT_REPORTING_FAILED"; CLEANUP_FAILED="CLEANUP_FAILED"; HARNESS_ERROR="HARNESS_ERROR"; INCOMPLETE="INCOMPLETE"
 
 _SECRET_KEY=re.compile(r"(?:api[_-]?key|access[_-]?key|auth(?:orization)?|credential|password|secret|token|private[_-]?key)",re.I)
 _SECRET_VALUE=re.compile(r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+")
@@ -146,6 +246,51 @@ def redact_for_recording(value:Any, *, _usage_context:bool=False, _event_metadat
         return result
     if isinstance(value,(list,tuple)): return [redact_for_recording(v,_usage_context=False,_event_metadata_context=False) for v in value]
     return _SECRET_VALUE.sub("<redacted>",value) if isinstance(value,str) else value
+
+
+def _proof_observation_for_provider(value: Any) -> Any:
+    """Keep exact-PDB semantics while omitting duplicated audit metadata.
+
+    Authoritative observations and events remain unchanged. This projection
+    is used only in model requests, where verbose safe-value metadata and
+    repeated proof identity fields otherwise duplicate the same evidence.
+    """
+
+    if not isinstance(value, Mapping):
+        return value
+    # action/run/task identities are already present in the surrounding
+    # controller request. Observation id, name, status, payload, and bounded
+    # summary are the complete model-relevant semantics.
+    result = {
+        field: value[field]
+        for field in (
+            "observation_id",
+            "name",
+            "status",
+            "payload",
+            "summary",
+            "truncated",
+        )
+        if field in value
+    }
+    payload = value.get("payload")
+    if not isinstance(payload, Mapping):
+        return result
+    compact_payload = dict(payload)
+    proof = payload.get("proof")
+    if isinstance(proof, Mapping):
+        compact_payload["proof"] = {
+            field: proof[field]
+            for field in (
+                "exact_reproduction",
+                "production_file",
+                "production_frame",
+                "breakpoint_line",
+            )
+            if field in proof
+        }
+    result["payload"] = compact_payload
+    return result
 
 def _command(value):
     if not isinstance(value,(list,tuple)) or not value or len(value)>MAX_COMMAND_ARGUMENTS or any(type(v) is not str or not v.strip() or "\x00" in v for v in value): raise LiveConfigurationError("live command is missing or invalid")
@@ -176,7 +321,7 @@ class LiveModelConfig:
         return cls.from_mapping(value)
     @property
     def configuration_fingerprint(self) -> str:
-        canonical=json.dumps({"schema_version":LIVE_CONFIG_SCHEMA_VERSION,"model_name":self.model_name,"command":list(self.command),"request_timeout_seconds":self.request_timeout_seconds,"tool_version":self.tool_version},ensure_ascii=False,sort_keys=True,separators=(",",":"))
+        canonical=json.dumps({"schema_version":LIVE_CONFIG_SCHEMA_VERSION,"model_name":self.model_name,"command":list(self.command),"request_timeout_seconds":self.request_timeout_seconds,"tool_version":self.tool_version,"directive_normalization_policy":DIRECTIVE_NORMALIZATION_POLICY},ensure_ascii=False,sort_keys=True,separators=(",",":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     def to_metadata(self, limits: "LiveRunLimits") -> dict[str,Any]:
         return {"schema_version":LIVE_CONFIG_SCHEMA_VERSION,"protocol_version":LIVE_PROTOCOL_VERSION,"model_name":self.model_name,"tool_version":self.tool_version,"configuration_fingerprint":self.configuration_fingerprint,"request_timeout_seconds":self.request_timeout_seconds,"continue_on_task_failure":limits.continue_on_task_failure,"limits":limits.to_mapping()}
@@ -193,7 +338,7 @@ class LiveExecutionAuthorization:
 
 @dataclass(frozen=True)
 class LiveRunLimits:
-    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None
+    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None; treatment_budget:"LiveTreatmentBudget|None"=None
     def __post_init__(self):
         if self.max_elapsed_seconds is not None:
             if type(self.max_elapsed_seconds) is not int:
@@ -202,8 +347,44 @@ class LiveRunLimits:
         for name,value,low,high in (("max_model_requests",self.max_model_requests,1,512),("max_controller_steps",self.max_controller_steps,1,256),("max_model_phase_seconds",self.max_model_phase_seconds,1,3600),("max_retries",self.max_retries,0,8),("max_response_bytes",self.max_response_bytes,1024,4*1024*1024)):
             if type(value) is not int or not low<=value<=high: raise LiveConfigurationError(name+" is invalid")
         if type(self.continue_on_task_failure) is not bool: raise LiveConfigurationError("continue_on_task_failure is invalid")
+        if self.treatment_budget is not None:
+            if not isinstance(self.treatment_budget, LiveTreatmentBudget): raise LiveConfigurationError("treatment_budget is invalid")
+            if self.max_model_requests != self.treatment_budget.max_model_requests or self.max_controller_steps != self.treatment_budget.max_controller_steps or self.max_retries != self.treatment_budget.max_retries:
+                raise LiveConfigurationError("treatment budget must be the authoritative global envelope")
     def to_mapping(self) -> dict[str,Any]:
-        return {"max_model_requests":self.max_model_requests,"max_controller_steps":self.max_controller_steps,"max_model_phase_seconds":self.max_model_phase_seconds,"max_retries":self.max_retries,"max_response_bytes":self.max_response_bytes,"continue_on_task_failure":self.continue_on_task_failure}
+        result={"max_model_requests":self.max_model_requests,"max_controller_steps":self.max_controller_steps,"max_model_phase_seconds":self.max_model_phase_seconds,"max_retries":self.max_retries,"max_response_bytes":self.max_response_bytes,"continue_on_task_failure":self.continue_on_task_failure}
+        if self.treatment_budget is not None: result["treatment_budget"]=self.treatment_budget.to_mapping()
+        return result
+
+@dataclass(frozen=True)
+class LiveTreatmentBudget:
+    """Internal, versioned Level-32 treatment envelope.
+
+    This is provenance/configuration only.  It is intentionally never added
+    to the model request contract.
+    """
+    logical_decision_ceiling:int=40
+    max_controller_steps:int=40
+    max_model_requests:int=40
+    max_patch_attempts:int=40
+    max_test_runs:int=40
+    max_pdb_observations:int=40
+    max_source_observations:int=40
+    max_retries:int=0
+    schema_version:str="treatment-budget-v1"
+    def __post_init__(self):
+        if self.schema_version != "treatment-budget-v1": raise LiveConfigurationError("unsupported treatment budget schema")
+        values=(self.logical_decision_ceiling,self.max_controller_steps,self.max_model_requests,self.max_patch_attempts,self.max_test_runs,self.max_pdb_observations,self.max_source_observations)
+        if any(type(value) is not int or value < 1 for value in values) or type(self.max_retries) is not int or self.max_retries < 0:
+            raise LiveConfigurationError("treatment budget values are invalid")
+        if not (self.logical_decision_ceiling == self.max_controller_steps == self.max_model_requests):
+            raise LiveConfigurationError("global treatment ceiling fields must agree")
+        if any(value < self.logical_decision_ceiling for value in (self.max_controller_steps,self.max_model_requests,self.max_patch_attempts,self.max_test_runs,self.max_pdb_observations,self.max_source_observations)):
+            raise LiveConfigurationError("derived action caps cannot bind before the global decision ceiling")
+    def to_mapping(self) -> dict[str,Any]:
+        return {"schema_version":self.schema_version,"logical_decision_ceiling":self.logical_decision_ceiling,"max_controller_steps":self.max_controller_steps,"max_model_requests":self.max_model_requests,"derived_action_caps":{"max_patch_attempts":self.max_patch_attempts,"max_test_runs":self.max_test_runs,"max_pdb_observations":self.max_pdb_observations,"max_source_observations":self.max_source_observations},"max_retries":self.max_retries}
+    def controller_limits(self) -> ControllerBudgetLimits:
+        return ControllerBudgetLimits(max_patch_attempts=self.max_patch_attempts,max_test_runs=self.max_test_runs,max_pdb_observations=self.max_pdb_observations,max_active_hypotheses=3,max_source_observations=self.max_source_observations)
 
 _SAFE_RUN_LABEL=re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 def _new_evaluation_identity(run_label: str|None) -> tuple[str,str|None]:
@@ -226,12 +407,14 @@ class _BoundedCapture:
     def text(self)->str:
         with self.lock: return bytes(self.data).decode("utf-8",errors="replace")
 
-def _read_pipe(pipe:Any,capture:_BoundedCapture):
+def _read_pipe(pipe:Any,capture:_BoundedCapture,activity:Callable[[],None]|None=None):
     try:
+        read_chunk=getattr(pipe,"read1",pipe.read)
         while True:
-            chunk=pipe.read(8192)
+            chunk=read_chunk(8192)
             if not chunk: return
             capture.add(chunk)
+            if activity is not None: activity()
     except Exception:
         return
 
@@ -292,9 +475,13 @@ class JsonlCommandTransport:
             process=subprocess.Popen(list(self.config.command),stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,shell=False,env=environment,creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if os.name=="nt" else 0)
         except (OSError,ValueError): raise LiveTransportError("model command could not be launched",kind="launch_error") from None
         stdout=_BoundedCapture(self.max_output_bytes); stderr=_BoundedCapture(self.max_output_bytes)
-        threads=[threading.Thread(target=_read_pipe,args=(process.stdout,stdout),daemon=True),threading.Thread(target=_read_pipe,args=(process.stderr,stderr),daemon=True)]
+        activity_lock=threading.Lock(); last_activity=[time.monotonic()]
+        def mark_activity():
+            with activity_lock: last_activity[0]=time.monotonic()
+        def idle_expired():
+            with activity_lock: return time.monotonic()-last_activity[0]>=timeout_seconds
+        threads=[threading.Thread(target=_read_pipe,args=(process.stdout,stdout,mark_activity),daemon=True),threading.Thread(target=_read_pipe,args=(process.stderr,stderr,mark_activity),daemon=True)]
         for thread in threads: thread.start()
-        deadline=time.monotonic()+timeout_seconds
         write_error=[]
         def write_request():
             try:
@@ -305,16 +492,22 @@ class JsonlCommandTransport:
                 write_error.append(exc)
         writer=threading.Thread(target=write_request,daemon=True)
         writer.start()
-        writer.join(timeout=max(0.0,deadline-time.monotonic()))
-        if writer.is_alive():
-            _terminate_process(process)
-            for thread in threads: thread.join(timeout=2)
-            raise LiveTransportError("model request stdin write timed out",kind="request_timeout",timed_out=True) from None
-        try: process.wait(timeout=max(0.0,deadline-time.monotonic()))
-        except subprocess.TimeoutExpired:
-            _terminate_process(process)
-            for thread in threads: thread.join(timeout=2)
-            raise LiveTransportError("model request timed out",kind="request_timeout",timed_out=True) from None
+        while writer.is_alive():
+            if idle_expired():
+                _terminate_process(process)
+                for thread in threads: thread.join(timeout=2)
+                raise LiveTransportError("model request stdin was idle for too long",kind="request_timeout",timed_out=True) from None
+            writer.join(timeout=0.05)
+        mark_activity()
+        while True:
+            try:
+                process.wait(timeout=0.05)
+                break
+            except subprocess.TimeoutExpired:
+                if idle_expired():
+                    _terminate_process(process)
+                    for thread in threads: thread.join(timeout=2)
+                    raise LiveTransportError("model request was idle for too long",kind="request_timeout",timed_out=True) from None
         for thread in threads: thread.join(timeout=2)
         if stdout.truncated: raise LiveTransportError("model response exceeded the configured output bound",kind="response_too_large")
         if process.returncode!=0:
@@ -334,10 +527,13 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
+    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; stream_frame_count:int=0; thinking_bytes:int=0; action_content_bytes:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); directive_rejections:int=0; directive_rejection_categories:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
+    def directive_rejection(self, category):
+        self.directive_rejections+=1
+        if category not in self.directive_rejection_categories: self.directive_rejection_categories.append(category)
     def usage(self,value):
         names=("prompt_tokens","completion_tokens","total_tokens")
         if not isinstance(value,Mapping):
@@ -348,10 +544,15 @@ class LiveModelMetrics:
             if type(number) is int and number >= 0:
                 old=getattr(self,name); setattr(self,name,number if old is None else old+number)
             elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
+    def activity(self,value):
+        if not isinstance(value,Mapping): return
+        for source,target in (("stream_frame_count","stream_frame_count"),("thinking_bytes","thinking_bytes"),("content_bytes","action_content_bytes")):
+            number=value.get(source)
+            if type(number) is int and number>=0: setattr(self,target,getattr(self,target)+number)
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"stream_frame_count":self.stream_frame_count,"thinking_bytes":self.thinking_bytes,"action_content_bytes":self.action_content_bytes,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"directive_rejection_count":self.directive_rejections,"directive_rejection_categories":self.directive_rejection_categories,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
 
-def _rejected(category: "DirectiveRejectionCategory", detail: str = "") -> LiveModelAdapterError:
-    return LiveModelAdapterError("invalid model directive", category=category, detail=detail)
+def _rejected(category: "DirectiveRejectionCategory", detail: str = "", *, stage: str | None = None, reason_code: str | None = None, content: str | None = None) -> LiveModelAdapterError:
+    return LiveModelAdapterError("invalid model directive", category=category, detail=detail, stage=stage, reason_code=reason_code, content=content, directive_rejection=True)
 
 def _require_field(value: Mapping[str, Any], key: str) -> Any:
     try:
@@ -522,6 +723,412 @@ def _resolve_raw_directive(response: Mapping[str, Any]) -> Any:
     return response["directive"] if wrapped else response
 
 
+def _normalize_redundant_trailing_brace(content: str) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Recover one mechanical trailing brace without changing directive data."""
+
+    start = len(content) - len(content.lstrip(" \t\r\n"))
+    if start >= len(content):
+        return None
+    try:
+        value, end = json.JSONDecoder().raw_decode(content, start)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    suffix = content[end:]
+    if re.fullmatch(r"[ \t\r\n]*}[ \t\r\n]*", suffix) is None:
+        return None
+    normalized = content[:end]
+    before = content.encode("utf-8")
+    after = normalized.encode("utf-8")
+    removed = suffix.encode("utf-8")
+    before_record = _normalization_content_record(content)
+    after_record = _normalization_content_record(normalized)
+    return value, {
+        "directive_transport_normalized": True,
+        "normalization_schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+        "normalization_policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+        "normalization_kind": "redundant_trailing_closing_delimiter",
+        "normalization_before": {
+            "byte_length": len(before),
+            **before_record,
+        },
+        "normalization_after": {
+            "byte_length": len(after),
+            **after_record,
+        },
+        "normalization_removed_prefix": None,
+        "normalization_removed_suffix": {
+            "byte_length": len(removed),
+            "sha256": hashlib.sha256(removed).hexdigest(),
+            "text": suffix,
+        },
+    }
+
+
+def _normalization_content_record(content: str) -> dict[str, Any]:
+    """Hash normalization content only when recording redaction is a no-op."""
+
+    recorded = redact_for_recording(content)
+    if recorded != content:
+        return {"sha256": None, "raw_hash_withheld": True}
+    return {
+        "sha256": hashlib.sha256(content.encode("utf-8")).hexdigest(),
+        "raw_hash_withheld": False,
+    }
+
+
+def _normalize_exact_json_markdown_fence(content: str) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Unwrap one exact whole-response lowercase-JSON Markdown fence.
+
+    This is transport-envelope compatibility only.  The inner bytes must be a
+    strict top-level JSON object and are neither stripped nor reserialized.
+    The recovery is deliberately not composed with any other normalization.
+    """
+
+    match = re.fullmatch(
+        r"(?P<outer_prefix>[ \t\r\n]*)```json\n(?P<inner>\{.*\})\n```(?P<outer_suffix>[ \t\r\n]*)",
+        content,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return None
+    inner = match.group("inner")
+    try:
+        value = json.loads(inner)
+        before = content.encode("utf-8")
+        after = inner.encode("utf-8")
+        removed_prefix_text = match.group("outer_prefix") + "```json\n"
+        removed_suffix_text = "\n```" + match.group("outer_suffix")
+        removed_prefix = removed_prefix_text.encode("utf-8")
+        removed_suffix = removed_suffix_text.encode("utf-8")
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    before_record = _normalization_content_record(content)
+    after_record = _normalization_content_record(inner)
+    return value, {
+        "directive_transport_normalized": True,
+        "normalization_schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+        "normalization_policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+        "normalization_kind": "exact_json_markdown_fence",
+        "normalization_before": {
+            "byte_length": len(before),
+            **before_record,
+        },
+        "normalization_after": {
+            "byte_length": len(after),
+            **after_record,
+        },
+        "normalization_removed_prefix": {
+            "byte_length": len(removed_prefix),
+            "sha256": hashlib.sha256(removed_prefix).hexdigest(),
+            "text": removed_prefix_text,
+        },
+        "normalization_removed_suffix": {
+            "byte_length": len(removed_suffix),
+            "sha256": hashlib.sha256(removed_suffix).hexdigest(),
+            "text": removed_suffix_text,
+        },
+    }
+
+
+def _normalize_prose_wrapped_exact_json_markdown_fence(
+    content: str,
+) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Recover one exact JSON fence surrounded by non-fenced model prose.
+
+    Some providers place an otherwise valid directive after a short natural
+    language explanation. Only the bytes inside one lowercase-JSON LF fence
+    are considered; extra fences or malformed/non-object inner content remain
+    rejected. The ignored prose is retained only through bounded provenance.
+    """
+
+    openings = list(re.finditer(r"```json\n", content))
+    if len(openings) != 1:
+        return None
+    opening = openings[0]
+    closing = re.search(r"\n```", content[opening.end():])
+    if closing is None:
+        return None
+    close_start = opening.end() + closing.start()
+    close_end = opening.end() + closing.end()
+    prefix = content[:opening.start()]
+    inner = content[opening.end():close_start]
+    suffix = content[close_end:]
+    if "```" in prefix or "```" in suffix:
+        return None
+    # Reject a bare four-backtick opener (the match would otherwise begin at
+    # its second backtick), while tolerating a provider's single inline
+    # backtick immediately before a prose-wrapped fence.
+    if prefix.strip("` \t\r\n") == "" and prefix:
+        return None
+    if re.fullmatch(r"[ \t\r\n]*json[ \t\r\n]*", suffix):
+        return None
+    try:
+        value = json.loads(inner)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    before = content.encode("utf-8")
+    after = inner.encode("utf-8")
+    removed_prefix_text = prefix + "```json\n"
+    removed_suffix_text = "\n```" + suffix
+    return value, {
+        "directive_transport_normalized": True,
+        "normalization_schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+        "normalization_policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+        "normalization_kind": "prose_wrapped_exact_json_markdown_fence",
+        "normalization_before": {
+            "byte_length": len(before),
+            **_normalization_content_record(content),
+        },
+        "normalization_after": {
+            "byte_length": len(after),
+            **_normalization_content_record(inner),
+        },
+        "normalization_removed_prefix": {
+            "byte_length": len(removed_prefix_text.encode("utf-8")),
+            "sha256": hashlib.sha256(removed_prefix_text.encode("utf-8")).hexdigest(),
+            "text": removed_prefix_text,
+        },
+        "normalization_removed_suffix": {
+            "byte_length": len(removed_suffix_text.encode("utf-8")),
+            "sha256": hashlib.sha256(removed_suffix_text.encode("utf-8")).hexdigest(),
+            "text": removed_suffix_text,
+        },
+    }
+
+
+def _normalize_prose_wrapped_exact_json_object(
+    content: str,
+) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Recover one strict mapping surrounded by prose without braces.
+
+    This handles providers that prepend or append a natural-language note but
+    do not use a Markdown fence. The first JSON object must be the only brace
+    pair-bearing region; that restriction prevents selecting one object from a
+    prose stream containing multiple candidate directives.
+    """
+
+    # Markdown-fenced/unterminated forms have their own stricter branches;
+    # keeping triple-backtick content out of this fallback preserves those
+    # rejection and provenance semantics.
+    if "```" in content:
+        return None
+    start = content.find("{")
+    if start < 0:
+        return None
+    prefix = content[:start]
+    if "{" in prefix or "}" in prefix:
+        return None
+    try:
+        value, end = json.JSONDecoder().raw_decode(content, start)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    suffix = content[end:]
+    if "{" in suffix or "}" in suffix:
+        return None
+    if suffix and re.match(r"^[ \t\r\n]*[A-Za-z]", suffix) is None:
+        return None
+    inner = content[start:end]
+    removed_prefix_text = prefix
+    removed_suffix_text = suffix
+    return value, {
+        "directive_transport_normalized": True,
+        "normalization_schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+        "normalization_policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+        "normalization_kind": "prose_wrapped_exact_json_object",
+        "normalization_before": {
+            "byte_length": len(content.encode("utf-8")),
+            **_normalization_content_record(content),
+        },
+        "normalization_after": {
+            "byte_length": len(inner.encode("utf-8")),
+            **_normalization_content_record(inner),
+        },
+        "normalization_removed_prefix": {
+            "byte_length": len(removed_prefix_text.encode("utf-8")),
+            "sha256": hashlib.sha256(removed_prefix_text.encode("utf-8")).hexdigest(),
+            "text": removed_prefix_text,
+        },
+        "normalization_removed_suffix": {
+            "byte_length": len(removed_suffix_text.encode("utf-8")),
+            "sha256": hashlib.sha256(removed_suffix_text.encode("utf-8")).hexdigest(),
+            "text": removed_suffix_text,
+        },
+    }
+
+
+def _normalize_unterminated_exact_json_markdown_fence(
+    content: str,
+) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Recover an unclosed JSON fence only when its remainder is strict JSON.
+
+    Some streaming providers return the opening Markdown fence and a complete
+    JSON object but omit the closing fence. This remains unambiguous because
+    the remainder must parse as exactly one top-level mapping with no prose.
+    """
+
+    match = re.fullmatch(
+        r"(?P<outer_prefix>[ \t\r\n]*)```json\n(?P<inner>\{.*\})(?P<outer_suffix>[ \t\r\n]*)",
+        content,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return None
+    inner = match.group("inner")
+    try:
+        value = json.loads(inner)
+    except (UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(value, Mapping):
+        return None
+    before = content.encode("utf-8")
+    after = inner.encode("utf-8")
+    removed_prefix_text = match.group("outer_prefix") + "```json\n"
+    removed_suffix_text = match.group("outer_suffix")
+    return value, {
+        "directive_transport_normalized": True,
+        "normalization_schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+        "normalization_policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+        "normalization_kind": "unterminated_exact_json_markdown_fence",
+        "normalization_before": {
+            "byte_length": len(before),
+            **_normalization_content_record(content),
+        },
+        "normalization_after": {
+            "byte_length": len(after),
+            **_normalization_content_record(inner),
+        },
+        "normalization_removed_prefix": {
+            "byte_length": len(removed_prefix_text.encode("utf-8")),
+            "sha256": hashlib.sha256(removed_prefix_text.encode("utf-8")).hexdigest(),
+            "text": removed_prefix_text,
+        },
+        "normalization_removed_suffix": {
+            "byte_length": len(removed_suffix_text.encode("utf-8")),
+            "sha256": hashlib.sha256(removed_suffix_text.encode("utf-8")).hexdigest(),
+            "text": removed_suffix_text,
+        },
+    }
+
+
+def _normalize_exact_json_fence_then_redundant_trailing_brace(
+    content: str,
+) -> tuple[Mapping[str, Any], dict[str, Any]] | None:
+    """Apply the one approved ordered composition with exact provenance.
+
+    The outer envelope must satisfy the existing lowercase-JSON LF fence
+    grammar. Its inner bytes must then satisfy the existing exactly-one
+    redundant trailing brace rule. No other ordering or chaining is attempted.
+    """
+
+    match = re.fullmatch(
+        r"(?P<outer_prefix>[ \t\r\n]*)```json\n(?P<inner>\{.*\})\n```(?P<outer_suffix>[ \t\r\n]*)",
+        content,
+        flags=re.DOTALL,
+    )
+    if match is None:
+        return None
+    inner = match.group("inner")
+    recovered = _normalize_redundant_trailing_brace(inner)
+    if recovered is None:
+        return None
+    value, inner_provenance = recovered
+    inner_removed_suffix = inner_provenance["normalization_removed_suffix"]["text"]
+    normalized = inner[:-len(inner_removed_suffix)]
+    removed_prefix_text = match.group("outer_prefix") + "```json\n"
+    fence_suffix_text = "\n```" + match.group("outer_suffix")
+    removed_suffix_text = inner_removed_suffix + fence_suffix_text
+
+    def content_record(value: str) -> dict[str, Any]:
+        encoded = value.encode("utf-8")
+        return {
+            "byte_length": len(encoded),
+            **_normalization_content_record(value),
+        }
+
+    def removed_record(value: str) -> dict[str, Any]:
+        encoded = value.encode("utf-8")
+        return {
+            "byte_length": len(encoded),
+            "sha256": hashlib.sha256(encoded).hexdigest(),
+            "text": value,
+        }
+
+    return value, {
+        "directive_transport_normalized": True,
+        "normalization_schema_version": DIRECTIVE_NORMALIZATION_SCHEMA_VERSION,
+        "normalization_policy_id": DIRECTIVE_NORMALIZATION_POLICY_ID,
+        "normalization_kind": "exact_json_markdown_fence_then_redundant_trailing_closing_delimiter",
+        "normalization_before": content_record(content),
+        "normalization_after": content_record(normalized),
+        "normalization_removed_prefix": removed_record(removed_prefix_text),
+        "normalization_removed_suffix": removed_record(removed_suffix_text),
+        "normalization_steps": [
+            {
+                "kind": "exact_json_markdown_fence",
+                "before": content_record(content),
+                "after": content_record(inner),
+                "removed_prefix": removed_record(removed_prefix_text),
+                "removed_suffix": removed_record(fence_suffix_text),
+            },
+            {
+                "kind": "redundant_trailing_closing_delimiter",
+                "before": content_record(inner),
+                "after": content_record(normalized),
+                "removed_prefix": None,
+                "removed_suffix": removed_record(inner_removed_suffix),
+            },
+        ],
+    }
+
+
+def _resolve_provider_directive(response: Mapping[str, Any]) -> tuple[Any, str | None, dict[str, Any] | None]:
+    """Decode the provider-completion envelope, then use the canonical parser.
+
+    ``directive_content`` is the only final assistant content form.  The
+    command adapter deliberately does not JSON-decode or validate it.
+    Existing deterministic transports may still return a direct mapping for
+    compatibility with the offline test harness.
+    """
+    if "directive_content" not in response:
+        return _resolve_raw_directive(response), None, None
+    if response.get("provider_completion_schema_version") != PROVIDER_COMPLETION_ENVELOPE_SCHEMA:
+        raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "provider completion envelope is unsupported", stage="extraction_failure", reason_code="invalid_completion_envelope")
+    content = response.get("directive_content")
+    if type(content) is not str:
+        raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "provider completion content is not text", stage="extraction_failure", reason_code="content_not_text")
+    if "directive" in response or "kind" in response:
+        raise _rejected(DirectiveRejectionCategory.AMBIGUOUS_ENVELOPE, "provider completion mixes final content and directive fields", stage="envelope_failure", reason_code="mixed_completion_envelope", content=content)
+    try:
+        value = json.loads(content)
+    except (UnicodeError, json.JSONDecodeError):
+        recovered = _normalize_redundant_trailing_brace(content)
+        if recovered is None:
+            recovered = _normalize_exact_json_markdown_fence(content)
+        if recovered is None:
+            recovered = _normalize_prose_wrapped_exact_json_markdown_fence(content)
+        if recovered is None:
+            recovered = _normalize_prose_wrapped_exact_json_object(content)
+        if recovered is None:
+            recovered = _normalize_unterminated_exact_json_markdown_fence(content)
+        if recovered is None:
+            recovered = _normalize_exact_json_fence_then_redundant_trailing_brace(content)
+        if recovered is None:
+            raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "final content was not valid JSON", stage="json_failure", reason_code="invalid_json", content=content) from None
+        value, normalization = recovered
+        return value, content, normalization
+    if not isinstance(value, Mapping):
+        raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "final content was not a JSON object", stage="schema_failure", reason_code="directive_not_object", content=content)
+    return value, content, None
+
+
 def _validate_directive_constraints(
     value: Mapping[str, Any],
     directive_schema: Mapping[str, Mapping[str, Any]] | None,
@@ -654,11 +1261,107 @@ def _parse(
             raise _rejected(DirectiveRejectionCategory.INVALID_ARGUMENT_VALUE, "hypothesis status fields failed validation") from None
     raise _rejected(DirectiveRejectionCategory.MALFORMED_DIRECTIVE, "unrecognized or missing directive 'kind'")
 
+
+def validate_synthetic_qualification_content(
+    content: str,
+    *,
+    action_contracts: Mapping[str, Mapping[str, Any]],
+    directive_kinds: set[str] | None = None,
+    legal_transition_targets: set[str] | None = None,
+    directive_schema: Mapping[str, Mapping[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Validate qualification content with the live parser authority.
+
+    This is deliberately a provider-neutral, Level-32-independent entry point
+    for transport qualification.  It performs the same envelope extraction,
+    accepted normalization, and semantic/action validation used by live
+    treatments, but supplies a minimal synthetic ``Reproduce`` snapshot and
+    caller-provided synthetic action contract.
+    """
+
+    if type(content) is not str:
+        return {
+            "schema_version": "transport-qualification-directive-v1",
+            "directive_protocol_ok": False,
+            "category": "DIRECTIVE_SEMANTIC_REJECTED",
+            "reason_code": "content_not_text",
+            "stage": "extraction_failure",
+        }
+    try:
+        value, _final_content, normalization = _resolve_provider_directive(
+            {
+                "provider_completion_schema_version": PROVIDER_COMPLETION_ENVELOPE_SCHEMA,
+                "directive_content": content,
+            }
+        )
+        snapshot = ControllerSnapshot(
+            run_id="qualification",
+            task_id="qualify-synthetic",
+            state=ControllerState.REPRODUCE,
+            model_call_index=0,
+            budget_limits=ControllerBudgetLimits(
+                max_patch_attempts=1,
+                max_test_runs=1,
+                max_pdb_observations=1,
+            ),
+            budget_state=ControllerBudgetState(),
+            hypotheses=HypothesisLedger(),
+        )
+        directive = _parse(
+            value,
+            snapshot,
+            action_contracts=action_contracts,
+            legal_transition_targets=(
+                set() if legal_transition_targets is None else legal_transition_targets
+            ),
+            directive_kinds=(
+                {"action"} if directive_kinds is None else directive_kinds
+            ),
+            directive_schema=(
+                _directive_schema_for_state(ControllerState.REPRODUCE)
+                if directive_schema is None
+                else directive_schema
+            ),
+        )
+        result: dict[str, Any] = {
+            "schema_version": "transport-qualification-directive-v1",
+            "directive_protocol_ok": True,
+            "category": "DIRECTIVE_PROTOCOL_VERIFIED",
+            "directive_kind": directive.kind.value,
+            "normalization_applied": normalization is not None,
+        }
+        if normalization is not None:
+            result["normalization_kind"] = normalization.get("normalization_kind")
+        if isinstance(directive, ActionDirective):
+            result["action_name"] = directive.name.value
+        return result
+    except LiveModelAdapterError as exc:
+        category = (
+            "DIRECTIVE_INVALID_JSON"
+            if exc.reason_code == "invalid_json"
+            else "DIRECTIVE_SEMANTIC_REJECTED"
+        )
+        return {
+            "schema_version": "transport-qualification-directive-v1",
+            "directive_protocol_ok": False,
+            "category": category,
+            "reason_code": exc.reason_code,
+            "stage": exc.stage,
+        }
+
 class LiveModelAdapter:
-    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False):
+    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False,proof_source_line=1,proof_observed_local_names=(),model_visible_budget_limits=None,model_visible_task=None):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
-        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]; self.directive_attempts=[]; self.proof_required=bool(proof_required); self._proof_observations=[]
+        if type(proof_source_line) is not int or proof_source_line < 1:
+            raise LiveConfigurationError("proof source line must be a positive integer")
+        if (
+            not isinstance(proof_observed_local_names, (list, tuple))
+            or any(type(name) is not str or not name for name in proof_observed_local_names)
+            or len(set(proof_observed_local_names)) != len(proof_observed_local_names)
+        ):
+            raise LiveConfigurationError("proof observed local names are invalid")
+        self.model_name=config.model_name; self.task=task; self.policy=policy; self.config=config; self.transport=transport; self.limits=limits; self.registry=registry; self.evaluation_id=evaluation_id; self.case_id=case_id; self.run_id=run_id; self.trajectory_id=trajectory_id; self.metrics=LiveModelMetrics(); self.clock=clock; self.model_phase_elapsed_seconds=0.0; self.history=[]; self.pdb_gate_decisions=[]; self.directive_rejections=[]; self.directive_rejection_evidence=[]; self.directive_attempts=[]; self.proof_cycle_events=[]; self.proof_required=bool(proof_required); self.proof_source_line=proof_source_line; self.proof_observed_local_names=tuple(proof_observed_local_names); self._proof_observations=[]
         # Optional RAG context: when None (the default) the public request is
         # byte-for-byte unchanged and ``retrieved_context`` is never emitted.
         # When supplied it must be a validated RagContext; arbitrary
@@ -666,6 +1369,13 @@ class LiveModelAdapter:
         if rag_context is not None and not isinstance(rag_context, RagContext):
             raise LiveConfigurationError("rag_context must be a validated RagContext")
         self._rag_context=rag_context
+        self.model_visible_budget_limits = model_visible_budget_limits or ControllerBudgetLimits.from_task_constraints(task.constraints)
+        if model_visible_task is None:
+            self.model_visible_task = task.agent_visible_mapping()
+        elif not isinstance(model_visible_task, Mapping):
+            raise LiveConfigurationError("model_visible_task must be a mapping")
+        else:
+            self.model_visible_task = dict(model_visible_task)
         self._failure_reproduced = False
         self._pdb_session_active = False
         self._runtime_transition_authorized = False
@@ -682,9 +1392,79 @@ class LiveModelAdapter:
         # to at most one append per logical call regardless of retry count.
         self._pdb_gate_decision_cache: tuple[int, Any] | None = None
         self._pdb_gate_recorded_for_index: int | None = None
+
+    def reconcile_tool_dispatch(self, controller_result: Any) -> None:
+        """Bind dispatch truth from completed controller/tool steps.
+
+        Parsing can only establish acceptance.  A controller step carrying an
+        action and authoritative observation proves the tool was dispatched;
+        transitions are explicitly non-tool and remain ``None``.
+        """
+        steps = getattr(controller_result, "steps", ())
+        dispatched = {
+            step.model_call_index
+            for step in steps
+            if getattr(step, "action", None) is not None
+            and getattr(step, "observation", None) is not None
+        }
+        for attempt in self.directive_attempts:
+            if attempt.get("directive_accepted") is not True:
+                continue
+            directive = attempt.get("directive")
+            if not isinstance(directive, Mapping):
+                attempt["tool_dispatched"] = None
+            elif directive.get("kind") != "action":
+                attempt["tool_dispatched"] = None
+            else:
+                attempt["tool_dispatched"] = attempt.get("model_call_index") in dispatched
     @staticmethod
     def _hypotheses(snapshot):
         return [{"hypothesis_id":item.hypothesis_id,"statement":item.statement,"confidence":item.confidence.value,"status":item.status.value,"evidence_refs":list(item.evidence_refs),"requires_runtime_evidence":item.requires_runtime_evidence,"revision":item.revision} for item in snapshot.hypotheses.hypotheses]
+    def _control_matches_selected_proof_contract(self, observation: Observation) -> bool:
+        starts = [
+            item
+            for item in self._proof_observations
+            if item.name == ActionName.START_PDB_SESSION.value
+            and item.status.value == "ok"
+        ]
+        if len(starts) != 1:
+            return False
+        proof = starts[0].payload.get("proof")
+        return (
+            type(proof) is dict
+            and observation.payload.get("state") == "paused"
+            and observation.payload.get("script") == proof.get("production_file")
+            and observation.payload.get("function") == proof.get("production_frame")
+        )
+
+    def _reset_selected_runtime_proof_cycle(self, observation: Observation) -> None:
+        runtime_names = {
+            ActionName.START_PDB_SESSION.value,
+            ActionName.GET_STACK_SUMMARY.value,
+            ActionName.GET_FRAME_LOCALS.value,
+            ActionName.STEP_PDB_SESSION.value,
+            ActionName.NEXT_PDB_SESSION.value,
+            ActionName.STOP_PDB_SESSION.value,
+        }
+        removed = [
+            item.observation_id
+            for item in self._proof_observations
+            if item.name in runtime_names
+        ]
+        self._proof_observations = [
+            item for item in self._proof_observations if item.name not in runtime_names
+        ]
+        self.proof_cycle_events.append({
+            "schema_version": "pdb-proof-cycle-event-v1",
+            "event": "selected_runtime_cycle_reset",
+            "trigger_observation_id": observation.observation_id,
+            "trigger_action": observation.name,
+            "trigger_state": observation.payload.get("state"),
+            "reason": "control did not pause in the declared production frame and the session is inactive",
+            "removed_selected_observation_ids": removed,
+            "trigger_retained_in_trajectory": True,
+        })
+
     def _observe_snapshot(self, snapshot: ControllerSnapshot) -> None:
         observation = snapshot.last_observation
         if observation is None:
@@ -698,7 +1478,38 @@ class LiveModelAdapter:
             and type(observation) is Observation
             and observation.status.value == "ok"
         ):
-            if not any(item.observation_id == observation.observation_id for item in self._proof_observations):
+            already_selected = any(
+                item.observation_id == observation.observation_id
+                for item in self._proof_observations
+            )
+            already_recorded_as_control_event = any(
+                item.get("trigger_observation_id") == observation.observation_id
+                for item in self.proof_cycle_events
+            )
+            is_control = observation.name in {
+                ActionName.STEP_PDB_SESSION.value,
+                ActionName.NEXT_PDB_SESSION.value,
+            }
+            if (
+                is_control
+                and not already_selected
+                and not already_recorded_as_control_event
+                and not self._control_matches_selected_proof_contract(observation)
+            ):
+                if observation.payload.get("state") != "paused":
+                    self._reset_selected_runtime_proof_cycle(observation)
+                else:
+                    self.proof_cycle_events.append({
+                        "schema_version": "pdb-proof-cycle-event-v1",
+                        "event": "control_observation_not_selected",
+                        "trigger_observation_id": observation.observation_id,
+                        "trigger_action": observation.name,
+                        "trigger_state": observation.payload.get("state"),
+                        "reason": "control paused outside the declared production frame",
+                        "removed_selected_observation_ids": [],
+                        "trigger_retained_in_trajectory": True,
+                    })
+            elif not already_selected and not already_recorded_as_control_event:
                 self._proof_observations.append(observation)
         if observation.name in {
             ActionName.APPLY_PATCH.value,
@@ -822,29 +1633,7 @@ class LiveModelAdapter:
 
         if not self.proof_required:
             return True
-        required = {
-            ActionName.START_PDB_SESSION.value,
-            ActionName.GET_STACK_SUMMARY.value,
-            ActionName.GET_FRAME_LOCALS.value,
-        }
-        for name in required:
-            matches = [
-                observation
-                for observation in self._proof_observations
-                if observation.name == name
-            ]
-            if len(matches) != 1 or matches[0].status.value != "ok":
-                return False
-        control_matches = [
-            observation
-            for observation in self._proof_observations
-            if observation.name
-            in {
-                ActionName.STEP_PDB_SESSION.value,
-                ActionName.NEXT_PDB_SESSION.value,
-            }
-        ]
-        return len(control_matches) == 1 and control_matches[0].status.value == "ok"
+        return validate_pdb_runtime_evidence(self._proof_observations)[0]
 
     def _proof_runtime_progress(self) -> dict[str, Any]:
         """Expose the exact proof's next bounded action without oracle data."""
@@ -862,7 +1651,7 @@ class LiveModelAdapter:
             counts.get(name.value, 0)
             for name in (ActionName.STEP_PDB_SESSION, ActionName.NEXT_PDB_SESSION)
         )
-        diagnosis_ready = start_ready and stack_ready and locals_ready and control_count == 1
+        diagnosis_ready = self._proof_diagnosis_ready()
 
         if not start_ready:
             next_actions = [ActionName.START_PDB_SESSION.value]
@@ -871,10 +1660,11 @@ class LiveModelAdapter:
         elif not locals_ready:
             next_actions = [ActionName.GET_FRAME_LOCALS.value]
         elif control_count != 1:
-            next_actions = [
-                ActionName.STEP_PDB_SESSION.value,
-                ActionName.NEXT_PDB_SESSION.value,
-            ]
+            # Exact proof must remain in the declared production frame.  A
+            # ``step`` on a call expression can descend into a helper and make
+            # otherwise valid evidence unusable; ``next`` executes that line
+            # while preserving the caller frame.
+            next_actions = [ActionName.NEXT_PDB_SESSION.value]
         elif self._pdb_session_active:
             next_actions = [ActionName.STOP_PDB_SESSION.value]
         else:
@@ -885,33 +1675,6 @@ class LiveModelAdapter:
             "pre_diagnosis_ready": diagnosis_ready,
             "session_active": self._pdb_session_active,
         }
-
-    def _exact_breakpoint_line(self) -> int | None:
-        """Choose a late executable line from the model-visible source window."""
-
-        source = self._unique_proof_observation(ActionName.GET_SOURCE_WINDOW)
-        if source is None:
-            return None
-        lines = source.payload.get("lines")
-        candidates: list[int] = []
-        if type(lines) is not list:
-            return None
-        for entry in lines:
-            if type(entry) is not dict:
-                continue
-            number = entry.get("line_number")
-            text = entry.get("text")
-            if type(number) is not int or type(text) is not str:
-                continue
-            stripped = text.strip()
-            indentation = len(text) - len(text.lstrip())
-            if (
-                indentation > 0
-                and stripped
-                and not stripped.startswith(("#", "return ", "def ", "class ", "@"))
-            ):
-                candidates.append(number)
-        return candidates[-1] if candidates else None
 
     def _unique_proof_observation(self, name: ActionName) -> Observation | None:
         matches = [
@@ -967,6 +1730,15 @@ class LiveModelAdapter:
         proof = start.payload.get("proof")
         if not usable_locals or type(proof) is not dict:
             return result
+        selected_local = usable_locals[0]
+        for name in self.proof_observed_local_names:
+            match = next(
+                (entry for entry in usable_locals if entry["name"] == name),
+                None,
+            )
+            if match is not None:
+                selected_local = match
+                break
         result.update(
             {
                 "evidence_refs": [
@@ -976,7 +1748,7 @@ class LiveModelAdapter:
                     controls[0].observation_id,
                 ],
                 "observed_values": {
-                    usable_locals[0]["name"]: usable_locals[0].get("value")
+                    selected_local["name"]: selected_local.get("value")
                 },
                 "target_file": proof.get("production_file"),
                 "target_symbol": proof.get("production_frame"),
@@ -1114,7 +1886,7 @@ class LiveModelAdapter:
                     if source_name in result and len(public_paths) == 1:
                         contract = dict(result[source_name])
                         properties = dict(contract.get("properties", {}))
-                        for field, value in (("path", public_paths[0]), ("line", 1)):
+                        for field, value in (("path", public_paths[0]), ("line", self.proof_source_line)):
                             spec = dict(properties.get(field, {}))
                             spec["enum"] = [value]
                             properties[field] = spec
@@ -1142,16 +1914,6 @@ class LiveModelAdapter:
                 for name, contract in result.items()
                 if name in next_actions
             }
-            start_name = ActionName.START_PDB_SESSION.value
-            breakpoint_line = self._exact_breakpoint_line()
-            if start_name in result and breakpoint_line is not None:
-                contract = dict(result[start_name])
-                properties = dict(contract.get("properties", {}))
-                spec = dict(properties.get("breakpoint_line", {}))
-                spec["enum"] = [breakpoint_line]
-                properties["breakpoint_line"] = spec
-                contract["properties"] = properties
-                result[start_name] = contract
             locals_name = ActionName.GET_FRAME_LOCALS.value
             bindings = self._proof_evidence_bindings()
             if locals_name in result and bindings is not None:
@@ -1213,7 +1975,21 @@ class LiveModelAdapter:
         runtime_allowed = self._runtime_transition_allowed(snapshot)
         effective_actions = list(contracts)
         history_window = PROOF_HISTORY_WINDOW if self.proof_required else MODEL_HISTORY_WINDOW
-        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.task.agent_visible_mapping(),"policy":self.policy.value,"directive_schema":directive_schema,"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":snapshot.budget_limits.max_patch_attempts,"max_test_runs":snapshot.budget_limits.max_test_runs,"max_pdb_observations":snapshot.budget_limits.max_pdb_observations,"max_active_hypotheses":snapshot.budget_limits.max_active_hypotheses,"max_source_observations":snapshot.budget_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":snapshot.last_observation.to_mapping() if snapshot.last_observation else None},"history":list(self.history[-history_window:]),"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
+        history = list(self.history[-history_window:])
+        if (
+            self.proof_required
+            and history
+            and history[-1].get("request_index") == logical_request_index
+        ):
+            # The current snapshot is represented authoritatively in the
+            # controller object below. Do not duplicate it before the current
+            # directive even exists.
+            history = history[:-1]
+        last_observation = snapshot.last_observation.to_mapping() if snapshot.last_observation else None
+        if self.proof_required:
+            last_observation = _proof_observation_for_provider(last_observation)
+        visible_limits = self.model_visible_budget_limits
+        payload = {"protocol":{"name":"agentic-debugger-live-jsonl","version":LIVE_PROTOCOL_VERSION,"request_id":request_id,"logical_model_call_index":logical_request_index,"transport_attempt_index":transport_attempt_index},"identity":{"evaluation_id":self.evaluation_id,"case_id":self.case_id,"run_id":self.run_id,"trajectory_id":self.trajectory_id},"task":self.model_visible_task,"policy":self.policy.value,"directive_schema":directive_schema,"action_contracts":contracts,"controller":{"state":snapshot.state.value,"task_id":snapshot.task_id,"model_call_index":snapshot.model_call_index,"allowed_actions":effective_actions,"legal_transition_targets":legal_targets,"budget_limits":{"max_patch_attempts":visible_limits.max_patch_attempts,"max_test_runs":visible_limits.max_test_runs,"max_pdb_observations":visible_limits.max_pdb_observations,"max_active_hypotheses":visible_limits.max_active_hypotheses,"max_source_observations":visible_limits.max_source_observations},"budget_state":{"patch_attempts":snapshot.budget_state.patch_attempts,"test_runs":snapshot.budget_state.test_runs,"pdb_observations":snapshot.budget_state.pdb_observations,"source_observations":snapshot.budget_state.source_observations},"hypotheses":self._hypotheses(snapshot),"last_observation":last_observation},"history":history,"directive_feedback":dict(rejection) if rejection else None,"instructions":"Return one directive JSON object. The request is the complete bounded current context; do not rely on process-local memory. Never return credentials. The 'directive_feedback' field is always present; it is null on the first transport attempt. When 'directive_feedback' is non-null, the previous transport attempt's directive was rejected for the stated category; do not repeat it, and choose a directive that satisfies the allowed_actions, legal_transition_targets, and action_contracts already advertised in this request."}
         if self.proof_required:
             payload["instructions"] = "Return one legal directive JSON object from current contracts. Context is complete; use no memory or credentials. Do not repeat non-null directive_feedback."
             if snapshot.state is ControllerState.REPRODUCE:
@@ -1278,13 +2054,17 @@ class LiveModelAdapter:
                 else []
             )
         logical_request_index = snapshot.model_call_index
-        history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None}
+        history_observation = redact_for_recording(snapshot.last_observation.to_mapping()) if snapshot.last_observation else None
+        if self.proof_required:
+            history_observation = _proof_observation_for_provider(history_observation)
+        history_entry={"request_index":logical_request_index,"state":snapshot.state.value,"allowed_actions":list(effective_contract),"last_observation":history_observation}
         self.history.append(history_entry)
         del self.history[:-MODEL_HISTORY_WINDOW]
         rejection: dict[str, Any] | None = None
         for attempt in range(self.limits.max_retries+1):
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
             request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,contracts=effective_contract,legal_targets=legal_targets,directive_schema=directive_schema,rejection=rejection))
+            final_content: str | None = None
             try:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
             except (TypeError,ValueError,UnicodeError):
@@ -1303,24 +2083,44 @@ class LiveModelAdapter:
             self.metrics.transport_attempts+=1
             self.metrics.cumulative_request_bytes += len(request_bytes)
             self.metrics.max_request_bytes = max(self.metrics.max_request_bytes, len(request_bytes))
-            timeout_seconds=min(self.config.request_timeout_seconds,self._remaining())
+            # The cumulative model-phase bound is an emergency guard checked
+            # between calls.  A currently progressing streamed response is
+            # governed by the transport's inactivity watchdog and is not cut
+            # off merely because a wall-clock slice elapsed mid-response.
+            self._remaining()
+            timeout_seconds=self.config.request_timeout_seconds
             phase_started=self.clock()
             try:
                 response=self.transport.request(request,timeout_seconds)
                 if not isinstance(response,Mapping): raise LiveModelAdapterError("invalid model response",category=DirectiveRejectionCategory.MALFORMED_DIRECTIVE,detail="model response was not a JSON object")
                 self.metrics.model_responses+=1
                 self.metrics.usage(response.get("usage"))
-                raw_directive=_resolve_raw_directive(response)
+                self.metrics.activity(response.get("transport_activity"))
                 attempt_record={
                     "model_call_index": logical_request_index,
                     "transport_attempt_index": attempt+1,
                     "state": snapshot.state.value,
-                    "directive": redact_for_recording(raw_directive),
+                    "directive": None,
+                    "provider_transport_completed": True,
+                    "directive_accepted": False,
+                    "tool_dispatched": False,
                     "accepted": False,
                     "rejection": None,
+                    "directive_transport_normalized": False,
+                    "normalization_schema_version": None,
+                    "normalization_policy_id": None,
+                    "normalization_kind": None,
+                    "normalization_before": None,
+                    "normalization_after": None,
+                    "normalization_removed_prefix": None,
+                    "normalization_removed_suffix": None,
                 }
                 self.directive_attempts.append(attempt_record)
                 del self.directive_attempts[:-256]
+                raw_directive, final_content, normalization = _resolve_provider_directive(response)
+                if normalization is not None:
+                    attempt_record.update(normalization)
+                attempt_record["directive"] = redact_for_recording(raw_directive)
                 # Canonical PDB gate recording point.  The model's real
                 # ``UNDERSTAND -> RUNTIME_EVIDENCE`` transition *attempt* is
                 # visible in ``raw_directive`` before :func:`_parse` can reject
@@ -1345,6 +2145,8 @@ class LiveModelAdapter:
                 contracts = effective_contract
                 directive=_parse(raw_directive,snapshot,action_contracts=contracts,directive_kinds=set(directive_schema),directive_schema=directive_schema,legal_transition_targets=set(legal_targets))
                 attempt_record["accepted"] = True
+                attempt_record["directive_accepted"] = True
+                attempt_record["tool_dispatched"] = None
                 if isinstance(directive, TransitionDirective) and directive.target_state is ControllerState.RUNTIME_EVIDENCE:
                     self._runtime_transition_authorized = True
                 self.history[-1]["directive"]=redact_for_recording(raw_directive)
@@ -1365,8 +2167,12 @@ class LiveModelAdapter:
                 rejection=None
                 self.metrics.error(exc.kind)
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
-                self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed") from None
+                self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed", directive_rejection=False) from None
             except LiveModelAdapterError as exc:
+                if not exc.directive_rejection:
+                    raise
+                if final_content is not None and exc.content is None:
+                    exc.content = final_content
                 rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt+1}
                 if (
                     self.directive_attempts
@@ -1375,10 +2181,15 @@ class LiveModelAdapter:
                     and self.directive_attempts[-1].get("accepted") is False
                 ):
                     self.directive_attempts[-1]["rejection"] = dict(rejection)
+                evidence = serialize_rejection_evidence(stage=exc.stage, category=exc.category.value, reason_code=exc.reason_code, reason=exc.detail, content=exc.content)
+                if validate_rejection_evidence(evidence):
+                    self.directive_rejection_evidence.append(evidence)
+                    if self.directive_attempts and self.directive_attempts[-1].get("model_call_index") == logical_request_index and self.directive_attempts[-1].get("transport_attempt_index") == attempt+1:
+                        self.directive_attempts[-1]["rejection_evidence"] = evidence
                 self.directive_rejections.append(dict(rejection))
-                self.metrics.error("invalid_model_response")
+                self.metrics.directive_rejection(exc.category.value)
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
-                self.metrics.termination_reason="invalid_model_response"; raise
+                self.metrics.termination_reason="directive_rejected"; raise
             finally:
                 self.model_phase_elapsed_seconds += max(0.0,self.clock()-phase_started)
     def _remaining(self):
@@ -1569,8 +2380,10 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
             status=LiveCaseStatus.VALIDATION_NOT_REACHED
         else:
             status=LiveCaseStatus.PDB_NOT_REACHED
+    elif metrics.termination_reason in {"model_request_limit","controller_step_limit"} or (result is not None and result.stop_reason is ControllerStopReason.MODEL_CALL_LIMIT): status=LiveCaseStatus.BUDGET_LIMITED
     elif metrics.termination_reason in {"request_timeout","elapsed_time_limit"}: status=LiveCaseStatus.TIMED_OUT
-    elif metrics.termination_reason in {"provider_or_transport_error","invalid_model_response"}: status=LiveCaseStatus.PROVIDER_ERROR
+    elif metrics.termination_reason == "directive_rejected": status=LiveCaseStatus.MODEL_DIRECTIVE_REJECTED
+    elif metrics.termination_reason == "provider_or_transport_error": status=LiveCaseStatus.PROVIDER_ERROR
     elif controller_failed: status=LiveCaseStatus.CONTROLLER_FAILED
     elif result is None: status=LiveCaseStatus.HARNESS_ERROR
     elif result.stop_reason is ControllerStopReason.DIRECTIVE_REJECTED: status=LiveCaseStatus.CONTROLLER_REJECTED
@@ -1636,8 +2449,24 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         evidence=evidence,
     )
 
-def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False):
-    repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve(); scenario=scenario_for(task_id); task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
+def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False,scenario_override=None):
+    repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve()
+    if scenario_override is None:
+        scenario=scenario_for(task_id)
+    elif isinstance(scenario_override, DemoScenario) and scenario_override.task_id == task_id:
+        scenario=scenario_override
+    else:
+        raise LiveConfigurationError("scenario override does not match the live task")
+    task=load_task(str(repo/CURATED_RELATIVE_ROOT/task_id/"task.json"))
+    controller_limits = limits.treatment_budget.controller_limits() if limits.treatment_budget is not None else ControllerBudgetLimits.from_task_constraints(task.constraints)
+    model_visible_resource_limits = None
+    if limits.treatment_budget is not None:
+        model_visible_resource_limits = {
+            "max_patch_attempts": controller_limits.max_patch_attempts,
+            "max_test_runs": controller_limits.max_test_runs,
+            "max_pdb_observations": controller_limits.max_pdb_observations,
+        }
+    model_visible_task = task.agent_visible_mapping(resource_limits=model_visible_resource_limits)
     case_id=f"{evaluation_id}:{task_id}:{policy.value}:r{repetition}"; run_id=f"live-{case_id}"; started=time.monotonic()
     case_dir=None; workspace=None; context=None; result=None; live_adapter=None; metrics=LiveModelMetrics(); diagnostics=[]; interrupted=False; controller_failed=False
     try:
@@ -1645,7 +2474,7 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
         workspace=TaskWorkspace(str(repo/CURATED_RELATIVE_ROOT/task_id),parent_dir=str(case_dir))
         if scenario.runtime_probe.exact_public_reproduction:
             (Path(workspace.root) / "task.json").write_text(
-                json.dumps(task.agent_visible_mapping(), sort_keys=True, indent=2) + "\n",
+                json.dumps(model_visible_task, sort_keys=True, indent=2) + "\n",
                 encoding="utf-8",
                 newline="\n",
             )
@@ -1655,8 +2484,15 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
             case_dir,
             model_selects_breakpoint=interactive_debugger_controls,
             task=task,
+            model_visible_task_mapping=model_visible_task,
         ) if policy is DemoPolicy.PDB_ON_UNCERTAINTY else None
-        context=DemoToolContext(task=task,workspace=workspace,patch="",probe=probe)
+        context=DemoToolContext(
+            task=task,
+            workspace=workspace,
+            patch="",
+            probe=probe,
+            official_patch_compatibility=True,
+        )
         registry=build_registry(
             context,
             pdb_policy=pdb_policy_for(policy),
@@ -1665,7 +2501,7 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
                 or scenario.runtime_probe.exact_public_reproduction
             ),
         )
-        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction)
+        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction,proof_source_line=scenario.runtime_probe.breakpoint_line if scenario_override is not None else 1,proof_observed_local_names=scenario.runtime_probe.inspect_expressions if scenario.runtime_probe.exact_public_reproduction else (),model_visible_budget_limits=controller_limits,model_visible_task=model_visible_task)
         metrics=live_adapter.metrics
         controller=DeterministicController(
             registry,
@@ -1679,7 +2515,8 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
         )
         try:
             controller_clock_started = time.monotonic()
-            result=controller.run(ControllerSnapshot(run_id,task_id,ControllerState.REPRODUCE,0,ControllerBudgetLimits.from_task_constraints(task.constraints),ControllerBudgetState(),HypothesisLedger()))
+            result=controller.run(ControllerSnapshot(run_id,task_id,ControllerState.REPRODUCE,0,controller_limits,ControllerBudgetState(),HypothesisLedger()))
+            live_adapter.reconcile_tool_dispatch(result)
             metrics.controller_wall_duration_ms = int((time.monotonic() - controller_clock_started) * 1000)
         except KeyboardInterrupt:
             interrupted=True; diagnostics.append("controller interrupted by operator")
@@ -1692,9 +2529,11 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
     except Exception as exc:
         diagnostics.append(redact_for_recording(bounded_error(exc)))
     observable_evidence = None
-    if retain_observable_model_directives and live_adapter is not None:
+    if live_adapter is not None and (retain_observable_model_directives or live_adapter.directive_rejection_evidence):
         observable_evidence = {
             "observable_model_directive_attempts": list(live_adapter.directive_attempts),
+            "observable_model_rejection_evidence": list(live_adapter.directive_rejection_evidence),
+            "proof_cycle_events": list(live_adapter.proof_cycle_events),
             "observable_model_directives": [
                 {
                     "model_call_index": entry.get("request_index"),
@@ -1851,12 +2690,18 @@ def _validate_case(case: Any):
     measurements=case["measurements"]
     if not isinstance(measurements,Mapping):
         _schema_error("case.measurements must be an object")
-    measurement_fields=("model_request_count","model_response_count","retry_count","provider_error_count","provider_error_kinds","token_usage","termination_reason","successful_pdb_observation_count","failed_pdb_observation_count","tool_call_count","case_elapsed_duration_ms","model_phase_elapsed_duration_ms","model_transport_duration_ms","elapsed_scope")
+    measurement_fields=("model_request_count","model_response_count","retry_count","provider_error_count","provider_error_kinds","directive_rejection_count","directive_rejection_categories","token_usage","termination_reason","successful_pdb_observation_count","failed_pdb_observation_count","tool_call_count","case_elapsed_duration_ms","model_phase_elapsed_duration_ms","model_transport_duration_ms","elapsed_scope")
     _require_fields(measurements,measurement_fields,"case.measurements")
     for field in ("model_request_count","model_response_count","retry_count","provider_error_count","successful_pdb_observation_count","failed_pdb_observation_count","tool_call_count","case_elapsed_duration_ms","model_phase_elapsed_duration_ms","model_transport_duration_ms"):
         _count(measurements[field],"case.measurements."+field)
+    for field in ("stream_frame_count","thinking_bytes","action_content_bytes"):
+        if field in measurements:
+            _count(measurements[field],"case.measurements."+field)
     if not isinstance(measurements["provider_error_kinds"],list) or any(type(item) is not str or not item for item in measurements["provider_error_kinds"]):
         _schema_error("case.measurements.provider_error_kinds must be a string array")
+    _count(measurements["directive_rejection_count"],"case.measurements.directive_rejection_count")
+    if not isinstance(measurements["directive_rejection_categories"],list) or any(type(item) is not str or not item for item in measurements["directive_rejection_categories"]):
+        _schema_error("case.measurements.directive_rejection_categories must be a string array")
     _string(measurements["termination_reason"],"case.measurements.termination_reason",nullable=True)
     _string(measurements["elapsed_scope"],"case.measurements.elapsed_scope")
     if measurements["model_phase_elapsed_duration_ms"] != measurements["model_transport_duration_ms"] or measurements["elapsed_scope"] != "case_observed; model_phase=transport_only":
@@ -1902,10 +2747,14 @@ def _validate_case(case: Any):
         _schema_error("cleanup-failed case state is inconsistent")
     if reporting["interrupted"] and status != LiveCaseStatus.INCOMPLETE.value:
         _schema_error("interrupted case has a non-incomplete status")
-    if status == LiveCaseStatus.PROVIDER_ERROR and not (measurements["provider_error_count"] > 0 and measurements["termination_reason"] in {"provider_or_transport_error","invalid_model_response"}):
+    if status == LiveCaseStatus.PROVIDER_ERROR and not (measurements["provider_error_count"] > 0 and measurements["termination_reason"] == "provider_or_transport_error"):
         _schema_error("provider-error case measurements are inconsistent")
+    if status == LiveCaseStatus.MODEL_DIRECTIVE_REJECTED.value and not (measurements["provider_error_count"] == 0 and measurements["directive_rejection_count"] > 0 and measurements["termination_reason"] == "directive_rejected"):
+        _schema_error("model-directive-rejected case measurements are inconsistent")
     if status == LiveCaseStatus.TIMED_OUT and measurements["termination_reason"] not in {"request_timeout","elapsed_time_limit"}:
         _schema_error("timed-out case termination is inconsistent")
+    if status == LiveCaseStatus.BUDGET_LIMITED and measurements["termination_reason"] not in {"model_request_limit","controller_step_limit"} and controller["stop_reason"] != ControllerStopReason.MODEL_CALL_LIMIT.value:
+        _schema_error("budget-limited case termination is inconsistent")
     if status == LiveCaseStatus.CONTROLLER_REJECTED and controller["stop_reason"] != ControllerStopReason.DIRECTIVE_REJECTED.value:
         _schema_error("controller-rejected case state is inconsistent")
     if status == LiveCaseStatus.EVENT_REPORTING_FAILED and reporting["event_recorded"]:
@@ -2019,4 +2868,4 @@ def validate_live_report(report):
         _schema_error("report completed count is inconsistent")
     return payload
 
-__all__=["DirectiveRejectionCategory","JsonlCommandTransport","LiveCaseResult","LiveCaseStatus","LiveConfigurationError","LiveEvaluationError","LiveExecutionAuthorization","LiveModelAdapter","LiveModelAdapterError","LiveModelConfig","LiveModelMetrics","LiveOptInError","LiveRunLimits","LiveTransportError","ModelTransport","LIVE_PROTOCOL_VERSION","LIVE_SCHEMA_VERSION","redact_for_recording","render_live_report","rejected_live_report","run_live_case","run_live_evaluation","validate_live_report"]
+__all__=["DirectiveRejectionCategory","JsonlCommandTransport","LiveCaseResult","LiveCaseStatus","LiveConfigurationError","LiveEvaluationError","LiveExecutionAuthorization","LiveModelAdapter","LiveModelAdapterError","LiveModelConfig","LiveModelMetrics","LiveOptInError","LiveRunLimits","LiveTreatmentBudget","LiveTransportError","ModelTransport","LIVE_PROTOCOL_VERSION","LIVE_SCHEMA_VERSION","redact_for_recording","render_live_report","rejected_live_report","run_live_case","run_live_evaluation","validate_live_report"]

@@ -15,6 +15,26 @@ _CONTRACT_KEYS = (
     "breakpoint_line", "production_frame",
 )
 
+PROOF_ROLE_SELECTION_SCHEMA_VERSION = "pdb-proof-role-selection-v2"
+PROOF_ROLE_SELECTION_POLICY_ID = "admissible-runtime-cycle-recovery-v2"
+PROOF_ROLE_SELECTION_POLICY = {
+    "schema_version": PROOF_ROLE_SELECTION_SCHEMA_VERSION,
+    "policy_id": PROOF_ROLE_SELECTION_POLICY_ID,
+    "history_retained": True,
+    "successful_candidates_only": True,
+    "exactly_one_successful_candidate_per_role": True,
+    "successful_duplicates_fail_closed": "within_selected_runtime_cycle",
+    "control_role_requires_paused_production_frame": True,
+    "exited_control_resets_selected_runtime_cycle": True,
+    "invalid_control_retained_in_event_history": True,
+    "exited_control_releases_tool_session": True,
+    "fresh_exact_session_bounded_by_controller_budget": True,
+    "superseded_cycle_roles_ignored_after_exited_boundary": True,
+    "convenience_selection": False,
+    "chronology_source": "original_ordered_history",
+    "identity_checks_unchanged": True,
+}
+
 
 def _ok(item: Any) -> bool:
     return (
@@ -73,8 +93,23 @@ def _local_values(payload: dict[str, Any]) -> dict[str, Any] | None:
     return result
 
 
-def validate_pdb_patch_evidence(observations: Iterable[Observation]) -> tuple[bool, str]:
-    """Validate the chronological baseline-to-diagnosis proof chain.
+def _runtime_cycle_start_index(ordered: tuple[Observation, ...]) -> int:
+    recovery_boundaries = [
+        index
+        for index, item in enumerate(ordered)
+        if _ok(item)
+        and item.name in {"step_pdb_session", "next_pdb_session"}
+        and item.payload.get("state") != "paused"
+        and any(
+            later.name == "start_pdb_session" and _ok(later)
+            for later in ordered[index + 1:]
+        )
+    ]
+    return recovery_boundaries[-1] + 1 if recovery_boundaries else 0
+
+
+def validate_pdb_runtime_evidence(observations: Iterable[Observation]) -> tuple[bool, str]:
+    """Validate the chronological baseline-to-control proof prefix.
 
     The input order is the controller's authoritative observation order.  No
     inference from names, latest values, or duplicate records is permitted.
@@ -90,29 +125,54 @@ def validate_pdb_patch_evidence(observations: Iterable[Observation]) -> tuple[bo
     if len(set(observation_ids)) != len(observation_ids) or len(set(action_ids)) != len(action_ids):
         return False, "pdb evidence contains duplicate observation identity"
 
-    baseline_items = [item for item in ordered if item.name == "run_reproduction" and item.payload.get("phase") == "baseline"]
-    start_items = [item for item in ordered if item.name == "start_pdb_session"]
-    stack_items = [item for item in ordered if item.name == "get_stack_summary"]
-    locals_items = [item for item in ordered if item.name == "get_frame_locals"]
-    step_items = [item for item in ordered if item.name in {"step_pdb_session", "next_pdb_session"}]
-    diagnosis_items = [item for item in ordered if item.name == "express_root_cause_hypothesis"]
-    if any(len(items) != 1 for items in (baseline_items, start_items, stack_items, locals_items, step_items, diagnosis_items)):
+    # Rejected/error observations are authoritative history, but only a
+    # successful observation may satisfy a proof role.  Keep ``ordered``
+    # intact so the selected successful nodes are still checked against the
+    # original chronology below.
+    baseline_items = [
+        item
+        for item in ordered
+        if _ok(item)
+        and item.name == "run_reproduction"
+        and item.payload.get("phase") == "baseline"
+    ]
+    cycle_start = _runtime_cycle_start_index(ordered)
+    cycle = ordered[cycle_start:]
+    start_items = [item for item in cycle if _ok(item) and item.name == "start_pdb_session"]
+    stack_items = [item for item in cycle if _ok(item) and item.name == "get_stack_summary"]
+    locals_items = [item for item in cycle if _ok(item) and item.name == "get_frame_locals"]
+    raw_step_items = [
+        item
+        for item in cycle
+        if _ok(item) and item.name in {"step_pdb_session", "next_pdb_session"}
+    ]
+    if any(len(items) != 1 for items in (baseline_items, start_items, stack_items, locals_items)):
         return False, "proof chain has missing or duplicate required observations"
-    baseline, start, stack, locals_observation, step, diagnosis = (
-        baseline_items[0], start_items[0], stack_items[0], locals_items[0], step_items[0], diagnosis_items[0]
+    baseline, start, stack, locals_observation = (
+        baseline_items[0], start_items[0], stack_items[0], locals_items[0]
     )
-    chain = (baseline, start, stack, locals_observation, step, diagnosis)
-    positions = [ordered.index(item) for item in chain]
-    if positions != sorted(positions) or len(set(positions)) != len(positions):
-        return False, "proof chain is not chronological"
-    if not all(_ok(item) for item in chain):
-        return False, "required proof observation is not successful"
     if baseline.payload.get("failure_reproduced") is not True:
         return False, "baseline failure reproduction is missing"
 
     contract = _proof(start)
     if not _contract_valid(contract, task_id=start.task_id):
         return False, "PDB proof contract is malformed"
+    step_items = [
+        item
+        for item in raw_step_items
+        if item.payload.get("state") == "paused"
+        and item.payload.get("script") == contract["production_file"]
+        and item.payload.get("function") == contract["production_frame"]
+    ]
+    if len(step_items) != 1:
+        if len(raw_step_items) == 1:
+            return False, "step/next did not produce a paused production frame"
+        return False, "proof chain has missing or duplicate required observations"
+    step = step_items[0]
+    chain = (baseline, start, stack, locals_observation, step)
+    positions = [ordered.index(item) for item in chain]
+    if positions != sorted(positions) or len(set(positions)) != len(positions):
+        return False, "proof chain is not chronological"
     if any(item.run_id != baseline.run_id or item.task_id != baseline.task_id for item in chain):
         return False, "proof observations cross run or task identity"
     if any(not _same_contract(_proof(item), contract) for item in chain[1:5]):
@@ -144,12 +204,49 @@ def validate_pdb_patch_evidence(observations: Iterable[Observation]) -> tuple[bo
         return False, "locals are not bound to the production stack frame"
     if _local_values(locals_observation.payload) is None:
         return False, "locals evidence is malformed"
-    if (
-        step.payload.get("state") != "paused"
-        or step.payload.get("script") != contract["production_file"]
-        or step.payload.get("function") != contract["production_frame"]
-    ):
-        return False, "step/next did not produce a paused production frame"
+    return True, "exact-runtime PDB evidence is ready for diagnosis"
+
+
+def validate_pdb_patch_evidence(observations: Iterable[Observation]) -> tuple[bool, str]:
+    """Validate the chronological baseline-to-diagnosis proof chain."""
+
+    ordered = tuple(observations)
+    runtime_allowed, runtime_reason = validate_pdb_runtime_evidence(ordered)
+    if not runtime_allowed:
+        return False, runtime_reason
+
+    baseline = next(
+        item for item in ordered
+        if _ok(item)
+        and item.name == "run_reproduction"
+        and item.payload.get("phase") == "baseline"
+    )
+    cycle = ordered[_runtime_cycle_start_index(ordered):]
+    start = next(item for item in cycle if _ok(item) and item.name == "start_pdb_session")
+    stack = next(item for item in cycle if _ok(item) and item.name == "get_stack_summary")
+    locals_observation = next(item for item in cycle if _ok(item) and item.name == "get_frame_locals")
+    contract = _proof(start)
+    assert contract is not None
+    step = next(
+        item for item in cycle
+        if _ok(item)
+        and item.name in {"step_pdb_session", "next_pdb_session"}
+        and item.payload.get("state") == "paused"
+        and item.payload.get("script") == contract["production_file"]
+        and item.payload.get("function") == contract["production_frame"]
+    )
+    diagnosis_items = [
+        item
+        for item in ordered
+        if _ok(item) and item.name == "express_root_cause_hypothesis"
+    ]
+    if len(diagnosis_items) != 1:
+        return False, "proof chain has missing or duplicate required observations"
+    diagnosis = diagnosis_items[0]
+    if ordered.index(diagnosis) <= ordered.index(step):
+        return False, "proof chain is not chronological"
+    if diagnosis.run_id != baseline.run_id or diagnosis.task_id != baseline.task_id:
+        return False, "proof observations cross run or task identity"
 
     refs = diagnosis.payload.get("evidence_refs")
     values = diagnosis.payload.get("observed_values")
@@ -171,4 +268,10 @@ def validate_pdb_patch_evidence(observations: Iterable[Observation]) -> tuple[bo
     return True, "exact-runtime PDB evidence and diagnosis are complete"
 
 
-__all__ = ["validate_pdb_patch_evidence"]
+__all__ = [
+    "PROOF_ROLE_SELECTION_POLICY",
+    "PROOF_ROLE_SELECTION_POLICY_ID",
+    "PROOF_ROLE_SELECTION_SCHEMA_VERSION",
+    "validate_pdb_runtime_evidence",
+    "validate_pdb_patch_evidence",
+]

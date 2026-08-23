@@ -18,7 +18,7 @@ from typing import Optional
 
 from agentic_debugger.agent.controller import ControllerRunResult
 from agentic_debugger.agent.controller_policy import ControllerBudgetState
-from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.state_machine import ControllerState, is_transition_allowed
 from agentic_debugger.events.schema import EventType, Metadata, RunEvent
 
 #: Fixed timestamp used when a caller wants a fully deterministic trajectory.
@@ -121,6 +121,28 @@ def project_controller_run(
                     or (step.stop_reason.value if step.stop_reason else "controller transition"),
                 },
             )
+
+    projected_state = (
+        result.steps[-1].state_after
+        if result.steps
+        else result.initial_state
+    )
+    if projected_state is not result.final_state:
+        # Terminal controller boundaries such as the model-call ceiling occur
+        # between model decisions.  They are observable state transitions but
+        # deliberately do not fabricate a model directive or tool step.
+        if not is_transition_allowed(projected_state, result.final_state):
+            raise ValueError("controller final state transition is invalid")
+        add(
+            EventType.TRANSITION,
+            TRANSITION_EVENT_NAME,
+            result.final_state,
+            {
+                "source_state": projected_state.value,
+                "target_state": result.final_state.value,
+                "reason": result.stop_reason.value,
+            },
+        )
 
     add(
         EventType.FINAL,

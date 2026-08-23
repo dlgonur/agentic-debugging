@@ -277,6 +277,33 @@ def _canonic(path: str) -> str:
     return os.path.normcase(os.path.abspath(path))
 
 
+def _package_context_for_script(
+    script_normalized: str,
+    workspace_root: str,
+) -> Optional[str]:
+    """Return the import package for a workspace script, when unambiguous.
+
+    PDB still executes the target as ``__main__`` so script entry points run,
+    but package modules need ``__package__`` populated for relative imports.
+    Only a conventional chain of identifier-named directories containing
+    ``__init__.py`` is accepted; ordinary top-level scripts retain the legacy
+    ``None`` package context.
+    """
+    parent = posixpath.dirname(script_normalized.replace('\\', '/'))
+    if not parent:
+        return None
+    parts = parent.split('/')
+    if any(not part.isidentifier() for part in parts):
+        return None
+
+    current = workspace_root
+    for part in parts:
+        current = os.path.join(current, part)
+        if not os.path.isfile(os.path.join(current, '__init__.py')):
+            return None
+    return '.'.join(parts)
+
+
 def _get_frame_locals_proxy_type() -> type:
     def _capture() -> type:
         return type(sys._getframe().f_locals)
@@ -2677,8 +2704,11 @@ class PdbWorker:
 
         try:
             script_dir = os.path.dirname(script_abs)
+            package_context = _package_context_for_script(
+                script_normalized, saved_cwd
+            )
             sys.argv = [script_normalized] + argv
-            sys.path = [script_dir] + saved_path
+            sys.path = [saved_cwd, script_dir] + saved_path
             sys.stdin = _NullReader()
             sys.stdout = _DiscardStdout()
             sys.stderr = _DiscardStderr()
@@ -2701,7 +2731,7 @@ class PdbWorker:
             globs: Dict[str, Any] = {
                 '__name__': '__main__',
                 '__doc__': None,
-                '__package__': None,
+                '__package__': package_context,
                 '__loader__': None,
                 '__spec__': None,
                 '__file__': script_abs,

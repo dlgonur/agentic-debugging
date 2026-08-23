@@ -414,7 +414,7 @@ class DemoPolicyModel:
                     ):
                         self._observed_values[item["name"]] = item.get("value")
                 self._phase = "runtime-step"
-                return ActionDirective(ActionName.STEP_PDB_SESSION, {})
+                return ActionDirective(ActionName.NEXT_PDB_SESSION, {})
             self._record_collected(
                 "get_frame_locals" if self._eval_index == 0 else "safe_eval_expression"
             )

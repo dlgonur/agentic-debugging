@@ -296,6 +296,57 @@ _SCENARIOS: tuple[DemoScenario, ...] = (
             breakpoint_line=9,
         ),
     ),
+    DemoScenario(
+        task_id="pdb-required-caller-callee-007",
+        hypothesis_id="proof-caller-callee-007",
+        root_cause_statement=(
+            "format_price normalizes the caller representation but forwards "
+            "the numeric amount unchanged to _render_cents, so dollar values "
+            "are interpreted as cents at the caller/callee boundary."
+        ),
+        localization=LocalizationClaim("price_pipeline.py", "format_price"),
+        reference_repair=ReferenceRepair(
+            "price_pipeline.py",
+            "    callee_input = caller_amount\n    return _render_cents(callee_input)",
+            "    callee_input = caller_amount * 100 if caller_representation == \"dollars\" else caller_amount\n"
+            "    return _render_cents(callee_input)",
+        ),
+        runtime_probe=RuntimeProbe(
+            module_path="price_pipeline.py",
+            focus_function="format_price",
+            call_source='format_price(12, "DOLLARS")',
+            anchor="callee_input = caller_amount",
+            inspect_expressions=("caller_amount", "caller_representation"),
+            exact_public_reproduction=True,
+            breakpoint_line=12,
+        ),
+    ),
+    DemoScenario(
+        task_id="pdb-required-multistage-units-008",
+        hypothesis_id="proof-multistage-units-008",
+        root_cause_statement=(
+            "request_deadline computes the normalized millisecond base delay "
+            "but passes the original unconverted value into "
+            "_expand_retry_window, discarding the earlier conversion stage."
+        ),
+        localization=LocalizationClaim("deadline_pipeline.py", "request_deadline"),
+        reference_repair=ReferenceRepair(
+            "deadline_pipeline.py",
+            "    retry_window_ms = _expand_retry_window(value, retry_count)\n"
+            "    return retry_window_ms + grace_ms",
+            "    retry_window_ms = _expand_retry_window(base_delay_ms, retry_count)\n"
+            "    return retry_window_ms + grace_ms",
+        ),
+        runtime_probe=RuntimeProbe(
+            module_path="deadline_pipeline.py",
+            focus_function="request_deadline",
+            call_source='request_deadline(2, " SECONDS ", 2, 250)',
+            anchor="retry_window_ms = _expand_retry_window(",
+            inspect_expressions=("value", "base_delay_ms", "retry_count"),
+            exact_public_reproduction=True,
+            breakpoint_line=12,
+        ),
+    ),
 )
 
 

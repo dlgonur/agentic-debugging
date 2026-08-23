@@ -358,6 +358,7 @@ class PdbSession:
             bootstrap = (
                 "import sys; import site; import runpy; "
                 "sys.path.append(site.getusersitepackages()); "
+                "sys.path.insert(0, __import__('os').getcwd()); "
                 "sys.path.insert(0, " + repr(project_root) + "); "
                 "runpy.run_module("
                 "'agentic_debugger.runtime.pdb_worker', run_name='__main__')"

@@ -65,7 +65,7 @@ _READ_CHUNK_BYTES = 8192
 #: The stdin writer is joined in bounded slices so an explicit cancellation
 #: interrupts a blocked request write promptly (a child that never reads
 #: stdin fills the OS pipe and blocks the writer indefinitely); the request
-#: deadline is honored by the same loop.
+#: inactivity watchdog is honored by the same loop.
 _WRITE_JOIN_SLICE_SECONDS = 0.05
 
 
@@ -91,13 +91,20 @@ class _BoundedCapture:
             return bytes(self._data).decode("utf-8", errors="replace")
 
 
-def _read_pipe(pipe: Any, capture: _BoundedCapture) -> None:
+def _read_pipe(
+    pipe: Any,
+    capture: _BoundedCapture,
+    activity: Optional[Callable[[], None]] = None,
+) -> None:
     try:
+        read_chunk = getattr(pipe, "read1", pipe.read)
         while True:
-            chunk = pipe.read(_READ_CHUNK_BYTES)
+            chunk = read_chunk(_READ_CHUNK_BYTES)
             if not chunk:
                 return
             capture.add(chunk)
+            if activity is not None:
+                activity()
     except Exception:
         return
 
@@ -197,7 +204,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         Cancellation is honored at every wait, including while the request
         writer is blocked on a full stdin pipe (a child that never reads
         stdin): the writer is joined in bounded slices that poll both the
-        cancellation check and the request deadline, so an explicit user
+        cancellation check and the request inactivity watchdog, so an explicit user
         cancellation can never be masked into ``request_timeout`` by a
         blocked write.
         """
@@ -290,14 +297,24 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         """
         stdout = _BoundedCapture(self.max_output_bytes)
         stderr = _BoundedCapture(self.max_output_bytes)
+        activity_lock = threading.Lock()
+        last_activity = [time.monotonic()]
+
+        def mark_activity() -> None:
+            with activity_lock:
+                last_activity[0] = time.monotonic()
+
+        def idle_expired() -> bool:
+            with activity_lock:
+                return time.monotonic() - last_activity[0] >= timeout_seconds
+
         threads = [
-            threading.Thread(target=_read_pipe, args=(process.stdout, stdout), daemon=True),
-            threading.Thread(target=_read_pipe, args=(process.stderr, stderr), daemon=True),
+            threading.Thread(target=_read_pipe, args=(process.stdout, stdout, mark_activity), daemon=True),
+            threading.Thread(target=_read_pipe, args=(process.stderr, stderr, mark_activity), daemon=True),
         ]
         for thread in threads:
             thread.start()
 
-        deadline = time.monotonic() + timeout_seconds
         write_error: list[BaseException] = []
 
         def write_request() -> None:
@@ -330,7 +347,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     pass
 
         # Wait for the request writer in bounded slices: both an explicit
-        # cancellation and the request deadline must win promptly, even when
+        # cancellation and the request inactivity watchdog must win promptly, even when
         # the write itself is blocked on a full pipe.
         while writer.is_alive():
             if self._cancel_check is not None:
@@ -342,17 +359,19 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
                     raise
-            if time.monotonic() >= deadline:
+            if idle_expired():
                 _terminate_command_tree(process)
                 _interrupt_writer()
                 for thread in threads:
                     thread.join(timeout=_TERMINATE_JOIN_SECONDS)
                 raise LiveTransportError(
-                    "model request stdin write timed out",
+                    "model request stdin was idle for too long",
                     kind="request_timeout",
                     timed_out=True,
                 ) from None
             writer.join(timeout=_WRITE_JOIN_SLICE_SECONDS)
+
+        mark_activity()
 
         while True:
             if self._cancel_check is not None:
@@ -371,12 +390,12 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                 process.wait(timeout=_POLL_INTERVAL_SECONDS)
                 break
             except subprocess.TimeoutExpired:
-                if time.monotonic() >= deadline:
+                if idle_expired():
                     _terminate_command_tree(process)
                     for thread in threads:
                         thread.join(timeout=_TERMINATE_JOIN_SECONDS)
                     raise LiveTransportError(
-                        "model request timed out",
+                        "model request was idle for too long",
                         kind="request_timeout",
                         timed_out=True,
                     ) from None
