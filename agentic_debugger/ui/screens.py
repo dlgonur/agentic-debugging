@@ -406,35 +406,18 @@ class SessionSettingRow(Static):
             event.prevent_default()
             event.stop()
 
-class TimeLimitInput(Input):
-    """Inline editor whose Enter key is owned by the session screen."""
-
-    def on_key(self, event: Any) -> None:
-        if getattr(event, "key", None) == "enter":
-            self.screen._finish_time_edit(commit=True)  # type: ignore[attr-defined]
-            event.prevent_default()
-            event.stop()
-            return
-        super().on_key(event)
-
-
-class TimeLimitRow(Horizontal):
-    """A setting row with a transient inline numeric editor."""
+class TimeLimitRow(Static):
+    """A compact, keyboard-focusable time-limit setting row."""
 
     can_focus = True
 
     def __init__(self, *, row_key: str = "time_limit", **kwargs: Any) -> None:
-        super().__init__(**kwargs)
+        super().__init__("", **kwargs)
         self.row_key = row_key
         self._value = "No limit"
         self._focused = False
 
-    def compose(self) -> ComposeResult:
-        yield Static("", id="time-limit-display")
-        yield TimeLimitInput(id="time-limit-input", type="integer", placeholder="seconds")
-
     def on_mount(self) -> None:
-        self.query_one("#time-limit-input", Input).display = False
         self._render_row()
 
     def _render_row(self) -> None:
@@ -443,26 +426,11 @@ class TimeLimitRow(Horizontal):
         text.append("> " if focused else "  ", style="bold #58a6ff" if focused else "dim")
         text.append("Time limit  ", style="#8b949e")
         text.append(self._value, style="bold #ffffff" if focused else "#c9d1d9")
-        self.query_one("#time-limit-display", Static).update(text)
+        self.update(text)
 
     def set_value(self, value: Optional[int]) -> None:
         self._value = "No limit" if value is None else str(value)
         self._render_row()
-
-    def begin_edit(self) -> None:
-        display = self.query_one("#time-limit-display", Static)
-        editor = self.query_one("#time-limit-input", Input)
-        editor.value = "" if self._value == "No limit" else self._value
-        display.display, editor.display = False, True
-        editor.focus()
-
-    def end_edit(self, *, commit: bool) -> Optional[str]:
-        editor = self.query_one("#time-limit-input", Input)
-        value = editor.value.strip()
-        editor.display = False
-        self.query_one("#time-limit-display", Static).display = True
-        self.focus()
-        return value if commit else None
 
     def on_focus(self) -> None:
         self._focused = True
@@ -483,9 +451,76 @@ class TimeLimitRow(Horizontal):
             event.prevent_default()
             event.stop()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "time-limit-input":
-            self.screen._finish_time_edit(commit=True)  # type: ignore[attr-defined]
+class TimeLimitEditorInput(Input):
+    """Modal time editor input with reliable Enter submission."""
+
+    def on_key(self, event: Any) -> None:
+        if getattr(event, "key", None) == "enter":
+            self.screen.action_save()  # type: ignore[attr-defined]
+            event.prevent_default()
+            event.stop()
+            return
+
+
+class TimeLimitEditorScreen(Screen):
+    """Small flat modal for editing the optional elapsed-time limit."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "save", "Save", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        current: Optional[int],
+        on_save: Callable[[Optional[int]], None],
+        on_cancel: Callable[[], None],
+    ) -> None:
+        super().__init__()
+        self.current = current
+        self._on_save = on_save
+        self._on_cancel = on_cancel
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="time-limit-dialog"):
+            yield Static("Set time limit", id="time-limit-title")
+            yield Static("Seconds", id="time-limit-label")
+            yield TimeLimitEditorInput(
+                value="" if self.current is None else str(self.current),
+                type="integer",
+                id="time-limit-editor",
+            )
+            yield Static("Empty value means no limit.", id="time-limit-help")
+            yield Static("enter save   esc cancel", id="time-limit-hint")
+            yield Static("", id="time-limit-error")
+
+    def on_mount(self) -> None:
+        self.query_one("#time-limit-editor", Input).focus()
+
+    def action_save(self) -> None:
+        raw = self.query_one("#time-limit-editor", Input).value.strip()
+        error = self.query_one("#time-limit-error", Static)
+        if not raw:
+            self._close(None)
+            return
+        try:
+            value = int(raw)
+        except ValueError:
+            error.update("time limit must be a whole number of seconds")
+            return
+        if value < 1:
+            error.update("time limit must be at least 1 second")
+            return
+        self._close(value)
+
+    def _close(self, value: Optional[int]) -> None:
+        self.app.pop_screen()
+        self._on_save(value)
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_cancel()
 
 
 class ChoicePickerScreen(Screen):
@@ -514,21 +549,42 @@ class ChoicePickerScreen(Screen):
     def on_mount(self) -> None:
         option_list = self.query_one("#choice-picker-list", OptionList)
         for choice in self.choices:
-            text = Text(choice.title)
+            text = Text("> " if choice.value == self.current else "  ", style="#58a6ff" if choice.value == self.current else "#8b949e")
+            text.append(choice.title, style="bold #ffffff" if choice.value == self.current else "#c9d1d9")
             if choice.secondary:
-                text.append(f"  {choice.secondary}", style="dim")
+                text.append(f"\n    {choice.secondary}", style="#8b949e")
             if choice.description:
-                text.append(f"\n  {choice.description}", style="dim")
+                text.append(f"\n    {choice.description}", style="#8b949e")
             option_list.add_option(text)
         if self.choices:
             option_list.highlighted = next(
                 (i for i, choice in enumerate(self.choices) if choice.value == self.current), 0
             )
             option_list.focus()
+            self._refresh_option_markers()
         else:
             option_list.display = False
             self.mount(Static("No configured model profiles.", id="choice-picker-empty"),
                        before=self.query_one("#choice-picker-hint"))
+
+    def _option_renderable(self, index: int) -> Text:
+        choice = self.choices[index]
+        selected = index == self.query_one("#choice-picker-list", OptionList).highlighted
+        text = Text("> " if selected else "  ", style="#58a6ff" if selected else "#8b949e")
+        text.append(choice.title, style="bold #ffffff" if selected else "#c9d1d9")
+        if choice.secondary:
+            text.append(f"\n    {choice.secondary}", style="#8b949e")
+        if choice.description:
+            text.append(f"\n    {choice.description}", style="#8b949e")
+        return text
+
+    def _refresh_option_markers(self) -> None:
+        option_list = self.query_one("#choice-picker-list", OptionList)
+        for index in range(len(self.choices)):
+            option_list.replace_option_prompt_at_index(index, self._option_renderable(index))
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        self._refresh_option_markers()
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         index = getattr(event, "option_index", None)
@@ -575,13 +631,12 @@ class StartSessionScreen(Screen):
         self._task_id = self._task_options[0][1] if self._task_options else None
         self._profile_id: Optional[str] = None
         self._max_elapsed_seconds: Optional[int] = None
-        self._editing_time = False
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("[bold #79c0ff]Agentic Debugging[/]\n[bold]New debugging session[/]\n[dim]Configure the debugging run.[/]", id="start-title")
+                    yield Static("[bold #79c0ff]Agentic Debugging[/]\n[bold #79c0ff]New debugging session[/]\n[dim]Configure the debugging run.[/]", id="start-title")
                     yield SessionSettingRow("Mode", row_key="mode", id="mode-row")
                     yield SessionSettingRow("Model", row_key="model", id="model-row")
                     yield SessionSettingRow("Task", row_key="task", id="task-row")
@@ -591,7 +646,7 @@ class StartSessionScreen(Screen):
                     yield Static("", id="start-trust")
                 yield Static("s start   h history   up/down navigate   enter edit   esc back   q quit", id="start-footer")
             with VerticalScroll(id="start-context"):
-                yield Static("[bold #8b949e]SESSION SETUP[/]", id="context-title")
+                yield Static("[bold #79c0ff]SESSION SETUP[/]", id="context-title")
                 yield Static("", id="context-summary")
 
     def on_mount(self) -> None:
@@ -645,7 +700,7 @@ class StartSessionScreen(Screen):
         self._focus_row(rows[(rows.index(current) - 1) % len(rows)] if current in rows else rows[0])
 
     def _activate_row(self, row_key: str) -> None:
-        self._begin_time_edit() if row_key == "time_limit" else self._open_choice_picker(row_key)
+        self._open_time_limit_editor() if row_key == "time_limit" else self._open_choice_picker(row_key)
 
     def _choice(self, value: str, title: str, description: str = "", secondary: str = "") -> ChoiceOption:
         return ChoiceOption(value, title, description, secondary)
@@ -767,46 +822,27 @@ class StartSessionScreen(Screen):
         lines.append(f"\n[#8b949e]Ready[/]\n{ready}")
         self.query_one("#context-summary", Static).update("\n".join(lines))
 
-    def _begin_time_edit(self) -> None:
-        self._editing_time = True
-        self.query_one("#time-limit-row", TimeLimitRow).begin_edit()
+    def _open_time_limit_editor(self) -> None:
+        self.app.push_screen(TimeLimitEditorScreen(
+            current=self._max_elapsed_seconds,
+            on_save=self._time_limit_saved,
+            on_cancel=lambda: self._focus_row("time_limit"),
+        ))
 
-    def _finish_time_edit(self, *, commit: bool) -> None:
-        row = self.query_one("#time-limit-row", TimeLimitRow)
-        raw = row.end_edit(commit=commit)
-        self._editing_time = False
-        if not commit or raw is None:
-            return
-        status = self.query_one("#start-status", Static)
-        if not raw:
-            self._max_elapsed_seconds = None
-            status.update("")
-        else:
-            try:
-                value = int(raw)
-            except ValueError:
-                status.update("[red]time limit must be a whole number of seconds[/]")
-                return
-            if value < 1:
-                status.update("[red]time limit must be at least 1 second[/]")
-                return
-            self._max_elapsed_seconds = value
-            status.update("")
+    def _time_limit_saved(self, value: Optional[int]) -> None:
+        self._max_elapsed_seconds = value
         self._render_rows()
         self._update_context()
+        self._focus_row("time_limit")
 
     def action_edit(self) -> None:
-        if not self._editing_time:
-            self._activate_row(self._focused_row_key())
+        self._activate_row(self._focused_row_key())
 
     def action_confirm(self) -> None:
-        if self._editing_time:
-            self._finish_time_edit(commit=True)
-        else:
-            self.action_edit()
+        self.action_edit()
 
     def action_cancel(self) -> None:
-        self._finish_time_edit(commit=False) if self._editing_time else self.app.pop_screen()
+        self.app.pop_screen()
 
     def action_history(self) -> None:
         self.app.pop_screen()
@@ -814,15 +850,8 @@ class StartSessionScreen(Screen):
     def action_quit_app(self) -> None:
         self.app.action_quit()
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "time-limit-input":
-            self._finish_time_edit(commit=True)
-
     def _start(self) -> None:
         from agentic_debugger.application.events import SourceKind
-        if self._editing_time:
-            self._finish_time_edit(commit=True)
-            return
         status = self.query_one("#start-status", Static)
         if not self._task_id:
             status.update("[red]choose a task[/]")

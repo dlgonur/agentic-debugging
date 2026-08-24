@@ -29,6 +29,7 @@ from agentic_debugger.ui.screens import (
     HomeScreen,
     ChoicePickerScreen,
     StartSessionScreen,
+    TimeLimitEditorScreen,
     WorkspaceMode,
     WorkspaceScreen,
 )
@@ -142,13 +143,15 @@ class TestBootAndHome:
             await pilot.press("down", "enter")
             assert start._selected_policy() == "static-baseline"
 
-            # Time limit is transient input only while editing.
+            # Time limit uses the same modal language as the shared pickers.
             await pilot.press("down", "enter")
-            assert start._editing_time is True
-            start.query_one("#time-limit-input").value = "12"
+            assert isinstance(pilot.app.screen, TimeLimitEditorScreen)
+            assert pilot.app.screen.query_one("#time-limit-dialog").region.height <= pilot.app.size.height
+            pilot.app.screen.query_one("#time-limit-editor").value = "12"
             await pilot.press("enter")
             assert start._max_elapsed_seconds == 12
-            assert start.query_one("#time-limit-input").display is False
+            assert isinstance(pilot.app.screen, StartSessionScreen)
+            assert pilot.app.focused.row_key == "time_limit"
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
@@ -158,8 +161,6 @@ class TestBootAndHome:
 
             def row_text(selector: str) -> str:
                 row = start.query_one(selector)
-                if selector == "#time-limit-row":
-                    return str(row.query_one("#time-limit-display").render())
                 return str(row.render())
 
             selectors = ("#mode-row", "#task-row", "#debugger-row", "#time-limit-row")
@@ -186,6 +187,44 @@ class TestBootAndHome:
             assert row_text("#task-row").startswith("  ")
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
+
+    def test_time_limit_modal_validates_cancel_and_empty_values(self, tmp_path):
+        async def scenario(pilot):
+            start = pilot.app.screen
+            await pilot.press("down", "down", "down", "enter")
+            assert isinstance(pilot.app.screen, TimeLimitEditorScreen)
+            editor = pilot.app.screen
+            assert editor.query_one("#time-limit-dialog").region.height <= pilot.app.size.height
+
+            editor.query_one("#time-limit-editor").value = "0"
+            await pilot.press("enter")
+            assert isinstance(pilot.app.screen, TimeLimitEditorScreen)
+            assert "at least 1 second" in str(editor.query_one("#time-limit-error").render())
+            await pilot.press("escape")
+            assert start._max_elapsed_seconds is None
+            assert pilot.app.focused.row_key == "time_limit"
+
+            await pilot.press("enter")
+            editor = pilot.app.screen
+            editor.query_one("#time-limit-editor").value = "15"
+            await pilot.press("enter")
+            assert start._max_elapsed_seconds == 15
+            assert pilot.app.focused.row_key == "time_limit"
+
+            await pilot.press("enter")
+            editor = pilot.app.screen
+            editor.query_one("#time-limit-editor").value = ""
+            await pilot.press("escape")
+            assert start._max_elapsed_seconds == 15
+            assert pilot.app.focused.row_key == "time_limit"
+
+            await pilot.press("enter")
+            editor = pilot.app.screen
+            editor.query_one("#time-limit-editor").value = ""
+            await pilot.press("enter")
+            assert start._max_elapsed_seconds is None
+
+        run_headless(make_app(tmp_path), scenario, size=(60, 20))
 
     def test_new_session_wide_context_and_picker_geometry(self, tmp_path):
         async def scenario(pilot):
