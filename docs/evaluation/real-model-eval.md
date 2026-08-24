@@ -249,16 +249,17 @@ and canonical immutability true, and 54-event replay terminal `Done`. Its
 Frozen evidence is in
 `experiments/pdb_capability_ladder/level18-gpt-oss-v1/`.
 
-The frozen 32/100 SWE-rebench V2 rung, `audreyr__cookiecutter-967`, produced
-the first valid failure boundary. V1 and V2 stopped on provider-context and
-proof-binding harness defects and are not model results. V3 completed 24
-provider calls with zero retries/errors, the exact PDB lifecycle, an
-evidence-bound diagnosis, model patch, controller `Done`, and local verifier
-`RESOLVED`. The official pinned Docker evaluator rejected the candidate (F2P
-0/5; P2P not passed 9/9). The raw model diff required only terminal-newline
-serialization normalization for Git; after that normalization the official
-failure was an ordinary candidate failure. Hidden identities and patches were
-never model-visible, and the task was not changed after the hidden outcome.
+The historical frozen 32/100 SWE-rebench V2 rung, `audreyr__cookiecutter-967`,
+was initially recorded as the first valid failure boundary. V1 and V2 stopped
+on provider-context and proof-binding harness defects and are not model
+results. V3 completed 24 provider calls with zero retries/errors, the exact
+PDB lifecycle, an evidence-bound diagnosis, model patch, controller `Done`, and
+local verifier `RESOLVED`. The official pinned Docker evaluator recorded
+rejection of the candidate (F2P 0/5; P2P not passed 9/9). Later
+candidate-artifact forensics established that official test execution was not
+proven for the raw serialization, so the `0/5, 9/9` shape is not a clean
+semantic model failure. Hidden identities and patches were never model-visible,
+and the task was not changed after the hidden outcome.
 `Understand` remains unavailable until the unique successful pre-diagnosis
 observations satisfy the same paused-production-frame checks as the
 authoritative patch gate and the session has stopped. A rejected debugger

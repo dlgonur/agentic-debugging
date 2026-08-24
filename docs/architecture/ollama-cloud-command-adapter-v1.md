@@ -10,8 +10,8 @@ adapter with accepted model profiles
 | `gpt-oss:20b-cloud` | `gpt-oss:20b` | `gpt-oss:20b` | live_verified — historically qualified streaming `think: high` |
 | `gpt-oss:120b-cloud` | `gpt-oss:120b` | `gpt-oss:120b` | live_verified — retained bounded qualification, `think: high` |
 | `nemotron-3-nano:30b-cloud` | `nemotron-3-nano:30b` | `nemotron-3-nano:30b` | live_verified — prior streamed qualification (task success not required) |
-| `glm-5.1:cloud` | `glm-5.1` | `glm-5.1` | live_verified — retained bounded generic-stream qualification |
-| `glm-5.2:cloud` | `glm-5.2` | `glm-5.2` | live_verified — accepted Transport Qualification V2; no-thinking 20/60 profile; Level-32 eligible, treatment not yet run |
+| `glm-5.1:cloud` | `glm-5.1` | `glm-5.1` | live_verified — retained bounded generic-stream qualification; Level-32 matrix authoritative RESOLVED (2026-08-24) |
+| `glm-5.2:cloud` | `glm-5.2` | `glm-5.2` | live_verified — accepted Transport Qualification V2; no-thinking 20/60 profile; Level-32 repaired treatment authoritative RESOLVED (2026-08-24) |
 | `deepseek-v4-flash:cloud` | `deepseek-v4-flash` | `deepseek-v4-flash:0731` | live_verified — retained bounded generic-stream qualification |
 | `deepseek-v4-pro:cloud` | `deepseek-v4-pro` | `deepseek-v4-pro:0813` | live_verified — retained bounded generic-stream qualification |
 | `kimi-k2.6:cloud` | `kimi-k2.6` | `kimi-k2.6` | live_verified — retained bounded qualification |

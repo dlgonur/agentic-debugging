@@ -19,10 +19,21 @@ Rules:
   `workspace-derived-official-git-diff-v1`. GLM 5.1 and GLM 5.2 independently
   reached authoritative F2P 5/5 and P2P failed 0/9. GPT-OSS 120B reached
   official tests but was a semantic rejection at F2P 4/5 and P2P failed 1/9;
-  the other 12 attempted models were protocol failures. No implementation or
-  prompt change occurred, no run was infrastructure-blocked, and no
-  candidate-materialization failure occurred. Detailed report:
+  the other 12 attempted models were protocol failures. Fourteen reached
+  exact-PDB proof and seven reached proven official tests; six of those seven
+  reached at least F2P 4/5. No implementation or prompt change occurred, no
+  run was infrastructure-blocked, and no candidate-materialization failure
+  occurred. Detailed report:
   `analysis/level32_repaired_model_matrix_20260824.md`.
+
+## Current project direction (2026-08-24)
+
+- [x] **Capability-ladder stopping point — COMPLETE.** Level-32 evidence is
+  sufficient for the current research cycle. Further capability escalation is
+  paused/closed for now; no harder rung or remaining model queue is active.
+- [ ] **Next active direction — Local Application / UI and UX refinement.**
+  Keep this high-level pending owner screenshot review; no detailed UI roadmap
+  is opened in the tracker yet.
 
 ---
 
@@ -247,18 +258,22 @@ Rules:
   observations, `COMPLETED/RESOLVED`, private checks true,
   cleanup/immutability true, 54-event replay `Done`, 165.463 s elapsed. Frozen
   evidence is at `experiments/pdb_capability_ladder/level18-gpt-oss-v1/`.
-  This remains one ordinal task; the later 32/100 rung located the first valid
-  failure boundary for this treatment.
-- [x] **Exact-PDB capability ladder — 32/100 boundary characterization** —
-  COMPLETE / NOT ACCEPTED (2026-08-21). On frozen SWE-rebench V2
+  This remains one ordinal task; the later 32/100 rung initially appeared to
+  locate a failure boundary, but subsequent candidate-artifact forensics
+  showed that its raw official-test interpretation was not proven.
+- [x] **Historical exact-PDB capability ladder — 32/100 boundary
+  characterization — COMPLETE / NOT ACCEPTED (2026-08-21).** On frozen
+  SWE-rebench V2
   `audreyr__cookiecutter-967`, V1 stopped on duplicated provider context and V2
   on an arbitrary host-path local binding; both are infrastructure-invalid and
   separately retained. V3 completed 24 calls/attempts, zero retries/provider
   errors, exact PDB proof, model patch, controller `Done`, local verifier
   `RESOLVED`, cleanup/immutability, and 63-event replay. The official pinned
-  Docker verifier rejected the candidate (F2P 0/5; P2P not passed 9/9), making
-  V3 a genuine model repair failure rather than a harness failure. No task
-  mutation or hidden-informed V4 followed. Canonical evidence is under
+  Docker verifier recorded rejection of the candidate (F2P 0/5; P2P not passed
+  9/9). Later candidate-artifact forensics established that official test
+  execution was not proven for the raw serialization, so this is not a clean
+  semantic model failure. No task mutation or hidden-informed V4 followed.
+  Canonical evidence is under
   `experiments/pdb_capability_ladder/level32-cookiecutter-967-gpt-oss-v3/`.
 
 ## 0. Daily Requirement
@@ -306,8 +321,8 @@ Rules:
 
 - [x] 1.2.0 Download Tier 2 papers into research/papers/tier2_core_sections/.
 - [x] 1.2.1 Read LDB / Debug Like a Human.
-- [ ] 1.2.2 Read Self-Debugging. (**SUPERSEDED — excluded from the accepted bounded review.** `docs/research/llm-debugging.md` §3.5 records no tracked primary note and excludes unverified claims (`3c23b6e`); not in the S7 20-work scope. Optional frontier reading only — **not current work**.)
-- [ ] 1.2.3 Read DebugBench. (**SUPERSEDED — excluded from the accepted bounded review.** Same treatment as 1.2.2: no tracked primary note (`docs/research/llm-debugging.md` §3.5); not in the S7 20-work scope. Optional frontier reading only — **not current work**.)
+- 1.2.2 Read Self-Debugging. (**SUPERSEDED — excluded from the accepted bounded review.** `docs/research/llm-debugging.md` §3.5 records no tracked primary note and excludes unverified claims (`3c23b6e`); not in the S7 20-work scope. Optional frontier reading only — **not current work**.)
+- 1.2.3 Read DebugBench. (**SUPERSEDED — excluded from the accepted bounded review.** Same treatment as 1.2.2: no tracked primary note (`docs/research/llm-debugging.md` §3.5); not in the S7 20-work scope. Optional frontier reading only — **not current work**.)
 - [x] 1.2.4 Summarize how LLM debugging differs from static code repair. (`docs/research/llm-debugging.md` §5 records the evidence acquisition, hypothesis revision, causal target, tool, validation, and data distinctions.)
 
 ### 1.3 Subtasks / Log
@@ -316,8 +331,8 @@ Rules:
 - [x] 1.3.2 Verify debug-gym.
 - [x] 1.3.3 Verify Debug2Fix. (Verified via the S7 closeout `677992f` — dedicated Debug2Fix section: atomic `Debug Start Session` operation, debug-subagent design, 2026 preprint evidence tier.)
 - [x] 1.3.4 Verify FramePilot / ADI. (Verified via the S7 closeout `677992f` — dedicated ADI/FramePilot section: agent-centric state-transition interface, FSE 2026 peer-reviewed tier, raw-PDB vs ADI controlled numbers.)
-- [ ] 1.3.5 Verify EnIGMA. (**SUPERSEDED — not in the accepted S7 20-work scope**; CTV-006 remains excluded from factual claims (`docs/research/automated-debugging.md`). **Not current work.**)
-- [ ] 1.3.6 Verify SWE-Doctor. (**SUPERSEDED — not in the accepted S7 20-work scope**; CTV-005 remains excluded from factual claims (`docs/research/automated-debugging.md`). **Not current work.**)
+- 1.3.5 Verify EnIGMA. (**SUPERSEDED — not in the accepted S7 20-work scope**; CTV-006 remains excluded from factual claims (`docs/research/automated-debugging.md`). **Not current work.**)
+- 1.3.6 Verify SWE-Doctor. (**SUPERSEDED — not in the accepted S7 20-work scope**; CTV-005 remains excluded from factual claims (`docs/research/automated-debugging.md`). **Not current work.**)
 - [x] 1.3.7 Decide which frontier systems are core evidence and which are only supporting references. (Decided by the S7 closeout evidence-tier system `677992f` — peer-reviewed vs preprint/environment tiers.)
 
 ### 1.4 Subtasks / Log
@@ -376,7 +391,7 @@ Rules:
 ## 4. Phase 4 — RAG and Agent Tools
 
 - [x] 4.1 Build RAG system over repository code, tests, issue descriptions, and error messages. (Completed 2026-08-06 — deterministic repository-native lexical RAG v1, `agentic_debugger/rag/`: fixture-scoped default + declared corpus-root/repo mode; source/test/issue/failure documents; safe task/issue projection with unit-tested oracle exclusion; explicit exclusion rules; `repository-index-v1`/`retrieval-result-v1` strict artifacts; revision binding; documented bounds; fail-closed. Infrastructure completion only; no RAG performance claim. See `docs/architecture/repository-rag.md`, `docs/evaluation/rag-comparison.md`.)
-- [ ] 4.2 Combine fine-tuned model with RAG. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — optional `rag_context` injection ready at the demo/model-adapter and `LiveModelAdapter` boundaries (additive; default request/case byte-identity proven; 20 KB public-request bound enforced pre-transport); frozen cp118+RAG treatment produced 10/40 valid pairs; primary correctness **NOT_EVALUATED**; no RAG success/failure claim. **Not an active future task.** Matches TODO Phase 4.)
+- [x] 4.2 Combine fine-tuned model with RAG. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — optional `rag_context` injection ready at the demo/model-adapter and `LiveModelAdapter` boundaries (additive; default request/case byte-identity proven; 20 KB public-request bound enforced pre-transport); frozen cp118+RAG treatment produced 10/40 valid pairs; primary correctness **NOT_EVALUATED**; no RAG success/failure claim. **Not an active future task.** Matches TODO Phase 4.)
 - [x] 4.3 Develop file-read, code-search, test-run, and patch-apply tools.
 - [x] 4.4 Create the debugging agent.
 - [x] 4.5 Make the model localize faults, identify root cause, and generate patches. (PARTIAL → DONE (R1-R6 phase, 2026-08-11/13) — R1 breakpoint/stack, R2 multi-turn dynamic loop + diagnosis, R3 debugger-informed patch → independent verifier RESOLVED, R4 model-generated regression test; R5 base-14B 5/5 clean holdout; R6 fine-tuned 7B 8/8 disjoint validation. Historical D1/S2 bounded-negative (2026-08-10/11) preserved, superseded.)

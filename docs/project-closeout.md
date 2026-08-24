@@ -1,10 +1,11 @@
-# Agentic Debugging — Project Closeout (current, 2026-08-13)
+# Agentic Debugging — Project Closeout (current, 2026-08-24)
 
 **Project:** Academic Agentic Debugging Internship Project
 **Owner:** Onur
 **Execution control:** Main FirstMate
-**Document date:** 2026-08-13
-**Docs baseline HEAD:** `34cce329b5e6e7cf42531d8e609774c7608b67cb`
+**Document date:** 2026-08-24
+**Accepted docs baseline HEAD before this reconciliation:**
+`70804d226f7e2d014e1edfa0760c2758e92acf94`
 **Supersedes:** `docs/archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
 snapshot) and the earlier `docs/archive/reports/final-report-v1.md`
@@ -100,23 +101,47 @@ immutability true, 54-event replay `Done`. These are three single-task rung
 results, not a success rate, generalization claim, matched model comparison,
 or causal PDB-effectiveness result.
 
-The subsequently frozen 32/100 rung used SWE-rebench V2
+The subsequently frozen historical 32/100 rung used SWE-rebench V2
 `audreyr__cookiecutter-967`. V1 and V2 are retained infrastructure-invalid
 treatments. V3 completed exact PDB, evidence-bound diagnosis, patching,
 controller `Done`, local verifier `RESOLVED`, cleanup, and replay in 24
 calls/attempts with zero retries/provider errors. The official pinned Docker
-verifier then rejected the model patch (F2P 0/5; P2P not passed 9/9). This is a
-valid negative model result and locates a descriptive one-task boundary between
-accepted 18/100 and failed 32/100. It is not a success rate, generalization
-claim, matched-model comparison, or causal PDB result. No hidden-informed task
-mutation or V4 followed; canonical evidence is under
+verifier then recorded rejection of the raw model patch (F2P 0/5; P2P not
+passed 9/9). At that historical point this located a descriptive one-task
+boundary between accepted 18/100 and failed 32/100. Later candidate-artifact
+forensics established that official test execution was not proven for the raw
+serialization, so the `0/5, 9/9` shape is not a clean semantic model failure.
+It is not a success rate, generalization claim, matched-model comparison, or
+causal PDB result. No hidden-informed task mutation or V4 followed; canonical
+evidence is under
 `experiments/pdb_capability_ladder/`.
+
+**2026-08-24 status update:** the Level-32 candidate-artifact boundary repair,
+historical candidate replay, GLM 5.2 V10/V11 repaired-treatment records, and
+the complete repaired model matrix are now closed evidence. Fresh GLM 5.2 V11
+authoritatively resolved the task under
+`workspace-derived-official-git-diff-v1` (exact PDB proof, canonical semantic
+equivalence, official application, proven official execution, F2P 5/5, P2P
+failed 0/9). GLM 5.1 independently reached the same authoritative resolution
+in the 15-model matrix. Across 15 eligible models run exactly once under one
+homogeneous repaired treatment, 14 reached exact-PDB proof, 7 reached proven
+official tests, 6 of those 7 reached at least F2P 4/5, 2 resolved, 1 was a
+semantic rejection, and 12 were protocol failures. Candidate materialization
+was no longer the systemic blocker. Historical raw runs remain unchanged;
+their later forensic reclassification and repaired-treatment results are
+recorded in the tracked analysis files named by the results index.
+
+The capability-ladder objective is sufficient for the current research cycle;
+further difficulty escalation is paused/closed for now. The next active project
+direction is **Local Application / UI and UX refinement**, pending owner
+screenshot review. No detailed UI roadmap is implied by this status.
 
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
 ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT
 INCOMPLETE DUE HARDWARE; R1-R6 DOCS CLOSEOUT COMMITTED, PUSHED, AND
-INTEGRATED TO MAIN**
+INTEGRATED TO MAIN; LEVEL-32 REPAIRED MATRIX COMPLETE; CAPABILITY ESCALATION
+PAUSED; NEXT DIRECTION LOCAL APPLICATION / UI AND UX REFINEMENT**
 
 ---
 
@@ -246,7 +271,7 @@ structured JSON trace export.
   `54828db1d5dec4e95105f1c1d07ba5dd7518060c`, R6 preserved implementation/
   evidence `4610785713832daaba6aa133374506a2d200391a`, professor trace
   deliverable `c9afe377db3f53229755532751b485fc2a13a4e7`, docs structure
-  baseline `34cce329b5e6e7cf42531d8e609774c7608b67cb`.
+  historical docs-structure baseline `34cce329b5e6e7cf42531d8e609774c7608b67cb`.
 - Frozen R6 evidence capsule:
   `experiments/r6_debugger_training/runs/frozen/` (+
   `capsule_manifest.json`); raw R5.9 evidence directory
@@ -267,7 +292,8 @@ remotely).
 
 Not in current scope: resuming the R6 final five-task holdout (closed
 boundary — INCOMPLETE_HARDWARE_STOP), DPO, RAG correctness campaigns,
-BugsInPy execution (license-gated), further new model experiments. The
+BugsInPy execution (license-gated), or further capability-ladder/model
+escalation in the current cycle. The
 2026-08-18 Nemotron capability probe is completed closed evidence, not an
 open campaign.
 

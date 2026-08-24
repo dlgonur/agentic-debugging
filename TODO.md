@@ -6,9 +6,17 @@
 eligible `live_verified` models ran exactly once, sequentially, under the
 homogeneous `workspace-derived-official-git-diff-v1` treatment. GLM 5.1 and
 GLM 5.2 were authoritative resolutions; GPT-OSS 120B was a semantic rejection;
-the remaining 12 attempted models were protocol failures. There were no
-candidate-materialization failures or infrastructure blocks. The durable
-leaderboard is `analysis/level32_repaired_model_matrix_20260824.md`.
+the remaining 12 attempted models were protocol failures. Fourteen reached
+exact-PDB proof, seven reached proven official tests, and six of those seven
+reached at least F2P 4/5. There were no candidate-materialization failures or
+infrastructure blocks. The durable leaderboard is
+`analysis/level32_repaired_model_matrix_20260824.md`.
+
+**Current project direction (2026-08-24):** The capability-ladder evidence is
+sufficient for the current research cycle. Further capability escalation is
+paused/closed for now. The next active direction is **Local Application / UI
+and UX refinement**, pending owner screenshot review; no detailed UI roadmap is
+opened here.
 
 **2026-08-24 Level-32 repaired authoritative treatment — COMPLETE / RESOLVED.**
 Fresh GLM 5.2 V11 under
@@ -49,16 +57,18 @@ task semantics; no fifth model is authorized in this goal. Full evidence is
 in `experiments/pdb_capability_ladder/` and `_ai-review/level32-model-
 escalation-v1/`.
 
-**2026-08-21 exact-PDB 32/100 boundary — COMPLETE / NOT ACCEPTED.** The frozen
+**Historical 2026-08-21 exact-PDB 32/100 boundary — COMPLETE / NOT ACCEPTED;
+superseded as current direction by the repaired treatment above.** The frozen
 SWE-rebench V2 `audreyr__cookiecutter-967` task was executed with the same
 `gpt-oss:20b-cloud` route. V1 and V2 are retained infrastructure-invalid
 treatments. V3 completed the real exact-PDB path, 24 calls/attempts, zero
 retries/provider errors, controller `Done`, local verifier `RESOLVED`, cleanup,
 immutability, and replay. The pinned official Docker verifier rejected the
 model-authored patch: F2P 0/5 and P2P not passed 9/9. No hidden-informed V4 was
-run. The current model's descriptive single-task boundary is therefore between
-accepted 18/100 and failed 32/100. A stronger-model comparison on the same
-frozen rung is the next optional experiment and requires a new identity.
+run. The current model's descriptive single-task boundary was therefore
+between accepted 18/100 and failed 32/100 at that historical point. The later
+repaired treatment and model matrix supersede that as the current project
+direction; no harder rung is currently queued.
 
 **2026-08-21 exact-PDB capability ladder through 18/100 — COMPLETE.** After the
 accepted 6/100 and 12/100 rungs, the same `gpt-oss:20b-cloud` route completed
@@ -70,8 +80,9 @@ real start/stack/locals/next/stop evidence and repaired a stale raw value in a
 three-function normalize/convert/retry-expand pipeline. Its 26,821 activity
 frames and 121,411 thinking bytes were progress only; thinking text was not
 stored or granted action authority. Tracked raw evidence and state hashes are
-under `experiments/pdb_capability_ladder/`. The later 32/100 rung located the
-first valid failure boundary for this treatment.
+under `experiments/pdb_capability_ladder/`. The later 32/100 rung initially
+appeared to locate a failure boundary; subsequent candidate-artifact forensics
+showed that its raw official-test interpretation was not proven.
 
 **2026-08-21 exact-PDB single-task live repair proof — COMPLETE.** The accepted
 product runtime route (`gpt-oss:20b-cloud` through Ollama 0.32.15 and Local
@@ -252,8 +263,8 @@ the candidate (`_ai-review/R1-R6-DOCS-CLOSEOUT-FIRSTMATE.zip`) **ACCEPTED**
 integrated to main by the Final Git operator. At the accepted Local
 Application V1 closeout, owner Git evidence showed main == origin/main at
 `387a100` — the accepted pre-reconciliation baseline (docs baseline
-`34cce329` and R1-R6 milestone commits `c842d69`…`c9afe37` on main; Task-8
-branch deleted locally and remotely).
+historical docs-structure baseline `34cce329` and R1-R6 milestone commits
+`c842d69`…`c9afe37` on main; Task-8 branch deleted locally and remotely).
 
 DPO (CLOSED / NOT JUSTIFIED), RAG correctness (S4 PARTIAL / NOT_EVALUATED)
 and BugsInPy execution (license-gated) remain closed and are not reopened
@@ -454,7 +465,7 @@ araştırma projesinin tamamlandığı anlamına gelmez.
 ## Phase 4 — RAG and Agent Tools
 
 - [x] Repository kodları, testler, issue açıklamaları ve hata mesajları için RAG sistemi kur. (Tamamlandı 2026-08-06 — deterministik repository-native lexical RAG v1: fixture-scoped default + declared corpus-root modu; source/test/issue/failure dokümanları; oracle-projeksiyon dışlama; explicit exclusion kuralları; `repository-index-v1`/`retrieval-result-v1` strict artifact'ları; revision binding; budget'lar; fail-closed. Bu bir altyapı tamamlamasıdır; RAG'ın model performansına katkısı iddia edilmez. bkz. docs/architecture/repository-rag.md, docs/evaluation/rag-comparison.md.)
-- [ ] Fine-tuned modeli RAG sistemiyle birleştir. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — frozen cp118+RAG treatment 10/40 geçerli pair üretti (frozen manifest sırasının ilk 10'u), kampanya compute fezibility nedeniyle durduruldu; primary correctness **NOT_EVALUATED**; RAG success/failure iddiası yok. Aktif gelecek görevi değildir.)
+- [x] Fine-tuned modeli RAG sistemiyle birleştir. (**CLOSED — PARTIAL / COMPUTE-CONSTRAINED** 2026-08-11 — frozen cp118+RAG treatment 10/40 geçerli pair üretti (frozen manifest sırasının ilk 10'u), kampanya compute fezibility nedeniyle durduruldu; primary correctness **NOT_EVALUATED**; RAG success/failure iddiası yok. Aktif gelecek görevi değildir.)
 - [x] Modelin kullanacağı dosya okuma, kod arama, test çalıştırma ve patch uygulama araçlarını geliştir. (Tamamlandı — deterministic file-read/code-search/test-run/patch-apply tools; bkz. docs/project-tracker.md Task 2-3.)
 - [x] Debugging agentini oluştur. (Tamamlandı — controller state machine ve Task 9 uçtan uca demonstration; bkz. docs/project-tracker.md.)
 - [x] Modelin hata konumunu bulmasını, root cause belirlemesini ve patch üretmesini sağla. (PARTIAL → DONE (R1-R6 phase, 2026-08-11/13) — repaired interface altında gerçek model: R1 breakpoint/stack, R2 multi-turn dynamic loop + diagnosis, R3 debugger-informed patch → independent verifier RESOLVED, R4 model-generated regression test; R5 base-14B 5/5 clean holdout; R6 fine-tuned 7B 8/8 disjoint validation. Historical bounded-negative (D1/S2, 2026-08-10/11) korunur; static-only gcd RESOLVED da korunur.)

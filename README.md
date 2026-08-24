@@ -42,8 +42,9 @@ new treatment and does not rewrite historical runs. Roadmap notes live in
   private checks true, cleanup/immutability true, replay `Done`. The tracked
   raw evidence and model patch are in
   [`experiments/pdb_capability_ladder/`](experiments/pdb_capability_ladder/README.md).
-  This advanced one ordinal rung only; the later frozen 32/100 run located the
-  first valid failure boundary for this treatment.
+  This advanced one ordinal rung only; the later frozen 32/100 run initially
+  appeared to locate a failure boundary, but the subsequent candidate-artifact
+  repair showed that its raw official-test interpretation was not proven.
 - **Exact-PDB capability ladder, 18/100 rung** (2026-08-21): COMPLETE on
   `pdb-required-multistage-units-008`. GPT-OSS used the real
   start/stack/locals/next/stop path, observed the converted intermediate value,
@@ -74,10 +75,18 @@ new treatment and does not rewrite historical runs. Roadmap notes live in
   `analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
 - **Level-32 repaired model matrix** (2026-08-24): COMPLETE — all 15 current
   live-verified aliases ran exactly once sequentially under the frozen repaired
-  transport. GLM 5.1 and GLM 5.2 independently resolved the official task;
-  GPT-OSS 120B was a semantic rejection and 12 models were protocol failures.
-  No code or prompt changes were made. Detailed leaderboard:
+  transport. Fourteen reached exact-PDB proof; seven reached proven official
+  tests; six of those seven reached at least F2P 4/5. GLM 5.1 and GLM 5.2
+  independently resolved the official task; GPT-OSS 120B was a semantic
+  rejection and 12 models were protocol failures. No code or prompt changes
+  were made, and candidate materialization was no longer the systemic blocker.
+  Detailed leaderboard:
   [`analysis/level32_repaired_model_matrix_20260824.md`](analysis/level32_repaired_model_matrix_20260824.md).
+- **Capability-ladder stopping point and next direction** (2026-08-24): the
+  Level-32 evidence is sufficient for the current research cycle. Capability
+  escalation is paused/closed for now; the next active project direction is
+  **Local Application / UI and UX refinement**, pending owner screenshot
+  review.
 - **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
   evidence. After the multi-model Ollama Cloud generalization, selected
   `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated
