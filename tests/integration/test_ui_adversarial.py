@@ -192,6 +192,7 @@ class TestReplayAdversarial:
         async def scenario(pilot):
             # the directory disappears between the listing and the open
             shutil.rmtree(session_dir)
+            await pilot.press("escape")
             await pilot.press("enter")
             # stays on home with an error notification; no crash
             await pilot.pause()
@@ -221,6 +222,7 @@ class TestReplayAdversarial:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
+            await pilot.press("escape")
             await pilot.press("enter")
             workspace = pilot.app.screen
             workspace.action_replay_end()
@@ -273,6 +275,7 @@ class TestReplayAdversarial:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
+            await pilot.press("escape")
             await pilot.press("enter")
             workspace = pilot.app.screen
             workspace.action_replay_end()

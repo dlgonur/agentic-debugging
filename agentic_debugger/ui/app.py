@@ -156,8 +156,8 @@ def make_session_id() -> str:
 class LocalApplicationV1(App):
     """The full-screen Local Application V1 TUI."""
 
-    TITLE = "Agentic Debugging — Local Application V1"
-    SUB_TITLE = "replay-first debugging session application"
+    TITLE = "Agentic Debugging"
+    SUB_TITLE = "Start a debugging session"
     CSS_PATH = "app.tcss"
 
     BINDINGS = [
@@ -221,7 +221,12 @@ class LocalApplicationV1(App):
     # -- boot ---------------------------------------------------------------
 
     def on_mount(self) -> None:
+        # History remains the base navigation surface, but a new debugging
+        # session is the product's primary first-run action.
         self.push_screen(HomeScreen())
+        self.push_screen(
+            StartSessionScreen(task_options=list(self.curated_task_options()))
+        )
 
     def on_unmount(self) -> None:
         # App teardown must never orphan a live worker: bounded cooperative

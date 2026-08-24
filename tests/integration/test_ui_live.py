@@ -286,7 +286,8 @@ class TestStartSessionScreen:
             )
             start_screen = pilot.app.screen
             task_select = start_screen.query_one("#task-select")
-            assert len(task_select._options) == 5  # canonical curated catalog
+            assert len(task_select._options) == len(pilot.app.curated_task_options())
+            assert len(task_select._options) >= 5  # canonical curated catalog
             # choose a task + policy through the widget API (user-equivalent)
             from textual.widgets import Select
 

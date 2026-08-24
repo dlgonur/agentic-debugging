@@ -16,6 +16,7 @@ from typing import Any, Optional, Tuple
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
+from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -225,7 +226,7 @@ def render_view_header(
 
 
 class HomeScreen(Screen):
-    """App-owned run history: the primary navigation surface."""
+    """App-owned run history: the secondary/replay navigation surface."""
 
     BINDINGS = [
         Binding("n", "start_session", "New session"),
@@ -237,8 +238,8 @@ class HomeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[bold #58a6ff]Agentic Debugging — Local Application V1[/]\n"
-            "[dim]App-owned session history[/]",
+            "[bold #58a6ff]Agentic Debugging[/]\n"
+            "[dim]Session history[/]",
             id="home-title",
         )
         yield Static("", id="home-empty", classes="empty-state")
@@ -379,43 +380,84 @@ class StartSessionScreen(Screen):
         self._mode = self.MODE_DETERMINISTIC
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            "[bold #58a6ff]Start session[/]\n"
-            "[dim]Deterministic offline execution or a configured command "
-            "model.[/]",
-            id="start-title",
-        )
-        yield Label("Mode")
-        yield Select(
-            id="mode-select",
-            options=[
-                ("deterministic offline", self.MODE_DETERMINISTIC),
-                ("configured command model", self.MODE_CONFIGURED),
-            ],
-            allow_blank=False,
-            value=self.MODE_DETERMINISTIC,
-        )
-        yield Static("", id="config-info")
-        yield Label("Task")
-        yield Select(id="task-select", options=self._task_options, allow_blank=False)
-        yield Label("Policy")
-        yield Select(
-            id="policy-select",
-            options=[
-                ("static baseline (debugger disabled)", "static-baseline"),
-                ("pdb on uncertainty (debugger gated)", "pdb-on-uncertainty"),
-            ],
-            allow_blank=False,
-            value="pdb-on-uncertainty",
-        )
-        yield Label("Command model profile", id="profile-label")
-        yield Select(id="profile-select", options=[], allow_blank=True)
-        yield Label("Elapsed budget (seconds, optional)")
-        yield Input(id="elapsed-input", placeholder="empty = no limit", type="integer")
-        yield Button("Start session", id="start-button", variant="primary")
-        yield Static("", id="start-error")
-        yield Static(
-            "[dim]escape: back to history[/]", id="start-hint"
+        yield VerticalScroll(
+            Container(
+                Static(
+                    "[bold #79c0ff]Agentic Debugging[/]\n"
+                    "[bold]New debugging session[/]\n"
+                    "[dim]Configure how the debugging run should start.[/]",
+                    id="start-title",
+                ),
+                Horizontal(
+                    Vertical(
+                        Static("EXECUTION", classes="section-heading"),
+                        Label("Mode", classes="field-label"),
+                        Select(
+                            id="mode-select",
+                            options=[
+                                ("Deterministic offline", self.MODE_DETERMINISTIC),
+                                ("Configured command model", self.MODE_CONFIGURED),
+                            ],
+                            allow_blank=False,
+                            value=self.MODE_DETERMINISTIC,
+                        ),
+                        Static("", id="config-info"),
+                        classes="field-section",
+                    ),
+                    Vertical(
+                        Static("TARGET", classes="section-heading"),
+                        Label("Task", classes="field-label"),
+                        Select(
+                            id="task-select",
+                            options=self._task_options,
+                            allow_blank=False,
+                        ),
+                        classes="field-section",
+                    ),
+                    classes="field-row",
+                ),
+                Horizontal(
+                    Vertical(
+                        Static("DEBUGGING", classes="section-heading"),
+                        Label("Policy", classes="field-label"),
+                        Select(
+                            id="policy-select",
+                            options=[
+                                ("Static baseline", "static-baseline"),
+                                ("Debugger on uncertainty", "pdb-on-uncertainty"),
+                            ],
+                            allow_blank=False,
+                            value="pdb-on-uncertainty",
+                        ),
+                        classes="field-section",
+                    ),
+                    Vertical(
+                        Static("LIMITS", classes="section-heading"),
+                        Label("Time limit (optional)", classes="field-label"),
+                        Input(
+                            id="elapsed-input",
+                            placeholder="No limit",
+                            type="integer",
+                        ),
+                        classes="field-section",
+                    ),
+                    classes="field-row",
+                ),
+                Horizontal(
+                    Label("Model profile", id="profile-label", classes="field-label"),
+                    Select(id="profile-select", options=[], allow_blank=True),
+                    id="profile-row",
+                ),
+                Horizontal(
+                    Button("Start debugging", id="start-button", variant="primary"),
+                    Button("History", id="history-button", variant="default"),
+                    classes="start-actions",
+                ),
+                Static("", id="start-error"),
+                Static("", id="start-hint"),
+                id="start-card",
+            ),
+            id="start-scroll",
         )
 
     def on_mount(self) -> None:
@@ -450,7 +492,9 @@ class StartSessionScreen(Screen):
         info = self.query_one("#config-info", Static)
         if self._mode == self.MODE_DETERMINISTIC:
             info.update("")
+            info.display = False
             return
+        info.display = True
         lines: list[str] = []
         if self._config_error is not None:
             lines.append(f"[red]configuration error: {_markup_escape(self._config_error)}[/]")
@@ -465,28 +509,15 @@ class StartSessionScreen(Screen):
         info.update("\n".join(lines) if lines else "[dim]no configured profiles[/]")
 
     def _render_trust_hint(self) -> None:
-        """Mode-aware security/trust-boundary wording (Blocker F).
-
-        Rendered in the bottom hint (below the Start button) so it never
-        pushes the button off-screen at the accepted compact 80x24 size.
-        Deterministic mode keeps its truthful offline claim; configured mode
-        states that the child is trusted user configuration and that V1 does
-        NOT enforce child-process network isolation (no umbrella "no
-        network" promise covers the configured command subprocess).
-        """
+        """Render concise, truthful help for the selected execution mode."""
         hint = self.query_one("#start-hint", Static)
         if self._mode == self.MODE_CONFIGURED:
             hint.update(
-                "[dim]escape: back · configured command = trusted user "
-                "configuration; V1 does not enforce child-process network "
-                "isolation (provide it externally if required)[/]"
+                "[dim]Configured commands are trusted user configuration. "
+                "The app does not enforce child-process network isolation.[/]"
             )
         else:
-            hint.update(
-                "[dim]escape: back · deterministic mode: application-"
-                "controlled offline execution, no provider/network "
-                "requirement[/]"
-            )
+            hint.update("[dim]Runs locally without a configured model (offline).[/]")
 
     def _refresh_mode(self) -> None:
         """Apply the selected mode: show/hide fields and gate Start.
@@ -498,10 +529,12 @@ class StartSessionScreen(Screen):
         mode = str(mode_select.value) if mode_select.value is not Select.BLANK else self.MODE_DETERMINISTIC
         self._mode = mode
         configured = mode == self.MODE_CONFIGURED
+        profile_row = self.query_one("#profile-row", Horizontal)
         profile_label = self.query_one("#profile-label", Label)
         profile_select = self.query_one("#profile-select", Select)
         button = self.query_one("#start-button", Button)
         if configured:
+            profile_row.display = True
             profile_label.display = True
             profile_select.display = True
             if not self._profiles:
@@ -510,6 +543,7 @@ class StartSessionScreen(Screen):
             else:
                 button.disabled = False
         else:
+            profile_row.display = False
             profile_label.display = False
             profile_select.display = False
             button.disabled = False
@@ -528,6 +562,8 @@ class StartSessionScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "start-button":
             self._start()
+        elif event.button.id == "history-button":
+            self.action_cancel()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "elapsed-input":

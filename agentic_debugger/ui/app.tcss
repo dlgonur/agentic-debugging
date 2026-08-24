@@ -1,4 +1,4 @@
-/* Local Application V1 — one deliberate default theme (dark, developer-tool).
+/* Agentic Debugging — one deliberate default theme (dark, developer-tool).
 
    Layout rule: the workspace is a compact vertical stack (header / tabbed
    panes / status bar) that stays navigable at 80x24 and uses the extra
@@ -11,7 +11,7 @@ Screen {
     color: #c9d1d9;
 }
 
-/* -- home screen -------------------------------------------------------- */
+/* -- history screen ----------------------------------------------------- */
 
 #home-title {
     padding: 1 2 0 2;
@@ -46,19 +46,140 @@ Screen {
     color: #8b949e;
 }
 
-/* -- start-session screen ----------------------------------------------- */
+/* -- new-session screen ------------------------------------------------- */
+
+#start-scroll {
+    align-horizontal: center;
+    width: 1fr;
+    height: 1fr;
+    scrollbar-size: 1 1;
+}
+
+#start-card {
+    width: 100%;
+    max-width: 72;
+    height: auto;
+    padding: 1 2;
+    margin: 0;
+    background: #111820;
+    border: round #263747;
+}
 
 #start-title {
-    padding: 1 2 0 2;
+    padding: 0 0 1 0;
+    color: #c9d1d9;
+    height: auto;
+}
+
+.field-row {
+    width: 100%;
+    height: auto;
+}
+
+.field-section {
+    width: 1fr;
+    height: auto;
+    margin: 0 1 0 0;
+}
+
+.section-heading {
+    color: #79c0ff;
+    text-style: bold;
+    height: 1;
+}
+
+.field-label {
+    color: #c9d1d9;
+    height: 1;
+}
+
+#start-card Select,
+#start-card Input {
+    width: 100%;
+    height: 3;
+    margin: 0;
+    background: #161f2a;
+    border: round #344454;
+}
+
+#start-card Select > SelectCurrent {
+    border: round #344454;
+    background: #161f2a;
+    padding: 0 1;
+}
+
+#start-card Select:focus > SelectCurrent,
+#start-card Input:focus {
+    border: round #6e9ccf;
+    background-tint: #79c0ff 5%;
+}
+
+#start-card Select > SelectOverlay {
+    width: 100%;
+    max-width: 100%;
+    max-height: 8;
+    padding: 0;
+    border: round #526d87;
+    background: #182331;
+}
+
+#start-card Select > SelectOverlay:focus {
+    border: round #6e9ccf;
+}
+
+#start-card Select > SelectOverlay > .option-list--option {
+    padding: 0 1;
+}
+
+#config-info {
+    height: auto;
+    color: #8b949e;
+}
+
+#profile-label,
+#profile-select {
+    margin-bottom: 1;
+}
+
+#profile-row {
+    width: 100%;
+    height: 3;
+    margin: 0 0 1 0;
+}
+
+#profile-row Label {
+    width: 15;
+    height: 3;
+    padding: 1 1 0 0;
+}
+
+#profile-row Select {
+    width: 1fr;
+    height: 3;
+    margin-bottom: 0;
+}
+
+.start-actions {
+    height: 3;
+    margin: 0 0 1 0;
+    align-horizontal: left;
+}
+
+.start-actions Button {
+    height: 3;
+    min-width: 16;
+    margin: 0 1 0 0;
 }
 
 #start-error {
-    padding: 0 2;
+    height: auto;
+    padding: 0;
     color: #f85149;
 }
 
 #start-hint {
-    padding: 0 2 1 2;
+    height: auto;
+    padding: 0;
     color: #8b949e;
 }
 
@@ -171,8 +292,8 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 
 /* -- shared focus language ------------------------------------------------ */
 
-Button:focus, Input:focus, Select:focus, DataTable:focus {
-    border: heavy #58a6ff;
+Button:focus {
+    border: round #6e9ccf;
 }
 
 Button {

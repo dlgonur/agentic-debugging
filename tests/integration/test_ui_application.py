@@ -25,7 +25,12 @@ from agentic_debugger.application.presentation import (
     reduce_event,
 )
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import HomeScreen, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import (
+    HomeScreen,
+    StartSessionScreen,
+    WorkspaceMode,
+    WorkspaceScreen,
+)
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
     DebuggerPanel,
@@ -72,22 +77,59 @@ def make_app(tmp_path: Path) -> LocalApplicationV1:
 
 
 async def open_first_row(pilot) -> None:
+    await pilot.press("escape")
     await pilot.press("enter")
 
 
 class TestBootAndHome:
-    def test_app_boots_to_home_screen(self, tmp_path):
+    def test_app_boots_to_new_session_screen(self, tmp_path):
         async def scenario(pilot):
             app = pilot.app
+            assert isinstance(app.screen, StartSessionScreen)
+            title = app.screen.query_one("#start-title")
+            assert "New debugging session" in str(title.render())
+            assert app.screen.query_one("#history-button")
+            await pilot.click("#history-button")
             assert isinstance(app.screen, HomeScreen)
-            title = app.screen.query_one("#home-title")
-            assert "Local Application V1" in str(title.render())
+            await pilot.press("n")
+            assert isinstance(app.screen, StartSessionScreen)
+
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+
+    def test_new_session_selects_are_keyboard_operable_and_bounded(self, tmp_path):
+        async def scenario(pilot):
+            start = pilot.app.screen
+            await pilot.click("#mode-select")
+            await pilot.press("enter")
+            await pilot.pause()
+            overlays = [overlay for overlay in start.query("SelectOverlay") if overlay.display]
+            assert len(overlays) == 1
+            overlay = overlays[0]
+            mode = start.query_one("#mode-select")
+            assert overlay.region.width <= mode.region.width
+            await pilot.press("down")
+            await pilot.press("enter")
+            assert start.query_one("#mode-select").value == "configured"
+            policy_options = [
+                option[0].plain
+                if hasattr(option[0], "plain")
+                else str(option[0])
+                for option in start.query_one("#policy-select")._options
+            ]
+            assert policy_options == ["Static baseline", "Debugger on uncertainty"]
+            await pilot.click("#policy-select")
+            await pilot.press("enter")
+            await pilot.press("down")
+            await pilot.press("enter")
+            assert start.query_one("#policy-select").value == "static-baseline"
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
     def test_empty_history_shows_empty_state(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("escape")
             app = pilot.app
+            assert isinstance(app.screen, HomeScreen)
             empty = app.screen.query_one("#home-empty")
             assert empty.display is True
             assert "No sessions yet" in str(empty.render())
@@ -100,6 +142,7 @@ class TestBootAndHome:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
+            await pilot.press("escape")
             table = pilot.app.screen.query_one("#history-table")
             row_count = table.row_count
             assert row_count == 1
@@ -119,6 +162,7 @@ class TestBootAndHome:
         populate_history(store, "sess.good")
 
         async def scenario(pilot):
+            await pilot.press("escape")
             table = pilot.app.screen.query_one("#history-table")
             rendered = table_text(table)
             assert "malformed" in rendered
@@ -137,6 +181,7 @@ class TestBootAndHome:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
+            await pilot.press("escape")
             table = pilot.app.screen.query_one("#history-table")
             rendered = table_text(table)
             assert "complete" in rendered
@@ -159,7 +204,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             assert isinstance(workspace, WorkspaceScreen)
             assert workspace.mode is WorkspaceMode.REPLAY
@@ -208,7 +253,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             await pilot.press("G")
             header = str(workspace.query_one("#status-header", StatusHeader).render())
@@ -235,7 +280,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             bar = workspace.query_one("#replay-bar", ReplayBar)
             header = workspace.query_one("#status-header", StatusHeader)
@@ -282,7 +327,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             # No events reduced yet: no recorded source exists at the start.
             source = pane_text(workspace, "#source-pane")
@@ -305,7 +350,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             assert isinstance(workspace, WorkspaceScreen)
             bar = workspace.query_one("#replay-bar", ReplayBar)
@@ -324,7 +369,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             assert isinstance(pilot.app.screen, HomeScreen)
             assert isinstance(pilot.app.screen, HomeScreen)
 
@@ -340,7 +385,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             await pilot.press("G")
             source = pane_text(workspace, "#source-pane")
@@ -354,7 +399,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             assert isinstance(pilot.app.screen, WorkspaceScreen)
             await pilot.press("q")
             assert isinstance(pilot.app.screen, HomeScreen)
@@ -370,7 +415,7 @@ class TestOpenReplay:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             await pilot.press("j")
             await pilot.press("1", "5")
             await pilot.press("enter")
@@ -390,7 +435,7 @@ class TestTerminalSizes:
 
             async def scenario(pilot, size=size):
                 # home -> open -> navigate -> switch tabs -> back home
-                await pilot.press("enter")
+                await open_first_row(pilot)
                 workspace = pilot.app.screen
                 assert isinstance(workspace, WorkspaceScreen)
                 await pilot.press("G")
@@ -408,7 +453,7 @@ class TestTerminalSizes:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             await pilot.press("]")
             await pilot.resize_terminal(80, 24)
             await pilot.pause()
@@ -452,7 +497,7 @@ class TestReplayExecutesNothing:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             await pilot.press("G")
             await pilot.press("g")
             for _ in range(30):
@@ -479,7 +524,7 @@ class TestReplayPrefixParity:
         )
 
         async def scenario(pilot):
-            await pilot.press("enter")
+            await open_first_row(pilot)
             workspace = pilot.app.screen
             controller = workspace.controller
             for step in range(controller.total_events):
