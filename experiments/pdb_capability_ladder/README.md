@@ -34,6 +34,13 @@ failsafe.
 | 18/100 | `pdb-required-multistage-units-008` | `gpt-oss:20b-cloud` | Accepted `RESOLVED`; see [`level18-gpt-oss-v1`](level18-gpt-oss-v1/result.md) |
 | 32/100 | `audreyr__cookiecutter-967` | `glm-5.2:cloud` | Fresh V11 under repaired `workspace-derived-official-git-diff-v1` authoritatively `RESOLVED` (F2P 5/5, P2P failed 0/9, official execution proven); V10 remains a separate infrastructure-blocked attempt; durable result: [`analysis/level32_glm52_v11_repaired_treatment_20260824.md`](../../analysis/level32_glm52_v11_repaired_treatment_20260824.md) |
 
+The complete repaired-treatment comparison is closed: 15 current
+`live_verified` aliases ran once sequentially, with GLM 5.1 and GLM 5.2
+authoritatively resolved, GPT-OSS 120B semantically rejected at 4/5 F2P, and
+12 protocol failures. Seven models reached proven official tests; none was
+infrastructure-blocked. See the detailed leaderboard in
+[`analysis/level32_repaired_model_matrix_20260824.md`](../../analysis/level32_repaired_model_matrix_20260824.md).
+
 No success rate, generalization, model ranking, or causal PDB benefit follows
 from a single rung. The original V3 `0/5, 9/9` summary was historically
 recorded, but raw model-diff serialization was not proven to be official-Git

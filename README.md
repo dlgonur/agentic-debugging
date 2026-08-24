@@ -72,6 +72,12 @@ new treatment and does not rewrite historical runs. Roadmap notes live in
   `INFRASTRUCTURE_BLOCKED` attempt; it never started provider/model execution.
   Durable V11 evidence is in
   `analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
+- **Level-32 repaired model matrix** (2026-08-24): COMPLETE — all 15 current
+  live-verified aliases ran exactly once sequentially under the frozen repaired
+  transport. GLM 5.1 and GLM 5.2 independently resolved the official task;
+  GPT-OSS 120B was a semantic rejection and 12 models were protocol failures.
+  No code or prompt changes were made. Detailed leaderboard:
+  [`analysis/level32_repaired_model_matrix_20260824.md`](analysis/level32_repaired_model_matrix_20260824.md).
 - **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
   evidence. After the multi-model Ollama Cloud generalization, selected
   `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated

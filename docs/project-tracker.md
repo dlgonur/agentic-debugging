@@ -12,6 +12,20 @@ Rules:
 
 ---
 
+## Level-32 repaired model matrix (2026-08-24)
+
+- [x] **`L32-MATRIX-01` — COMPLETE.** The frozen current roster contained 15
+  live-verified models; all 15 were called exactly once sequentially under
+  `workspace-derived-official-git-diff-v1`. GLM 5.1 and GLM 5.2 independently
+  reached authoritative F2P 5/5 and P2P failed 0/9. GPT-OSS 120B reached
+  official tests but was a semantic rejection at F2P 4/5 and P2P failed 1/9;
+  the other 12 attempted models were protocol failures. No implementation or
+  prompt change occurred, no run was infrastructure-blocked, and no
+  candidate-materialization failure occurred. Detailed report:
+  `analysis/level32_repaired_model_matrix_20260824.md`.
+
+---
+
 ## Level-32 repaired authoritative treatment (2026-08-24)
 
 - [x] **`workspace-derived-official-git-diff-v1` — AUTHORITATIVE RESOLVED.**

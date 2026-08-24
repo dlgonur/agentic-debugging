@@ -2,6 +2,14 @@
 
 ## Durum notu
 
+**2026-08-24 Level-32 repaired model matrix — COMPLETE.** All 15 currently
+eligible `live_verified` models ran exactly once, sequentially, under the
+homogeneous `workspace-derived-official-git-diff-v1` treatment. GLM 5.1 and
+GLM 5.2 were authoritative resolutions; GPT-OSS 120B was a semantic rejection;
+the remaining 12 attempted models were protocol failures. There were no
+candidate-materialization failures or infrastructure blocks. The durable
+leaderboard is `analysis/level32_repaired_model_matrix_20260824.md`.
+
 **2026-08-24 Level-32 repaired authoritative treatment — COMPLETE / RESOLVED.**
 Fresh GLM 5.2 V11 under
 `pdb-capability-level32-cookiecutter-967-glm-5.2-cloud-v11-workspace-derived-official-git-diff-v1`

@@ -53,6 +53,16 @@ an infrastructure-blocked attempt whose provider/model execution never
 started. The durable V11 record is
 `../../analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
 
+## Level-32 repaired model matrix (2026-08-24)
+
+The complete frozen comparison ran all 15 current `live_verified` aliases
+exactly once sequentially under the same repaired treatment. GLM 5.1 and GLM
+5.2 were authoritative resolutions; GPT-OSS 120B was a semantic rejection;
+the remaining 12 attempted models were protocol failures. There were no
+candidate-materialization failures or infrastructure blocks. The detailed
+leaderboard and per-model provenance are tracked in
+`../../analysis/level32_repaired_model_matrix_20260824.md`.
+
 ## Frozen Level-32 escalation evidence (2026-08-22)
 
 The explicitly authorized escalation used the existing one-task operator on
