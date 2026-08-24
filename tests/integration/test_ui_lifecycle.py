@@ -45,11 +45,12 @@ from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     HomeScreen,
     StartSessionScreen,
+    TaskField,
     WorkspaceMode,
     WorkspaceScreen,
 )
 
-from textual.widgets import Select
+from textual.widgets import Select, RadioButton, RadioSet
 
 from ui_support import (
     VALID_TASK_ID,
@@ -268,8 +269,8 @@ def start_via_start_screen(pilot) -> WorkspaceScreen:
 
     start_screen = pilot.app.screen
     assert isinstance(start_screen, _Start)
-    start_screen.query_one("#task-select", Select).value = TASK_ID
-    start_screen.query_one("#policy-select", Select).value = POLICY
+    start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
+    list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
     return start_screen
 
 

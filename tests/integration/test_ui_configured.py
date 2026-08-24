@@ -41,10 +41,10 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import HomeScreen, StartSessionScreen, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import HomeScreen, StartSessionScreen, TaskField, WorkspaceMode, WorkspaceScreen
 from agentic_debugger.ui.widgets import LiveBar, StatusHeader
 
-from textual.widgets import Button, Select, Static as _Static
+from textual.widgets import Button, Select, Static as _Static, RadioButton, RadioSet
 
 from ui_support import run_headless
 
@@ -107,7 +107,7 @@ class TestConfiguredStartScreen:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             await pilot.pause()
             # no valid configured profile: Start disabled with a clear reason
             button = start.query_one("#start-button", Button)
@@ -115,7 +115,7 @@ class TestConfiguredStartScreen:
             info = str(start.query_one("#config-info").render())
             assert "no configured profiles" in info
             # switching back to deterministic re-enables Start
-            start.query_one("#mode-select", Select).value = "deterministic"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             assert start.query_one("#start-button", Button).disabled is False
 
@@ -135,7 +135,7 @@ class TestConfiguredStartScreen:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             await pilot.pause()
             info = str(start.query_one("#config-info").render())
             assert "configuration error" in info
@@ -172,7 +172,7 @@ class TestConfiguredStartScreen:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             await pilot.pause()
             info = str(start.query_one("#config-info").render())
             assert "configuration error" in info
@@ -198,7 +198,7 @@ class TestConfiguredStartScreen:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             await pilot.pause()
             select = start.query_one("#profile-select", Select)
             assert len(select._options) >= 1
@@ -230,22 +230,29 @@ class TestConfiguredStartScreen:
             start = pilot.app.screen
 
             def description_text() -> str:
-                # The mode-aware trust-boundary wording lives in the bottom
-                # hint (below the Start button) so it never pushes the button
-                # off-screen at the accepted compact 80x24 size.
+                # Trust wording lives in the bottom hint only for configured
+                # mode; deterministic mode's description is inside the visible
+                # radio choice itself.
                 return str(start.query_one("#start-hint").render())
 
-            # Deterministic mode: truthful offline claim.
-            start.query_one("#mode-select", Select).value = "deterministic"
+            # Deterministic mode: description is inside the radio, hint is hidden.
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             det = description_text()
-            assert "offline" in det
+            # The separate bottom line for deterministic is removed; the
+            # offline claim lives in the visible radio choice.
+            hint_display = start.query_one("#start-hint").display
+            assert hint_display is False or det.strip() == ""
             assert "network isolation" not in det
+            from textual.widgets import RadioButton as _RB2
+            mode_radio = start.query_one("#mode-radio", RadioSet)
+            det_label = list(mode_radio.query(_RB2))[0].label.plain
+            assert "Runs locally" in det_label
 
             # Configured mode: must NOT promise network isolation; must state
             # the child is trusted user configuration and V1 does not enforce
             # child-process network isolation.
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             await pilot.pause()
             cfg = description_text()
             assert "trusted user configuration" in cfg
@@ -274,10 +281,10 @@ class TestConfiguredLiveSession:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -372,10 +379,10 @@ class TestConfiguredLiveSession:
         async def scenario(pilot):
             def open_configured_start():
                 start_screen = pilot.app.screen
-                start_screen.query_one("#mode-select", Select).value = "configured"
+                list(start_screen.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
                 start_screen.query_one("#profile-select", Select).value = "dummy"
-                start_screen.query_one("#task-select", Select).value = TASK_ID
-                start_screen.query_one("#policy-select", Select).value = PDB_POLICY
+                start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
+                list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
 
             async def settle_and_click():
                 await pilot.pause()
@@ -470,10 +477,10 @@ class TestConfiguredCancellation:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -545,10 +552,10 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -557,7 +564,11 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             workspace1 = pilot.app.screen
-            assert "configured command model" in header_text(workspace1)
+            await wait_until(
+                pilot,
+                lambda: "configured command model" in header_text(workspace1),
+                label="stage1-configured-header",
+            )
             await wait_until(
                 pilot,
                 lambda: workspace1._live_terminal is not None,
@@ -583,8 +594,8 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2.query_one("#task-select", Select).value = TASK_ID
-            start2.query_one("#policy-select", Select).value = PDB_POLICY
+            start2.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start2.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.click("#start-button")
             await wait_until(
                 pilot,
@@ -646,8 +657,8 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.click("#start-button")
             await wait_until(
                 pilot,
@@ -687,10 +698,10 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2.query_one("#mode-select", Select).value = "configured"
+            list(start2.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start2.query_one("#profile-select", Select).value = "dummy"
-            start2.query_one("#task-select", Select).value = TASK_ID
-            start2.query_one("#policy-select", Select).value = PDB_POLICY
+            start2.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start2.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -741,10 +752,10 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -782,10 +793,10 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2.query_one("#mode-select", Select).value = "configured"
+            list(start2.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start2.query_one("#profile-select", Select).value = "dummy"
-            start2.query_one("#task-select", Select).value = TASK_ID
-            start2.query_one("#policy-select", Select).value = PDB_POLICY
+            start2.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start2.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -834,10 +845,10 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             # the configuration changes between discovery and start
             (tmp_path / "config" / "command-models.json").unlink()
             await pilot.pause()
@@ -873,10 +884,10 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -918,10 +929,10 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#mode-select", Select).value = "configured"
+            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
             start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-select", Select).value = TASK_ID
-            start.query_one("#policy-select", Select).value = PDB_POLICY
+            start.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.pause()
             await pilot.click("#start-button")
             await wait_until(
@@ -981,10 +992,10 @@ class TestAppExitDuringConfiguredRequest:
                     timeout_seconds=30.0,
                 )
                 start = pilot.app.screen
-                start.query_one("#mode-select", Select).value = "configured"
+                list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
                 start.query_one("#profile-select", Select).value = "dummy"
-                start.query_one("#task-select", Select).value = TASK_ID
-                start.query_one("#policy-select", Select).value = PDB_POLICY
+                start.query_one("#task-field", TaskField).update_task(TASK_ID)
+                list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
                 await pilot.pause()
                 await pilot.click("#start-button")
                 await wait_until(

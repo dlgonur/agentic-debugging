@@ -57,61 +57,98 @@ Screen {
 
 #start-card {
     width: 100%;
-    max-width: 72;
+    max-width: 70;
     height: auto;
-    padding: 1 2;
+    padding: 1 2 0 2;
     margin: 0;
-    background: #111820;
-    border: round #263747;
+    background: #0d1117;
+    border: none;
 }
 
 #start-title {
-    padding: 0 0 1 0;
+    padding: 0;
     color: #c9d1d9;
     height: auto;
-}
-
-.field-row {
-    width: 100%;
-    height: auto;
-}
-
-.field-section {
-    width: 1fr;
-    height: auto;
-    margin: 0 1 0 0;
-}
-
-.section-heading {
-    color: #79c0ff;
-    text-style: bold;
-    height: 1;
 }
 
 .field-label {
-    color: #c9d1d9;
+    color: #8b949e;
+    text-style: bold;
     height: 1;
+    margin: 0;
+}
+
+#start-card RadioSet {
+    width: 100%;
+    height: auto;
+    margin: 0 0 1 0;
+    padding: 0;
+    background: transparent;
+    border: none;
+}
+
+#start-card RadioSet:focus {
+    border: none;
+    background: transparent;
+}
+
+#start-card RadioSet > RadioButton {
+    width: 1fr;
+    height: 1;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+    color: #c9d1d9;
+}
+
+#start-card RadioSet > RadioButton > .toggle--button {
+    color: #484f58;
+    background: #21262d;
+}
+
+#start-card RadioSet > RadioButton.-on > .toggle--button {
+    color: #58a6ff;
+    background: #21262d;
+}
+
+#start-card RadioSet > RadioButton.-on > .toggle--label {
+    color: #e6edf3;
+    background: transparent;
+    text-style: bold;
+}
+
+#start-card RadioSet:focus > RadioButton.-selected > .toggle--label {
+    background: transparent;
+    color: #ffffff;
+}
+
+#start-card RadioSet:blur > RadioButton.-selected > .toggle--label {
+    background: transparent;
+    color: #c9d1d9;
 }
 
 #start-card Select,
 #start-card Input {
     width: 100%;
-    height: 3;
-    margin: 0;
-    background: #161f2a;
-    border: round #344454;
+    height: 1;
+    margin: 0 0 1 0;
+    background: #161b22;
+    border: none;
+    padding: 0 1;
 }
 
 #start-card Select > SelectCurrent {
-    border: round #344454;
-    background: #161f2a;
+    border: none;
+    background: #161b22;
     padding: 0 1;
+    height: 1;
 }
 
 #start-card Select:focus > SelectCurrent,
 #start-card Input:focus {
-    border: round #6e9ccf;
-    background-tint: #79c0ff 5%;
+    border: none;
+    background-tint: #21262d 10%;
 }
 
 #start-card Select > SelectOverlay {
@@ -119,56 +156,157 @@ Screen {
     max-width: 100%;
     max-height: 8;
     padding: 0;
-    border: round #526d87;
-    background: #182331;
+    border: tall #30363d;
+    background: #161b22;
 }
 
 #start-card Select > SelectOverlay:focus {
-    border: round #6e9ccf;
+    border: tall #30363d;
 }
 
 #start-card Select > SelectOverlay > .option-list--option {
     padding: 0 1;
 }
 
+#task-field {
+    width: 100%;
+    height: 2;
+    background: #161b22;
+    border: none;
+    padding: 0 1;
+    color: #c9d1d9;
+}
+
+#task-field:focus {
+    background-tint: #21262d 10%;
+    border: none;
+}
+
+#task-chooser-dialog {
+    width: 60;
+    max-width: 70;
+    height: 18;
+    max-height: 70%;
+    background: #21262d;
+    border: none;
+    padding: 1 1;
+}
+
+#task-chooser-title {
+    height: 1;
+    color: #c9d1d9;
+    text-style: bold;
+    padding: 0;
+    margin: 0 0 1 0;
+}
+
+#task-chooser-list {
+    height: 1fr;
+    background: #21262d;
+    border: none;
+    padding: 0;
+    scrollbar-gutter: stable;
+    scrollbar-size: 1 1;
+    scrollbar-color: #30363d;
+    scrollbar-background: #21262d;
+    scrollbar-corner-color: #21262d;
+}
+
+#task-chooser-list > .option-list--option {
+    padding: 0 1;
+    color: #8b949e;
+}
+
+#task-chooser-list > .option-list--option-highlighted {
+    background: #30363d;
+    color: #ffffff;
+    text-style: bold;
+}
+
+#task-chooser-list:focus > .option-list--option-highlighted {
+    background: #30363d;
+    color: #ffffff;
+    text-style: bold;
+}
+
+#task-chooser-hint {
+    height: 1;
+    color: #8b949e;
+    padding: 0;
+    margin: 1 0 0 0;
+}
+
+TaskChooserScreen {
+    align: center middle;
+    background: #0d1117 70%;
+}
+
 #config-info {
     height: auto;
     color: #8b949e;
+    margin: 0;
 }
 
 #profile-label,
 #profile-select {
-    margin-bottom: 1;
+    margin-bottom: 0;
 }
 
 #profile-row {
     width: 100%;
-    height: 3;
+    height: 1;
     margin: 0 0 1 0;
+    display: none;
 }
 
 #profile-row Label {
     width: 15;
-    height: 3;
-    padding: 1 1 0 0;
+    height: 1;
+    padding: 0 1 0 0;
+    color: #8b949e;
 }
 
 #profile-row Select {
     width: 1fr;
-    height: 3;
+    height: 1;
     margin-bottom: 0;
 }
 
 .start-actions {
-    height: 3;
-    margin: 0 0 1 0;
+    height: 1;
+    margin: 1 0 0 0;
     align-horizontal: left;
 }
 
 .start-actions Button {
-    height: 3;
+    height: 1;
     min-width: 16;
+    padding: 0 2;
     margin: 0 1 0 0;
+    border: none;
+}
+
+.start-actions #start-button {
+    background: #1f6feb;
+    color: #ffffff;
+    border: none;
+}
+
+.start-actions #start-button:focus {
+    background: #1f6feb;
+    border: none;
+    background-tint: #ffffff 12%;
+}
+
+.start-actions #history-button {
+    background: #21262d;
+    color: #c9d1d9;
+    border: none;
+}
+
+.start-actions #history-button:focus {
+    border: none;
+    background: #30363d;
 }
 
 #start-error {
@@ -181,6 +319,7 @@ Screen {
     height: auto;
     padding: 0;
     color: #8b949e;
+    display: none;
 }
 
 /* -- workspace ----------------------------------------------------------- */
@@ -293,7 +432,7 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 /* -- shared focus language ------------------------------------------------ */
 
 Button:focus {
-    border: round #6e9ccf;
+    border: tall #30363d;
 }
 
 Button {

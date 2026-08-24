@@ -23,6 +23,9 @@ from textual.widgets import (
     DataTable,
     Input,
     Label,
+    OptionList,
+    RadioButton,
+    RadioSet,
     Select,
     Static,
     TabPane,
@@ -351,6 +354,176 @@ def verifier_cell(entry: SessionHistoryEntry) -> str:
     return "—"
 
 
+class TaskField(Static):
+    """Flat task display field: title primary, id muted, subtle affordance.
+
+    Focusable and clickable; Enter/click opens the task chooser.  No Select
+    chrome, no three-row box, no blue glow.
+    """
+
+    can_focus = True
+
+    def __init__(
+        self,
+        task_options: Optional[list[tuple[str, str]]] = None,
+        current_task_id: Optional[str] = None,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__("", **kwargs)
+        self._task_options: list[tuple[str, str]] = list(task_options or [])
+        self._task_id: Optional[str] = current_task_id
+        self._update_display()
+
+    def set_options(self, options: list[tuple[str, str]]) -> None:
+        self._task_options = list(options)
+        # If no task is selected and options exist, default to first task
+        # so the field is never blank at startup (human title primary).
+        if self._task_id is None and self._task_options:
+            self._task_id = self._task_options[0][1]
+        self._update_display()
+
+    def update_task(self, task_id: Optional[str]) -> None:
+        self._task_id = task_id
+        self._update_display()
+
+    @property
+    def task_id(self) -> Optional[str]:
+        return self._task_id
+
+    @property
+    def task_options(self) -> list[tuple[str, str]]:
+        return self._task_options
+
+    def _update_display(self) -> None:
+        if not self._task_id:
+            # No selection yet — placeholder with subtle affordance
+            self.update("[dim]Choose a task  >[/]")
+            return
+        # Derive human title from the stored label or via helper
+        title: Optional[str] = None
+        for label, tid in self._task_options:
+            if tid == self._task_id:
+                if "·" in label:
+                    title = label.split("·", 1)[0].strip()
+                else:
+                    title = label
+                break
+        if title is None:
+            try:
+                from agentic_debugger.ui.app import task_display_title
+
+                title = task_display_title(self._task_id)
+            except Exception:
+                title = self._task_id
+        if title and title != self._task_id:
+            self.update(
+                f"[bold]{_markup_escape(title)}[/]\n"
+                f"[dim]{_markup_escape(self._task_id)}  >[/]"
+            )
+        else:
+            self.update(f"[bold]{_markup_escape(self._task_id)}  >[/]")
+
+    def on_click(self, event: Any) -> None:
+        # Any click on the field opens the chooser
+        try:
+            screen = self.screen
+            if hasattr(screen, "_open_task_chooser"):
+                screen._open_task_chooser()  # type: ignore[attr-defined]
+                event.prevent_default()
+                event.stop()
+        except Exception:
+            pass
+
+    def on_key(self, event: Any) -> None:
+        # Enter/space opens chooser when focused
+        key = getattr(event, "key", None)
+        if key in ("enter", "space"):
+            try:
+                screen = self.screen
+                if hasattr(screen, "_open_task_chooser"):
+                    screen._open_task_chooser()  # type: ignore[attr-defined]
+                    event.prevent_default()
+                    event.stop()
+            except Exception:
+                pass
+
+
+class TaskChooserScreen(Screen):
+    """Compact bounded task chooser — command-palette style.
+
+    Dark flat background, simple title, OptionList with restrained highlight
+    (no large saturated blue rectangle, no broken border glyphs).  Keyboard:
+    ↑↓ navigate, enter select, esc cancel.  Mouse: click selects.
+    """
+
+    BINDINGS = [Binding("escape", "cancel", "Cancel")]
+
+    def __init__(
+        self,
+        task_options: list[tuple[str, str]],
+        current_task_id: Optional[str],
+        on_select: Any,
+    ) -> None:
+        super().__init__()
+        self._task_options = list(task_options)
+        self._current_task_id = current_task_id
+        self._on_select = on_select
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="task-chooser-dialog"):
+            yield Static("[bold]Select task[/]", id="task-chooser-title")
+            yield OptionList(id="task-chooser-list")
+            yield Static("[dim]↑↓ navigate   enter select   esc cancel[/]", id="task-chooser-hint")
+
+    def on_mount(self) -> None:
+        ol = self.query_one("#task-chooser-list", OptionList)
+        # Populate with title primary, id muted secondary (one line compact).
+        # Use public OptionList API: add Text prompts directly and keep
+        # index -> task_id mapping in self._task_options.
+        for label, _task_id in self._task_options:
+            # label is like "Title · task_id"; split for styled Text
+            if "·" in label:
+                title_part, id_part = [p.strip() for p in label.split("·", 1)]
+                t = Text()
+                t.append(title_part)
+                t.append("  ")
+                t.append(id_part, style="dim")
+            else:
+                t = Text(label)
+            ol.add_option(t)
+        # Highlight current selection via index
+        if self._current_task_id is not None:
+            for idx, (_, tid) in enumerate(self._task_options):
+                if tid == self._current_task_id:
+                    ol.highlighted = idx
+                    break
+        ol.focus()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        # Public API: event.option_index is the selected index; resolve
+        # task_id via our own mapping (do not depend on private Option.id).
+        task_id: Optional[str] = None
+        try:
+            # OptionList.OptionSelected carries option_index
+            idx = getattr(event, "option_index", None)
+            if idx is None:
+                # Fallback: highlighted index
+                idx = self.query_one("#task-chooser-list", OptionList).highlighted
+            if idx is not None and 0 <= idx < len(self._task_options):
+                task_id = self._task_options[idx][1]
+        except Exception:
+            task_id = None
+        self.app.pop_screen()
+        try:
+            if callable(self._on_select):
+                self._on_select(task_id)
+        except Exception:
+            pass
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+
 class StartSessionScreen(Screen):
     """Bounded start of one live session: deterministic or configured."""
 
@@ -388,65 +561,49 @@ class StartSessionScreen(Screen):
                     "[dim]Configure how the debugging run should start.[/]",
                     id="start-title",
                 ),
-                Horizontal(
-                    Vertical(
-                        Static("EXECUTION", classes="section-heading"),
-                        Label("Mode", classes="field-label"),
-                        Select(
-                            id="mode-select",
-                            options=[
-                                ("Deterministic offline", self.MODE_DETERMINISTIC),
-                                ("Configured command model", self.MODE_CONFIGURED),
-                            ],
-                            allow_blank=False,
-                            value=self.MODE_DETERMINISTIC,
-                        ),
-                        Static("", id="config-info"),
-                        classes="field-section",
+                Label("Mode", classes="field-label"),
+                RadioSet(
+                    RadioButton(
+                        "Deterministic offline \u2014 Runs locally, no configured model.",
+                        value=True,
+                        id="mode-deterministic",
                     ),
-                    Vertical(
-                        Static("TARGET", classes="section-heading"),
-                        Label("Task", classes="field-label"),
-                        Select(
-                            id="task-select",
-                            options=self._task_options,
-                            allow_blank=False,
-                        ),
-                        classes="field-section",
+                    RadioButton(
+                        "Configured command model \u2014 Uses a configured profile.",
+                        id="mode-configured",
                     ),
-                    classes="field-row",
-                ),
-                Horizontal(
-                    Vertical(
-                        Static("DEBUGGING", classes="section-heading"),
-                        Label("Policy", classes="field-label"),
-                        Select(
-                            id="policy-select",
-                            options=[
-                                ("Static baseline", "static-baseline"),
-                                ("Debugger on uncertainty", "pdb-on-uncertainty"),
-                            ],
-                            allow_blank=False,
-                            value="pdb-on-uncertainty",
-                        ),
-                        classes="field-section",
-                    ),
-                    Vertical(
-                        Static("LIMITS", classes="section-heading"),
-                        Label("Time limit (optional)", classes="field-label"),
-                        Input(
-                            id="elapsed-input",
-                            placeholder="No limit",
-                            type="integer",
-                        ),
-                        classes="field-section",
-                    ),
-                    classes="field-row",
+                    id="mode-radio",
                 ),
                 Horizontal(
                     Label("Model profile", id="profile-label", classes="field-label"),
                     Select(id="profile-select", options=[], allow_blank=True),
                     id="profile-row",
+                ),
+                Static("", id="config-info"),
+                Label("Task", classes="field-label"),
+                TaskField(
+                    id="task-field",
+                    task_options=self._task_options,
+                    current_task_id=self._task_options[0][1] if self._task_options else None,
+                ),
+                Label("Debugger", classes="field-label"),
+                RadioSet(
+                    RadioButton(
+                        "On uncertainty \u2014 Use debugger when evidence is useful.",
+                        value=True,
+                        id="policy-on",
+                    ),
+                    RadioButton(
+                        "Disabled \u2014 Use static reasoning only.",
+                        id="policy-off",
+                    ),
+                    id="policy-radio",
+                ),
+                Label("Time limit", classes="field-label"),
+                Input(
+                    id="elapsed-input",
+                    placeholder="No limit",
+                    type="integer",
                 ),
                 Horizontal(
                     Button("Start debugging", id="start-button", variant="primary"),
@@ -463,9 +620,51 @@ class StartSessionScreen(Screen):
     def on_mount(self) -> None:
         if not self._task_options:
             self._task_options = list(self.app.curated_task_options())
-            self.query_one("#task-select", Select).set_options(self._task_options)
+        # Keep TaskField options in sync and ensure a sensible default
+        try:
+            field = self.query_one("#task-field", TaskField)
+            field.set_options(self._task_options)
+        except Exception:
+            pass
         self._refresh_profiles()
         self._refresh_mode()
+
+    def _open_task_chooser(self) -> None:
+        try:
+            field = self.query_one("#task-field", TaskField)
+            current = field.task_id
+            options = field.task_options or self._task_options
+        except Exception:
+            current = None
+            options = self._task_options
+        if not options:
+            try:
+                options = list(self.app.curated_task_options())
+            except Exception:
+                options = []
+        self.app.push_screen(
+            TaskChooserScreen(
+                task_options=options,
+                current_task_id=current,
+                on_select=self._on_task_selected,
+            )
+        )
+
+    def _on_task_selected(self, task_id: Optional[str]) -> None:
+        if not task_id:
+            return
+        try:
+            field = self.query_one("#task-field", TaskField)
+            field.update_task(task_id)
+        except Exception:
+            pass
+        # Keep internal options snapshot in sync
+        # (The field already holds the id; _task_options remains for chooser)
+        # Return focus to the field for sensible keyboard flow
+        try:
+            self.query_one("#task-field", TaskField).focus()
+        except Exception:
+            pass
 
     # -- profile discovery (invalid config must not crash the TUI) ---------
 
@@ -488,6 +687,30 @@ class StartSessionScreen(Screen):
             select.set_options([("(no configured profiles)", "")])
         self._render_config_info()
 
+    def _selected_mode(self) -> str:
+        """Return the current mode from the RadioSet, falling back to state."""
+        try:
+            radio = self.query_one("#mode-radio", RadioSet)
+            # pressed_index == 0 -> deterministic, 1 -> configured
+            if radio.pressed_index == 1:
+                return self.MODE_CONFIGURED
+            if radio.pressed_index == 0:
+                return self.MODE_DETERMINISTIC
+        except Exception:
+            pass
+        return self._mode
+
+    def _selected_policy(self) -> str:
+        """Return the current policy domain value from the policy RadioSet."""
+        try:
+            radio = self.query_one("#policy-radio", RadioSet)
+            # 0 -> pdb-on-uncertainty (On uncertainty), 1 -> static-baseline
+            if radio.pressed_index == 1:
+                return "static-baseline"
+            return "pdb-on-uncertainty"
+        except Exception:
+            return "pdb-on-uncertainty"
+
     def _render_config_info(self) -> None:
         info = self.query_one("#config-info", Static)
         if self._mode == self.MODE_DETERMINISTIC:
@@ -509,15 +732,16 @@ class StartSessionScreen(Screen):
         info.update("\n".join(lines) if lines else "[dim]no configured profiles[/]")
 
     def _render_trust_hint(self) -> None:
-        """Render concise, truthful help for the selected execution mode."""
+        """Render concise trust hint only for configured mode."""
         hint = self.query_one("#start-hint", Static)
         if self._mode == self.MODE_CONFIGURED:
+            hint.display = True
             hint.update(
-                "[dim]Configured commands are trusted user configuration. "
-                "The app does not enforce child-process network isolation.[/]"
+                "[dim]trusted user configuration; V1 does not enforce network isolation.[/]"
             )
         else:
-            hint.update("[dim]Runs locally without a configured model (offline).[/]")
+            hint.update("")
+            hint.display = False
 
     def _refresh_mode(self) -> None:
         """Apply the selected mode: show/hide fields and gate Start.
@@ -525,8 +749,7 @@ class StartSessionScreen(Screen):
         Start is disabled with a clear reason when configured mode is
         selected but no valid configured profile exists.
         """
-        mode_select = self.query_one("#mode-select", Select)
-        mode = str(mode_select.value) if mode_select.value is not Select.BLANK else self.MODE_DETERMINISTIC
+        mode = self._selected_mode()
         self._mode = mode
         configured = mode == self.MODE_CONFIGURED
         profile_row = self.query_one("#profile-row", Horizontal)
@@ -542,17 +765,22 @@ class StartSessionScreen(Screen):
                 button.tooltip = "no valid configured command-model profile"
             else:
                 button.disabled = False
+                button.tooltip = None
         else:
             profile_row.display = False
             profile_label.display = False
             profile_select.display = False
             button.disabled = False
+            button.tooltip = None
         self._render_config_info()
         self._render_trust_hint()
 
-    def on_select_changed(self, event: Select.Changed) -> None:
-        if event.select.id == "mode-select":
+    def on_radio_set_changed(self, event: RadioSet.Changed) -> None:
+        if event.radio_set.id == "mode-radio":
             self._refresh_mode()
+        # policy radio change needs no extra UI toggling but is tracked via _selected_policy
+
+    def on_select_changed(self, event: Select.Changed) -> None:
         if event.select.id == "profile-select" and self._mode == self.MODE_CONFIGURED:
             self._render_config_info()
 
@@ -572,12 +800,15 @@ class StartSessionScreen(Screen):
     def _start(self) -> None:
         from agentic_debugger.application.events import SourceKind
 
-        task_select = self.query_one("#task-select", Select)
-        policy_select = self.query_one("#policy-select", Select)
+        try:
+            task_field = self.query_one("#task-field", TaskField)
+            task_id_val = task_field.task_id
+        except Exception:
+            task_id_val = None
         profile_select = self.query_one("#profile-select", Select)
         elapsed_input = self.query_one("#elapsed-input", Input)
         error = self.query_one("#start-error", Static)
-        if task_select.value is Select.BLANK:
+        if not task_id_val:
             error.update("[red]choose a task[/]")
             return
         max_elapsed: Optional[int] = None
@@ -599,10 +830,11 @@ class StartSessionScreen(Screen):
                 error.update("[red]select a configured command-model profile[/]")
                 return
             profile_id = str(profile_select.value)
+        policy = self._selected_policy()
         try:
             self.app.start_live_session(
-                task_id=str(task_select.value),
-                policy=str(policy_select.value),
+                task_id=str(task_id_val),
+                policy=policy,
                 max_elapsed_seconds=max_elapsed,
                 source_kind=(
                     SourceKind.CONFIGURED_MODEL if configured else SourceKind.OFFLINE_DEMO

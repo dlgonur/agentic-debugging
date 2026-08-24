@@ -30,10 +30,10 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import HomeScreen, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import HomeScreen, TaskField, WorkspaceMode, WorkspaceScreen
 from agentic_debugger.ui.widgets import LiveBar, SourcePanel, StatusHeader
 
-from textual.widgets import Static as _Static
+from textual.widgets import Static as _Static, RadioButton, RadioSet
 
 from ui_support import run_headless
 
@@ -285,14 +285,14 @@ class TestStartSessionScreen:
                 label="stage0-start-screen",
             )
             start_screen = pilot.app.screen
-            task_select = start_screen.query_one("#task-select")
-            assert len(task_select._options) == len(pilot.app.curated_task_options())
-            assert len(task_select._options) >= 5  # canonical curated catalog
+            task_select = start_screen.query_one("#task-field", TaskField)
+            assert len(task_select.task_options) == len(pilot.app.curated_task_options())
+            assert len(task_select.task_options) >= 5  # canonical curated catalog
             # choose a task + policy through the widget API (user-equivalent)
             from textual.widgets import Select
 
-            start_screen.query_one("#task-select", Select).value = TASK_ID
-            start_screen.query_one("#policy-select", Select).value = POLICY
+            start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
+            list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
             await pilot.click("#start-button")
             await wait_until(
                 pilot,
@@ -353,8 +353,8 @@ class TestStartSessionScreen:
         async def scenario(pilot):
             def open_start_form():
                 start_screen = pilot.app.screen
-                start_screen.query_one("#task-select", Select).value = TASK_ID
-                start_screen.query_one("#policy-select", Select).value = POLICY
+                start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
+                list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
 
             # -- session 1: complete through the real start UX -------------
             await pilot.press("n")
