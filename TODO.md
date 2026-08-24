@@ -2,6 +2,17 @@
 
 ## Durum notu
 
+**2026-08-24 Level-32 repaired authoritative treatment — COMPLETE / RESOLVED.**
+Fresh GLM 5.2 V11 under
+`pdb-capability-level32-cookiecutter-967-glm-5.2-cloud-v11-workspace-derived-official-git-diff-v1`
+completed the exact PDB proof and the repaired workspace-derived candidate
+transport. The raw patch was preserved, canonical equivalence and official
+application passed, official test execution was proven, and the authoritative
+result was F2P 5/5 with P2P failed 0/9. V10 remains separately preserved as an
+infrastructure-blocked attempt with provider/model execution not started. The
+durable V11 record is
+`analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
+
 **2026-08-23 Level-32 candidate-artifact boundary — COMPLETE.** The new
 `workspace-derived-official-git-diff-v1` treatment preserves raw model patches,
 materializes them through the authorized tolerant PatchManager, derives a

@@ -41,6 +41,18 @@ from aggregate `0/5` counts alone. The durable provider-free replay summary is
 tracked in `../../analysis/level32_candidate_artifact_replay_20260823.md`; its local
 FirstMate package is `_ai-review/L32-ARTIFACT-01/`.
 
+## Level-32 repaired authoritative treatment (2026-08-24)
+
+Fresh GLM 5.2 V11 used treatment revision 11 and the same
+`workspace-derived-official-git-diff-v1` candidate transport. Provider/model
+execution started; the controller completed the exact PDB proof; the raw patch
+was preserved; canonical workspace equivalence and strict official application
+passed; and `official_test_execution_proven=true`. The authoritative result
+was F2P 5/5, P2P failed 0/9, `accepted=true`. V10 is preserved separately as
+an infrastructure-blocked attempt whose provider/model execution never
+started. The durable V11 record is
+`../../analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
+
 ## Frozen Level-32 escalation evidence (2026-08-22)
 
 The explicitly authorized escalation used the existing one-task operator on

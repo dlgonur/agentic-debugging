@@ -63,6 +63,15 @@ new treatment and does not rewrite historical runs. Roadmap notes live in
   artifact remains unchanged. Durable replay evidence is in
   `analysis/level32_candidate_artifact_replay_20260823.md`; the local review
   package is `_ai-review/L32-ARTIFACT-01/`.
+- **Level-32 repaired authoritative treatment** (2026-08-24): COMPLETE / RESOLVED.
+  Fresh GLM 5.2 V11 under
+  `workspace-derived-official-git-diff-v1` completed the exact PDB proof,
+  preserved the raw patch, passed canonical semantic equivalence and official
+  application, and reached `official_test_execution_proven=true` with F2P
+  **5/5** and P2P failed **0/9**. V10 remains a separate preserved
+  `INFRASTRUCTURE_BLOCKED` attempt; it never started provider/model execution.
+  Durable V11 evidence is in
+  `analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
 - **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
   evidence. After the multi-model Ollama Cloud generalization, selected
   `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated

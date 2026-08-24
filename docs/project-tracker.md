@@ -12,10 +12,22 @@ Rules:
 
 ---
 
+## Level-32 repaired authoritative treatment (2026-08-24)
+
+- [x] **`workspace-derived-official-git-diff-v1` — AUTHORITATIVE RESOLVED.**
+  Fresh GLM 5.2 V11 completed provider/model execution and the exact PDB
+  `start/stack/locals/next/stop` proof. The raw candidate patch was preserved;
+  the workspace-derived canonical patch passed semantic equivalence and strict
+  official application; official test execution was proven; F2P was 5/5 and
+  P2P failed 0/9; `accepted=true`. V10 remains a separately preserved
+  `INFRASTRUCTURE_BLOCKED` attempt and never started provider/model execution.
+  Durable evidence is tracked in
+  `analysis/level32_glm52_v11_repaired_treatment_20260824.md`.
+
 ## Level-32 candidate-artifact boundary (2026-08-23)
 
-- [x] **`workspace-derived-official-git-diff-v1` — COMPLETE / no repaired-
-  treatment authoritative success.** The raw model patch remains immutable
+- [x] **Historical provider-free replay boundary — COMPLETE.** The raw model
+  patch remains immutable
   provenance in `candidate.patch`; after tolerant authorized materialization,
   the operator derives `candidate-official.patch` from the actual pristine to
   patched workspace delta. Strict Git application, changed-path authorization,
@@ -26,7 +38,9 @@ Rules:
   retained and are not treated as semantic failures without proven test
   execution. Durable replay evidence is tracked in
   `analysis/level32_candidate_artifact_replay_20260823.md`; the local review
-  package is under `_ai-review/L32-ARTIFACT-01/`.
+  package is under `_ai-review/L32-ARTIFACT-01/`. This historical replay had no
+  authoritative success; the later fresh GLM 5.2 V11 treatment is recorded
+  separately above.
 
 ## Autonomous Level-32 continuation (2026-08-22)
 

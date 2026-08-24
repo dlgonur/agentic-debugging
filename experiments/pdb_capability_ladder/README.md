@@ -32,7 +32,7 @@ failsafe.
 | 6/100 | `pdb-required-boundary-006` | `gpt-oss:20b-cloud` | Accepted `RESOLVED`; see [`level06-gpt-oss-v1`](level06-gpt-oss-v1/result.md) |
 | 12/100 | `pdb-required-caller-callee-007` | `gpt-oss:20b-cloud` | Accepted `RESOLVED`; see [`level12-gpt-oss-v1`](level12-gpt-oss-v1/result.md) |
 | 18/100 | `pdb-required-multistage-units-008` | `gpt-oss:20b-cloud` | Accepted `RESOLVED`; see [`level18-gpt-oss-v1`](level18-gpt-oss-v1/result.md) |
-| 32/100 | `audreyr__cookiecutter-967` | `gpt-oss:20b-cloud` | Historical V3 retained unchanged; repaired `workspace-derived-official-git-diff-v1` replay reached official tests for 16/18 retained candidates, with no 5/5 F2P + 0 P2P resolution; durable summary: [`analysis/level32_candidate_artifact_replay_20260823.md`](../../analysis/level32_candidate_artifact_replay_20260823.md) |
+| 32/100 | `audreyr__cookiecutter-967` | `glm-5.2:cloud` | Fresh V11 under repaired `workspace-derived-official-git-diff-v1` authoritatively `RESOLVED` (F2P 5/5, P2P failed 0/9, official execution proven); V10 remains a separate infrastructure-blocked attempt; durable result: [`analysis/level32_glm52_v11_repaired_treatment_20260824.md`](../../analysis/level32_glm52_v11_repaired_treatment_20260824.md) |
 
 No success rate, generalization, model ranking, or causal PDB benefit follows
 from a single rung. The original V3 `0/5, 9/9` summary was historically
