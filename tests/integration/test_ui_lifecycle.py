@@ -45,12 +45,10 @@ from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     HomeScreen,
     StartSessionScreen,
-    TaskField,
     WorkspaceMode,
     WorkspaceScreen,
 )
 
-from textual.widgets import Select, RadioButton, RadioSet
 
 from ui_support import (
     VALID_TASK_ID,
@@ -269,8 +267,9 @@ def start_via_start_screen(pilot) -> WorkspaceScreen:
 
     start_screen = pilot.app.screen
     assert isinstance(start_screen, _Start)
-    start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
-    list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+    start_screen._task_id = TASK_ID
+    start_screen._policy = "pdb-on-uncertainty"
+    start_screen._render_rows()
     return start_screen
 
 
@@ -445,7 +444,7 @@ class TestOwnershipRelease:
                 label="start-screen-1",
             )
             start_via_start_screen(pilot)
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -462,10 +461,10 @@ class TestOwnershipRelease:
                 label="start-screen-2",
             )
             start_via_start_screen(pilot)
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await pilot.pause()
             assert isinstance(pilot.app.screen, StartSessionScreen)
-            error = pilot.app.screen.query_one("#start-error")
+            error = pilot.app.screen.query_one("#start-status")
             assert "already active" in str(error.render())
             # Escape still returns to Home normally.
             await pilot.press("escape")
@@ -505,7 +504,7 @@ class TestOwnershipRelease:
             # And a new session can start from that Home.
             await pilot.press("n")
             start_via_start_screen(pilot)
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -543,7 +542,7 @@ class TestSequentialSessions:
                 label="start-screen",
             )
             start_via_start_screen(pilot)
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -572,7 +571,7 @@ class TestSequentialSessions:
                 label="start-screen-2",
             )
             start_via_start_screen(pilot)
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),

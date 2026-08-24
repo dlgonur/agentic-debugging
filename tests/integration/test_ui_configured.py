@@ -41,10 +41,10 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import HomeScreen, StartSessionScreen, TaskField, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import ChoicePickerScreen, HomeScreen, StartSessionScreen, WorkspaceMode, WorkspaceScreen
 from agentic_debugger.ui.widgets import LiveBar, StatusHeader
 
-from textual.widgets import Button, Select, Static as _Static, RadioButton, RadioSet
+from textual.widgets import Static as _Static
 
 from ui_support import run_headless
 
@@ -96,172 +96,93 @@ def make_app(tmp_path: Path) -> LocalApplicationV1:
 
 
 class TestConfiguredStartScreen:
-    def test_no_profiles_disables_start_with_reason(self, tmp_path):
-        app = make_app(tmp_path)
-
+    def test_no_profiles_keeps_start_unavailable(self, tmp_path):
         async def scenario(pilot):
-            await pilot.press("n")
-            await wait_until(
-                pilot,
-                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
-                timeout_seconds=30.0,
-            )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
             await pilot.pause()
-            # no valid configured profile: Start disabled with a clear reason
-            button = start.query_one("#start-button", Button)
-            assert button.disabled is True
-            info = str(start.query_one("#config-info").render())
-            assert "no configured profiles" in info
-            # switching back to deterministic re-enables Start
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[0].value = True
-            await pilot.pause()
-            assert start.query_one("#start-button", Button).disabled is False
+            assert start.start_available is False
+            assert start.query_one("#model-row").display is True
+            assert "no configured model profiles" in str(start.query_one("#start-status").render())
+            start._mode = start.MODE_DETERMINISTIC
+            start._refresh_mode()
+            assert start.start_available is True
 
-        run_headless(app, scenario, size=(100, 30))
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
     def test_malformed_config_does_not_crash_the_tui(self, tmp_path):
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "command-models.json").write_text("{not-json", encoding="utf-8")
-        app = make_app(tmp_path)
 
         async def scenario(pilot):
-            await pilot.press("n")
-            await wait_until(
-                pilot,
-                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
-                timeout_seconds=30.0,
-            )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
             await pilot.pause()
-            info = str(start.query_one("#config-info").render())
-            assert "configuration error" in info
-            assert start.query_one("#start-button", Button).disabled is True
-            # escape still returns home; the TUI is alive
+            assert "configuration error" in str(start.query_one("#start-status").render())
             await pilot.press("escape")
-            await wait_until(
-                pilot,
-                lambda: isinstance(pilot.app.screen, HomeScreen),
-                timeout_seconds=30.0,
-            )
+            assert isinstance(pilot.app.screen, HomeScreen)
 
-        run_headless(app, scenario, size=(100, 30))
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
-    def test_config_load_error_shows_safe_bounded_diagnostic(self, tmp_path):
-        """Repair Pass 2 Blocker 1: a malformed config whose raw values are
-        credential-shaped must surface only the safe bounded structural
-        diagnostic on the Start screen — never the secret literal.
-        """
+    def test_config_load_error_is_safe_and_bounded(self, tmp_path):
         secret = "API_KEY=supersecret-value"
         config_dir = tmp_path / "config"
         config_dir.mkdir()
         (config_dir / "command-models.json").write_text(
-            json.dumps({"schema_version": secret, "profiles": []}),
-            encoding="utf-8",
+            json.dumps({"schema_version": secret, "profiles": []}), encoding="utf-8"
         )
-        app = make_app(tmp_path)
 
         async def scenario(pilot):
-            await pilot.press("n")
-            await wait_until(
-                pilot,
-                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
-                timeout_seconds=30.0,
-            )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
             await pilot.pause()
-            info = str(start.query_one("#config-info").render())
-            assert "configuration error" in info
-            # the safe structural diagnostic, never the raw secret
+            info = str(start.query_one("#start-status").render())
             assert "unsupported command-model configuration version" in info
             assert secret not in info
-            assert "supersecret-value" not in info
-            # the diagnostic stays within the explicit byte bound
             assert len(info.encode("utf-8")) < 1000
-            assert start.query_one("#start-button", Button).disabled is True
 
-        run_headless(app, scenario, size=(100, 30))
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
-    def test_profiles_are_listed_with_safe_info(self, tmp_path):
+    def test_profiles_are_available_through_the_shared_picker(self, tmp_path):
         write_profile(tmp_path, "dummy", "valid")
-        app = make_app(tmp_path)
 
         async def scenario(pilot):
-            await pilot.press("n")
-            await wait_until(
-                pilot,
-                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
-                timeout_seconds=30.0,
-            )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._open_choice_picker("model")
             await pilot.pause()
-            select = start.query_one("#profile-select", Select)
-            assert len(select._options) >= 1
-            info = str(start.query_one("#config-info").render())
-            assert "Dummy command model" in info
-            assert "dummy" in info
-            assert start.query_one("#start-button", Button).disabled is False
+            assert isinstance(pilot.app.screen, ChoicePickerScreen)
+            assert pilot.app.screen.title == "Select model profile"
+            assert pilot.app.screen.query_one("#choice-picker-list").highlighted == 0
+            await pilot.press("enter")
+            assert start.profile_id == "dummy"
+            assert start.start_available is True
+            model_row = str(start.query_one("#model-row").render())
+            assert "Dummy command model" in model_row
+            assert "dummy" not in model_row
 
-        run_headless(app, scenario, size=(100, 30))
+        run_headless(make_app(tmp_path), scenario, size=(100, 30))
 
     def test_trust_boundary_wording_is_truthful_per_mode(self, tmp_path):
-        """Blocker F: configured mode must not promise network isolation.
-
-        Deterministic mode keeps its truthful offline claim; configured mode
-        must state that the child is trusted user configuration and that V1
-        does not enforce child-process network isolation.  No umbrella
-        "no network" promise may cover the configured command subprocess.
-        """
         write_profile(tmp_path, "dummy", "valid")
-        app = make_app(tmp_path)
 
         async def scenario(pilot):
-            await pilot.press("n")
-            await wait_until(
-                pilot,
-                lambda: pilot.app.screen.__class__.__name__ == "StartSessionScreen",
-                timeout_seconds=30.0,
-            )
             start = pilot.app.screen
-
-            def description_text() -> str:
-                # Trust wording lives in the bottom hint only for configured
-                # mode; deterministic mode's description is inside the visible
-                # radio choice itself.
-                return str(start.query_one("#start-hint").render())
-
-            # Deterministic mode: description is inside the radio, hint is hidden.
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[0].value = True
+            assert "network isolation" not in str(start.query_one("#start-trust").render())
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
             await pilot.pause()
-            det = description_text()
-            # The separate bottom line for deterministic is removed; the
-            # offline claim lives in the visible radio choice.
-            hint_display = start.query_one("#start-hint").display
-            assert hint_display is False or det.strip() == ""
-            assert "network isolation" not in det
-            from textual.widgets import RadioButton as _RB2
-            mode_radio = start.query_one("#mode-radio", RadioSet)
-            det_label = list(mode_radio.query(_RB2))[0].label.plain
-            assert "Runs locally" in det_label
+            trust = str(start.query_one("#start-trust").render())
+            assert "trusted user configuration" in trust
+            assert "network isolation" in trust
+            assert "network-isolated" not in trust
 
-            # Configured mode: must NOT promise network isolation; must state
-            # the child is trusted user configuration and V1 does not enforce
-            # child-process network isolation.
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            await pilot.pause()
-            cfg = description_text()
-            assert "trusted user configuration" in cfg
-            assert "does not enforce" in cfg and "network isolation" in cfg
-            # No false umbrella promise that the configured child is
-            # network-isolated.
-            assert "network-isolated" not in cfg
-
-        run_headless(app, scenario, size=(100, 30))
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
 
 class TestConfiguredLiveSession:
@@ -281,12 +202,16 @@ class TestConfiguredLiveSession:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -379,14 +304,18 @@ class TestConfiguredLiveSession:
         async def scenario(pilot):
             def open_configured_start():
                 start_screen = pilot.app.screen
-                list(start_screen.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-                start_screen.query_one("#profile-select", Select).value = "dummy"
-                start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
-                list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+                start_screen._mode = start_screen.MODE_CONFIGURED
+                start_screen._refresh_mode()
+                start_screen._profile_id = "dummy"
+                start_screen._render_rows()
+                start_screen._task_id = TASK_ID
+                start_screen._render_rows()
+                start_screen._policy = "pdb-on-uncertainty"
+                start_screen._render_rows()
 
             async def settle_and_click():
                 await pilot.pause()
-                await pilot.click("#start-button")
+                await pilot.press("s")
 
             # -- session 1: start the failing configured model -------------
             await pilot.press("n")
@@ -477,12 +406,16 @@ class TestConfiguredCancellation:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -552,12 +485,16 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -594,9 +531,11 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start2.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
-            await pilot.click("#start-button")
+            start2._task_id = TASK_ID
+            start2._render_rows()
+            start2._policy = "pdb-on-uncertainty"
+            start2._render_rows()
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -657,9 +596,11 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
-            await pilot.click("#start-button")
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -698,12 +639,16 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            list(start2.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start2.query_one("#profile-select", Select).value = "dummy"
-            start2.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start2.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start2._mode = start2.MODE_CONFIGURED
+            start2._refresh_mode()
+            start2._profile_id = "dummy"
+            start2._render_rows()
+            start2._task_id = TASK_ID
+            start2._render_rows()
+            start2._policy = "pdb-on-uncertainty"
+            start2._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -752,12 +697,16 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -793,12 +742,16 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            list(start2.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start2.query_one("#profile-select", Select).value = "dummy"
-            start2.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start2.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start2._mode = start2.MODE_CONFIGURED
+            start2._refresh_mode()
+            start2._profile_id = "dummy"
+            start2._render_rows()
+            start2._task_id = TASK_ID
+            start2._render_rows()
+            start2._policy = "pdb-on-uncertainty"
+            start2._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -845,18 +798,22 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             # the configuration changes between discovery and start
             (tmp_path / "config" / "command-models.json").unlink()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await pilot.pause()
             # still on the start screen with a clear error, never a crash
             assert pilot.app.screen.__class__.__name__ == "StartSessionScreen"
-            error = str(start.query_one("#start-error").render())
+            error = str(start.query_one("#start-status").render())
             assert "configured command model unavailable" in error
             assert "profile not found" in error
             # the TUI remains usable: escape returns home
@@ -884,12 +841,16 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -929,12 +890,16 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-            start.query_one("#profile-select", Select).value = "dummy"
-            start.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+            start._mode = start.MODE_CONFIGURED
+            start._refresh_mode()
+            start._profile_id = "dummy"
+            start._render_rows()
+            start._task_id = TASK_ID
+            start._render_rows()
+            start._policy = "pdb-on-uncertainty"
+            start._render_rows()
             await pilot.pause()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -992,12 +957,16 @@ class TestAppExitDuringConfiguredRequest:
                     timeout_seconds=30.0,
                 )
                 start = pilot.app.screen
-                list(start.query_one("#mode-radio", RadioSet).query(RadioButton))[1].value = True
-                start.query_one("#profile-select", Select).value = "dummy"
-                start.query_one("#task-field", TaskField).update_task(TASK_ID)
-                list(start.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+                start._mode = start.MODE_CONFIGURED
+                start._refresh_mode()
+                start._profile_id = "dummy"
+                start._render_rows()
+                start._task_id = TASK_ID
+                start._render_rows()
+                start._policy = "pdb-on-uncertainty"
+                start._render_rows()
                 await pilot.pause()
-                await pilot.click("#start-button")
+                await pilot.press("s")
                 await wait_until(
                     pilot,
                     lambda: isinstance(pilot.app.screen, WorkspaceScreen),

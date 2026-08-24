@@ -30,10 +30,10 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import HomeScreen, TaskField, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import HomeScreen, WorkspaceMode, WorkspaceScreen
 from agentic_debugger.ui.widgets import LiveBar, SourcePanel, StatusHeader
 
-from textual.widgets import Static as _Static, RadioButton, RadioSet
+from textual.widgets import Static as _Static
 
 from ui_support import run_headless
 
@@ -285,15 +285,13 @@ class TestStartSessionScreen:
                 label="stage0-start-screen",
             )
             start_screen = pilot.app.screen
-            task_select = start_screen.query_one("#task-field", TaskField)
-            assert len(task_select.task_options) == len(pilot.app.curated_task_options())
-            assert len(task_select.task_options) >= 5  # canonical curated catalog
-            # choose a task + policy through the widget API (user-equivalent)
-            from textual.widgets import Select
-
-            start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
-            list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
-            await pilot.click("#start-button")
+            assert len(start_screen._task_options) == len(pilot.app.curated_task_options())
+            assert len(start_screen._task_options) >= 5  # canonical curated catalog
+            # choose a task + policy through the screen state API
+            start_screen._task_id = TASK_ID
+            start_screen._policy = "pdb-on-uncertainty"
+            start_screen._render_rows()
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -346,15 +344,14 @@ class TestStartSessionScreen:
         registered run is in history, and a second real session starts from
         that same Home.  Both sessions get distinct ids.
         """
-        from textual.widgets import Select
-
         app = make_app(tmp_path)
 
         async def scenario(pilot):
             def open_start_form():
                 start_screen = pilot.app.screen
-                start_screen.query_one("#task-field", TaskField).update_task(TASK_ID)
-                list(start_screen.query_one("#policy-radio", RadioSet).query(RadioButton))[0].value = True
+                start_screen._task_id = TASK_ID
+                start_screen._policy = "pdb-on-uncertainty"
+                start_screen._render_rows()
 
             # -- session 1: complete through the real start UX -------------
             await pilot.press("n")
@@ -365,7 +362,7 @@ class TestStartSessionScreen:
                 label="stage0-start-screen",
             )
             open_start_form()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
@@ -403,7 +400,7 @@ class TestStartSessionScreen:
                 label="stage3-start-screen",
             )
             open_start_form()
-            await pilot.click("#start-button")
+            await pilot.press("s")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, WorkspaceScreen),
