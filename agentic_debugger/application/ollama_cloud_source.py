@@ -164,6 +164,7 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
             config,
             max_output_bytes=MAX_MODEL_RESPONSE_BYTES,
             cancel_check=ctx.token.check,
+            activity_observer=ctx.liveness_reporter,
         )
         adapter = LiveModelAdapter(
             task=demo_context.task,

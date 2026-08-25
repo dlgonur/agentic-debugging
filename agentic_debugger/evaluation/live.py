@@ -24,6 +24,10 @@ from agentic_debugger.agent.controller_policy import (
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
 from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
+from agentic_debugger.agent.observer import (
+    ControllerObservationKind,
+    NoopControllerObserver,
+)
 from agentic_debugger.agent.proof_gate import (
     validate_pdb_patch_evidence,
     validate_pdb_runtime_evidence,
@@ -495,9 +499,14 @@ def _typed_command_error_kind(stderr_text: str) -> str | None:
     return detail[0] if detail is not None else None
 
 class JsonlCommandTransport:
-    def __init__(self,config,*,max_output_bytes=MAX_MODEL_RESPONSE_BYTES):
+    def __init__(self,config,*,max_output_bytes=MAX_MODEL_RESPONSE_BYTES,activity_observer=None):
         if type(max_output_bytes) is not int or not 1024<=max_output_bytes<=4*1024*1024: raise LiveConfigurationError("max response bytes is invalid")
-        self.config=config; self.max_output_bytes=max_output_bytes
+        if activity_observer is not None and not callable(activity_observer): raise LiveConfigurationError("activity_observer must be callable or None")
+        self.config=config; self.max_output_bytes=max_output_bytes; self.activity_observer=activity_observer
+    def _activity(self, kind):
+        if self.activity_observer is not None:
+            try: self.activity_observer(kind)
+            except Exception: pass
     @staticmethod
     def subprocess_environment():
         environment={"PATH":os.environ.get("PATH",""),"PYTHONIOENCODING":"utf-8"}
@@ -512,8 +521,10 @@ class JsonlCommandTransport:
         except (OSError,ValueError): raise LiveTransportError("model command could not be launched",kind="launch_error") from None
         stdout=_BoundedCapture(self.max_output_bytes); stderr=_BoundedCapture(self.max_output_bytes)
         activity_lock=threading.Lock(); last_activity=[time.monotonic()]
+        self._activity("request_started")
         def mark_activity():
             with activity_lock: last_activity[0]=time.monotonic()
+            self._activity("stream_activity")
         def idle_expired():
             with activity_lock: return time.monotonic()-last_activity[0]>=timeout_seconds
         threads=[threading.Thread(target=_read_pipe,args=(process.stdout,stdout,mark_activity),daemon=True),threading.Thread(target=_read_pipe,args=(process.stderr,stderr,mark_activity),daemon=True)]
@@ -560,6 +571,7 @@ class JsonlCommandTransport:
         # the bounded request writer finishes.  A successful JSON response is
         # the provider completion contract; the harmless broken-pipe signal is
         # not a transport failure in that case.
+        self._activity("request_completed")
         return value
 
 @dataclass
@@ -1387,7 +1399,7 @@ def validate_synthetic_qualification_content(
         }
 
 class LiveModelAdapter:
-    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False,proof_source_line=1,proof_observed_local_names=(),model_visible_budget_limits=None,model_visible_task=None,progress_observer: Callable[[str], None] | None = None):
+    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False,proof_source_line=1,proof_observed_local_names=(),model_visible_budget_limits=None,model_visible_task=None,progress_observer: Callable[[str], None] | None = None,operation_observer: Callable[[Mapping[str, Any]], None] | None = None):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
         if type(proof_source_line) is not int or proof_source_line < 1:
@@ -1410,6 +1422,14 @@ class LiveModelAdapter:
         if progress_observer is not None and not callable(progress_observer):
             raise LiveConfigurationError("progress_observer must be callable or None")
         self._progress_observer = progress_observer
+        # Structured operation telemetry seam: the adapter reports facts it
+        # genuinely owns from completed tool observations (source ranges,
+        # debugger lifecycle, PDB proof observations, candidate outcomes).
+        # The channel is observer-only and side-effect safe; it never changes
+        # decisions, metrics, budgets, or recorded evidence.
+        if operation_observer is not None and not callable(operation_observer):
+            raise LiveConfigurationError("operation_observer must be callable or None")
+        self._operation_observer = operation_observer
         if model_visible_task is None:
             self.model_visible_task = task.agent_visible_mapping()
         elif not isinstance(model_visible_task, Mapping):
@@ -1505,10 +1525,140 @@ class LiveModelAdapter:
             "trigger_retained_in_trajectory": True,
         })
 
+    def _notify_operation(self, record: Mapping[str, Any]) -> None:
+        if self._operation_observer is None:
+            return
+        try:
+            self._operation_observer(record)
+        except Exception:
+            # Telemetry must never alter the scientific path.
+            pass
+
+    @staticmethod
+    def _pdb_location_from_payload(payload: Mapping[str, Any]) -> tuple[str | None, int | None]:
+        proof = payload.get("proof") if isinstance(payload.get("proof"), Mapping) else None
+        if proof is not None:
+            file_name = proof.get("production_file")
+            line = proof.get("breakpoint_line")
+            if isinstance(file_name, str) and type(line) is int and line > 0:
+                return file_name, line
+        frames = payload.get("frames")
+        if isinstance(frames, list) and frames:
+            ordered = sorted(
+                (frame for frame in frames if isinstance(frame, Mapping)),
+                key=lambda frame: not frame.get("is_current"),
+            )
+            for frame in ordered:
+                script = frame.get("script")
+                line = frame.get("line")
+                if isinstance(script, str) and type(line) is int and line > 0:
+                    return script, line
+        return None, None
+
+    #: Handler-level dispatch reasons: the apply_patch handler actually ran
+    #: (and consumed a patch attempt) so its outcome is a real candidate
+    #: attempt result.  Dispatch-level rejections never proposed a patch.
+    _HANDLER_OUTCOME_REASONS = frozenset({"tool_rejected", "tool_error", "tool_timeout"})
+
+    def _project_operation_facts(self, observation: Any) -> None:
+        """Emit bounded structured facts the adapter genuinely owns.
+
+        Only tool names, file ranges, breakpoint identities, statuses and
+        bounded diagnostics cross this seam -- never prompts, model text,
+        completions, or private test identities.
+        """
+        if self._operation_observer is None or type(observation) is not Observation:
+            return
+        name = observation.name
+        status = observation.status.value
+        payload = observation.payload if isinstance(observation.payload, Mapping) else {}
+        if name == ActionName.GET_SOURCE_WINDOW.value:
+            if status == "ok":
+                path = payload.get("path")
+                start = payload.get("start_line")
+                end = payload.get("end_line")
+                if (
+                    isinstance(path, str) and path
+                    and type(start) is int and type(end) is int
+                    and 0 < start <= end
+                ):
+                    self._notify_operation({
+                        "operation": "source_inspection",
+                        "tool": name,
+                        "file": path,
+                        "start_line": start,
+                        "end_line": end,
+                    })
+            return
+        if name == ActionName.APPLY_PATCH.value:
+            reason = payload.get("diagnostic")
+            bounded_reason = (
+                reason if isinstance(reason, str) and reason
+                else str(payload.get("dispatch_reason") or status)
+            )[:200]
+            if status == "ok":
+                files = payload.get("changed_files")
+                changed = [
+                    item for item in (files if isinstance(files, list) else ())
+                    if isinstance(item, str)
+                ]
+                self._notify_operation({
+                    "operation": "candidate",
+                    "phase": "applied",
+                    "reason": bounded_reason,
+                    "changed_files": changed[:16],
+                })
+            elif payload.get("dispatch_reason") in self._HANDLER_OUTCOME_REASONS:
+                phase = {
+                    "rejected": "rejected",
+                    "timeout": "failed",
+                    "error": "failed",
+                }.get(status)
+                if phase is not None:
+                    self._notify_operation({
+                        "operation": "candidate",
+                        "phase": phase,
+                        "reason": bounded_reason,
+                    })
+            return
+        if name == ActionName.REVERT_PATCH.value:
+            if status == "ok":
+                self._notify_operation({
+                    "operation": "candidate",
+                    "phase": "reverted",
+                    "reason": "candidate reverted",
+                })
+            return
+        if name == ActionName.START_PDB_SESSION.value:
+            if status == "ok" and payload.get("state") == "paused":
+                script = payload.get("script")
+                line = payload.get("breakpoint_line")
+                if isinstance(script, str) and script and type(line) is int and line > 0:
+                    self._notify_operation({
+                        "operation": "debugger_active",
+                        "script": script,
+                        "breakpoint_line": line,
+                    })
+            return
+        if name in {
+            ActionName.GET_STACK_SUMMARY.value,
+            ActionName.GET_FRAME_LOCALS.value,
+            ActionName.SAFE_EVAL_EXPRESSION.value,
+        } and status == "ok":
+            record: dict[str, Any] = {"operation": "pdb_observation"}
+            script, line = self._pdb_location_from_payload(payload)
+            if script is not None and line is not None:
+                record["script"] = script
+                record["line"] = line
+            self._notify_operation(record)
+
     def _observe_snapshot(self, snapshot: ControllerSnapshot) -> None:
         observation = snapshot.last_observation
         if observation is None:
             return
+        # Structured operation facts are projected before any gate/proof
+        # bookkeeping: they are pure telemetry over the same observation.
+        self._project_operation_facts(observation)
         # Failed/rejected attempts remain in the authoritative event stream, but
         # they are not proof.  Keeping only successful observations here lets a
         # model recover from a rejected debugger action without either erasing
@@ -1555,8 +1705,9 @@ class LiveModelAdapter:
             ActionName.APPLY_PATCH.value,
             ActionName.REVERT_PATCH.value,
         }:
-            if observation.name == ActionName.APPLY_PATCH.value and self._progress_observer is not None:
-                self._progress_observer("candidate")
+            # The candidate outcome itself is projected through the
+            # structured operation channel (``_project_operation_facts``);
+            # stage-level detail would only invite unstructured claims.
             # A new or reverted candidate invalidates prior Validate evidence.
             self._post_patch_f2p_collected = False
             self._regression_collected = False
@@ -2504,7 +2655,59 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         evidence=evidence,
     )
 
-def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False,scenario_override=None,progress_observer: Callable[[str], None] | None = None):
+class _ControllerOperationObserver:
+    """Observer-only projection of controller-owned execution boundaries.
+
+    Converts controller-native tool-dispatch and step-completion
+    observations into bounded structured operation records.  Ordinary
+    exceptions are swallowed (mirroring the controller's own observer
+    contract) so telemetry can never alter a decision, budget, step, or
+    result.  Records carry tool names, statuses and step ordinals only --
+    never model text, prompts, arguments, or observation payloads.  Model
+    request boundaries are intentionally not projected here: the transport
+    activity channel owns logical request identity (including retries).
+    """
+
+    def __init__(self, sink: Callable[[Mapping[str, Any]], None]) -> None:
+        self._sink = sink
+
+    def notify(self, observation: Any) -> None:
+        try:
+            self._notify(observation)
+        except Exception:
+            pass
+
+    def _notify(self, observation: Any) -> None:
+        kind = observation.kind
+        if kind is ControllerObservationKind.TOOL_STARTED:
+            if observation.tool_name:
+                self._sink({
+                    "operation": "tool",
+                    "phase": "started",
+                    "tool": observation.tool_name,
+                })
+        elif kind is ControllerObservationKind.TOOL_COMPLETED:
+            if observation.tool_name:
+                status = (
+                    observation.observation_status.value
+                    if observation.observation_status is not None
+                    else "error"
+                )
+                self._sink({
+                    "operation": "tool",
+                    "phase": "completed",
+                    "tool": observation.tool_name,
+                    "status": status,
+                })
+        elif kind is ControllerObservationKind.STEP_COMPLETED:
+            self._sink({
+                "operation": "controller_step",
+                "step_index": observation.step_index or 0,
+                "directive_kind": observation.directive_kind,
+            })
+
+
+def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False,scenario_override=None,progress_observer: Callable[[str], None] | None = None,operation_observer: Callable[[Mapping[str, Any]], None] | None = None):
     repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve()
     if scenario_override is None:
         scenario=scenario_for(task_id)
@@ -2559,7 +2762,7 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
                 or scenario.runtime_probe.exact_public_reproduction
             ),
         )
-        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction,proof_source_line=scenario.runtime_probe.breakpoint_line if scenario_override is not None else 1,proof_observed_local_names=scenario.runtime_probe.inspect_expressions if scenario.runtime_probe.exact_public_reproduction else (),model_visible_budget_limits=controller_limits,model_visible_task=model_visible_task,progress_observer=progress_observer)
+        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction,proof_source_line=scenario.runtime_probe.breakpoint_line if scenario_override is not None else 1,proof_observed_local_names=scenario.runtime_probe.inspect_expressions if scenario.runtime_probe.exact_public_reproduction else (),model_visible_budget_limits=controller_limits,model_visible_task=model_visible_task,progress_observer=progress_observer,operation_observer=operation_observer)
         metrics=live_adapter.metrics
         controller=DeterministicController(
             registry,
@@ -2569,6 +2772,11 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
                 require_pdb_evidence_before_patch=(
                     scenario.runtime_probe.exact_public_reproduction
                 ),
+            ),
+            observer=(
+                _ControllerOperationObserver(operation_observer)
+                if operation_observer is not None
+                else NoopControllerObserver()
             ),
         )
         try:

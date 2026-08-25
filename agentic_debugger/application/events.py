@@ -774,7 +774,10 @@ def _payload_operator_progress(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("operator.progress payload must be a mapping")
     required = {"stage"}
-    optional = {"detail"}
+    # ``official_execution_proven`` is the additive typed milestone: it is
+    # emitted only after the operator observed official test execution and
+    # lets presentation state carry that fact without parsing ``detail``.
+    optional = {"detail", "official_execution_proven"}
     _check_required(payload, required, "operator.progress payload")
     _check_no_unknown(payload, required | optional, "operator.progress payload")
     stage = _enum(payload["stage"], "stage", OperatorStage)
@@ -782,7 +785,13 @@ def _payload_operator_progress(payload: Mapping[str, Any]) -> dict[str, Any]:
     if detail is not None:
         if type(detail) is not str or not detail or len(detail.encode("utf-8")) > 512:
             raise SchemaValidationError("operator.progress detail is invalid")
-    return {"stage": stage.value, "detail": detail}
+    proven = payload.get("official_execution_proven")
+    if proven is not None and type(proven) is not bool:
+        raise SchemaValidationError("official_execution_proven must be a bool")
+    result: dict[str, Any] = {"stage": stage.value, "detail": detail}
+    if proven is not None:
+        result["official_execution_proven"] = proven
+    return result
 
 
 def _payload_terminal(payload: Mapping[str, Any], label: str, kind: SessionEventKind) -> dict[str, Any]:
@@ -966,12 +975,20 @@ def _payload_directive_rejected(payload: Mapping[str, Any]) -> dict[str, Any]:
 def _payload_tool(payload: Mapping[str, Any], label: str, *, completed: bool) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError(f"{label} must be a mapping")
+    # ``target`` is the additive structured-operation refinement: a bounded
+    # logical target (e.g. ``cookiecutter/config.py:40-80``) the producing
+    # boundary genuinely owns.  It is optional so historical tool events and
+    # the controller-observer projection stay valid without it.
     required = {"tool_name"} if not completed else {"tool_name", "status"}
+    optional = {"target"}
     _check_required(payload, required, label)
-    _check_no_unknown(payload, required, label)
+    _check_no_unknown(payload, required | optional, label)
     result = {
         "tool_name": _bounded_text(payload["tool_name"], "tool_name", MAX_IDENTIFIER_CHARS)
     }
+    target = payload.get("target")
+    if target is not None:
+        result["target"] = _bounded_text_or_none(target, "target", MAX_SHORT_TEXT_CHARS)
     if completed:
         result["status"] = _enum(payload["status"], "status", ObservationStatus).value
     return result

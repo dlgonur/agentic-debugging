@@ -249,7 +249,7 @@ ChoicePickerScreen {
 
 #live-run-context {
     display: none;
-    width: 30;
+    width: 46;
     height: 1fr;
     padding: 1 2;
     background: #111820;

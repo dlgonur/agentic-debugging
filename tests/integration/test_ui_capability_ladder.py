@@ -138,7 +138,35 @@ def test_wide_ladder_header_is_concise_and_context_panel_is_truthful() -> None:
     assert "PDB\nPending" in context
     assert "Verifier\nPending" in context
     assert "Official SWE-rebench" in context
-    assert "Official tests\nNot executed" in context
+    assert "Official tests\nNot started" in context
+
+    # Official milestone truth: preparing/launched/completed stay distinct
+    # preparatory states; only the typed execution-proven fact renders
+    # "Executed".
+    def _official_for(stage: OperatorStage, proven=None) -> str:
+        milestone_view = SessionViewState(
+            task_id="audreyr__cookiecutter-967",
+            source_kind=SourceKind.LEVEL32_OPERATOR,
+            status=SessionStatus.RUNNING,
+            operator_stage=stage,
+            official_execution_proven=proven,
+        )
+        milestone_panel = LiveRunContextPanel()
+        milestone_panel.update_view(milestone_view, elapsed="00:00")
+        return milestone_panel._text.render().plain
+
+    assert "Official tests\nPreparing" in _official_for(
+        OperatorStage.OFFICIAL_VERIFICATION_PREPARING
+    )
+    assert "Official tests\nEvaluator launched" in _official_for(
+        OperatorStage.OFFICIAL_EVALUATOR_STARTED
+    )
+    unproven_completed = _official_for(OperatorStage.OFFICIAL_EVALUATOR_COMPLETED)
+    assert "Official tests\nCompleted (unproven)" in unproven_completed
+    assert "Executed" not in unproven_completed.split("Official tests", 1)[1].splitlines()[1]
+    assert "Official tests\nExecuted" in _official_for(
+        OperatorStage.OFFICIAL_EVALUATOR_COMPLETED, proven=True
+    )
 
     lower_view = SessionViewState(
         task_id="pdb-required-multistage-units-008",

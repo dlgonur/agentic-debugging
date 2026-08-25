@@ -38,6 +38,7 @@ from agentic_debugger.application.session import (
     SessionResult,
     SessionSpec,
 )
+from agentic_debugger.application.worker_protocol import WorkerLiveness
 from agentic_debugger.application.sources import ExecutionSourceSpec
 
 LEVEL32_TASK_ID = "audreyr__cookiecutter-967"
@@ -273,17 +274,18 @@ class Level32OperatorWorker:
         self._stderr_capture_path = self._session_dir / "operator.stderr.capture.txt"
         self._stdout_stream: Any = None
         self._stderr_stream: Any = None
-        self._candidate_progress_count = 0
+        self._liveness: Optional[WorkerLiveness] = None
+        self._streamed_request_indexes: set[int] = set()
+        # Structured-operation state: which debugger facts were already
+        # projected live so post-run finalization never duplicates them.
+        self._streamed_debugger_started = False
+        self._streamed_pdb_observation: Optional[tuple[str, int]] = None
+        self._pause_generation = 0
 
     def _emit_progress(self, stage: OperatorStage, detail: Optional[str] = None) -> None:
-        # Candidate/model alternation is useful only when the attempt number
-        # is visible.  Keep distinct attempts, but do not present identical
-        # bare stage records as meaningful progress.
-        if stage is OperatorStage.CANDIDATE:
-            self._candidate_progress_count += 1
-            detail = detail or f"attempt {self._candidate_progress_count}"
-        elif stage is OperatorStage.MODEL_RUNNING and self._candidate_progress_count and not detail:
-            detail = f"attempt {self._candidate_progress_count + 1}"
+        # Distinct (stage, detail) pairs are retained; identical consecutive
+        # bare stage records are not meaningful progress.  Details are only
+        # ever facts the operator recorded, never synthesized here.
         current = (stage, detail)
         if current == self._last_progress:
             return
@@ -306,15 +308,287 @@ class Level32OperatorWorker:
                     self._progress_offset = stream.tell()
                     try:
                         record = json.loads(line)
-                        stage = OperatorStage(record.get("stage"))
-                        detail = record.get("detail")
-                        self._emit_progress(stage, detail if isinstance(detail, str) else None)
+                        schema = record.get("schema_version")
+                        if schema == "operator-progress-v1":
+                            stage = OperatorStage(record.get("stage"))
+                            detail = record.get("detail")
+                            self._emit_progress(stage, detail if isinstance(detail, str) else None)
+                        elif schema == "operator-progress-v2":
+                            self._consume_progress_v2(record)
+                        else:
+                            continue
                     except (TypeError, ValueError, json.JSONDecodeError):
                         # A malformed observer record is ignored. The
                         # authoritative operator result remains the source of truth.
                         continue
         except (FileNotFoundError, OSError, UnicodeDecodeError):
             return
+
+    #: Handler-level apply outcomes that are real candidate attempts.
+    _TOOL_STATUSES = frozenset({"ok", "error", "rejected", "timeout"})
+    _CANDIDATE_PHASES = frozenset({"applied", "rejected", "failed", "reverted"})
+
+    @staticmethod
+    def _bounded_operation_text(value: Any, maximum: int = 200) -> Optional[str]:
+        if type(value) is not str or not value:
+            return None
+        if len(value.encode("utf-8")) > maximum or contains_credential_shape(value):
+            return None
+        return value
+
+    @staticmethod
+    def _relative_operation_path(value: Any) -> Optional[str]:
+        text = Level32OperatorWorker._bounded_operation_text(value, 256)
+        if text is None:
+            return None
+        if len(text) >= 2 and text[1] == ":" and text[0].isalpha():
+            return None
+        if text.startswith(("/", "\\")):
+            return None
+        parts = [part for part in text.replace("\\", "/").split("/") if part]
+        if not parts or ".." in parts:
+            return None
+        return text
+
+    @staticmethod
+    def _operation_line(value: Any) -> Optional[int]:
+        if type(value) is not int or isinstance(value, bool) or value < 1:
+            return None
+        return value
+
+    def _consume_operation_record(self, record: Mapping[str, Any]) -> None:
+        """Map one strictly validated structured operation to typed events.
+
+        Malformed records drop silently: the authoritative operator result
+        remains the source of truth and no fact is ever reconstructed from
+        an invalid observation channel record.
+        """
+        operation = record.get("operation")
+        if operation == "tool":
+            phase = record.get("phase")
+            tool = self._bounded_operation_text(record.get("tool"), 64)
+            if tool is None or phase not in ("started", "completed"):
+                return
+            if phase == "started":
+                if set(record) != {"schema_version", "kind", "operation", "phase", "tool"}:
+                    return
+                self._emit(SessionEventKind.TOOL_STARTED, {"tool_name": tool})
+                return
+            if set(record) != {
+                "schema_version", "kind", "operation", "phase", "tool", "status",
+            }:
+                return
+            status = record.get("status")
+            if status not in self._TOOL_STATUSES:
+                return
+            self._emit(SessionEventKind.TOOL_COMPLETED, {"tool_name": tool, "status": status})
+            return
+        if operation == "source_inspection":
+            if set(record) != {
+                "schema_version", "kind", "operation", "tool", "file",
+                "start_line", "end_line",
+            }:
+                return
+            tool = self._bounded_operation_text(record.get("tool"), 64)
+            file_name = self._relative_operation_path(record.get("file"))
+            start = self._operation_line(record.get("start_line"))
+            end = self._operation_line(record.get("end_line"))
+            if tool is None or file_name is None or start is None or end is None:
+                return
+            if start > end:
+                return
+            target = f"{file_name}:{start}-{end}"
+            self._emit(
+                SessionEventKind.TOOL_COMPLETED,
+                {"tool_name": tool, "status": "ok", "target": target},
+            )
+            return
+        if operation == "debugger_active":
+            if set(record) != {"schema_version", "kind", "operation", "script", "breakpoint_line"}:
+                return
+            script = self._relative_operation_path(record.get("script"))
+            line = self._operation_line(record.get("breakpoint_line"))
+            if script is None or line is None:
+                return
+            if not self._streamed_debugger_started:
+                self._streamed_debugger_started = True
+                self._emit(
+                    SessionEventKind.DEBUGGER_STARTED,
+                    {"script": script, "breakpoints": (f"{script}:{line}",)},
+                )
+            if self._pause_generation == 0:
+                self._pause_generation = 1
+                self._emit(
+                    SessionEventKind.DEBUGGER_LOCATION_CHANGED,
+                    {"script": script, "line": line, "function": None, "pause_generation": 1},
+                )
+            return
+        if operation == "pdb_observation":
+            allowed = {"schema_version", "kind", "operation"}
+            if not allowed.issubset(set(record)) or set(record) - allowed - {"script", "line"}:
+                return
+            script = self._relative_operation_path(record.get("script"))
+            line = self._operation_line(record.get("line"))
+            if ("script" in record or "line" in record) and (script is None or line is None):
+                return
+            self._pause_generation += 1
+            if script is not None and line is not None:
+                if self._streamed_pdb_observation is None:
+                    self._streamed_pdb_observation = (script, line)
+                self._emit(
+                    SessionEventKind.DEBUGGER_LOCATION_CHANGED,
+                    {"script": script, "line": line, "function": None, "pause_generation": self._pause_generation},
+                )
+            self._emit(
+                SessionEventKind.DEBUGGER_STACK_OBSERVED,
+                {"pause_generation": self._pause_generation, "frames": ()},
+            )
+            return
+        if operation == "candidate":
+            phase = record.get("phase")
+            if phase not in self._CANDIDATE_PHASES:
+                return
+            attempt = record.get("attempt")
+            if type(attempt) is not int or isinstance(attempt, bool) or attempt < 1:
+                return
+            reason = self._bounded_operation_text(record.get("reason"))
+            index = attempt - 1
+            if phase == "applied":
+                changed = record.get("changed_files")
+                if type(changed) is not list or len(changed) > 16:
+                    return
+                files: list[str] = []
+                for item in changed:
+                    path = self._relative_operation_path(item)
+                    if path is None:
+                        return
+                    files.append(path)
+                base = {"attempt_index": index, "changed_files": tuple(files), "syntax_passed": None}
+                self._emit(SessionEventKind.PATCH_APPLIED, base)
+            elif phase == "rejected":
+                self._emit(
+                    SessionEventKind.PATCH_REJECTED,
+                    {"attempt_index": index, "rejection_reason": reason or "candidate rejected by patch validation"},
+                )
+            elif phase == "failed":
+                self._emit(
+                    SessionEventKind.PATCH_APPLY_FAILED,
+                    {"attempt_index": index, "apply_failure_reason": reason or "candidate patch apply failed"},
+                )
+            else:
+                self._emit(SessionEventKind.PATCH_REVERTED, {"attempt_index": index})
+            return
+        if operation == "controller_step":
+            if set(record) != {"schema_version", "kind", "operation", "step_index", "directive_kind"}:
+                return
+            step_index = record.get("step_index")
+            if type(step_index) is not int or isinstance(step_index, bool) or step_index < 0:
+                return
+            directive_kind = self._bounded_operation_text(record.get("directive_kind"), 64)
+            self._emit(
+                SessionEventKind.CONTROLLER_STEP,
+                {"step_index": step_index, "directive_kind": directive_kind, "stop_reason": None},
+            )
+            return
+        # Unknown operation kinds are ignored (fail closed).
+
+    def _consume_progress_v2(self, record: Mapping[str, Any]) -> None:
+        """Accept additive safe v2 observer records; malformed records drop."""
+        kind = record.get("kind")
+        if kind == "operation":
+            self._consume_operation_record(record)
+            return
+        if kind == "liveness":
+            allowed = {
+                "schema_version", "kind", "request_index", "request_elapsed_seconds",
+                "last_activity_age_seconds", "transport_alive", "watchdog_idle_seconds",
+            }
+            if set(record) != allowed:
+                return
+            request_index = record.get("request_index")
+            if request_index is not None and (type(request_index) is not int or request_index < 0):
+                return
+            values = [record.get("request_elapsed_seconds"), record.get("last_activity_age_seconds"), record.get("watchdog_idle_seconds")]
+            if any(type(value) not in (int, float) or isinstance(value, bool) or value < 0 for value in values):
+                return
+            if type(record.get("transport_alive")) is not bool:
+                return
+            with self._lock:
+                self._liveness = WorkerLiveness(
+                    request_index=request_index,
+                    request_elapsed_seconds=float(values[0]),
+                    last_activity_age_seconds=float(values[1]),
+                    transport_alive=record["transport_alive"],
+                    watchdog_idle_seconds=float(values[2]),
+                )
+            return
+        if kind == "model_request":
+            detail = record.get("detail")
+            if type(detail) is not str or not detail.startswith("request "):
+                return
+            number = detail.split(" ", 2)[1]
+            if not number.isdigit() or int(number) < 1:
+                return
+            index = int(number) - 1
+            if index not in self._streamed_request_indexes:
+                self._streamed_request_indexes.add(index)
+                self._emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": index})
+            self._emit_progress(OperatorStage.MODEL_RUNNING, detail)
+            return
+        if kind == "model_request_completed":
+            detail = record.get("detail")
+            if type(detail) is not str or not detail.startswith("request "):
+                return
+            number = detail.split(" ", 2)[1]
+            if not number.isdigit() or int(number) < 1:
+                return
+            index = int(number) - 1
+            if index in self._streamed_request_indexes:
+                self._emit(SessionEventKind.MODEL_REQUEST_COMPLETED, {"request_index": index, "status": "ok"})
+                self._streamed_request_indexes.remove(index)
+            return
+        if kind == "official_execution_proven":
+            # The typed milestone is durable operator evidence: real official
+            # test execution was observed.  Stage/detail remain unchanged for
+            # v1 history readability.
+            allowed = {
+                "schema_version", "kind", "stage", "detail",
+                "official_execution_proven",
+            }
+            if set(record) != allowed or record.get("official_execution_proven") is not True:
+                return
+            try:
+                stage = OperatorStage(record["stage"])
+            except (KeyError, ValueError):
+                return
+            detail = record.get("detail")
+            if type(detail) is not str or not detail or contains_credential_shape(detail):
+                return
+            current = (stage, detail)
+            if current == self._last_progress:
+                # Same fact already emitted: enrich nothing, re-mark typed.
+                return
+            self._last_progress = current
+            self._emit(
+                SessionEventKind.OPERATOR_PROGRESS,
+                {"stage": stage.value, "detail": detail, "official_execution_proven": True},
+            )
+            return
+        # Durable v2 operational records have a safe stage and optional
+        # bounded label only. They intentionally remain one SessionEvent-v1
+        # ``operator.progress`` fact, so v1 history stays readable and final
+        # result projection never re-emits a duplicate tool/PDB/verifier fact.
+        allowed = {"schema_version", "kind", "stage", "detail"}
+        if set(record) != allowed or type(kind) is not str or type(record.get("detail")) not in (str, type(None)):
+            return
+        try:
+            stage = OperatorStage(record["stage"])
+        except (KeyError, ValueError):
+            return
+        detail = record.get("detail")
+        if detail is not None and (not detail or len(detail.encode("utf-8")) > 512 or contains_credential_shape(detail)):
+            return
+        self._emit_progress(stage, detail)
 
     @property
     def pid(self) -> Optional[int]:
@@ -324,6 +598,11 @@ class Level32OperatorWorker:
     def events(self) -> Tuple[SessionEvent, ...]:
         with self._lock:
             return tuple(self._events)
+
+    @property
+    def liveness(self) -> Optional[WorkerLiveness]:
+        with self._lock:
+            return self._liveness
 
     @property
     def session_dir(self) -> Path:
@@ -638,10 +917,30 @@ class Level32OperatorWorker:
         if pdb_proof is not None:
             script = pdb_proof["script"]
             line = pdb_proof["line"]
-            self._emit(
-                SessionEventKind.DEBUGGER_STARTED,
-                {"script": script, "breakpoints": (f"{script}:{line}",)},
-            )
+            # Post-run finalization projects only facts not already streamed
+            # live through the structured operation channel: a streamed
+            # debugger start or proof observation is never re-emitted.
+            if not self._streamed_debugger_started:
+                self._streamed_debugger_started = True
+                self._emit(
+                    SessionEventKind.DEBUGGER_STARTED,
+                    {"script": script, "breakpoints": (f"{script}:{line}",)},
+                )
+            if self._streamed_pdb_observation is None:
+                # The extracted proof has already established an exact
+                # observed breakpoint. Represent that fact through the
+                # existing v1 debugger observation vocabulary; debugger
+                # start alone is never treated as proof by the projection.
+                self._streamed_pdb_observation = (script, line)
+                self._pause_generation = max(1, self._pause_generation + 1)
+                self._emit(
+                    SessionEventKind.DEBUGGER_LOCATION_CHANGED,
+                    {"script": script, "line": line, "function": None, "pause_generation": self._pause_generation},
+                )
+                self._emit(
+                    SessionEventKind.DEBUGGER_STACK_OBSERVED,
+                    {"pause_generation": self._pause_generation, "frames": ()},
+                )
         if result is not None:
             official = result.get("official_verifier")
             if isinstance(official, Mapping):

@@ -559,3 +559,310 @@ def test_cancellation_remains_cancelled_and_does_not_project_verifier(tmp_path):
     assert result.status is SessionStatus.CANCELLED
     assert result.termination_reason is SessionTerminationReason.CANCELLED
     assert not any(event.event_kind is SessionEventKind.VERIFIER_COMPLETED for event in journal.events)
+
+
+# ---------------------------------------------------------------------------
+# Structured operation telemetry: producer -> application typed mapping
+# ---------------------------------------------------------------------------
+
+
+def _op(record: dict) -> str:
+    return json.dumps({"schema_version": "operator-progress-v2", "kind": "operation", **record})
+
+
+def _structured_progress_lines() -> list:
+    """One realistic structured operator stream over the observer channel."""
+    return [
+        # v1/v2 duplicate stage pair: the application must dedup to one fact.
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "preflight"}),
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "stage", "stage": "preflight", "detail": None}),
+        _op({"operation": "controller_step", "step_index": 0, "directive_kind": "action"}),
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "model_request", "stage": "model_running", "detail": "request 1"}),
+        _op({"operation": "tool", "phase": "started", "tool": "get_source_window"}),
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "model_request_completed", "stage": "model_running", "detail": "request 1 completed"}),
+        _op({"operation": "tool", "phase": "completed", "tool": "get_source_window", "status": "ok"}),
+        _op({"operation": "source_inspection", "tool": "get_source_window", "file": "cookiecutter/config.py", "start_line": 40, "end_line": 80}),
+        _op({"operation": "debugger_active", "script": "cookiecutter/config.py", "breakpoint_line": 58}),
+        _op({"operation": "tool", "phase": "started", "tool": "get_frame_locals"}),
+        _op({"operation": "tool", "phase": "completed", "tool": "get_frame_locals", "status": "ok"}),
+        _op({"operation": "pdb_observation", "script": "cookiecutter/config.py", "line": 58}),
+        _op({"operation": "candidate", "phase": "rejected", "reason": "patch context mismatch", "attempt": 1}),
+        _op({"operation": "tool", "phase": "started", "tool": "apply_patch"}),
+        _op({"operation": "tool", "phase": "completed", "tool": "apply_patch", "status": "ok"}),
+        _op({"operation": "candidate", "phase": "applied", "reason": "candidate patch applied to the disposable workspace", "changed_files": ["cookiecutter/config.py"], "attempt": 2}),
+        # Malformed records must drop without corrupting the stream.
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "operation", "operation": "tool", "phase": "started", "tool": "bogus-tool", "extra": 1}),
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "operation", "operation": "candidate", "phase": "applied", "attempt": True}),
+        # Latest-value liveness stays out of the durable journal.
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "liveness", "request_index": 0, "request_elapsed_seconds": 12.5, "last_activity_age_seconds": 9.0, "transport_alive": True, "watchdog_idle_seconds": 300.0}),
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_verification_preparing"}),
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_evaluator_started"}),
+        json.dumps({"schema_version": "operator-progress-v2", "kind": "official_execution_proven", "stage": "official_evaluator_completed", "detail": "official execution proven", "official_execution_proven": True}),
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_evaluator_completed"}),
+    ]
+
+
+class _StructuredOperatorProcess(_FakeOperatorProcess):
+    def __init__(self, argv, result, lines):
+        super().__init__(argv, result)
+        self._lines = lines
+        self._polls = 0
+
+    def poll(self):
+        self._polls += 1
+        if self._polls == 1:
+            progress = Path(self.argv[self.argv.index("--progress-file") + 1])
+            progress.write_text("\n".join(self._lines) + "\n", encoding="utf-8")
+            return None
+        return self.returncode
+
+
+def _structured_result() -> dict:
+    return {
+        "accepted": False,
+        "classification": "official_rejection_semantic",
+        "official_verifier": {
+            "official_test_execution_proven": True,
+            "fail_to_pass_total": 5,
+            "fail_to_pass_passed": 4,
+            "pass_to_pass_total": 9,
+            "pass_to_pass_failed": 0,
+        },
+        "pdb_proof": {
+            "observed": True,
+            "successful_observation_count": 2,
+            "script": "cookiecutter/config.py",
+            "breakpoint_line": 58,
+        },
+        "cleanup": {
+            "temporary_source_removed": True,
+            "private_official_material_removed": True,
+        },
+    }
+
+
+def _run_structured_worker(tmp_path, lines, result, name="structured") -> Level32OperatorWorker:
+    profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)
+    worker = Level32OperatorWorker(
+        session_dir=tmp_path / "runs" / name,
+        session_id="sess-level32-" + name,
+        run_id="run-level32-" + name,
+        repository_root=tmp_path,
+        model=profile,
+        revision=7,
+        treatment_id="level32-treatment-v7-" + name,
+        output_dir=tmp_path / "experiments" / name,
+        spec=build_level32_spec(profile.alias),
+        process_factory=lambda argv, **kwargs: _StructuredOperatorProcess(argv, result, lines),
+    )
+    worker.start()
+    worker.wait()
+    return worker
+
+
+def _reduce_journal(worker):
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    view = initial_session_view(
+        presentation_identity(build_level32_spec("glm-5.2:cloud"))
+    )
+    for event in journal.events:
+        view = reduce_event(view, event)
+    return view, journal
+
+
+def test_structured_operations_map_to_typed_events_and_truthful_state(tmp_path):
+    worker = _run_structured_worker(
+        tmp_path, _structured_progress_lines(), _structured_result()
+    )
+    view, journal = _reduce_journal(worker)
+    kinds = [event.event_kind for event in journal.events]
+
+    # Typed tool/source facts.
+    assert SessionEventKind.TOOL_STARTED in kinds
+    assert SessionEventKind.TOOL_COMPLETED in kinds
+    source_completed = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.TOOL_COMPLETED
+        and event.payload.get("target") == "cookiecutter/config.py:40-80"
+    )
+    assert source_completed.payload["tool_name"] == "get_source_window"
+    assert source_completed.payload["status"] == "ok"
+    # The typed target is visible in presentation state at that point in the
+    # stream (a later tool boundary may legitimately replace it).
+    prefix_view = initial_session_view(
+        presentation_identity(build_level32_spec("glm-5.2:cloud"))
+    )
+    for event in journal.events:
+        if event.sequence > source_completed.sequence:
+            break
+        prefix_view = reduce_event(prefix_view, event)
+    assert prefix_view.current_tool_target == "cookiecutter/config.py:40-80"
+
+    # Debugger truth: entered -> active; observation -> observed (live).
+    assert SessionEventKind.DEBUGGER_STARTED in kinds
+    assert SessionEventKind.DEBUGGER_LOCATION_CHANGED in kinds
+    assert SessionEventKind.DEBUGGER_STACK_OBSERVED in kinds
+    assert view.debugger.session_started is True
+    assert view.pdb_observed is True
+    assert view.debugger.script == "cookiecutter/config.py"
+    assert view.debugger.line == 58
+
+    # Candidate truth: APPLY_PATCH result determines state.
+    rejected = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_REJECTED
+    )
+    applied = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_APPLIED
+    )
+    assert rejected.payload["attempt_index"] == 0
+    assert "context mismatch" in rejected.payload["rejection_reason"]
+    assert applied.payload["attempt_index"] == 1
+    assert applied.payload["changed_files"] == ("cookiecutter/config.py",)
+    # End state: the independent verifier completion upgrades the applied
+    # attempt to VERIFIED; the rejected attempt is never upgraded.
+    assert [attempt.stage.value for attempt in view.patch_attempts] == ["rejected", "verified"]
+    # Before the verifier event, the apply result itself is the state.
+    verifier_completed = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.VERIFIER_COMPLETED
+    )
+    pre_verify = initial_session_view(
+        presentation_identity(build_level32_spec("glm-5.2:cloud"))
+    )
+    for event in journal.events:
+        if event.sequence >= verifier_completed.sequence:
+            break
+        pre_verify = reduce_event(pre_verify, event)
+    assert [attempt.stage.value for attempt in pre_verify.patch_attempts] == ["rejected", "applied"]
+    assert all("available" not in json.dumps(event.payload) for event in journal.events)
+
+    # Request/step ordinals are zero-based durable ids displayed one-based
+    # by the projection layer.
+    started = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.MODEL_REQUEST_STARTED
+    )
+    assert started.payload["request_index"] == 0
+    step = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.CONTROLLER_STEP
+    )
+    assert step.payload["step_index"] == 0
+    assert view.latest_controller_step_index == 0
+
+    # Official milestone truth: only the typed proven fact marks execution.
+    proven_progress = [
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+        and event.payload.get("official_execution_proven") is True
+    ]
+    assert len(proven_progress) == 1
+    assert proven_progress[0].payload["stage"] == "official_evaluator_completed"
+    assert view.official_execution_proven is True
+
+    # Post-run finalization must not duplicate streamed debugger facts.
+    assert kinds.count(SessionEventKind.DEBUGGER_STARTED) == 1
+    assert kinds.count(SessionEventKind.DEBUGGER_STACK_OBSERVED) == 1
+
+    # v1/v2 stage dedup: the preflight pair produced exactly one fact.
+    preflight = [
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+        and event.payload["stage"] == "preflight"
+    ]
+    assert len(preflight) == 1
+
+    # Malformed structured records dropped without side effects.
+    assert not any(
+        event.event_kind in (SessionEventKind.TOOL_STARTED, SessionEventKind.TOOL_COMPLETED)
+        and event.payload.get("tool_name") == "bogus-tool"
+        for event in journal.events
+    )
+
+    validate_session_event_stream(journal.events)
+
+
+def test_liveness_side_band_never_reaches_the_durable_journal(tmp_path):
+    worker = _run_structured_worker(
+        tmp_path, _structured_progress_lines(), _structured_result(), "liveness-only"
+    )
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    assert worker.liveness is not None
+    assert worker.liveness.request_index == 0
+    assert worker.liveness.transport_alive is True
+    for event in journal.events:
+        assert "request_elapsed_seconds" not in event.payload
+        assert "transport_alive" not in event.payload
+        assert "watchdog_idle_seconds" not in event.payload
+
+
+def test_failed_and_rejected_candidates_never_become_applied_or_available(tmp_path):
+    lines = [
+        _op({"operation": "candidate", "phase": "rejected", "reason": "invalid context", "attempt": 1}),
+        _op({"operation": "candidate", "phase": "failed", "reason": "hunk failed to apply", "attempt": 2}),
+    ]
+    worker = _run_structured_worker(tmp_path, lines, _structured_result(), "failed-candidates")
+    view, journal = _reduce_journal(worker)
+    stages = [attempt.stage.value for attempt in view.patch_attempts]
+    assert stages == ["rejected", "apply_failed"]
+    assert all(attempt.stage.value not in ("applied", "verified") for attempt in view.patch_attempts)
+    assert not any(event.event_kind is SessionEventKind.PATCH_APPLIED for event in journal.events)
+    assert all("available" not in json.dumps(event.payload) for event in journal.events)
+
+
+def test_official_milestones_stay_distinct_and_only_proven_renders_executed(tmp_path):
+    base = _structured_result()
+    unproven_result = dict(base)
+    unproven_result["official_verifier"] = {
+        "official_test_execution_proven": False,
+        "fail_to_pass_total": 5,
+        "fail_to_pass_passed": 0,
+        "pass_to_pass_total": 9,
+        "pass_to_pass_failed": 9,
+    }
+    unproven_lines = [
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_verification_preparing"}),
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_evaluator_started"}),
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_evaluator_completed"}),
+    ]
+    worker = _run_structured_worker(tmp_path, unproven_lines, unproven_result, "unproven")
+    view, journal = _reduce_journal(worker)
+    stage_sequence = [
+        event.payload["stage"]
+        for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+    ]
+    # Preparing, launched, and completed remain distinct milestones...
+    assert "official_verification_preparing" in stage_sequence
+    assert "official_evaluator_started" in stage_sequence
+    assert "official_evaluator_completed" in stage_sequence
+    # ...and none of them is a typed execution-proven fact.
+    assert not any(
+        event.payload.get("official_execution_proven")
+        for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+    )
+    assert view.official_execution_proven is False
+    verifier = next(
+        event for event in journal.events
+        if event.event_kind is SessionEventKind.VERIFIER_COMPLETED
+    )
+    assert verifier.payload["official_test_execution_proven"] is False
+
+
+def test_bare_candidate_stage_emits_no_patch_fact(tmp_path):
+    lines = [
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "candidate"}),
+    ]
+    worker = _run_structured_worker(tmp_path, lines, _structured_result(), "bare-candidate")
+    view, journal = _reduce_journal(worker)
+    patch_kinds = {
+        SessionEventKind.PATCH_PROPOSED,
+        SessionEventKind.PATCH_APPLIED,
+        SessionEventKind.PATCH_REJECTED,
+        SessionEventKind.PATCH_APPLY_FAILED,
+    }
+    assert not any(event.event_kind in patch_kinds for event in journal.events)
+    assert view.patch_attempts == ()

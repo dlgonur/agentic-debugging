@@ -128,7 +128,7 @@ class TestLiveAdversarial:
                 lambda: len(workspace._live_events) >= 4,
                 label="live-events",
             )
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             # the session keeps running in the background and registers
             await wait_until(

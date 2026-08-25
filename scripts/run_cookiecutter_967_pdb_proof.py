@@ -96,6 +96,52 @@ class _ProgressWriter:
     def __init__(self, path: str | None) -> None:
         self._path = Path(path).resolve() if path else None
         self._last: tuple[str, str | None] | None = None
+        self._request_index = -1
+        self._request_started_at: float | None = None
+        self._last_activity_at: float | None = None
+        self._last_liveness_at = 0.0
+        self._candidate_attempt = 0
+
+    def observe_operation(self, record: dict[str, Any]) -> None:
+        """Structured operation channel for the application worker.
+
+        Receives bounded facts the execution boundary genuinely owns (tool
+        dispatch, source ranges, debugger lifecycle, PDB observations,
+        candidate outcomes) and appends them as ``operator-progress-v2``
+        operation records.  Candidate ordinals are assigned here so the
+        application never has to reconstruct attempt identity; a candidate
+        record exists only for real handler-level apply outcomes.
+        """
+        if self._path is None:
+            return
+        if not isinstance(record, dict) or "operation" not in record:
+            return
+        if record.get("operation") == "candidate":
+            phase = record.get("phase")
+            if phase == "reverted":
+                if self._candidate_attempt < 1:
+                    return
+                attempt = self._candidate_attempt
+            else:
+                self._candidate_attempt += 1
+                attempt = self._candidate_attempt
+            record = {**record, "attempt": attempt}
+        self._append({
+            "schema_version": "operator-progress-v2",
+            "kind": "operation",
+            **record,
+        })
+
+    def _append(self, payload: dict[str, Any]) -> None:
+        if self._path is None:
+            return
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(payload, sort_keys=True) + "\n")
+                stream.flush()
+        except OSError:
+            return
 
     def emit(self, stage: str, detail: str | None = None) -> None:
         if self._path is None:
@@ -105,17 +151,91 @@ class _ProgressWriter:
             return
         self._last = current
         payload: dict[str, Any] = {"schema_version": "operator-progress-v1", "stage": stage}
+        v2: dict[str, Any] = {
+            "schema_version": "operator-progress-v2", "kind": "stage",
+            "stage": stage, "detail": detail,
+        }
         if detail:
             payload["detail"] = detail
         try:
             self._path.parent.mkdir(parents=True, exist_ok=True)
             with self._path.open("a", encoding="utf-8", newline="\n") as stream:
+                # Retain v1 during the additive migration. The application
+                # de-duplicates its matching v2 companion by stable
+                # ``stage/detail`` identity, so this is observer-only.
                 stream.write(json.dumps(payload, sort_keys=True) + "\n")
+                stream.write(json.dumps(v2, sort_keys=True) + "\n")
                 stream.flush()
         except OSError:
             # Observability is fail-open. The authoritative operator must not
             # change its scientific result because the UI is unavailable.
             return
+
+    def liveness(
+        self, *, request_index: int, request_elapsed_seconds: float,
+        last_activity_age_seconds: float, transport_alive: bool,
+        watchdog_idle_seconds: float = 300.0,
+    ) -> None:
+        """Best-effort latest-value liveness record; never model content."""
+        if self._path is None:
+            return
+        payload = {
+            "schema_version": "operator-progress-v2", "kind": "liveness",
+            "request_index": request_index,
+            "request_elapsed_seconds": request_elapsed_seconds,
+            "last_activity_age_seconds": last_activity_age_seconds,
+            "transport_alive": transport_alive,
+            "watchdog_idle_seconds": watchdog_idle_seconds,
+        }
+        try:
+            with self._path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(payload, sort_keys=True) + "\n")
+                stream.flush()
+        except OSError:
+            return
+
+    def observe_stage(self, stage: str) -> None:
+        """Live adapter seam: records only known operation boundaries."""
+        if stage == "model_running":
+            self._request_index += 1
+            now = time.monotonic()
+            self._request_started_at = now
+            self._last_activity_at = now
+            self._write_liveness(now, force=True, alive=True)
+            self._append({"schema_version": "operator-progress-v2", "kind": "model_request", "stage": stage, "detail": f"request {self._request_index + 1}"})
+        elif stage == "debugger":
+            self._append({"schema_version": "operator-progress-v2", "kind": "debugger_lifecycle", "stage": stage, "detail": "debugger operation"})
+        # The candidate stage is no longer claimed here: the structured
+        # operation channel owns candidate truth, and an apply outcome (not
+        # stage entry) determines applied/rejected/failed state.
+        self.emit(stage)
+
+    def transport_activity(self, activity: str) -> None:
+        """Actual command stream boundary. No prompt or response crosses it."""
+        now = time.monotonic()
+        if activity == "request_started" and self._request_started_at is None:
+            self._request_index += 1
+            self._request_started_at = now
+        if activity in ("request_started", "stream_activity"):
+            self._last_activity_at = now
+            self._write_liveness(now, force=activity == "request_started", alive=True)
+        elif activity == "request_completed":
+            self._write_liveness(now, force=True, alive=False)
+            self._append({"schema_version": "operator-progress-v2", "kind": "model_request_completed", "stage": "model_running", "detail": f"request {self._request_index + 1} completed"})
+            self._request_started_at = None
+
+    def _write_liveness(self, now: float, *, force: bool, alive: bool) -> None:
+        if not force and now - self._last_liveness_at < 0.25:
+            return
+        if self._request_index < 0:
+            return
+        self.liveness(
+            request_index=self._request_index,
+            request_elapsed_seconds=now - self._request_started_at if self._request_started_at is not None else 0.0,
+            last_activity_age_seconds=now - self._last_activity_at if self._last_activity_at is not None else 0.0,
+            transport_alive=alive,
+        )
+        self._last_liveness_at = now
 
 
 def _load_ollama_adapter_module(module_name: str) -> Any:
@@ -1608,7 +1728,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_public_scaffold(fixture, str(row["problem_statement"]))
         case_parent = Path(temporary) / "cases"
         case_parent.mkdir()
-        transport = JsonlCommandTransport(config)
+        transport = JsonlCommandTransport(config, activity_observer=progress.transport_activity)
         live = run_live_case(
             repository_root=str(staging_root),
             task_id=TASK_ID,
@@ -1628,7 +1748,8 @@ def main(argv: list[str] | None = None) -> int:
             evaluation_id=treatment_id,
             retain_observable_model_directives=True,
             scenario_override=_scenario(),
-            progress_observer=progress.emit,
+            progress_observer=progress.observe_stage,
+            operation_observer=progress.observe_operation,
         )
         case = live.to_mapping()
         (output / "live-results.json").write_text(
@@ -1668,6 +1789,14 @@ def main(argv: list[str] | None = None) -> int:
                 raw_patch=patch,
                 candidate_artifact=artifact_mapping,
             )
+            if official.get("official_test_execution_proven") is True:
+                progress._append({
+                    "schema_version": "operator-progress-v2",
+                    "kind": "official_execution_proven",
+                    "stage": "official_evaluator_completed",
+                    "detail": "official execution proven",
+                    "official_execution_proven": True,
+                })
             progress.emit("official_evaluator_completed")
         (output / "official-verifier-summary.json").write_text(
             json.dumps(official, indent=2, sort_keys=True) + "\n", encoding="utf-8"

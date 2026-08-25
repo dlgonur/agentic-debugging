@@ -41,6 +41,7 @@ from agentic_debugger.application.presentation import (
     VerifierSummaryView,
     current_source,
 )
+from agentic_debugger.application.live_execution import LiveExecutionState
 
 _NOT_RECORDED = "NOT RECORDED"
 
@@ -520,8 +521,10 @@ class PatchPanel(VerticalScroll):
             return text
         for attempt in view.patch_attempts:
             stage = attempt.stage
+            # Displayed ordinals are one-based; the durable attempt_index
+            # inside the view stays zero-based.
             text.append(
-                f"Attempt {attempt.attempt_index} — {stage.value.upper()}",
+                f"Attempt {attempt.attempt_index + 1} — {stage.value.upper()}",
                 style=_stage_style(stage),
             )
             text.append("\n")
@@ -764,6 +767,23 @@ class TimelinePanel(VerticalScroll):
         return text
 
 
+def _official_tests_label(view: SessionViewState) -> Optional[str]:
+    """Official-verifier milestone label; only proven execution is 'Executed'."""
+    if view.source_kind is not SourceKind.LEVEL32_OPERATOR:
+        return None
+    if view.official_execution_proven is True:
+        return "Executed"
+    if view.operator_stage is OperatorStage.OFFICIAL_EVALUATOR_COMPLETED:
+        return "Completed (unproven)"
+    if view.operator_stage is OperatorStage.OFFICIAL_EVALUATOR_STARTED:
+        return "Evaluator launched"
+    if view.operator_stage is OperatorStage.OFFICIAL_VERIFICATION_PREPARING:
+        return "Preparing"
+    if view.status.terminal:
+        return "Not executed"
+    return "Not started"
+
+
 class StatusHeader(Static):
     """One compact status header line derived from the presentation view.
 
@@ -843,14 +863,7 @@ class LiveRunContextPanel(VerticalScroll):
             SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud",
             SourceKind.LEVEL32_OPERATOR: "Ollama Cloud",
         }.get(view.source_kind, "Recorded source")
-        official = None
-        if view.source_kind is SourceKind.LEVEL32_OPERATOR:
-            official = (
-                "Executed"
-                if view.verifier_summary is not None
-                and view.verifier_summary.official_test_execution_proven is True
-                else "Not executed"
-            )
+        official = _official_tests_label(view)
         lines = [
             "[bold #79c0ff]RUN[/]",
             "[#8b949e]Task[/]", "[bright_white]" + _markup_escape(task_display_title(view.task_id)) + "[/]",
@@ -869,6 +882,114 @@ class LiveRunContextPanel(VerticalScroll):
             lines.extend(("[#8b949e]Official tests[/]", "[bright_white]" + official + "[/]"))
         self._text.update("\n".join(lines))
 
+    def update_execution(self, state: LiveExecutionState) -> None:
+        """Render operational facts before static provenance on wide screens.
+
+        Every field is one physical row (label + value) so the complete
+        runtime context -- including provenance and the official-verifier
+        milestone -- stays above the fold at practical workspace sizes.
+        """
+        from agentic_debugger.ui.app import task_display_title
+        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        view = state.view
+        metadata = ladder_task_metadata(view.task_id) if is_ladder_task(view.task_id) else None
+        runtime = {
+            SourceKind.OFFLINE_DEMO: "Local deterministic",
+            SourceKind.CONFIGURED_MODEL: "Configured command",
+            SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud",
+            SourceKind.LEVEL32_OPERATOR: "Ollama Cloud",
+        }.get(view.source_kind, "Recorded source")
+        treatment = (
+            f"V{view.model_provenance.treatment_revision}"
+            if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None
+            else metadata.treatment if metadata is not None else "Not recorded"
+        )
+        def counter(value, maximum):
+            if value is None:
+                return "Not recorded"
+            return f"{value} / {maximum}" if maximum is not None else str(value)
+        def duration(value):
+            return "—" if value is None else f"{value:.1f}s"
+        if view.pdb_observed:
+            pdb = "Observed"
+        elif view.debugger.session_started:
+            pdb = "Active / awaiting evidence"
+        elif view.status.terminal:
+            pdb = "Not reached"
+        else:
+            pdb = "Not recorded"
+        verifier = (
+            view.verifier_summary.outcome.value if view.verifier_summary and view.verifier_summary.outcome
+            else "Active" if view.verifier_stages else "Not started"
+        )
+        official = _official_tests_label(view)
+
+        def row(label: str, value: str) -> str:
+            return (
+                f"[#8b949e]{label:<10}[/] "
+                f"[bright_white]{_markup_escape(value)}[/]"
+            )
+
+        lines = [
+            "[bold #79c0ff]RUN[/]",
+            f"[bright_white]{_markup_escape(task_display_title(view.task_id))}[/]",
+            row("NOW", state.operation_label),
+            row("TARGET", state.current_target or "Not observed"),
+            row("MODEL", f"Request {counter(state.request_ordinal, state.ceilings.model_requests)}"),
+            row("STEP", counter(state.controller_step_ordinal, state.ceilings.controller_steps)),
+            row("ATTEMPT", counter(state.candidate_attempt_ordinal, state.ceilings.candidate_attempts)),
+            row("PDB", pdb),
+            row("VERIFIER", verifier),
+        ]
+        if state.live and state.snapshot is not None:
+            lines.extend((
+                row("ELAPSED", duration(state.request_elapsed_seconds)),
+                row("ACTIVITY", f"{duration(state.last_activity_age_seconds)} ago"),
+                row("TRANSPORT", "Alive" if state.snapshot.transport_alive else "Idle"),
+                row("WATCHDOG", duration(state.snapshot.watchdog_idle_seconds)),
+            ))
+        lines.extend((
+            row(
+                "Model",
+                view.model_provenance.display_name
+                if view.model_provenance and view.model_provenance.display_name
+                else "Not recorded",
+            ),
+            row(
+                "Alias",
+                view.model_provenance.profile_id
+                if view.model_provenance and view.model_provenance.profile_id
+                else "Not recorded",
+            ),
+        ))
+        if metadata is not None:
+            lines.extend((
+                row("Runtime", runtime),
+                row("Evaluation", metadata.evaluation),
+                row("Treatment", treatment),
+            ))
+        if official is not None:
+            lines.append(row("Official", official))
+        self._text.update("\n".join(lines))
+
+
+class LiveExecutionFeed(Static):
+    """Non-focusable bounded tail of the durable presentation timeline."""
+
+    can_focus = False
+
+    def update_execution(self, state: LiveExecutionState, *, rows: int = 4) -> None:
+        tail = state.recent_operations[-max(1, min(rows, 6)):]
+        prefix = "LIVE" if state.mode.value == "live" else "RECENT"
+        lines = [f"[bold #8b949e]{prefix} · {_markup_escape(state.operation_label)}[/]"]
+        for entry in tail:
+            marker = "✓" if "completed" in entry.summary or "applied" in entry.summary else "→"
+            summary = " ".join(entry.summary.split())
+            if len(summary) > 120:
+                summary = summary[:117] + "..."
+            lines.append(f"[dim]{marker}[/] {_markup_escape(summary)}")
+        self.update("\n".join(lines))
+
 
 class ReplayBar(Static):
     """Replay-control footer (position + key hints)."""
@@ -883,6 +1004,7 @@ __all__ = [
     "DebuggerPanel",
     "EvidenceState",
     "LiveBar",
+    "LiveExecutionFeed",
     "LiveRunContextPanel",
     "PatchPanel",
     "ReplayBar",

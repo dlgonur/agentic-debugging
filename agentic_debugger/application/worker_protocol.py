@@ -65,12 +65,13 @@ _MSG_START = "start"
 _MSG_CANCEL = "cancel"
 _MSG_READY = "ready"
 _MSG_EVENT = "event"
+_MSG_LIVENESS = "liveness"
 _MSG_TERMINAL = "terminal"
 _MSG_FATAL = "fatal"
 _MSG_ERROR = "error"
 
 _PARENT_TO_WORKER_TYPES = frozenset({_MSG_START, _MSG_CANCEL})
-_WORKER_TO_PARENT_TYPES = frozenset({_MSG_READY, _MSG_EVENT, _MSG_TERMINAL, _MSG_FATAL, _MSG_ERROR})
+_WORKER_TO_PARENT_TYPES = frozenset({_MSG_READY, _MSG_EVENT, _MSG_LIVENESS, _MSG_TERMINAL, _MSG_FATAL, _MSG_ERROR})
 
 _MAX_PATH_CHARS = 2048
 _MAX_RUN_ID_CHARS = 256
@@ -426,6 +427,29 @@ class WorkerNotification:
     result: Optional[SessionResult] = None
     error_kind: Optional[str] = None
     diagnostics: Tuple[str, ...] = ()
+    liveness: Optional["WorkerLiveness"] = None
+
+
+@dataclass(frozen=True)
+class WorkerLiveness:
+    """Bounded non-durable timing facts, measured on the worker clock."""
+
+    request_index: Optional[int]
+    request_elapsed_seconds: Optional[float]
+    last_activity_age_seconds: Optional[float]
+    transport_alive: bool
+    watchdog_idle_seconds: Optional[float]
+
+
+def _liveness_number(value: Any, label: str) -> Optional[float]:
+    if value is None:
+        return None
+    if type(value) not in (int, float) or isinstance(value, bool):
+        raise _invalid(f"{label} must be a non-negative number or null")
+    result = float(value)
+    if not 0.0 <= result <= float(_MAX_ELAPSED_SECONDS):
+        raise _invalid(f"{label} is out of range")
+    return result
 
 
 def parse_worker_message(line: str, spec: SessionSpec) -> WorkerNotification:
@@ -453,6 +477,30 @@ def parse_worker_message(line: str, spec: SessionSpec) -> WorkerNotification:
         if type(sequence) is not int or isinstance(sequence, bool) or sequence < 0:
             raise _invalid("event message sequence must be a non-negative integer")
         return WorkerNotification(kind=kind, sequence=sequence)
+    if kind == _MSG_LIVENESS:
+        required = {
+            "type", "request_index", "request_elapsed_seconds",
+            "last_activity_age_seconds", "transport_alive", "watchdog_idle_seconds",
+        }
+        if set(message) != required:
+            raise _invalid("liveness message fields are invalid")
+        request_index = message["request_index"]
+        if request_index is not None and (
+            type(request_index) is not int or isinstance(request_index, bool) or request_index < 0
+        ):
+            raise _invalid("liveness request_index must be a non-negative integer or null")
+        if type(message["transport_alive"]) is not bool:
+            raise _invalid("liveness transport_alive must be a bool")
+        return WorkerNotification(
+            kind=kind,
+            liveness=WorkerLiveness(
+                request_index=request_index,
+                request_elapsed_seconds=_liveness_number(message["request_elapsed_seconds"], "request_elapsed_seconds"),
+                last_activity_age_seconds=_liveness_number(message["last_activity_age_seconds"], "last_activity_age_seconds"),
+                transport_alive=message["transport_alive"],
+                watchdog_idle_seconds=_liveness_number(message["watchdog_idle_seconds"], "watchdog_idle_seconds"),
+            ),
+        )
     if kind == _MSG_TERMINAL:
         raw_result = message.get("result")
         return WorkerNotification(
@@ -518,6 +566,37 @@ def event_notification(sequence: int) -> bytes:
     return serialize_message({"type": _MSG_EVENT, "sequence": sequence})
 
 
+def liveness_notification(
+    *,
+    request_index: Optional[int],
+    request_elapsed_seconds: Optional[float],
+    last_activity_age_seconds: Optional[float],
+    transport_alive: bool,
+    watchdog_idle_seconds: Optional[float],
+) -> bytes:
+    """Build a safe latest-value notification outside the durable journal."""
+    if request_index is not None and (
+        type(request_index) is not int or isinstance(request_index, bool) or request_index < 0
+    ):
+        raise _invalid("liveness request_index must be a non-negative integer or null")
+    for value, label in (
+        (request_elapsed_seconds, "request_elapsed_seconds"),
+        (last_activity_age_seconds, "last_activity_age_seconds"),
+        (watchdog_idle_seconds, "watchdog_idle_seconds"),
+    ):
+        _liveness_number(value, label)
+    if type(transport_alive) is not bool:
+        raise _invalid("liveness transport_alive must be a bool")
+    return serialize_message({
+        "type": _MSG_LIVENESS,
+        "request_index": request_index,
+        "request_elapsed_seconds": request_elapsed_seconds,
+        "last_activity_age_seconds": last_activity_age_seconds,
+        "transport_alive": transport_alive,
+        "watchdog_idle_seconds": watchdog_idle_seconds,
+    })
+
+
 def terminal_message(result: SessionResult) -> bytes:
     return serialize_message({"type": _MSG_TERMINAL, "result": result.to_mapping()})
 
@@ -547,12 +626,14 @@ def error_message(error_kind: str, diagnostics: Sequence[str]) -> bytes:
 __all__ = [
     "MAX_WORKER_LINE_BYTES",
     "StartRequest",
+    "WorkerLiveness",
     "WorkerNotification",
     "WorkerProtocolError",
     "cancel_message",
     "error_message",
     "event_notification",
     "fatal_message",
+    "liveness_notification",
     "parse_cancel_message",
     "parse_parent_message",
     "parse_start_request",

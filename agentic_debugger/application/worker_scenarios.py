@@ -77,6 +77,9 @@ class ScenarioContext:
     #: persist app-owned artifacts here so they survive the disposable work
     #: directory cleanup (Task 7).
     session_dir: Optional[Path] = None
+    #: Observer-only callback for bounded transport liveness.  It never
+    #: affects source, controller, verifier, or cleanup behavior.
+    liveness_reporter: Optional[Callable[[str], None]] = None
 
 
 def _require_int(params: Mapping[str, Any], key: str, minimum: int, maximum: int) -> int:

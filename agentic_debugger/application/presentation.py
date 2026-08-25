@@ -250,6 +250,20 @@ class SessionViewState:
     cleanup_verified: Optional[bool] = None
     model_provenance: Optional[ModelProvenanceView] = None
     operator_stage: Optional[OperatorStage] = None
+    #: Typed operational facts retained by the reducer so live widgets never
+    #: parse display summaries.  They are derived exclusively from v1 events.
+    latest_model_request_index: Optional[int] = None
+    outstanding_model_request_index: Optional[int] = None
+    latest_controller_step_index: Optional[int] = None
+    current_tool_name: Optional[str] = None
+    #: Last structured target a tool event carried (e.g. a source range).
+    #: Cleared only when a later tool event carries a different/absent
+    #: target; it never claims more than the producing boundary recorded.
+    current_tool_target: Optional[str] = None
+    pdb_observed: bool = False
+    #: Typed official-verifier milestone: True only after the operator
+    #: observed real official test execution (never inferred from stage).
+    official_execution_proven: Optional[bool] = None
     timeline: Tuple[TimelineEntry, ...] = ()
 
 
@@ -282,22 +296,24 @@ def summarize_event(event: SessionEvent) -> str:
         )
     if kind is SessionEventKind.CONTROLLER_STEP:
         detail = payload.get("directive_kind") or payload.get("stop_reason") or "step"
-        return f"controller step {payload['step_index']} ({detail})"
+        # User-visible summaries are one-based; durable step_index stays
+        # zero-based inside the event payload.
+        return f"controller step {payload['step_index'] + 1} ({detail})"
     if kind is SessionEventKind.CONTROLLER_TRANSITION:
         return (
             f"controller transition "
             f"({payload['source_state']} -> {payload['target_state']})"
         )
     if kind is SessionEventKind.MODEL_REQUEST_STARTED:
-        return f"model request {payload['request_index']} started"
+        return f"model request {payload['request_index'] + 1} started"
     if kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
         if payload["status"] != "ok" and payload.get("error_kind"):
             return (
-                f"model request {payload['request_index']} failed — "
+                f"model request {payload['request_index'] + 1} failed — "
                 f"{payload['error_kind']}: {payload['error_message']}"
             )
         return (
-            f"model request {payload['request_index']} completed "
+            f"model request {payload['request_index'] + 1} completed "
             f"({payload['status']})"
         )
     if kind is SessionEventKind.MODEL_DIRECTIVE_ACCEPTED:
@@ -312,9 +328,13 @@ def summarize_event(event: SessionEvent) -> str:
         suffix = f": {detail}" if detail else ""
         return f"operator stage {payload['stage']}{suffix}"
     if kind is SessionEventKind.TOOL_STARTED:
-        return f"tool {payload['tool_name']} started"
+        summary = f"tool {payload['tool_name']} started"
+        target = payload.get("target")
+        return f"{summary} ({target})" if target else summary
     if kind is SessionEventKind.TOOL_COMPLETED:
-        return f"tool {payload['tool_name']} completed ({payload['status']})"
+        summary = f"tool {payload['tool_name']} completed ({payload['status']})"
+        target = payload.get("target")
+        return f"{summary} ({target})" if target else summary
     if kind is SessionEventKind.DEBUGGER_STARTED:
         return "debugger started"
     if kind is SessionEventKind.DEBUGGER_LOCATION_CHANGED:
@@ -325,15 +345,15 @@ def summarize_event(event: SessionEvent) -> str:
     if kind is SessionEventKind.DEBUGGER_LOCALS_OBSERVED:
         return f"locals observed ({len(payload['locals'])} values)"
     if kind is SessionEventKind.PATCH_PROPOSED:
-        return f"patch attempt {payload['attempt_index']} proposed"
+        return f"patch attempt {payload['attempt_index'] + 1} proposed"
     if kind is SessionEventKind.PATCH_REJECTED:
-        return f"patch attempt {payload['attempt_index']} rejected"
+        return f"patch attempt {payload['attempt_index'] + 1} rejected"
     if kind is SessionEventKind.PATCH_APPLY_FAILED:
-        return f"patch attempt {payload['attempt_index']} apply failed"
+        return f"patch attempt {payload['attempt_index'] + 1} apply failed"
     if kind is SessionEventKind.PATCH_APPLIED:
-        return f"patch attempt {payload['attempt_index']} applied"
+        return f"patch attempt {payload['attempt_index'] + 1} applied"
     if kind is SessionEventKind.PATCH_REVERTED:
-        return f"patch attempt {payload['attempt_index']} reverted"
+        return f"patch attempt {payload['attempt_index'] + 1} reverted"
     if kind is SessionEventKind.SOURCE_SNAPSHOT:
         return (
             f"source snapshot ({payload['path']}, {payload['stage']}, "
@@ -650,19 +670,51 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
     if kind is SessionEventKind.CONTROLLER_STEP:
         return replace(
             state,
+            latest_controller_step_index=payload["step_index"],
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,
         )
 
+    if kind is SessionEventKind.MODEL_REQUEST_STARTED:
+        return replace(
+            state, latest_model_request_index=payload["request_index"],
+            outstanding_model_request_index=payload["request_index"],
+            controller_phase=controller_phase, run_id=run_id, timeline=timeline,
+        )
+
+    if kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
+        outstanding = state.outstanding_model_request_index
+        if outstanding == payload["request_index"]:
+            outstanding = None
+        return replace(
+            state, latest_model_request_index=payload["request_index"],
+            outstanding_model_request_index=outstanding,
+            controller_phase=controller_phase, run_id=run_id, timeline=timeline,
+        )
+
+    if kind is SessionEventKind.TOOL_STARTED:
+        return replace(
+            state, current_tool_name=payload["tool_name"],
+            current_tool_target=payload.get("target"),
+            controller_phase=controller_phase, run_id=run_id, timeline=timeline,
+        )
+
+    if kind is SessionEventKind.TOOL_COMPLETED:
+        return replace(
+            state, current_tool_name=None,
+            current_tool_target=(
+                payload["target"]
+                if payload.get("target") is not None
+                else state.current_tool_target
+            ),
+            controller_phase=controller_phase, run_id=run_id, timeline=timeline,
+        )
+
     if kind in (
         SessionEventKind.CONTROLLER_TRANSITION,
-        SessionEventKind.MODEL_REQUEST_STARTED,
-        SessionEventKind.MODEL_REQUEST_COMPLETED,
         SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
         SessionEventKind.MODEL_DIRECTIVE_REJECTED,
-        SessionEventKind.TOOL_STARTED,
-        SessionEventKind.TOOL_COMPLETED,
         SessionEventKind.ARTIFACT_WRITTEN,
         SessionEventKind.VERIFIER_STARTED,
     ):
@@ -692,9 +744,13 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         )
 
     if kind is SessionEventKind.OPERATOR_PROGRESS:
+        proven = payload.get("official_execution_proven")
         return replace(
             state,
             operator_stage=OperatorStage(payload["stage"]),
+            official_execution_proven=(
+                state.official_execution_proven if proven is None else proven
+            ),
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,
@@ -747,6 +803,7 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         return replace(
             state,
             debugger=debugger,
+            pdb_observed=True,
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,
@@ -765,6 +822,7 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         return replace(
             state,
             debugger=debugger,
+            pdb_observed=True,
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,
@@ -916,10 +974,14 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         attempts = state.patch_attempts
         if payload["status"] == EvaluationStatus.COMPLETED.value:
             attempts = _mark_applied_verified(attempts)
+        proven = payload.get("official_test_execution_proven")
         return replace(
             state,
             verifier_summary=summary,
             patch_attempts=attempts,
+            official_execution_proven=(
+                state.official_execution_proven if proven is None else proven
+            ),
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,

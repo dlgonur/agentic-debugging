@@ -14,6 +14,7 @@ from agentic_debugger.application.worker_protocol import (
     error_message,
     event_notification,
     fatal_message,
+    liveness_notification,
     parse_cancel_message,
     parse_parent_message,
     parse_start_request,
@@ -268,5 +269,27 @@ class TestMessages:
     def test_unknown_worker_message_type_fails_closed(self):
         with pytest.raises(WorkerProtocolError):
             parse_worker_message('{"type": "nope"}', make_spec())
+
+    def test_liveness_is_typed_and_not_an_event_notification(self):
+        notification = parse_worker_message(
+            liveness_notification(
+                request_index=4,
+                request_elapsed_seconds=12.5,
+                last_activity_age_seconds=0.25,
+                transport_alive=True,
+                watchdog_idle_seconds=300.0,
+            ).decode("utf-8"),
+            make_spec(),
+        )
+        assert notification.kind == "liveness"
+        assert notification.liveness is not None
+        assert notification.liveness.request_index == 4
+
+    def test_malformed_liveness_fails_closed(self):
+        with pytest.raises(WorkerProtocolError):
+            parse_worker_message(
+                '{"type":"liveness","request_index":1,"transport_alive":true}',
+                make_spec(),
+            )
 
 

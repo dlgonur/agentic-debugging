@@ -155,12 +155,15 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         *,
         max_output_bytes: int = MAX_MODEL_RESPONSE_BYTES,
         cancel_check: Optional[Callable[[], None]] = None,
+        activity_observer: Optional[Callable[[str], None]] = None,
         cwd: Optional[str] = None,
         environment: Optional[Mapping[str, str]] = None,
     ) -> None:
         super().__init__(config, max_output_bytes=max_output_bytes)
         if cancel_check is not None and not callable(cancel_check):
             raise ApplicationInputError("cancel_check must be callable or None")
+        if activity_observer is not None and not callable(activity_observer):
+            raise ApplicationInputError("activity_observer must be callable or None")
         if cwd is not None:
             if type(cwd) is not str or not cwd:
                 raise ApplicationInputError("cwd must be a non-empty string or None")
@@ -180,6 +183,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     )
                 validated_environment[name] = value
         self._cancel_check = cancel_check
+        self._activity_observer = activity_observer
         self._cwd = cwd
         self._environment = validated_environment
         # NOTE: the worker-lifecycle cleanup ownership for request-owned
@@ -260,8 +264,10 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         if request_group_id is not None:
             register_request_group(request_group_id)
         try:
+            self._notify_activity("request_started")
             return self._run_request(process, request_bytes, timeout_seconds)
         finally:
+            self._notify_activity("request_completed")
             # Request-owned group ownership invariant (POSIX): when request()
             # leaves for ANY reason — success, invalid response, non-zero
             # exit, cancellation, timeout, or a bounded transport failure —
@@ -280,6 +286,13 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
                     # attempted, so the worker-lifecycle SIGTERM handler
                     # still owns any in-flight group up to this point.
                     unregister_request_group(request_group_id)
+
+    def _notify_activity(self, activity: str) -> None:
+        if self._activity_observer is not None:
+            try:
+                self._activity_observer(activity)
+            except Exception:
+                pass
 
     def _run_request(
         self,
@@ -304,6 +317,7 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
         def mark_activity() -> None:
             with activity_lock:
                 last_activity[0] = time.monotonic()
+            self._notify_activity("activity")
 
         def idle_expired() -> bool:
             with activity_lock:

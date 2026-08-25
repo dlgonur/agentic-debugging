@@ -307,7 +307,7 @@ class TestOwnershipRelease:
                 label="worker-closed",
             )
             # The finished session registered into app-owned history.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             table = pilot.app.screen.query_one("#history-table")
             assert table.row_count == 1
@@ -337,7 +337,7 @@ class TestOwnershipRelease:
             assert workspace._live_terminal is not None
             # Back to Home, then a cancelled session must not block a fresh
             # session either.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             app.start_live_session(
                 task_id=TASK_ID, policy=POLICY, max_elapsed_seconds=None
@@ -349,7 +349,7 @@ class TestOwnershipRelease:
                 lambda: app.live_runner is None,
                 label="runner-released-2",
             )
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
 
         run_headless(app, scenario)
@@ -374,7 +374,7 @@ class TestOwnershipRelease:
                 label="failure-shown",
             )
             assert "startup failed" in str(
-                workspace.query_one("#live-bar").render()
+                workspace.query_one("#status-header").render()
             )
             await wait_until(
                 pilot,
@@ -384,7 +384,7 @@ class TestOwnershipRelease:
             await wait_until(pilot, lambda: runner.worker.closed, label="worker-closed")
             # Back to Home; a retry can start another session without
             # restarting the TUI.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             app.start_live_session(
                 task_id=TASK_ID, policy=POLICY, max_elapsed_seconds=None
@@ -397,7 +397,7 @@ class TestOwnershipRelease:
                 lambda: app.live_runner is None,
                 label="runner-released-2",
             )
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
 
         run_headless(app, scenario)
@@ -451,7 +451,7 @@ class TestOwnershipRelease:
                 label="workspace-1",
             )
             # Back to Home while the first session stays genuinely active.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             # The second launch is rejected on the form itself.
             await pilot.press("n")
@@ -488,7 +488,7 @@ class TestOwnershipRelease:
                 task_id=TASK_ID, policy=POLICY, max_elapsed_seconds=None
             )
             # Back to Home while the session is still running.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             # The background completion releases ownership and registers.
             await wait_until(
@@ -560,7 +560,7 @@ class TestSequentialSessions:
             session1_id = app.live_view.session_id
             assert session1_id is not None
             # q returns to Home, not to the StartSessionScreen.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             assert pilot.app.screen.query_one("#history-table").row_count == 1
             # A second session starts from the same Home screen.
@@ -588,7 +588,7 @@ class TestSequentialSessions:
                 lambda: app.live_runner is None,
                 label="runner-released-2",
             )
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             assert pilot.app.screen.query_one("#history-table").row_count == 2
 
@@ -611,7 +611,7 @@ class TestSequentialSessions:
                 label="runner-released-1",
             )
             session1_id = app.live_view.session_id
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             # Start the second session; its completion registers afterwards.
             app.start_live_session(
@@ -633,7 +633,7 @@ class TestSequentialSessions:
                 label="runner-released-2",
             )
             # Both sequential sessions are in history with distinct ids.
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             await wait_until(
                 pilot,
@@ -653,7 +653,7 @@ class TestSequentialSessions:
             assert workspace.entry.session_id == session1_id
             workspace.action_replay_end()
             assert workspace.controller.view.status is SessionStatus.SUCCEEDED
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
 
         run_headless(app, scenario)

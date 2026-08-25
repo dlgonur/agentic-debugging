@@ -129,7 +129,7 @@ def test_model_error_timeline_exposes_safe_concrete_reason() -> None:
         ),
     )
     assert view.timeline[-1].summary == (
-        "model request 0 failed — http_error: "
+        "model request 1 failed — http_error: "
         "Ollama HTTP request returned status 401"
     )
 
@@ -819,3 +819,63 @@ class TestTimeline:
         )
         assert len(view.timeline[-1].summary) <= 240
         assert view.timeline[-1].summary.endswith("...")
+
+
+class TestStructuredOperationFacts:
+    """Reducer coverage for the typed structured-operation refinements."""
+
+    def test_tool_events_carry_and_replace_typed_target(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(SessionEventKind.TOOL_STARTED, {"tool_name": "get_source_window"}, sequence=2),
+        )
+        assert state.current_tool_name == "get_source_window"
+        assert state.current_tool_target is None
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_COMPLETED,
+                {"tool_name": "get_source_window", "status": "ok", "target": "cookiecutter/config.py:40-80"},
+                sequence=3,
+            ),
+        )
+        assert state.current_tool_name is None
+        assert state.current_tool_target == "cookiecutter/config.py:40-80"
+        # A later tool boundary replaces the target with its own.
+        state = reduce_event(
+            state,
+            make_event(SessionEventKind.TOOL_STARTED, {"tool_name": "run_tests"}, sequence=4),
+        )
+        assert state.current_tool_target is None
+
+    def test_operator_progress_official_execution_proven_is_typed_and_sticky(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.OPERATOR_PROGRESS,
+                {"stage": "official_evaluator_completed", "detail": "official execution proven", "official_execution_proven": True},
+                sequence=2,
+            ),
+        )
+        assert state.official_execution_proven is True
+        # A later plain progress event never clears the proven fact.
+        state = reduce_event(
+            state,
+            make_event(SessionEventKind.OPERATOR_PROGRESS, {"stage": "cleanup"}, sequence=3),
+        )
+        assert state.official_execution_proven is True
+        assert state.operator_stage.value == "cleanup"
+
+    def test_verifier_completed_sets_official_execution_from_authoritative_result(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.VERIFIER_COMPLETED,
+                {**VERIFIER_COMPLETED_PAYLOAD, "official_test_execution_proven": False},
+                sequence=2,
+            ),
+        )
+        assert state.official_execution_proven is False

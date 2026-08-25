@@ -643,9 +643,10 @@ def test_deepseek_transport_fingerprint_and_fresh_revision_are_identity_bound(tm
     assert operator._treatment_fingerprint("deepseek-v4-flash:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
         "462ca1aec8be74380f6c355a084b8c979e91a1010d8e78da30b40d09696da85a"
     )
-    # V5 is now a preserved historical evidence directory; the next fresh
-    # allocation must therefore be V6 rather than reusing that treatment.
-    assert operator.next_unused_treatment_revision(REPOSITORY_ROOT, "deepseek-v4-flash:cloud") == 6
+    # Revision allocation is covered deterministically by the dedicated
+    # tmp_path test; it is intentionally NOT asserted against the live
+    # repository root here, because local preserved evidence directories
+    # (e.g. an ignored V6 run) are not part of the candidate.
     assert operator._treatment_id_for_model("deepseek-v4-flash:cloud", 5).endswith("-v5-workspace-derived-official-git-diff-v1")
     after = {
         path.relative_to(historical): hashlib.sha256(path.read_bytes()).hexdigest()
@@ -653,6 +654,28 @@ def test_deepseek_transport_fingerprint_and_fresh_revision_are_identity_bound(tm
         if path.is_file()
     }
     assert after == before
+
+
+def test_next_unused_treatment_revision_is_deterministic_from_evidence_directories(tmp_path):
+    """The allocator skips every preserved evidence revision deterministically.
+
+    Environment-independent: builds synthetic preserved treatment
+    directories (V4, V5, V6) under a tmp_path root and proves the next
+    fresh allocation is V7.  It never depends on the owner's local run
+    tree, so it passes identically on a clean clone or CI.
+    """
+    root = tmp_path / "repo"
+    experiment_root = root / "experiments" / "pdb_capability_ladder"
+    for revision in ("v4", "v5", "v6"):
+        (experiment_root / f"level32-cookiecutter-967-deepseek-v4-flash-cloud-{revision}").mkdir(parents=True)
+    assert operator.next_unused_treatment_revision(root, "deepseek-v4-flash:cloud") == 7
+    # A run with a suffix after the revision number is still preserved
+    # evidence for that revision.
+    (experiment_root / "level32-cookiecutter-967-deepseek-v4-flash-cloud-v7-tool-accepted").mkdir()
+    assert operator.next_unused_treatment_revision(root, "deepseek-v4-flash:cloud") == 8
+    # A fresh root with no evidence starts at V1.
+    fresh = tmp_path / "fresh"
+    assert operator.next_unused_treatment_revision(fresh, "deepseek-v4-flash:cloud") == 1
 
 
 def test_kimi_timeout_repair_is_model_specific_and_bounded(tmp_path):

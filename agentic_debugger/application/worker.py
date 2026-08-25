@@ -59,6 +59,7 @@ from agentic_debugger.application.worker_protocol import (
     WorkerProtocolError,
     error_message,
     event_notification,
+    liveness_notification,
     fatal_message,
     parse_cancel_message,
     parse_parent_message,
@@ -83,6 +84,53 @@ EXIT_STARTUP_ERROR = 2
 EXIT_JOURNAL_FATAL = 3
 
 _MAX_DIAGNOSTICS = 64
+_LIVENESS_INTERVAL_SECONDS = 0.25
+
+
+class _LivenessReporter:
+    """Coalesce transport activity into latest-value side-band snapshots."""
+
+    def __init__(self, watchdog_idle_seconds: float = 300.0) -> None:
+        self._watchdog = watchdog_idle_seconds
+        self._request_index = -1
+        self._request_started: Optional[float] = None
+        self._last_activity: Optional[float] = None
+        self._last_sent = 0.0
+        self._lock = threading.Lock()
+
+    def __call__(self, activity: str) -> None:
+        now = time.monotonic()
+        with self._lock:
+            if activity == "request_started":
+                self._request_index += 1
+                self._request_started = now
+                self._last_activity = now
+            elif activity == "activity":
+                self._last_activity = now
+            elif activity == "request_completed":
+                self._send(now, alive=False, force=True)
+                self._request_started = None
+                return
+            else:
+                return
+            self._send(now, alive=self._request_started is not None, force=activity == "request_started")
+
+    def _send(self, now: float, *, alive: bool, force: bool) -> None:
+        if not force and now - self._last_sent < _LIVENESS_INTERVAL_SECONDS:
+            return
+        started = self._request_started
+        last = self._last_activity
+        try:
+            _send(liveness_notification(
+                request_index=self._request_index if self._request_index >= 0 else None,
+                request_elapsed_seconds=(now - started if started is not None else None),
+                last_activity_age_seconds=(now - last if last is not None else None),
+                transport_alive=alive,
+                watchdog_idle_seconds=self._watchdog,
+            ))
+            self._last_sent = now
+        except Exception:
+            pass
 
 
 def run_worker_source(
@@ -530,6 +578,7 @@ def run_worker(request: StartRequest) -> int:
                 emitter=coordinator.emitter,
                 run_id=request.run_id,
                 session_dir=Path(request.journal_path).resolve().parent,
+                liveness_reporter=_LivenessReporter(),
             ),
             request.scenario_params,
         )

@@ -44,6 +44,7 @@ from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.replay import SessionReplaySource, phase_boundaries
 from agentic_debugger.application.session import SessionResult
 from agentic_debugger.application.worker_process import SessionWorkerProcess
+from agentic_debugger.application.worker_protocol import WorkerLiveness
 
 _TERMINAL_KINDS = frozenset(
     {
@@ -264,6 +265,7 @@ class LiveSessionRunner:
         on_events: Callable[[Tuple[SessionEvent, ...]], None],
         on_terminal: Callable[[SessionResult, Optional[str]], None],
         on_failure: Callable[[str], None],
+        on_liveness: Optional[Callable[[WorkerLiveness], None]] = None,
         poll_interval_seconds: float = _DEFAULT_POLL_INTERVAL_SECONDS,
     ) -> None:
         if not isinstance(worker, LiveWorker):
@@ -289,12 +291,14 @@ class LiveSessionRunner:
         self._on_events = on_events
         self._on_terminal = on_terminal
         self._on_failure = on_failure
+        self._on_liveness = on_liveness
         self._poll_interval = float(poll_interval_seconds)
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._started = False
         self._terminal: Optional[SessionResult] = None
         self._delivered_count = 0
+        self._last_liveness: Optional[WorkerLiveness] = None
 
     # -- state --------------------------------------------------------------
 
@@ -401,6 +405,11 @@ class LiveSessionRunner:
                 last = len(events)
                 self._delivered_count = last
                 self._call(self._on_events, events)
+            snapshot = getattr(self._worker, "liveness", None)
+            if snapshot is not None and snapshot != self._last_liveness:
+                self._last_liveness = snapshot
+                if self._on_liveness is not None:
+                    self._call(self._on_liveness, snapshot)
             if events and events[-1].event_kind in _TERMINAL_KINDS:
                 return
             pid = self._worker.pid

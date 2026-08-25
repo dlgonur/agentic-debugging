@@ -58,6 +58,7 @@ from agentic_debugger.application.session import (
 from agentic_debugger.application.worker_protocol import (
     MAX_WORKER_LINE_BYTES,
     WorkerNotification,
+    WorkerLiveness,
     cancel_message,
     parse_worker_message,
     start_message,
@@ -196,6 +197,7 @@ class SessionWorkerProcess:
         self._result: Optional[SessionResult] = None
         self._startup_error: Optional[WorkerStartupError] = None
         self._journal_offset = 0
+        self._liveness: Optional[WorkerLiveness] = None
 
     # -- properties ---------------------------------------------------------
 
@@ -221,6 +223,12 @@ class SessionWorkerProcess:
         sequence notifications; the durable journal is authoritative)."""
         with self._lock:
             return tuple(self._events)
+
+    @property
+    def liveness(self) -> Optional[WorkerLiveness]:
+        """Latest safe side-band snapshot; it is never journaled."""
+        with self._lock:
+            return self._liveness
 
     @property
     def job_assigned(self) -> bool:
@@ -591,6 +599,9 @@ class SessionWorkerProcess:
                 # The notification carries only the sequence; the durable
                 # journal is the event authority and the parent catches up.
                 self._catch_up_journal()
+            elif notification.kind == "liveness":
+                with self._lock:
+                    self._liveness = notification.liveness
             elif notification.kind == "terminal":
                 with self._lock:
                     self._terminal = notification

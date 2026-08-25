@@ -52,6 +52,7 @@ from agentic_debugger.application.presentation import (
     current_source,
     reduce_event,
 )
+from agentic_debugger.application.live_execution import ExecutionMode, LiveExecutionState, project_live_execution
 from agentic_debugger.application.replay import phase_boundaries
 from agentic_debugger.application.session import SessionResult
 from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
@@ -60,6 +61,7 @@ from agentic_debugger.ui.widgets import (
     DebuggerPanel,
     EvidenceState,
     LiveBar,
+    LiveExecutionFeed,
     LiveRunContextPanel,
     PatchPanel,
     ReplayBar,
@@ -1094,12 +1096,16 @@ class WorkspaceScreen(Screen):
                 with TabbedContent(id="pane-tabs"):
                     with TabPane("Source", id="tab-source"):
                         yield SourcePanel(id="source-pane")
+                        yield LiveExecutionFeed(id="source-live-feed")
                     with TabPane("Debugger", id="tab-debugger"):
                         yield DebuggerPanel(id="debugger-pane")
+                        yield LiveExecutionFeed(id="debugger-live-feed")
                     with TabPane("Patch", id="tab-patch"):
                         yield PatchPanel(id="patch-pane")
+                        yield LiveExecutionFeed(id="patch-live-feed")
                     with TabPane("Verifier", id="tab-verifier"):
                         yield VerifierPanel(id="verifier-pane")
+                        yield LiveExecutionFeed(id="verifier-live-feed")
                     with TabPane("Activity", id="tab-activity"):
                         yield ActivityPanel(id="activity-pane")
                     with TabPane("Timeline", id="tab-timeline"):
@@ -1118,6 +1124,7 @@ class WorkspaceScreen(Screen):
             # app-owned live state is authoritative, so catch up now; the
             # panes render whatever terminal/failure fields already exist.
             self.refresh_live()
+            self.set_interval(0.5, self.refresh_live)
         else:
             self._render_all()
         self._update_live_context_visibility(self.size.width)
@@ -1148,7 +1155,9 @@ class WorkspaceScreen(Screen):
                 continue
             self._live_last_sequence = event.sequence
             self._view = reduce_event(self._view, event)
-            self._live_events = self._live_events + (event,)
+            # Compatibility-only cursor support; the durable reducer already
+            # owns the full bounded presentation timeline.
+            self._live_events = (self._live_events + (event,))[-2000:]
             # The visible cancelling state comes from the recorded
             # ``session.cancel_requested`` evidence, never from the key
             # press alone; the terminal still waits for worker evidence.
@@ -1321,10 +1330,18 @@ class WorkspaceScreen(Screen):
         self.query_one("#activity-pane", ActivityPanel).update_view(view)
         boundaries = self._current_boundaries()
         self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
-        if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
-            self.query_one("#live-run-context", LiveRunContextPanel).update_view(
-                view, elapsed=self._live_elapsed()
-            )
+        execution: Optional[LiveExecutionState]
+        if self.mode is WorkspaceMode.LIVE:
+            execution = self.app.live_execution_state()
+        else:
+            execution = project_live_execution(view, mode=ExecutionMode.REPLAY)
+        if execution is not None:
+            for feed_id in ("#source-live-feed", "#debugger-live-feed", "#patch-live-feed", "#verifier-live-feed"):
+                self.query_one(feed_id, LiveExecutionFeed).update_execution(
+                    execution, rows=3 if self.size.width < 100 else 5
+                )
+            if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
+                self.query_one("#live-run-context", LiveRunContextPanel).update_execution(execution)
         self._render_bar()
 
     def _live_elapsed(self) -> str:
@@ -1372,9 +1389,22 @@ class WorkspaceScreen(Screen):
                 and self._live_terminal is None
                 and self._live_failure is None
             ):
-                bar.update(
-                    f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]"
-                )
+                state = self.app.live_execution_state()
+                if state is not None and self.size.width < 100:
+                    ordinal = state.request_ordinal
+                    req = (
+                        f"req {ordinal}/{state.ceilings.model_requests}"
+                        if ordinal is not None and state.ceilings.model_requests is not None
+                        else f"req {ordinal}" if ordinal is not None else "req —"
+                    )
+                    detail = f"LIVE · {state.operation_label} · {req}"
+                    if state.request_elapsed_seconds is not None:
+                        detail += f" · {state.request_elapsed_seconds:.0f}s"
+                    if state.last_activity_age_seconds is not None:
+                        detail += f" · last {state.last_activity_age_seconds:.0f}s"
+                    bar.update(f"[dim]{_markup_escape(detail)}   {WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
+                else:
+                    bar.update(f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
             else:
                 bar.update(
                     f"[dim]{WORKSPACE_FOOTER_IDLE}   ? help[/]"

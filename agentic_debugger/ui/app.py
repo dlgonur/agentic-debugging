@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import os
 import secrets
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional, Tuple
@@ -44,6 +45,10 @@ from agentic_debugger.application.command_config import (
 )
 from agentic_debugger.application.events import SessionEvent, SourceKind
 from agentic_debugger.application.history import HistoryStore
+from agentic_debugger.application.live_execution import (
+    EphemeralSnapshot, ExecutionMode, KnownCeilings, LiveExecutionState,
+    project_live_execution,
+)
 from agentic_debugger.application.level32 import (
     LADDER_TASK_IDS,
     ladder_task_metadata,
@@ -65,6 +70,7 @@ from agentic_debugger.application.replay import SessionReplaySource
 from agentic_debugger.application.session import SessionBudgets, SessionResult, SessionSpec
 from agentic_debugger.application.sources import ExecutionSourceSpec
 from agentic_debugger.application.worker_process import SessionWorkerProcess
+from agentic_debugger.application.worker_protocol import WorkerLiveness
 from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
 from agentic_debugger.ui.screens import (
     HomeScreen,
@@ -206,6 +212,8 @@ class LocalApplicationV1(App):
         self._live_view: Optional[SessionViewState] = None
         self._live_events: Tuple[SessionEvent, ...] = ()
         self._live_last_sequence = -1
+        self._live_snapshot: Optional[EphemeralSnapshot] = None
+        self._live_generation = 0
         self._live_workspace: Optional[WorkspaceScreen] = None
 
     # -- properties ---------------------------------------------------------
@@ -233,6 +241,26 @@ class LocalApplicationV1(App):
     def live_view(self) -> Optional[SessionViewState]:
         """The app-owned live presentation state (None before a live start)."""
         return self._live_view
+
+    def live_execution_state(self) -> Optional[LiveExecutionState]:
+        if self._live_view is None:
+            return None
+        ceilings = KnownCeilings()
+        if self._live_view.task_id in LADDER_TASK_IDS and self._live_view.task_id != LEVEL32_TASK_ID:
+            from agentic_debugger.application.ollama_cloud_source import ladder_runtime_contract
+            contract = ladder_runtime_contract(self._live_view.task_id)
+            ceilings = KnownCeilings(contract.max_model_requests, contract.max_controller_steps)
+        elif self._live_view.task_id == LEVEL32_TASK_ID:
+            from agentic_debugger.evaluation.live import LiveTreatmentBudget
+            budget = LiveTreatmentBudget(max_retries=1)
+            ceilings = KnownCeilings(
+                budget.max_model_requests, budget.max_controller_steps,
+                budget.max_patch_attempts,
+            )
+        return project_live_execution(
+            self._live_view, mode=ExecutionMode.LIVE, ceilings=ceilings,
+            snapshot=self._live_snapshot, now_monotonic=time.monotonic(),
+        )
 
     # -- boot ---------------------------------------------------------------
 
@@ -382,6 +410,7 @@ class LocalApplicationV1(App):
         if self._live_runner is not None:
             raise RuntimeError("a live session is already active")
         session_id = make_session_id()
+        generation = self._live_generation + 1
         run_id = f"run-{session_id}"
         if source_kind is SourceKind.LEVEL32_OPERATOR:
             if task_id != LEVEL32_TASK_ID:
@@ -478,6 +507,9 @@ class LocalApplicationV1(App):
             on_events=self._on_live_events,
             on_terminal=self._on_live_terminal,
             on_failure=self._on_live_failure,
+            on_liveness=lambda liveness: self._on_live_liveness(
+                generation, session_id, liveness
+            ),
         )
         workspace = WorkspaceScreen(
             mode=WorkspaceMode.LIVE,
@@ -490,6 +522,8 @@ class LocalApplicationV1(App):
         self._live_view = view
         self._live_events = ()
         self._live_last_sequence = -1
+        self._live_generation = generation
+        self._live_snapshot = None
         self._live_workspace = workspace
         if isinstance(self.screen, StartSessionScreen):
             # A successful launch replaces the start form on the stack so
@@ -533,7 +567,42 @@ class LocalApplicationV1(App):
                 continue
             self._live_last_sequence = event.sequence
             self._live_view = reduce_event(self._live_view, event)
-            self._live_events = self._live_events + (event,)
+            # A journal prefix is already retained by the worker and reduced
+            # into the bounded timeline. Keep only a bounded compatibility
+            # tail; never create a second unbounded event log in the app.
+            self._live_events = (self._live_events + (event,))[-2000:]
+        workspace = self._live_workspace
+        if workspace is not None and workspace.is_mounted:
+            workspace.refresh_live()
+
+    def _on_live_liveness(
+        self, generation: int, session_id: str, liveness: WorkerLiveness
+    ) -> None:
+        try:
+            self.call_from_thread(self._live_liveness_ui, generation, session_id, liveness)
+        except Exception:
+            pass
+
+    def _live_liveness_ui(
+        self, generation: int, session_id: str, liveness: WorkerLiveness
+    ) -> None:
+        if (
+            self._live_view is None
+            or self._live_view.status.terminal
+            or generation != self._live_generation
+            or self._live_identity is None
+            or self._live_identity.session_id != session_id
+        ):
+            return
+        self._live_snapshot = EphemeralSnapshot(
+            generation=self._live_generation,
+            request_index=liveness.request_index,
+            request_elapsed_seconds=liveness.request_elapsed_seconds,
+            last_activity_age_seconds=liveness.last_activity_age_seconds,
+            transport_alive=liveness.transport_alive,
+            watchdog_idle_seconds=liveness.watchdog_idle_seconds,
+            received_monotonic=time.monotonic(),
+        )
         workspace = self._live_workspace
         if workspace is not None and workspace.is_mounted:
             workspace.refresh_live()

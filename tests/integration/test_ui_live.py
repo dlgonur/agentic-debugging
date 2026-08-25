@@ -139,7 +139,7 @@ class TestLiveStartAndProgression:
             assert live_view.cleanup_verified is True
 
             # completed run appears in app-owned history
-            await pilot.press("q")
+            await pilot.press("h")
             assert isinstance(pilot.app.screen, HomeScreen)
             table = pilot.app.screen.query_one("#history-table")
             assert table.row_count == 1
@@ -296,7 +296,7 @@ class TestStartSessionScreen:
             )
             start_screen = pilot.app.screen
             assert len(start_screen._task_options) == len(pilot.app.curated_task_options())
-            assert len(start_screen._task_options) >= 5  # canonical curated catalog
+            assert len(start_screen._task_options) == 4  # accepted capability ladder
             # choose a task + policy through the screen state API
             start_screen._task_id = TASK_ID
             start_screen._policy = "pdb-on-uncertainty"
@@ -390,7 +390,7 @@ class TestStartSessionScreen:
             session1_id = app.live_view.session_id
             assert session1_id is not None
             # q returns to Home (the app says "q returns to history").
-            await pilot.press("q")
+            await pilot.press("h")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -433,7 +433,7 @@ class TestStartSessionScreen:
             session2_id = app.live_view.session_id
             assert session2_id is not None
             assert session2_id != session1_id
-            await pilot.press("q")
+            await pilot.press("h")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
