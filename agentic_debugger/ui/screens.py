@@ -34,6 +34,7 @@ from agentic_debugger.application.events import (
     SessionStatus,
     SourceKind,
 )
+from agentic_debugger.application.level32 import LEVEL32_TASK_ID
 from agentic_debugger.application.history import (
     HistoryClassification,
     SessionHistoryEntry,
@@ -127,6 +128,7 @@ def _compact_source_label(source_kind: Optional[SourceKind]) -> str:
         SourceKind.SESSION_BUNDLE: "bundle",
         SourceKind.CANONICAL_TRAJECTORY: "trajectory",
         SourceKind.EXPERIMENT_EVIDENCE: "experiment",
+        SourceKind.LEVEL32_OPERATOR: "Level-32 operator",
     }.get(source_kind, source_kind.value)
 
 
@@ -170,6 +172,7 @@ def render_view_header(
         SourceKind.SESSION_BUNDLE: "recorded bundle",
         SourceKind.CANONICAL_TRAJECTORY: "recorded trajectory",
         SourceKind.EXPERIMENT_EVIDENCE: "recorded experiment",
+        SourceKind.LEVEL32_OPERATOR: "Level-32 authoritative operator",
     }.get(view.source_kind, view.source_kind.value)
     head.append(f"  ·  {source_label}")
     head.append("\n")
@@ -410,6 +413,23 @@ class SessionSettingRow(Static):
             event.prevent_default()
             event.stop()
 
+
+class ReadonlySettingRow(Static):
+    """Flat task-specific metadata row with no editable affordance."""
+
+    def __init__(self, label: str, **kwargs: Any) -> None:
+        super().__init__("", **kwargs)
+        self.label = label
+        self._value = ""
+
+    def set_value(self, value: str) -> None:
+        self._value = value
+        text = Text()
+        text.append("  ", style="dim")
+        text.append(f"{self.label:<12}", style="#8b949e")
+        text.append(self._value, style="#c9d1d9")
+        self.update(text)
+
 class TimeLimitRow(Static):
     """A compact, keyboard-focusable time-limit setting row."""
 
@@ -568,7 +588,7 @@ class ChoicePickerScreen(Screen):
             self._refresh_option_markers()
         else:
             option_list.display = False
-            self.mount(Static("No configured model profiles.", id="choice-picker-empty"),
+            self.mount(Static("No eligible model profiles.", id="choice-picker-empty"),
                        before=self.query_one("#choice-picker-hint"))
 
     def _option_renderable(self, index: int) -> Text:
@@ -645,7 +665,9 @@ class StartSessionScreen(Screen):
                     yield SessionSettingRow("Model", row_key="model", id="model-row")
                     yield SessionSettingRow("Task", row_key="task", id="task-row")
                     yield SessionSettingRow("Debugger", row_key="debugger", id="debugger-row")
+                    yield ReadonlySettingRow("Debugger", id="level32-debugger-row")
                     yield TimeLimitRow(id="time-limit-row")
+                    yield ReadonlySettingRow("Treatment", id="level32-treatment-row")
                     yield Static("", id="start-status")
                     yield Static("", id="start-trust")
                 yield Static("s start   h history   up/down navigate   enter edit   esc back   q quit", id="start-footer")
@@ -681,6 +703,8 @@ class StartSessionScreen(Screen):
         )
 
     def _focusable_row_ids(self) -> list[str]:
+        if self._task_id == LEVEL32_TASK_ID:
+            return ["task", "model"]
         rows = ["mode"]
         if self._mode == self.MODE_CONFIGURED:
             rows.append("model")
@@ -704,6 +728,8 @@ class StartSessionScreen(Screen):
         self._focus_row(rows[(rows.index(current) - 1) % len(rows)] if current in rows else rows[0])
 
     def _activate_row(self, row_key: str) -> None:
+        if self._task_id == LEVEL32_TASK_ID and row_key not in {"task", "model"}:
+            return
         self._open_time_limit_editor() if row_key == "time_limit" else self._open_choice_picker(row_key)
 
     def _choice(self, value: str, title: str, description: str = "", secondary: str = "") -> ChoiceOption:
@@ -730,8 +756,20 @@ class StartSessionScreen(Screen):
             ]
             title, current = "Select debugger policy", self._policy
         elif row_key == "model":
-            choices = [self._choice(p.profile_id, p.display_name, f"command: {p.executable}", p.profile_id) for p in self._profiles]
-            title, current = "Select model profile", self._profile_id
+            if self._task_id == LEVEL32_TASK_ID:
+                choices = [
+                    self._choice(
+                        p.alias,
+                        p.display_name,
+                        f"{p.readiness} · Ollama Cloud",
+                        p.alias,
+                    )
+                    for p in self.app.level32_model_profiles()
+                ]
+                title, current = "Select model", self._profile_id
+            else:
+                choices = [self._choice(p.profile_id, p.display_name, f"command: {p.executable}", p.profile_id) for p in self._profiles]
+                title, current = "Select model profile", self._profile_id
         else:
             return
         self.app.push_screen(ChoicePickerScreen(
@@ -745,13 +783,18 @@ class StartSessionScreen(Screen):
             self._refresh_mode()
         elif row_key == "task":
             self._task_id = value
-            self._render_rows()
+            self._refresh_mode()
         elif row_key == "debugger":
             self._policy = value
             self._render_rows()
         elif row_key == "model":
             self._profile_id = value
-            self._render_rows()
+            if self._task_id == LEVEL32_TASK_ID:
+                # Model selection changes the Level-32 readiness/status state,
+                # not only the displayed row value.
+                self._refresh_mode()
+            else:
+                self._render_rows()
         self._focus_row(row_key)
         self._update_context()
 
@@ -774,9 +817,16 @@ class StartSessionScreen(Screen):
 
     @property
     def start_available(self) -> bool:
+        if self._task_id == LEVEL32_TASK_ID:
+            return any(p.alias == self._profile_id for p in self.app.level32_model_profiles())
         return self._mode != self.MODE_CONFIGURED or bool(self._profiles and self._profile_id)
 
     def _profile_display_name(self) -> str:
+        if self._task_id == LEVEL32_TASK_ID:
+            profiles = self.app.level32_model_profiles()
+            if self._profile_id is None:
+                return "Not selected" if profiles else "Not available"
+            return next((p.display_name for p in profiles if p.alias == self._profile_id), "Not available")
         return next((p.display_name for p in self._profiles if p.profile_id == self._profile_id), "Not configured")
 
     def _task_display_name(self) -> str:
@@ -796,24 +846,56 @@ class StartSessionScreen(Screen):
         self.query_one("#task-row", SessionSettingRow).set_value(self._task_display_name())
         self.query_one("#debugger-row", SessionSettingRow).set_value("On uncertainty" if self._policy == "pdb-on-uncertainty" else "Disabled")
         self.query_one("#time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
+        self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value("Exact PDB required")
+        self.query_one("#level32-treatment-row", ReadonlySettingRow).set_value("Frozen Level-32")
 
     def _refresh_mode(self) -> None:
+        level32 = self._task_id == LEVEL32_TASK_ID
         configured = self._mode == self.MODE_CONFIGURED
-        self.query_one("#model-row", SessionSettingRow).display = configured
+        self.query_one("#mode-row", SessionSettingRow).display = not level32
+        self.query_one("#model-row", SessionSettingRow).display = configured or level32
+        self.query_one("#debugger-row", SessionSettingRow).display = not level32
+        self.query_one("#level32-debugger-row", ReadonlySettingRow).display = level32
+        self.query_one("#time-limit-row", TimeLimitRow).display = not level32
+        self.query_one("#level32-treatment-row", ReadonlySettingRow).display = level32
         status = self.query_one("#start-status", Static)
-        if self._config_error is not None and configured:
+        if level32 and not self.app.level32_model_profiles():
+            status.update("[yellow]start unavailable — no eligible Ollama model profiles[/]")
+        elif level32 and self._profile_id is None:
+            status.update("[yellow]choose an eligible Ollama model[/]")
+        elif self._config_error is not None and configured:
             status.update(f"[red]configuration error: {_markup_escape(self._config_error)}[/]")
         elif configured and not self._profiles:
             status.update("[yellow]start unavailable — no configured model profiles[/]")
         else:
             status.update("")
         trust = self.query_one("#start-trust", Static)
-        trust.update("[yellow]configured commands are trusted user configuration; network isolation is not enforced[/]" if configured else "")
-        trust.display = configured and self.size.width < 100
+        trust.update("[yellow]Level-32 delegates to the frozen authoritative operator; Start runs one live treatment[/]" if level32 else ("[yellow]configured commands are trusted user configuration; network isolation is not enforced[/]" if configured else ""))
+        trust.display = (configured or level32) and self.size.width < 100
         self._render_rows()
         self._update_context()
 
     def _update_context(self) -> None:
+        if self._task_id == LEVEL32_TASK_ID:
+            ready = "Yes" if self.start_available else "No"
+            profiles = self.app.level32_model_profiles()
+            if self._profile_id is not None:
+                alias = self._profile_id
+            elif profiles:
+                alias = "—"
+            else:
+                alias = "Not available"
+            lines = [
+                "[#8b949e]Task[/]\nLevel 32/100",
+                f"\n[#8b949e]Model[/]\n{_markup_escape(self._profile_display_name())}",
+                f"\n[#8b949e]Alias[/]\n{_markup_escape(alias)}",
+                "\n[#8b949e]Debugger[/]\nExact PDB",
+                "\n[#8b949e]Treatment[/]\nFrozen Level-32",
+                "\n[#8b949e]Evaluation[/]\nOfficial",
+                f"\n[#8b949e]Ready[/]\n{ready}",
+            ]
+            self.query_one("#context-summary", Static).update("\n".join(lines))
+            return
         ready = "Yes" if self.start_available and self._task_id else "No"
         lines = [
             f"[#8b949e]Mode[/]\n{_markup_escape('Deterministic offline' if self._mode == self.MODE_DETERMINISTIC else 'Configured command model')}",
@@ -864,6 +946,18 @@ class StartSessionScreen(Screen):
             status.update("[yellow]start unavailable — choose a configured model profile[/]")
             return
         try:
+            if self._task_id == LEVEL32_TASK_ID:
+                if not self.start_available:
+                    status.update("[yellow]start unavailable — choose an eligible Ollama model[/]")
+                    return
+                self.app.start_live_session(
+                    task_id=LEVEL32_TASK_ID,
+                    policy="exact-pdb-level32-frozen",
+                    max_elapsed_seconds=None,
+                    source_kind=SourceKind.LEVEL32_OPERATOR,
+                    profile_id=self._profile_id,
+                )
+                return
             self.app.start_live_session(
                 task_id=str(self._task_id),
                 policy=self._policy,
@@ -1079,6 +1173,9 @@ class WorkspaceScreen(Screen):
                 extra = "cancelling…"
             else:
                 extra = None
+            if view.model_provenance is not None and view.model_provenance.display_name:
+                model_extra = f"model: {view.model_provenance.display_name}"
+                extra = f"{model_extra}  ·  {extra}" if extra else model_extra
         header = render_view_header(
             view, mode=mode, mode_style=mode_style,
             replay_position=position, extra=extra,

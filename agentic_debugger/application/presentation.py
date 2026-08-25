@@ -166,6 +166,8 @@ class VerifierSummaryView:
     p2p_passed: Optional[int]
     p2p_total: Optional[int]
     workspace_cleaned: Optional[bool]
+    classification: Optional[str] = None
+    official_test_execution_proven: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +223,9 @@ class ModelProvenanceView:
     display_name: Optional[str] = None
     protocol_version: Optional[str] = None
     tool_version: Optional[str] = None
+    treatment_revision: Optional[int] = None
+    treatment_id: Optional[str] = None
+    result_location: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -668,6 +673,9 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
                 display_name=payload.get("display_name"),
                 protocol_version=payload.get("protocol_version"),
                 tool_version=payload.get("tool_version"),
+                treatment_revision=payload.get("treatment_revision"),
+                treatment_id=payload.get("treatment_id"),
+                result_location=payload.get("result_location"),
             ),
         )
 
@@ -881,6 +889,8 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
             p2p_passed=payload["p2p_passed"],
             p2p_total=payload["p2p_total"],
             workspace_cleaned=payload["workspace_cleaned"],
+            classification=payload.get("classification"),
+            official_test_execution_proven=payload.get("official_test_execution_proven"),
         )
         attempts = state.patch_attempts
         if payload["status"] == EvaluationStatus.COMPLETED.value:

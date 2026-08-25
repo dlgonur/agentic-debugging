@@ -643,6 +643,21 @@ class TestPatchView:
         assert view.patch_attempts[0].stage is PatchStage.REJECTED
         assert view.patch_attempts[0].rejection_reason == "malformed_diff"
 
+    def test_verifier_execution_proven_is_preserved_when_present(self):
+        view = reduce_all(
+            state_running(),
+            (
+                make_event(
+                    SessionEventKind.VERIFIER_COMPLETED,
+                    {**VERIFIER_COMPLETED_PAYLOAD, "official_test_execution_proven": True},
+                    sequence=3,
+                    run_id=VALID_RUN_ID,
+                ),
+            ),
+        )
+        assert view.verifier_summary is not None
+        assert view.verifier_summary.official_test_execution_proven is True
+
     def test_applied_then_reverted(self):
         view = reduce_all(
             state_running(),

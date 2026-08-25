@@ -413,6 +413,20 @@ class TestPaneRendering:
         assert "RESOLVED" in plain
         assert_no_style_tags(plain)
 
+    def test_verifier_pane_shows_explicit_official_execution_evidence(self):
+        view = fold(bracket_stream())
+        assert view.verifier_summary is not None
+        view = replace(
+            view,
+            verifier_summary=replace(
+                view.verifier_summary,
+                official_test_execution_proven=True,
+            ),
+        )
+        plain = VerifierPanel._render_view(view).plain
+        assert "official tests executed" in plain
+        assert "Yes" in plain
+
     def test_redaction_marker_remains_visible(self):
         view = fold(bracket_stream())
         plain = DebuggerPanel._render_view(view).plain

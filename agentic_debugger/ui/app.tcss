@@ -90,6 +90,11 @@ TimeLimitRow:focus {
     display: none;
 }
 
+#level32-debugger-row,
+#level32-treatment-row {
+    display: none;
+}
+
 #start-status,
 #start-trust {
     width: 1fr;

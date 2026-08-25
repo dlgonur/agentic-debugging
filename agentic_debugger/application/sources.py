@@ -61,7 +61,11 @@ class ModelExecutionError(RuntimeError):
         super().__init__(message)
         self.termination_reason = termination_reason
 
-_STARTABLE_KINDS = frozenset({SourceKind.OFFLINE_DEMO, SourceKind.CONFIGURED_MODEL})
+_STARTABLE_KINDS = frozenset({
+    SourceKind.OFFLINE_DEMO,
+    SourceKind.CONFIGURED_MODEL,
+    SourceKind.LEVEL32_OPERATOR,
+})
 
 _MAX_POLICY_CHARS = 64
 _MAX_CONFIG_REF_CHARS = 512
@@ -141,6 +145,11 @@ class ExecutionSourceSpec:
             if self.model_config_ref is None:
                 raise ApplicationInputError(
                     "configured_model sources require a model_config_ref"
+                )
+        elif self.kind is SourceKind.LEVEL32_OPERATOR:
+            if self.model_config_ref is None:
+                raise ApplicationInputError(
+                    "level32_operator sources require a canonical model alias"
                 )
         elif self.model_config_ref is not None:
             raise ApplicationInputError(

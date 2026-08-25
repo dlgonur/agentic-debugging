@@ -634,8 +634,16 @@ class VerifierPanel(VerticalScroll):
         )
         _append_kv(text, "fail-to-pass", _counts(summary.f2p_passed, summary.f2p_total))
         _append_kv(text, "pass-to-pass", _counts(summary.p2p_passed, summary.p2p_total))
+        if summary.official_test_execution_proven is not None:
+            _append_kv(
+                text,
+                "official tests executed",
+                "Yes" if summary.official_test_execution_proven else "No",
+            )
         if summary.workspace_cleaned is not None:
             _append_kv(text, "workspace cleaned", str(summary.workspace_cleaned))
+        if summary.classification:
+            _append_kv(text, "Level-32 classification", summary.classification)
         text.append(
             "\nThe verifier result is the correctness authority. "
             "Application completion is operational only.\n",

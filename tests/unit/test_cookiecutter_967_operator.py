@@ -511,11 +511,12 @@ def test_shared_image_gate_runs_before_model_adapter_setup(tmp_path, monkeypatch
     assert len(gate_calls) == len(representatives)
 
 
-def test_frozen_model_rejects_revision_and_other_models_get_fresh_identity():
+def test_frozen_model_fresh_revisions_keep_transport_and_other_models_get_fresh_identity():
     import pytest
 
-    with pytest.raises(operator.ProofError, match="frozen GPT-OSS 20B"):
-        operator._treatment_id_for_model("gpt-oss:20b-cloud", 2)
+    assert operator._treatment_id_for_model("gpt-oss:20b-cloud", 2).endswith(
+        "gpt-oss-20b-cloud-v2-workspace-derived-official-git-diff-v1"
+    )
     with pytest.raises(operator.ProofError, match="positive integer"):
         operator._treatment_id_for_model("qwen3.5:cloud", 0)
 

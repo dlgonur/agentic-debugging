@@ -162,6 +162,39 @@ class TestSessionEventSchema:
 
 
 class TestPayloadBounds:
+    def test_verifier_execution_proven_is_optional_and_backward_compatible(self):
+        historical = SessionEvent.from_mapping(
+            make_event_mapping(
+                SessionEventKind.VERIFIER_COMPLETED,
+                {
+                    "status": "COMPLETED",
+                    "outcome": "RESOLVED",
+                    "f2p_passed": 1,
+                    "f2p_total": 1,
+                    "p2p_passed": 1,
+                    "p2p_total": 1,
+                    "workspace_cleaned": True,
+                },
+            )
+        )
+        assert "official_test_execution_proven" not in historical.payload
+        current = SessionEvent.from_mapping(
+            make_event_mapping(
+                SessionEventKind.VERIFIER_COMPLETED,
+                {
+                    "status": "COMPLETED",
+                    "outcome": None,
+                    "f2p_passed": None,
+                    "f2p_total": None,
+                    "p2p_passed": None,
+                    "p2p_total": None,
+                    "workspace_cleaned": False,
+                    "official_test_execution_proven": False,
+                },
+            )
+        )
+        assert current.payload["official_test_execution_proven"] is False
+
     def test_oversized_text_rejected(self):
         with pytest.raises(SchemaValidationError):
             SessionEvent.from_mapping(

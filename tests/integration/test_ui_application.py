@@ -226,6 +226,84 @@ class TestBootAndHome:
 
         run_headless(make_app(tmp_path), scenario, size=(60, 20))
 
+
+class TestLevel32NewSession:
+    def test_level32_task_switches_to_frozen_model_configuration_and_back(self, tmp_path):
+        async def scenario(pilot):
+            start = pilot.app.screen
+            # Open the shared task picker and select the appended Level-32 entry.
+            await pilot.press("down", "enter")
+            assert isinstance(pilot.app.screen, ChoicePickerScreen)
+            picker = pilot.app.screen
+            assert any("Level 32/100" in choice.title for choice in picker.choices)
+            for _ in range(len(picker.choices) - 1):
+                await pilot.press("down")
+            await pilot.press("enter")
+
+            assert start.task_id == "audreyr__cookiecutter-967"
+            assert start.query_one("#mode-row").display is False
+            assert start.query_one("#time-limit-row").display is False
+            assert start.query_one("#debugger-row").display is False
+            assert start.query_one("#level32-debugger-row").display is True
+            assert start.query_one("#level32-treatment-row").display is True
+            assert start.start_available is False
+            assert "Not selected" in start.query_one("#model-row").render().plain
+            context = start.query_one("#context-summary").render().plain
+            assert "Model\nNot selected" in context
+            assert "Alias\n—" in context
+            assert "Ready" in str(start.query_one("#context-summary").render())
+            assert "No" in str(start.query_one("#context-summary").render())
+            assert "choose an eligible Ollama model" in start.query_one("#start-status").render().plain
+
+            # Model choices are canonical aliases from the live profile registry.
+            await pilot.press("down", "enter")
+            assert isinstance(pilot.app.screen, ChoicePickerScreen)
+            model_picker = pilot.app.screen
+            assert model_picker.title == "Select model"
+            assert len(model_picker.choices) == 15
+            assert all(":" in choice.value for choice in model_picker.choices)
+            await pilot.press("enter")
+            assert start.profile_id == model_picker.choices[0].value
+            assert start.start_available is True
+            assert model_picker.choices[0].title in start.query_one("#model-row").render().plain
+            context = start.query_one("#context-summary").render().plain
+            assert model_picker.choices[0].value in context
+            assert "Ready\nYes" in context
+            assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
+            assert start.query_one("#level32-debugger-row").render().plain.find("Exact PDB") >= 0
+
+            # Selecting a normal task restores the ordinary editable shell.
+            await pilot.press("up", "enter")
+            assert isinstance(pilot.app.screen, ChoicePickerScreen)
+            await pilot.press("home", "enter")
+            assert start.task_id != "audreyr__cookiecutter-967"
+            assert start.query_one("#mode-row").display is True
+            assert start.query_one("#time-limit-row").display is True
+            assert start.query_one("#debugger-row").display is True
+            assert start.query_one("#level32-treatment-row").display is False
+
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+
+    def test_level32_empty_eligible_roster_is_distinguished_from_unselected(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(LocalApplicationV1, "level32_model_profiles", lambda self: ())
+
+        async def scenario(pilot):
+            start = pilot.app.screen
+            await pilot.press("down", "enter")
+            for _ in range(len(pilot.app.screen.choices) - 1):
+                await pilot.press("down")
+            await pilot.press("enter")
+
+            assert start.start_available is False
+            assert "Not available" in start.query_one("#model-row").render().plain
+            context = start.query_one("#context-summary").render().plain
+            assert "Model\nNot available" in context
+            assert "Ready\nNo" in context
+            assert "start unavailable — no eligible Ollama model profiles" in start.query_one("#start-status").render().plain
+            assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
+
+        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+
     def test_new_session_wide_context_and_picker_geometry(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen

@@ -43,6 +43,13 @@ from agentic_debugger.application.command_config import (
 )
 from agentic_debugger.application.events import SessionEvent, SourceKind
 from agentic_debugger.application.history import HistoryStore
+from agentic_debugger.application.level32 import (
+    LEVEL32_TASK_ID,
+    Level32OperatorWorker,
+    build_level32_spec,
+    level32_model_profiles,
+    next_level32_treatment,
+)
 from agentic_debugger.application.presentation import (
     PresentationIdentity,
     SessionViewState,
@@ -66,6 +73,7 @@ DEFAULT_HISTORY_DIR_NAME = "AgenticDebugger"
 
 _COOPERATIVE_GRACE_SECONDS = 10.0
 _READY_TIMEOUT_SECONDS = 30.0
+LEVEL32_TASK_TITLE = "Level 32/100 — Cookiecutter #967"
 
 _CURATED_TASK_TITLES: dict[str, str] = {
     "curated-none-handling-001": "Format an optional display name",
@@ -103,6 +111,8 @@ def task_display_title(task_id: str, repo_root: Optional[Path] = None) -> str:
                 pass
     if task_id in _CURATED_TASK_TITLES:
         return _CURATED_TASK_TITLES[task_id]
+    if task_id == LEVEL32_TASK_ID:
+        return LEVEL32_TASK_TITLE
     return task_id
 
 
@@ -315,10 +325,11 @@ class LocalApplicationV1(App):
 
     def curated_task_options(self) -> Tuple[Tuple[str, str], ...]:
         """Human-readable options (label, task_id) for task selectors."""
-        return tuple(
+        curated = tuple(
             task_display_option(task_id, self._repository_root)
             for task_id in self.curated_task_ids()
         )
+        return curated + ((f"{LEVEL32_TASK_TITLE} · {LEVEL32_TASK_ID}", LEVEL32_TASK_ID),)
 
     def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
         """Safe profile summaries for the Start screen, plus a load error.
@@ -334,6 +345,10 @@ class LocalApplicationV1(App):
             return self._config_store.summaries(), None
         except CommandConfigError as exc:
             return (), str(exc)
+
+    def level32_model_profiles(self):
+        """Return the canonical, local-only Level-32 Ollama roster."""
+        return level32_model_profiles()
 
     def start_live_session(
         self,
@@ -362,7 +377,32 @@ class LocalApplicationV1(App):
             raise RuntimeError("a live session is already active")
         session_id = make_session_id()
         run_id = f"run-{session_id}"
-        if source_kind is SourceKind.CONFIGURED_MODEL:
+        if source_kind is SourceKind.LEVEL32_OPERATOR:
+            if task_id != LEVEL32_TASK_ID:
+                raise ValueError("Level-32 operator sessions require the canonical task id")
+            if profile_id is None:
+                raise ValueError("Level-32 sessions require a canonical Ollama model alias")
+            if policy != "exact-pdb-level32-frozen":
+                raise ValueError("Level-32 debugger policy is frozen to exact PDB")
+            if max_elapsed_seconds is not None:
+                raise ValueError("Level-32 uses its frozen operator budget")
+            model = next((item for item in self.level32_model_profiles() if item.alias == profile_id), None)
+            if model is None:
+                raise ValueError("selected model is not currently Level-32 eligible")
+            revision, treatment_id, output_dir = next_level32_treatment(self._repository_root, model.alias)
+            spec = build_level32_spec(model.alias)
+            worker = Level32OperatorWorker(
+                session_dir=self.history_store.session_dir(session_id),
+                session_id=session_id,
+                run_id=run_id,
+                repository_root=self._repository_root,
+                model=model,
+                revision=revision,
+                treatment_id=treatment_id,
+                output_dir=output_dir,
+                spec=spec,
+            )
+        elif source_kind is SourceKind.CONFIGURED_MODEL:
             if profile_id is None:
                 raise ValueError("configured command-model sessions require a profile id")
             # Re-validate at start time: the configuration may have changed
@@ -390,27 +430,28 @@ class LocalApplicationV1(App):
             scenario = deterministic_source_name()
             scenario_params = {"task_id": task_id, "policy": policy}
             model_config_ref = None
-        spec = SessionSpec(
-            task_id=task_id,
-            source=ExecutionSourceSpec(
-                kind=source_kind,
+        if source_kind is not SourceKind.LEVEL32_OPERATOR:
+            spec = SessionSpec(
                 task_id=task_id,
-                policy=policy,
-                model_config_ref=model_config_ref,
-            ),
-            budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
-        )
-        worker = SessionWorkerProcess(
-            session_dir=self.history_store.session_dir(session_id),
-            session_id=session_id,
-            spec=spec,
-            run_id=run_id,
-            scenario=scenario,
-            scenario_params=scenario_params,
-            cooperative_grace_seconds=_COOPERATIVE_GRACE_SECONDS,
-            ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
-            max_elapsed_seconds=max_elapsed_seconds,
-        )
+                source=ExecutionSourceSpec(
+                    kind=source_kind,
+                    task_id=task_id,
+                    policy=policy,
+                    model_config_ref=model_config_ref,
+                ),
+                budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
+            )
+            worker = SessionWorkerProcess(
+                session_dir=self.history_store.session_dir(session_id),
+                session_id=session_id,
+                spec=spec,
+                run_id=run_id,
+                scenario=scenario,
+                scenario_params=scenario_params,
+                cooperative_grace_seconds=_COOPERATIVE_GRACE_SECONDS,
+                ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
+                max_elapsed_seconds=max_elapsed_seconds,
+            )
         identity = presentation_identity(spec)
         view = initial_session_view(identity)
         runner = LiveSessionRunner(

@@ -108,6 +108,7 @@ class SourceKind(str, Enum):
 
     OFFLINE_DEMO = "offline_demo"
     CONFIGURED_MODEL = "configured_model"
+    LEVEL32_OPERATOR = "level32_operator"
     SESSION_BUNDLE = "session_bundle"
     CANONICAL_TRAJECTORY = "canonical_trajectory"
     EXPERIMENT_EVIDENCE = "experiment_evidence"
@@ -813,9 +814,10 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         "protocol_version",
         "tool_version",
     }
+    optional = {"treatment_revision", "treatment_id", "result_location"}
     _check_required(payload, required, "model.configured payload")
-    _check_no_unknown(payload, required, "model.configured payload")
-    return {
+    _check_no_unknown(payload, required | optional, "model.configured payload")
+    result = {
         "profile_id": _bounded_text(
             payload["profile_id"], "profile_id", MAX_IDENTIFIER_CHARS
         ),
@@ -832,6 +834,13 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
             payload["tool_version"], "tool_version", MAX_SHORT_TEXT_CHARS
         ),
     }
+    if "treatment_revision" in payload:
+        result["treatment_revision"] = _nonneg_int(payload["treatment_revision"], "treatment_revision")
+    if "treatment_id" in payload:
+        result["treatment_id"] = _bounded_text(payload["treatment_id"], "treatment_id", MAX_IDENTIFIER_CHARS)
+    if "result_location" in payload:
+        result["result_location"] = _bounded_text(payload["result_location"], "result_location", MAX_SHORT_TEXT_CHARS)
+    return result
 
 
 def _payload_request_started(payload: Mapping[str, Any]) -> dict[str, Any]:
@@ -1166,7 +1175,11 @@ def _payload_verifier_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
         "status", "outcome", "f2p_passed", "f2p_total",
         "p2p_passed", "p2p_total", "workspace_cleaned",
     }
-    optional = {"private_checks_passed"}
+    optional = {
+        "private_checks_passed",
+        "classification",
+        "official_test_execution_proven",
+    }
     _check_required(payload, required, "verifier.completed payload")
     _check_no_unknown(payload, required | optional, "verifier.completed payload")
     status = payload["status"]
@@ -1186,6 +1199,13 @@ def _payload_verifier_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     }
     if "private_checks_passed" in payload:
         result["private_checks_passed"] = _bool(payload["private_checks_passed"], "private_checks_passed")
+    if "classification" in payload:
+        result["classification"] = _bounded_text_or_none(payload["classification"], "classification", MAX_SHORT_TEXT_CHARS)
+    if "official_test_execution_proven" in payload:
+        result["official_test_execution_proven"] = _bool(
+            payload["official_test_execution_proven"],
+            "official_test_execution_proven",
+        )
     return result
 
 

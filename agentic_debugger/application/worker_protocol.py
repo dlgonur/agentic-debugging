@@ -248,7 +248,11 @@ def session_spec_from_mapping(m: Any) -> SessionSpec:
 
 def can_start_new_session_kind(kind: SourceKind) -> bool:
     """Live-startable source kinds only (mirrors Task-1 authority)."""
-    return kind in (SourceKind.OFFLINE_DEMO, SourceKind.CONFIGURED_MODEL)
+    return kind in (
+        SourceKind.OFFLINE_DEMO,
+        SourceKind.CONFIGURED_MODEL,
+        SourceKind.LEVEL32_OPERATOR,
+    )
 
 
 def session_result_from_mapping(m: Any, spec: SessionSpec) -> SessionResult:

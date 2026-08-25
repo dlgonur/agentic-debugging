@@ -111,14 +111,43 @@ def _load_ollama_adapter_module(module_name: str) -> Any:
 def _treatment_id_for_model(model: str, revision: int = 1) -> str:
     if type(revision) is not int or revision < 1:
         raise ProofError("treatment revision must be a positive integer")
-    if model == "gpt-oss:20b-cloud":
-        if revision != 1:
-            raise ProofError("the frozen GPT-OSS 20B treatment accepts only revision 1")
+    if model == "gpt-oss:20b-cloud" and revision == 1:
         return TREATMENT_ID
     slug = model.replace(":", "-").replace("/", "-")
     if model == "gpt-oss:120b-cloud":
         slug = "gpt-oss-120b"
     return f"pdb-capability-level32-cookiecutter-967-{slug}-v{revision}-{CANDIDATE_TRANSPORT_ID}"
+
+
+def next_unused_treatment_revision(repository_root: str | Path, model: str) -> int:
+    """Return the next unused Level-32 revision without touching a run."""
+
+    root = Path(repository_root).resolve()
+    slug = model.replace(":", "-").replace("/", "-")
+    legacy_slug = (
+        "gpt-oss-120b"
+        if model == "gpt-oss:120b-cloud"
+        else "gpt-oss"
+        if model == "gpt-oss:20b-cloud"
+        else slug.removesuffix("-cloud")
+    )
+    prefixes = {
+        f"level32-cookiecutter-967-{slug}-v",
+        f"level32-cookiecutter-967-{legacy_slug}-v",
+    }
+    highest = 0
+    experiment_root = root / "experiments" / "pdb_capability_ladder"
+    if experiment_root.is_dir():
+        for entry in experiment_root.iterdir():
+            if not entry.is_dir():
+                continue
+            for prefix in prefixes:
+                if entry.name.startswith(prefix):
+                    suffix = entry.name[len(prefix):].split("-", 1)[0]
+                    if suffix.isdigit():
+                        highest = max(highest, int(suffix))
+                    break
+    return highest + 1
 
 
 def _resolve_model_or_fail(model: str) -> tuple[str, Any]:
