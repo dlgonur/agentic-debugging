@@ -547,6 +547,8 @@ class TestTransitionsAndTerminals:
         ]
         assert len(completed) == 1
         assert completed[0].request_status == "error"
+        assert completed[0].error_kind == "model_adapter_error"
+        assert completed[0].error_message == "model adapter rejected the request"
 
     def test_early_done_and_failed_paths(self):
         done_observer = RecordingObserver()

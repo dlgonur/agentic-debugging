@@ -29,6 +29,7 @@ from agentic_debugger.application.events import (
     OperatorStage,
     SessionEventKind,
     SessionStatus,
+    SessionTerminationReason,
     SourceSnapshotStage,
     SourceKind,
 )
@@ -786,9 +787,21 @@ class LiveRunContextPanel(VerticalScroll):
         from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
 
         model = view.model_provenance
-        stage = _operator_stage_label(view.operator_stage) if view.operator_stage else "Not recorded"
+        terminal = view.status.terminal
+        if view.status is SessionStatus.SUCCEEDED:
+            stage = "Completed"
+        elif view.status is SessionStatus.CANCELLED:
+            stage = "Cancelled"
+        elif terminal and view.termination_reason is SessionTerminationReason.MODEL_ERROR:
+            stage = "Model error"
+        elif terminal:
+            stage = view.status.value.replace("_", " ").title()
+        else:
+            stage = _operator_stage_label(view.operator_stage) if view.operator_stage else "Not recorded"
         if view.debugger.session_started:
             pdb = "Observed"
+        elif terminal:
+            pdb = "Not reached"
         elif view.operator_stage is OperatorStage.DEBUGGER:
             pdb = "Active"
         else:
@@ -796,7 +809,9 @@ class LiveRunContextPanel(VerticalScroll):
         if view.verifier_summary is not None:
             verifier = view.verifier_summary.outcome.value if view.verifier_summary.outcome else "Completed"
         elif view.verifier_stages:
-            verifier = "Active"
+            verifier = "Not completed" if terminal else "Active"
+        elif terminal:
+            verifier = "Not run"
         else:
             verifier = "Pending"
         ladder = is_ladder_task(view.task_id)

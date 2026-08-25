@@ -346,6 +346,9 @@ def test_typed_command_error_kind_survives_and_arbitrary_stderr_is_discarded():
             LiveModelConfig("local", typed_command), max_output_bytes=1024
         ).request({}, 5)
     assert typed_error.value.kind == "invalid_directive"
+    assert typed_error.value.safe_message == (
+        "provider completion did not satisfy the directive contract"
+    )
     assert "provider completion" not in str(typed_error.value)
 
     task = DebugTask.from_mapping(
@@ -368,8 +371,12 @@ def test_typed_command_error_kind_survives_and_arbitrary_stderr_is_discarded():
         limits=LiveRunLimits(max_model_requests=1, max_retries=0),
         registry=_test_live_registry(),
     )
-    with pytest.raises(LiveModelAdapterError):
+    with pytest.raises(LiveModelAdapterError) as adapter_error:
         adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter_error.value.error_kind == "invalid_directive"
+    assert adapter_error.value.safe_message == (
+        "provider completion did not satisfy the directive contract"
+    )
     assert adapter.metrics.to_mapping()["provider_error_kinds"] == [
         "invalid_directive"
     ]

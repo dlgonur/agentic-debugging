@@ -34,6 +34,7 @@ from agentic_debugger.application.events import (
     SessionEvent,
     SessionEventKind,
     SessionStatus,
+    SessionTerminationReason,
     SourceKind,
 )
 from agentic_debugger.application.level32 import (
@@ -228,7 +229,11 @@ def render_view_header(
         elif summary.workspace_cleaned is False:
             verifier += " · cleanup failed"
     elif view.verifier_stages:
-        verifier = "verifier running"
+        verifier = "verifier incomplete" if view.status.terminal else "verifier running"
+    elif view.termination_reason is SessionTerminationReason.MODEL_ERROR:
+        verifier = "model error"
+    elif view.status is SessionStatus.CANCELLED:
+        verifier = "cancelled"
     else:
         verifier = "verifier pending" if view.status is SessionStatus.RUNNING else "verifier: —"
     if view.cleanup_verified is True and "cleanup verified" not in verifier:
@@ -1347,7 +1352,11 @@ class WorkspaceScreen(Screen):
             )
         else:
             bar = self.query_one("#live-bar", LiveBar)
-            if self._live_terminal is None and self._live_failure is None:
+            if (
+                not self._view.status.terminal
+                and self._live_terminal is None
+                and self._live_failure is None
+            ):
                 bar.update(
                     "[dim]left/right views   1-7 activity filters   c cancel   ? help   q history[/]"
                 )

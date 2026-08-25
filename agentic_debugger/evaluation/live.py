@@ -45,10 +45,11 @@ class LiveEvaluationError(RuntimeError): pass
 class LiveOptInError(LiveEvaluationError): pass
 class LiveConfigurationError(LiveEvaluationError): pass
 class LiveTransportError(LiveEvaluationError):
-    def __init__(self, message: str, *, kind: str = "transport_error", timed_out: bool = False):
+    def __init__(self, message: str, *, kind: str = "transport_error", timed_out: bool = False, safe_message: str | None = None):
         super().__init__(message)
         self.kind = kind
         self.timed_out = timed_out
+        self.safe_message = safe_message
 
 class ModelRequestBudgetExceeded(LiveEvaluationError):
     """The transport rejected the model request before any provider process.
@@ -86,7 +87,7 @@ class DirectiveRejectionCategory(str, Enum):
 MAX_REJECTION_DETAIL_CHARS = 200
 
 class LiveModelAdapterError(ModelAdapterError):
-    def __init__(self, message: str, *, category: "DirectiveRejectionCategory" = DirectiveRejectionCategory.MALFORMED_DIRECTIVE, detail: str = "", stage: str | None = None, reason_code: str | None = None, content: str | None = None, directive_rejection: bool = False):
+    def __init__(self, message: str, *, category: "DirectiveRejectionCategory" = DirectiveRejectionCategory.MALFORMED_DIRECTIVE, detail: str = "", stage: str | None = None, reason_code: str | None = None, content: str | None = None, directive_rejection: bool = False, error_kind: str | None = None, safe_message: str | None = None):
         super().__init__(message)
         self.category = category
         text = str(detail)
@@ -103,6 +104,28 @@ class LiveModelAdapterError(ModelAdapterError):
         self.reason_code = reason_code or default_reason
         self.content = content if type(content) is str else None
         self.directive_rejection = directive_rejection
+        effective_error_kind = error_kind or (
+            self.reason_code if directive_rejection else None
+        )
+        self.error_kind = (
+            effective_error_kind
+            if type(effective_error_kind) is str
+            and effective_error_kind
+            and len(effective_error_kind.encode("utf-8", errors="ignore")) <= 64
+            else None
+        )
+        if safe_message is None and directive_rejection and self.detail:
+            safe_message = self.detail
+        if type(safe_message) is str and safe_message:
+            safe_text = str(redact_for_recording(safe_message)).replace("\r", " ").replace("\n", " ")
+            encoded = safe_text.encode("utf-8", errors="replace")
+            if len(encoded) > MAX_REJECTION_DETAIL_CHARS:
+                safe_text = encoded[: MAX_REJECTION_DETAIL_CHARS - 3].decode(
+                    "utf-8", errors="ignore"
+                ) + "..."
+            self.safe_message = safe_text
+        else:
+            self.safe_message = None
 
 LIVE_SCHEMA_VERSION = "1.1"
 LIVE_PROTOCOL_VERSION = "1.3"
@@ -425,13 +448,13 @@ def _terminate_process(process:subprocess.Popen):
         try: process.kill(); process.wait(timeout=2)
         except Exception: pass
 
-def _typed_command_error_kind(stderr_text: str) -> str | None:
+def _typed_command_error_detail(stderr_text: str) -> tuple[str, str] | None:
     """Read only the closed, provider-safe command error envelope.
 
     Arbitrary configured-command stderr is intentionally ignored.  A command
-    may contribute a typed failure kind only by emitting one strict JSON
-    object with the accepted schema and closed vocabulary; its free-form
-    message is validated for bounded shape but is never retained in reports.
+    may contribute a typed failure only by emitting one strict JSON object
+    with the accepted schema and closed vocabulary.  Its message is retained
+    only when it is bounded, single-line, and not credential-shaped.
     """
 
     if type(stderr_text) is not str or not stderr_text:
@@ -452,11 +475,24 @@ def _typed_command_error_kind(stderr_text: str) -> str | None:
         return None
     if type(kind) is not str or kind not in _TYPED_COMMAND_ERROR_KINDS:
         return None
-    if type(message) is not str or not message or len(message) > MAX_REJECTION_DETAIL_CHARS:
+    if (
+        type(message) is not str
+        or not message
+        or len(message.encode("utf-8", errors="replace")) > MAX_REJECTION_DETAIL_CHARS
+    ):
         return None
     if any(ord(char) < 0x20 and char not in "\t\r\n" for char in message):
         return None
-    return kind
+    if "\r" in message or "\n" in message or _SECRET_VALUE.search(message):
+        return None
+    return kind, message
+
+
+def _typed_command_error_kind(stderr_text: str) -> str | None:
+    """Compatibility projection of the accepted typed command error kind."""
+
+    detail = _typed_command_error_detail(stderr_text)
+    return detail[0] if detail is not None else None
 
 class JsonlCommandTransport:
     def __init__(self,config,*,max_output_bytes=MAX_MODEL_RESPONSE_BYTES):
@@ -511,10 +547,11 @@ class JsonlCommandTransport:
         for thread in threads: thread.join(timeout=2)
         if stdout.truncated: raise LiveTransportError("model response exceeded the configured output bound",kind="response_too_large")
         if process.returncode!=0:
-            typed_kind = _typed_command_error_kind(stderr.text())
+            typed_detail = _typed_command_error_detail(stderr.text())
             raise LiveTransportError(
                 "model command failed",
-                kind=typed_kind or "process_error",
+                kind=typed_detail[0] if typed_detail is not None else "process_error",
+                safe_message=typed_detail[1] if typed_detail is not None else None,
             )
         try: value=json.loads(stdout.text())
         except (UnicodeError,json.JSONDecodeError): raise LiveTransportError("model response was invalid JSON",kind="invalid_response") from None
@@ -2176,7 +2213,12 @@ class LiveModelAdapter:
                 rejection=None
                 self.metrics.error(exc.kind)
                 if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
-                self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError("model transport failed", directive_rejection=False) from None
+                self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError(
+                    "model transport failed",
+                    directive_rejection=False,
+                    error_kind=exc.kind,
+                    safe_message=exc.safe_message or str(exc),
+                ) from None
             except LiveModelAdapterError as exc:
                 if not exc.directive_rejection:
                     raise

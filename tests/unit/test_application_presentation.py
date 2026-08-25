@@ -112,6 +112,28 @@ class TestInitialView:
         assert view.verifier_stages == ()
 
 
+def test_model_error_timeline_exposes_safe_concrete_reason() -> None:
+    view = reduce_event(
+        state_running(),
+        make_event(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "error",
+                "error_kind": "http_error",
+                "error_message": "Ollama HTTP request returned status 401",
+            },
+            sequence=3,
+            run_id=VALID_RUN_ID,
+            controller_phase=ControllerState.REPRODUCE,
+        ),
+    )
+    assert view.timeline[-1].summary == (
+        "model request 0 failed — http_error: "
+        "Ollama HTTP request returned status 401"
+    )
+
+
 def replay_completed_stream():
     """A valid completed stream whose provenance is a recorded source kind."""
     events = []

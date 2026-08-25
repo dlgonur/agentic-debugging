@@ -51,6 +51,7 @@ MAX_OBSERVATION_IDENTIFIER_BYTES = 256
 MAX_OBSERVATION_SHORT_TEXT_BYTES = 64
 MAX_OBSERVATION_NAME_BYTES = 256
 MAX_OBSERVATION_TRANSITION_REASON_BYTES = 2048
+MAX_OBSERVATION_ERROR_MESSAGE_BYTES = 512
 
 
 class ControllerObservationError(ValueError):
@@ -153,6 +154,8 @@ class ControllerObservation:
     target_state: Optional[ControllerState] = None
     directive_kind: Optional[str] = None
     request_status: Optional[str] = None
+    error_kind: Optional[str] = None
+    error_message: Optional[str] = None
     tool_name: Optional[str] = None
     observation_status: Optional[ObservationStatus] = None
     rejection_category: Optional[str] = None
@@ -176,6 +179,22 @@ class ControllerObservation:
         )
         object.__setattr__(
             self, "request_status", _short_text_or_none(self.request_status, "request_status")
+        )
+        object.__setattr__(
+            self, "error_kind", _short_text_or_none(self.error_kind, "error_kind")
+        )
+        object.__setattr__(
+            self,
+            "error_message",
+            (
+                None
+                if self.error_message is None
+                else _bounded_text(
+                    self.error_message,
+                    "error_message",
+                    MAX_OBSERVATION_ERROR_MESSAGE_BYTES,
+                )
+            ),
         )
         object.__setattr__(self, "tool_name", _name_or_none(self.tool_name, "tool_name"))
         object.__setattr__(
@@ -226,6 +245,7 @@ class NoopControllerObserver:
 
 __all__ = [
     "MAX_OBSERVATION_IDENTIFIER_BYTES",
+    "MAX_OBSERVATION_ERROR_MESSAGE_BYTES",
     "MAX_OBSERVATION_NAME_BYTES",
     "MAX_OBSERVATION_SHORT_TEXT_BYTES",
     "MAX_OBSERVATION_TRANSITION_REASON_BYTES",

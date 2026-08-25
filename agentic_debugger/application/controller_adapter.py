@@ -56,6 +56,7 @@ from agentic_debugger.agent.observer import (
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.application import ApplicationContractError, ApplicationInputError
 from agentic_debugger.application.events import (
+    contains_credential_shape,
     ModelRequestStatus,
     SessionEvent,
     SessionEventKind,
@@ -70,6 +71,7 @@ _MAX_TASK_ID_BYTES = 256
 _MAX_RUN_ID_BYTES = 256
 _MAX_SHORT_TEXT_BYTES = 64
 _MAX_NAME_BYTES = 256
+_MAX_ERROR_MESSAGE_BYTES = 512
 
 _VALID_DIRECTIVE_KINDS = frozenset(candidate.value for candidate in ModelDirectiveKind)
 _VALID_STOP_REASONS = frozenset(candidate.value for candidate in ControllerStopReason)
@@ -411,12 +413,36 @@ class ControllerSessionEventAdapter(ControllerObserver):
                     f"unknown request_status {request_status!r} in "
                     f"{observation.kind.value} observation"
                 )
+            payload = {
+                "request_index": self._require_index(observation, "model_call_index"),
+                "status": request_status,
+            }
+            if observation.error_kind is not None or observation.error_message is not None:
+                if request_status == ModelRequestStatus.OK.value:
+                    raise ApplicationContractError(
+                        "successful model request cannot carry error detail"
+                    )
+                error_kind = _bounded_text_or_none(
+                    observation.error_kind, "error_kind", _MAX_SHORT_TEXT_BYTES
+                )
+                error_message = _bounded_text_or_none(
+                    observation.error_message,
+                    "error_message",
+                    _MAX_ERROR_MESSAGE_BYTES,
+                )
+                if error_kind is None or error_message is None:
+                    raise ApplicationContractError(
+                        "model request error kind and message must appear together"
+                    )
+                if contains_credential_shape(error_kind) or contains_credential_shape(error_message):
+                    error_kind = "model_error"
+                    error_message = "model request failed; sensitive detail was removed"
+                payload.update(
+                    {"error_kind": error_kind, "error_message": error_message}
+                )
             self._emit(
                 SessionEventKind.MODEL_REQUEST_COMPLETED,
-                {
-                    "request_index": self._require_index(observation, "model_call_index"),
-                    "status": request_status,
-                },
+                payload,
             )
             return
 

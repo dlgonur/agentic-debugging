@@ -1175,7 +1175,10 @@ def _http_json_request(
         except (OSError, http.client.HTTPException):
             raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
         if response.status < 200 or response.status >= 300:
-            raise OllamaAdapterError("Ollama HTTP request returned an error", kind="http_error")
+            raise OllamaAdapterError(
+                f"Ollama HTTP request returned status {response.status}",
+                kind="http_error",
+            )
         raw_body = _read_http_body(response, connection, deadline=deadline)
     finally:
         connection.close()
@@ -1426,7 +1429,10 @@ def _stream_chat_request(
         except (OSError, http.client.HTTPException):
             raise OllamaAdapterError("Ollama HTTP request failed", kind="http_error") from None
         if response.status < 200 or response.status >= 300:
-            raise OllamaAdapterError("Ollama HTTP request returned an error", kind="http_error")
+            raise OllamaAdapterError(
+                f"Ollama HTTP request returned status {response.status}",
+                kind="http_error",
+            )
 
         while True:
             if connection.sock is not None:

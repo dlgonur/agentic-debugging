@@ -10,7 +10,15 @@ import pytest
 textual = pytest.importorskip("textual")
 
 from agentic_debugger.application.history import HistoryStore
-from agentic_debugger.application.events import OperatorStage, SessionStatus, SourceKind
+from agentic_debugger.application.events import (
+    SESSION_EVENT_SCHEMA_VERSION,
+    OperatorStage,
+    SessionEvent,
+    SessionEventKind,
+    SessionStatus,
+    SessionTerminationReason,
+    SourceKind,
+)
 from agentic_debugger.application.level32 import LADDER_TASKS, level32_model_profiles
 from agentic_debugger.application.presentation import (
     ModelProvenanceView,
@@ -26,7 +34,7 @@ from agentic_debugger.ui.screens import (
     WorkspaceScreen,
     render_view_header,
 )
-from agentic_debugger.ui.widgets import LiveRunContextPanel
+from agentic_debugger.ui.widgets import LiveBar, LiveRunContextPanel
 from ui_support import run_headless
 
 
@@ -155,6 +163,129 @@ def test_wide_ladder_header_is_concise_and_context_panel_is_truthful() -> None:
     official_panel.update_view(replace(view, operator_stage=OperatorStage.OFFICIAL_VERIFICATION))
     official_context = official_panel._text.render().plain
     assert "Stage\nOfficial verification" in official_context
+
+
+def test_terminal_model_error_header_and_sidebar_are_truthful() -> None:
+    view = SessionViewState(
+        task_id="pdb-required-boundary-006",
+        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
+        status=SessionStatus.FAILED,
+        termination_reason=SessionTerminationReason.MODEL_ERROR,
+        operator_stage=OperatorStage.COMPLETED,
+        cleanup_verified=True,
+        model_provenance=ModelProvenanceView(
+            profile_id="deepseek-v4-flash:cloud",
+            display_name="deepseek-v4-flash",
+        ),
+    )
+    header = render_view_header(view, mode="LIVE", mode_style="bold")
+    assert "Failed" in header.plain
+    assert "model error" in header.plain
+    assert "cleanup verified" in header.plain
+    assert "verifier: —" not in header.plain
+
+    panel = LiveRunContextPanel()
+    panel.update_view(view, elapsed="00:02")
+    context = panel._text.render().plain
+    assert "Stage\nModel error" in context
+    assert "PDB\nNot reached" in context
+    assert "Verifier\nNot run" in context
+    assert "Stage\nCompleted" not in context
+    assert "PDB\nPending" not in context
+    assert "Verifier\nPending" not in context
+
+    cancelled = replace(
+        view,
+        status=SessionStatus.CANCELLED,
+        termination_reason=SessionTerminationReason.CANCELLED,
+    )
+    panel.update_view(cancelled)
+    cancelled_context = panel._text.render().plain
+    assert "Stage\nCancelled" in cancelled_context
+    assert "PDB\nNot reached" in cancelled_context
+    assert "Verifier\nNot run" in cancelled_context
+
+
+def test_live_footer_refreshes_when_running_session_fails(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+    identity = PresentationIdentity(
+        task_id="pdb-required-boundary-006",
+        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
+        session_id="session-footer-transition",
+    )
+    running = replace(initial_session_view(identity), status=SessionStatus.RUNNING)
+    workspace = WorkspaceScreen(
+        mode=WorkspaceMode.LIVE,
+        identity=identity,
+        view=running,
+    )
+    failed = SessionEvent(
+        schema_version=SESSION_EVENT_SCHEMA_VERSION,
+        session_id="session-footer-transition",
+        task_id="pdb-required-boundary-006",
+        run_id="run-footer-transition",
+        sequence=0,
+        timestamp_utc="2026-08-25T12:00:00Z",
+        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
+        event_kind=SessionEventKind.SESSION_FAILED,
+        controller_phase=None,
+        payload={"status": "failed", "termination_reason": "model_error"},
+    )
+
+    async def scenario(pilot):
+        pilot.app.push_screen(workspace)
+        await pilot.pause()
+        running_footer = str(workspace.query_one("#live-bar", LiveBar).render())
+        assert "c cancel" in running_footer
+
+        pilot.app._live_events = (failed,)
+        workspace.refresh_live()
+        await pilot.pause()
+
+        assert workspace._view.status is SessionStatus.FAILED
+        failed_footer = str(workspace.query_one("#live-bar", LiveBar).render())
+        assert "c cancel" not in failed_footer
+        assert "1-7 activity filters" in failed_footer
+
+    run_headless(app, scenario, size=(120, 32))
+
+
+@pytest.mark.parametrize(
+    ("status", "reason"),
+    [
+        (SessionStatus.CANCELLED, SessionTerminationReason.CANCELLED),
+        (SessionStatus.SUCCEEDED, SessionTerminationReason.DONE),
+    ],
+)
+def test_terminal_footer_never_advertises_cancel(
+    tmp_path: Path,
+    status: SessionStatus,
+    reason: SessionTerminationReason,
+) -> None:
+    app = make_app(tmp_path)
+    identity = PresentationIdentity(
+        task_id="pdb-required-boundary-006",
+        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
+    )
+    terminal = replace(
+        initial_session_view(identity),
+        status=status,
+        termination_reason=reason,
+    )
+
+    async def scenario(pilot):
+        workspace = WorkspaceScreen(
+            mode=WorkspaceMode.LIVE,
+            identity=identity,
+            view=terminal,
+        )
+        pilot.app.push_screen(workspace)
+        await pilot.pause()
+        footer = str(workspace.query_one("#live-bar", LiveBar).render())
+        assert "c cancel" not in footer
+        assert "1-7 activity filters" in footer
+
+    run_headless(app, scenario, size=(120, 32))
 
 
 def test_live_context_panel_is_wide_only(tmp_path: Path) -> None:

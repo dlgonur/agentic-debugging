@@ -116,6 +116,22 @@ def _identifier(value: object, field_name: str) -> str:
     return _bounded_text(value, field_name, 256)
 
 
+def _model_error_text(value: object, fallback: str, maximum_bytes: int) -> str:
+    """Accept only already-bounded model error telemetry, else use fallback."""
+
+    if type(value) is not str or not value or value != value.strip():
+        return fallback
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        return fallback
+    if len(encoded) > maximum_bytes or any(
+        ord(char) < 0x20 or ord(char) == 0x7F for char in value
+    ):
+        return fallback
+    return value
+
+
 def _read(value: object, field_name: str) -> object:
     try:
         return getattr(value, field_name)
@@ -1077,25 +1093,36 @@ class DeterministicController:
             except ModelScriptExhaustedError:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
-                      request_status="error")
+                      request_status="error", error_kind="model_script_exhausted",
+                      error_message="scripted model response is unavailable")
                 failure_step(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED)
                 return result(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED, state)
             except ModelScriptMismatchError:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
-                      request_status="error")
+                      request_status="error", error_kind="model_script_mismatch",
+                      error_message="scripted model response does not match controller state")
                 failure_step(ControllerStopReason.MODEL_SCRIPT_MISMATCH)
                 return result(ControllerStopReason.MODEL_SCRIPT_MISMATCH, state)
-            except ModelAdapterError:
+            except ModelAdapterError as exc:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
-                      request_status="error")
+                      request_status="error",
+                      error_kind=_model_error_text(
+                          getattr(exc, "error_kind", None), "model_adapter_error", 64
+                      ),
+                      error_message=_model_error_text(
+                          getattr(exc, "safe_message", None),
+                          "model adapter rejected the request",
+                          512,
+                      ))
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
             except Exception:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
-                      request_status="error")
+                      request_status="error", error_kind="unexpected_model_error",
+                      error_message="unexpected model request failure")
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
@@ -1104,7 +1131,8 @@ class DeterministicController:
             except Exception:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
-                      request_status="error")
+                      request_status="error", error_kind="invalid_directive",
+                      error_message="model response did not produce a canonical directive")
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 

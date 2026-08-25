@@ -890,12 +890,38 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.request_completed payload must be a mapping")
     required = {"request_index", "status"}
+    optional = {"error_kind", "error_message"}
     _check_required(payload, required, "model.request_completed payload")
-    _check_no_unknown(payload, required, "model.request_completed payload")
-    return {
+    _check_no_unknown(payload, required | optional, "model.request_completed payload")
+    result = {
         "request_index": _nonneg_int(payload["request_index"], "request_index"),
         "status": _enum(payload["status"], "status", ModelRequestStatus).value,
     }
+    has_kind = "error_kind" in payload
+    has_message = "error_message" in payload
+    if has_kind != has_message:
+        raise SchemaValidationError(
+            "model.request_completed error_kind and error_message must appear together"
+        )
+    if has_kind:
+        if result["status"] == ModelRequestStatus.OK.value:
+            raise SchemaValidationError(
+                "successful model.request_completed cannot carry error detail"
+            )
+        error_kind = _bounded_text(
+            payload["error_kind"], "error_kind", MAX_IDENTIFIER_CHARS
+        )
+        error_message = _bounded_text(
+            payload["error_message"], "error_message", MAX_SHORT_TEXT_CHARS
+        )
+        assert error_kind is not None and error_message is not None
+        if contains_credential_shape(error_kind) or contains_credential_shape(error_message):
+            raise SchemaValidationError(
+                "model.request_completed error detail contains credential-shaped text"
+            )
+        result["error_kind"] = error_kind
+        result["error_message"] = error_message
+    return result
 
 
 def _payload_directive_accepted(payload: Mapping[str, Any]) -> dict[str, Any]:

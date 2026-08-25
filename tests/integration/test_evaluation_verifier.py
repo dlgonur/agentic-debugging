@@ -39,6 +39,26 @@ CORRECT = {
     "curated-caller-callee-005": ("price.py", "    callee_input = caller_amount\n    return _format_price(callee_input)", "    callee_input = caller_amount * 100 if caller_representation == \"dollars\" else caller_amount\n    return _format_price(callee_input)"),
 }
 
+LOWER_RUNG_CORRECT = {
+    "pdb-required-boundary-006": (
+        "window_tail.py",
+        "selected = values[start_index:end_index - (1 if requested_size == item_count else 0)]",
+        "selected = values[start_index:end_index]",
+    ),
+    "pdb-required-caller-callee-007": (
+        "price_pipeline.py",
+        "    callee_input = caller_amount\n    return _render_cents(callee_input)",
+        "    callee_input = caller_amount * 100 if caller_representation == \"dollars\" else caller_amount\n"
+        "    return _render_cents(callee_input)",
+    ),
+    "pdb-required-multistage-units-008": (
+        "deadline_pipeline.py",
+        "    retry_window_ms = _expand_retry_window(value, retry_count)\n    return retry_window_ms + grace_ms",
+        "    retry_window_ms = _expand_retry_window(base_delay_ms, retry_count)\n"
+        "    return retry_window_ms + grace_ms",
+    ),
+}
+
 
 @pytest.mark.parametrize("task_id", sorted(CORRECT))
 def test_five_correct_curated_patches_resolve(task_id, tmp_path):
@@ -60,6 +80,23 @@ def test_five_correct_curated_patches_resolve(task_id, tmp_path):
     assert result.verification_command_count == 4 + 2 * (result.f2p_total + result.p2p_total)
     assert result.verification_selected_test_count == 2 + 3 * (result.f2p_total + result.p2p_total)
     assert hashlib.sha256((CURATED / task_id / rel).read_bytes()).hexdigest() == before_hash
+
+
+@pytest.mark.parametrize("task_id", sorted(LOWER_RUNG_CORRECT))
+def test_lower_rung_verifier_replays_level6_12_18_provider_free(task_id):
+    task = task_for(task_id)
+    rel, old, new = LOWER_RUNG_CORRECT[task_id]
+    source = (CURATED / task_id / rel).read_text(encoding="utf-8")
+    assert old in source
+    result = EvaluationVerifier(str(ROOT)).evaluate(
+        task, patch_for(rel, source, source.replace(old, new))
+    )
+    assert result.status is EvaluationStatus.COMPLETED
+    assert result.outcome is SemanticOutcome.RESOLVED
+    assert result.baseline.valid is True
+    assert result.baseline.collection is not None
+    assert result.baseline.collection.passed is True
+    assert result.workspace.canonical_fixture_unchanged is True
 
 
 def test_noop_breaking_and_regression(tmp_path):
@@ -139,6 +176,7 @@ def test_real_baseline_already_passing_is_rejected(tmp_path):
     assert result.status is EvaluationStatus.BASELINE_INVALID
     assert result.outcome is None
     assert result.baseline.f2p[0].status.value == "PASS"
+    assert result.patch_application.attempted is False
 
 
 def test_real_collection_import_error_is_infrastructure_failure(tmp_path):

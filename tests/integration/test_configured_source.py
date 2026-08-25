@@ -664,7 +664,18 @@ class TestConfiguredSourceFailures:
         diagnostics = " ".join(result.diagnostics)
         assert "model transport: " in diagnostics
         assert expected_transport in diagnostics
-        kinds = [e.event_kind for e in journal_of(store, session_id).events]
+        events = journal_of(store, session_id).events
+        kinds = [e.event_kind for e in events]
+        failed_requests = [
+            event
+            for event in events
+            if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+            and event.payload["status"] == "error"
+        ]
+        assert len(failed_requests) == 1
+        assert failed_requests[0].payload["error_kind"]
+        assert failed_requests[0].payload["error_message"]
+        assert kinds.count(SessionEventKind.SESSION_FAILED) == 1
         assert kinds[-1] is SessionEventKind.SESSION_FAILED
         worker.close()
 

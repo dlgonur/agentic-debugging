@@ -1767,6 +1767,32 @@ def test_oversized_http_body_and_http_error_are_bounded(fixture_server) -> None:
     assert len(chat_payloads(failed)) == 1
 
 
+@pytest.mark.parametrize("status", [401, 403, 404, 429, 500])
+def test_streaming_chat_http_error_preserves_only_safe_status(
+    fixture_server, status: int
+) -> None:
+    secret_body = b'{"error":"provider-secret-body","token":"not-for-telemetry"}'
+    state = _FixtureState(chat_status=status, chat_body=secret_body)
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(endpoint)
+
+    assert rc == 1
+    assert stdout == ""
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+    assert len(chat_payloads(state)) == 1
+    errors = [json.loads(line) for line in stderr.splitlines() if line.strip()]
+    assert errors == [
+        {
+            "kind": "http_error",
+            "message": f"Ollama HTTP request returned status {status}",
+            "schema_version": "command-error-v1",
+        }
+    ]
+    assert "provider-secret-body" not in stderr
+    assert "not-for-telemetry" not in stderr
+
+
 def test_timeout_is_bounded_and_no_retry_occurs(fixture_server) -> None:
     state = _FixtureState(delay=2.0)
     _state, _server, endpoint = fixture_server(state)

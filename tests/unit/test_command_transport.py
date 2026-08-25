@@ -148,6 +148,36 @@ class TestFailureVocabulary:
             transport.request({}, 30.0)
         assert exc.value.kind == "process_error"
 
+    def test_typed_adapter_error_preserves_safe_kind_and_message(self):
+        envelope = json.dumps(
+            {
+                "schema_version": "command-error-v1",
+                "kind": "http_error",
+                "message": "Ollama HTTP request returned status 401",
+            },
+            separators=(",", ":"),
+        )
+        command = py(
+            f"import sys; sys.stdin.read(); sys.stderr.write({envelope!r}); "
+            "raise SystemExit(1)"
+        )
+        with pytest.raises(LiveTransportError) as exc:
+            transport_for(command).request({}, 30.0)
+        assert exc.value.kind == "http_error"
+        assert exc.value.safe_message == "Ollama HTTP request returned status 401"
+
+    def test_credential_shaped_typed_message_falls_back_to_process_error(self):
+        command = py(
+            "import sys,json; sys.stdin.read(); message='to'+'ken'+'='+'must-not-survive'; "
+            "sys.stderr.write(json.dumps({'schema_version':'command-error-v1',"
+            "'kind':'http_error','message':message},separators=(',',':'))); "
+            "raise SystemExit(1)"
+        )
+        with pytest.raises(LiveTransportError) as exc:
+            transport_for(command).request({}, 30.0)
+        assert exc.value.kind == "process_error"
+        assert exc.value.safe_message is None
+
     def test_launch_error_for_missing_executable(self):
         transport = transport_for(["definitely-not-a-real-executable-xyz"])
         with pytest.raises(LiveTransportError) as exc:

@@ -277,6 +277,50 @@ class TestMapping:
         ))
         assert dict(adapter.events()[-1].payload) == {"request_index": 0, "status": "error"}
 
+    def test_safe_model_error_detail_is_durably_mapped(self):
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="error",
+            error_kind="http_error",
+            error_message="Ollama HTTP request returned status 401",
+        ))
+        assert dict(adapter.events()[-1].payload) == {
+            "request_index": 0,
+            "status": "error",
+            "error_kind": "http_error",
+            "error_message": "Ollama HTTP request returned status 401",
+        }
+
+    def test_credential_shaped_model_error_detail_is_replaced(self):
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="error",
+            error_kind="http_error",
+            error_message="token=must-not-survive",
+        ))
+        payload = dict(adapter.events()[-1].payload)
+        assert payload["error_kind"] == "model_error"
+        assert payload["error_message"] == (
+            "model request failed; sensitive detail was removed"
+        )
+        assert "must-not-survive" not in str(payload)
+
     def test_directive_accepted_action_mapped(self):
         adapter = adapter_for()
         adapter.notify(observation(

@@ -291,6 +291,11 @@ def summarize_event(event: SessionEvent) -> str:
     if kind is SessionEventKind.MODEL_REQUEST_STARTED:
         return f"model request {payload['request_index']} started"
     if kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
+        if payload["status"] != "ok" and payload.get("error_kind"):
+            return (
+                f"model request {payload['request_index']} failed — "
+                f"{payload['error_kind']}: {payload['error_message']}"
+            )
         return (
             f"model request {payload['request_index']} completed "
             f"({payload['status']})"

@@ -72,6 +72,27 @@ class TestSessionEventSchema:
         with pytest.raises(SchemaValidationError):
             SessionEvent.from_mapping(make_event_mapping(SessionEventKind.TOOL_STARTED, "nope"))
 
+    def test_model_request_error_detail_is_bounded_safe_and_paired(self):
+        payload = {
+            "request_index": 0,
+            "status": "error",
+            "error_kind": "http_error",
+            "error_message": "Ollama HTTP request returned status 401",
+        }
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+        )
+        assert event.to_mapping()["payload"] == payload
+        for invalid in (
+            {"request_index": 0, "status": "error", "error_kind": "http_error"},
+            {**payload, "status": "ok"},
+            {**payload, "error_message": "token=must-not-survive"},
+        ):
+            with pytest.raises(SchemaValidationError):
+                SessionEvent.from_mapping(
+                    make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, invalid)
+                )
+
     def test_unknown_top_level_field_rejected(self):
         mapping = make_event_mapping(SessionEventKind.SESSION_CREATED)
         mapping["extra"] = 1

@@ -19,7 +19,9 @@ and proves:
 from __future__ import annotations
 
 import json
+import shutil
 import time
+import uuid
 from pathlib import Path
 
 import pytest
@@ -48,17 +50,19 @@ from agentic_debugger.application.session import (
 from agentic_debugger.application.sources import ExecutionSourceSpec
 from agentic_debugger.application.worker_process import SessionWorkerProcess
 
+ROOT = Path(__file__).resolve().parents[2]
 TASK_ID = "curated-off-by-one-002"
+LOWER_RUNG_TASK_ID = "pdb-required-boundary-006"
 PDB_POLICY = "pdb-on-uncertainty"
 STATIC_POLICY = "static-baseline"
 
 
-def make_spec(policy: str) -> SessionSpec:
+def make_spec(policy: str, task_id: str = TASK_ID) -> SessionSpec:
     return SessionSpec(
-        task_id=TASK_ID,
+        task_id=task_id,
         source=ExecutionSourceSpec(
             kind=SourceKind.OFFLINE_DEMO,
-            task_id=TASK_ID,
+            task_id=task_id,
             policy=policy,
             model_config_ref=None,
         ),
@@ -70,6 +74,7 @@ def make_worker(
     store: HistoryStore,
     session_id: str,
     policy: str,
+    task_id: str = TASK_ID,
     **kwargs,
 ) -> SessionWorkerProcess:
     kwargs.setdefault("cooperative_grace_seconds", 10.0)
@@ -77,10 +82,10 @@ def make_worker(
     return SessionWorkerProcess(
         session_dir=store.session_dir(session_id),
         session_id=session_id,
-        spec=make_spec(policy),
+        spec=make_spec(policy, task_id),
         run_id=f"run-{session_id}",
         scenario=DETERMINISTIC_SOURCE_NAME,
-        scenario_params={"task_id": TASK_ID, "policy": policy},
+        scenario_params={"task_id": task_id, "policy": policy},
         **kwargs,
     )
 
@@ -233,6 +238,35 @@ class TestProductionSourceCompletes:
 
     def test_worker_process_is_reaped(self, completed_run):
         assert pid_is_alive(completed_run["worker_pid"]) is False
+
+    def test_level6_verifier_isolated_from_repo_local_ui_review_root(self):
+        """The UI session root may be inside the checkout without changing pytest node IDs."""
+        storage_root = ROOT / ".ui-review" / f"test-lower-rung-{uuid.uuid4().hex}"
+        store = HistoryStore(storage_root)
+        worker = make_worker(
+            store,
+            "sess.lower.rung.ui",
+            PDB_POLICY,
+            task_id=LOWER_RUNG_TASK_ID,
+        )
+        try:
+            assert worker.start() is None
+            result = worker.wait()
+            assert result.status is SessionStatus.SUCCEEDED
+            assert result.cleanup_verified is True
+            evaluation = json.loads(
+                (worker.session_dir / "evaluation.json").read_text(encoding="utf-8")
+            )
+            assert evaluation["status"] == "COMPLETED"
+            assert evaluation["outcome"] == "RESOLVED"
+            collection = evaluation["baseline"]["collection"]
+            assert collection["passed"] is True
+            assert collection["collected_nodes"] == collection["declared_nodes"]
+            assert all(".ui-review" not in node for node in collection["collected_nodes"])
+            assert evaluation["patch_application"]["attempted"] is True
+        finally:
+            worker.close()
+            shutil.rmtree(storage_root, ignore_errors=False)
 
 
 class TestHistoryAndReplayParity:

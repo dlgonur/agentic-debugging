@@ -292,7 +292,15 @@ def run_local_session(
                 verifier_adapter.started()
                 evaluation = EvaluationVerifier(
                     str(_repository_root()),
-                    workspace_parent=str(case_parent),
+                    # Keep verifier workspaces outside the application-owned
+                    # session tree.  The UI stores sessions under the
+                    # repository's .ui-review directory; placing pytest's
+                    # disposable verifier copy there lets repository config
+                    # files become its rootdir and changes collected node
+                    # identities.  EvaluationVerifier owns and cleans its
+                    # default system-temp workspace, while the controller
+                    # workspace remains under case_parent and is released
+                    # below.
                     progress_observer=verifier_adapter,
                     cancel_check=ctx.token.check,
                 ).evaluate(task, verification_patch)
