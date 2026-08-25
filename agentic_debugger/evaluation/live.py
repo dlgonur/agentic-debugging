@@ -65,7 +65,7 @@ class ModelRequestBudgetExceeded(LiveEvaluationError):
 
     def __init__(self, request_byte_count: int, limit: int) -> None:
         super().__init__(
-            f"OpenCode canonical public request exceeds the public-evidence byte budget "
+            f"Canonical public request exceeds the public-evidence byte budget "
             f"({request_byte_count} > {limit})"
         )
         self.request_byte_count = int(request_byte_count)
@@ -1350,7 +1350,7 @@ def validate_synthetic_qualification_content(
         }
 
 class LiveModelAdapter:
-    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False,proof_source_line=1,proof_observed_local_names=(),model_visible_budget_limits=None,model_visible_task=None):
+    def __init__(self,*,task,policy,config,transport,limits,registry=None,evaluation_id="evaluation",case_id="case",run_id="run",trajectory_id="trajectory",clock=time.monotonic,rag_context=None,proof_required=False,proof_source_line=1,proof_observed_local_names=(),model_visible_budget_limits=None,model_visible_task=None,progress_observer: Callable[[str], None] | None = None):
         if type(registry) is not ToolRegistry:
             raise LiveConfigurationError("live tool registry is required")
         if type(proof_source_line) is not int or proof_source_line < 1:
@@ -1370,6 +1370,9 @@ class LiveModelAdapter:
             raise LiveConfigurationError("rag_context must be a validated RagContext")
         self._rag_context=rag_context
         self.model_visible_budget_limits = model_visible_budget_limits or ControllerBudgetLimits.from_task_constraints(task.constraints)
+        if progress_observer is not None and not callable(progress_observer):
+            raise LiveConfigurationError("progress_observer must be callable or None")
+        self._progress_observer = progress_observer
         if model_visible_task is None:
             self.model_visible_task = task.agent_visible_mapping()
         elif not isinstance(model_visible_task, Mapping):
@@ -1515,6 +1518,8 @@ class LiveModelAdapter:
             ActionName.APPLY_PATCH.value,
             ActionName.REVERT_PATCH.value,
         }:
+            if observation.name == ActionName.APPLY_PATCH.value and self._progress_observer is not None:
+                self._progress_observer("candidate")
             # A new or reverted candidate invalidates prior Validate evidence.
             self._post_patch_f2p_collected = False
             self._regression_collected = False
@@ -1533,6 +1538,8 @@ class LiveModelAdapter:
             self._regression_collected = True
         elif observation.name == ActionName.START_PDB_SESSION.value:
             self._pdb_session_active = payload.get("state") == "paused"
+            if self._pdb_session_active and self._progress_observer is not None:
+                self._progress_observer("debugger")
         elif observation.name in {
             ActionName.CONTINUE_PDB_SESSION.value,
             ActionName.STEP_PDB_SESSION.value,
@@ -2091,6 +2098,8 @@ class LiveModelAdapter:
             timeout_seconds=self.config.request_timeout_seconds
             phase_started=self.clock()
             try:
+                if self._progress_observer is not None:
+                    self._progress_observer("model_running")
                 response=self.transport.request(request,timeout_seconds)
                 if not isinstance(response,Mapping): raise LiveModelAdapterError("invalid model response",category=DirectiveRejectionCategory.MALFORMED_DIRECTIVE,detail="model response was not a JSON object")
                 self.metrics.model_responses+=1
@@ -2449,7 +2458,7 @@ def _finalize_live_case(*,task_id,policy,repetition,case_id,run_id,config,task,c
         evidence=evidence,
     )
 
-def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False,scenario_override=None):
+def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_parent,config,limits,transport,evaluation_id="local",interactive_debugger_controls=False,retain_observable_model_directives=False,scenario_override=None,progress_observer: Callable[[str], None] | None = None):
     repo=Path(repository_root).resolve(); parent=Path(workspace_parent).resolve()
     if scenario_override is None:
         scenario=scenario_for(task_id)
@@ -2504,7 +2513,7 @@ def _acceptance_live_case(*,repository_root,task_id,policy,repetition,workspace_
                 or scenario.runtime_probe.exact_public_reproduction
             ),
         )
-        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction,proof_source_line=scenario.runtime_probe.breakpoint_line if scenario_override is not None else 1,proof_observed_local_names=scenario.runtime_probe.inspect_expressions if scenario.runtime_probe.exact_public_reproduction else (),model_visible_budget_limits=controller_limits,model_visible_task=model_visible_task)
+        live_adapter=LiveModelAdapter(task=task,policy=policy,config=config,transport=transport,limits=limits,registry=registry,evaluation_id=evaluation_id,case_id=case_id,run_id=run_id,trajectory_id=run_id,proof_required=scenario.runtime_probe.exact_public_reproduction,proof_source_line=scenario.runtime_probe.breakpoint_line if scenario_override is not None else 1,proof_observed_local_names=scenario.runtime_probe.inspect_expressions if scenario.runtime_probe.exact_public_reproduction else (),model_visible_budget_limits=controller_limits,model_visible_task=model_visible_task,progress_observer=progress_observer)
         metrics=live_adapter.metrics
         controller=DeterministicController(
             registry,

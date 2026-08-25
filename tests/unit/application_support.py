@@ -55,6 +55,7 @@ VALID_PAYLOADS = {
         "protocol_version": "1.3",
         "tool_version": "live-command-v1",
     },
+    SessionEventKind.OPERATOR_PROGRESS: {"stage": "preflight", "detail": None},
     SessionEventKind.TOOL_STARTED: {"tool_name": "apply_patch"},
     SessionEventKind.TOOL_COMPLETED: {"tool_name": "apply_patch", "status": "ok"},
     SessionEventKind.DEBUGGER_STARTED: {

@@ -38,6 +38,7 @@ from agentic_debugger.application.emitter import (
     SessionEventEmitter,
 )
 from agentic_debugger.application.events import (
+    OperatorStage,
     SessionEventKind,
     SessionPhase,
     SessionStatus,
@@ -105,12 +106,19 @@ def run_worker_source(
         DETERMINISTIC_SOURCE_NAME,
         run_deterministic_session,
     )
+    from agentic_debugger.application.ollama_cloud_source import (
+        OLLAMA_CLOUD_SOURCE_NAME,
+        run_ollama_cloud_session,
+    )
 
     if name == DETERMINISTIC_SOURCE_NAME:
         run_deterministic_session(ctx, params)
         return
     if name == CONFIGURED_SOURCE_NAME:
         run_configured_session(ctx, params)
+        return
+    if name == OLLAMA_CLOUD_SOURCE_NAME:
+        run_ollama_cloud_session(ctx, params)
         return
     run_scenario(name, ctx, params)
 
@@ -567,6 +575,14 @@ def run_worker(request: StartRequest) -> int:
         # which never started session-owned work and must not claim cleanup).
         if coordinator.started:
             coordinator.emit_status(SessionPhase.CLEANING)
+            if request.spec.source.kind in (
+                SourceKind.OLLAMA_CLOUD_LADDER,
+                SourceKind.LEVEL32_OPERATOR,
+            ):
+                coordinator.emit(
+                    SessionEventKind.OPERATOR_PROGRESS,
+                    {"stage": OperatorStage.CLEANUP.value},
+                )
             coordinator.emit(SessionEventKind.CLEANUP_STARTED, {})
             cleanup_ok = _cleanup_work_dir(work_dir, diagnostics)
             coordinator.emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup_ok})
@@ -576,6 +592,14 @@ def run_worker(request: StartRequest) -> int:
         status, reason = _terminal_for(
             outcome, cleanup_ok, coordinator.started, failure_reason
         )
+        if request.spec.source.kind in (
+            SourceKind.OLLAMA_CLOUD_LADDER,
+            SourceKind.LEVEL32_OPERATOR,
+        ):
+            coordinator.emit(
+                SessionEventKind.OPERATOR_PROGRESS,
+                {"stage": OperatorStage.COMPLETED.value},
+            )
         coordinator.emit_terminal(status, reason)
         try:
             journal.close()
@@ -640,6 +664,7 @@ def main() -> None:
     from agentic_debugger.application.deterministic_source import (
         DETERMINISTIC_SOURCE_NAME,
     )
+    from agentic_debugger.application.ollama_cloud_source import OLLAMA_CLOUD_SOURCE_NAME
 
     first_line = sys.stdin.buffer.readline(MAX_WORKER_LINE_BYTES + 1)
     if not first_line:
@@ -660,6 +685,7 @@ def main() -> None:
         request.scenario not in SCENARIO_NAMES
         and request.scenario != DETERMINISTIC_SOURCE_NAME
         and request.scenario != CONFIGURED_SOURCE_NAME
+        and request.scenario != OLLAMA_CLOUD_SOURCE_NAME
     ):
         _send(error_message("unknown_scenario", [request.scenario]))
         os._exit(EXIT_STARTUP_ERROR)

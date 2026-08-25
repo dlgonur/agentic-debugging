@@ -237,6 +237,26 @@ ChoicePickerScreen {
 
 /* -- workspace ----------------------------------------------------------- */
 
+#workspace-body {
+    width: 1fr;
+    height: 1fr;
+}
+
+#workspace-main {
+    width: 1fr;
+    height: 1fr;
+}
+
+#live-run-context {
+    display: none;
+    width: 30;
+    height: 1fr;
+    padding: 1 2;
+    background: #111820;
+    color: #c9d1d9;
+    scrollbar-size: 1 1;
+}
+
 #status-header {
     dock: top;
     padding: 0 2;

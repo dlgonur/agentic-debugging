@@ -18,12 +18,13 @@ layer:
 - app teardown never strands a live worker (bounded cooperative
   cancellation, Task-3 escalation, then handle release).
 
-The app requires no GPU, model provider, WSL, or campaign infrastructure.
-Deterministic sessions are application-controlled offline execution.
-Configured command-model sessions launch a user-configured local command
-(trusted user configuration); the app itself adds no provider integration,
-but V1 does not enforce child-process network isolation.  The scientific
-core never imports this package.
+The deterministic and replay paths require no model provider, WSL, or
+campaign infrastructure.  Capability-ladder sessions use the canonical
+Ollama Cloud operator path and keep provider readiness separate from the
+app-owned configured-command registry.  Configured command-model sessions
+remain trusted user configuration; the app itself does not enforce
+child-process network isolation.  The scientific core never imports this
+package.
 """
 
 from __future__ import annotations
@@ -44,6 +45,9 @@ from agentic_debugger.application.command_config import (
 from agentic_debugger.application.events import SessionEvent, SourceKind
 from agentic_debugger.application.history import HistoryStore
 from agentic_debugger.application.level32 import (
+    LADDER_TASK_IDS,
+    ladder_task_metadata,
+    ladder_task_options,
     LEVEL32_TASK_ID,
     Level32OperatorWorker,
     build_level32_spec,
@@ -111,8 +115,8 @@ def task_display_title(task_id: str, repo_root: Optional[Path] = None) -> str:
                 pass
     if task_id in _CURATED_TASK_TITLES:
         return _CURATED_TASK_TITLES[task_id]
-    if task_id == LEVEL32_TASK_ID:
-        return LEVEL32_TASK_TITLE
+    if task_id in LADDER_TASK_IDS:
+        return ladder_task_metadata(task_id).title
     return task_id
 
 
@@ -324,12 +328,9 @@ class LocalApplicationV1(App):
         )
 
     def curated_task_options(self) -> Tuple[Tuple[str, str], ...]:
-        """Human-readable options (label, task_id) for task selectors."""
-        curated = tuple(
-            task_display_option(task_id, self._repository_root)
-            for task_id in self.curated_task_ids()
-        )
-        return curated + ((f"{LEVEL32_TASK_TITLE} · {LEVEL32_TASK_ID}", LEVEL32_TASK_ID),)
+        """The product picker exposes exactly the accepted capability ladder."""
+
+        return ladder_task_options()
 
     def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
         """Safe profile summaries for the Start screen, plus a load error.
@@ -347,8 +348,11 @@ class LocalApplicationV1(App):
             return (), str(exc)
 
     def level32_model_profiles(self):
-        """Return the canonical, local-only Level-32 Ollama roster."""
+        """Return the canonical, local-only Ollama Cloud roster."""
         return level32_model_profiles()
+
+    def ollama_cloud_model_profiles(self):
+        return self.level32_model_profiles()
 
     def start_live_session(
         self,
@@ -426,6 +430,17 @@ class LocalApplicationV1(App):
                 "expected_fingerprint": profile.configuration_fingerprint,
             }
             model_config_ref = profile_id
+        elif task_id in LADDER_TASK_IDS:
+            if profile_id is None:
+                raise ValueError("capability-ladder sessions require a canonical Ollama Cloud alias")
+            model = next((item for item in self.ollama_cloud_model_profiles() if item.alias == profile_id), None)
+            if model is None:
+                raise ValueError("selected model is not currently Ollama Cloud eligible")
+            from agentic_debugger.application.ollama_cloud_source import OLLAMA_CLOUD_SOURCE_NAME
+            scenario = OLLAMA_CLOUD_SOURCE_NAME
+            scenario_params = {"model_alias": model.alias, "policy": policy}
+            model_config_ref = model.alias
+            source_kind = SourceKind.OLLAMA_CLOUD_LADDER
         else:
             scenario = deterministic_source_name()
             scenario_params = {"task_id": task_id, "policy": policy}

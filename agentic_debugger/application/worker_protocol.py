@@ -251,6 +251,7 @@ def can_start_new_session_kind(kind: SourceKind) -> bool:
     return kind in (
         SourceKind.OFFLINE_DEMO,
         SourceKind.CONFIGURED_MODEL,
+        SourceKind.OLLAMA_CLOUD_LADDER,
         SourceKind.LEVEL32_OPERATOR,
     )
 

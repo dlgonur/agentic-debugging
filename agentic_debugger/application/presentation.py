@@ -38,6 +38,7 @@ from agentic_debugger.application import (
 from agentic_debugger.application.events import (
     SessionEvent,
     SessionEventKind,
+    OperatorStage,
     SessionPhase,
     SessionStatus,
     SessionTerminationReason,
@@ -248,6 +249,7 @@ class SessionViewState:
     sources: Tuple[SourceView, ...] = ()
     cleanup_verified: Optional[bool] = None
     model_provenance: Optional[ModelProvenanceView] = None
+    operator_stage: Optional[OperatorStage] = None
     timeline: Tuple[TimelineEntry, ...] = ()
 
 
@@ -300,6 +302,10 @@ def summarize_event(event: SessionEvent) -> str:
         return f"directive rejected ({payload['rejection_category']})"
     if kind is SessionEventKind.MODEL_CONFIGURED:
         return f"model configured ({payload['profile_id']})"
+    if kind is SessionEventKind.OPERATOR_PROGRESS:
+        detail = payload.get("detail")
+        suffix = f": {detail}" if detail else ""
+        return f"operator stage {payload['stage']}{suffix}"
     if kind is SessionEventKind.TOOL_STARTED:
         return f"tool {payload['tool_name']} started"
     if kind is SessionEventKind.TOOL_COMPLETED:
@@ -677,6 +683,15 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
                 treatment_id=payload.get("treatment_id"),
                 result_location=payload.get("result_location"),
             ),
+        )
+
+    if kind is SessionEventKind.OPERATOR_PROGRESS:
+        return replace(
+            state,
+            operator_stage=OperatorStage(payload["stage"]),
+            controller_phase=controller_phase,
+            run_id=run_id,
+            timeline=timeline,
         )
 
     if kind is SessionEventKind.DEBUGGER_STARTED:

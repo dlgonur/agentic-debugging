@@ -80,6 +80,75 @@ class _FakeOperatorProcess:
         self.returncode = -9
 
 
+class _ProgressOperatorProcess(_FakeOperatorProcess):
+    def __init__(self, argv, result):
+        super().__init__(argv, result)
+        self._polls = 0
+
+    def poll(self):
+        self._polls += 1
+        if self._polls == 1:
+            progress = Path(self.argv[self.argv.index("--progress-file") + 1])
+            progress.write_text(
+                "\n".join(
+                    json.dumps({"schema_version": "operator-progress-v1", "stage": stage})
+                    for stage in ("preflight", "model_running", "debugger", "official_verification")
+                ) + "\n",
+                encoding="utf-8",
+            )
+            return None
+        return self.returncode
+
+
+def test_operator_progress_observer_is_structured_and_not_waiting_model(tmp_path):
+    profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)
+
+    def factory(argv, **kwargs):
+        return _ProgressOperatorProcess(
+            argv,
+            {
+                "accepted": False,
+                "classification": "official_test_execution_unproven",
+                "official_verifier": {},
+                "cleanup": {
+                    "temporary_source_removed": True,
+                    "private_official_material_removed": True,
+                },
+            },
+        )
+
+    worker = Level32OperatorWorker(
+        session_dir=tmp_path / "runs" / "progress",
+        session_id="sess-level32-progress",
+        run_id="run-sess-level32-progress",
+        repository_root=tmp_path,
+        model=profile,
+        revision=1,
+        treatment_id="level32-treatment-v1",
+        output_dir=tmp_path / "experiments" / "progress",
+        spec=build_level32_spec(profile.alias),
+        process_factory=factory,
+    )
+    worker.start()
+    worker.wait()
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    progress = [
+        event.payload["stage"]
+        for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+    ]
+    assert progress[:5] == ["starting", "preflight", "preflight", "model_running", "debugger"]
+    assert "official_verification" in progress
+    assert all(
+        not (
+            event.event_kind is SessionEventKind.SESSION_STATUS_CHANGED
+            and event.payload["phase"] == "waiting_model"
+        )
+        for event in journal.events
+    )
+    validate_session_event_stream(journal.events)
+
+
 def test_one_start_passes_exact_alias_and_revision_and_preserves_classification(tmp_path):
     calls = []
     profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)

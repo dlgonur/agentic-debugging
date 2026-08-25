@@ -466,7 +466,8 @@ class TestPaneRendering:
 
         src_plain = SourcePanel._render_view(view, evidence_state=EvidenceState.LIVE_PENDING).plain
         assert "Source evidence not available yet." in src_plain
-        assert "Waiting for the live session..." in src_plain
+        assert "Waiting for source evidence..." in src_plain
+        assert "Waiting for the live session..." not in src_plain
         assert "replay position" not in src_plain
         assert "Advance the replay" not in src_plain
 

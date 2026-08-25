@@ -19,6 +19,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
 from agentic_debugger.application.emitter import SessionEventEmitter
 from agentic_debugger.application.events import (
+    OperatorStage,
     SessionEvent,
     SessionEventKind,
     SessionPhase,
@@ -39,6 +40,56 @@ from agentic_debugger.application.sources import ExecutionSourceSpec
 
 LEVEL32_TASK_ID = "audreyr__cookiecutter-967"
 LEVEL32_OPERATOR_SCRIPT = "scripts/run_cookiecutter_967_pdb_proof.py"
+
+@dataclass(frozen=True)
+class LadderTaskMetadata:
+    """One canonical product label set for an accepted ladder rung."""
+
+    title: str
+    task_id: str
+    debugger: str
+    treatment: str
+    evaluation: str
+
+
+LADDER_TASKS: tuple[LadderTaskMetadata, ...] = (
+    LadderTaskMetadata(
+        "Level 6/100", "pdb-required-boundary-006", "Exact PDB required",
+        "Accepted Level-6 contract", "Independent verifier",
+    ),
+    LadderTaskMetadata(
+        "Level 12/100", "pdb-required-caller-callee-007", "Exact PDB required",
+        "Accepted Level-12 contract", "Independent verifier",
+    ),
+    LadderTaskMetadata(
+        "Level 18/100", "pdb-required-multistage-units-008", "Exact PDB required",
+        "Accepted Level-18 contract", "Independent verifier",
+    ),
+    LadderTaskMetadata(
+        "Level 32/100 — Cookiecutter #967", LEVEL32_TASK_ID, "Exact PDB required",
+        "Frozen Level-32", "Official SWE-rebench",
+    ),
+)
+LADDER_TASK_IDS = frozenset(item.task_id for item in LADDER_TASKS)
+
+
+def ladder_task_options() -> tuple[tuple[str, str], ...]:
+    """The four accepted product rungs, retaining their canonical IDs."""
+
+    return tuple((f"{item.title} · {item.task_id}", item.task_id) for item in LADDER_TASKS)
+
+
+def ladder_task_metadata(task_id: str) -> LadderTaskMetadata:
+    """Return the immutable metadata for one accepted rung."""
+
+    for item in LADDER_TASKS:
+        if item.task_id == task_id:
+            return item
+    raise KeyError(task_id)
+
+
+def is_ladder_task(task_id: Optional[str]) -> bool:
+    return task_id in LADDER_TASK_IDS
 
 
 @dataclass(frozen=True)
@@ -79,6 +130,9 @@ def level32_model_profiles() -> Tuple[Level32ModelProfile, ...]:
         for spec in sorted(CLOUD_MODELS.values(), key=lambda item: item.local_alias)
         if is_treatment_eligible(spec)
     )
+
+
+ollama_cloud_model_profiles = level32_model_profiles
 
 
 def next_level32_treatment(repository_root: str | Path, model: str) -> tuple[int, str, Path]:
@@ -195,6 +249,37 @@ class Level32OperatorWorker:
         self._lock = threading.Lock()
         self._cancel_requested = False
         self._closed = False
+        self._progress_path = self._session_dir / "operator.progress.jsonl"
+        self._progress_offset = 0
+
+    def _emit_progress(self, stage: OperatorStage, detail: Optional[str] = None) -> None:
+        payload: dict[str, Any] = {"stage": stage.value}
+        if detail:
+            payload["detail"] = detail
+        self._emit(SessionEventKind.OPERATOR_PROGRESS, payload)
+
+    def _drain_progress(self) -> None:
+        """Consume only the optional observer channel, never operator logs."""
+
+        try:
+            with self._progress_path.open("r", encoding="utf-8") as stream:
+                stream.seek(self._progress_offset)
+                while True:
+                    line = stream.readline()
+                    if not line:
+                        break
+                    self._progress_offset = stream.tell()
+                    try:
+                        record = json.loads(line)
+                        stage = OperatorStage(record.get("stage"))
+                        detail = record.get("detail")
+                        self._emit_progress(stage, detail if isinstance(detail, str) else None)
+                    except (TypeError, ValueError, json.JSONDecodeError):
+                        # A malformed observer record is ignored. The
+                        # authoritative operator result remains the source of truth.
+                        continue
+        except (FileNotFoundError, OSError, UnicodeDecodeError):
+            return
 
     @property
     def pid(self) -> Optional[int]:
@@ -233,6 +318,7 @@ class Level32OperatorWorker:
         self._emit(SessionEventKind.SESSION_CREATED, {"spec_fingerprint": self._spec.fingerprint()})
         self._emitter.bind_run_id(self._run_id)
         self._emit(SessionEventKind.SESSION_STARTED, {})
+        self._emit_progress(OperatorStage.STARTING)
         self._emit(
             SessionEventKind.MODEL_CONFIGURED,
             {
@@ -248,8 +334,9 @@ class Level32OperatorWorker:
         )
         self._emit(
             SessionEventKind.SESSION_STATUS_CHANGED,
-            {"status": "running", "phase": SessionPhase.WAITING_MODEL.value},
+            {"status": "running", "phase": SessionPhase.EXECUTING_TOOL.value},
         )
+        self._emit_progress(OperatorStage.PREFLIGHT)
         argv = [
             sys.executable,
             str(self._repository_root / LEVEL32_OPERATOR_SCRIPT),
@@ -259,6 +346,7 @@ class Level32OperatorWorker:
             "--treatment-revision", str(self._revision),
             "--live",
             "--confirm-live-model-access",
+            "--progress-file", str(self._session_dir / "operator.progress.jsonl"),
         ]
         try:
             self._process = self._process_factory(
@@ -280,6 +368,10 @@ class Level32OperatorWorker:
     def _monitor(self) -> None:
         assert self._process is not None
         try:
+            while self._process.poll() is None:
+                self._drain_progress()
+                threading.Event().wait(0.05)
+            self._drain_progress()
             stdout, stderr = self._process.communicate()
             returncode = self._process.returncode
         except Exception as exc:
@@ -341,6 +433,7 @@ class Level32OperatorWorker:
                     verifier_payload["official_test_execution_proven"] = execution_proven
                 self._emit(SessionEventKind.VERIFIER_COMPLETED, verifier_payload)
         self._emit(SessionEventKind.CLEANUP_STARTED, {})
+        self._emit_progress(OperatorStage.CLEANUP)
         self._emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup})
         if self._cancel_requested:
             status, reason, kind = SessionStatus.CANCELLED, SessionTerminationReason.CANCELLED, SessionEventKind.SESSION_CANCELLED
@@ -350,6 +443,7 @@ class Level32OperatorWorker:
             status, reason, kind = SessionStatus.UNRESOLVED, SessionTerminationReason.UNRESOLVED, SessionEventKind.SESSION_COMPLETED
         else:
             status, reason, kind = SessionStatus.FAILED, SessionTerminationReason.SUBPROCESS_ERROR, SessionEventKind.SESSION_FAILED
+        self._emit_progress(OperatorStage.COMPLETED)
         self._emit(
             kind,
             {"status": status.value, "termination_reason": reason.value},
@@ -418,9 +512,16 @@ def build_level32_spec(model_alias: str) -> SessionSpec:
 
 __all__ = [
     "LEVEL32_TASK_ID",
+    "LADDER_TASK_IDS",
+    "LADDER_TASKS",
+    "LadderTaskMetadata",
     "Level32ModelProfile",
     "Level32OperatorWorker",
     "build_level32_spec",
     "level32_model_profiles",
+    "ladder_task_metadata",
+    "ladder_task_options",
+    "is_ladder_task",
+    "ollama_cloud_model_profiles",
     "next_level32_treatment",
 ]

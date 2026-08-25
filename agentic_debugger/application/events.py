@@ -108,6 +108,7 @@ class SourceKind(str, Enum):
 
     OFFLINE_DEMO = "offline_demo"
     CONFIGURED_MODEL = "configured_model"
+    OLLAMA_CLOUD_LADDER = "ollama_cloud_ladder"
     LEVEL32_OPERATOR = "level32_operator"
     SESSION_BUNDLE = "session_bundle"
     CANONICAL_TRAJECTORY = "canonical_trajectory"
@@ -166,6 +167,21 @@ class SessionPhase(str, Enum):
     CLEANING = "cleaning"
 
 
+class OperatorStage(str, Enum):
+    """Truthful operational boundaries exposed by ladder operators."""
+
+    STARTING = "starting"
+    PREFLIGHT = "preflight"
+    PREPARING_WORKSPACE = "preparing_workspace"
+    MODEL_RUNNING = "model_running"
+    DEBUGGER = "debugger"
+    CANDIDATE = "candidate"
+    VERIFICATION = "verification"
+    OFFICIAL_VERIFICATION = "official_verification"
+    CLEANUP = "cleanup"
+    COMPLETED = "completed"
+
+
 class SessionTerminationReason(str, Enum):
     """Application-level failure/termination taxonomy.
 
@@ -206,6 +222,7 @@ class SessionEventKind(str, Enum):
     MODEL_DIRECTIVE_ACCEPTED = "model.directive_accepted"
     MODEL_DIRECTIVE_REJECTED = "model.directive_rejected"
     MODEL_CONFIGURED = "model.configured"
+    OPERATOR_PROGRESS = "operator.progress"
     TOOL_STARTED = "tool.started"
     TOOL_COMPLETED = "tool.completed"
     DEBUGGER_STARTED = "debugger.started"
@@ -747,6 +764,23 @@ def _payload_status_changed(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"status": status.value, "phase": phase.value}
 
 
+def _payload_operator_progress(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Validate observer-only progress from an authoritative ladder run."""
+
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("operator.progress payload must be a mapping")
+    required = {"stage"}
+    optional = {"detail"}
+    _check_required(payload, required, "operator.progress payload")
+    _check_no_unknown(payload, required | optional, "operator.progress payload")
+    stage = _enum(payload["stage"], "stage", OperatorStage)
+    detail = payload.get("detail")
+    if detail is not None:
+        if type(detail) is not str or not detail or len(detail.encode("utf-8")) > 512:
+            raise SchemaValidationError("operator.progress detail is invalid")
+    return {"stage": stage.value, "detail": detail}
+
+
 def _payload_terminal(payload: Mapping[str, Any], label: str, kind: SessionEventKind) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError(f"{label} must be a mapping")
@@ -1234,6 +1268,7 @@ _PAYLOAD_VALIDATORS: Dict[SessionEventKind, Any] = {
     SessionEventKind.SESSION_CREATED: _payload_created,
     SessionEventKind.SESSION_STARTED: lambda p: _payload_empty(p, "session.started payload"),
     SessionEventKind.SESSION_STATUS_CHANGED: _payload_status_changed,
+    SessionEventKind.OPERATOR_PROGRESS: _payload_operator_progress,
     SessionEventKind.SESSION_CANCEL_REQUESTED: lambda p: _payload_empty(p, "session.cancel_requested payload"),
     SessionEventKind.SESSION_COMPLETED: lambda p: _payload_terminal(p, "session.completed payload", SessionEventKind.SESSION_COMPLETED),
     SessionEventKind.SESSION_FAILED: lambda p: _payload_terminal(p, "session.failed payload", SessionEventKind.SESSION_FAILED),
@@ -1550,6 +1585,7 @@ __all__ = [
     "SESSION_EVENT_SCHEMA_VERSION",
     "SessionEvent",
     "SessionEventKind",
+    "OperatorStage",
     "SessionPhase",
     "SessionStatus",
     "SessionTerminationReason",

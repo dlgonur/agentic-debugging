@@ -50,8 +50,8 @@ class TestSessionEventSchema:
         # 29 Task-1 kinds + 4 bounded additive Task-4 kinds
         # (controller.transition, patch.apply_failed, source.snapshot,
         # diagnosis.recorded) + 1 bounded additive Task-8 kind
-        # (model.configured).
-        assert len(SessionEventKind) == 34
+        # (model.configured, operator.progress).
+        assert len(SessionEventKind) == 35
 
     @pytest.mark.parametrize("kind", list(SessionEventKind))
     def test_valid_event_round_trip(self, kind):

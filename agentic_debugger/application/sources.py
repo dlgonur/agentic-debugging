@@ -64,6 +64,7 @@ class ModelExecutionError(RuntimeError):
 _STARTABLE_KINDS = frozenset({
     SourceKind.OFFLINE_DEMO,
     SourceKind.CONFIGURED_MODEL,
+    SourceKind.OLLAMA_CLOUD_LADDER,
     SourceKind.LEVEL32_OPERATOR,
 })
 
@@ -146,7 +147,7 @@ class ExecutionSourceSpec:
                 raise ApplicationInputError(
                     "configured_model sources require a model_config_ref"
                 )
-        elif self.kind is SourceKind.LEVEL32_OPERATOR:
+        elif self.kind in (SourceKind.OLLAMA_CLOUD_LADDER, SourceKind.LEVEL32_OPERATOR):
             if self.model_config_ref is None:
                 raise ApplicationInputError(
                     "level32_operator sources require a canonical model alias"

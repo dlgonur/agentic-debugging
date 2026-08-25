@@ -89,6 +89,29 @@ PREPARED_TREATMENT_REVISIONS = {
 }
 
 
+class _ProgressWriter:
+    """Optional observer-only JSONL channel for the application worker."""
+
+    def __init__(self, path: str | None) -> None:
+        self._path = Path(path).resolve() if path else None
+
+    def emit(self, stage: str, detail: str | None = None) -> None:
+        if self._path is None:
+            return
+        payload: dict[str, Any] = {"schema_version": "operator-progress-v1", "stage": stage}
+        if detail:
+            payload["detail"] = detail
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open("a", encoding="utf-8", newline="\n") as stream:
+                stream.write(json.dumps(payload, sort_keys=True) + "\n")
+                stream.flush()
+        except OSError:
+            # Observability is fail-open. The authoritative operator must not
+            # change its scientific result because the UI is unavailable.
+            return
+
+
 def _load_ollama_adapter_module(module_name: str) -> Any:
     """Load the sibling adapter safely when the script is run by path."""
 
@@ -1194,6 +1217,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list-models", action="store_true", help="list selectable aliases and exit")
     parser.add_argument("--live", action="store_true")
     parser.add_argument("--confirm-live-model-access", action="store_true")
+    parser.add_argument("--progress-file", default=None, help=argparse.SUPPRESS)
     parser.add_argument(
         "--integrity-gate",
         action="store_true",
@@ -1332,6 +1356,8 @@ def _result_summary(
 
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    progress = _ProgressWriter(args.progress_file)
+    progress.emit("starting")
     if args.integrity_gate:
         if args.live or args.confirm_live_model_access or args.recover_existing:
             raise ProofError("integrity gate cannot be combined with live or recovery execution")
@@ -1442,6 +1468,7 @@ def main(argv: list[str] | None = None) -> int:
         raise ProofError("live selection and explicit model-access confirmation are required")
 
     row = _load_official_row()
+    progress.emit("preflight")
     image_verification = _verify_image_and_record(output)
     config = _adapter_config(root, model=requested_model, logical_decision_ceiling=treatment_budget.logical_decision_ceiling if treatment_budget is not None else 25)
     preflight = _preflight(config)
@@ -1462,6 +1489,7 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     with tempfile.TemporaryDirectory(prefix="cookiecutter-967-pdb-") as temporary:
+        progress.emit("preparing_workspace")
         staging_root = Path(temporary) / "repository"
         fixture = staging_root / "agentic_debugger/datasets/curated" / TASK_ID
         _copy_image_source(fixture)
@@ -1488,6 +1516,7 @@ def main(argv: list[str] | None = None) -> int:
             evaluation_id=treatment_id,
             retain_observable_model_directives=True,
             scenario_override=_scenario(),
+            progress_observer=progress.emit,
         )
         case = live.to_mapping()
         (output / "live-results.json").write_text(
@@ -1495,9 +1524,11 @@ def main(argv: list[str] | None = None) -> int:
         )
         candidate = _candidate_patch_record(case)
         patch = candidate["patch"]
+        progress.emit("candidate")
         artifact = _canonicalize_level32_candidate(fixture, patch, parent_dir=Path(temporary))
         artifact_mapping = _write_candidate_artifacts(output, patch, artifact)
         with tempfile.TemporaryDirectory(prefix="cookiecutter-967-private-eval-") as private:
+            progress.emit("official_verification")
             official = _official_evaluate(
                 row,
                 artifact.patch,
@@ -1509,6 +1540,7 @@ def main(argv: list[str] | None = None) -> int:
             json.dumps(official, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
 
+    progress.emit("cleanup")
     summary = _result_summary(
         case,
         official,
@@ -1523,6 +1555,7 @@ def main(argv: list[str] | None = None) -> int:
     (output / "result.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    progress.emit("completed")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if summary["accepted"] else 1
 

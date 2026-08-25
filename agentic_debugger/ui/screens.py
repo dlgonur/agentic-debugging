@@ -11,6 +11,7 @@ model work.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Callable, Optional, Tuple
 
@@ -29,12 +30,17 @@ from textual.widgets import (
 )
 
 from agentic_debugger.application.events import (
+    OperatorStage,
     SessionEvent,
     SessionEventKind,
     SessionStatus,
     SourceKind,
 )
-from agentic_debugger.application.level32 import LEVEL32_TASK_ID
+from agentic_debugger.application.level32 import (
+    LEVEL32_TASK_ID,
+    is_ladder_task,
+    ladder_task_metadata,
+)
 from agentic_debugger.application.history import (
     HistoryClassification,
     SessionHistoryEntry,
@@ -53,6 +59,7 @@ from agentic_debugger.ui.widgets import (
     DebuggerPanel,
     EvidenceState,
     LiveBar,
+    LiveRunContextPanel,
     PatchPanel,
     ReplayBar,
     SourcePanel,
@@ -80,6 +87,10 @@ _CLASSIFICATION_STYLE = {
 
 def _markup_escape(value: Any) -> str:
     return str(value).replace("[", "\\[").replace("]", "\\]")
+
+
+def _operator_stage_label(stage: Any) -> str:
+    return str(stage.value if hasattr(stage, "value") else stage).replace("_", " ").capitalize()
 
 
 def _format_duration(started: Optional[str], ended: Optional[str]) -> str:
@@ -125,6 +136,7 @@ def _compact_source_label(source_kind: Optional[SourceKind]) -> str:
     return {
         SourceKind.OFFLINE_DEMO: "offline",
         SourceKind.CONFIGURED_MODEL: "configured",
+        SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud",
         SourceKind.SESSION_BUNDLE: "bundle",
         SourceKind.CANONICAL_TRAJECTORY: "trajectory",
         SourceKind.EXPERIMENT_EVIDENCE: "experiment",
@@ -169,12 +181,14 @@ def render_view_header(
     source_label = {
         SourceKind.OFFLINE_DEMO: "deterministic offline",
         SourceKind.CONFIGURED_MODEL: "configured command model",
+        SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud ladder",
         SourceKind.SESSION_BUNDLE: "recorded bundle",
         SourceKind.CANONICAL_TRAJECTORY: "recorded trajectory",
         SourceKind.EXPERIMENT_EVIDENCE: "recorded experiment",
         SourceKind.LEVEL32_OPERATOR: "Level-32 authoritative operator",
     }.get(view.source_kind, view.source_kind.value)
-    head.append(f"  ·  {source_label}")
+    if view.source_kind not in (SourceKind.OLLAMA_CLOUD_LADDER, SourceKind.LEVEL32_OPERATOR):
+        head.append(f"  ·  {source_label}")
     head.append("\n")
     status_style = {
         SessionStatus.RUNNING: "bold blue",
@@ -194,15 +208,13 @@ def render_view_header(
         else view.status.value.replace("_", " ").capitalize()
     )
     if view.status is SessionStatus.RUNNING:
-        phase = (
-            view.controller_phase.value
-            if view.controller_phase is not None
-            else (
-                view.phase.value.replace("_", " ").title()
-                if view.phase is not None
-                else None
-            )
-        )
+        phase = None
+        if view.operator_stage is not None:
+            phase = _operator_stage_label(view.operator_stage)
+        elif view.controller_phase is not None:
+            phase = view.controller_phase.value
+        elif view.phase is not None:
+            phase = view.phase.value.replace("_", " ").title()
         if phase is not None:
             status_text += f"  ·  {phase}"
     head.append(status_text, style=status_style)
@@ -679,9 +691,13 @@ class StartSessionScreen(Screen):
         if not self._task_options:
             self._task_options = list(self.app.curated_task_options())
             self._task_id = self._task_options[0][1] if self._task_options else None
-        self._refresh_profiles()
+        if not is_ladder_task(self._task_id):
+            self._refresh_profiles()
+        if is_ladder_task(self._task_id):
+            profiles = self.app.ollama_cloud_model_profiles()
+            self._profile_id = profiles[0].alias if profiles else None
         self._refresh_mode()
-        self._focus_row("mode")
+        self._focus_row("task" if is_ladder_task(self._task_id) else "mode")
         self._update_context_visibility(self.size.width)
         self._update_footer(self.size.width)
 
@@ -703,7 +719,7 @@ class StartSessionScreen(Screen):
         )
 
     def _focusable_row_ids(self) -> list[str]:
-        if self._task_id == LEVEL32_TASK_ID:
+        if is_ladder_task(self._task_id):
             return ["task", "model"]
         rows = ["mode"]
         if self._mode == self.MODE_CONFIGURED:
@@ -728,7 +744,7 @@ class StartSessionScreen(Screen):
         self._focus_row(rows[(rows.index(current) - 1) % len(rows)] if current in rows else rows[0])
 
     def _activate_row(self, row_key: str) -> None:
-        if self._task_id == LEVEL32_TASK_ID and row_key not in {"task", "model"}:
+        if is_ladder_task(self._task_id) and row_key not in {"task", "model"}:
             return
         self._open_time_limit_editor() if row_key == "time_limit" else self._open_choice_picker(row_key)
 
@@ -756,7 +772,7 @@ class StartSessionScreen(Screen):
             ]
             title, current = "Select debugger policy", self._policy
         elif row_key == "model":
-            if self._task_id == LEVEL32_TASK_ID:
+            if is_ladder_task(self._task_id):
                 choices = [
                     self._choice(
                         p.alias,
@@ -783,13 +799,18 @@ class StartSessionScreen(Screen):
             self._refresh_mode()
         elif row_key == "task":
             self._task_id = value
+            if is_ladder_task(self._task_id) and self._profile_id is None:
+                profiles = self.app.ollama_cloud_model_profiles()
+                self._profile_id = profiles[0].alias if profiles else None
+            elif not is_ladder_task(self._task_id):
+                self._refresh_profiles()
             self._refresh_mode()
         elif row_key == "debugger":
             self._policy = value
             self._render_rows()
         elif row_key == "model":
             self._profile_id = value
-            if self._task_id == LEVEL32_TASK_ID:
+            if is_ladder_task(self._task_id):
                 # Model selection changes the Level-32 readiness/status state,
                 # not only the displayed row value.
                 self._refresh_mode()
@@ -817,12 +838,12 @@ class StartSessionScreen(Screen):
 
     @property
     def start_available(self) -> bool:
-        if self._task_id == LEVEL32_TASK_ID:
+        if is_ladder_task(self._task_id):
             return any(p.alias == self._profile_id for p in self.app.level32_model_profiles())
         return self._mode != self.MODE_CONFIGURED or bool(self._profiles and self._profile_id)
 
     def _profile_display_name(self) -> str:
-        if self._task_id == LEVEL32_TASK_ID:
+        if is_ladder_task(self._task_id):
             profiles = self.app.level32_model_profiles()
             if self._profile_id is None:
                 return "Not selected" if profiles else "Not available"
@@ -846,22 +867,27 @@ class StartSessionScreen(Screen):
         self.query_one("#task-row", SessionSettingRow).set_value(self._task_display_name())
         self.query_one("#debugger-row", SessionSettingRow).set_value("On uncertainty" if self._policy == "pdb-on-uncertainty" else "Disabled")
         self.query_one("#time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
-        self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value("Exact PDB required")
-        self.query_one("#level32-treatment-row", ReadonlySettingRow).set_value("Frozen Level-32")
+        if is_ladder_task(self._task_id):
+            metadata = ladder_task_metadata(self._task_id)
+            self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value(metadata.debugger)
+            self.query_one("#level32-treatment-row", ReadonlySettingRow).set_value(metadata.treatment)
+        else:
+            self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value("Exact PDB required")
+            self.query_one("#level32-treatment-row", ReadonlySettingRow).set_value("Frozen Level-32")
 
     def _refresh_mode(self) -> None:
-        level32 = self._task_id == LEVEL32_TASK_ID
+        ladder = is_ladder_task(self._task_id)
         configured = self._mode == self.MODE_CONFIGURED
-        self.query_one("#mode-row", SessionSettingRow).display = not level32
-        self.query_one("#model-row", SessionSettingRow).display = configured or level32
-        self.query_one("#debugger-row", SessionSettingRow).display = not level32
-        self.query_one("#level32-debugger-row", ReadonlySettingRow).display = level32
-        self.query_one("#time-limit-row", TimeLimitRow).display = not level32
-        self.query_one("#level32-treatment-row", ReadonlySettingRow).display = level32
+        self.query_one("#mode-row", SessionSettingRow).display = not ladder
+        self.query_one("#model-row", SessionSettingRow).display = configured or ladder
+        self.query_one("#debugger-row", SessionSettingRow).display = not ladder
+        self.query_one("#level32-debugger-row", ReadonlySettingRow).display = ladder
+        self.query_one("#time-limit-row", TimeLimitRow).display = not ladder
+        self.query_one("#level32-treatment-row", ReadonlySettingRow).display = ladder
         status = self.query_one("#start-status", Static)
-        if level32 and not self.app.level32_model_profiles():
-            status.update("[yellow]start unavailable — no eligible Ollama model profiles[/]")
-        elif level32 and self._profile_id is None:
+        if ladder and not self.app.ollama_cloud_model_profiles():
+            status.update("[yellow]start unavailable — no eligible Ollama Cloud models[/]")
+        elif ladder and self._profile_id is None:
             status.update("[yellow]choose an eligible Ollama model[/]")
         elif self._config_error is not None and configured:
             status.update(f"[red]configuration error: {_markup_escape(self._config_error)}[/]")
@@ -870,15 +896,15 @@ class StartSessionScreen(Screen):
         else:
             status.update("")
         trust = self.query_one("#start-trust", Static)
-        trust.update("[yellow]Level-32 delegates to the frozen authoritative operator; Start runs one live treatment[/]" if level32 else ("[yellow]configured commands are trusted user configuration; network isolation is not enforced[/]" if configured else ""))
-        trust.display = (configured or level32) and self.size.width < 100
+        trust.update("[yellow]Capability ladder uses the canonical Ollama Cloud operator contract[/]" if ladder else ("[yellow]configured commands are trusted user configuration; network isolation is not enforced[/]" if configured else ""))
+        trust.display = (configured or ladder) and self.size.width < 100
         self._render_rows()
         self._update_context()
 
     def _update_context(self) -> None:
-        if self._task_id == LEVEL32_TASK_ID:
+        if is_ladder_task(self._task_id):
             ready = "Yes" if self.start_available else "No"
-            profiles = self.app.level32_model_profiles()
+            profiles = self.app.ollama_cloud_model_profiles()
             if self._profile_id is not None:
                 alias = self._profile_id
             elif profiles:
@@ -886,12 +912,12 @@ class StartSessionScreen(Screen):
             else:
                 alias = "Not available"
             lines = [
-                "[#8b949e]Task[/]\nLevel 32/100",
+                f"[#8b949e]Task[/]\n{_markup_escape(ladder_task_metadata(self._task_id).title)}",
                 f"\n[#8b949e]Model[/]\n{_markup_escape(self._profile_display_name())}",
                 f"\n[#8b949e]Alias[/]\n{_markup_escape(alias)}",
-                "\n[#8b949e]Debugger[/]\nExact PDB",
-                "\n[#8b949e]Treatment[/]\nFrozen Level-32",
-                "\n[#8b949e]Evaluation[/]\nOfficial",
+                f"\n[#8b949e]Debugger[/]\n{_markup_escape(ladder_task_metadata(self._task_id).debugger)}",
+                f"\n[#8b949e]Treatment[/]\n{_markup_escape(ladder_task_metadata(self._task_id).treatment)}",
+                f"\n[#8b949e]Evaluation[/]\n{_markup_escape(ladder_task_metadata(self._task_id).evaluation)}",
                 f"\n[#8b949e]Ready[/]\n{ready}",
             ]
             self.query_one("#context-summary", Static).update("\n".join(lines))
@@ -946,15 +972,15 @@ class StartSessionScreen(Screen):
             status.update("[yellow]start unavailable — choose a configured model profile[/]")
             return
         try:
-            if self._task_id == LEVEL32_TASK_ID:
+            if is_ladder_task(self._task_id):
                 if not self.start_available:
                     status.update("[yellow]start unavailable — choose an eligible Ollama model[/]")
                     return
                 self.app.start_live_session(
-                    task_id=LEVEL32_TASK_ID,
-                    policy="exact-pdb-level32-frozen",
+                    task_id=str(self._task_id),
+                    policy=("exact-pdb-level32-frozen" if self._task_id == LEVEL32_TASK_ID else "pdb-on-uncertainty"),
                     max_elapsed_seconds=None,
-                    source_kind=SourceKind.LEVEL32_OPERATOR,
+                    source_kind=(SourceKind.LEVEL32_OPERATOR if self._task_id == LEVEL32_TASK_ID else SourceKind.OLLAMA_CLOUD_LADDER),
                     profile_id=self._profile_id,
                 )
                 return
@@ -1042,19 +1068,23 @@ class WorkspaceScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield StatusHeader(id="status-header")
-        with TabbedContent(id="pane-tabs"):
-            with TabPane("Source", id="tab-source"):
-                yield SourcePanel(id="source-pane")
-            with TabPane("Debugger", id="tab-debugger"):
-                yield DebuggerPanel(id="debugger-pane")
-            with TabPane("Patch", id="tab-patch"):
-                yield PatchPanel(id="patch-pane")
-            with TabPane("Verifier", id="tab-verifier"):
-                yield VerifierPanel(id="verifier-pane")
-            with TabPane("Activity", id="tab-activity"):
-                yield ActivityPanel(id="activity-pane")
-            with TabPane("Timeline", id="tab-timeline"):
-                yield TimelinePanel(id="timeline-pane")
+        with Horizontal(id="workspace-body"):
+            with Vertical(id="workspace-main"):
+                with TabbedContent(id="pane-tabs"):
+                    with TabPane("Source", id="tab-source"):
+                        yield SourcePanel(id="source-pane")
+                    with TabPane("Debugger", id="tab-debugger"):
+                        yield DebuggerPanel(id="debugger-pane")
+                    with TabPane("Patch", id="tab-patch"):
+                        yield PatchPanel(id="patch-pane")
+                    with TabPane("Verifier", id="tab-verifier"):
+                        yield VerifierPanel(id="verifier-pane")
+                    with TabPane("Activity", id="tab-activity"):
+                        yield ActivityPanel(id="activity-pane")
+                    with TabPane("Timeline", id="tab-timeline"):
+                        yield TimelinePanel(id="timeline-pane")
+            if self.mode is WorkspaceMode.LIVE:
+                yield LiveRunContextPanel(id="live-run-context")
         if self.mode is WorkspaceMode.REPLAY:
             yield ReplayBar(id="replay-bar")
         else:
@@ -1069,6 +1099,14 @@ class WorkspaceScreen(Screen):
             self.refresh_live()
         else:
             self._render_all()
+        self._update_live_context_visibility(self.size.width)
+
+    def on_resize(self, event: Any) -> None:
+        self._update_live_context_visibility(event.size.width)
+
+    def _update_live_context_visibility(self, width: int) -> None:
+        if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
+            self.query_one("#live-run-context", LiveRunContextPanel).display = width >= 100
 
     def on_unmount(self) -> None:
         self.app.detach_live_workspace(self)
@@ -1173,7 +1211,11 @@ class WorkspaceScreen(Screen):
                 extra = "cancelling…"
             else:
                 extra = None
-            if view.model_provenance is not None and view.model_provenance.display_name:
+            if (
+                view.source_kind not in (SourceKind.OLLAMA_CLOUD_LADDER, SourceKind.LEVEL32_OPERATOR)
+                and view.model_provenance is not None
+                and view.model_provenance.display_name
+            ):
                 model_extra = f"model: {view.model_provenance.display_name}"
                 extra = f"{model_extra}  ·  {extra}" if extra else model_extra
         header = render_view_header(
@@ -1258,7 +1300,30 @@ class WorkspaceScreen(Screen):
         self.query_one("#activity-pane", ActivityPanel).update_view(view)
         boundaries = self._current_boundaries()
         self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
+        if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
+            self.query_one("#live-run-context", LiveRunContextPanel).update_view(
+                view, elapsed=self._live_elapsed()
+            )
         self._render_bar()
+
+    def _live_elapsed(self) -> str:
+        if len(self._live_events) < 2:
+            return "—"
+        try:
+            started = datetime.fromisoformat(
+                self._live_events[1].timestamp_utc.replace("Z", "+00:00")
+            )
+            ended = (
+                datetime.fromisoformat(
+                    self._live_events[-1].timestamp_utc.replace("Z", "+00:00")
+                )
+                if self._live_terminal is not None
+                else datetime.now(timezone.utc)
+            )
+            seconds = max(0, int((ended - started).total_seconds()))
+            return f"{seconds // 60:02d}:{seconds % 60:02d}"
+        except (TypeError, ValueError):
+            return "—"
 
     def _current_boundaries(self) -> frozenset[int]:
         if self.mode is WorkspaceMode.REPLAY and self.controller is not None:

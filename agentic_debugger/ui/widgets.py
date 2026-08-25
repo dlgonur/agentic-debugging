@@ -26,9 +26,11 @@ from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from agentic_debugger.application.events import (
+    OperatorStage,
     SessionEventKind,
     SessionStatus,
     SourceSnapshotStage,
+    SourceKind,
 )
 from agentic_debugger.application.presentation import (
     DebuggerViewState,
@@ -40,6 +42,14 @@ from agentic_debugger.application.presentation import (
 )
 
 _NOT_RECORDED = "NOT RECORDED"
+
+
+def _markup_escape(value: Any) -> str:
+    return str(value).replace("[", "\\[").replace("]", "\\]")
+
+
+def _operator_stage_label(stage: Any) -> str:
+    return str(stage.value if hasattr(stage, "value") else stage).replace("_", " ").capitalize()
 
 
 class EvidenceState(str, Enum):
@@ -91,6 +101,7 @@ _ACTIVITY_FILTER_KINDS: dict[str, frozenset[str]] = {
             SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value,
             SessionEventKind.MODEL_DIRECTIVE_REJECTED.value,
             SessionEventKind.MODEL_CONFIGURED.value,
+            SessionEventKind.OPERATOR_PROGRESS.value,
         }
     ),
     "tools": frozenset(
@@ -146,6 +157,7 @@ _KIND_STYLE: dict[str, str] = {
     SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value: "bold #a371f7",
     SessionEventKind.MODEL_DIRECTIVE_REJECTED.value: "yellow",
     SessionEventKind.MODEL_CONFIGURED.value: "bold #a371f7",
+    SessionEventKind.OPERATOR_PROGRESS.value: "bold #79c0ff",
     SessionEventKind.TOOL_STARTED.value: "dark_cyan",
     SessionEventKind.TOOL_COMPLETED.value: "dark_cyan",
     SessionEventKind.DEBUGGER_STARTED.value: "magenta",
@@ -298,7 +310,7 @@ class SourcePanel(VerticalScroll):
                 return text
             if evidence_state == EvidenceState.LIVE_PENDING:
                 text = Text("Source evidence not available yet.\n")
-                text.append("Waiting for the live session...\n", style="dim")
+                text.append("Waiting for source evidence...\n", style="dim")
                 return text
             if evidence_state == EvidenceState.REPLAY_PENDING:
                 text = Text(
@@ -759,6 +771,80 @@ class StatusHeader(Static):
     """
 
 
+class LiveRunContextPanel(VerticalScroll):
+    """Truthful runtime context for wide capability-ladder workspaces."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._text = Static("")
+
+    def compose(self) -> ComposeResult:
+        yield self._text
+
+    def update_view(self, view: SessionViewState, *, elapsed: str = "—") -> None:
+        from agentic_debugger.ui.app import task_display_title
+        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+
+        model = view.model_provenance
+        stage = _operator_stage_label(view.operator_stage) if view.operator_stage else "Not recorded"
+        if view.debugger.session_started:
+            pdb = "Observed"
+        elif view.operator_stage is OperatorStage.DEBUGGER:
+            pdb = "Active"
+        else:
+            pdb = "Pending"
+        if view.verifier_summary is not None:
+            verifier = view.verifier_summary.outcome.value if view.verifier_summary.outcome else "Completed"
+        elif view.verifier_stages:
+            verifier = "Active"
+        else:
+            verifier = "Pending"
+        ladder = is_ladder_task(view.task_id)
+        metadata = ladder_task_metadata(view.task_id) if ladder else None
+        if view.source_kind is SourceKind.LEVEL32_OPERATOR:
+            treatment = (
+                f"V{model.treatment_revision}"
+                if model is not None and model.treatment_revision is not None
+                else metadata.treatment if metadata is not None else "Not recorded"
+            )
+        elif metadata is not None:
+            treatment = metadata.treatment
+        else:
+            treatment = "Not recorded"
+        evaluation = metadata.evaluation if metadata is not None else None
+        runtime = {
+            SourceKind.OFFLINE_DEMO: "Local deterministic",
+            SourceKind.CONFIGURED_MODEL: "Configured command",
+            SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud",
+            SourceKind.LEVEL32_OPERATOR: "Ollama Cloud",
+        }.get(view.source_kind, "Recorded source")
+        official = None
+        if view.source_kind is SourceKind.LEVEL32_OPERATOR:
+            official = (
+                "Executed"
+                if view.verifier_summary is not None
+                and view.verifier_summary.official_test_execution_proven is True
+                else "Not executed"
+            )
+        lines = [
+            "[bold #79c0ff]RUN[/]",
+            "[#8b949e]Task[/]", "[bright_white]" + _markup_escape(task_display_title(view.task_id)) + "[/]",
+            "[#8b949e]ID[/]", "[bright_white]" + _markup_escape(view.task_id) + "[/]",
+            "[#8b949e]Model[/]", "[bright_white]" + _markup_escape(model.display_name if model and model.display_name else "Not recorded") + "[/]",
+            "[#8b949e]Alias[/]", "[bright_white]" + _markup_escape(model.profile_id if model and model.profile_id else "Not recorded") + "[/]",
+            "[#8b949e]Runtime[/]", "[bright_white]" + runtime + "[/]",
+            *(["[#8b949e]Evaluation[/]", "[bright_white]" + evaluation + "[/]"] if evaluation else []),
+            "[#8b949e]Treatment[/]", "[bright_white]" + treatment + "[/]",
+            "[#8b949e]Stage[/]", "[bright_white]" + _markup_escape(stage) + "[/]",
+            "[#8b949e]Elapsed[/]", "[bright_white]" + _markup_escape(elapsed) + "[/]",
+            "[#8b949e]PDB[/]", "[bright_white]" + pdb + "[/]",
+            "[#8b949e]Verifier[/]", "[bright_white]" + _markup_escape(verifier) + "[/]",
+        ]
+        if official is not None:
+            lines.extend(("[#8b949e]Official tests[/]", "[bright_white]" + official + "[/]"))
+        self._text.update("\n".join(lines))
+
+
 class ReplayBar(Static):
     """Replay-control footer (position + key hints)."""
 
@@ -772,6 +858,7 @@ __all__ = [
     "DebuggerPanel",
     "EvidenceState",
     "LiveBar",
+    "LiveRunContextPanel",
     "PatchPanel",
     "ReplayBar",
     "SourcePanel",
