@@ -335,6 +335,44 @@ class TestBootAndHome:
 
 
 class TestOpenReplay:
+    def test_workspace_arrows_switch_views_from_content_focus(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        populate_history(store, "sess.replay.arrow-nav")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario(pilot):
+            await open_first_row(pilot)
+            workspace = pilot.app.screen
+            tabs = workspace.query_one("#pane-tabs")
+            source = workspace.query_one("#source-pane")
+            source.focus()
+            await pilot.pause()
+            assert tabs.active == "tab-source"
+
+            await pilot.press("right")
+            assert tabs.active == "tab-debugger"
+            await pilot.press("right")
+            assert tabs.active == "tab-patch"
+            await pilot.press("left")
+            assert tabs.active == "tab-debugger"
+
+            # Repeated navigation stays screen-global after focus moves to a
+            # different read-only pane.
+            workspace.query_one("#activity-pane").focus()
+            tabs.active = "tab-activity"
+            await pilot.pause()
+            await pilot.press("right", "right", "left")
+            assert tabs.active == "tab-timeline"
+
+            # Existing numeric bindings remain Activity filters rather than
+            # being repurposed as view navigation.
+            activity = workspace.query_one("#activity-pane")
+            tabs.active = "tab-activity"
+            await pilot.press("5")
+            assert activity.filter == "debugger"
+
+        run_headless(app, scenario)
+
     def test_open_completed_session_renders_all_panes(self, tmp_path):
         store = HistoryStore(tmp_path)
         populate_history(store, "sess.replay.rich")
@@ -421,40 +459,39 @@ class TestOpenReplay:
             workspace = pilot.app.screen
             bar = workspace.query_one("#replay-bar", ReplayBar)
             header = workspace.query_one("#status-header", StatusHeader)
-            assert "0/28" in str(bar.render())
-            # The prev/next key hints render their literal bracket glyphs
-            # (no markup-escape artifacts like "[[/").
+            assert "0/28" in str(header.render())
             bar_text = str(bar.render())
-            assert "[ prev" in bar_text
-            assert "[[/" not in bar_text
+            assert "left/right views" in bar_text
+            assert "1-7 activity filters" in bar_text
             # next events
             await pilot.press("]")
-            assert "1/28" in str(bar.render())
+            assert "1/28" in str(header.render())
             await pilot.press("]")
             await pilot.press("]")
-            assert "3/28" in str(bar.render())
+            assert "3/28" in str(header.render())
             # previous
             await pilot.press("[")
-            assert "2/28" in str(bar.render())
+            assert "2/28" in str(header.render())
             # end and begin
             await pilot.press("G")
-            assert "28/28" in str(bar.render())
+            assert "28/28" in str(header.render())
             header_text = str(header.render())
-            assert "SUCCEEDED" in header_text
+            assert "Completed" in header_text
+            assert "Succeeded" not in header_text
             assert "at end" in header_text
             await pilot.press("g")
-            assert "0/28" in str(bar.render())
+            assert "0/28" in str(header.render())
             # phase navigation: effective boundaries are 0,2,3,15,18
             await pilot.press("}")
-            assert "2/28" in str(bar.render())
+            assert "2/28" in str(header.render())
             await pilot.press("}")
-            assert "3/28" in str(bar.render())
+            assert "3/28" in str(header.render())
             await pilot.press("}")
-            assert "15/28" in str(bar.render())
+            assert "15/28" in str(header.render())
             await pilot.press("}")
-            assert "18/28" in str(bar.render())
+            assert "18/28" in str(header.render())
             await pilot.press("{")
-            assert "15/28" in str(bar.render())
+            assert "15/28" in str(header.render())
 
         run_headless(app, scenario)
 
@@ -557,8 +594,8 @@ class TestOpenReplay:
             await pilot.press("1", "5")
             await pilot.press("enter")
             workspace = pilot.app.screen
-            bar = workspace.query_one("#replay-bar", ReplayBar)
-            assert "15/28" in str(bar.render())
+            header = workspace.query_one("#status-header", StatusHeader)
+            assert "15/28" in str(header.render())
 
         run_headless(app, scenario)
 

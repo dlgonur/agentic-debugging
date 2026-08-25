@@ -163,25 +163,15 @@ def render_view_header(
     head = Text()
     head.append(f" {mode} ", style=mode_style)
     title = task_display_title(view.task_id)
-    if title and title != view.task_id:
-        head.append(f"  ·  {title} · {view.task_id}")
-    else:
-        head.append(f"  ·  task {view.task_id}")
+    head.append(f"  {title}")
     source_label = {
         SourceKind.OFFLINE_DEMO: "deterministic offline",
         SourceKind.CONFIGURED_MODEL: "configured command model",
+        SourceKind.SESSION_BUNDLE: "recorded bundle",
+        SourceKind.CANONICAL_TRAJECTORY: "recorded trajectory",
+        SourceKind.EXPERIMENT_EVIDENCE: "recorded experiment",
     }.get(view.source_kind, view.source_kind.value)
     head.append(f"  ·  {source_label}")
-    if view.model_provenance is not None and view.model_provenance.display_name:
-        # Recorded safe provenance only; never a claimed provider identity.
-        head.append(
-            f"  ·  model {view.model_provenance.display_name}"
-            f" ({view.model_provenance.profile_id})"
-        )
-    if replay_position is not None:
-        head.append(f"  ·  {replay_position}")
-    if view.session_id:
-        head.append(f"  ·  {view.session_id}", style="dim")
     head.append("\n")
     status_style = {
         SessionStatus.RUNNING: "bold blue",
@@ -195,30 +185,44 @@ def render_view_header(
         SessionStatus.CLEANUP_FAILED: "bold red",
         SessionStatus.CREATED: "dim",
     }.get(view.status, "default")
-    status_text = view.status.value.upper()
-    if view.status is SessionStatus.RUNNING and view.phase is not None:
-        status_text += f" ({view.phase.value})"
-    if view.status.terminal and view.termination_reason is not None:
-        status_text += f" ({view.termination_reason.value})"
+    status_text = (
+        "Completed"
+        if view.status is SessionStatus.SUCCEEDED
+        else view.status.value.replace("_", " ").capitalize()
+    )
+    if view.status is SessionStatus.RUNNING:
+        phase = (
+            view.controller_phase.value
+            if view.controller_phase is not None
+            else (
+                view.phase.value.replace("_", " ").title()
+                if view.phase is not None
+                else None
+            )
+        )
+        if phase is not None:
+            status_text += f"  ·  {phase}"
     head.append(status_text, style=status_style)
-    if view.controller_phase is not None:
-        head.append(f"  ·  phase: {view.controller_phase.value.capitalize()}")
     verifier = ""
     if view.verifier_summary is not None:
         summary = view.verifier_summary
         outcome_str = summary.outcome.value if summary.outcome else (summary.status or "?")
         verifier = f"verifier: {outcome_str}"
-        if summary.f2p_total is not None:
-            verifier += f" · fail-to-pass {summary.f2p_passed}/{summary.f2p_total}"
-        if summary.p2p_total is not None and summary.p2p_total > 0:
-            verifier += f" · pass-to-pass {summary.p2p_passed}/{summary.p2p_total}"
         if summary.workspace_cleaned:
             verifier += " · cleanup verified"
+        elif summary.workspace_cleaned is False:
+            verifier += " · cleanup failed"
     elif view.verifier_stages:
-        verifier = "verifier: running"
+        verifier = "verifier running"
     else:
-        verifier = "verifier: pending" if view.status is SessionStatus.RUNNING else "verifier: —"
+        verifier = "verifier pending" if view.status is SessionStatus.RUNNING else "verifier: —"
+    if view.cleanup_verified is True and "cleanup verified" not in verifier:
+        verifier += " · cleanup verified"
+    elif view.cleanup_verified is False and "cleanup failed" not in verifier:
+        verifier += " · cleanup failed"
     head.append(f"  ·  {verifier}")
+    if replay_position is not None:
+        head.append(f"  ·  {replay_position}", style="dim")
     if extra is not None:
         head.append(f"  ·  {extra}")
     return head
@@ -887,6 +891,8 @@ class WorkspaceScreen(Screen):
     """
 
     BINDINGS = [
+        Binding("left", "workspace_previous_view", "Previous view", priority=True),
+        Binding("right", "workspace_next_view", "Next view", priority=True),
         Binding("]", "replay_next", "Next event"),
         Binding("[", "replay_previous", "Previous event"),
         Binding("}", "replay_next_phase", "Next phase"),
@@ -1065,13 +1071,11 @@ class WorkspaceScreen(Screen):
                     "  ·  read-only replay"
                 )
         if self.mode is WorkspaceMode.LIVE:
-            if self._live_terminal is not None:
-                extra = "session finished — q returns to history"
-            elif self._live_failure is not None:
+            if self._live_failure is not None and self._live_terminal is None:
                 extra = "startup failed"
-            elif self._cancel_requested_ui:
+            elif self._cancel_requested_ui and self._live_terminal is None:
                 extra = "cancel requested — waiting for worker cleanup"
-            elif self._cancel_active:
+            elif self._cancel_active and self._live_terminal is None:
                 extra = "cancelling…"
             else:
                 extra = None
@@ -1175,43 +1179,50 @@ class WorkspaceScreen(Screen):
             if self.controller is None:
                 bar.update("")
                 return
-            controller = self.controller
-            pos_label = (
-                "before first event"
-                if controller.at_beginning
-                else ("at end" if controller.at_end else f"event {controller.index}/{controller.total_events}")
-            )
             bar.update(
-                f"[dim][bold]replay[/] {controller.index}/{controller.total_events} events ({pos_label})"
-                f"   ·   [bold]\\[[/] prev   [bold]][/] next   [bold]{{[/] prev phase   "
-                f"[bold]}}[/] next phase   [bold]g[/] begin   [bold]G[/] end   "
-                f"[bold]j[/] jump   [bold]?[/] help   [bold]q[/] history[/]"
+                "[dim]left/right views   1-7 activity filters   \\[/] events   {/} phases   "
+                "? help   q history[/]"
             )
         else:
             bar = self.query_one("#live-bar", LiveBar)
-            if self._live_terminal is not None:
-                result = self._live_terminal
-                term_style = (
-                    "bold green"
-                    if result.status is SessionStatus.SUCCEEDED
-                    else ("bold yellow" if result.status is SessionStatus.CANCELLED else "bold red")
-                )
+            if self._live_terminal is None and self._live_failure is None:
                 bar.update(
-                    f"[{term_style}]{result.status.value.upper()}[/] ({result.termination_reason.value})"
-                    f"  ·  cleanup verified: {result.cleanup_verified}"
-                    f"  ·  [bold]?[/] help  ·  [bold]q[/] returns to history"
-                )
-            elif self._live_failure is not None:
-                bar.update(f"[bold red]startup failed[/]  ·  [bold]?[/] help  ·  [bold]q[/] returns to history")
-            elif self._cancel_requested_ui or self._cancel_active:
-                bar.update(
-                    "[bold yellow]cancel requested[/] — waiting for the "
-                    "worker's cooperative cleanup and terminal evidence"
+                    "[dim]left/right views   1-7 activity filters   c cancel   ? help   q history[/]"
                 )
             else:
                 bar.update(
-                    "[dim]live session running[/]   ·   [bold]c[/] cancel   [bold]?[/] help   [bold]q[/] history"
+                    "[dim]left/right views   1-7 activity filters   ? help   q history[/]"
                 )
+
+    # -- workspace view navigation ------------------------------------------
+
+    _VIEW_IDS = (
+        "tab-source",
+        "tab-debugger",
+        "tab-patch",
+        "tab-verifier",
+        "tab-activity",
+        "tab-timeline",
+    )
+
+    def _switch_workspace_view(self, offset: int) -> None:
+        """Switch views from the screen so child focus cannot swallow arrows."""
+        tabs = self.query_one("#pane-tabs", TabbedContent)
+        try:
+            current = self._VIEW_IDS.index(tabs.active)
+        except ValueError:
+            current = 0 if offset > 0 else len(self._VIEW_IDS) - 1
+        target = (current + offset) % len(self._VIEW_IDS)
+        tabs.active = self._VIEW_IDS[target]
+        # Keep focus in the newly visible scrollable pane for coherent
+        # Up/Down behavior and immediate repeated Left/Right navigation.
+        tabs.get_pane(self._VIEW_IDS[target]).focus()
+
+    def action_workspace_previous_view(self) -> None:
+        self._switch_workspace_view(-1)
+
+    def action_workspace_next_view(self) -> None:
+        self._switch_workspace_view(1)
 
     # -- replay actions -----------------------------------------------------
 

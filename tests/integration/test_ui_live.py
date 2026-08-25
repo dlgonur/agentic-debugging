@@ -76,6 +76,10 @@ def live_bar_text(workspace: WorkspaceScreen) -> str:
     return str(workspace.query_one("#live-bar", LiveBar).render())
 
 
+def header_text(workspace: WorkspaceScreen) -> str:
+    return str(workspace.query_one("#status-header", StatusHeader).render())
+
+
 async def wait_live_terminal(pilot, workspace: WorkspaceScreen) -> None:
     await wait_until(
         pilot,
@@ -120,11 +124,15 @@ class TestLiveStartAndProgression:
                 timeout_seconds=240.0,
                 label="stage2-source-pane",
             )
+            assert "1-7 activity filters" in live_bar_text(workspace)
+            assert "c cancel" in live_bar_text(workspace)
             # operational terminal arrives with real evidence
             await wait_live_terminal(pilot, workspace)
-            bar = live_bar_text(workspace)
-            assert "SUCCEEDED" in bar
-            assert "cleanup verified: True" in bar
+            header = header_text(workspace)
+            assert "Completed" in header
+            assert "Succeeded" not in header
+            assert "cleanup verified" in header
+            assert "c cancel" not in live_bar_text(workspace)
             live_view = app.live_view
             assert live_view is not None
             assert live_view.status is SessionStatus.SUCCEEDED
@@ -215,15 +223,17 @@ class TestLiveCancellation:
             # press; the terminal still waits for real worker evidence
             await wait_until(
                 pilot,
-                lambda: "cancel requested" in live_bar_text(workspace),
+                lambda: workspace._cancel_requested_ui
+                or workspace._live_terminal is not None,
                 timeout_seconds=30.0,
                 label="stage2-cancel-requested",
             )
             # the terminal only arrives with real worker evidence
             await wait_live_terminal(pilot, workspace)
-            bar = live_bar_text(workspace)
-            assert "cancelled" in bar
-            assert "cleanup verified: True" in bar
+            header = header_text(workspace)
+            assert "Cancelled" in header
+            assert "cleanup verified" in header
+            assert "c cancel" not in live_bar_text(workspace)
             live_view = app.live_view
             assert live_view is not None
             assert live_view.status is SessionStatus.CANCELLED
@@ -309,7 +319,7 @@ class TestStartSessionScreen:
             # clean up: cancel + wait for the honest terminal
             await pilot.press("c")
             await wait_live_terminal(pilot, workspace)
-            assert "cancelled" in live_bar_text(workspace) or "succeeded" in live_bar_text(workspace)
+            assert "Cancelled" in header_text(workspace) or "Completed" in header_text(workspace)
 
         run_headless(app, scenario, size=(100, 30))
 
@@ -375,7 +385,8 @@ class TestStartSessionScreen:
             # workspace is Home, not StartSessionScreen.
             assert isinstance(pilot.app._screen_stack[-2], HomeScreen)
             await wait_live_terminal(pilot, workspace1)
-            assert "SUCCEEDED" in live_bar_text(workspace1)
+            assert "Completed" in header_text(workspace1)
+            assert "Succeeded" not in header_text(workspace1)
             session1_id = app.live_view.session_id
             assert session1_id is not None
             # q returns to Home (the app says "q returns to history").
@@ -418,7 +429,7 @@ class TestStartSessionScreen:
             )
             await pilot.press("c")
             await wait_live_terminal(pilot, workspace2)
-            assert "CANCELLED" in live_bar_text(workspace2)
+            assert "Cancelled" in header_text(workspace2)
             session2_id = app.live_view.session_id
             assert session2_id is not None
             assert session2_id != session1_id

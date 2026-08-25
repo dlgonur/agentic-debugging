@@ -15,6 +15,8 @@ and call the pane render methods directly, without a terminal.
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from agentic_debugger.application.events import SessionEventKind, SourceKind
@@ -35,6 +37,7 @@ from agentic_debugger.ui.widgets import (
     VerifierPanel,
     _ACTIVITY_FILTER_KINDS,
     _KIND_STYLE,
+    _highlight_source_lines,
     _entry_style,
 )
 
@@ -268,9 +271,10 @@ class TestHeaderRendering:
         )
         plain = header.plain
         assert "LIVE" in plain
-        assert view.session_id in plain
-        assert "curated-off-by-one-002" in plain
         assert "Return the complete recent window" in plain
+        assert "deterministic offline" in plain
+        assert "session-test-001" not in plain
+        assert "curated-off-by-one-002" not in plain
         assert_no_style_tags(plain)
 
     def test_replay_header_plain_has_mode_but_no_markup(self):
@@ -284,7 +288,8 @@ class TestHeaderRendering:
         plain = header.plain
         assert "REPLAY" in plain
         assert "28/28 events" in plain
-        assert "SUCCEEDED" in plain
+        assert "Completed" in plain
+        assert "Succeeded" not in plain
         assert_no_style_tags(plain)
 
     def test_header_status_and_verifier_text_is_plain(self):
@@ -294,12 +299,65 @@ class TestHeaderRendering:
         )
         plain = header.plain
         assert "verifier: RESOLVED" in plain
-        assert "fail-to-pass 1/1" in plain
+        assert "cleanup verified" in plain
+        assert "fail-to-pass" not in plain
+        assert_no_style_tags(plain)
+
+    def test_completed_header_can_show_baseline_invalid_verifier_outcome(self):
+        view = fold(bracket_stream())
+        assert view.verifier_summary is not None
+        view = replace(
+            view,
+            verifier_summary=replace(
+                view.verifier_summary,
+                status="BASELINE_INVALID",
+                outcome=None,
+            ),
+        )
+        plain = render_view_header(
+            view, mode="LIVE", mode_style="bold white on #1f6feb"
+        ).plain
+        assert "Completed" in plain
+        assert "Succeeded" not in plain
+        assert "verifier: BASELINE_INVALID" in plain
         assert "cleanup verified" in plain
         assert_no_style_tags(plain)
 
+    def test_running_header_is_concise_and_keeps_phase_and_verifier_state(self):
+        view = fold(bracket_stream()[:3])
+        plain = render_view_header(
+            view, mode="LIVE", mode_style="bold white on #1f6feb"
+        ).plain
+        assert "Running" in plain
+        assert "Executing Tool" in plain
+        assert "verifier pending" in plain
+        assert "executing_tool" not in plain
+
 
 class TestPaneRendering:
+    def test_source_uses_filename_aware_syntax_highlighting(self):
+        lines = _highlight_source_lines(
+            "def answer(value):\n"
+            "    # keep this boundary\n"
+            "    return value + 7\n",
+            "answer.py",
+        )
+        assert [line.plain for line in lines] == [
+            "def answer(value):",
+            "    # keep this boundary",
+            "    return value + 7",
+        ]
+        styles = {str(span.style) for line in lines for span in line.spans}
+        assert any("#ff7b72" in style for style in styles)  # keyword/operator
+        assert any("#d2a8ff" in style for style in styles)  # function name
+        assert any("#8b949e" in style for style in styles)  # comment
+        assert any("#79c0ff" in style for style in styles)  # number
+
+    def test_source_unknown_extension_falls_back_to_plain_text(self):
+        lines = _highlight_source_lines("plain [text]\n", "notes.unknownext")
+        assert [line.plain for line in lines] == ["plain [text]"]
+        assert not lines[0].spans
+
     def test_debugger_pane_headings_and_evidence_are_plain(self):
         view = fold(bracket_stream())
         plain = DebuggerPanel._render_view(view).plain

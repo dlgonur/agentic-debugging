@@ -14,8 +14,12 @@ come from the view.
 from __future__ import annotations
 
 from enum import Enum
+from pathlib import Path
 from typing import Any, Optional
 
+from pygments import lex
+from pygments.lexers import ClassNotFound, get_lexer_for_filename
+from pygments.token import Comment, Keyword, Name, Number, Operator, String, Token
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.containers import VerticalScroll
@@ -202,6 +206,57 @@ def _stage_style(stage: PatchStage) -> str:
     }[stage]
 
 
+def _source_token_style(token_type: Token) -> Optional[str]:
+    """Map common Pygments categories to the restrained application palette."""
+    if token_type in Comment:
+        return "dim italic #8b949e"
+    if token_type in Keyword:
+        return "bold #ff7b72"
+    if token_type in Name.Function:
+        return "#d2a8ff"
+    if token_type in Name.Class:
+        return "bold #ffa657"
+    if token_type in String:
+        return "#a5d6ff"
+    if token_type in Number:
+        return "#79c0ff"
+    if token_type in Operator:
+        return "#ff7b72"
+    if token_type in Token.Punctuation:
+        return "#c9d1d9"
+    return None
+
+
+def _highlight_source_lines(source_text: str, source_path: str) -> list[Text]:
+    """Return one styled Rich ``Text`` per source line.
+
+    Lexer selection is filename-based and deliberately fails closed to plain
+    text for extensions Pygments does not recognize.  The input text is only
+    split into styled spans; it is never parsed as Rich markup.
+    """
+    lines = [Text(line, no_wrap=True) for line in (source_text.splitlines() or [""])]
+    try:
+        filename = Path(source_path).name or source_path
+        lexer = get_lexer_for_filename(filename, code=source_text)
+    except (ClassNotFound, OSError, TypeError, ValueError):
+        return lines
+
+    lines = [Text("", no_wrap=True) for _ in lines]
+    line_index = 0
+    for token_type, value in lex(source_text, lexer):
+        chunks = value.split("\n")
+        for chunk_index, chunk in enumerate(chunks):
+            if line_index < len(lines) and chunk:
+                style = _source_token_style(token_type)
+                if style is None:
+                    lines[line_index].append(chunk)
+                else:
+                    lines[line_index].append(chunk, style=style)
+            if chunk_index < len(chunks) - 1:
+                line_index += 1
+    return lines
+
+
 class SourcePanel(VerticalScroll):
     """Recorded source with the current execution line highlighted."""
 
@@ -278,7 +333,7 @@ class SourcePanel(VerticalScroll):
             if debugger.script == source.path and debugger.line is not None
             else None
         )
-        lines = source.text.splitlines() or [""]
+        lines = _highlight_source_lines(source.text, source.path)
         highlighted = highlight_line is not None and 1 <= highlight_line <= len(lines)
         gutter_width = max(3, len(str(len(lines))))
         for index, line in enumerate(lines, start=1):
@@ -286,13 +341,14 @@ class SourcePanel(VerticalScroll):
             if index == highlight_line:
                 gutter.stylize("bold yellow")
             text.append_text(gutter)
-            content = Text(line, no_wrap=True)
             if index == highlight_line:
-                content.stylize("bold yellow on #3a2f00")
+                # Keep the syntax foreground colors and add only the current
+                # line emphasis/background on top of them.
+                line.stylize("bold on #3a2f00")
                 text.append("▶ ", style="bold yellow")
             else:
                 text.append("  ")
-            text.append_text(content)
+            text.append_text(line)
             text.append("\n")
         if not highlighted and debugger.script is not None:
             text.append(

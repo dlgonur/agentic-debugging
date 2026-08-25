@@ -222,9 +222,10 @@ class TestConfiguredLiveSession:
             # provenance arrives through the shared journal
             await wait_until(
                 pilot,
-                lambda: "model Dummy command model" in header_text(workspace),
+                lambda: workspace._view.model_provenance is not None
+                and workspace._view.model_provenance.display_name == "Dummy command model",
                 timeout_seconds=120.0,
-                label="stage1-provenance-header",
+                label="stage1-provenance-evidence",
             )
             await wait_until(
                 pilot,
@@ -232,9 +233,10 @@ class TestConfiguredLiveSession:
                 timeout_seconds=300.0,
                 label="stage2-terminal",
             )
-            bar = live_bar_text(workspace)
-            assert "SUCCEEDED" in bar
-            assert "cleanup verified: True" in bar
+            header = header_text(workspace)
+            assert "Completed" in header
+            assert "Succeeded" not in header
+            assert "cleanup verified" in header
             live_view = app.live_view
             assert live_view is not None
             assert live_view.status is SessionStatus.SUCCEEDED
@@ -340,7 +342,9 @@ class TestConfiguredLiveSession:
             )
             assert workspace._live_terminal.status is SessionStatus.FAILED
             assert workspace._live_terminal.termination_reason.value == "model_error"
-            assert "FAILED" in live_bar_text(workspace)
+            assert "Failed" in header_text(workspace)
+            assert "c cancel" not in live_bar_text(workspace)
+            assert "1-7 activity filters" in live_bar_text(workspace)
             # return to history; the failure registered honestly
             await pilot.press("q")
             await wait_until(
@@ -445,7 +449,7 @@ class TestConfiguredCancellation:
             await pilot.press("c")
             await wait_until(
                 pilot,
-                lambda: "cancel requested" in live_bar_text(workspace),
+                lambda: "cancel requested" in header_text(workspace),
                 timeout_seconds=30.0,
                 label="stage2-cancel-requested",
             )
@@ -456,7 +460,7 @@ class TestConfiguredCancellation:
                 label="stage3-terminal",
             )
             assert workspace._live_terminal.status is SessionStatus.CANCELLED
-            assert "CANCELLED" in live_bar_text(workspace)
+            assert "Cancelled" in header_text(workspace)
             await wait_until(
                 pilot,
                 lambda: not pid_is_alive(worker_pid),
@@ -512,7 +516,9 @@ class TestMixedSequentialSessions:
                 timeout_seconds=300.0,
                 label="stage1-configured-terminal",
             )
-            assert "SUCCEEDED" in live_bar_text(workspace1)
+            assert "Completed" in header_text(workspace1)
+            assert "Succeeded" not in header_text(workspace1)
+            assert "c cancel" not in live_bar_text(workspace1)
             session1_id = app.live_view.session_id
             assert session1_id is not None
             await pilot.press("q")
@@ -556,7 +562,7 @@ class TestMixedSequentialSessions:
                 timeout_seconds=120.0,
                 label="stage3-det-terminal",
             )
-            assert "CANCELLED" in live_bar_text(workspace2)
+            assert "Cancelled" in header_text(workspace2)
             session2_id = app.live_view.session_id
             assert session2_id != session1_id
             await pilot.press("q")
@@ -621,7 +627,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=120.0,
                 label="stage2-det-terminal",
             )
-            assert "CANCELLED" in live_bar_text(workspace1)
+            assert "Cancelled" in header_text(workspace1)
             session1_id = app.live_view.session_id
             assert session1_id is not None
             await pilot.press("q")
@@ -912,7 +918,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=180.0,
                 label="stage1-small-terminal-failure",
             )
-            assert "FAILED" in live_bar_text(workspace)
+            assert "Failed" in header_text(workspace)
             await pilot.press("q")
             await wait_until(
                 pilot,

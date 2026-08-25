@@ -311,7 +311,7 @@ class TestReplayAdversarial:
                 label="live-terminal",
             )
             header = str(workspace.query_one("#status-header", StatusHeader).render())
-            assert "SUCCEEDED" in header or "CANCELLED" in header
+            assert "Completed" in header or "Cancelled" in header
 
         run_headless(app, scenario)
 
