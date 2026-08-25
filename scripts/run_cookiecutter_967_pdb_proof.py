@@ -46,6 +46,7 @@ from agentic_debugger.evaluation.live import (
     run_live_case,
 )
 from agentic_debugger.events.replay import replay_events
+from agentic_debugger.application.events import contains_credential_shape
 from agentic_debugger.runtime.patcher import (
     CanonicalPatchArtifact,
     materialize_and_canonicalize_patch,
@@ -94,10 +95,15 @@ class _ProgressWriter:
 
     def __init__(self, path: str | None) -> None:
         self._path = Path(path).resolve() if path else None
+        self._last: tuple[str, str | None] | None = None
 
     def emit(self, stage: str, detail: str | None = None) -> None:
         if self._path is None:
             return
+        current = (stage, detail)
+        if current == self._last:
+            return
+        self._last = current
         payload: dict[str, Any] = {"schema_version": "operator-progress-v1", "stage": stage}
         if detail:
             payload["detail"] = detail
@@ -694,6 +700,12 @@ def _adapter_config(root: Path, *, model: str | None = None, logical_decision_ce
         "--expected-version",
         EXPECTED_OLLAMA_VERSION,
     )
+    # Keep the adapter subprocess's outer deadline aligned with the canonical
+    # model profile.  Without this flag the adapter defaults its request
+    # deadline to the inactivity watchdog, collapsing DeepSeek's evidence-
+    # backed 300/3600 profile back to a 300-second total request.
+    if request_timeout != idle_timeout:
+        argv = (*argv, "--request-timeout", str(int(request_timeout)))
     if thinking is not None:
         argv = (*argv, "--thinking-level", thinking)
     return LiveModelConfig(
@@ -1354,6 +1366,106 @@ def _result_summary(
     }
 
 
+def _safe_operator_error(value: Any) -> str:
+    text = str(value or "").replace("\x00", " ").replace("\r", " ").replace("\n", " ")
+    if len(text) > 512:
+        text = text[:509] + "..."
+    return "[redacted sensitive operator error]" if contains_credential_shape(text) else text
+
+
+def _exact_pdb_proof_summary(case: dict[str, Any]) -> dict[str, Any]:
+    """Project PDB observation only from an exact structured proof record."""
+
+    measurements = case.get("measurements")
+    count = (
+        measurements.get("successful_pdb_observation_count")
+        if isinstance(measurements, dict)
+        else 0
+    )
+    summary: dict[str, Any] = {
+        "observed": False,
+        "successful_observation_count": count if type(count) is int and count >= 0 else 0,
+        "script": None,
+        "breakpoint_line": None,
+    }
+    events_jsonl = case.get("events_jsonl")
+    if not isinstance(events_jsonl, str) or not isinstance(count, int) or count <= 0:
+        return summary
+    for line_text in events_jsonl.splitlines():
+        try:
+            event = json.loads(line_text)
+        except (TypeError, json.JSONDecodeError):
+            continue
+        payload = event.get("payload") if isinstance(event, dict) else None
+        observation = payload.get("observation") if isinstance(payload, dict) else None
+        observation_payload = (
+            observation.get("payload") if isinstance(observation, dict) else None
+        )
+        proof = (
+            observation_payload.get("proof")
+            if isinstance(observation_payload, dict)
+            else None
+        )
+        if not isinstance(proof, dict) or proof.get("exact_reproduction") is not True:
+            continue
+        script = proof.get("production_file") or observation_payload.get("script")
+        breakpoint_line = proof.get("breakpoint_line") or observation_payload.get(
+            "breakpoint_line"
+        )
+        if isinstance(script, str) and type(breakpoint_line) is int and breakpoint_line > 0:
+            summary.update(
+                {
+                    "observed": True,
+                    "script": script,
+                    "breakpoint_line": breakpoint_line,
+                }
+            )
+            return summary
+    return summary
+
+
+def _operator_failure_summary(
+    case: dict[str, Any],
+    *,
+    model: str,
+    treatment_id: str,
+    failure_kind: str,
+    failure: Any,
+) -> dict[str, Any]:
+    """Persist a bounded operator outcome when treatment cannot reach verify."""
+
+    summary = _result_summary(
+        case,
+        {},
+        "",
+        model=model,
+        treatment_id=treatment_id,
+    )
+    cleaned = bool(
+        isinstance(case.get("reporting"), dict)
+        and case["reporting"].get("completed") is True
+        and case["reporting"].get("cleanup") == "cleaned"
+    )
+    summary.update(
+        {
+            "official_verifier": None,
+            "candidate_patch_sha256": None,
+            "candidate_patch_provenance": None,
+            "pdb_proof": _exact_pdb_proof_summary(case),
+            "operator_failure": {
+                "kind": failure_kind,
+                "message": _safe_operator_error(failure),
+                "process_exit_code": 2,
+            },
+            "cleanup": {
+                "temporary_source_removed": cleaned,
+                "private_official_material_removed": cleaned,
+            },
+        }
+    )
+    return summary
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     progress = _ProgressWriter(args.progress_file)
@@ -1522,13 +1634,33 @@ def main(argv: list[str] | None = None) -> int:
         (output / "live-results.json").write_text(
             json.dumps(case, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
-        candidate = _candidate_patch_record(case)
+        try:
+            candidate = _candidate_patch_record(case)
+        except ProofError as exc:
+            summary = _operator_failure_summary(
+                case,
+                model=requested_model,
+                treatment_id=treatment_id,
+                failure_kind="candidate_unavailable",
+                failure=exc,
+            )
+            progress.emit("cleanup")
+            (output / "result.json").write_text(
+                json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            # The operator has written its result, but the process has not
+            # exited yet.  ``completed`` is reserved for the supervising
+            # application after process exit, result parsing, and cleanup.
+            progress.emit("finalizing")
+            print(json.dumps(summary, indent=2, sort_keys=True))
+            return 2
         patch = candidate["patch"]
         progress.emit("candidate")
         artifact = _canonicalize_level32_candidate(fixture, patch, parent_dir=Path(temporary))
         artifact_mapping = _write_candidate_artifacts(output, patch, artifact)
         with tempfile.TemporaryDirectory(prefix="cookiecutter-967-private-eval-") as private:
-            progress.emit("official_verification")
+            progress.emit("official_verification_preparing")
+            progress.emit("official_evaluator_started")
             official = _official_evaluate(
                 row,
                 artifact.patch,
@@ -1536,6 +1668,7 @@ def main(argv: list[str] | None = None) -> int:
                 raw_patch=patch,
                 candidate_artifact=artifact_mapping,
             )
+            progress.emit("official_evaluator_completed")
         (output / "official-verifier-summary.json").write_text(
             json.dumps(official, indent=2, sort_keys=True) + "\n", encoding="utf-8"
         )
@@ -1555,7 +1688,10 @@ def main(argv: list[str] | None = None) -> int:
     (output / "result.json").write_text(
         json.dumps(summary, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
-    progress.emit("completed")
+    # The operator has written a result but is still inside ``main``.  The
+    # application supervisor emits ``completed`` only after process exit and
+    # authoritative result/cleanup projection.
+    progress.emit("finalizing")
     print(json.dumps(summary, indent=2, sort_keys=True))
     return 0 if summary["accepted"] else 1
 

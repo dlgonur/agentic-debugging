@@ -75,27 +75,49 @@ def _validate(params: Mapping[str, Any]) -> tuple[str, DemoPolicy]:
     return alias, DemoPolicy(policy_value)
 
 
-def _config(alias: str, *, logical_call_ceiling: int) -> tuple[LiveModelConfig, Any]:
+def _config(
+    alias: str,
+    *,
+    logical_call_ceiling: int,
+    idle_timeout_seconds: int | None = None,
+    request_timeout_seconds: int | None = None,
+) -> tuple[LiveModelConfig, Any]:
     from scripts.ollama_cloud_command_adapter import is_treatment_eligible, resolve_cloud_model
 
     spec = resolve_cloud_model(alias)
     if spec.readiness != "live_verified" or not is_treatment_eligible(spec):
         raise ScenarioInputError("selected Ollama Cloud alias is not eligible")
     root = Path(__file__).resolve().parents[2]
+    request_timeout = (
+        spec.request_timeout_seconds
+        if request_timeout_seconds is None
+        else request_timeout_seconds
+    )
+    idle_timeout = (
+        spec.idle_timeout_seconds
+        if idle_timeout_seconds is None
+        else idle_timeout_seconds
+    )
     command: list[str] = [
         sys.executable,
         str(root / "scripts" / "ollama_cloud_command_adapter.py"),
         "--model", spec.local_alias,
-        "--timeout", str(int(spec.idle_timeout_seconds)),
+        "--timeout", str(int(idle_timeout)),
         "--max-logical-model-calls", str(logical_call_ceiling),
         "--expected-version", "0.32.15",
     ]
+    # The adapter's own outer deadline must be explicit whenever it differs
+    # from the stream watchdog.  Otherwise the adapter would silently fall
+    # back to ``--timeout`` even though the canonical profile carries a
+    # separate request bound.
+    if request_timeout != idle_timeout:
+        command.extend(("--request-timeout", str(int(request_timeout))))
     if spec.thinking_level is not None:
         command.extend(("--thinking-level", spec.thinking_level))
     return LiveModelConfig(
         model_name=spec.local_alias,
         command=tuple(command),
-        request_timeout_seconds=spec.request_timeout_seconds,
+        request_timeout_seconds=request_timeout,
         tool_version="ollama-cloud-adapter-v1.3-ladder",
     ), spec
 
@@ -118,7 +140,12 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
     )
     _progress(ctx, OperatorStage.STARTING)
     _progress(ctx, OperatorStage.PREFLIGHT)
-    config, profile = _config(alias, logical_call_ceiling=contract.max_model_requests)
+    config, profile = _config(
+        alias,
+        logical_call_ceiling=contract.max_model_requests,
+        idle_timeout_seconds=300,
+        request_timeout_seconds=contract.max_model_phase_seconds,
+    )
     ctx.emitter.emit(
         SessionEventKind.MODEL_CONFIGURED,
         {

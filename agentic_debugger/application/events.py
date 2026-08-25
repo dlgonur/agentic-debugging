@@ -178,6 +178,10 @@ class OperatorStage(str, Enum):
     CANDIDATE = "candidate"
     VERIFICATION = "verification"
     OFFICIAL_VERIFICATION = "official_verification"
+    OFFICIAL_VERIFICATION_PREPARING = "official_verification_preparing"
+    OFFICIAL_EVALUATOR_STARTED = "official_evaluator_started"
+    OFFICIAL_EVALUATOR_COMPLETED = "official_evaluator_completed"
+    FINALIZING = "finalizing"
     CLEANUP = "cleanup"
     COMPLETED = "completed"
 

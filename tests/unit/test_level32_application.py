@@ -3,11 +3,19 @@
 from __future__ import annotations
 
 import json
+import subprocess
+import sys
+import threading
 from pathlib import Path
 
 import pytest
 
-from agentic_debugger.application.events import SessionEventKind, validate_session_event_stream
+from agentic_debugger.application.events import (
+    SessionEventKind,
+    SessionStatus,
+    SessionTerminationReason,
+    validate_session_event_stream,
+)
 from agentic_debugger.application.journal import JournalReadState, read_session_journal
 from agentic_debugger.application.level32 import (
     Level32ModelProfile,
@@ -92,12 +100,81 @@ class _ProgressOperatorProcess(_FakeOperatorProcess):
             progress.write_text(
                 "\n".join(
                     json.dumps({"schema_version": "operator-progress-v1", "stage": stage})
-                    for stage in ("preflight", "model_running", "debugger", "official_verification")
+                    for stage in (
+                        "preflight",
+                        "model_running",
+                        "debugger",
+                        "official_verification_preparing",
+                        "official_evaluator_started",
+                        "official_evaluator_completed",
+                        "finalizing",
+                    )
                 ) + "\n",
                 encoding="utf-8",
             )
             return None
         return self.returncode
+
+
+class _FailedOperatorProcess:
+    pid = 4243
+    returncode = 1
+
+    def __init__(self, argv, *, result_text=None, cleanup_evidence=False):
+        self.argv = list(argv)
+        self.result_text = result_text
+        self.cleanup_evidence = cleanup_evidence
+
+    def poll(self):
+        return self.returncode
+
+    def communicate(self):
+        output = Path(self.argv[self.argv.index("--output-dir") + 1])
+        output.mkdir(parents=True, exist_ok=True)
+        if self.cleanup_evidence:
+            (output / "live-results.json").write_text(
+                json.dumps(
+                    {
+                        "reporting": {"completed": True, "cleanup": "cleaned"},
+                        "measurements": {"successful_pdb_observation_count": 3},
+                        "events_jsonl": json.dumps(
+                            {
+                                "payload": {
+                                    "observation": {
+                                        "payload": {
+                                            "proof": {
+                                                "exact_reproduction": True,
+                                                "production_file": "cookiecutter/config.py",
+                                                "breakpoint_line": 58,
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        ),
+                    }
+                ),
+                encoding="utf-8",
+            )
+        if self.result_text is not None:
+            (output / "result.json").write_text(self.result_text, encoding="utf-8")
+        return "operator stdout", "operator stderr"
+
+    def terminate(self):
+        self.returncode = -15
+
+    def kill(self):
+        self.returncode = -9
+
+
+class _CancellableOperatorProcess(_FailedOperatorProcess):
+    returncode = None
+
+    def poll(self):
+        return self.returncode
+
+    def terminate(self):
+        self.returncode = -15
 
 
 def test_operator_progress_observer_is_structured_and_not_waiting_model(tmp_path):
@@ -137,8 +214,19 @@ def test_operator_progress_observer_is_structured_and_not_waiting_model(tmp_path
         for event in journal.events
         if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
     ]
-    assert progress[:5] == ["starting", "preflight", "preflight", "model_running", "debugger"]
-    assert "official_verification" in progress
+    assert progress == [
+        "starting",
+        "preflight",
+        "model_running",
+        "debugger",
+        "official_verification_preparing",
+        "official_evaluator_started",
+        "official_evaluator_completed",
+        "finalizing",
+        "cleanup",
+        "completed",
+    ]
+    assert "official_evaluator_completed" in progress
     assert all(
         not (
             event.event_kind is SessionEventKind.SESSION_STATUS_CHANGED
@@ -147,6 +235,62 @@ def test_operator_progress_observer_is_structured_and_not_waiting_model(tmp_path
         for event in journal.events
     )
     validate_session_event_stream(journal.events)
+
+
+def test_real_popen_finalizes_without_waiting_for_inherited_descendant_output(tmp_path):
+    """A direct operator exit is terminal even when a child retains stdout."""
+
+    profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)
+    result_text = json.dumps(
+        {
+            "accepted": False,
+            "classification": "official_test_execution_unproven",
+            "official_verifier": {},
+            "cleanup": {
+                "temporary_source_removed": True,
+                "private_official_material_removed": True,
+            },
+        }
+    )
+
+    def factory(argv, **kwargs):
+        output = Path(argv[argv.index("--output-dir") + 1])
+        child_code = "import time; time.sleep(2)"
+        parent_code = (
+            "import pathlib, subprocess, sys; "
+            f"output=pathlib.Path({str(output)!r}); output.mkdir(parents=True, exist_ok=True); "
+            f"subprocess.Popen([sys.executable, '-c', {child_code!r}]); "
+            f"(output / 'result.json').write_text({result_text!r}, encoding='utf-8')"
+        )
+        return subprocess.Popen(
+            [sys.executable, "-c", parent_code],
+            cwd=kwargs["cwd"],
+            stdin=kwargs["stdin"],
+            stdout=kwargs["stdout"],
+            stderr=kwargs["stderr"],
+            shell=False,
+            close_fds=False,
+        )
+
+    worker = Level32OperatorWorker(
+        session_dir=tmp_path / "runs" / "real-popen",
+        session_id="sess-level32-real-popen",
+        run_id="run-level32-real-popen",
+        repository_root=tmp_path,
+        model=profile,
+        revision=1,
+        treatment_id="level32-treatment-real-popen",
+        output_dir=tmp_path / "experiments" / "real-popen",
+        spec=build_level32_spec(profile.alias),
+        process_factory=factory,
+    )
+    worker.start()
+    outcome = {}
+    waiter = threading.Thread(target=lambda: outcome.setdefault("result", worker.wait()))
+    waiter.start()
+    waiter.join(timeout=0.8)
+    assert not waiter.is_alive(), "finalization waited on a descendant output handle"
+    assert outcome["result"].termination_reason is SessionTerminationReason.UNRESOLVED
 
 
 def test_one_start_passes_exact_alias_and_revision_and_preserves_classification(tmp_path):
@@ -190,6 +334,12 @@ def test_one_start_passes_exact_alias_and_revision_and_preserves_classification(
     assert argv[argv.index("--model") + 1] == "glm-5.2:cloud"
     assert argv[argv.index("--treatment-revision") + 1] == "7"
     assert "--live" in argv and "--confirm-live-model-access" in argv
+    assert argv[0] == sys.executable
+    assert Path(argv[1]).as_posix().endswith("scripts/run_cookiecutter_967_pdb_proof.py")
+    assert calls[0][1]["cwd"] == str(tmp_path.resolve())
+    assert calls[0][1]["shell"] is False
+    assert calls[0][1]["stdout"] is not subprocess.PIPE
+    assert calls[0][1]["stderr"] is not subprocess.PIPE
     assert result.termination_reason.value == "unresolved"
     journal = read_session_journal(worker.session_dir / "session.events.jsonl")
     assert journal.state is JournalReadState.COMPLETE
@@ -292,3 +442,120 @@ def test_pre_test_failure_keeps_execution_false_and_counts_unrecorded(tmp_path):
     assert (summary.f2p_passed, summary.f2p_total) == (None, None)
     assert (summary.p2p_passed, summary.p2p_total) == (None, None)
     assert summary.classification == "official_test_execution_unproven"
+
+
+def _failed_worker(tmp_path, factory, name="failed"):
+    profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)
+    worker = Level32OperatorWorker(
+        session_dir=tmp_path / "runs" / name,
+        session_id="sess-level32-" + name,
+        run_id="run-level32-" + name,
+        repository_root=tmp_path,
+        model=profile,
+        revision=7,
+        treatment_id="level32-treatment-v7-" + name,
+        output_dir=tmp_path / "experiments" / name,
+        spec=build_level32_spec(profile.alias),
+        process_factory=factory,
+    )
+    worker.start()
+    return worker
+
+
+def test_subprocess_failure_retains_safe_exit_diagnostic_and_command_evidence(tmp_path):
+    worker = _failed_worker(
+        tmp_path,
+        lambda argv, **kwargs: _FailedOperatorProcess(argv),
+        "missing-result",
+    )
+    result = worker.wait()
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    diagnosis = next(
+        event for event in journal.events if event.event_kind is SessionEventKind.DIAGNOSIS_RECORDED
+    )
+    assert result.termination_reason is SessionTerminationReason.SUBPROCESS_ERROR
+    assert result.cleanup_verified is False
+    assert "exit 1" in diagnosis.payload["text"]
+    assert "operator stderr" in diagnosis.payload["text"]
+    assert json.loads((worker.session_dir / "operator.process.json").read_text())["exit_code"] == 1
+    assert json.loads((worker.session_dir / "operator.command.json").read_text())["shell"] is False
+    assert (worker.session_dir / "operator.stderr.txt").read_text() == "operator stderr"
+
+
+def test_malformed_result_is_distinguished_from_missing_result(tmp_path):
+    worker = _failed_worker(
+        tmp_path,
+        lambda argv, **kwargs: _FailedOperatorProcess(argv, result_text="{not-json"),
+        "malformed-result",
+    )
+    result = worker.wait()
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    diagnosis = next(
+        event for event in journal.events if event.event_kind is SessionEventKind.DIAGNOSIS_RECORDED
+    )
+    assert result.termination_reason is SessionTerminationReason.SUBPROCESS_ERROR
+    assert "result parse failed" in diagnosis.payload["text"]
+    assert "JSONDecodeError" in diagnosis.payload["text"]
+
+
+def test_cleanup_projection_uses_structured_live_case_evidence(tmp_path):
+    worker = _failed_worker(
+        tmp_path,
+        lambda argv, **kwargs: _FailedOperatorProcess(argv, cleanup_evidence=True),
+        "cleanup-projection",
+    )
+    result = worker.wait()
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    cleanup = next(
+        event for event in journal.events if event.event_kind is SessionEventKind.CLEANUP_COMPLETED
+    )
+    assert result.cleanup_verified is True
+    assert cleanup.payload["verified"] is True
+    assert any(event.event_kind is SessionEventKind.DEBUGGER_STARTED for event in journal.events)
+
+
+def test_structured_operator_failure_projects_pdb_proof_but_not_verifier(tmp_path):
+    structured = json.dumps(
+        {
+            "accepted": False,
+            "classification": "incomplete_provider_model_transport_failure",
+            "official_verifier": None,
+            "pdb_proof": {
+                "observed": True,
+                "successful_observation_count": 3,
+                "script": "cookiecutter/config.py",
+                "breakpoint_line": 54,
+            },
+            "operator_failure": {"kind": "candidate_unavailable", "message": "no active patch"},
+            "cleanup": {
+                "temporary_source_removed": True,
+                "private_official_material_removed": True,
+            },
+        }
+    )
+    worker = _failed_worker(
+        tmp_path,
+        lambda argv, **kwargs: _FailedOperatorProcess(argv, result_text=structured),
+        "structured-failure",
+    )
+    result = worker.wait()
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    kinds = [event.event_kind for event in journal.events]
+    assert result.termination_reason is SessionTerminationReason.SUBPROCESS_ERROR
+    assert result.cleanup_verified is True
+    assert SessionEventKind.DEBUGGER_STARTED in kinds
+    assert SessionEventKind.VERIFIER_COMPLETED not in kinds
+
+
+def test_cancellation_remains_cancelled_and_does_not_project_verifier(tmp_path):
+    worker = _failed_worker(
+        tmp_path,
+        lambda argv, **kwargs: _CancellableOperatorProcess(argv, cleanup_evidence=True),
+        "cancelled",
+    )
+    worker.cancel()
+    result = worker.wait()
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    assert result.status is SessionStatus.CANCELLED
+    assert result.termination_reason is SessionTerminationReason.CANCELLED
+    assert not any(event.event_kind is SessionEventKind.VERIFIER_COMPLETED for event in journal.events)

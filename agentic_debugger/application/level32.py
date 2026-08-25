@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 
 from agentic_debugger.application.emitter import SessionEventEmitter
+from agentic_debugger.application.command_transport import _terminate_command_tree
 from agentic_debugger.application.events import (
     OperatorStage,
     SessionEvent,
@@ -27,6 +28,7 @@ from agentic_debugger.application.events import (
     SessionTerminationReason,
     SourceKind,
     VerifierStage,
+    contains_credential_shape,
 )
 from agentic_debugger.application.history import HistoryStore
 from agentic_debugger.application.journal import SessionEventJournal
@@ -178,7 +180,21 @@ def _sha256(path: Path) -> str:
 
 def _safe_text(value: Any, maximum: int = 4000) -> str:
     text = str(value or "").replace("\x00", " ").replace("\r", " ").replace("\n", " ")
-    return text if len(text) <= maximum else text[: maximum - 3] + "..."
+    if len(text) > maximum:
+        text = text[: maximum - 3] + "..."
+    return "[redacted sensitive subprocess output]" if contains_credential_shape(text) else text
+
+
+def _write_text(path: Path, value: Any, *, maximum: int = 8192) -> None:
+    path.write_text(_safe_text(value, maximum), encoding="utf-8", newline="\n")
+
+
+def _write_json(path: Path, value: Mapping[str, Any]) -> None:
+    path.write_text(
+        json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+        newline="\n",
+    )
 
 
 def _official_verifier_counts(
@@ -251,8 +267,27 @@ class Level32OperatorWorker:
         self._closed = False
         self._progress_path = self._session_dir / "operator.progress.jsonl"
         self._progress_offset = 0
+        self._last_progress: tuple[OperatorStage, Optional[str]] | None = None
+        self._result_parse_error: Optional[str] = None
+        self._stdout_capture_path = self._session_dir / "operator.stdout.capture.txt"
+        self._stderr_capture_path = self._session_dir / "operator.stderr.capture.txt"
+        self._stdout_stream: Any = None
+        self._stderr_stream: Any = None
+        self._candidate_progress_count = 0
 
     def _emit_progress(self, stage: OperatorStage, detail: Optional[str] = None) -> None:
+        # Candidate/model alternation is useful only when the attempt number
+        # is visible.  Keep distinct attempts, but do not present identical
+        # bare stage records as meaningful progress.
+        if stage is OperatorStage.CANDIDATE:
+            self._candidate_progress_count += 1
+            detail = detail or f"attempt {self._candidate_progress_count}"
+        elif stage is OperatorStage.MODEL_RUNNING and self._candidate_progress_count and not detail:
+            detail = f"attempt {self._candidate_progress_count + 1}"
+        current = (stage, detail)
+        if current == self._last_progress:
+            return
+        self._last_progress = current
         payload: dict[str, Any] = {"stage": stage.value}
         if detail:
             payload["detail"] = detail
@@ -349,16 +384,35 @@ class Level32OperatorWorker:
             "--progress-file", str(self._session_dir / "operator.progress.jsonl"),
         ]
         try:
+            _write_json(
+                self._session_dir / "operator.command.json",
+                {
+                    "schema_version": "level32-subprocess-command-v1",
+                    "executable": _safe_text(sys.executable, 1024),
+                    "argv": [_safe_text(item, 2048) for item in argv],
+                    "cwd": _safe_text(self._repository_root, 2048),
+                    "shell": False,
+                },
+            )
+        except OSError:
+            pass
+        try:
+            self._stdout_stream = self._stdout_capture_path.open(
+                "w", encoding="utf-8", newline="\n"
+            )
+            self._stderr_stream = self._stderr_capture_path.open(
+                "w", encoding="utf-8", newline="\n"
+            )
             self._process = self._process_factory(
                 argv,
                 cwd=str(self._repository_root),
                 stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
+                stdout=self._stdout_stream,
+                stderr=self._stderr_stream,
                 shell=False,
             )
         except Exception as exc:
+            self._close_capture_streams()
             self._finish(returncode=2, stdout="", stderr=f"operator launch failed: {exc}", result=None)
             return None
         self._thread = threading.Thread(target=self._monitor, name="level32-operator", daemon=True)
@@ -372,12 +426,57 @@ class Level32OperatorWorker:
                 self._drain_progress()
                 threading.Event().wait(0.05)
             self._drain_progress()
-            stdout, stderr = self._process.communicate()
             returncode = self._process.returncode
+            if isinstance(self._process, subprocess.Popen):
+                # Do not call communicate() here.  The operator can launch a
+                # Docker child that inherits the parent's output handles; a
+                # direct-process exit then leaves communicate() waiting for
+                # EOF that belongs to a descendant.  File-backed capture is
+                # bounded at projection time and has no pipe-drain wait.
+                self._close_capture_streams()
+                stdout = self._read_capture(self._stdout_capture_path)
+                stderr = self._read_capture(self._stderr_capture_path)
+            else:
+                # Provider-free fakes retain the small process seam used by
+                # unit tests; production Popen never enters this branch.
+                stdout, stderr = self._process.communicate()
+                self._close_capture_streams()
+            if returncode is None:
+                returncode = self._process.poll()
         except Exception as exc:
+            self._close_capture_streams()
             stdout, stderr, returncode = "", f"operator supervision failed: {exc}", 2
         result = self._read_result()
         self._finish(returncode=returncode if returncode is not None else 2, stdout=stdout, stderr=stderr, result=result)
+
+    @staticmethod
+    def _read_capture(path: Path) -> str:
+        try:
+            return path.read_text(encoding="utf-8", errors="replace")
+        except (OSError, UnicodeError):
+            return ""
+
+    def _close_capture_streams(self) -> None:
+        for attribute in ("_stdout_stream", "_stderr_stream"):
+            stream = getattr(self, attribute)
+            if stream is None:
+                continue
+            try:
+                stream.close()
+            except Exception:
+                pass
+            setattr(self, attribute, None)
+
+    def _remove_capture_files(self) -> None:
+        for path in (self._stdout_capture_path, self._stderr_capture_path):
+            try:
+                path.unlink()
+            except FileNotFoundError:
+                pass
+            except OSError:
+                # The bounded operator.stdout/stderr evidence remains the
+                # durable fallback if a capture file cannot be removed.
+                pass
 
     def _read_result(self) -> Optional[dict[str, Any]]:
         path = self._output_dir / "result.json"
@@ -385,9 +484,121 @@ class Level32OperatorWorker:
             return None
         try:
             value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+            self._result_parse_error = _safe_text(f"{type(exc).__name__}: {exc}", 512)
+            return None
+        if not isinstance(value, dict):
+            self._result_parse_error = "result.json is not a JSON object"
+            return None
+        return value
+
+    def _cleanup_evidence(self) -> bool:
+        value = self._read_live_results()
+        reporting = value.get("reporting") if isinstance(value, Mapping) else None
+        return bool(
+            isinstance(reporting, Mapping)
+            and reporting.get("completed") is True
+            and reporting.get("cleanup") == "cleaned"
+        )
+
+    def _read_live_results(self) -> Optional[dict[str, Any]]:
+        path = self._output_dir / "live-results.json"
+        if not path.is_file():
+            return None
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError):
             return None
         return value if isinstance(value, dict) else None
+
+    def _pdb_proof_payload(
+        self, result: Optional[Mapping[str, Any]]
+    ) -> Optional[dict[str, Any]]:
+        sources = tuple(
+            source
+            for source in (result, self._read_live_results())
+            if isinstance(source, Mapping)
+        )
+        for source in sources:
+            explicit = source.get("pdb_proof")
+            if isinstance(explicit, Mapping):
+                count = explicit.get("successful_observation_count")
+                script = explicit.get("script")
+                line = explicit.get("breakpoint_line")
+                if (
+                    explicit.get("observed") is True
+                    and type(count) is int
+                    and count > 0
+                    and isinstance(script, str)
+                    and type(line) is int
+                    and line > 0
+                ):
+                    return {"script": script, "line": line, "count": count}
+
+            # The live operator stores the exact proof in its canonical
+            # trajectory, not in the summary measurements.  A count alone is
+            # insufficient: it must never be converted into a guessed file
+            # or breakpoint line.
+            events_jsonl = source.get("events_jsonl")
+            if not isinstance(events_jsonl, str):
+                continue
+            measurements = source.get("measurements")
+            count = (
+                measurements.get("successful_pdb_observation_count")
+                if isinstance(measurements, Mapping)
+                else None
+            )
+            if type(count) is not int or count <= 0:
+                continue
+            for line_text in events_jsonl.splitlines():
+                try:
+                    event = json.loads(line_text)
+                except (TypeError, json.JSONDecodeError):
+                    continue
+                payload = event.get("payload") if isinstance(event, Mapping) else None
+                observation = payload.get("observation") if isinstance(payload, Mapping) else None
+                observation_payload = (
+                    observation.get("payload")
+                    if isinstance(observation, Mapping)
+                    else None
+                )
+                proof = (
+                    observation_payload.get("proof")
+                    if isinstance(observation_payload, Mapping)
+                    else None
+                )
+                if not isinstance(proof, Mapping) or proof.get("exact_reproduction") is not True:
+                    continue
+                script = proof.get("production_file") or observation_payload.get("script")
+                breakpoint_line = proof.get("breakpoint_line") or observation_payload.get("breakpoint_line")
+                if isinstance(script, str) and type(breakpoint_line) is int and breakpoint_line > 0:
+                    return {"script": script, "line": breakpoint_line, "count": count}
+        return None
+
+    def _record_process_evidence(
+        self,
+        *,
+        returncode: int,
+        stdout: str,
+        stderr: str,
+        result_present: bool,
+    ) -> None:
+        try:
+            _write_text(self._session_dir / "operator.stdout.txt", stdout)
+            _write_text(self._session_dir / "operator.stderr.txt", stderr)
+            _write_json(
+                self._session_dir / "operator.process.json",
+                {
+                    "schema_version": "level32-subprocess-result-v1",
+                    "pid": self.pid,
+                    "exit_code": returncode,
+                    "result_path": _safe_text(self._output_dir / "result.json", 2048),
+                    "result_present": result_present,
+                    "result_parse_error": self._result_parse_error,
+                },
+            )
+        except OSError:
+            pass
 
     def _record_artifacts(self) -> None:
         if not self._output_dir.is_dir():
@@ -406,15 +617,32 @@ class Level32OperatorWorker:
         if self._result is not None:
             return
         accepted = bool(result and result.get("accepted") is True)
+        operator_failure = result.get("operator_failure") if result else None
         cleanup = bool(
             result
             and isinstance(result.get("cleanup"), Mapping)
             and result["cleanup"].get("temporary_source_removed") is True
             and result["cleanup"].get("private_official_material_removed") is True
         )
+        cleanup = cleanup or self._cleanup_evidence()
         classification = result.get("classification") if result else None
+        self._record_process_evidence(
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+            result_present=result is not None,
+        )
+        self._remove_capture_files()
+        self._record_artifacts()
+        pdb_proof = self._pdb_proof_payload(result)
+        if pdb_proof is not None:
+            script = pdb_proof["script"]
+            line = pdb_proof["line"]
+            self._emit(
+                SessionEventKind.DEBUGGER_STARTED,
+                {"script": script, "breakpoints": (f"{script}:{line}",)},
+            )
         if result is not None:
-            self._record_artifacts()
             official = result.get("official_verifier")
             if isinstance(official, Mapping):
                 f2p_passed, f2p_total, p2p_passed, p2p_total = _official_verifier_counts(official)
@@ -432,11 +660,28 @@ class Level32OperatorWorker:
                 if type(execution_proven) is bool:
                     verifier_payload["official_test_execution_proven"] = execution_proven
                 self._emit(SessionEventKind.VERIFIER_COMPLETED, verifier_payload)
+        if result is None or isinstance(operator_failure, Mapping):
+            if isinstance(operator_failure, Mapping):
+                reason = _safe_text(operator_failure.get("message"), 512)
+                detail = f"Level-32 operator failed — exit {returncode}: {reason or 'structured operator failure'}"
+            elif self._result_parse_error:
+                detail = f"Level-32 result parse failed — exit {returncode}: {self._result_parse_error}"
+            else:
+                reason = _safe_text(stderr or stdout, 512)
+                detail = f"Level-32 operator failed — exit {returncode}: {reason or 'result.json was not produced'}"
+            self._emit(
+                SessionEventKind.DIAGNOSIS_RECORDED,
+                {"text": detail, "file_path": None, "symbol": None, "confidence": "observed"},
+            )
         self._emit(SessionEventKind.CLEANUP_STARTED, {})
         self._emit_progress(OperatorStage.CLEANUP)
         self._emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup})
-        if self._cancel_requested:
+        if self._cancel_requested and not cleanup:
+            status, reason, kind = SessionStatus.CLEANUP_FAILED, SessionTerminationReason.CLEANUP_FAILED, SessionEventKind.SESSION_FAILED
+        elif self._cancel_requested:
             status, reason, kind = SessionStatus.CANCELLED, SessionTerminationReason.CANCELLED, SessionEventKind.SESSION_CANCELLED
+        elif isinstance(operator_failure, Mapping) or result is None:
+            status, reason, kind = SessionStatus.FAILED, SessionTerminationReason.SUBPROCESS_ERROR, SessionEventKind.SESSION_FAILED
         elif result is not None and accepted:
             status, reason, kind = SessionStatus.SUCCEEDED, SessionTerminationReason.DONE, SessionEventKind.SESSION_COMPLETED
         elif result is not None:
@@ -449,8 +694,13 @@ class Level32OperatorWorker:
             {"status": status.value, "termination_reason": reason.value},
         )
         diagnostics: tuple[str, ...] = ()
-        if result is None:
-            diagnostic = _safe_text(stderr or stdout)
+        if isinstance(operator_failure, Mapping):
+            diagnostic = _safe_text(operator_failure.get("message"), 512)
+            diagnostics = (diagnostic,) if diagnostic else ()
+        elif result is None:
+            diagnostic = _safe_text(stderr or stdout, 512)
+            if self._result_parse_error:
+                diagnostic = self._result_parse_error
             diagnostics = (diagnostic,) if diagnostic else ()
         self._result = SessionResult(
             session_id=SessionId(self._session_id),
@@ -478,13 +728,21 @@ class Level32OperatorWorker:
         self._cancel_requested = True
         process = self._process
         if process is not None and process.poll() is None:
-            try:
-                process.terminate()
-            except Exception:
+            if isinstance(process, subprocess.Popen):
                 try:
-                    process.kill()
+                    _terminate_command_tree(process)
                 except Exception:
                     pass
+            else:
+                try:
+                    process.terminate()
+                    if process.poll() is None:
+                        process.kill()
+                except Exception:
+                    try:
+                        process.kill()
+                    except Exception:
+                        pass
 
     def close(self) -> None:
         if self._closed:
@@ -492,7 +750,8 @@ class Level32OperatorWorker:
         self._closed = True
         self.cancel()
         if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=60.0)
+            self._thread.join(timeout=5.0)
+        self._close_capture_streams()
         if self._journal is not None and self._result is None:
             self._journal.close()
 

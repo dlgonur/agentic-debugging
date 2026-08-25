@@ -133,7 +133,7 @@ CLOUD_MODELS: dict[str, CloudModelSpec] = {
         capabilities=("completion", "thinking", "tools"),
         # Promoted from the accepted immutable Qualification V2 artifact at
         # experiments/pdb_capability_ladder/transport_qualifications/
-        # glm-5.2-v2.json.  Preserve its measured no-thinking, 20/60 profile.
+        # glm-5.2-v2.json.  Preserve its no-thinking streaming profile.
         transport_profile_declared=True,
         transport_verified=True,
         thinking_level=None,
@@ -157,6 +157,12 @@ CLOUD_MODELS: dict[str, CloudModelSpec] = {
         # deepseek-v4-flash-v1.json was inspected and accepted.
         transport_verified=True,
         thinking_level=None,
+        # The accepted Level-6/12/18 runs showed that DeepSeek can remain
+        # validly quiet for longer than the generic 20-second watchdog.  Keep
+        # the evidence-backed Level-32 profile identity-bound: 300 seconds of
+        # stream inactivity and a 3,600-second outer request bound.
+        idle_timeout_seconds=300.0,
+        request_timeout_seconds=3600.0,
     ),
     "deepseek-v4-pro:cloud": CloudModelSpec(
         local_alias="deepseek-v4-pro:cloud",
@@ -192,10 +198,6 @@ CLOUD_MODELS: dict[str, CloudModelSpec] = {
         # kimi-k2.6-v1.json was inspected and accepted.
         transport_verified=True,
         thinking_level=None,
-        # Kimi v2 produced continuous valid stream activity for 439 seconds
-        # and reached Validate before the inherited 20-second idle watchdog
-        # ended its final decision. Keep the repair model-specific and
-        # bounded; the outer request limit remains above the idle limit.
         idle_timeout_seconds=45.0,
         request_timeout_seconds=75.0,
     ),
@@ -284,11 +286,6 @@ CLOUD_MODELS: dict[str, CloudModelSpec] = {
         # nemotron-3-super-v1.json was inspected and accepted.
         transport_verified=True,
         thinking_level=None,
-        # Level-32 V1 produced 7,864 valid stream frames over 318 seconds,
-        # reached Validate, and then lost its seventeenth decision to the
-        # inherited 20-second idle watchdog.  Keep the infrastructure repair
-        # model-specific and bounded; the outer request limit remains above
-        # the idle limit.
         idle_timeout_seconds=45.0,
         request_timeout_seconds=75.0,
     ),
@@ -308,10 +305,6 @@ CLOUD_MODELS: dict[str, CloudModelSpec] = {
         # nemotron-3-ultra-v1.json was independently inspected and accepted.
         transport_verified=True,
         thinking_level=None,
-        # Level-32 V1 completed 14 valid decisions, exact PDB, and an
-        # evidence-bound diagnosis, then lost its first Patch decision to the
-        # inherited 20-second idle watchdog. Keep the bounded repair specific
-        # to Ultra; retries and all semantic/action budgets remain unchanged.
         idle_timeout_seconds=45.0,
         request_timeout_seconds=75.0,
     ),
@@ -383,6 +376,7 @@ CONTENT_FRAGMENT_OBSERVABILITY_SCHEMA_VERSION = (
 )
 
 DEFAULT_TIMEOUT_SECONDS = 20.0
+MAX_REQUEST_TIMEOUT_SECONDS = 3600.0
 DEFAULT_THINKING_LEVEL = "high"
 # The inherited 25,000-byte ceiling rejected Kimi's otherwise valid frozen
 # Level-32 request at 26,622 bytes after successful PDB evidence.  32 KiB is
@@ -1134,7 +1128,7 @@ def _read_http_body(
 
 
 def _validate_timeout_seconds(timeout_seconds: float) -> float:
-    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= 300:
+    if type(timeout_seconds) not in (int, float) or not 0 < timeout_seconds <= MAX_REQUEST_TIMEOUT_SECONDS:
         raise OllamaAdapterError("Ollama request timeout is invalid", kind="configuration")
     return float(timeout_seconds)
 
@@ -1373,6 +1367,7 @@ def _stream_chat_request(
     spec: CloudModelSpec,
     *,
     idle_timeout_seconds: float,
+    request_deadline: float | None = None,
     thinking_level: str | None,
     activity_stream: TextIO,
  ) -> tuple[str, dict[str, Any], dict[str, Any]]:
@@ -1401,7 +1396,13 @@ def _stream_chat_request(
     if len(request_bytes) > MAX_RAW_RESPONSE_BYTES:
         raise OllamaAdapterError("Ollama request exceeded the configured bound", kind="request_too_large")
 
-    connection = http.client.HTTPConnection(host, port, timeout=idle_timeout_seconds)
+    if request_deadline is None:
+        request_deadline = time.monotonic() + idle_timeout_seconds
+    connection = http.client.HTTPConnection(
+        host,
+        port,
+        timeout=min(idle_timeout_seconds, _remaining_timeout(request_deadline)),
+    )
     content_parts: list[str] = []
     content_bytes = 0
     thinking_bytes = 0
@@ -1435,8 +1436,14 @@ def _stream_chat_request(
             )
 
         while True:
+            # Every received frame refreshes the liveness timeout. The
+            # request deadline remains the outer treatment bound.
+            read_timeout = min(
+                idle_timeout_seconds,
+                _remaining_timeout(request_deadline),
+            )
             if connection.sock is not None:
-                connection.sock.settimeout(idle_timeout_seconds)
+                connection.sock.settimeout(read_timeout)
             try:
                 raw_line = response.readline(MAX_STREAM_FRAME_BYTES + 1)
             except (socket.timeout, TimeoutError):
@@ -1688,7 +1695,18 @@ def run_adapter(
     parser = argparse.ArgumentParser(description="Ollama Cloud Local Application V1 command adapter")
     parser.add_argument("--endpoint", default=DEFAULT_ENDPOINT)
     parser.add_argument("--model", default=DEFAULT_MODEL_ID)
-    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT_SECONDS)
+    parser.add_argument(
+        "--timeout",
+        type=float,
+        default=DEFAULT_TIMEOUT_SECONDS,
+        help="stream inactivity timeout in seconds",
+    )
+    parser.add_argument(
+        "--request-timeout",
+        type=float,
+        default=None,
+        help="outer metadata/generation request timeout in seconds",
+    )
     parser.add_argument("--max-logical-model-calls", type=int, default=DEFAULT_MAX_LOGICAL_MODEL_CALLS)
     parser.add_argument("--expected-version", default=EXPECTED_OLLAMA_VERSION)
     parser.add_argument(
@@ -1754,14 +1772,19 @@ def run_adapter(
         request = _read_request(stdin_stream)
         validate_logical_call_index(request, args.max_logical_model_calls)
         canonical_public_request(request)
-        deadline = time.monotonic() + _validate_timeout_seconds(args.timeout)
+        idle_timeout = _validate_timeout_seconds(args.timeout)
+        request_timeout = _validate_timeout_seconds(
+            args.request_timeout if args.request_timeout is not None else args.timeout
+        )
+        deadline = time.monotonic() + request_timeout
         _read_cloud_metadata(args.endpoint, spec, deadline=deadline)
         thinking = effective_thinking_level(spec, args.thinking_level)
         content, usage, activity = _stream_chat_request(
             args.endpoint,
             request,
             spec,
-            idle_timeout_seconds=_remaining_timeout(deadline),
+            idle_timeout_seconds=idle_timeout,
+            request_deadline=deadline,
             thinking_level=thinking,
             activity_stream=stderr_stream,
         )

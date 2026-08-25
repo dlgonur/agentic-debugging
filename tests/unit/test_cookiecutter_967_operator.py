@@ -4,6 +4,7 @@ import hashlib
 import json
 import subprocess
 import sys
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -33,6 +34,32 @@ def test_result_summary_accepts_string_replay_state(monkeypatch):
 
     assert summary["replay_terminal_state"] == "Done"
     assert summary["accepted"] is False
+
+
+def test_operator_failure_summary_preserves_pdb_and_cleanup_without_verifier():
+    case = json.loads(
+        (
+            REPOSITORY_ROOT
+            / "experiments/pdb_capability_ladder/level32-cookiecutter-967-deepseek-v4-flash-cloud-v4/live-results.json"
+        ).read_text(encoding="utf-8")
+    )
+    summary = operator._operator_failure_summary(
+        case,
+        model="deepseek-v4-flash:cloud",
+        treatment_id="pdb-capability-level32-cookiecutter-967-deepseek-v4-flash-cloud-v4-workspace-derived-official-git-diff-v1",
+        failure_kind="candidate_unavailable",
+        failure=operator.ProofError("the live case did not retain a tool-accepted active candidate patch"),
+    )
+    assert summary["accepted"] is False
+    assert summary["classification"] == "incomplete_provider_model_transport_failure"
+    assert summary["pdb_proof"]["observed"] is True
+    assert summary["pdb_proof"]["successful_observation_count"] == 3
+    assert summary["pdb_proof"]["breakpoint_line"] == 58
+    assert summary["official_verifier"] is None
+    assert summary["cleanup"] == {
+        "temporary_source_removed": True,
+        "private_official_material_removed": True,
+    }
 
 
 def test_public_scaffold_exposes_recursive_merge_contract(tmp_path):
@@ -570,6 +597,62 @@ def test_adapter_config_carries_selected_model_alias(tmp_path):
     # Default still gpt-oss:20b
     default = operator._adapter_config(tmp_path)
     assert default.model_name == "gpt-oss:20b-cloud"
+
+
+def test_deepseek_level32_adapter_config_uses_canonical_300_3600_profile(tmp_path):
+    config = operator._adapter_config(
+        tmp_path,
+        model="deepseek-v4-flash:cloud",
+        logical_decision_ceiling=25,
+    )
+    assert config.model_name == "deepseek-v4-flash:cloud"
+    assert config.request_timeout_seconds == 3600.0
+    assert config.command[config.command.index("--model") + 1] == "deepseek-v4-flash:cloud"
+    assert config.command[config.command.index("--timeout") + 1] == "300"
+    assert config.command[config.command.index("--request-timeout") + 1] == "3600"
+    assert config.command.count("--timeout") == 1
+    assert config.command.count("--request-timeout") == 1
+
+
+def test_deepseek_transport_fingerprint_and_fresh_revision_are_identity_bound(tmp_path):
+    historical = REPOSITORY_ROOT / "experiments/pdb_capability_ladder/level32-cookiecutter-967-deepseek-v4-flash-cloud-v4"
+    historical_preflight = json.loads((historical / "preflight.json").read_text(encoding="utf-8"))
+    historical_live = json.loads((historical / "live-results.json").read_text(encoding="utf-8"))
+    historical_measurements = historical_live["measurements"]
+    assert historical_preflight["treatment_budget"]["max_retries"] == 1
+    assert historical_preflight["treatment_budget"] == operator.LEVEL32_TREATMENT_BUDGET.to_mapping()
+    assert "limits" not in historical_live  # LiveRunLimits is not independently persisted.
+    assert historical_measurements["retry_count"] == 2
+    assert historical_measurements["model_request_count"] == 18
+    assert historical_measurements["model_response_count"] == 15
+    assert historical_measurements["transport_attempt_count"] == 18
+    assert historical_measurements["provider_error_count"] == 3
+    assert historical_preflight["treatment_fingerprint"] == (
+        "7ef36c07d3eafd8c1df52189e5d41b3aff0ace7944a3feaddc8dbf049847793f"
+    )
+    before = {
+        path.relative_to(historical): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in historical.rglob("*")
+        if path.is_file()
+    }
+    current = adapter.resolve_cloud_model("deepseek-v4-flash:cloud")
+    old = replace(current, idle_timeout_seconds=20.0, request_timeout_seconds=60.0)
+    assert adapter.transport_config_fingerprint(old) != adapter.transport_config_fingerprint(current)
+    assert operator._model_provenance("deepseek-v4-flash:cloud")["transport_config_fingerprint"] == adapter.transport_config_fingerprint(current)
+    assert operator.LEVEL32_TREATMENT_BUDGET.max_retries == historical_preflight["treatment_budget"]["max_retries"]
+    assert operator._treatment_fingerprint("deepseek-v4-flash:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
+        "462ca1aec8be74380f6c355a084b8c979e91a1010d8e78da30b40d09696da85a"
+    )
+    # V5 is now a preserved historical evidence directory; the next fresh
+    # allocation must therefore be V6 rather than reusing that treatment.
+    assert operator.next_unused_treatment_revision(REPOSITORY_ROOT, "deepseek-v4-flash:cloud") == 6
+    assert operator._treatment_id_for_model("deepseek-v4-flash:cloud", 5).endswith("-v5-workspace-derived-official-git-diff-v1")
+    after = {
+        path.relative_to(historical): hashlib.sha256(path.read_bytes()).hexdigest()
+        for path in historical.rglob("*")
+        if path.is_file()
+    }
+    assert after == before
 
 
 def test_kimi_timeout_repair_is_model_specific_and_bounded(tmp_path):

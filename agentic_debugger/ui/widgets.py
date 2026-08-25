@@ -794,10 +794,20 @@ class LiveRunContextPanel(VerticalScroll):
             stage = "Cancelled"
         elif terminal and view.termination_reason is SessionTerminationReason.MODEL_ERROR:
             stage = "Model error"
+        elif terminal and view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
+            stage = "Controller budget exhausted"
+        elif terminal and view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:
+            stage = "Controller failed"
         elif terminal:
             stage = view.status.value.replace("_", " ").title()
         else:
-            stage = _operator_stage_label(view.operator_stage) if view.operator_stage else "Not recorded"
+            stage = (
+                "Finalizing"
+                if view.operator_stage is OperatorStage.COMPLETED
+                else _operator_stage_label(view.operator_stage)
+                if view.operator_stage
+                else "Not recorded"
+            )
         if view.debugger.session_started:
             pdb = "Observed"
         elif terminal:

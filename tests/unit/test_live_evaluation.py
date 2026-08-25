@@ -2321,6 +2321,45 @@ def test_model_timing_accumulates_transport_only_across_requests_and_retries():
     assert adapter._remaining() == 898.5
 
 
+def test_frozen_model_phase_remaining_is_the_outer_transport_bound():
+    task = DebugTask.from_mapping(
+        json.loads(
+            (ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()
+        )
+    )
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    now = [0.0]
+    timeouts: list[float] = []
+
+    class OverlongTransport:
+        def request(self, payload, timeout_seconds):
+            del payload
+            timeouts.append(timeout_seconds)
+            now[0] += 2.0
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "bounded"}}
+
+    adapter = LiveModelAdapter(
+        task=task,
+        policy=DemoPolicy.STATIC_BASELINE,
+        config=LiveModelConfig("test-model", ("test-model-command",), request_timeout_seconds=3600.0),
+        transport=OverlongTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2, max_model_phase_seconds=1, max_retries=0),
+        registry=_test_live_registry(),
+        clock=lambda: now[0],
+    )
+    snapshot = ControllerSnapshot(
+        "phase-bound", task.task_id, ControllerState.REPRODUCE, 0,
+        ControllerBudgetLimits.from_task_constraints(task.constraints),
+        ControllerBudgetState(), HypothesisLedger(),
+    )
+
+    adapter.next_directive(snapshot)
+    assert timeouts == [1.0]
+    with pytest.raises(LiveModelAdapterError, match="elapsed time limit"):
+        adapter.next_directive(snapshot)
+
+
 def test_case_model_timing_excludes_post_request_verifier_event_cleanup(workspace_parent):
     result = _case(workspace_parent, ScriptedTransport(_patch()))
     assert result.measurements["model_phase_elapsed_duration_ms"] == result.measurements["model_transport_duration_ms"]

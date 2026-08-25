@@ -85,6 +85,13 @@ _CLASSIFICATION_STYLE = {
     HistoryClassification.UNREGISTERED: "dim",
 }
 
+# Canonical user-facing keyboard vocabulary shared by footers and help.
+START_FOOTER = "s start   h history   up/down navigate   enter edit   esc back   ctrl+c quit"
+START_FOOTER_COMPACT = "s start h history up/down move enter edit esc back ctrl+c quit"
+WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 activity filters   c cancel   h history   n new session   ctrl+c quit"
+WORKSPACE_FOOTER_IDLE = "left/right views   1-7 activity filters   h history   n new session   ctrl+c quit"
+REPLAY_FOOTER = "left/right views   1-7 activity filters   events   phases   h history   n new session   ctrl+c quit"
+
 
 def _markup_escape(value: Any) -> str:
     return str(value).replace("[", "\\[").replace("]", "\\]")
@@ -211,7 +218,11 @@ def render_view_header(
     if view.status is SessionStatus.RUNNING:
         phase = None
         if view.operator_stage is not None:
-            phase = _operator_stage_label(view.operator_stage)
+            phase = (
+                "Finalizing"
+                if view.operator_stage is OperatorStage.COMPLETED
+                else _operator_stage_label(view.operator_stage)
+            )
         elif view.controller_phase is not None:
             phase = view.controller_phase.value
         elif view.phase is not None:
@@ -232,6 +243,12 @@ def render_view_header(
         verifier = "verifier incomplete" if view.status.terminal else "verifier running"
     elif view.termination_reason is SessionTerminationReason.MODEL_ERROR:
         verifier = "model error"
+    elif view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
+        verifier = "controller budget exhausted"
+    elif view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:
+        verifier = "controller failed"
+    elif view.termination_reason is SessionTerminationReason.SUBPROCESS_ERROR:
+        verifier = "operator error"
     elif view.status is SessionStatus.CANCELLED:
         verifier = "cancelled"
     else:
@@ -255,7 +272,6 @@ class HomeScreen(Screen):
         Binding("n", "start_session", "New session"),
         Binding("o", "open_selected", "Open"),
         Binding("r", "refresh", "Refresh"),
-        Binding("q", "quit_app", "Quit"),
         Binding("?", "show_help", "Help"),
     ]
 
@@ -269,7 +285,7 @@ class HomeScreen(Screen):
         yield DataTable(id="history-table")
         yield Static(
             "[dim]new: [bold]n[/]   open: [bold]o[/]/[bold]enter[/]   "
-            "refresh: [bold]r[/]   quit: [bold]q[/]   help: [bold]?[/][/]",
+            "refresh: [bold]r[/]   quit: [bold]ctrl+c[/]   help: [bold]?[/][/]",
             id="home-hint",
         )
 
@@ -360,7 +376,7 @@ class HomeScreen(Screen):
         self.notify("History refreshed.")
 
     def action_quit_app(self) -> None:
-        self.app.exit()
+        self.app.action_quit()
 
     def action_show_help(self) -> None:
         self.app.push_screen(HelpModalScreen())
@@ -648,7 +664,6 @@ class StartSessionScreen(Screen):
         Binding("down", "move_down", "Next setting", show=False),
         Binding("s", "start", "Start"),
         Binding("h", "history", "History"),
-        Binding("q", "quit_app", "Quit"),
         Binding("enter", "confirm", "Confirm", show=False),
         Binding("escape", "cancel", "Back"),
     ]
@@ -687,7 +702,7 @@ class StartSessionScreen(Screen):
                     yield ReadonlySettingRow("Treatment", id="level32-treatment-row")
                     yield Static("", id="start-status")
                     yield Static("", id="start-trust")
-                yield Static("s start   h history   up/down navigate   enter edit   esc back   q quit", id="start-footer")
+                yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
                 yield Static("[bold #79c0ff]SESSION SETUP[/]", id="context-title")
                 yield Static("", id="context-summary")
@@ -718,9 +733,9 @@ class StartSessionScreen(Screen):
     def _update_footer(self, width: int) -> None:
         footer = self.query_one("#start-footer", Static)
         footer.update(
-            "s start h hist up/down move enter edit esc back q quit"
+            START_FOOTER_COMPACT
             if width < 70
-            else "s start   h history   up/down navigate   enter edit   esc back   q quit"
+            else START_FOOTER
         )
 
     def _focusable_row_ids(self) -> list[str]:
@@ -1033,7 +1048,8 @@ class WorkspaceScreen(Screen):
         Binding("6", "filter_patch", "Filter: patch", show=False),
         Binding("7", "filter_verifier", "Filter: verifier", show=False),
         Binding("c", "cancel_live", "Cancel session"),
-        Binding("q", "back_home", "Back to history"),
+        Binding("h", "history", "History", priority=True),
+        Binding("n", "new_session", "New session", priority=True),
         Binding("escape", "back_home", "Back", show=False),
         Binding("?", "show_help", "Help"),
     ]
@@ -1347,8 +1363,7 @@ class WorkspaceScreen(Screen):
                 bar.update("")
                 return
             bar.update(
-                "[dim]left/right views   1-7 activity filters   \\[/] events   {/} phases   "
-                "? help   q history[/]"
+                f"[dim]{REPLAY_FOOTER}   ? help[/]"
             )
         else:
             bar = self.query_one("#live-bar", LiveBar)
@@ -1358,11 +1373,11 @@ class WorkspaceScreen(Screen):
                 and self._live_failure is None
             ):
                 bar.update(
-                    "[dim]left/right views   1-7 activity filters   c cancel   ? help   q history[/]"
+                    f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]"
                 )
             else:
                 bar.update(
-                    "[dim]left/right views   1-7 activity filters   ? help   q history[/]"
+                    f"[dim]{WORKSPACE_FOOTER_IDLE}   ? help[/]"
                 )
 
     # -- workspace view navigation ------------------------------------------
@@ -1468,6 +1483,17 @@ class WorkspaceScreen(Screen):
         self._render_all()
         self._runner.cancel()
 
+    def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
+        if action == "cancel_live":
+            return bool(
+                self.mode is WorkspaceMode.LIVE
+                and self._runner is not None
+                and self._live_terminal is None
+                and self._live_failure is None
+                and not self._view.status.terminal
+            )
+        return True
+
     def live_cancel_event_seen(self) -> None:
         self._cancel_requested_ui = True
         self._render_all()
@@ -1476,6 +1502,14 @@ class WorkspaceScreen(Screen):
 
     def action_back_home(self) -> None:
         self.app.go_home()
+
+    def action_history(self) -> None:
+        self.app.go_home()
+
+    def action_new_session(self) -> None:
+        self.app.push_screen(
+            StartSessionScreen(task_options=list(self.app.curated_task_options()))
+        )
 
     def action_show_help(self) -> None:
         self.app.push_screen(HelpModalScreen())
@@ -1571,7 +1605,6 @@ class HelpModalScreen(Screen):
 
     BINDINGS = [
         Binding("escape", "close_help", "Close"),
-        Binding("q", "close_help", "Close"),
         Binding("enter", "close_help", "Close"),
         Binding("?", "close_help", "Close"),
     ]
@@ -1600,13 +1633,13 @@ class HelpModalScreen(Screen):
                 "[dim]Only the independent verifier decides whether a candidate is RESOLVED.[/]\n"
                 "\n"
                 "[bold #79c0ff]Navigation[/]\n"
-                "  • Home:      [bold]n[/] new session · [bold]o[/]/[bold]enter[/] open replay · [bold]r[/] refresh · [bold]q[/] quit · [bold]?[/] help\n"
+                "  • Home:      [bold]n[/] new session · [bold]o[/]/[bold]enter[/] open replay · [bold]r[/] refresh · [bold]ctrl+c[/] quit · [bold]?[/] help\n"
                 "  • Workspace: [bold]\\[[/]/[bold]][/] prev/next event · [bold]{{[/]/[bold]}}[/] prev/next phase · [bold]g[/]/[bold]G[/] begin/end\n"
-                "               [bold]j[/] jump to sequence · [bold]1[/]..[bold]7[/] activity filter · [bold]c[/] cancel live · [bold]q[/] history · [bold]?[/] help",
+                "               [bold]j[/] jump to sequence · [bold]1[/]..[bold]7[/] activity filter · [bold]c[/] cancel live · [bold]h[/] history · [bold]n[/] new session · [bold]ctrl+c[/] quit · [bold]?[/] help",
                 id="help-content",
             )
             yield Static(
-                "[dim]Press escape, q, or enter to close help[/]", id="help-hint"
+                "[dim]Press escape or enter to close help[/]", id="help-hint"
             )
 
     def action_close_help(self) -> None:

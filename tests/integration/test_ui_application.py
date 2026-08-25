@@ -78,6 +78,16 @@ def make_app(tmp_path: Path) -> LocalApplicationV1:
     return LocalApplicationV1(history_store=store)
 
 
+def make_standard_app(tmp_path: Path) -> LocalApplicationV1:
+    """Build the ordinary editable shell for non-ladder UI coverage."""
+    app = make_app(tmp_path)
+    app.curated_task_options = lambda: (
+        (VALID_TASK_ID, VALID_TASK_ID),
+        ("curated-wrong-branch-003", "curated-wrong-branch-003"),
+    )
+    return app
+
+
 async def open_first_row(pilot) -> None:
     await pilot.press("escape")
     await pilot.press("enter")
@@ -95,7 +105,7 @@ class TestBootAndHome:
             await pilot.press("n")
             assert isinstance(app.screen, StartSessionScreen)
 
-        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+        run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
 
     def test_new_session_is_flat_and_uses_one_shared_picker(self, tmp_path):
         async def scenario(pilot):
@@ -153,7 +163,7 @@ class TestBootAndHome:
             assert isinstance(pilot.app.screen, StartSessionScreen)
             assert pilot.app.focused.row_key == "time_limit"
 
-        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+        run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
 
     def test_new_session_focus_marker_transfers_without_alignment_shift(self, tmp_path):
         async def scenario(pilot):
@@ -186,7 +196,7 @@ class TestBootAndHome:
             assert row_text("#debugger-row").startswith("> ")
             assert row_text("#task-row").startswith("  ")
 
-        run_headless(make_app(tmp_path), scenario, size=(80, 24))
+        run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
 
     def test_time_limit_modal_validates_cancel_and_empty_values(self, tmp_path):
         async def scenario(pilot):
@@ -224,7 +234,7 @@ class TestBootAndHome:
             await pilot.press("enter")
             assert start._max_elapsed_seconds is None
 
-        run_headless(make_app(tmp_path), scenario, size=(60, 20))
+        run_headless(make_standard_app(tmp_path), scenario, size=(60, 20))
 
 
 class TestLevel32NewSession:
@@ -232,7 +242,7 @@ class TestLevel32NewSession:
         async def scenario(pilot):
             start = pilot.app.screen
             # Open the shared task picker and select the appended Level-32 entry.
-            await pilot.press("down", "enter")
+            await pilot.press("enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             picker = pilot.app.screen
             assert any("Level 32/100" in choice.title for choice in picker.choices)
@@ -246,14 +256,13 @@ class TestLevel32NewSession:
             assert start.query_one("#debugger-row").display is False
             assert start.query_one("#level32-debugger-row").display is True
             assert start.query_one("#level32-treatment-row").display is True
-            assert start.start_available is False
-            assert "Not selected" in start.query_one("#model-row").render().plain
+            assert start.start_available is True
+            assert "Not selected" not in start.query_one("#model-row").render().plain
             context = start.query_one("#context-summary").render().plain
-            assert "Model\nNot selected" in context
-            assert "Alias\n—" in context
-            assert "Ready" in str(start.query_one("#context-summary").render())
-            assert "No" in str(start.query_one("#context-summary").render())
-            assert "choose an eligible Ollama model" in start.query_one("#start-status").render().plain
+            assert "Model\n" in context
+            assert "Alias\n—" not in context
+            assert "Ready\nYes" in context
+            assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
 
             # Model choices are canonical aliases from the live profile registry.
             await pilot.press("down", "enter")
@@ -272,15 +281,16 @@ class TestLevel32NewSession:
             assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
             assert start.query_one("#level32-debugger-row").render().plain.find("Exact PDB") >= 0
 
-            # Selecting a normal task restores the ordinary editable shell.
+            # Selecting a lower ladder task keeps the frozen ladder shell.
             await pilot.press("up", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             await pilot.press("home", "enter")
             assert start.task_id != "audreyr__cookiecutter-967"
-            assert start.query_one("#mode-row").display is True
-            assert start.query_one("#time-limit-row").display is True
-            assert start.query_one("#debugger-row").display is True
-            assert start.query_one("#level32-treatment-row").display is False
+            assert start.query_one("#mode-row").display is False
+            assert start.query_one("#time-limit-row").display is False
+            assert start.query_one("#debugger-row").display is False
+            assert start.query_one("#level32-debugger-row").display is True
+            assert start.query_one("#level32-treatment-row").display is True
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
@@ -299,7 +309,7 @@ class TestLevel32NewSession:
             context = start.query_one("#context-summary").render().plain
             assert "Model\nNot available" in context
             assert "Ready\nNo" in context
-            assert "start unavailable — no eligible Ollama model profiles" in start.query_one("#start-status").render().plain
+            assert "start unavailable — no eligible Ollama Cloud models" in start.query_one("#start-status").render().plain
             assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
@@ -332,13 +342,13 @@ class TestLevel32NewSession:
                 assert widget.region.y >= 0
                 assert widget.region.y + widget.region.height <= pilot.app.size.height
             footer = str(start.query_one("#start-footer").render())
-            assert "s start" in footer and "up/down move" in footer and "q quit" in footer
+            assert "s start" in footer and "up/down move" in footer and "ctrl+c quit" in footer
             assert "↑" not in footer and "↓" not in footer
             await pilot.press("down", "down", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             await pilot.press("escape")
 
-        run_headless(make_app(tmp_path), scenario, size=(60, 20))
+        run_headless(make_standard_app(tmp_path), scenario, size=(60, 20))
 
     def test_empty_history_shows_empty_state(self, tmp_path):
         async def scenario(pilot):
@@ -653,7 +663,7 @@ class TestOpenReplay:
         async def scenario(pilot):
             await open_first_row(pilot)
             assert isinstance(pilot.app.screen, WorkspaceScreen)
-            await pilot.press("q")
+            await pilot.press("escape")
             assert isinstance(pilot.app.screen, HomeScreen)
             # history still listed after returning home
             table = pilot.app.screen.query_one("#history-table")
@@ -694,7 +704,7 @@ class TestTerminalSizes:
                 await pilot.press("]", "[", "g")
                 # switch to the debugger tab and back
                 await pilot.press("tab", "tab")
-                await pilot.press("q")
+                await pilot.press("escape")
                 assert isinstance(pilot.app.screen, HomeScreen)
 
             run_headless(app, scenario, size=size)
@@ -715,7 +725,7 @@ class TestTerminalSizes:
             await pilot.press("G")
             await pilot.resize_terminal(100, 30)
             await pilot.pause()
-            await pilot.press("q")
+            await pilot.press("escape")
             assert isinstance(pilot.app.screen, HomeScreen)
 
         run_headless(app, scenario)
@@ -755,7 +765,7 @@ class TestReplayExecutesNothing:
             for _ in range(30):
                 await pilot.press("]")
             await pilot.press("[")
-            await pilot.press("q")
+            await pilot.press("escape")
             assert isinstance(pilot.app.screen, HomeScreen)
 
         run_headless(app, scenario)

@@ -186,6 +186,10 @@ def test_ui_ladder_source_binds_exact_probe_and_all_frozen_limits(
     assert captured["run_local_session"]["max_model_calls"] == 24
     command = captured["config"].command
     assert command[command.index("--max-logical-model-calls") + 1] == "24"
+    assert command[command.index("--timeout") + 1] == "300"
+    assert command[command.index("--request-timeout") + 1] == str(
+        source.ladder_runtime_contract(task_id).max_model_phase_seconds
+    )
 
 
 def test_exact_pdb_adapter_rejects_patch_evidence_without_runtime_proof(tmp_path: Path) -> None:

@@ -31,6 +31,12 @@ Readiness is three-state: `catalog` (selectable + provenance-validated, no trans
 
 `transport_config_fingerprint` covers every material execution parameter (alias, upstream, effective tags remote, capabilities, family, parameter count, context length, readiness/profile/verified/thinking, protocol name+version, Ollama version, host, all byte/frame/timeout bounds, retry/fallback counts, stream mode). Any material difference yields a different persisted fingerprint.
 
+The evidence-backed `deepseek-v4-flash:cloud` profile uses a 300-second
+stream-inactivity watchdog and a 3,600-second outer request bound. The Level-32
+operator passes both values explicitly to the adapter; the inactivity watchdog
+refreshes on every valid stream frame, while the outer deadline remains
+authoritative for the complete request.
+
 Nemotron 3 Super's first Level-32 treatment produced 7,864 streamed frames,
 reached `Validate`, and then lost its seventeenth decision to the inherited
 20-second inactivity watchdog. That incomplete treatment is infrastructure
@@ -235,6 +241,13 @@ active stream may exceed its idle timeout in total elapsed time while each
 progress interval remains below the idle timeout, but a silent stream still
 fails at the adapter watchdog and any completion exceeding the outer request
 deadline fails as an infrastructure measurement error.
+
+The accepted lower-rung application source applies the proven 300-second
+activity watchdog explicitly, rather than inheriting a model-profile value
+from the frozen Level-32 operator roster. Its outer request deadline is the
+remaining rung model-phase guard (600 seconds for Level 6 and 3,600 seconds
+for Levels 12 and 18). The controller's cancellation token remains the
+prompt-stop path, and lower-rung retries remain zero.
 
 The current verified owner environment for this contract is Ollama `0.32.15`.
 The accepted 2026-08-17 product-runtime proof used `0.32.14`; the exact pin is

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
@@ -337,11 +338,14 @@ def invoke(
     request: dict[str, Any] | None = None,
     *,
     timeout: float = 2.0,
+    request_timeout: float | None = None,
     model: str | None = None,
 ) -> tuple[int, str, str]:
     stdout = io.StringIO()
     stderr = io.StringIO()
     argv = ["--endpoint", endpoint, "--timeout", str(timeout)]
+    if request_timeout is not None:
+        argv.extend(["--request-timeout", str(request_timeout)])
     if model is not None:
         argv.extend(["--model", model])
     rc = adapter.run_adapter(
@@ -506,6 +510,9 @@ def test_registry_contains_all_17_aliases_with_verified_upstream():
     assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].transport_profile_declared is True
     assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].transport_verified is True
     assert adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"].thinking_level is None
+    deepseek = adapter.CLOUD_MODELS["deepseek-v4-flash:cloud"]
+    assert deepseek.idle_timeout_seconds == 300.0
+    assert deepseek.request_timeout_seconds == 3600.0
     assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].transport_profile_declared is True
     assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].transport_verified is True
     assert adapter.CLOUD_MODELS["nemotron-3-ultra:cloud"].thinking_level is None
@@ -1819,12 +1826,136 @@ def test_idle_inactivity_fails_before_outer_request_deadline(fixture_server) -> 
     )
     state = _FixtureState(chat_chunks=((0.0, first), (0.08, final)))
     _state, _server, endpoint = fixture_server(state)
-    rc, stdout, stderr = invoke(endpoint, timeout=0.05)
+    rc, stdout, stderr = invoke(endpoint, timeout=0.05, request_timeout=0.5)
     assert rc == 1
     assert stdout == ""
     errors = [json.loads(line) for line in stderr.splitlines() if line.strip().startswith("{")]
     assert errors[0]["kind"] == "timeout"
     assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+
+
+def test_stream_quiet_longer_than_old_watchdog_survives_inside_outer_deadline(fixture_server) -> None:
+    first = (
+        json.dumps(stream_frame(content="partial"), separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    final = (
+        json.dumps(stream_frame(done=True), separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
+    state = _FixtureState(chat_chunks=((0.0, first), (0.12, final)))
+    _state, _server, endpoint = fixture_server(state)
+
+    rc, stdout, stderr = invoke(
+        endpoint,
+        timeout=0.2,
+        request_timeout=0.5,
+    )
+
+    assert rc == 0, stderr
+    value = json.loads(stdout)
+    assert value["directive_content"] == "partial"
+    assert value["transport_activity"]["stream_frame_count"] == 2
+    assert request_paths(state) == ["/api/tags", "/api/show", "/api/chat"]
+
+
+def test_deepseek_stream_liveness_refreshes_after_a_synthetic_21_second_quiet_period(monkeypatch):
+    spec = adapter.resolve_cloud_model("deepseek-v4-flash:cloud")
+    clock = [1000.0]
+    connections: list[object] = []
+
+    class FakeSocket:
+        def __init__(self):
+            self.timeouts: list[float] = []
+
+        def settimeout(self, value: float) -> None:
+            self.timeouts.append(value)
+
+    class FakeResponse:
+        status = 200
+
+        def __init__(self, sock):
+            self.sock = sock
+            self._frames = iter(
+                [
+                    json.dumps(stream_frame(content="partial", frame_model=spec.upstream_model)).encode() + b"\n",
+                    json.dumps(stream_frame(done=True, frame_model=spec.upstream_model)).encode() + b"\n",
+                    b"",
+                ]
+            )
+
+        def readline(self, _maximum: int) -> bytes:
+            value = next(self._frames)
+            if value:
+                clock[0] += 21.0
+            return value
+
+    class FakeConnection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = FakeSocket()
+            self.response = FakeResponse(self.sock)
+            connections.append(self)
+
+        def request(self, *_args, **_kwargs) -> None:
+            return None
+
+        def getresponse(self):
+            return self.response
+
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(adapter.http.client, "HTTPConnection", FakeConnection)
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock[0])
+    content, _usage, activity = adapter._stream_chat_request(
+        "http://127.0.0.1:11434/api",
+        sample_request(),
+        spec,
+        idle_timeout_seconds=300.0,
+        request_deadline=4600.0,
+        thinking_level=None,
+        activity_stream=io.StringIO(),
+    )
+    assert content == "partial"
+    assert activity["stream_frame_count"] == 2
+    assert connections[0].sock.timeouts[0] == 300.0
+    assert connections[0].sock.timeouts[1] == 300.0
+
+
+def test_deepseek_stream_still_times_out_after_a_synthetic_301_second_quiet_period(monkeypatch):
+    spec = adapter.resolve_cloud_model("deepseek-v4-flash:cloud")
+    clock = [1000.0]
+    class FakeResponse:
+        status = 200
+        def __init__(self):
+            self.sock = SimpleNamespace(settimeout=lambda _value: None)
+        def readline(self, _maximum: int) -> bytes:
+            clock[0] += 301.0
+            raise TimeoutError
+
+    class FakeConnection:
+        def __init__(self, *_args, **_kwargs):
+            self.sock = SimpleNamespace(settimeout=lambda _value: None)
+        def request(self, *_args, **_kwargs) -> None:
+            return None
+        def getresponse(self):
+            return FakeResponse()
+        def close(self) -> None:
+            return None
+
+    monkeypatch.setattr(adapter.http.client, "HTTPConnection", FakeConnection)
+    monkeypatch.setattr(adapter.time, "monotonic", lambda: clock[0])
+    with pytest.raises(adapter.OllamaAdapterError, match="idle for too long") as exc_info:
+        adapter._stream_chat_request(
+            "http://127.0.0.1:11434/api",
+            sample_request(),
+            spec,
+            idle_timeout_seconds=300.0,
+            request_deadline=4600.0,
+            thinking_level=None,
+            activity_stream=io.StringIO(),
+        )
+    assert exc_info.value.kind == "timeout"
 
 
 def test_shared_deadline_includes_metadata_cost(fixture_server) -> None:

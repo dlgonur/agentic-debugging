@@ -206,6 +206,55 @@ def test_terminal_model_error_header_and_sidebar_are_truthful() -> None:
     assert "Verifier\nNot run" in cancelled_context
 
 
+def test_terminal_level32_operator_error_header_is_specific() -> None:
+    view = SessionViewState(
+        task_id="audreyr__cookiecutter-967",
+        source_kind=SourceKind.LEVEL32_OPERATOR,
+        status=SessionStatus.FAILED,
+        termination_reason=SessionTerminationReason.SUBPROCESS_ERROR,
+        cleanup_verified=False,
+    )
+    header = render_view_header(view, mode="LIVE", mode_style="bold")
+    assert "Failed" in header.plain
+    assert "operator error" in header.plain
+    assert "cleanup failed" in header.plain
+    assert "verifier: —" not in header.plain
+
+
+def test_level6_controller_budget_failure_is_specific_and_verifier_is_not_claimed() -> None:
+    view = SessionViewState(
+        task_id="pdb-required-boundary-006",
+        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
+        status=SessionStatus.FAILED,
+        termination_reason=SessionTerminationReason.DIRECTIVE_EXHAUSTED,
+        cleanup_verified=True,
+    )
+    header = render_view_header(view, mode="LIVE", mode_style="bold")
+    assert "controller budget exhausted" in header.plain
+    assert "verifier: —" not in header.plain
+
+    panel = LiveRunContextPanel()
+    panel.update_view(view)
+    context = panel._text.render().plain
+    assert "Stage\nController budget exhausted" in context
+    assert "PDB\nNot reached" in context
+    assert "Verifier\nNot run" in context
+
+
+def test_level32_completed_progress_while_running_is_presented_as_finalizing() -> None:
+    view = SessionViewState(
+        task_id="audreyr__cookiecutter-967",
+        source_kind=SourceKind.LEVEL32_OPERATOR,
+        status=SessionStatus.RUNNING,
+        operator_stage=OperatorStage.COMPLETED,
+    )
+    header = render_view_header(view, mode="LIVE", mode_style="bold")
+    assert "Running  ·  Finalizing" in header.plain
+    panel = LiveRunContextPanel()
+    panel.update_view(view)
+    assert "Stage\nFinalizing" in panel._text.render().plain
+
+
 def test_live_footer_refreshes_when_running_session_fails(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     identity = PresentationIdentity(

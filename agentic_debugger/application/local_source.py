@@ -264,10 +264,22 @@ def run_local_session(
             ctx.token.check()  # controller -> verifier boundary
 
             if fail_on_controller_failure and result.stop_reason is not ControllerStopReason.DONE:
+                failure_category, termination_reason = _controller_failure_category(result)
+                ctx.emitter.emit(
+                    SessionEventKind.DIAGNOSIS_RECORDED,
+                    {
+                        "text": (
+                            f"{failure_category}; independent verifier was not run"
+                        ),
+                        "file_path": None,
+                        "symbol": None,
+                        "confidence": "observed",
+                    },
+                )
                 raise ModelExecutionError(
                     "controller run ended without completion "
                     f"(stop: {result.stop_reason.value})",
-                    _termination_reason_for(result.stop_reason),
+                    termination_reason,
                 )
 
             # Independent verifier: progress events through the shared
@@ -324,13 +336,69 @@ def run_local_session(
             )
 
 
-def _termination_reason_for(stop_reason: ControllerStopReason) -> SessionTerminationReason:
+def _controller_failure_category(
+    result: ControllerRunResult,
+) -> tuple[str, SessionTerminationReason]:
+    """Classify a failed controller without turning model prose into a verdict.
+
+    A failed state can be reached after the controller has exhausted the
+    bounded patch-attempt lifecycle even when the enum stop reason is the
+    generic ``FAILED``.  The latest Level-6 failure followed that path after
+    two rejected patch attempts.  Only bounded controller evidence is used:
+    the stop reason and transition labels, never a model-supplied diagnosis.
+    """
+
+    stop_reason = result.stop_reason
+    if stop_reason in (
+        ControllerStopReason.BUDGET_EXHAUSTED,
+        ControllerStopReason.MODEL_CALL_LIMIT,
+    ):
+        return "controller budget exhausted", SessionTerminationReason.DIRECTIVE_EXHAUSTED
+    if stop_reason in (
+        ControllerStopReason.DIRECTIVE_REJECTED,
+        ControllerStopReason.MODEL_SCRIPT_EXHAUSTED,
+        ControllerStopReason.MODEL_SCRIPT_MISMATCH,
+    ):
+        return "controller directive exhausted", SessionTerminationReason.DIRECTIVE_EXHAUSTED
+    if stop_reason is ControllerStopReason.MODEL_ERROR:
+        return "model error", SessionTerminationReason.MODEL_ERROR
+    if stop_reason is ControllerStopReason.CONTROLLER_ERROR:
+        return "controller error", SessionTerminationReason.CONTROLLER_FAILED
+
+    transition_text = " ".join(
+        step.transition_reason or "" for step in result.steps
+    ).lower()
+    if any(
+        marker in transition_text
+        for marker in (
+            "budget exhausted",
+            "patch-attempt budget",
+            "patch attempt budget",
+            "no active patch",
+        )
+    ):
+        return "controller budget exhausted", SessionTerminationReason.DIRECTIVE_EXHAUSTED
+    return "controller failed", SessionTerminationReason.CONTROLLER_FAILED
+
+
+def _termination_reason_for(
+    stop_reason: ControllerStopReason,
+    *,
+    result: ControllerRunResult | None = None,
+) -> SessionTerminationReason:
     """Map a failed controller stop to the honest Task-1 termination reason."""
+    if result is not None:
+        return _controller_failure_category(result)[1]
     if stop_reason is ControllerStopReason.MODEL_ERROR:
         return SessionTerminationReason.MODEL_ERROR
     if stop_reason is ControllerStopReason.DIRECTIVE_REJECTED:
         return SessionTerminationReason.DIRECTIVE_EXHAUSTED
-    if stop_reason is ControllerStopReason.MODEL_CALL_LIMIT:
+    if stop_reason in (
+        ControllerStopReason.MODEL_CALL_LIMIT,
+        ControllerStopReason.BUDGET_EXHAUSTED,
+        ControllerStopReason.MODEL_SCRIPT_EXHAUSTED,
+        ControllerStopReason.MODEL_SCRIPT_MISMATCH,
+    ):
         return SessionTerminationReason.DIRECTIVE_EXHAUSTED
     return SessionTerminationReason.CONTROLLER_FAILED
 

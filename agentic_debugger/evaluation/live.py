@@ -327,7 +327,7 @@ class LiveModelConfig:
         if type(self.model_name) is not str or not self.model_name.strip(): raise LiveConfigurationError("live model name is missing")
         if _SECRET_VALUE.search(self.model_name): raise LiveConfigurationError("live model name contains a credential-shaped value")
         _command(self.command)
-        if type(self.request_timeout_seconds) not in (int,float) or not 0<self.request_timeout_seconds<=300: raise LiveConfigurationError("live request timeout is invalid")
+        if type(self.request_timeout_seconds) not in (int,float) or not 0<self.request_timeout_seconds<=3600: raise LiveConfigurationError("live request timeout is invalid")
         if type(self.tool_version) is not str or not self.tool_version.strip() or _SECRET_VALUE.search(self.tool_version): raise LiveConfigurationError("live tool version is invalid")
     @classmethod
     def from_mapping(cls,value):
@@ -2132,7 +2132,11 @@ class LiveModelAdapter:
             # governed by the transport's inactivity watchdog and is not cut
             # off merely because a wall-clock slice elapsed mid-response.
             self._remaining()
-            timeout_seconds=self.config.request_timeout_seconds
+            # The frozen model-phase guard is the authoritative outer bound
+            # for long-running cloud decisions. Configured transports retain
+            # their shorter request bound through ``min``; ladder configs set
+            # it to the rung guard and pass the remaining phase time here.
+            timeout_seconds=min(self.config.request_timeout_seconds, self._remaining())
             phase_started=self.clock()
             try:
                 if self._progress_observer is not None:
@@ -2827,7 +2831,10 @@ def _validate_configuration_metadata(value: Any):
     _string(value["tool_version"],"report.configuration.tool_version")
     if type(value["configuration_fingerprint"]) is not str or not re.fullmatch(r"[0-9a-f]{64}",value["configuration_fingerprint"]):
         _schema_error("report.configuration fingerprint is invalid")
-    if type(value["request_timeout_seconds"]) not in (int,float) or not 0 < value["request_timeout_seconds"] <= 300:
+    # Level-32's evidence-backed DeepSeek profile uses the same 3,600-second
+    # outer model-phase bound accepted by LiveModelConfig.  Lower-rung cases
+    # retain their existing, smaller values; this is only the schema ceiling.
+    if type(value["request_timeout_seconds"]) not in (int,float) or not 0 < value["request_timeout_seconds"] <= 3600:
         _schema_error("report.configuration request timeout is invalid")
     _boolean(value["continue_on_task_failure"],"report.configuration.continue_on_task_failure")
     limits=value["limits"]

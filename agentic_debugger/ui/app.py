@@ -175,7 +175,9 @@ class LocalApplicationV1(App):
     CSS_PATH = "app.tcss"
 
     BINDINGS = [
-        Binding("ctrl+q", "quit", "Quit", show=False),
+        # The universal application exit key. Priority keeps it reachable
+        # from ordinary child widgets and active workspaces.
+        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
     def __init__(

@@ -855,7 +855,15 @@ def _derive_manifest(directory: Path, read: Any) -> SessionManifest:
     journal_path = directory / JOURNAL_FILE_NAME
     journal_sha256 = _file_sha256(journal_path)
     artifacts: list[ManifestArtifact] = []
-    for name in (RESULT_FILE_NAME, "candidate.patch", "evaluation.json"):
+    for name in (
+        RESULT_FILE_NAME,
+        "candidate.patch",
+        "evaluation.json",
+        "operator.command.json",
+        "operator.process.json",
+        "operator.stdout.txt",
+        "operator.stderr.txt",
+    ):
         artifact_path = directory / name
         if artifact_path.is_file():
             artifacts.append(
@@ -891,12 +899,17 @@ def _derive_result_mapping(events: Tuple[SessionEvent, ...]) -> Optional[Dict[st
     started_at: Optional[str] = None
     run_id: Optional[str] = None
     cleanup_verified = False
+    diagnostics: list[str] = []
     for event in events:
         if event.event_kind is SessionEventKind.SESSION_STARTED:
             run_id = event.run_id
             started_at = event.timestamp_utc
         elif event.event_kind is SessionEventKind.CLEANUP_COMPLETED:
             cleanup_verified = bool(event.payload["verified"])
+        elif event.event_kind is SessionEventKind.DIAGNOSIS_RECORDED:
+            text = event.payload.get("text")
+            if isinstance(text, str) and text:
+                diagnostics.append(text)
         elif event.event_kind in (
             SessionEventKind.SESSION_COMPLETED,
             SessionEventKind.SESSION_FAILED,
@@ -916,7 +929,7 @@ def _derive_result_mapping(events: Tuple[SessionEvent, ...]) -> Optional[Dict[st
         "ended_at_utc": terminal_event.timestamp_utc,
         "sequence": terminal_event.sequence,
         "cleanup_verified": cleanup_verified,
-        "diagnostics": [],
+        "diagnostics": diagnostics[:4],
     }
 
 

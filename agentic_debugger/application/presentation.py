@@ -340,7 +340,8 @@ def summarize_event(event: SessionEvent) -> str:
             f"{payload['line_count']} lines)"
         )
     if kind is SessionEventKind.DIAGNOSIS_RECORDED:
-        return "diagnosis recorded"
+        detail = payload.get("text")
+        return f"diagnosis recorded: {_trim_summary(detail)}" if detail else "diagnosis recorded"
     if kind is SessionEventKind.VERIFIER_STARTED:
         return "verifier started"
     if kind is SessionEventKind.VERIFIER_STAGE_STARTED:
