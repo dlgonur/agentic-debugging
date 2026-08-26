@@ -118,6 +118,7 @@ VALID_PAYLOADS = {
     },
     SessionEventKind.CLEANUP_STARTED: {},
     SessionEventKind.CLEANUP_COMPLETED: {"verified": True},
+    SessionEventKind.CLEANUP_NOT_REQUIRED: {},
     SessionEventKind.ARTIFACT_WRITTEN: {"path": "session.events.jsonl", "sha256": VALID_PATCH_SHA256},
 }
 

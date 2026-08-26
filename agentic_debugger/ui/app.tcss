@@ -374,6 +374,43 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     color: #8b949e;
 }
 
+/* -- activity / timeline copy bar ---------------------------------------- */
+
+#activity-container, #timeline-container {
+    height: 1fr;
+    width: 1fr;
+}
+
+#activity-copy-bar, #timeline-copy-bar {
+    height: 1;
+    width: 1fr;
+    align: right middle;
+    padding: 0 1;
+    background: #0d1117;
+}
+
+.copy-button {
+    width: auto;
+    min-width: 10;
+    height: 1;
+    padding: 0 1;
+    background: #21262d;
+    color: #8b949e;
+    border: none;
+    text-style: none;
+}
+
+.copy-button:hover {
+    background: #30363d;
+    color: #c9d1d9;
+}
+
+.copy-button:focus {
+    background: #21262d;
+    color: #8b949e;
+    border: none;
+}
+
 /* -- shared focus language ------------------------------------------------ */
 
 Button:focus {
@@ -382,4 +419,8 @@ Button:focus {
 
 Button {
     margin: 1 2;
+}
+
+.copy-button {
+    margin: 0;
 }

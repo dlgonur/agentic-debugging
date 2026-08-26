@@ -998,6 +998,10 @@ def _fold_workstream_event(
                 fields["change"] = preview
             updated = replace(entry, **fields)
             return entries[:index] + (updated,) + entries[index + 1 :]
+        # No cross-ordinal deduplication: distinct patch attempts remain
+        # distinct even when patch bodies are identical.  Same-ordinal
+        # late enrichment is handled above; different ordinals are never
+        # collapsed based on SHA/body/preview equality.
         return _append(
             entries,
             WorkstreamEntry(

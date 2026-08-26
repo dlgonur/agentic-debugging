@@ -57,7 +57,7 @@ BRACKET_SOURCE = (
 BRACKET_PATCH = (
     "--- a/recent_window.py\n"
     "+++ b/recent_window.py\n"
-    "@@ -1,3 +1,3 @@\n"
+    "@@ -1,2 +1,2 @@\n"
     "-def recent_window(days, limit):\n"
     "+def recent_window(days, limit=3):\n"
     " # [bold red]not markup[/]\n"

@@ -21,6 +21,7 @@ from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
+    Button,
     DataTable,
     Input,
     OptionList,
@@ -28,6 +29,12 @@ from textual.widgets import (
     TabPane,
     TabbedContent,
 )
+
+
+class CopyAllButton(Button):
+    """Mouse-clickable COPY ALL control without keyboard focus trap."""
+
+    can_focus = False
 
 from agentic_debugger.application.events import (
     OperatorStage,
@@ -1109,9 +1116,15 @@ class WorkspaceScreen(Screen):
                         yield VerifierPanel(id="verifier-pane")
                         yield WorkstreamPanel(id="verifier-workstream")
                     with TabPane("Activity", id="tab-activity"):
-                        yield ActivityPanel(id="activity-pane")
+                        with Vertical(id="activity-container"):
+                            with Horizontal(id="activity-copy-bar"):
+                                yield CopyAllButton("COPY ALL", id="copy-activity", classes="copy-button")
+                            yield ActivityPanel(id="activity-pane")
                     with TabPane("Timeline", id="tab-timeline"):
-                        yield TimelinePanel(id="timeline-pane")
+                        with Vertical(id="timeline-container"):
+                            with Horizontal(id="timeline-copy-bar"):
+                                yield CopyAllButton("COPY ALL", id="copy-timeline", classes="copy-button")
+                            yield TimelinePanel(id="timeline-pane")
             if self.mode is WorkspaceMode.LIVE:
                 yield LiveRunContextPanel(id="live-run-context")
         if self.mode is WorkspaceMode.REPLAY:
@@ -1598,6 +1611,73 @@ class WorkspaceScreen(Screen):
         panel.filter = name
         if self._view is not None:
             panel.update_view(self._view)
+
+    # -- copy all -----------------------------------------------------------
+
+    def _current_view_for_copy(self) -> Optional[SessionViewState]:
+        """Durable view for copy: replay controller or live incremental view."""
+        if self.mode is WorkspaceMode.REPLAY and self.controller is not None:
+            return self.controller.view
+        return self._view
+
+    def _copy_to_clipboard(self, text: str, success_message: str) -> None:
+        """Clipboard write without new dependency; failure is non-fatal."""
+        try:
+            # Prefer Textual's OSC-52 clipboard; fall back to no-op if unavailable.
+            self.app.copy_to_clipboard(text)
+            self.notify(success_message, timeout=2.0)
+        except Exception:
+            # Clipboard failure must be non-fatal and must not mutate history.
+            self.notify("Copy failed — clipboard unavailable", severity="warning", timeout=3.0)
+
+    def _activity_copy_text(self) -> str:
+        view = self._current_view_for_copy()
+        if view is None:
+            return "No activity recorded."
+        panel = self._activity_panel()
+        # Use the panel's current filter and the view's durable timeline.
+        # Do NOT use rendered Textual lines or scroll window.
+        from agentic_debugger.ui.widgets import activity_export_text
+
+        return activity_export_text(view, filter_name=panel.filter)
+
+    def _timeline_copy_text(self) -> str:
+        view = self._current_view_for_copy()
+        if view is None:
+            return "No events recorded."
+        # Preserve phase boundaries as displayed.
+        boundaries = self._current_boundaries()
+        from agentic_debugger.ui.widgets import timeline_export_text
+
+        return timeline_export_text(view, phase_boundary_sequences=boundaries)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        # Mouse-clickable COPY ALL without keyboard focus trap; no global shortcut.
+        # Do NOT journal the copy action; do NOT mutate session history.
+        if event.button.id == "copy-activity":
+            text = self._activity_copy_text()
+            # Count logical events matching current filter for acknowledgement.
+            view = self._current_view_for_copy()
+            if view is not None:
+                from agentic_debugger.ui.widgets import _ACTIVITY_FILTER_KINDS
+
+                allowed = _ACTIVITY_FILTER_KINDS.get(self._activity_panel().filter, frozenset())
+                count = sum(
+                    1 for e in view.timeline if not allowed or e.event_kind.value in allowed
+                )
+                # For "all", count is total timeline length.
+                success = f"Copied {count} activity events" if count != 1 else "Copied 1 activity event"
+            else:
+                success = "Copied activity"
+            self._copy_to_clipboard(text, success)
+            event.stop()
+        elif event.button.id == "copy-timeline":
+            text = self._timeline_copy_text()
+            view = self._current_view_for_copy()
+            count = len(view.timeline) if view is not None else 0
+            success = f"Copied {count} timeline events" if count else "Copied timeline"
+            self._copy_to_clipboard(text, success)
+            event.stop()
 
 
 class JumpToSequenceScreen(Screen):

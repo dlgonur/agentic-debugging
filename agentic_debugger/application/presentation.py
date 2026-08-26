@@ -81,6 +81,43 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         in_flight_attempt_ordinal=in_flight_ordinal,
         debugger_target=debugger_target,
     )
+    # Terminal truth: a terminal session must not retain a stale
+    # "applying" workstream entry.  Candidate proposal != application,
+    # and official semantic rejection must not retroactively label a
+    # patch as "apply failed".  Settle any remaining ACTIVE change
+    # units at terminal without inventing a new ordinal.
+    if next_state.status.terminal:
+        from agentic_debugger.application.workstream import WorkstreamStatus as _WStatus
+        from agentic_debugger.application.workstream import WorkstreamKind as _WKind
+        # Max authoritative patch ordinal from durable patch attempts.
+        max_patch_ordinal = 0
+        for attempt in next_state.patch_attempts:
+            ordinal = attempt.attempt_index + 1
+            if ordinal > max_patch_ordinal:
+                max_patch_ordinal = ordinal
+        # Terminal settlement: no ACTIVE change may remain.  A proposal is
+        # not an application, and official rejection must not become
+        # "apply failed".  Also, a fabricated ordinal beyond the
+        # authoritative patch attempts (e.g., final-candidate snapshot
+        # mis-attributed as a new attempt) must not be retained.
+        new_entries: list = []
+        settled = False
+        for entry in workstream:
+            if entry.kind is _WKind.CHANGE and entry.status is _WStatus.ACTIVE:
+                settled = True
+                # Fabricated ordinal beyond authoritative attempts: drop it.
+                # The canonical candidate body, if any, was already deduplicated
+                # onto its provenance attempt via preview/sha equality.
+                if entry.ordinal is not None and entry.ordinal > max_patch_ordinal:
+                    continue
+                label = "Final candidate" if entry.change is not None else "Change"
+                new_entries.append(
+                    replace(entry, status=_WStatus.COMPLETED, label=label, detail=None)
+                )
+            else:
+                new_entries.append(entry)
+        if settled or len(new_entries) != len(workstream):
+            workstream = tuple(new_entries)
     if workstream is not next_state.workstream:
         next_state = replace(next_state, workstream=workstream)
     return next_state

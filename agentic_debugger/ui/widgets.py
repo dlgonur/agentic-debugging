@@ -764,6 +764,13 @@ class ActivityPanel(VerticalScroll):
             text.append("\n")
         return text
 
+    def export_text(self, view: Optional[SessionViewState] = None) -> str:
+        """Full logical Activity export for clipboard (filter-aware)."""
+        target = view if view is not None else self._view
+        if target is None:
+            return "No activity recorded."
+        return activity_export_text(target, filter_name=self.filter)
+
 
 class TimelinePanel(VerticalScroll):
     """Concise event timeline with effective phase-boundary markers.
@@ -804,6 +811,13 @@ class TimelinePanel(VerticalScroll):
             text.append(entry.summary, style=style)
             text.append("\n")
         return text
+
+    def export_text(self, view: Optional[SessionViewState] = None) -> str:
+        """Full logical Timeline export for clipboard."""
+        target = view if view is not None else self._view
+        if target is None:
+            return "No events recorded."
+        return timeline_export_text(target, phase_boundary_sequences=self._boundaries)
 
 
 def _official_tests_label(view: SessionViewState) -> Optional[str]:
@@ -875,9 +889,20 @@ class LiveRunContextPanel(VerticalScroll):
             pdb = "Active"
         else:
             pdb = "Pending"
+        # Durable verifier truth for the compact context panel.
+        # Presence of verifier_summary (VERIFIER_COMPLETED) is the authority;
+        # outcome (RESOLVED vs UNRESOLVED) never changes whether it completed.
         if view.verifier_summary is not None:
-            verifier = view.verifier_summary.outcome.value if view.verifier_summary.outcome else "Completed"
+            verifier = "Completed"
         elif view.verifier_stages:
+            verifier = "Not completed" if terminal else "Active"
+        elif view.operator_stage in (
+            OperatorStage.VERIFICATION,
+            OperatorStage.OFFICIAL_VERIFICATION,
+            OperatorStage.OFFICIAL_VERIFICATION_PREPARING,
+            OperatorStage.OFFICIAL_EVALUATOR_STARTED,
+            OperatorStage.OFFICIAL_EVALUATOR_COMPLETED,
+        ):
             verifier = "Not completed" if terminal else "Active"
         elif terminal:
             verifier = "Not run"
@@ -957,10 +982,25 @@ class LiveRunContextPanel(VerticalScroll):
             pdb = "Not reached"
         else:
             pdb = "Not recorded"
-        verifier = (
-            view.verifier_summary.outcome.value if view.verifier_summary and view.verifier_summary.outcome
-            else "Active" if view.verifier_stages else "Not started"
-        )
+        # Durable verifier truth: VERIFIER_COMPLETED is the authority.
+        # Do NOT infer from outcome (resolved vs unresolved) and do NOT
+        # rely on ephemeral liveness after terminal completion.
+        if view.verifier_summary is not None:
+            verifier = "Completed"
+        elif view.verifier_stages:
+            verifier = "Active"
+        elif view.operator_stage in (
+            OperatorStage.VERIFICATION,
+            OperatorStage.OFFICIAL_VERIFICATION,
+            OperatorStage.OFFICIAL_VERIFICATION_PREPARING,
+            OperatorStage.OFFICIAL_EVALUATOR_STARTED,
+            OperatorStage.OFFICIAL_EVALUATOR_COMPLETED,
+        ):
+            # Level-32 official verification in progress: treat as active
+            # unless already settled via verifier_summary.
+            verifier = "Active" if not view.status.terminal else "Not completed"
+        else:
+            verifier = "Not started"
         official = _official_tests_label(view)
 
         def row(label: str, value: str) -> str:
@@ -1216,6 +1256,106 @@ class LiveBar(Static):
     """Live-session footer (operational status + cancel hint)."""
 
 
+def activity_export_text(
+    view: SessionViewState,
+    *,
+    filter_name: str = "all",
+    task_title: Optional[str] = None,
+) -> str:
+    """Deterministic text export for the Activity ledger.
+
+    Uses the same filter/order semantics as the current tab and the same
+    safe presentation summaries.  The result is the complete logical
+    Activity contents, not the visible viewport.  Pure; never touches
+    clipboard, journal, or ephemeral liveness.
+    """
+    from agentic_debugger.ui.app import task_display_title
+
+    title = task_title if task_title is not None else task_display_title(view.task_id)
+    status_label = (
+        "Completed"
+        if view.status is SessionStatus.SUCCEEDED
+        else view.status.value.replace("_", " ").capitalize()
+    )
+    # Treatment label: reuse the same derivation as the context panel.
+    try:
+        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None:
+            treatment = f"V{view.model_provenance.treatment_revision}"
+        elif is_ladder_task(view.task_id):
+            treatment = ladder_task_metadata(view.task_id).treatment
+        else:
+            treatment = "—"
+    except Exception:
+        treatment = "—"
+    allowed = _ACTIVITY_FILTER_KINDS.get(filter_name, frozenset())
+    entries = [
+        entry
+        for entry in view.timeline
+        if not allowed or entry.event_kind.value in allowed
+    ]
+    lines = [
+        title,
+        f"Status: {status_label}",
+        f"Treatment: {treatment}",
+        f"View: Activity",
+        f"Filter: {filter_name}",
+        "",
+    ]
+    # Activity renders newest first (reversed), so export preserves that.
+    for entry in reversed(entries):
+        lines.append(f"#{entry.sequence} {entry.summary}")
+    if not entries:
+        lines.append("No activity recorded for this filter.")
+    return "\n".join(lines)
+
+
+def timeline_export_text(
+    view: SessionViewState,
+    *,
+    task_title: Optional[str] = None,
+    phase_boundary_sequences: Optional[frozenset[int]] = None,
+) -> str:
+    """Deterministic text export for the full Timeline.
+
+    Full logical timeline in its displayed (chronological) ordering with
+    effective phase-boundary markers preserved as "»".  Pure.
+    """
+    from agentic_debugger.ui.app import task_display_title
+
+    title = task_title if task_title is not None else task_display_title(view.task_id)
+    status_label = (
+        "Completed"
+        if view.status is SessionStatus.SUCCEEDED
+        else view.status.value.replace("_", " ").capitalize()
+    )
+    try:
+        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None:
+            treatment = f"V{view.model_provenance.treatment_revision}"
+        elif is_ladder_task(view.task_id):
+            treatment = ladder_task_metadata(view.task_id).treatment
+        else:
+            treatment = "—"
+    except Exception:
+        treatment = "—"
+    lines = [
+        title,
+        f"Status: {status_label}",
+        f"Treatment: {treatment}",
+        f"View: Timeline",
+        "",
+    ]
+    if not view.timeline:
+        lines.append("No events recorded.")
+        return "\n".join(lines)
+    boundaries = phase_boundary_sequences or frozenset()
+    for entry in view.timeline:
+        marker = "» " if entry.sequence in boundaries else ""
+        lines.append(f"{marker}#{entry.sequence} {entry.summary}")
+    return "\n".join(lines)
+
+
 __all__ = [
     "ActivityPanel",
     "DebuggerPanel",
@@ -1230,5 +1370,7 @@ __all__ = [
     "TimelinePanel",
     "VerifierPanel",
     "WorkstreamPanel",
+    "activity_export_text",
     "render_workstream",
+    "timeline_export_text",
 ]

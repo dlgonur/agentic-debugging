@@ -948,13 +948,21 @@ def _candidate_patch_record(case: dict[str, Any]) -> dict[str, Any]:
     and semantic parsing. Candidate identity must instead follow the tool
     observation that actually mutated the disposable workspace. Successful
     reverts clear the active candidate; later successful applies replace it.
+
+    The authoritative one-based patch-attempt ordinal is derived from
+    replayed apply_patch action ordering, not from patch equality.  Each
+    real apply_patch action is counted in replay order and its action_id
+    is associated with that ordinal.  When a successful observation makes a
+    candidate active, that ordinal is persisted as `attempt`.
     """
 
     events_jsonl = case.get("events_jsonl")
     if not isinstance(events_jsonl, str) or not events_jsonl.strip():
         raise ProofError("the live case has no replayable candidate evidence")
     replay = replay_events(events_jsonl)
-    actions: dict[str, tuple[str, int]] = {}
+    # Real apply_patch actions in replay order → one-based ordinal.
+    actions: dict[str, tuple[str, int, int]] = {}
+    attempt_counter = 0
     active: dict[str, Any] | None = None
     for event in replay.events:
         event_type = event.event_type.value if hasattr(event.event_type, "value") else str(event.event_type)
@@ -965,7 +973,8 @@ def _candidate_patch_record(case: dict[str, Any]) -> dict[str, Any]:
             action_id = action.get("action_id")
             patch = action.get("arguments", {}).get("patch")
             if isinstance(action_id, str) and isinstance(patch, str) and patch.strip():
-                actions[action_id] = (patch, event.sequence)
+                attempt_counter += 1
+                actions[action_id] = (patch, event.sequence, attempt_counter)
             continue
         if event_type != "observation":
             continue
@@ -985,7 +994,7 @@ def _candidate_patch_record(case: dict[str, Any]) -> dict[str, Any]:
         source = actions.get(action_id) if isinstance(action_id, str) else None
         if source is None:
             raise ProofError("successful patch observation has no matching action")
-        patch, action_sequence = source
+        patch, action_sequence, attempt = source
         patch_sha256 = hashlib.sha256(patch.encode("utf-8")).hexdigest()
         if payload.get("patch_sha256") != patch_sha256:
             raise ProofError("successful patch observation disagrees with action bytes")
@@ -998,6 +1007,7 @@ def _candidate_patch_record(case: dict[str, Any]) -> dict[str, Any]:
             "observation_id": observation.get("observation_id"),
             "action_event_sequence": action_sequence,
             "observation_event_sequence": event.sequence,
+            "attempt": attempt,
         }
     if active is None:
         raise ProofError("the live case did not retain a tool-accepted active candidate patch")
@@ -1885,6 +1895,11 @@ def main(argv: list[str] | None = None) -> int:
             print(json.dumps(summary, indent=2, sort_keys=True))
             return 2
         patch = candidate["patch"]
+        # Authoritative attempt provenance for the final candidate.
+        candidate_attempt = candidate.get("attempt")
+        if type(candidate_attempt) is not int or candidate_attempt < 1:
+            # Fallback for historical records without attempt (should not happen for new runs).
+            candidate_attempt = progress._candidate_attempt
         progress.emit("candidate")
         artifact = _canonicalize_level32_candidate(fixture, patch, parent_dir=Path(temporary))
         artifact_mapping = _write_candidate_artifacts(output, patch, artifact)
@@ -1895,10 +1910,12 @@ def main(argv: list[str] | None = None) -> int:
         # from the ACTUAL FILE BYTES just written (never from the in-memory
         # string), so a byte-exact CRLF artifact still matches.  Never
         # carries body or prose; fail-open if the observer channel is
-        # unavailable.
+        # unavailable.  The attempt is the authoritative one-based
+        # patch-attempt ordinal of the candidate (not the latest handler
+        # attempt).
         candidate_patch_path = output / "candidate.patch"
         progress.candidate_patch_available(
-            attempt=progress._candidate_attempt,
+            attempt=candidate_attempt,
             sha256=_sha256(candidate_patch_path),
             candidate_patch_path="candidate.patch",
         )
