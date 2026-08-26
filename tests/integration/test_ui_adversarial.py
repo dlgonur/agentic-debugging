@@ -280,11 +280,13 @@ class TestReplayAdversarial:
             workspace = pilot.app.screen
             workspace.action_replay_end()
             patch = pane_text(workspace, "#patch-pane")
-            assert "Attempt 0" in patch and "REJECTED" in patch
+            # User-facing attempt ordinals are one-based (the durable
+            # attempt_index stays zero-based inside the events).
+            assert "Attempt 1" in patch and "REJECTED" in patch
             assert "malformed diff" in patch
             # the accepted attempt was independently verified (verifier
             # completed), so its final stage is VERIFIED, never APPLIED==FIXED
-            assert "Attempt 1" in patch and "VERIFIED" in patch
+            assert "Attempt 2" in patch and "VERIFIED" in patch
 
         run_headless(app, scenario)
 

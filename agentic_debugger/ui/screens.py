@@ -61,7 +61,6 @@ from agentic_debugger.ui.widgets import (
     DebuggerPanel,
     EvidenceState,
     LiveBar,
-    LiveExecutionFeed,
     LiveRunContextPanel,
     PatchPanel,
     ReplayBar,
@@ -69,6 +68,7 @@ from agentic_debugger.ui.widgets import (
     StatusHeader,
     TimelinePanel,
     VerifierPanel,
+    WorkstreamPanel,
 )
 
 _TERMINAL_KINDS = frozenset(
@@ -1096,16 +1096,16 @@ class WorkspaceScreen(Screen):
                 with TabbedContent(id="pane-tabs"):
                     with TabPane("Source", id="tab-source"):
                         yield SourcePanel(id="source-pane")
-                        yield LiveExecutionFeed(id="source-live-feed")
+                        yield WorkstreamPanel(id="source-workstream")
                     with TabPane("Debugger", id="tab-debugger"):
                         yield DebuggerPanel(id="debugger-pane")
-                        yield LiveExecutionFeed(id="debugger-live-feed")
+                        yield WorkstreamPanel(id="debugger-workstream")
                     with TabPane("Patch", id="tab-patch"):
                         yield PatchPanel(id="patch-pane")
-                        yield LiveExecutionFeed(id="patch-live-feed")
+                        yield WorkstreamPanel(id="patch-workstream")
                     with TabPane("Verifier", id="tab-verifier"):
                         yield VerifierPanel(id="verifier-pane")
-                        yield LiveExecutionFeed(id="verifier-live-feed")
+                        yield WorkstreamPanel(id="verifier-workstream")
                     with TabPane("Activity", id="tab-activity"):
                         yield ActivityPanel(id="activity-pane")
                     with TabPane("Timeline", id="tab-timeline"):
@@ -1336,9 +1336,30 @@ class WorkspaceScreen(Screen):
         else:
             execution = project_live_execution(view, mode=ExecutionMode.REPLAY)
         if execution is not None:
-            for feed_id in ("#source-live-feed", "#debugger-live-feed", "#patch-live-feed", "#verifier-live-feed"):
-                self.query_one(feed_id, LiveExecutionFeed).update_execution(
-                    execution, rows=3 if self.size.width < 100 else 5
+            # Empty evidence panes lend their space to the workstream; a
+            # pane with real content keeps it and gets a compact stream.
+            # No tab stealing happens here: only the *selected* pane's
+            # layout adapts, and every pane re-render is evidence-driven.
+            narrow = self.size.width < 100
+            for pane_id, workstream_id, available in (
+                ("#source-pane", "#source-workstream", source_state is EvidenceState.AVAILABLE),
+                ("#debugger-pane", "#debugger-workstream", debugger_state is EvidenceState.AVAILABLE),
+                ("#patch-pane", "#patch-workstream", patch_state is EvidenceState.AVAILABLE),
+                ("#verifier-pane", "#verifier-workstream", verifier_state is EvidenceState.AVAILABLE),
+            ):
+                pane = self.query_one(pane_id)
+                workstream = self.query_one(workstream_id, WorkstreamPanel)
+                expanded = not available and bool(view.workstream)
+                pane.styles.height = "1fr" if available or not view.workstream else "auto"
+                workstream.styles.height = "1fr" if expanded else "auto"
+                workstream.update_workstream(
+                    execution,
+                    expanded=expanded,
+                    narrow=narrow,
+                    height=self.size.height,
+                    # The Patch pane owns the detailed diff; its stream stays
+                    # compact without a duplicate diff block.
+                    suppress_change_body=pane_id == "#patch-pane",
                 )
             if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
                 self.query_one("#live-run-context", LiveRunContextPanel).update_execution(execution)

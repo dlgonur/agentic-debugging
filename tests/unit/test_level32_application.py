@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -866,3 +867,356 @@ def test_bare_candidate_stage_emits_no_patch_fact(tmp_path):
     }
     assert not any(event.event_kind in patch_kinds for event in journal.events)
     assert view.patch_attempts == ()
+
+
+# ---------------------------------------------------------------------------
+# Candidate patch-body enrichment at finalization (live change preview)
+# ---------------------------------------------------------------------------
+
+_CANDIDATE_PATCH = (
+    "--- a/cookiecutter/config.py\n"
+    "+++ b/cookiecutter/config.py\n"
+    "@@ -54,6 +54,6 @@\n"
+    "     value = config.get(key)\n"
+    "\n"
+    "     if value is None:\n"
+    "-        return None\n"
+    "+        return \"\"\n"
+    "\n"
+    "     return value\n"
+)
+
+
+class _CandidatePatchOperatorProcess(_StructuredOperatorProcess):
+    """Fake operator that also leaves the model-authored candidate.patch."""
+
+    def __init__(self, argv, result, lines, patch_text):
+        super().__init__(argv, result, lines)
+        self.candidate_patch = patch_text
+
+    def communicate(self):
+        stdout, stderr = super().communicate()
+        if self.candidate_patch is not None:
+            output = Path(self.argv[self.argv.index("--output-dir") + 1])
+            (output / "candidate.patch").write_bytes(
+                self.candidate_patch.encode("utf-8")
+            )
+        return stdout, stderr
+
+
+def _run_candidate_patch_worker(tmp_path, lines, patch_text, name):
+    profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)
+    worker = Level32OperatorWorker(
+        session_dir=tmp_path / "runs" / name,
+        session_id="sess-level32-" + name,
+        run_id="run-level32-" + name,
+        repository_root=tmp_path,
+        model=profile,
+        revision=7,
+        treatment_id="level32-treatment-v7-" + name,
+        output_dir=tmp_path / "experiments" / name,
+        spec=build_level32_spec(profile.alias),
+        process_factory=lambda argv, **kwargs: _CandidatePatchOperatorProcess(
+            argv, _structured_result(), lines, patch_text
+        ),
+    )
+    worker.start()
+    worker.wait()
+    return worker
+
+
+def _applied_candidate_lines() -> list:
+    return [
+        _op({"operation": "candidate", "phase": "applied", "reason": "candidate applied", "changed_files": ["cookiecutter/config.py"], "attempt": 1}),
+    ]
+
+
+def test_applied_candidate_gains_authoritative_patch_body_at_finalization(tmp_path):
+    """The live structured channel carries the outcome; the exact model
+    authored candidate.patch artifact is enriched onto the same attempt at
+    finalization without regressing the recorded outcome."""
+    from agentic_debugger.application.presentation import PatchStage
+
+    worker = _run_candidate_patch_worker(
+        tmp_path, _applied_candidate_lines(), _CANDIDATE_PATCH, "patch-body"
+    )
+    view, journal = _reduce_journal(worker)
+    attempts = view.patch_attempts
+    assert len(attempts) == 1
+    # applied -> verified by the completed verifier; the late proposed body
+    # must never regress that chain (VERIFIED proves no PROPOSED regression,
+    # because only an APPLIED attempt is promoted).
+    assert attempts[0].stage is PatchStage.VERIFIED
+    assert attempts[0].patch_text == _CANDIDATE_PATCH
+    assert attempts[0].changed_files == ("cookiecutter/config.py",)
+    proposed = [
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_PROPOSED
+    ]
+    assert len(proposed) == 1
+    assert proposed[0].payload["patch_text"] == _CANDIDATE_PATCH
+    assert proposed[0].payload["attempt_index"] == 0
+    # the enrichment reaches the workstream change unit as a real preview
+    changes = [entry for entry in view.workstream if entry.kind.value == "change"]
+    assert len(changes) == 1
+    assert changes[0].label == "Applied change"
+    assert changes[0].change is not None
+    assert changes[0].change.additions == 1
+    assert changes[0].change.deletions == 1
+
+
+def test_unsafe_or_missing_patch_body_leaves_outcome_facts_unchanged(tmp_path):
+    from agentic_debugger.application.presentation import PatchStage
+
+    for patch_text, name in (
+        ("password = hunter2", "unsafe-body"),
+        (None, "missing-body"),
+    ):
+        worker = _run_candidate_patch_worker(
+            tmp_path, _applied_candidate_lines(), patch_text, name
+        )
+        view, journal = _reduce_journal(worker)
+        attempts = view.patch_attempts
+        assert len(attempts) == 1
+        assert attempts[0].stage is PatchStage.VERIFIED
+        assert attempts[0].patch_text is None
+        assert not [
+            event
+            for event in journal.events
+            if event.event_kind is SessionEventKind.PATCH_PROPOSED
+            and event.payload.get("patch_text")
+        ]
+
+# ---------------------------------------------------------------------------
+# Live candidate patch availability (patch body before official evaluation)
+# ---------------------------------------------------------------------------
+
+
+class _LiveCandidatePatchProcess(_StructuredOperatorProcess):
+    """Deterministic fake operator with a two-phase progress channel.
+
+    First poll: the progress file carries only records up to (and
+    including) the ``candidate_patch_available`` milestone.  Second poll:
+    the operator is STILL ALIVE (poll again) while the progress file is
+    extended with the official-verification records.  This proves the
+    application consumes the milestone and emits PATCH_PROPOSED while the
+    process is running, before official evaluation completes.
+    """
+
+    def __init__(self, argv, result, lines, milestone, tail):
+        super().__init__(argv, result, lines)
+        self._milestone = milestone
+        self._tail = tail
+        self._polls = 0
+
+    def poll(self):
+        self._polls += 1
+        progress = Path(self.argv[self.argv.index("--progress-file") + 1])
+        if self._polls == 1:
+            progress.write_text("\n".join(self._milestone) + "\n", encoding="utf-8")
+            return None
+        if self._polls == 2:
+            # Extend the channel; the operator process is still alive.
+            progress.write_text(
+                "\n".join(self._milestone + self._tail) + "\n", encoding="utf-8"
+            )
+            return None
+        return self.returncode
+
+
+def _live_candidate_milestone_lines(patch_text, attempt=1):
+    digest = hashlib.sha256(patch_text.encode("utf-8")).hexdigest()
+    return [
+        _op({"operation": "candidate", "phase": "applied", "reason": "candidate applied", "changed_files": ["cookiecutter/config.py"], "attempt": attempt}),
+        json.dumps({
+            "schema_version": "operator-progress-v2",
+            "kind": "operation",
+            "operation": "candidate_patch_available",
+            "attempt": attempt,
+            "sha256": digest,
+            "candidate_patch": "candidate.patch",
+        }),
+    ]
+
+
+def _live_candidate_tail_lines():
+    return [
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_verification_preparing"}),
+        json.dumps({"schema_version": "operator-progress-v1", "stage": "official_evaluator_started"}),
+    ]
+
+
+def _run_live_candidate_worker(tmp_path, milestone, tail, patch_text, name="live-patch"):
+    output_dir = tmp_path / "experiments" / name
+    output_dir.mkdir(parents=True, exist_ok=True)
+    (output_dir / "candidate.patch").write_bytes(patch_text.encode("utf-8"))
+    profile = Level32ModelProfile("glm-5.2:cloud", "glm-5.2", "live_verified", "a" * 64)
+    worker = Level32OperatorWorker(
+        session_dir=tmp_path / "runs" / name,
+        session_id="sess-level32-" + name,
+        run_id="run-level32-" + name,
+        repository_root=tmp_path,
+        model=profile,
+        revision=7,
+        treatment_id="level32-treatment-v7-" + name,
+        output_dir=output_dir,
+        spec=build_level32_spec(profile.alias),
+        process_factory=lambda argv, **kwargs: _LiveCandidatePatchProcess(
+            argv, _structured_result(), [], milestone, tail
+        ),
+    )
+    worker.start()
+    worker.wait()
+    return worker
+
+
+def test_live_patch_body_visible_before_official_evaluation_and_exit(tmp_path):
+    """The key acceptance sequence: candidate applied -> candidate.patch
+    written -> milestone consumed -> PATCH_PROPOSED emitted -> change
+    preview available -> official_verification_preparing -> operator STILL
+    ALIVE.  Diff visible BEFORE official evaluation completes and BEFORE
+    subprocess exit."""
+    worker = _run_live_candidate_worker(
+        tmp_path,
+        _live_candidate_milestone_lines(_CANDIDATE_PATCH),
+        _live_candidate_tail_lines(),
+        _CANDIDATE_PATCH,
+    )
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    official_progress = [
+        (event.sequence, event.payload.get("stage"))
+        for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+    ]
+    first_official_sequence = next(
+        sequence
+        for sequence, stage in official_progress
+        if stage in ("official_verification_preparing", "official_evaluator_started")
+    )
+    proposed = next(
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_PROPOSED
+        and event.payload.get("patch_text")
+    )
+    # the typed body event precedes the first official-verification stage
+    assert proposed.sequence < first_official_sequence
+    assert proposed.payload["patch_text"] == _CANDIDATE_PATCH
+    assert proposed.payload["attempt_index"] == 0
+    assert proposed.payload["patch_sha256"] == hashlib.sha256(
+        _CANDIDATE_PATCH.encode("utf-8")
+    ).hexdigest()
+    # live milestone + finalization == one durable patch-body fact
+    bodies = [
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_PROPOSED
+        and event.payload.get("patch_text")
+    ]
+    assert len(bodies) == 1
+    # the milestone was consumed on the SECOND poll while the process was
+    # still alive: poll 1 delivered the milestone, poll 2 delivered the
+    # official-verification tail with the process still running (poll 2
+    # returned None again), and only poll 3 returned the exit code.
+    assert worker._process is not None
+    assert worker._process._polls == 3
+    assert worker._process.returncode == 1
+
+
+
+def test_crlf_candidate_patch_live_milestone_uses_exact_file_bytes(tmp_path):
+    """A byte-valid CRLF candidate.patch must pass the live milestone hash
+    check: the milestone carries the sha256 of the ACTUAL FILE BYTES, and
+    the application hashes the raw bytes (never newline-normalized text).
+    PATCH_PROPOSED appears LIVE with the exact decoded text, before
+    official verification and before process exit."""
+    crlf_patch = _CANDIDATE_PATCH.replace("\n", "\r\n")
+    worker = _run_live_candidate_worker(
+        tmp_path,
+        _live_candidate_milestone_lines(crlf_patch),
+        _live_candidate_tail_lines(),
+        crlf_patch,
+        "crlf-live",
+    )
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    proposed = next(
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_PROPOSED
+        and event.payload.get("patch_text")
+    )
+    assert proposed.payload["patch_text"] == crlf_patch
+    assert proposed.payload["patch_sha256"] == hashlib.sha256(
+        crlf_patch.encode("utf-8")
+    ).hexdigest()
+    official = next(
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.OPERATOR_PROGRESS
+        and event.payload.get("stage")
+        in ("official_verification_preparing", "official_evaluator_started")
+    )
+    assert proposed.sequence < official.sequence
+    # one durable body fact (live + finalization idempotency)
+    bodies = [
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_PROPOSED
+        and event.payload.get("patch_text")
+    ]
+    assert len(bodies) == 1
+
+
+def test_patch_milestone_hash_mismatch_drops_silently_and_finalization_still_emits(tmp_path):
+    """A milestone whose hash does not match the artifact must not emit a
+    body; the fail-open finalization fallback still emits the authoritative
+    body afterwards (v1/no-milestone operator support)."""
+    digest = hashlib.sha256(b"different").hexdigest()
+    milestone = [
+        _op({"operation": "candidate", "phase": "applied", "reason": "applied", "changed_files": ["cookiecutter/config.py"], "attempt": 1}),
+        json.dumps({
+            "schema_version": "operator-progress-v2",
+            "kind": "operation",
+            "operation": "candidate_patch_available",
+            "attempt": 1,
+            "sha256": digest,
+            "candidate_patch": "candidate.patch",
+        }),
+    ]
+    worker = _run_live_candidate_worker(
+        tmp_path, milestone, [], _CANDIDATE_PATCH, "hash-mismatch"
+    )
+    journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+    bodies = [
+        event
+        for event in journal.events
+        if event.event_kind is SessionEventKind.PATCH_PROPOSED
+        and event.payload.get("patch_text")
+    ]
+    assert len(bodies) == 1
+    assert bodies[0].payload["patch_text"] == _CANDIDATE_PATCH
+
+
+def test_patch_milestone_malformed_records_drop_without_emission(tmp_path):
+    for name, record in (
+        ("bad-op", {"operation": "candidate_patch_available", "attempt": 1, "sha256": "b" * 64, "candidate_patch": "candidate.patch"}),
+        ("bad-attempt", {"operation": "candidate_patch_available", "attempt": True, "sha256": "b" * 64, "candidate_patch": "candidate.patch"}),
+        ("bad-hash", {"operation": "candidate_patch_available", "attempt": 1, "sha256": "xyz", "candidate_patch": "candidate.patch"}),
+        ("bad-path", {"operation": "candidate_patch_available", "attempt": 1, "sha256": "b" * 64, "candidate_patch": "other.patch"}),
+    ):
+        milestone = [
+            _op({"operation": "candidate", "phase": "applied", "reason": "applied", "changed_files": ["cookiecutter/config.py"], "attempt": 1}),
+            json.dumps({"schema_version": "operator-progress-v2", "kind": "operation", **record}),
+        ]
+        worker = _run_live_candidate_worker(
+            tmp_path, milestone, [], _CANDIDATE_PATCH, "malformed-" + name
+        )
+        journal = read_session_journal(worker.session_dir / "session.events.jsonl")
+        bodies = [
+            event
+            for event in journal.events
+            if event.event_kind is SessionEventKind.PATCH_PROPOSED
+            and event.payload.get("patch_text")
+        ]
+        assert len(bodies) == 1, name

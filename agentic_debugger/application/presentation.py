@@ -50,12 +50,42 @@ from agentic_debugger.application.events import (
     validate_session_id,
 )
 from agentic_debugger.application.session import SessionSpec
+from agentic_debugger.application.workstream import (
+    WorkstreamEntry,
+    apply_workstream_event,
+)
 from agentic_debugger.evaluation.outcome_taxonomy import SemanticOutcome
 from agentic_debugger.evaluation.runner import EvaluationStatus
 
 #: Deterministic tail cap for the derived activity timeline.
 MAX_TIMELINE_ENTRIES = 2000
 MAX_TIMELINE_SUMMARY_CHARS = 240
+
+def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewState:
+    """Public reducer: core presentation fold plus workstream curation.
+
+    The workstream is derived with pre-event hints (in-flight attempt
+    ordinal, last debugger location) computed from ``state`` before the
+    core fold, then folded from the same validated event.  It is additive
+    presentation state: the core fields and timeline are identical with or
+    without it, so live/replay parity and scientific facts are unchanged.
+    """
+    in_flight_ordinal = _in_flight_attempt_ordinal(state)
+    debugger_target = _debugger_location_target(state)
+    next_state = _reduce_event_core(state, event)
+    workstream = apply_workstream_event(
+        next_state.workstream,
+        event_kind=event.event_kind.value,
+        payload=dict(event.payload),
+        sequence=event.sequence,
+        in_flight_attempt_ordinal=in_flight_ordinal,
+        debugger_target=debugger_target,
+    )
+    if workstream is not next_state.workstream:
+        next_state = replace(next_state, workstream=workstream)
+    return next_state
+
+
 
 __all__ = [
     "DebuggerViewState",
@@ -71,6 +101,7 @@ __all__ = [
     "TimelineEntry",
     "VerifierStageView",
     "VerifierSummaryView",
+    "WorkstreamEntry",
     "current_source",
     "initial_session_view",
     "presentation_identity",
@@ -265,6 +296,10 @@ class SessionViewState:
     #: observed real official test execution (never inferred from stage).
     official_execution_proven: Optional[bool] = None
     timeline: Tuple[TimelineEntry, ...] = ()
+    #: Curated operational workstream (semantic work units, bounded).  The
+    #: complete forensic ledger remains ``timeline``; this is presentation
+    #: curation over the same durable facts, never a second authority.
+    workstream: Tuple[WorkstreamEntry, ...] = ()
 
 
 def _trim_summary(text: str) -> str:
@@ -462,6 +497,20 @@ def _transition(state: SessionViewState, target: SessionStatus) -> SessionStatus
     return target
 
 
+#: Lifecycle rank of one patch-attempt stage.  A ``PROPOSED`` record that
+#: arrives *after* a later stage (the Level-32 patch body is finalized only
+#: after the live apply outcome was streamed) enriches the attempt's patch
+#: text without regressing the authoritative outcome.
+_PATCH_STAGE_RANK = {
+    PatchStage.PROPOSED: 0,
+    PatchStage.REJECTED: 1,
+    PatchStage.APPLY_FAILED: 1,
+    PatchStage.APPLIED: 2,
+    PatchStage.REVERTED: 3,
+    PatchStage.VERIFIED: 4,
+}
+
+
 def _upsert_patch_attempt(
     attempts: Tuple[PatchAttemptView, ...], attempt: PatchAttemptView
 ) -> Tuple[PatchAttemptView, ...]:
@@ -470,6 +519,37 @@ def _upsert_patch_attempt(
             # One attempt accumulates fields across its lifecycle events
             # (proposed carries the hash and patch text; applied carries
             # files/syntax; later stages carry a failure/revert reason).
+            # A late PROPOSED never regresses a recorded outcome.
+            if (
+                attempt.stage is PatchStage.PROPOSED
+                and _PATCH_STAGE_RANK[existing.stage] > _PATCH_STAGE_RANK[attempt.stage]
+            ):
+                # Late proposal: keep the recorded outcome and its fields,
+                # enriching only the patch hash/body it carries.
+                attempt = replace(
+                    attempt,
+                    stage=existing.stage,
+                    changed_files=(
+                        attempt.changed_files
+                        if attempt.changed_files
+                        else existing.changed_files
+                    ),
+                    syntax_passed=(
+                        attempt.syntax_passed
+                        if attempt.syntax_passed is not None
+                        else existing.syntax_passed
+                    ),
+                    rejection_reason=(
+                        attempt.rejection_reason
+                        if attempt.rejection_reason is not None
+                        else existing.rejection_reason
+                    ),
+                    apply_failure_reason=(
+                        attempt.apply_failure_reason
+                        if attempt.apply_failure_reason is not None
+                        else existing.apply_failure_reason
+                    ),
+                )
             merged = replace(
                 attempt,
                 patch_sha256=(
@@ -575,7 +655,30 @@ def current_source(state: SessionViewState) -> Optional[SourceView]:
     return None
 
 
-def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewState:
+def _in_flight_attempt_ordinal(state: SessionViewState) -> int:
+    """One-based ordinal of the candidate currently being applied.
+
+    Matches the live-operation projection: with no recorded attempt the
+    in-flight attempt is 1; while the latest attempt is still PROPOSED it is
+    that attempt itself; after a settled outcome it is the successor.
+    """
+    attempts = state.patch_attempts
+    if not attempts:
+        return 1
+    last = attempts[-1]
+    if last.stage is PatchStage.PROPOSED:
+        return last.attempt_index + 1
+    return last.attempt_index + 2
+
+
+def _debugger_location_target(state: SessionViewState) -> Optional[str]:
+    debugger = state.debugger
+    if debugger.script and debugger.line is not None:
+        return f"{debugger.script}:{debugger.line}"
+    return debugger.script
+
+
+def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionViewState:
     """Reduce one validated event into a new immutable view state.
 
     Pure: no I/O, no mutation of ``state`` or ``event``.  Events whose

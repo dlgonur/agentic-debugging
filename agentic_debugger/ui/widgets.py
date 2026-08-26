@@ -22,7 +22,7 @@ from pygments.lexers import ClassNotFound, get_lexer_for_filename
 from pygments.token import Comment, Keyword, Name, Number, Operator, String, Token
 from rich.text import Text
 from textual.app import ComposeResult
-from textual.containers import VerticalScroll
+from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
 from agentic_debugger.application.events import (
@@ -41,9 +41,23 @@ from agentic_debugger.application.presentation import (
     VerifierSummaryView,
     current_source,
 )
-from agentic_debugger.application.live_execution import LiveExecutionState
+from agentic_debugger.application.live_execution import LiveExecutionState, OperationKind
+from agentic_debugger.application.workstream import (
+    ChangePreview,
+    ChangePreviewLimits,
+    DiffLineKind,
+    WorkstreamEntry,
+    WorkstreamStatus,
+    build_change_preview,
+)
 
 _NOT_RECORDED = "NOT RECORDED"
+
+#: Bounded change preview limits for the detailed Patch pane (larger than
+#: the compact live workstream preview, still never a full dump).
+PATCH_PANE_PREVIEW_LIMITS = ChangePreviewLimits(
+    max_files=8, max_hunks=4, max_lines=40, max_line_chars=110
+)
 
 
 def _markup_escape(value: Any) -> str:
@@ -504,8 +518,12 @@ class PatchPanel(VerticalScroll):
         text = Text()
         if not view.patch_attempts:
             if evidence_state == EvidenceState.LIVE_PENDING:
-                text.append("No patch attempt yet.\n")
-                text.append("Waiting for patch generation...\n", style="dim")
+                if view.current_tool_name == "apply_patch":
+                    text.append("Candidate attempt 1\n", style="bold #ffa657")
+                    text.append("Applying change…\n", style="dim")
+                else:
+                    text.append("No patch attempt yet.\n")
+                    text.append("Waiting for patch generation...\n", style="dim")
                 return text
             if evidence_state == EvidenceState.REPLAY_PENDING:
                 text.append(
@@ -543,20 +561,41 @@ class PatchPanel(VerticalScroll):
                     f"  apply failure: {attempt.apply_failure_reason}\n",
                     style="red",
                 )
-            if attempt.patch_text:
-                text.append("\n", style="dim")
-                for line in attempt.patch_text.splitlines():
-                    if line.startswith("+") and not line.startswith("+++"):
-                        style = "green"
-                    elif line.startswith("-") and not line.startswith("---"):
-                        style = "red"
-                    elif line.startswith("@@"):
-                        style = "cyan"
-                    else:
-                        style = "dim"
-                    text.append(line, style=style)
-                    text.append("\n")
+            preview = (
+                build_change_preview(attempt.patch_text, PATCH_PANE_PREVIEW_LIMITS)
+                if attempt.patch_text
+                else None
+            )
+            if preview is not None:
+                text.append(
+                    f"\n  CHANGED FILES · +{preview.additions} -{preview.deletions}"
+                    f" across {len(preview.files) + preview.omitted_files}"
+                    f" file{'s' if len(preview.files) + preview.omitted_files > 1 else ''}\n",
+                    style="bold #8fb7d9",
+                )
+                for file_summary in preview.files:
+                    text.append(
+                        f"  {file_summary.operation.value} {file_summary.path}"
+                        f"  +{file_summary.additions}"
+                        f" -{file_summary.deletions}\n",
+                        style="#c9d1d9",
+                    )
+                if preview.omitted_files:
+                    text.append(
+                        f"  … +{preview.omitted_files} more file{'s' if preview.omitted_files > 1 else ''}\n",
+                        style="dim",
+                    )
+                text.append("\n  DIFF", style="bold #8fb7d9")
+                if preview.primary_path:
+                    text.append(f" · {preview.primary_path}", style="#c9d1d9")
                 text.append("\n")
+                _append_diff_lines(text, preview, indent="  ")
+                text.append("\n")
+            elif attempt.patch_text:
+                text.append(
+                    "\n  (diff body withheld: patch content did not parse as a bounded unified diff)\n",
+                    style="yellow",
+                )
         text.append(
             "\nPatch application only mutates the recorded workspace. "
             "APPLIED does not mean FIXED — correctness is decided by the "
@@ -973,22 +1012,200 @@ class LiveRunContextPanel(VerticalScroll):
         self._text.update("\n".join(lines))
 
 
-class LiveExecutionFeed(Static):
-    """Non-focusable bounded tail of the durable presentation timeline."""
+_STATUS_MARKER: dict[WorkstreamStatus, tuple[str, str]] = {
+    WorkstreamStatus.ACTIVE: ("→", "bold #79c0ff"),
+    WorkstreamStatus.COMPLETED: ("✓", "green"),
+    WorkstreamStatus.FAILED: ("×", "red"),
+    WorkstreamStatus.WAITING: ("~", "yellow"),
+}
+
+_KIND_LABEL_STYLE = {
+    "change": "bold #ffa657",
+    "official_verification": "bold #d2a8ff",
+    "verification": "#a371f7",
+    "error": "bold red",
+}
+
+
+def _kind_style(entry: WorkstreamEntry) -> str:
+    return _KIND_LABEL_STYLE.get(entry.kind.value, "bright_white")
+
+
+def _change_stats_text(change: ChangePreview) -> str:
+    if change.multi_file:
+        return f"{len(change.files) + change.omitted_files} files · +{change.additions} -{change.deletions}"
+    return f"+{change.additions} -{change.deletions}"
+
+
+def _append_diff_lines(text: "Text", change: ChangePreview, *, indent: str) -> None:
+    """Append the bounded, terminal-native diff body of the primary file."""
+    for line in change.lines:
+        pad = " " * len(indent)
+        if line.kind is DiffLineKind.HUNK:
+            text.append(f"{pad}{line.text}\n", style="cyan")
+            continue
+        number = line.old_lineno if line.old_lineno is not None else line.new_lineno
+        prefix = {
+            DiffLineKind.CONTEXT: " ",
+            DiffLineKind.ADDED: "+",
+            DiffLineKind.REMOVED: "-",
+        }[line.kind]
+        style = {
+            DiffLineKind.CONTEXT: "#8b949e",
+            DiffLineKind.ADDED: "green",
+            DiffLineKind.REMOVED: "red",
+        }[line.kind]
+        text.append(f"{pad}{number:>4} │{prefix}", style=style)
+        text.append(f"{line.text}\n", style=style)
+    if change.truncated or change.omitted_files:
+        parts = []
+        if change.omitted_files:
+            parts.append(f"+{change.omitted_files} more file{'s' if change.omitted_files > 1 else ''}")
+        if change.omitted_lines:
+            parts.append(f"+{change.omitted_lines} more changed line{'s' if change.omitted_lines > 1 else ''}")
+        if parts:
+            text.append(f"{indent}… {' · '.join(parts)}\n", style="dim")
+
+
+def _append_entry(
+    text: "Text",
+    entry: WorkstreamEntry,
+    *,
+    with_change_body: bool,
+    narrow: bool,
+) -> None:
+    marker, marker_style = _STATUS_MARKER[entry.status]
+    text.append(f"{marker} ", style=marker_style)
+    text.append(entry.label.upper() if not narrow else entry.label, style=_kind_style(entry))
+    if entry.ordinal is not None:
+        text.append(f" {entry.ordinal}", style="#c9d1d9")
+    target = entry.target
+    if not target and entry.change is not None and entry.change.primary_path:
+        # A rejected candidate has no authoritative changed-file list; the
+        # preview's primary path is the honest fallback.
+        target = entry.change.primary_path
+    if target:
+        text.append(f"  {target}", style="#c9d1d9")
+    if entry.change is not None:
+        text.append(f"  {_change_stats_text(entry.change)}", style="bold green")
+    detail = entry.detail
+    if entry.change is not None and detail and detail.startswith("+") and detail.endswith("more"):
+        # The preview's file summary already states what was changed.
+        detail = None
+    if detail:
+        text.append(f"  · {detail}", style="#8b949e")
+    text.append("\n")
+    if with_change_body and entry.change is not None and not narrow:
+        change = entry.change
+        if change.multi_file:
+            for file_summary in change.files:
+                text.append(
+                    f"    {file_summary.operation.value} {file_summary.path}"
+                    f"  +{file_summary.additions} -{file_summary.deletions}\n",
+                    style="#8b949e",
+                )
+            if change.omitted_files:
+                text.append(f"    … +{change.omitted_files} more\n", style="dim")
+        if change.primary_path and change.multi_file:
+            text.append(f"    {change.primary_path}\n", style="#c9d1d9")
+        _append_diff_lines(text, change, indent="  ")
+
+
+def render_workstream(
+    state: LiveExecutionState,
+    *,
+    expanded: bool,
+    narrow: bool,
+    height: int = 40,
+    suppress_change_body: bool = False,
+) -> "Text":
+    """Render the curated operational workstream (pure; no widget state).
+
+    ``expanded`` is used when the selected evidence pane has no substantive
+    content yet: the workstream becomes the primary body.  ``narrow``
+    degrades to single-line entries without diff bodies.  Row budgets are
+    bounded by the terminal height.  ``suppress_change_body`` keeps the
+    diff out of the stream when the selected pane already owns diff detail
+    (the Patch pane), avoiding a duplicated block.
+    """
+    entries = state.view.workstream
+    text = Text()
+    prefix = "LIVE" if state.mode.value == "live" else "RECENT"
+    header = state.operation_label
+    if (
+        state.operation in (OperationKind.MODEL_REQUEST, OperationKind.WAITING_FOR_MODEL)
+        and state.request_ordinal is not None
+    ):
+        ceiling = state.ceilings.model_requests
+        header = (
+            f"{header} / {ceiling}" if ceiling is not None else header
+        )
+    text.append(f"{prefix} · ", style="bold #8b949e")
+    text.append(f"{header}\n", style="bold #ffffff")
+    text.append("─" * 40 + "\n", style="dim")
+    if not entries:
+        text.append("Waiting for operational activity…\n", style="dim")
+        return text
+    if expanded:
+        rows = 16 if height >= 30 else 8
+    else:
+        rows = 5 if height >= 30 else 3
+    visible = entries[-rows:]
+    # The diff body appears for the most recent change unit only: rhythm
+    # over repetition, and a hard bound on rendered diff lines.
+    last_change_index = -1
+    if not suppress_change_body:
+        for index in range(len(visible) - 1, -1, -1):
+            if visible[index].change is not None:
+                last_change_index = index
+                break
+    for index, entry in enumerate(visible):
+        _append_entry(
+            text,
+            entry,
+            with_change_body=index == last_change_index,
+            narrow=narrow,
+        )
+    hidden = len(entries) - len(visible)
+    if hidden > 0:
+        text.append(f"… {hidden} earlier operation{'s' if hidden > 1 else ''}\n", style="dim")
+    return text
+
+
+class WorkstreamPanel(Vertical):
+    """Non-focusable curated operational workstream below an evidence pane.
+
+    Observational only: it renders the same immutable ``SessionViewState``
+    workstream every other pane renders and never takes keyboard focus.
+    """
 
     can_focus = False
 
-    def update_execution(self, state: LiveExecutionState, *, rows: int = 4) -> None:
-        tail = state.recent_operations[-max(1, min(rows, 6)):]
-        prefix = "LIVE" if state.mode.value == "live" else "RECENT"
-        lines = [f"[bold #8b949e]{prefix} · {_markup_escape(state.operation_label)}[/]"]
-        for entry in tail:
-            marker = "✓" if "completed" in entry.summary or "applied" in entry.summary else "→"
-            summary = " ".join(entry.summary.split())
-            if len(summary) > 120:
-                summary = summary[:117] + "..."
-            lines.append(f"[dim]{marker}[/] {_markup_escape(summary)}")
-        self.update("\n".join(lines))
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._text: Static = Static("")
+
+    def compose(self) -> ComposeResult:
+        yield self._text
+
+    def update_workstream(
+        self,
+        state: LiveExecutionState,
+        *,
+        expanded: bool,
+        narrow: bool,
+        height: int = 40,
+        suppress_change_body: bool = False,
+    ) -> None:
+        self._text.update(
+            render_workstream(
+                state,
+                expanded=expanded,
+                narrow=narrow,
+                height=height,
+                suppress_change_body=suppress_change_body,
+            )
+        )
 
 
 class ReplayBar(Static):
@@ -1004,12 +1221,14 @@ __all__ = [
     "DebuggerPanel",
     "EvidenceState",
     "LiveBar",
-    "LiveExecutionFeed",
     "LiveRunContextPanel",
+    "PATCH_PANE_PREVIEW_LIMITS",
     "PatchPanel",
     "ReplayBar",
     "SourcePanel",
     "StatusHeader",
     "TimelinePanel",
     "VerifierPanel",
+    "WorkstreamPanel",
+    "render_workstream",
 ]

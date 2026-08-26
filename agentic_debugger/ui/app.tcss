@@ -300,6 +300,18 @@ SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, ActivityPanel, TimelinePa
     color: #c9d1d9;
 }
 
+WorkstreamPanel {
+    height: auto;
+    padding: 0 1;
+    background: #0d1117;
+    color: #c9d1d9;
+    scrollbar-size: 1 1;
+}
+
+WorkstreamPanel Static {
+    width: 1fr;
+}
+
 SourcePanel Static, DebuggerPanel Static, PatchPanel Static,
 VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     width: 1fr;

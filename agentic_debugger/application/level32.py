@@ -20,6 +20,7 @@ from typing import Any, Callable, Mapping, Optional, Protocol, Tuple
 from agentic_debugger.application.emitter import SessionEventEmitter
 from agentic_debugger.application.command_transport import _terminate_command_tree
 from agentic_debugger.application.events import (
+    MAX_PATCH_TEXT_CHARS,
     OperatorStage,
     SessionEvent,
     SessionEventKind,
@@ -281,6 +282,13 @@ class Level32OperatorWorker:
         self._streamed_debugger_started = False
         self._streamed_pdb_observation: Optional[tuple[str, int]] = None
         self._pause_generation = 0
+        # Zero-based attempt index of the last streamed applied candidate;
+        # the authoritative patch body is enriched onto it at finalization.
+        self._last_applied_attempt_index: Optional[int] = None
+        #: Stable identity of patch bodies already emitted live
+        #: (attempt_index -> sha256).  Finalization re-checks this map so
+        #: live milestone + post-run fallback == one durable fact.
+        self._patch_bodies_emitted: dict[int, str] = {}
 
     def _emit_progress(self, stage: OperatorStage, detail: Optional[str] = None) -> None:
         # Distinct (stage, detail) pairs are retained; identical consecutive
@@ -364,6 +372,9 @@ class Level32OperatorWorker:
         an invalid observation channel record.
         """
         operation = record.get("operation")
+        if operation == "candidate_patch_available":
+            self._consume_candidate_patch_milestone(record)
+            return
         if operation == "tool":
             phase = record.get("phase")
             tool = self._bounded_operation_text(record.get("tool"), 64)
@@ -464,6 +475,7 @@ class Level32OperatorWorker:
                         return
                     files.append(path)
                 base = {"attempt_index": index, "changed_files": tuple(files), "syntax_passed": None}
+                self._last_applied_attempt_index = index
                 self._emit(SessionEventKind.PATCH_APPLIED, base)
             elif phase == "rejected":
                 self._emit(
@@ -892,6 +904,105 @@ class Level32OperatorWorker:
                 continue
             self._emit(SessionEventKind.ARTIFACT_WRITTEN, {"path": relative, "sha256": digest})
 
+    def _emit_candidate_patch_text(self) -> None:
+        """Finalization fallback for the live patch body (historical v1).
+
+        Observer-only and fail-open: for operators that never emitted the
+        live ``candidate_patch_available`` milestone, read the authoritative
+        ``candidate.patch`` artifact once after process exit and emit the
+        typed body.  Idempotent with the live path via
+        ``_patch_bodies_emitted``: a body already emitted live is never
+        re-emitted.
+        """
+        if self._last_applied_attempt_index is None:
+            return
+        self._read_and_emit_candidate_patch(
+            attempt_index=self._last_applied_attempt_index
+        )
+
+    def _consume_candidate_patch_milestone(self, record: Mapping[str, Any]) -> None:
+        """Handle one validated ``candidate_patch_available`` milestone.
+
+        The milestone carries the authoritative one-based attempt identity
+        and the exact sha256 of the raw patch the operator just wrote.
+        Reading is strict and fail-closed: the artifact must be the expected
+        fresh ``candidate.patch`` in the session output directory, must
+        satisfy the patch size/credential bounds, and its sha256 must equal
+        the milestone hash.  Only then is the typed ``patch.proposed`` body
+        emitted -- live, before official evaluation starts.  Anything else
+        drops silently (the operator's authoritative result remains the
+        source of truth, and finalization keeps its own fail-open path).
+        """
+        allowed = {
+            "schema_version", "kind", "operation", "attempt", "sha256",
+            "candidate_patch",
+        }
+        if set(record) != allowed:
+            return
+        if record.get("operation") != "candidate_patch_available":
+            return
+        if record.get("candidate_patch") != "candidate.patch":
+            return
+        attempt = record.get("attempt")
+        if type(attempt) is not int or isinstance(attempt, bool) or attempt < 1:
+            return
+        milestone_sha256 = record.get("sha256")
+        if type(milestone_sha256) is not str or len(milestone_sha256) != 64:
+            return
+        try:
+            if int(milestone_sha256, 16) < 0:  # pragma: no cover - int() gate
+                return
+        except ValueError:
+            return
+        self._read_and_emit_candidate_patch(
+            attempt_index=attempt - 1, expected_sha256=milestone_sha256
+        )
+
+    def _read_and_emit_candidate_patch(
+        self, *, attempt_index: int, expected_sha256: Optional[str] = None
+    ) -> None:
+        """Read the fresh output-dir candidate.patch bytes and emit the body.
+
+        Shared by the live milestone (hash-verified, strict) and the
+        finalization fallback (fail-open, for historical v1/no-milestone
+        operators).  Provenance is byte-exact: the file is read as raw
+        bytes, a conservative byte-size bound is enforced, the SHA-256 of
+        the exact bytes must match the milestone hash (no newline
+        normalization), the bytes are decoded as strict UTF-8, and the
+        existing text/credential validation applies before the typed body
+        is emitted.  Idempotent per (attempt_index, sha256): a body already
+        emitted live is never re-emitted by finalization.
+        """
+        if self._patch_bodies_emitted.get(attempt_index) is not None:
+            return
+        path = self._output_dir / "candidate.patch"
+        try:
+            raw = path.read_bytes()
+        except OSError:
+            return
+        if len(raw) > MAX_PATCH_TEXT_CHARS:
+            return
+        digest = hashlib.sha256(raw).hexdigest()
+        if expected_sha256 is not None and digest != expected_sha256:
+            return
+        try:
+            text = raw.decode("utf-8", errors="strict")
+        except UnicodeDecodeError:
+            return
+        if not text.strip():
+            return
+        if contains_credential_shape(text):
+            return
+        self._patch_bodies_emitted[attempt_index] = digest
+        self._emit(
+            SessionEventKind.PATCH_PROPOSED,
+            {
+                "attempt_index": attempt_index,
+                "patch_sha256": digest,
+                "patch_text": text,
+            },
+        )
+
     def _finish(self, *, returncode: int, stdout: str, stderr: str, result: Optional[dict[str, Any]]) -> None:
         if self._result is not None:
             return
@@ -913,6 +1024,7 @@ class Level32OperatorWorker:
         )
         self._remove_capture_files()
         self._record_artifacts()
+        self._emit_candidate_patch_text()
         pdb_proof = self._pdb_proof_payload(result)
         if pdb_proof is not None:
             script = pdb_proof["script"]

@@ -143,6 +143,30 @@ class _ProgressWriter:
         except OSError:
             return
 
+    def candidate_patch_available(
+        self, *, attempt: int, sha256: str, candidate_patch_path: str
+    ) -> None:
+        """Observer-only milestone: the authoritative candidate patch is now
+        durably written and provenance-bound.
+
+        Emitted by the operator right after ``_write_candidate_artifacts``
+        finalized ``candidate.patch`` (before official evaluation starts).
+        Carries the authoritative one-based attempt identity this writer
+        assigned and the exact sha256 of the written raw patch; it never
+        carries patch body, model prose, or prompts.  The supervising
+        application reads the artifact itself and verifies the hash.
+        """
+        if self._path is None:
+            return
+        self._append({
+            "schema_version": "operator-progress-v2",
+            "kind": "operation",
+            "operation": "candidate_patch_available",
+            "attempt": attempt,
+            "sha256": sha256,
+            "candidate_patch": candidate_patch_path,
+        })
+
     def emit(self, stage: str, detail: str | None = None) -> None:
         if self._path is None:
             return
@@ -1779,6 +1803,20 @@ def main(argv: list[str] | None = None) -> int:
         progress.emit("candidate")
         artifact = _canonicalize_level32_candidate(fixture, patch, parent_dir=Path(temporary))
         artifact_mapping = _write_candidate_artifacts(output, patch, artifact)
+        # Observer-only milestone: the authoritative candidate.patch is now
+        # written and provenance-bound.  The supervising application reads
+        # the artifact, verifies the sha256, and surfaces the live change
+        # preview before official evaluation begins.  The hash is computed
+        # from the ACTUAL FILE BYTES just written (never from the in-memory
+        # string), so a byte-exact CRLF artifact still matches.  Never
+        # carries body or prose; fail-open if the observer channel is
+        # unavailable.
+        candidate_patch_path = output / "candidate.patch"
+        progress.candidate_patch_available(
+            attempt=progress._candidate_attempt,
+            sha256=_sha256(candidate_patch_path),
+            candidate_patch_path="candidate.patch",
+        )
         with tempfile.TemporaryDirectory(prefix="cookiecutter-967-private-eval-") as private:
             progress.emit("official_verification_preparing")
             progress.emit("official_evaluator_started")

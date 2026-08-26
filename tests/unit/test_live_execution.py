@@ -131,6 +131,33 @@ def test_writer_operation_channel_assigns_candidate_ordinals_only_for_real_attem
     assert not [row for row in rows2 if row.get("kind") == "operation"]
 
 
+
+
+def test_writer_candidate_patch_available_milestone_is_safe_and_typed(tmp_path) -> None:
+    from scripts.run_cookiecutter_967_pdb_proof import _ProgressWriter
+    path = tmp_path / "operator.progress.jsonl"
+    writer = _ProgressWriter(str(path))
+    writer.observe_operation(
+        {"operation": "candidate", "phase": "applied", "reason": "applied",
+         "changed_files": ["a.py"]}
+    )
+    digest = "b" * 64
+    writer.candidate_patch_available(attempt=writer._candidate_attempt, sha256=digest, candidate_patch_path="candidate.patch")
+    rows = [__import__("json").loads(line) for line in path.read_text(encoding="utf-8").splitlines()]
+    milestones = [
+        row for row in rows
+        if row.get("kind") == "operation" and row.get("operation") == "candidate_patch_available"
+    ]
+    assert len(milestones) == 1
+    record = milestones[0]
+    assert record["schema_version"] == "operator-progress-v2"
+    assert record["attempt"] == 1
+    assert record["sha256"] == digest
+    assert record["candidate_patch"] == "candidate.patch"
+    # observer-only: no body, no prose, no prompt, no environment
+    for key in ("patch_text", "body", "prompt", "content", "env", "stdout"):
+        assert key not in record
+
 def test_writer_candidate_stage_never_claims_availability(tmp_path) -> None:
     from scripts.run_cookiecutter_967_pdb_proof import _ProgressWriter
     path = tmp_path / "operator.progress.jsonl"
