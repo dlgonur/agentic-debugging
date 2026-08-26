@@ -249,7 +249,7 @@ remaining rung model-phase guard (600 seconds for Level 6 and 3,600 seconds
 for Levels 12 and 18). The controller's cancellation token remains the
 prompt-stop path, and lower-rung retries remain zero.
 
-The current verified owner environment for this contract is Ollama `0.32.15`.
+The current verified owner environment for this contract is Ollama `0.33.0`.
 The accepted 2026-08-17 product-runtime proof used `0.32.14`; the exact pin is
 kept explicit rather than relaxed across versions. The
 accepted product default requires `gpt-oss:20b-cloud` available. The

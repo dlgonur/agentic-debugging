@@ -1391,6 +1391,10 @@ def test_prepared_revisions_include_kimi_v7_and_fresh_gemma_v3():
     assert level32_operator._treatment_fingerprint(
         "gemma4:31b-cloud", LiveTreatmentBudget()
     ) != "f8471e129c786978f32498072db3872a82fad5ee09338b0e1615d39167dd2378"
+    # Fresh fingerprint after Ollama 0.33.0 qualification must differ from historical; exact value proves version is fingerprinted.
+    assert level32_operator._treatment_fingerprint(
+        "gemma4:31b-cloud", LiveTreatmentBudget()
+    ) == "ed7a79d7e5000b12b963910ae86b3cf2116e515106e7cbc4262af35e7d97668f"
     assert level32_operator._treatment_id_for_model("kimi-k2.6:cloud", 7) == (
         "pdb-capability-level32-cookiecutter-967-kimi-k2.6-cloud-v7-"
         "workspace-derived-official-git-diff-v1"

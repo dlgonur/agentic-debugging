@@ -1142,6 +1142,18 @@ def _fold_workstream_event(
             label="Cleanup",
         )
 
+    if kind == "cleanup.not_required":
+        # Explicit positive proof: no disposable resources were created.
+        return _append(
+            entries,
+            WorkstreamEntry(
+                kind=WorkstreamKind.CLEANUP,
+                status=WorkstreamStatus.COMPLETED,
+                label="Cleanup not required",
+                sequence=sequence,
+            ),
+        )
+
     if kind == "session.failed":
         reason = payload.get("termination_reason")
         return _append(

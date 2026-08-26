@@ -366,7 +366,7 @@ ALLOWED_MODEL_IDENTIFIERS = frozenset(CLOUD_MODELS)
 EXPECTED_CLOUD_REMOTE_MODEL = CLOUD_MODELS[MODEL_ID].upstream_model
 EXPECTED_CLOUD_REMOTE_HOST = "https://ollama.com"
 DEFAULT_ENDPOINT = "http://127.0.0.1:11434/api"
-EXPECTED_OLLAMA_VERSION = "0.32.15"
+EXPECTED_OLLAMA_VERSION = "0.33.0"
 COMMAND_ERROR_SCHEMA_VERSION = "command-error-v1"
 PROTOCOL_NAME = "agentic-debugger-live-jsonl"
 PROTOCOL_VERSION = "1.3"
@@ -1634,7 +1634,12 @@ def run_preflight(
     )
     version = version_response.get("version")
     if type(version) is not str or version != expected_version:
-        raise OllamaAdapterError("Ollama version is not the expected version", kind="preflight_failed")
+        # Use distinct, allowlistedkind for exact-version gate so the operator can preserve structured
+        # expected/actual without exposing arbitrary daemon stderr. Version strings are bounded semver.
+        raise OllamaAdapterError(
+            f"Ollama version mismatch: expected {expected_version!r} actual {version!r}",
+            kind="ollama_version_mismatch",
+        )
     tag, show_response = _read_cloud_metadata(endpoint, spec, deadline=deadline)
     capabilities = show_response.get("capabilities")
     if not isinstance(capabilities, list) or any(type(item) is not str for item in capabilities):

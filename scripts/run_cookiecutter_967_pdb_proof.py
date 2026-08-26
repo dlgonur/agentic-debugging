@@ -64,7 +64,7 @@ PARQUET_SHA256 = "0e0bf9355f892ad74ae98d4e1c404f39fd6654a8e351ee3e6ab162e4a64cd3
 EVALUATOR_COMMIT = "c71902a8cf8d2b725f63d51f199f4d3e56f68d2d"
 MODEL = "gpt-oss:20b-cloud"
 DEFAULT_MODEL = MODEL
-EXPECTED_OLLAMA_VERSION = "0.32.15"
+EXPECTED_OLLAMA_VERSION = "0.33.0"
 IMAGE_GATE_OBSERVABILITY_POLICY_ID = "evaluator-image-gate-observability-v1"
 IMAGE_GATE_EVIDENCE_SCHEMA_VERSION = "level32-image-verification-v1"
 IMAGE_INSPECT_FORMAT = (
@@ -194,6 +194,41 @@ class _ProgressWriter:
             # Observability is fail-open. The authoritative operator must not
             # change its scientific result because the UI is unavailable.
             return
+
+    def emit_pre_resource_abort(self, reason: str) -> None:
+        """Explicit positive proof that abort is before any disposable resource.
+
+        Must be called from a control-flow path definitively before the first
+        `TemporaryDirectory`/`container`/`private-eval-dir` creation. Presence
+        of this fact proves Cleanup Not required; absence proves nothing.
+        Fail-open: if the observer write fails, truth remains unknown.
+        """
+        if self._path is None:
+            return
+        if reason not in ("image_gate", "ollama_preflight", "unknown"):
+            reason = "unknown"
+        self._append({
+            "schema_version": "operator-progress-v2",
+            "kind": "pre_resource_abort",
+            "reason": reason,
+        })
+
+    def emit_resource_creation_started(self) -> None:
+        """Signal emitted immediately BEFORE first disposable resource may exist.
+
+        Presence means resources MAY exist; absence proves nothing. This fixes
+        the previous `TemporaryDirectory.__enter__ -> preparing_workspace`
+        ordering where a crash could leave a resource without a signal.
+        Fail-open.
+        """
+        if self._path is None:
+            return
+        self._append({
+            "schema_version": "operator-progress-v2",
+            "kind": "resource_creation_started",
+        })
+        # Also emit the human stage for live chronology; worker drains both.
+        self.emit("preparing_workspace")
 
     def liveness(
         self, *, request_index: int, request_elapsed_seconds: float,
@@ -529,6 +564,8 @@ def _inspect_failure_category(result: Any) -> str:
         "permission denied while trying to connect",
         "docker daemon is not running",
         "context deadline exceeded",
+        "dockerdesktoplinuxengine",
+        "failed to connect to the docker api",
     )
     if any(marker in diagnostic for marker in missing_markers):
         return "IMAGE_ABSENT"
@@ -863,7 +900,9 @@ def _adapter_config(root: Path, *, model: str | None = None, logical_decision_ce
 def _preflight(config: LiveModelConfig) -> dict[str, Any]:
     result = _run([*config.command, "--preflight"], timeout=90)
     if result.returncode != 0:
-        raise ProofError("Ollama zero-inference preflight failed")
+        # Preserve structured, allowlisted diagnostics for known preflight gates
+        # without exposing arbitrary daemon stderr.
+        _raise_preflight_proof_error(result)
     try:
         payload = json.loads(result.stdout)
     except json.JSONDecodeError as exc:
@@ -871,6 +910,35 @@ def _preflight(config: LiveModelConfig) -> dict[str, Any]:
     if payload.get("provider_inference_started") is not False:
         raise ProofError("Ollama preflight did not remain zero-inference")
     return payload
+
+
+def _raise_preflight_proof_error(result: Any) -> None:
+    """Map adapter error envelope to a bounded, allowlisted ProofError."""
+
+    raw = getattr(result, "stderr", "") or ""
+    try:
+        envelope = json.loads(raw.strip().splitlines()[-1]) if raw.strip() else {}
+    except (json.JSONDecodeError, IndexError, AttributeError):
+        envelope = {}
+    kind = envelope.get("kind") if isinstance(envelope, dict) else None
+    message = envelope.get("message") if isinstance(envelope, dict) else None
+    # Allowlisted structured gate: exact version mismatch carries expected/actual
+    # in the message as bounded semver strings.
+    if kind == "ollama_version_mismatch" and isinstance(message, str):
+        # Extract bounded version tokens from allowlisted message shape
+        # e.g. "Ollama version mismatch: expected '0.33.0' actual '0.32.15'"
+        match = re.search(
+            r"expected\s+'([0-9]+\.[0-9]+\.[0-9]+)'\s+actual\s+'([0-9]+\.[0-9]+\.[0-9]+)'",
+            message,
+        )
+        if match:
+            expected, actual = match.group(1), match.group(2)
+            raise ProofError(
+                f"OLLAMA_VERSION_MISMATCH expected {expected} actual {actual}"
+            )
+        # Fallback to safe kind without arbitrary stderr
+        raise ProofError("OLLAMA_VERSION_MISMATCH")
+    raise ProofError("Ollama zero-inference preflight failed")
 
 
 def _candidate_patch_record(case: dict[str, Any]) -> dict[str, Any]:
@@ -1723,11 +1791,24 @@ def main(argv: list[str] | None = None) -> int:
     if not args.live or not args.confirm_live_model_access:
         raise ProofError("live selection and explicit model-access confirmation are required")
 
-    row = _load_official_row()
     progress.emit("preflight")
-    image_verification = _verify_image_and_record(output)
-    config = _adapter_config(root, model=requested_model, logical_decision_ceiling=treatment_budget.logical_decision_ceiling if treatment_budget is not None else 25)
-    preflight = _preflight(config)
+    try:
+        row = _load_official_row()
+        image_verification = _verify_image_and_record(output)
+        config = _adapter_config(root, model=requested_model, logical_decision_ceiling=treatment_budget.logical_decision_ceiling if treatment_budget is not None else 25)
+        preflight = _preflight(config)
+    except Exception as exc:
+        # Positive pre-resource proof: we are definitively BEFORE the first
+        # disposable workspace/container/private-eval resource. Emit a
+        # bounded durable signal whose presence proves NOT REQUIRED.
+        # Fail-open: if the observer write fails, truth remains unknown,
+        # never falsely Not required.
+        try:
+            reason = "image_gate" if isinstance(exc, ImageVerificationError) else "ollama_preflight"
+            progress.emit_pre_resource_abort(reason)  # type: ignore[attr-defined]
+        except Exception:
+            pass
+        raise
     # Provenance retains the exact requested alias and the resolved
     # transport fingerprint so a later config change cannot silently reuse
     # the same scientific treatment identity.
@@ -1744,8 +1825,12 @@ def main(argv: list[str] | None = None) -> int:
         json.dumps(preflight, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
 
+    # Fix ordering: signal BEFORE first disposable resource may be created.
+    # Previously `TemporaryDirectory.__enter__ -> preparing_workspace` could
+    # leave a resource without a signal on crash. Now `resource_creation_started`
+    # (and `preparing_workspace`) is emitted BEFORE `__enter__`.
+    progress.emit_resource_creation_started()  # type: ignore[attr-defined]
     with tempfile.TemporaryDirectory(prefix="cookiecutter-967-pdb-") as temporary:
-        progress.emit("preparing_workspace")
         staging_root = Path(temporary) / "repository"
         fixture = staging_root / "agentic_debugger/datasets/curated" / TASK_ID
         _copy_image_source(fixture)

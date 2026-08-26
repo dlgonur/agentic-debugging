@@ -279,6 +279,11 @@ class SessionViewState:
     diagnosis: Optional[DiagnosisView] = None
     sources: Tuple[SourceView, ...] = ()
     cleanup_verified: Optional[bool] = None
+    #: Explicit positive proof that cleanup was not required because no
+    #: disposable runtime resources were ever created. Presence means
+    #: "Not required"; absence means unknown unless proven. Never inferred
+    #: from missing timeline entries.
+    cleanup_not_required: bool = False
     model_provenance: Optional[ModelProvenanceView] = None
     operator_stage: Optional[OperatorStage] = None
     #: Typed operational facts retained by the reducer so live widgets never
@@ -411,6 +416,8 @@ def summarize_event(event: SessionEvent) -> str:
     if kind is SessionEventKind.CLEANUP_COMPLETED:
         verified = "verified" if payload["verified"] else "unverified"
         return f"cleanup completed ({verified})"
+    if kind is SessionEventKind.CLEANUP_NOT_REQUIRED:
+        return "cleanup not required"
     if kind is SessionEventKind.ARTIFACT_WRITTEN:
         return f"artifact written: {payload['path']}"
     raise ApplicationContractError(f"unsupported event kind: {kind.value!r}")
@@ -1103,6 +1110,16 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
         return replace(
             state,
             cleanup_verified=payload["verified"],
+            controller_phase=controller_phase,
+            run_id=run_id,
+            timeline=timeline,
+        )
+
+    if kind is SessionEventKind.CLEANUP_NOT_REQUIRED:
+        return replace(
+            state,
+            cleanup_verified=None,
+            cleanup_not_required=True,
             controller_phase=controller_phase,
             run_id=run_id,
             timeline=timeline,

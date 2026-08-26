@@ -289,6 +289,17 @@ class Level32OperatorWorker:
         #: (attempt_index -> sha256).  Finalization re-checks this map so
         #: live milestone + post-run fallback == one durable fact.
         self._patch_bodies_emitted: dict[int, str] = {}
+        #: Positive lifecycle evidence: explicit durable signals only.
+        #: `pre_resource_abort` is emitted by the operator from a code path
+        #: definitively before any disposable workspace/container/private-dir
+        #: can be created, and `resource_creation_started` is emitted
+        #: immediately BEFORE the first disposable resource may be created.
+        #: Presence of `pre_resource_abort` positively proves NOT REQUIRED;
+        #: absence proves nothing. This avoids inferring from missing files or
+        #: missing timeline entries and tolerates fail-open observer writes.
+        self._observed_operator_stages: set[OperatorStage] = set()
+        self._pre_resource_abort_observed: bool = False
+        self._resource_creation_started_observed: bool = False
 
     def _emit_progress(self, stage: OperatorStage, detail: Optional[str] = None) -> None:
         # Distinct (stage, detail) pairs are retained; identical consecutive
@@ -298,6 +309,10 @@ class Level32OperatorWorker:
         if current == self._last_progress:
             return
         self._last_progress = current
+        # Positive lifecycle evidence for resource-creation boundary.
+        self._observed_operator_stages.add(stage)
+        if stage is OperatorStage.PREPARING_WORKSPACE:
+            self._resource_creation_started_observed = True
         payload: dict[str, Any] = {"stage": stage.value}
         if detail:
             payload["detail"] = detail
@@ -506,6 +521,27 @@ class Level32OperatorWorker:
 
     def _consume_progress_v2(self, record: Mapping[str, Any]) -> None:
         """Accept additive safe v2 observer records; malformed records drop."""
+        if record.get("kind") == "pre_resource_abort":
+            # Explicit positive proof that operator aborted before any
+            # disposable resource could be created. Fail-open: absence proves
+            # nothing; malformed records drop.
+            allowed = {"schema_version", "kind", "reason"}
+            if set(record) != allowed:
+                return
+            reason = record.get("reason")
+            if reason not in ("image_gate", "ollama_preflight", "launch_failed", "unknown"):
+                return
+            self._pre_resource_abort_observed = True
+            return
+        if record.get("kind") == "resource_creation_started":
+            # Emitted immediately BEFORE first disposable resource may be created.
+            # Presence means resources MAY exist; absence proves nothing.
+            if set(record) != {"schema_version", "kind"}:
+                return
+            self._resource_creation_started_observed = True
+            # Also treat as PREPARING_WORKSPACE for backward compatibility
+            self._emit_progress(OperatorStage.PREPARING_WORKSPACE)
+            return
         kind = record.get("kind")
         if kind == "operation":
             self._consume_operation_record(record)
@@ -1084,9 +1120,29 @@ class Level32OperatorWorker:
                 SessionEventKind.DIAGNOSIS_RECORDED,
                 {"text": detail, "file_path": None, "symbol": None, "confidence": "observed"},
             )
-        self._emit(SessionEventKind.CLEANUP_STARTED, {})
-        self._emit_progress(OperatorStage.CLEANUP)
-        self._emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup})
+        # Three cleanup truths, positive proof only:
+        # - NOT REQUIRED: explicit `pre_resource_abort` observed (operator
+        #   aborted before any disposable resource) or supervisor launch
+        #   failure (subprocess never existed). Presence proves NOT REQUIRED;
+        #   absence proves nothing — and if `resource_creation_started` was
+        #   also observed, resources MAY exist, so not required is not proven
+        #   (conservative).
+        # - VERIFIED: cleanup required and verified
+        # - FAILED/UNVERIFIED: resources may have existed and cleanup not proven
+        # The progress channel is fail-open, so missing `pre_resource_abort`
+        # must never be interpreted as proof. `resource_creation_started` /
+        # `PREPARING_WORKSPACE` presence means resources MAY exist, but its
+        # absence still does not prove they do not.
+        pre_resource_proven = self._pre_resource_abort_observed and not self._resource_creation_started_observed
+        # Supervisor launch failure is also positive local proof (no subprocess).
+        if not pre_resource_proven and result is None and self._process is None and not self._resource_creation_started_observed:
+            pre_resource_proven = True
+        if pre_resource_proven:
+            self._emit(SessionEventKind.CLEANUP_NOT_REQUIRED, {})
+        else:
+            self._emit(SessionEventKind.CLEANUP_STARTED, {})
+            self._emit_progress(OperatorStage.CLEANUP)
+            self._emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup})
         if self._cancel_requested and not cleanup:
             status, reason, kind = SessionStatus.CLEANUP_FAILED, SessionTerminationReason.CLEANUP_FAILED, SessionEventKind.SESSION_FAILED
         elif self._cancel_requested:

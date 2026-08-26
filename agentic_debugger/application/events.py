@@ -246,6 +246,7 @@ class SessionEventKind(str, Enum):
     VERIFIER_COMPLETED = "verifier.completed"
     CLEANUP_STARTED = "cleanup.started"
     CLEANUP_COMPLETED = "cleanup.completed"
+    CLEANUP_NOT_REQUIRED = "cleanup.not_required"
     ARTIFACT_WRITTEN = "artifact.written"
 
 
@@ -1299,6 +1300,15 @@ def _payload_cleanup_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     return {"verified": _bool(payload["verified"], "verified")}
 
 
+def _payload_cleanup_not_required(payload: Mapping[str, Any]) -> dict[str, Any]:
+    if not isinstance(payload, Mapping):
+        raise SchemaValidationError("cleanup.not_required payload must be a mapping")
+    _check_no_unknown(payload, set(), "cleanup.not_required payload")
+    if payload:
+        raise SchemaValidationError("cleanup.not_required payload must be empty")
+    return {}
+
+
 def _payload_artifact_written(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("artifact.written payload must be a mapping")
@@ -1346,6 +1356,7 @@ _PAYLOAD_VALIDATORS: Dict[SessionEventKind, Any] = {
     SessionEventKind.VERIFIER_COMPLETED: _payload_verifier_completed,
     SessionEventKind.CLEANUP_STARTED: lambda p: _payload_empty(p, "cleanup.started payload"),
     SessionEventKind.CLEANUP_COMPLETED: _payload_cleanup_completed,
+    SessionEventKind.CLEANUP_NOT_REQUIRED: _payload_cleanup_not_required,
     SessionEventKind.ARTIFACT_WRITTEN: _payload_artifact_written,
 }
 
@@ -1562,6 +1573,16 @@ def validate_session_event_stream(events: Sequence[SessionEvent]) -> None:
                 )
             cleanup_active = False
             last_completed_verified = event.payload["verified"]
+        elif kind is SessionEventKind.CLEANUP_NOT_REQUIRED:
+            if cleanup_active:
+                raise ApplicationContractError(
+                    f"cleanup.not_required at event {index} while cleanup is active"
+                )
+            # Explicit positive proof that no disposable resources were created.
+            # Does not require a preceding cleanup.started and does not set
+            # last_completed_verified — it authorizes a terminal without
+            # verified cleanup.
+            pass
         elif kind in (
             SessionEventKind.SESSION_COMPLETED,
             SessionEventKind.SESSION_FAILED,

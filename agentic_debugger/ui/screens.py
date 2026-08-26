@@ -255,7 +255,9 @@ def render_view_header(
         verifier = "cancelled"
     else:
         verifier = "verifier pending" if view.status is SessionStatus.RUNNING else "verifier: —"
-    if view.cleanup_verified is True and "cleanup verified" not in verifier:
+    if getattr(view, "cleanup_not_required", False) and "cleanup" not in verifier and "Not required" not in verifier and "No resources" not in verifier:
+        verifier += " · No resources created"
+    elif view.cleanup_verified is True and "cleanup verified" not in verifier:
         verifier += " · cleanup verified"
     elif view.cleanup_verified is False and "cleanup failed" not in verifier:
         verifier += " · cleanup failed"

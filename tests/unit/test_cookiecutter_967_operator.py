@@ -641,7 +641,7 @@ def test_deepseek_transport_fingerprint_and_fresh_revision_are_identity_bound(tm
     assert operator._model_provenance("deepseek-v4-flash:cloud")["transport_config_fingerprint"] == adapter.transport_config_fingerprint(current)
     assert operator.LEVEL32_TREATMENT_BUDGET.max_retries == historical_preflight["treatment_budget"]["max_retries"]
     assert operator._treatment_fingerprint("deepseek-v4-flash:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
-        "462ca1aec8be74380f6c355a084b8c979e91a1010d8e78da30b40d09696da85a"
+        "b801f31c039a53cdcc2acd360cf8f735673fe91d4bd1bc86f3aef33fbe8aa258"
     )
     # Revision allocation is covered deterministically by the dedicated
     # tmp_path test; it is intentionally NOT asserted against the live
@@ -738,14 +738,14 @@ def test_glm_5_2_promotion_preserves_qualified_profile_and_prepares_v1_treatment
     assert spec.idle_timeout_seconds == 20.0
     assert spec.request_timeout_seconds == 60.0
     assert adapter.transport_config_fingerprint(spec) == (
-        "0685fad3a22efa7ba8a4776729f2f552e89d66f1032c9ad1fcb344557759dad9"
+        "bfd7aec79604a13117f81eccf783945ead24818c3bbb2af94d1294601cba51cb"
     )
     assert operator._treatment_id_for_model("glm-5.2:cloud", 1) == (
         "pdb-capability-level32-cookiecutter-967-glm-5.2-cloud-v1-"
         "workspace-derived-official-git-diff-v1"
     )
     assert operator._treatment_fingerprint("glm-5.2:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
-        "633bb6885072229b999e9dd4da7de496e6bb20cb495359a9560a637937f1025c"
+        "1ade13510c9bcb828582c6c8e5a01b3caeb9834b744b0ef3dce8a8e3283a083e"
     )
     artifact = REPOSITORY_ROOT / "experiments/pdb_capability_ladder/transport_qualifications/glm-5.2-v2.json"
     assert hashlib.sha256(artifact.read_bytes()).hexdigest() == (
@@ -792,7 +792,7 @@ def test_glm_5_1_qualification_promotion_is_eligible():
     assert spec.readiness == "live_verified"
     assert adapter.is_treatment_eligible(spec) is True
     assert adapter.transport_config_fingerprint(spec) == (
-        "fb1fb2cc6e3525586b34565afc1dc43cb416acdf06738af2c70d014ee576a4a4"
+        "5626c018b911bc74760d260fb8234b84bd73b66a0e6fe237a971a8844d81d3f9"
     )
 
 

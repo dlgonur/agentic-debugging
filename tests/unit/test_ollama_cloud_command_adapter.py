@@ -539,7 +539,7 @@ def test_registry_contains_all_17_aliases_with_verified_upstream():
     assert glm52.idle_timeout_seconds == 20.0
     assert glm52.request_timeout_seconds == 60.0
     assert adapter.transport_config_fingerprint(glm52) == (
-        "0685fad3a22efa7ba8a4776729f2f552e89d66f1032c9ad1fcb344557759dad9"
+        "bfd7aec79604a13117f81eccf783945ead24818c3bbb2af94d1294601cba51cb"
     )
     assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].transport_profile_declared is True
     assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].transport_verified is False
@@ -549,7 +549,7 @@ def test_registry_contains_all_17_aliases_with_verified_upstream():
     assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].thinking_level is None
     assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"]) is True
     assert adapter.transport_config_fingerprint(adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"]) == (
-        "43d64e327b205ec770eb91cf25bcd98eab9b1fef035cfd52687d26b46b6d0994"
+        "5c8b53107dc087049accb43c05777ca26e7a8c86824c3108715c2e70f3bd8365"
     )
     assert adapter.CLOUD_MODELS["minimax-m3:cloud"].transport_profile_declared is True
     assert adapter.CLOUD_MODELS["minimax-m3:cloud"].transport_verified is True
@@ -560,7 +560,7 @@ def test_registry_contains_all_17_aliases_with_verified_upstream():
     assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["minimax-m3:cloud"]) is True
     assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["minimax-m3:cloud"]) is True
     assert adapter.transport_config_fingerprint(adapter.CLOUD_MODELS["minimax-m3:cloud"]) == (
-        "27eedd82055634fd1c3d2ec733f1f4445e52a3db6c6c3e500ed3a80a952cb6e0"
+        "ca5c24e3524433576a7fed75f85e56a4aa89fd74ac9bd3cd038f6432d2129351"
     )
     assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].transport_profile_declared is True
     assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].transport_verified is True
@@ -585,7 +585,7 @@ def test_minimax_m3_promotion_preserves_identity_and_fingerprint():
     assert adapter.is_live_transport_ready(spec) is True
     assert adapter.is_treatment_eligible(spec) is True
     assert adapter.transport_config_fingerprint(spec) == (
-        "27eedd82055634fd1c3d2ec733f1f4445e52a3db6c6c3e500ed3a80a952cb6e0"
+        "ca5c24e3524433576a7fed75f85e56a4aa89fd74ac9bd3cd038f6432d2129351"
     )
 
 
@@ -598,7 +598,7 @@ def test_minimax_m3_registry_and_qualification_artifact_are_stable():
         "workspace-derived-official-git-diff-v1"
     )
     assert operator._treatment_fingerprint("minimax-m3:cloud", operator.LEVEL32_TREATMENT_BUDGET) == (
-        "551a0b4ec74878bea5eba90bede31503823b0f046871b5d05f2516fa12faecb0"
+        "7606ea8671aa88936960bcb3e089caa4d446fc68b1b907df1e18292afb0ab12e"
     )
 
     artifact = REPO_ROOT / "experiments" / "pdb_capability_ladder" / "transport_qualifications" / "minimax-m3-v1.json"
