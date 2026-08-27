@@ -119,6 +119,8 @@ def task_display_title(task_id: str, repo_root: Optional[Path] = None) -> str:
                         return str(data["title"])
             except Exception:
                 pass
+    if task_id == "local-project-debug":
+        return "Local Project Debug"
     if task_id in _CURATED_TASK_TITLES:
         return _CURATED_TASK_TITLES[task_id]
     if task_id in LADDER_TASK_IDS:
@@ -191,8 +193,15 @@ class LocalApplicationV1(App):
         history_root: Optional[str | os.PathLike[str]] = None,
         repo_root: Optional[str | os.PathLike[str]] = None,
         history_store: Optional[HistoryStore] = None,
+        initial_project: Optional[str | os.PathLike[str]] = None,
     ) -> None:
         super().__init__()
+        # Capture launch cwd BEFORE any --root/session handling could imply a cwd change
+        try:
+            from agentic_debugger.application.local_project import capture_launch_cwd
+            capture_launch_cwd()
+        except Exception:
+            pass
         self._history_store = history_store
         if self._history_store is None:
             self._history_store = HistoryStore(
@@ -204,6 +213,13 @@ class LocalApplicationV1(App):
         self._repository_root = (
             Path(repo_root).resolve() if repo_root is not None else repository_root()
         )
+        self._initial_project: Optional[Path] = None
+        if initial_project is not None:
+            try:
+                from agentic_debugger.application.local_project import resolve_project_path, get_launch_cwd
+                self._initial_project = resolve_project_path(str(initial_project), get_launch_cwd())
+            except Exception:
+                self._initial_project = Path(str(initial_project))
         # Live session state is app-owned: a presentation disconnect (back to
         # history) does not cancel the worker; it keeps journaling and the
         # finished session registers into app-owned history.
@@ -215,6 +231,9 @@ class LocalApplicationV1(App):
         self._live_snapshot: Optional[EphemeralSnapshot] = None
         self._live_generation = 0
         self._live_workspace: Optional[WorkspaceScreen] = None
+        self._local_project_worktree_parent: Optional[Path] = None
+        self._local_project_repo_root: Optional[Path] = None
+        self._local_project_head: Optional[str] = None
 
     # -- properties ---------------------------------------------------------
 
@@ -262,12 +281,24 @@ class LocalApplicationV1(App):
             snapshot=self._live_snapshot, now_monotonic=time.monotonic(),
         )
 
+    @property
+    def initial_project(self) -> Optional[Path]:
+        return self._initial_project
+
     # -- boot ---------------------------------------------------------------
 
     def on_mount(self) -> None:
         # History remains the base navigation surface, but a new debugging
         # session is the product's primary first-run action.
         self.push_screen(HomeScreen())
+        # If --project was supplied, prefill Local Project Debug directly
+        if self._initial_project is not None:
+            try:
+                from agentic_debugger.ui.screens import LocalProjectStartScreen
+                self.push_screen(LocalProjectStartScreen(initial_project=str(self._initial_project)))
+                return
+            except Exception:
+                pass
         self.push_screen(
             StartSessionScreen(task_options=list(self.curated_task_options()))
         )
@@ -534,6 +565,208 @@ class LocalApplicationV1(App):
         else:
             self.push_screen(workspace)
         runner.start()
+
+    def start_local_project_session(
+        self,
+        *,
+        project_path: str,
+        bug_description: str,
+        reproduction_command: Optional[str] = None,
+        verification_command: Optional[str] = None,
+        profile_id: Optional[str] = None,
+        max_elapsed_seconds: Optional[int] = None,
+    ) -> None:
+        """Start one Local Project Debug session.
+
+        Validates the project, creates an isolated detached worktree, builds
+        the immutable task contract, and supervises the worker.  The UI
+        workspace is pushed first so the presentation model is ready for
+        first events.
+        """
+        from agentic_debugger.application.local_project import (
+            LocalProjectTaskSpec,
+            capture_launch_cwd,
+            cleanup_parent_tmpdir,
+            create_isolated_worktree,
+            get_launch_cwd,
+            validate_local_project,
+        )
+        from agentic_debugger.application.local_project_source import (
+            LOCAL_PROJECT_SOURCE_NAME,
+        )
+
+        if self._live_runner is not None:
+            raise RuntimeError("a live session is already active")
+        # Resolve against captured launch cwd (preserve shell cwd before --root)
+        try:
+            launch_cwd = get_launch_cwd()
+        except Exception:
+            launch_cwd = Path.cwd().resolve()
+        # Model selection is REQUIRED and real — fail before creating any execution resources
+        # Support both Ollama Cloud roster (primary) and configured command-model profiles (additional)
+        if profile_id is None or not str(profile_id).strip():
+            raise RuntimeError("Local Project Debug requires a selected model profile")
+        # Try Ollama Cloud roster first (actual product)
+        ollama_profile = None
+        expected_fp = None
+        model_config_ref = None
+        try:
+            from agentic_debugger.application.level32 import level32_model_profiles
+            for m in level32_model_profiles():
+                if m.alias == profile_id:
+                    ollama_profile = m
+                    expected_fp = m.transport_config_fingerprint
+                    model_config_ref = m.alias
+                    break
+        except Exception:
+            pass
+        if ollama_profile is None:
+            try:
+                prof = self._config_store.get(profile_id)
+                expected_fp = prof.configuration_fingerprint
+                model_config_ref = prof.profile_id
+            except Exception as exc:
+                raise RuntimeError(f"Selected model profile unavailable: {exc}") from exc
+        validated = validate_local_project(project_path, launch_cwd=launch_cwd)
+        if validated.dirty:
+            raise RuntimeError(
+                "Project has uncommitted changes. "
+                "Commit/stash them first or choose a clean repository."
+            )
+        # Create isolated worktree (Git-native, no owner mutation) — parent owns until worker owns
+        worktree = None
+        try:
+            worktree = create_isolated_worktree(validated.repo_root, validated.head_commit)
+        except Exception:
+            raise
+        isolated_path = worktree.isolated_path
+        parent_tmpdir = worktree.parent_tmpdir
+        # Build SessionSpec for Local Project (task_id is fixed, policy is None)
+        from datetime import datetime, timezone
+
+        created_at = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        task_id = "local-project-debug"
+        session_id = make_session_id()
+        generation = self._live_generation + 1
+        run_id = f"run-{session_id}"
+        spec = SessionSpec(
+            task_id=task_id,
+            source=ExecutionSourceSpec(
+                kind=SourceKind.LOCAL_PROJECT,
+                task_id=task_id,
+                policy=None,
+                model_config_ref=model_config_ref,
+            ),
+            budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
+        )
+        # Also persist the LocalProjectTaskSpec contract as an artifact (immutable)
+        # but also keep it in memory for Apply-to-Project gates
+        local_spec = LocalProjectTaskSpec(
+            session_id=session_id,
+            source_repo_path=str(validated.repo_root),
+            source_head_commit=validated.head_commit,
+            isolated_workspace_path=str(isolated_path),
+            bug_description=bug_description,
+            reproduction_command=reproduction_command,
+            verification_command=verification_command,
+            model_runtime=profile_id,
+            budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
+            created_at_utc=created_at,
+        )
+        # Remember worktree for emergency fallback (parent owns until worker owns)
+        self._local_project_worktree_parent = parent_tmpdir
+        self._local_project_repo_root = validated.repo_root
+        self._local_project_head = validated.head_commit
+
+        # Pre-validate profile fingerprint for worker
+        worker_owned = False
+        try:
+            # Distinguish Ollama vs configured for worker
+            scenario_params={
+                "project_repo_path": str(validated.repo_root),
+                "project_head": validated.head_commit,
+                "isolated_workspace": str(isolated_path),
+                "bug_description": bug_description,
+                "reproduction_command": reproduction_command,
+                "verification_command": verification_command,
+                "config_root": str(self._config_store.root),
+                "profile_id": profile_id,
+                "expected_fingerprint": expected_fp,
+                "parent_tmpdir": str(parent_tmpdir),
+                "policy": "pdb-on-uncertainty",
+            }
+            # Mark Ollama for worker
+            try:
+                from agentic_debugger.application.level32 import level32_model_profiles
+                if any(m.alias == profile_id for m in level32_model_profiles()):
+                    scenario_params["is_ollama"] = True
+                    scenario_params["ollama_alias"] = profile_id
+            except Exception:
+                pass
+            worker = SessionWorkerProcess(
+                session_dir=self.history_store.session_dir(session_id),
+                session_id=session_id,
+                spec=spec,
+                run_id=run_id,
+                scenario=LOCAL_PROJECT_SOURCE_NAME,
+                scenario_params=scenario_params,
+                cooperative_grace_seconds=_COOPERATIVE_GRACE_SECONDS,
+                ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
+                max_elapsed_seconds=max_elapsed_seconds,
+            )
+            # Pre-write the contract artifact so history can replay without workspace
+            try:
+                worker.session_dir.mkdir(parents=True, exist_ok=True)
+                import json as _json
+                (worker.session_dir / "local_project_task.json").write_text(
+                    _json.dumps(local_spec.to_mapping(), indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+            except Exception:
+                pass
+            identity = presentation_identity(spec)
+            view = initial_session_view(identity)
+            runner = LiveSessionRunner(
+                worker,
+                history_store=self.history_store,
+                on_started=self._on_live_started,
+                on_events=self._on_live_events,
+                on_terminal=self._on_live_terminal,
+                on_failure=self._on_live_failure,
+                on_liveness=lambda liveness: self._on_live_liveness(
+                    generation, session_id, liveness
+                ),
+            )
+            workspace = WorkspaceScreen(
+                mode=WorkspaceMode.LIVE,
+                identity=identity,
+                view=view,
+                runner=runner,
+            )
+            self._live_runner = runner
+            self._live_identity = identity
+            self._live_view = view
+            self._live_events = ()
+            self._live_last_sequence = -1
+            self._live_generation = generation
+            self._live_snapshot = None
+            self._live_workspace = workspace
+            # Local project start always replaces the form
+            try:
+                self.switch_screen(workspace)
+            except Exception:
+                self.push_screen(workspace)
+            runner.start()
+            worker_owned = True
+        except Exception as exc:
+            # Before worker ownership: parent must clean worktree (verified)
+            if not worker_owned:
+                try:
+                    from agentic_debugger.application.local_project import cleanup_parent_tmpdir
+                    cleanup_parent_tmpdir(parent_tmpdir, validated.repo_root)
+                except Exception:
+                    pass
+            raise
 
     def detach_live_workspace(self, workspace: WorkspaceScreen) -> None:
         """A workspace was popped; the live session itself keeps running."""

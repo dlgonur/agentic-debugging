@@ -29,7 +29,8 @@ def build_parser() -> argparse.ArgumentParser:
         description=(
             "Launch the Local Application V1 replay-first Textual "
             "application over app-owned session history, deterministic "
-            "offline sessions, and configured command-model sessions."
+            "offline sessions, configured command-model sessions, and "
+            "Local Project Debug sessions."
         ),
     )
     parser.add_argument(
@@ -38,6 +39,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Application-owned history root (default: "
             "%%LOCALAPPDATA%%/AgenticDebugger or ~/AgenticDebugger)."
+        ),
+    )
+    parser.add_argument(
+        "--project",
+        default=None,
+        help=(
+            "Prefill Local Project Debug with a project path "
+            "(absolute or relative to the shell launch cwd; '.' means launch cwd)."
         ),
     )
     return parser
@@ -62,8 +71,11 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     _require_textual()
     from agentic_debugger.ui.app import LocalApplicationV1
+    from agentic_debugger.application.local_project import capture_launch_cwd
 
-    app = LocalApplicationV1(history_root=args.root)
+    # Preserve shell cwd before any root handling
+    capture_launch_cwd()
+    app = LocalApplicationV1(history_root=args.root, initial_project=args.project)
     app.run()
     return 0
 

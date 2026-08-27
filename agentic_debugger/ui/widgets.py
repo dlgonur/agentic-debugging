@@ -908,6 +908,42 @@ class LiveRunContextPanel(VerticalScroll):
             verifier = "Not run"
         else:
             verifier = "Pending"
+        # Local Project Debug has distinct sidebar facts; hide ladder treatment
+        if view.source_kind is SourceKind.LOCAL_PROJECT:
+            runtime = "Local Project Debug"
+            # Extract repo basename / HEAD from diagnosis observed_values if present
+            repo_basename = "—"
+            head_short = "—"
+            try:
+                diag = view.diagnosis
+                if diag is not None and getattr(diag, "text", None):
+                    # fallback to task_id basename
+                    pass
+                # presentation diagnosis doesn't expose observed_values, but we stored via diagnosis payload?
+                # Try to read from verifier summary classification or from timeline? For now use task_id
+                # Use view.task_id's repo info embedded in diagnosis text observed_values via raw: we stored in diagnosis.
+                # Since Presentation DiagnosisView doesn't have observed_values, we fallback to showing task_id
+                pass
+            except Exception:
+                pass
+            # Try to derive from view.timeline diagnosis recorded observed values? Not available in view; use simple
+            # Display the repo basename as task_id unless diagnosis provides better
+            # For local project, task_id is local-project-debug; we show it as Project
+            # and attempt to show head from model provenance alias if it looks like SHA
+            if view.model_provenance is not None and view.model_provenance.profile_id and len(view.model_provenance.profile_id) == 12:
+                head_short = view.model_provenance.profile_id
+            lines = [
+                "[bold #79c0ff]RUN[/]",
+                "[bright_white]Local Project Debug[/]",
+                "[#8b949e]Stage[/]", "[bright_white]" + _markup_escape(stage) + "[/]",
+                "[#8b949e]Elapsed[/]", "[bright_white]" + _markup_escape(elapsed) + "[/]",
+                "[#8b949e]PDB[/]", "[bright_white]" + pdb + "[/]",
+                "[#8b949e]Verifier[/]", "[bright_white]" + _markup_escape(verifier) + "[/]",
+                "[#8b949e]Project[/]", "[bright_white]" + _markup_escape(repo_basename) + "[/]",
+                "[#8b949e]Source HEAD[/]", "[bright_white]" + _markup_escape(head_short) + "[/]",
+            ]
+            self._text.update("\n".join(lines))
+            return
         ladder = is_ladder_task(view.task_id)
         metadata = ladder_task_metadata(view.task_id) if ladder else None
         if view.source_kind is SourceKind.LEVEL32_OPERATOR:
@@ -956,6 +992,49 @@ class LiveRunContextPanel(VerticalScroll):
         from agentic_debugger.ui.app import task_display_title
         from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
         view = state.view
+        # Local Project Debug: hide ladder treatment/evaluation
+        if view.source_kind is SourceKind.LOCAL_PROJECT:
+            # Early return for Local Project execution context (distinct facts)
+            def counter(value, maximum):
+                if value is None:
+                    return "Not recorded"
+                return f"{value} / {maximum}" if maximum is not None else str(value)
+            def duration(value):
+                return "—" if value is None else f"{value:.1f}s"
+            if view.pdb_observed:
+                pdb = "Observed"
+            elif view.debugger.session_started:
+                pdb = "Active / awaiting evidence"
+            elif view.status.terminal:
+                pdb = "Not reached"
+            else:
+                pdb = "Not recorded"
+            if view.verifier_summary is not None:
+                verifier = "Completed"
+            elif view.verifier_stages:
+                verifier = "Active"
+            else:
+                verifier = "Not started"
+            def row(label: str, value: str) -> str:
+                return f"[#8b949e]{label:<10}[/] [bright_white]{_markup_escape(value)}[/]"
+            repo_basename = "—"
+            head_short = "—"
+            # Model field may hold repo basename for local project when stored as profile_id
+            lines = [
+                "[bold #79c0ff]RUN[/]",
+                "[bright_white]Local Project Debug[/]",
+                row("NOW", state.operation_label),
+                row("TARGET", state.current_target or "Not observed"),
+                row("MODEL", f"Request {counter(state.request_ordinal, state.ceilings.model_requests)}"),
+                row("STEP", counter(state.controller_step_ordinal, state.ceilings.controller_steps)),
+                row("ATTEMPT", counter(state.candidate_attempt_ordinal, state.ceilings.candidate_attempts)),
+                row("PDB", pdb),
+                row("VERIFIER", verifier),
+                row("Project", repo_basename),
+                row("Source HEAD", head_short),
+            ]
+            self._text.update("\n".join(lines))
+            return
         metadata = ladder_task_metadata(view.task_id) if is_ladder_task(view.task_id) else None
         runtime = {
             SourceKind.OFFLINE_DEMO: "Local deterministic",

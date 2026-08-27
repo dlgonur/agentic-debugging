@@ -106,6 +106,31 @@ def _bounded_text(value: Any, label: str, max_chars: int) -> str:
     return value
 
 
+# Multiline-safe variant for Local Project bug text only.
+# The TextArea intentionally produces LF, CRLF/CR and possibly TAB;
+# those three C0 controls are permitted here, while NUL and all other
+# C0 controls plus DEL remain fail-closed and the 4 KiB bound is kept.
+_ALLOWED_BUG_DESCRIPTION_CTRLS = frozenset({0x09, 0x0A, 0x0D})
+
+
+def _bounded_bug_description_text(value: Any, label: str, max_chars: int) -> str:
+    if type(value) is not str or not value:
+        raise _invalid(f"{label} must be a non-empty string")
+    try:
+        encoded = value.encode("utf-8")
+    except UnicodeEncodeError:
+        raise _invalid(f"{label} must be UTF-8 text")
+    if len(encoded) > max_chars:
+        raise _invalid(f"{label} exceeds the {max_chars}-byte bound")
+    for char in value:
+        code = ord(char)
+        if code == 0x7F:
+            raise _invalid(f"{label} contains control characters")
+        if code < 0x20 and code not in _ALLOWED_BUG_DESCRIPTION_CTRLS:
+            raise _invalid(f"{label} contains control characters")
+    return value
+
+
 def _bounded_text_or_none(value: Any, label: str, max_chars: int) -> Optional[str]:
     if value is None:
         return None
@@ -170,7 +195,16 @@ def _scenario_params(value: Any) -> Dict[str, Any]:
         if item is None:
             result[key] = None
         elif type(item) is str:
-            result[key] = _bounded_text(item, "scenario_params value", _MAX_PARAM_VALUE_CHARS)
+            # Key-aware safety: only bug_description may contain normal
+            # textual whitespace (LF, CR, TAB); all other string params
+            # including commands stay strictly single-line.  NUL, other C0
+            # controls and DEL remain rejected for every key.
+            if key == "bug_description":
+                result[key] = _bounded_bug_description_text(
+                    item, "scenario_params value", _MAX_PARAM_VALUE_CHARS
+                )
+            else:
+                result[key] = _bounded_text(item, "scenario_params value", _MAX_PARAM_VALUE_CHARS)
         elif type(item) is bool:
             result[key] = item
         elif type(item) is int:
@@ -254,6 +288,7 @@ def can_start_new_session_kind(kind: SourceKind) -> bool:
         SourceKind.CONFIGURED_MODEL,
         SourceKind.OLLAMA_CLOUD_LADDER,
         SourceKind.LEVEL32_OPERATOR,
+        SourceKind.LOCAL_PROJECT,
     )
 
 

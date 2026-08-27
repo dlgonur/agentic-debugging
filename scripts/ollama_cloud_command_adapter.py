@@ -1820,6 +1820,62 @@ def run_adapter(
         return 1
 
 
+def build_ollama_live_config(
+    alias: str,
+    *,
+    logical_call_ceiling: int = 32,
+    idle_timeout_seconds: int | None = None,
+    request_timeout_seconds: int | None = None,
+):
+    """Provider-free canonical Ollama LiveModelConfig construction.
+
+    Validates the alias against the repository-owned Cloud roster, derives
+    timeouts from the model's transport profile when not supplied, and builds
+    the exact JSONL command the worker will execute.  No network or daemon
+    contact is performed; transport qualification remains a separate
+    Start-time gate.  Fail-closed on unknown or non-eligible aliases.
+    """
+
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    # Import here to avoid circular import when evaluated live imports this module
+    from agentic_debugger.evaluation.live import LiveModelConfig as _LiveModelConfig
+
+    spec = resolve_cloud_model(alias)
+    if spec.readiness != "live_verified" or not is_treatment_eligible(spec):
+        raise OllamaAdapterError("selected Ollama Cloud alias is not eligible", kind="configuration")
+    if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 1 <= logical_call_ceiling <= 512:
+        raise OllamaAdapterError("logical call ceiling is invalid", kind="configuration")
+    idle = spec.idle_timeout_seconds if idle_timeout_seconds is None else idle_timeout_seconds
+    req = spec.request_timeout_seconds if request_timeout_seconds is None else request_timeout_seconds
+    idle = _validate_timeout_seconds(float(idle))
+    req = _validate_timeout_seconds(float(req))
+    root = _Path(__file__).resolve().parents[1]
+    command: list[str] = [
+        _sys.executable,
+        str(root / "scripts" / "ollama_cloud_command_adapter.py"),
+        "--model",
+        spec.local_alias,
+        "--timeout",
+        str(int(idle)),
+        "--max-logical-model-calls",
+        str(int(logical_call_ceiling)),
+        "--expected-version",
+        EXPECTED_OLLAMA_VERSION,
+    ]
+    if int(req) != int(idle):
+        command.extend(("--request-timeout", str(int(req))))
+    if spec.thinking_level is not None:
+        command.extend(("--thinking-level", spec.thinking_level))
+    return _LiveModelConfig(
+        model_name=spec.local_alias,
+        command=tuple(command),
+        request_timeout_seconds=float(req),
+        tool_version="ollama-cloud-adapter-v1.3-local",
+    )
+
+
 def main() -> None:
     raise SystemExit(run_adapter())
 

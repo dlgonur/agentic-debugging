@@ -137,7 +137,7 @@ def run_worker_source(
     name: str,
     ctx: ScenarioContext,
     params: Any,
-) -> None:
+) -> Optional[str]:
     """Dispatch one worker execution source.
 
     The internal Task-3 scenarios (``worker_scenarios``) remain the bounded
@@ -158,6 +158,10 @@ def run_worker_source(
         OLLAMA_CLOUD_SOURCE_NAME,
         run_ollama_cloud_session,
     )
+    from agentic_debugger.application.local_project_source import (
+        LOCAL_PROJECT_SOURCE_NAME,
+        run_local_project_session,
+    )
 
     if name == DETERMINISTIC_SOURCE_NAME:
         run_deterministic_session(ctx, params)
@@ -168,7 +172,10 @@ def run_worker_source(
     if name == OLLAMA_CLOUD_SOURCE_NAME:
         run_ollama_cloud_session(ctx, params)
         return
+    if name == LOCAL_PROJECT_SOURCE_NAME:
+        return run_local_project_session(ctx, params)
     run_scenario(name, ctx, params)
+    return None
 
 
 def _default_clock() -> str:
@@ -569,7 +576,7 @@ def run_worker(request: StartRequest) -> int:
             ) from exc
         coordinator.emit_status(SessionPhase.EXECUTING_TOOL)
         token.check()  # close the started -> scenario window
-        run_worker_source(
+        disposition = run_worker_source(
             request.scenario,
             ScenarioContext(
                 work_dir=work_dir,
@@ -582,6 +589,14 @@ def run_worker(request: StartRequest) -> int:
             ),
             request.scenario_params,
         )
+        # Local Project terminal authority: typed return, not sidecar file
+        if request.scenario == "local_project":
+            if disposition == "UNRESOLVED":
+                outcome = "unresolved"
+            elif disposition == "FIXED":
+                outcome = "completed"
+            # Fallback to file for backward compatibility (audit only, not authority)
+            # but the return value is authoritative; file write failure does not affect outcome
     except CancellationError as exc:
         if exc.reason is CancellationReason.CANCELLED:
             try:
@@ -633,7 +648,22 @@ def run_worker(request: StartRequest) -> int:
                     {"stage": OperatorStage.CLEANUP.value},
                 )
             coordinator.emit(SessionEventKind.CLEANUP_STARTED, {})
-            cleanup_ok = _cleanup_work_dir(work_dir, diagnostics)
+            work_ok = _cleanup_work_dir(work_dir, diagnostics)
+            cleanup_ok = work_ok
+            # Local Project isolated worktree is also session-owned; must be verified before terminal
+            if request.scenario == "local_project":
+                parent = request.scenario_params.get("parent_tmpdir")
+                repo = request.scenario_params.get("project_repo_path")
+                if parent and repo:
+                    try:
+                        from agentic_debugger.application.local_project import cleanup_parent_tmpdir
+                        iso_ok = cleanup_parent_tmpdir(Path(parent), Path(repo))
+                        cleanup_ok = work_ok and iso_ok
+                        if not iso_ok:
+                            diagnostics.append(_bounded_diagnostic("isolated worktree cleanup failed or not verified"))
+                    except Exception as exc:
+                        diagnostics.append(_bounded_diagnostic(f"isolated worktree cleanup failed: {exc}"))
+                        cleanup_ok = False
             coordinator.emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup_ok})
         else:
             cleanup_ok = False
@@ -690,6 +720,8 @@ def _terminal_for(
         return SessionStatus.CLEANUP_FAILED, SessionTerminationReason.CLEANUP_FAILED
     if outcome == "completed":
         return SessionStatus.SUCCEEDED, SessionTerminationReason.DONE
+    if outcome == "unresolved":
+        return SessionStatus.UNRESOLVED, SessionTerminationReason.UNRESOLVED
     if outcome == "cancelled":
         return SessionStatus.CANCELLED, SessionTerminationReason.CANCELLED
     if outcome == "timed_out":
@@ -713,6 +745,7 @@ def main() -> None:
     from agentic_debugger.application.deterministic_source import (
         DETERMINISTIC_SOURCE_NAME,
     )
+    from agentic_debugger.application.local_project_source import LOCAL_PROJECT_SOURCE_NAME
     from agentic_debugger.application.ollama_cloud_source import OLLAMA_CLOUD_SOURCE_NAME
 
     first_line = sys.stdin.buffer.readline(MAX_WORKER_LINE_BYTES + 1)
@@ -735,6 +768,7 @@ def main() -> None:
         and request.scenario != DETERMINISTIC_SOURCE_NAME
         and request.scenario != CONFIGURED_SOURCE_NAME
         and request.scenario != OLLAMA_CLOUD_SOURCE_NAME
+        and request.scenario != LOCAL_PROJECT_SOURCE_NAME
     ):
         _send(error_message("unknown_scenario", [request.scenario]))
         os._exit(EXIT_STARTUP_ERROR)

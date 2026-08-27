@@ -82,7 +82,7 @@ def _config(
     idle_timeout_seconds: int | None = None,
     request_timeout_seconds: int | None = None,
 ) -> tuple[LiveModelConfig, Any]:
-    from scripts.ollama_cloud_command_adapter import is_treatment_eligible, resolve_cloud_model
+    from scripts.ollama_cloud_command_adapter import EXPECTED_OLLAMA_VERSION, is_treatment_eligible, resolve_cloud_model
 
     spec = resolve_cloud_model(alias)
     if spec.readiness != "live_verified" or not is_treatment_eligible(spec):
@@ -104,7 +104,7 @@ def _config(
         "--model", spec.local_alias,
         "--timeout", str(int(idle_timeout)),
         "--max-logical-model-calls", str(logical_call_ceiling),
-        "--expected-version", "0.32.15",
+        "--expected-version", EXPECTED_OLLAMA_VERSION,
     ]
     # The adapter's own outer deadline must be explicit whenever it differs
     # from the stream watchdog.  Otherwise the adapter would silently fall
@@ -120,6 +120,29 @@ def _config(
         request_timeout_seconds=request_timeout,
         tool_version="ollama-cloud-adapter-v1.3-ladder",
     ), spec
+
+
+def build_ollama_live_config(
+    alias: str,
+    *,
+    logical_call_ceiling: int = 32,
+    idle_timeout_seconds: int | None = None,
+    request_timeout_seconds: int | None = None,
+) -> LiveModelConfig:
+    """Canonical provider-free Ollama LiveModelConfig for Local Project.
+
+    Reuses :func:`scripts.ollama_cloud_command_adapter.build_ollama_live_config`
+    so Local Project and the ladder share one validated construction path.
+    """
+
+    from scripts.ollama_cloud_command_adapter import build_ollama_live_config as _build
+
+    return _build(
+        alias,
+        logical_call_ceiling=logical_call_ceiling,
+        idle_timeout_seconds=idle_timeout_seconds,
+        request_timeout_seconds=request_timeout_seconds,
+    )
 
 
 def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) -> None:

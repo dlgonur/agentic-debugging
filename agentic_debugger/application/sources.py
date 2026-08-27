@@ -66,6 +66,7 @@ _STARTABLE_KINDS = frozenset({
     SourceKind.CONFIGURED_MODEL,
     SourceKind.OLLAMA_CLOUD_LADDER,
     SourceKind.LEVEL32_OPERATOR,
+    SourceKind.LOCAL_PROJECT,
 })
 
 _MAX_POLICY_CHARS = 64
@@ -151,6 +152,11 @@ class ExecutionSourceSpec:
             if self.model_config_ref is None:
                 raise ApplicationInputError(
                     "level32_operator sources require a canonical model alias"
+                )
+        elif self.kind is SourceKind.LOCAL_PROJECT:
+            if self.model_config_ref is None:
+                raise ApplicationInputError(
+                    "local_project sources require a model_config_ref"
                 )
         elif self.model_config_ref is not None:
             raise ApplicationInputError(

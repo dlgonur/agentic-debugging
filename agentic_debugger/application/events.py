@@ -110,6 +110,7 @@ class SourceKind(str, Enum):
     CONFIGURED_MODEL = "configured_model"
     OLLAMA_CLOUD_LADDER = "ollama_cloud_ladder"
     LEVEL32_OPERATOR = "level32_operator"
+    LOCAL_PROJECT = "local_project"
     SESSION_BUNDLE = "session_bundle"
     CANONICAL_TRAJECTORY = "canonical_trajectory"
     EXPERIMENT_EVIDENCE = "experiment_evidence"

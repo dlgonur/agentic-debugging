@@ -235,6 +235,159 @@ ChoicePickerScreen {
     background: #0d1117 90%;
 }
 
+BugDescriptionEditorScreen {
+    align: center middle;
+    background: #0d1117 90%;
+}
+
+#bug-editor-dialog {
+    width: 70;
+    max-width: 90%;
+    height: auto;
+    max-height: 85%;
+    padding: 1 2;
+    background: #161b22;
+}
+
+#bug-editor-title {
+    height: 1;
+    margin: 0 0 1 0;
+    color: #79c0ff;
+    text-style: bold;
+}
+
+#bug-editor {
+    width: 1fr;
+    height: 10;
+    min-height: 8;
+    max-height: 14;
+    background: #0d1117;
+    color: #c9d1d9;
+    border: round #2c3a47;
+    padding: 0 1;
+}
+
+#bug-editor:focus {
+    border: round #58a6ff;
+}
+
+#bug-editor-actions {
+    width: 1fr;
+    height: auto;
+    align: center middle;
+    margin: 1 0 0 0;
+}
+
+#bug-save-button {
+    width: auto;
+    min-width: 12;
+    height: 1;
+    padding: 0 2;
+    background: #238636;
+    color: #ffffff;
+    border: none;
+    text-style: bold;
+}
+
+#bug-save-button:hover {
+    background: #2ea043;
+}
+
+#bug-save-button:focus {
+    background: #2ea043;
+    border: tall #3fb950;
+}
+
+#bug-editor-hint {
+    height: 1;
+    margin: 1 0 0 0;
+    color: #8b949e;
+}
+
+#bug-editor-error {
+    height: auto;
+    color: #f85149;
+}
+
+SingleLineFieldEditorScreen {
+    align: center middle;
+    background: #0d1117 90%;
+}
+
+#single-line-dialog {
+    width: 70;
+    max-width: 90%;
+    height: auto;
+    max-height: 85%;
+    padding: 1 2;
+    background: #161b22;
+}
+
+#single-line-title {
+    height: 1;
+    margin: 0 0 1 0;
+    color: #79c0ff;
+    text-style: bold;
+}
+
+#single-line-editor {
+    width: 1fr;
+    height: 1;
+    min-height: 1;
+    background: #0d1117;
+    color: #c9d1d9;
+    border: round #2c3a47;
+    padding: 0 1;
+}
+
+#single-line-editor:focus {
+    border: round #58a6ff;
+}
+
+#single-line-actions {
+    width: 1fr;
+    height: auto;
+    align: right middle;
+    margin: 1 0 0 0;
+}
+
+#single-line-save-button {
+    width: auto;
+    min-width: 12;
+    height: 1;
+    padding: 0 2;
+    background: #238636;
+    color: #ffffff;
+    border: none;
+    text-style: bold;
+}
+
+#single-line-save-button:hover {
+    background: #2ea043;
+}
+
+#single-line-save-button:focus {
+    background: #2ea043;
+    border: tall #3fb950;
+}
+
+#single-line-hint {
+    height: 1;
+    margin: 1 0 0 0;
+    color: #8b949e;
+}
+
+#single-line-error {
+    height: auto;
+    color: #f85149;
+}
+
+/* Legacy alias also centered (the tiny upper-left implementation is removed) */
+_SingleLineEditorScreen {
+    align: center middle;
+    background: #0d1117 90%;
+}
+
 /* -- workspace ----------------------------------------------------------- */
 
 #workspace-body {
@@ -423,4 +576,41 @@ Button {
 
 .copy-button {
     margin: 0;
+}
+
+#local-start-actions {
+    width: 1fr;
+    height: auto;
+    align: center middle;
+    margin: 1 0 0 0;
+}
+
+#local-start-button {
+    width: auto;
+    min-width: 22;
+    height: 1;
+    padding: 0 2;
+    background: #238636;
+    color: #ffffff;
+    border: none;
+    text-style: bold;
+    margin: 0;
+}
+
+#local-start-button:hover {
+    background: #2ea043;
+}
+
+#local-start-button:focus {
+    background: #2ea043;
+    border: tall #3fb950;
+}
+
+#local-project-resolved,
+#local-start-status,
+#local-start-trust {
+    height: auto;
+    color: #8b949e;
+    margin: 0 0 0 0;
+    padding: 0 0 0 2;
 }
