@@ -570,7 +570,7 @@ class TestConfiguredSourceHappyPath:
             assert SessionEventKind.TOOL_COMPLETED in kinds
             assert len(state.calls) == 2
             assert all(call["model"] == "gpt-oss:20b-cloud" for call in state.calls)
-            assert all(call["stream"] is False for call in state.calls)
+            assert all(call["stream"] is True for call in state.calls)
             assert all("tools" not in call for call in state.calls)
             assert state.paths.count("/api/tags") == 2
             assert state.paths.count("/api/show") == 2
@@ -630,7 +630,7 @@ class TestConfiguredSourceHappyPath:
             assert SessionEventKind.TOOL_COMPLETED in kinds
             assert len(state.calls) == 2
             assert all(call["model"] == "nemotron-3-nano:30b-cloud" for call in state.calls)
-            assert all(call["stream"] is False for call in state.calls)
+            assert all(call["stream"] is True for call in state.calls)
             assert all("tools" not in call for call in state.calls)
             assert state.paths.count("/api/tags") == 2
             assert state.paths.count("/api/show") == 2
@@ -647,8 +647,8 @@ class TestConfiguredSourceFailures:
         [
             ("malformed", "provider_or_transport_error"),
             ("fail", "provider_or_transport_error"),
-            ("invalid_directive", "invalid_model_response"),
-            ("illegal_action", "invalid_model_response"),
+            ("invalid_directive", "directive_rejected"),
+            ("illegal_action", "directive_rejected"),
             ("flood_stdout", "provider_or_transport_error"),
         ],
     )

@@ -241,12 +241,19 @@ class TestLevel32NewSession:
     def test_level32_task_switches_to_frozen_model_configuration_and_back(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
-            # Open the shared task picker and select the appended Level-32 entry.
+            # Open the shared task picker and select the Level-32 entry.  The
+            # picker also exposes accepted curated sessions after the frozen
+            # ladder, so locate the rung by identity instead of position.
             await pilot.press("enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             picker = pilot.app.screen
             assert any("Level 32/100" in choice.title for choice in picker.choices)
-            for _ in range(len(picker.choices) - 1):
+            level32_index = next(
+                index
+                for index, choice in enumerate(picker.choices)
+                if choice.value == "audreyr__cookiecutter-967"
+            )
+            for _ in range(level32_index):
                 await pilot.press("down")
             await pilot.press("enter")
 

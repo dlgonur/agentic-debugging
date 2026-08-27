@@ -296,7 +296,7 @@ class TestStartSessionScreen:
             )
             start_screen = pilot.app.screen
             assert len(start_screen._task_options) == len(pilot.app.curated_task_options())
-            assert len(start_screen._task_options) == 4  # accepted capability ladder
+            assert len(start_screen._task_options) == 9  # four ladder + five curated tasks
             # choose a task + policy through the screen state API
             start_screen._task_id = TASK_ID
             start_screen._policy = "pdb-on-uncertainty"

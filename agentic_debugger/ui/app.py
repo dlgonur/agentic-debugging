@@ -386,9 +386,23 @@ class LocalApplicationV1(App):
         )
 
     def curated_task_options(self) -> Tuple[Tuple[str, str], ...]:
-        """The product picker exposes exactly the accepted capability ladder."""
+        """All accepted session tasks exposed by the product picker.
 
-        return ladder_task_options()
+        Capability-ladder rungs remain first and keep their frozen metadata.
+        The repository-native curated tasks follow them so the accepted
+        deterministic-offline and configured-command sources are reachable
+        through the ordinary Start flow instead of existing only as tested
+        worker seams.
+        """
+
+        ladder = ladder_task_options()
+        ladder_ids = {task_id for _, task_id in ladder}
+        curated = tuple(
+            task_display_option(task_id, self._repository_root)
+            for task_id in self.curated_task_ids()
+            if task_id not in ladder_ids
+        )
+        return ladder + curated
 
     def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
         """Safe profile summaries for the Start screen, plus a load error.

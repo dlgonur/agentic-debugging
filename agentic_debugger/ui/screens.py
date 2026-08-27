@@ -2383,6 +2383,11 @@ class WorkspaceScreen(Screen):
         if self._live_terminal is not None:
             self.notify("The session already finished.", severity="information")
             return
+        # The user-facing request exists as soon as this action is accepted.
+        # Mark it before dispatch so a fast worker cannot deliver the durable
+        # cancel event and terminal in one UI batch without ever rendering the
+        # truthful intermediate state.
+        self._cancel_requested_ui = True
         self._cancel_active = True
         self._render_all()
         self._runner.cancel()
