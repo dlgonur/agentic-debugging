@@ -126,7 +126,7 @@ def write_local_profile(root: Path, profile_id: str, patch_path: Path, mode: str
 def make_local_worker(store: HistoryStore, session_id: str, repo: Path, head: str, isolated: Path, parent: Path, profile_id: str, repro: str | None = 'python -c "print(1)"', verify: str | None = 'python -c "print(1)"', bug: str = "add returns a - b"):
     from agentic_debugger.application.worker_process import SessionWorkerProcess
     spec = SessionSpec(task_id="local-project-debug", source=ExecutionSourceSpec(kind=SourceKind.LOCAL_PROJECT, task_id="local-project-debug", model_config_ref=profile_id))
-    return SessionWorkerProcess(
+    worker = SessionWorkerProcess(
         session_dir=store.session_dir(session_id),
         session_id=session_id,
         spec=spec,
@@ -149,6 +149,29 @@ def make_local_worker(store: HistoryStore, session_id: str, repo: Path, head: st
         ready_timeout_seconds=30.0,
         max_elapsed_seconds=180,
     )
+    # Mirror the production pre-write (ui/app.py): the canonical
+    # LocalProjectTaskSpec artifact must exist before the worker starts so
+    # the source's end-of-session preservation round-trips it.
+    from agentic_debugger.application.local_project import LocalProjectTaskSpec
+    from agentic_debugger.application.session import SessionBudgets
+    worker.session_dir.mkdir(parents=True, exist_ok=True)
+    local_spec = LocalProjectTaskSpec(
+        session_id=session_id,
+        source_repo_path=str(repo),
+        source_head_commit=head,
+        isolated_workspace_path=str(isolated),
+        bug_description=bug,
+        reproduction_command=repro,
+        verification_command=verify,
+        model_runtime=profile_id,
+        budgets=SessionBudgets(max_elapsed_seconds=180),
+        created_at_utc="2026-08-27T00:00:00Z",
+    )
+    (worker.session_dir / "local_project_task.json").write_text(
+        json.dumps(local_spec.to_mapping(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+    return worker
 
 # ---------------------------------------------------------------------------
 # 1. launch cwd capture
@@ -863,8 +886,16 @@ def test_worker_owned_isolated_cleanup_failure(tmp_path):
     repo = make_git_fixture(tmp_path, "cleanup_fail")
     validated = validate_local_project(str(repo), launch_cwd=tmp_path)
     wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
-    # Inject failure via sentinel file inside parent_tmpdir
-    (wt.parent_tmpdir / ".inject-cleanup-failure").write_text("fail", encoding="utf-8")
+    # Natural failure injection: an undeletable read-only file inside the
+    # parent temp dir makes the real rmtree fail (Windows read-only attribute;
+    # POSIX additionally needs a non-writable parent directory).
+    import os as _os
+    import stat as _stat
+    locked = wt.parent_tmpdir / "locked-cleanup-probe.txt"
+    locked.write_text("undeletable", encoding="utf-8")
+    _os.chmod(locked, _stat.S_IREAD)
+    if sys.platform != "win32":
+        _os.chmod(wt.parent_tmpdir, 0o500)
     patch_path = tmp_path / "cleanup_fail.patch"
     write_calculator_patch(patch_path)
     store_root = tmp_path / "hist_cleanup_fail"
@@ -890,8 +921,13 @@ def test_worker_owned_isolated_cleanup_failure(tmp_path):
         worker.close()
         # cleanup manually for test isolation
         try:
-            (wt.parent_tmpdir / ".inject-cleanup-failure").unlink(missing_ok=True)
-        except: pass
+            import os as _os
+            import stat as _stat
+            _os.chmod(locked, _stat.S_IWRITE | _stat.S_IREAD)
+            if sys.platform != "win32":
+                _os.chmod(wt.parent_tmpdir, 0o700)
+        except Exception:
+            pass
         cleanup_parent_tmpdir(wt.parent_tmpdir, validated.repo_root)
 
 def test_pre_worker_startup_failure_cleans_worktree(tmp_path):
@@ -1047,7 +1083,9 @@ def test_pdb_invocation_real(tmp_path):
     _run(["git","config","user.name","Test"], repo)
     (repo / "calculator.py").write_text("def add(a,b):\n    return a - b\n", encoding="utf-8")
     (repo / "test_calculator.py").write_text("from calculator import add\n\ndef test_add():\n    assert add(1,2)==3\n\ndef test_dummy():\n    assert True\n", encoding="utf-8")
-    (repo / "repro.py").write_text("from calculator import add\nprint(add(1,2))\n", encoding="utf-8")
+    # The baseline reproduction must genuinely FAIL on the buggy calculator:
+    # a truthful non-zero exit is what unlocks the PDB-on-uncertainty gate.
+    (repo / "repro.py").write_text("from calculator import add\nimport sys\nprint(add(1,2))\nsys.exit(0 if add(1,2)==3 else 1)\n", encoding="utf-8")
     _run(["git","add","."], repo)
     _run(["git","commit","-m","initial"], repo)
     # Verify inventory sort: calculator.py before repro.py
@@ -1108,8 +1146,6 @@ def test_sidecar_write_failure_still_unresolved(tmp_path):
     repo = make_git_fixture(tmp_path, "sidecar_fail")
     validated = validate_local_project(str(repo), launch_cwd=tmp_path)
     wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
-    # Inject sidecar failure via parent_tmpdir sentinel (exists before worker, no need to pre-create session_dir)
-    (wt.parent_tmpdir / ".inject-sidecar-failure").write_text("x", encoding="utf-8")
     bad_patch = tmp_path / "bad_sidecar.patch"
     write_calculator_patch(bad_patch, bad=True)
     store_root = tmp_path / "hist_sidecar"
@@ -1118,8 +1154,11 @@ def test_sidecar_write_failure_still_unresolved(tmp_path):
     store = HistoryStore(store_root)
     import uuid, json
     session_id = f"sess-sidecar-{uuid.uuid4().hex[:6]}"
-    worker = make_local_worker(store, session_id, repo, validated.head_commit, wt.isolated_path, wt.parent_tmpdir, "dummy-sidecar", repro='python -c "print(1)"', verify='python -c "import sys; sys.exit(1)"', bug="sidecar failure test")
+    worker = make_local_worker(store, session_id, repo, validated.head_commit, wt.isolated_path, wt.parent_tmpdir, "dummy-sidecar", repro='python -c "print(1)"', verify='python -c "print(2)"', bug="sidecar failure test")
     session_dir = store.session_dir(session_id)
+    # Natural failure injection: a directory occupying the sidecar path makes
+    # the real write fail (no production failure sentinel involved).
+    (session_dir / "local_project_disposition.json").mkdir()
     try:
         assert worker.start() is None
         result = worker.wait()
@@ -1130,15 +1169,19 @@ def test_sidecar_write_failure_still_unresolved(tmp_path):
         journal = read_session_journal(session_dir / "session.events.jsonl")
         kinds = [e.event_kind.value for e in journal.events]
         assert "verifier.completed" in kinds
-        # sidecar file must not exist (write was injected to fail) but journal is intact
-        assert not (session_dir / "local_project_disposition.json").exists()
+        # sidecar file must not exist as a file (write failed naturally) but journal is intact
+        assert not (session_dir / "local_project_disposition.json").is_file()
+        # the failure must be durably visible, not silent
+        failure_events = [
+            e for e in journal.events
+            if e.event_kind.value == "diagnosis.recorded"
+            and "local_project_disposition.json write failed" in (e.payload.get("text") or "")
+        ]
+        assert failure_events
         # cleanup should still be verified true (isolated removed) because only sidecar failed
         assert result.cleanup_verified is True
     finally:
         worker.close()
-        try:
-            (wt.parent_tmpdir / ".inject-sidecar-failure").unlink(missing_ok=True)
-        except: pass
         cleanup_parent_tmpdir(wt.parent_tmpdir, validated.repo_root)
 
 def test_ollama_live_config_construction_provider_free():

@@ -39,6 +39,7 @@ from agentic_debugger.application.observability import ObservabilityContext, Ses
 from agentic_debugger.application.source_snapshots import SourceSnapshotStage, capture_source_snapshot
 from agentic_debugger.application.sources import ModelExecutionError
 from agentic_debugger.application.worker_scenarios import ScenarioContext, ScenarioInputError
+from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.demo.policies import DemoPolicy, pdb_policy_for
 from agentic_debugger.evaluation.live import LiveModelAdapter, LiveModelConfig, LiveRunLimits, MAX_MODEL_RESPONSE_BYTES
 from agentic_debugger.evaluation.task_schema import Constraints
@@ -85,35 +86,70 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
 def _bounded(output: str, limit: int=4000) -> str:
     return output[:limit-3]+"..." if len(output)>limit else output
 
+def _split_command(cmd: str) -> list[str]:
+    """Split one single-line command into argv using Windows-compatible rules.
+
+    ``shlex.split(..., posix=False)`` keeps quote characters inside tokens, so
+    a quoted path (``python "my script.py"``) would reach ``Popen`` with the
+    quotes as literal filename characters.  One balanced surrounding quote
+    pair per token is stripped (the CreateProcess convention); embedded or
+    unbalanced quotes are preserved verbatim and fail naturally at launch.
+    """
+    argv = shlex.split(cmd, posix=False)
+    stripped: list[str] = []
+    for token in argv:
+        if (
+            len(token) >= 2
+            and token[0] == token[-1]
+            and token[0] in ('"', "'")
+        ):
+            token = token[1:-1]
+        if token:
+            stripped.append(token)
+    return stripped
+
+
 def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=None):
-    start=time.monotonic()
+    """Run one user command in ``cwd`` through the accepted runtime runner.
+
+    Uses ``runtime.command_runner.CommandRunner`` over the isolated workspace
+    (reader threads, process-tree kill ladder, bounded incremental UTF-8
+    decoding, cooperative cancellation).  This deliberately does not spawn and
+    drain pipes inline: a descendant that inherits the output pipes can never
+    wedge the worker.  Returns ``(exit_code, stdout, stderr, elapsed_seconds)``.
+    """
+    from agentic_debugger.runtime.command_runner import CommandRunner
+    from agentic_debugger.runtime.exceptions import CommandExecutionError
+
+    start = time.monotonic()
     try:
-        argv=shlex.split(cmd, posix=False)
+        argv = _split_command(cmd)
     except ValueError as exc:
-        return 127, "", f"parse failed: {exc}", time.monotonic()-start
-    if not argv: return 127, "", "empty", time.monotonic()-start
+        return 127, "", f"parse failed: {exc}", time.monotonic() - start
+    if not argv:
+        return 127, "", "empty", time.monotonic() - start
+    runner = CommandRunner(_IsolatedWorkspace(cwd))
     try:
-        proc=subprocess.Popen(argv, stdin=subprocess.DEVNULL, cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-    except Exception as exc:
-        return 127, "", f"launch failed: {exc}", time.monotonic()-start
-    while True:
-        if cancel_check:
-            try: cancel_check()
-            except Exception:
-                try: proc.terminate()
-                except: pass
-                raise
-        try:
-            out,err=proc.communicate(timeout=0.2)
-            break
-        except subprocess.TimeoutExpired:
-            if time.monotonic()-start>timeout:
-                try: proc.kill()
-                except: pass
-                out,err=proc.communicate()
-                return 124, _bounded(out or ""), _bounded((err or "")+f" timed out {timeout}s"), time.monotonic()-start
-            continue
-    return (proc.returncode if proc.returncode is not None else 127), _bounded(out or ""), _bounded(err or ""), time.monotonic()-start
+        result = runner.run(argv, ".", timeout, cancel_check=cancel_check)
+    except CommandExecutionError as exc:
+        return 127, "", f"launch failed: {exc}", time.monotonic() - start
+    except CancellationError:
+        raise
+    if result.exit_code is not None:
+        exit_code = result.exit_code
+    elif result.timed_out:
+        exit_code = 124
+    else:
+        exit_code = 127
+    err = result.stderr or ""
+    if result.timed_out:
+        err = (err + f" timed out {timeout}s").strip()
+    return (
+        exit_code,
+        _bounded(result.stdout or ""),
+        _bounded(err),
+        time.monotonic() - start,
+    )
 
 def _inventory_tracked_python_files(isolated: Path) -> List[str]:
     try:
@@ -270,8 +306,14 @@ class _IsolatedWorkspace:
         resolved=os.path.normpath(os.path.join(self._root, native))
         real_resolved=os.path.realpath(resolved)
         real_root_norm=os.path.normpath(self._real_root)
-        if not real_resolved.startswith(real_root_norm+os.sep):
-            if real_resolved!=real_root_norm: raise ValueError(f"Resolved path escapes workspace root: {relative_path!r}")
+        try:
+            common=os.path.commonpath([real_root_norm, real_resolved])
+        except ValueError:
+            raise ValueError(f"Resolved path escapes workspace root: {relative_path!r}") from None
+        # normcase matches the containment authority in local_project
+        # (Windows is case-insensitive; POSIX normcase is a no-op).
+        if os.path.normcase(common)!=os.path.normcase(real_root_norm):
+            raise ValueError(f"Resolved path escapes workspace root: {relative_path!r}")
         if must_exist and not os.path.exists(resolved): raise ValueError(f"Path does not exist: {relative_path!r}")
         return resolved
     def cleanup(self):
@@ -461,23 +503,24 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         # Execute the honest reproduction command in the isolated workspace
         exit_code, out, err, elapsed = _run_command_bounded(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0)
         passed = (exit_code == 0)
-        # For Local Project, baseline failure is considered reproduced when a
-        # reproduction command is supplied (the user asserts a bug); this
-        # satisfies the PDB gate which requires failure_reproduced True for
-        # on-uncertainty. Post-patch is passed when exit==0.
-        reproduced = True
-        failure_output = _bounded((out or "") + (err or ""), 4000) if not passed else _bounded((out or "") + (err or ""), 4000)
-        # Keep payload honest: failure_reproduced reflects gate, passed reflects exit
+        # Baseline truth comes from the command itself: a non-zero exit is
+        # the observed failure; a zero exit means the reported bug did NOT
+        # reproduce and must not satisfy any downstream gate (the user's
+        # bug report is not reproduction proof).  Post-patch records
+        # ``passed`` (exit==0) and reports no failure reproduction.
+        baseline_reproduced = not passed
+        failure_output = _bounded((out or "") + (err or ""), 4000)
+        # Keep payload honest: failure_reproduced reflects the observed
+        # command result, passed reflects the exit code.
         payload = {
             "phase": phase,
             "exit_code": exit_code,
             "passed": bool(passed),
-            "failure_reproduced": bool(reproduced) if phase == "baseline" else False,
+            "failure_reproduced": bool(baseline_reproduced) if phase == "baseline" else False,
             "failure_output": failure_output,
         }
         if phase == "baseline":
-            context.baseline_failure_reproduced = True
-            # Also set _failure_reproduced for LiveModelAdapter's gate
+            context.baseline_failure_reproduced = bool(baseline_reproduced)
             summary = "baseline reproduction executed"
         else:
             context.post_patch_f2p_passed = bool(passed)
@@ -613,7 +656,10 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         probe = context.probe
         if probe is not None and getattr(probe, "exact_public_reproduction", False) and context.__dict__.get("pdb_session_factory", PdbSession) is PdbSession:
             return PdbSession(workspace, startup_timeout=15.0, request_timeout=30.0, proof_pytest_dependencies=True)
-        return PdbSession(workspace)
+        # Local Project: one PDB request runs the whole reproduction script
+        # (bounded at 30 s by the command contract), so the per-request
+        # timeout must cover that whole run rather than the 5 s default.
+        return PdbSession(workspace, startup_timeout=15.0, request_timeout=60.0)
 
     def handle_start_pdb(action, arguments):  # type: ignore[no-untyped-def]
         if pdb_policy is PdbPolicy.DISABLED:
@@ -833,6 +879,31 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         live_config=LiveModelConfig(model_name=profile.display_name, command=profile.live_command(), request_timeout_seconds=profile.request_timeout_seconds, tool_version=profile.tool_version)
         limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
         transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, cwd=profile.cwd, environment=dict(profile.environment) if profile.environment else None)
+    # Safe durable model provenance (same contract as the configured/ladder
+    # sources): the journal records which model actually serves this Local
+    # Project session, so replay needs no live workspace or sidecar file.
+    # MODEL_CONFIGURED is mandatory durable provenance: if the authoritative
+    # journal cannot record it, the emitter failure (EmitterFatalError)
+    # propagates through the existing journal-fatal worker contract and no
+    # model request may start.  The payload carries only profile identity
+    # fields, never credentials.
+    if ollama_profile is not None:
+        model_provenance_payload={
+            "profile_id": ollama_profile.alias,
+            "config_fingerprint": ollama_profile.transport_config_fingerprint,
+            "display_name": ollama_profile.display_name,
+            "protocol_version": "1.3",
+            "tool_version": live_config.tool_version,
+        }
+    else:
+        model_provenance_payload={
+            "profile_id": profile.profile_id,
+            "config_fingerprint": profile.configuration_fingerprint,
+            "display_name": profile.display_name,
+            "protocol_version": profile.protocol_version,
+            "tool_version": profile.tool_version,
+        }
+    ctx.emitter.emit(SessionEventKind.MODEL_CONFIGURED, model_provenance_payload)
     adapters: list[Any]=[]
     def _model_factory(dctx, reg):  # type: ignore[no-untyped-def]
         adapter=LiveModelAdapter(task=dctx.task, policy=policy, config=live_config, transport=transport, limits=limits, registry=reg, evaluation_id=session_id, case_id=f"{session_id}:{task_id}", run_id=run_id, trajectory_id=run_id)
@@ -879,10 +950,14 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     ctx.emitter.emit(SessionEventKind.VERIFIER_COMPLETED, {"status": "COMPLETED","outcome": "RESOLVED" if verified_fixed else None,"f2p_passed": 1 if verified_fixed else 0,"f2p_total": 1,"p2p_passed": 1 if verified_fixed else 0,"p2p_total": 1,"workspace_cleaned": None,"classification": "Fixed" if verified_fixed else "Unresolved"})
     session_dir=ctx.session_dir
     disposition="FIXED" if verified_fixed else "UNRESOLVED"
+    artifact_failures: list[str]=[]
     if session_dir is not None:
         try:
             session_dir.mkdir(parents=True, exist_ok=True)
-            if has_active_candidate and patch_text and not contains_credential_shape(patch_text):
+        except Exception as exc:
+            artifact_failures.append(f"session directory unavailable: {exc}")
+        if has_active_candidate and patch_text and not contains_credential_shape(patch_text):
+            try:
                 candidate_path=session_dir / "candidate.patch"
                 candidate_path.write_text(patch_text, encoding="utf-8", newline="\n")
                 sha=hashlib.sha256(patch_text.encode("utf-8")).hexdigest()
@@ -894,25 +969,53 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                         break
                     except Exception:
                         continue
+            except Exception as exc:
+                # The candidate artifact is required for Apply To Project;
+                # its absence must be visible, not silent.
+                artifact_failures.append(f"candidate.patch write failed: {exc}")
+        try:
+            # Keep the canonical artifact authoritative.  The app pre-writes
+            # this file as ``LocalProjectTaskSpec.to_mapping()`` before the
+            # worker starts; the session must not replace it with a second,
+            # incompatible schema (Apply To Project and history/reopen read
+            # the canonical ``source_repo_path`` / ``source_head_commit``).
+            # ``from_mapping`` is read strictly (unknown keys rejected) and
+            # this writer is the same authority that produced the file, so a
+            # failure here is an honest artifact failure, not a silent
+            # rewrite of the contract.
             task_path=session_dir / "local_project_task.json"
-            task_path.write_text(json.dumps({"project_repo_path": str(repo_root),"project_head": validated["project_head"],"isolated_workspace": str(isolated),"bug_description": bug_description,"reproduction_command": repro_cmd,"verification_command": verify_cmd,"session_id": session_id,"model_profile": profile_id, "tracked_files": tracked[:20]}, indent=2, sort_keys=True), encoding="utf-8")
-            # Audit sidecar (not authority) — allow injection to simulate failure without breaking journal
-            try:
-                _sentinel_triggered = False
-                try:
-                    _sidecar_sentinel = Path(validated["parent_tmpdir"]) if validated.get("parent_tmpdir") else None
-                    if _sidecar_sentinel is not None and (_sidecar_sentinel / ".inject-sidecar-failure").exists():
-                        _sentinel_triggered = True
-                except Exception:
-                    _sentinel_triggered = False
-                if _sentinel_triggered:
-                    raise OSError("injected sidecar failure")
-                if session_dir is not None and (session_dir / ".inject-sidecar-failure").exists():
-                    raise OSError("injected sidecar failure")
-                disp_path=session_dir / "local_project_disposition.json"
-                disp_path.write_text(json.dumps({"disposition": disposition, "has_active_candidate": has_active_candidate, "verification_passed": bool(verification_passed)}), encoding="utf-8")
-            except Exception:
-                pass
+            from agentic_debugger.application.local_project import (
+                LocalProjectTaskSpec,
+                SessionBudgets,
+            )
+            _spec=LocalProjectTaskSpec.from_mapping(json.loads(task_path.read_text(encoding="utf-8")))
+            _new_spec=LocalProjectTaskSpec(
+                session_id=_spec.session_id,
+                source_repo_path=_spec.source_repo_path,
+                source_head_commit=_spec.source_head_commit,
+                isolated_workspace_path=_spec.isolated_workspace_path,
+                bug_description=_spec.bug_description,
+                reproduction_command=_spec.reproduction_command,
+                verification_command=_spec.verification_command,
+                model_runtime=_spec.model_runtime,
+                budgets=SessionBudgets(**_spec.budgets.to_mapping()),
+                created_at_utc=_spec.created_at_utc,
+            )
+            task_path.write_text(
+                json.dumps(_new_spec.to_mapping(), indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            artifact_failures.append(f"local_project_task.json write failed: {exc}")
+        # Audit sidecar (not authority; the typed return is authoritative).
+        try:
+            disp_path=session_dir / "local_project_disposition.json"
+            disp_path.write_text(json.dumps({"disposition": disposition, "has_active_candidate": has_active_candidate, "verification_passed": bool(verification_passed)}), encoding="utf-8")
+        except Exception as exc:
+            artifact_failures.append(f"local_project_disposition.json write failed: {exc}")
+    for failure in artifact_failures[:4]:
+        try:
+            ctx.emitter.emit(SessionEventKind.DIAGNOSIS_RECORDED, {"text": _bounded(failure, 400), "file_path": None, "symbol": None, "confidence": "system"})
         except Exception:
             pass
     ctx.emitter.emit(SessionEventKind.CONTROLLER_STEP, {"step_index": 2, "directive_kind": "verification", "stop_reason": "done" if verified_fixed else "unresolved"})

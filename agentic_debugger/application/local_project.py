@@ -201,6 +201,8 @@ def _run_git(cwd: Path, args: list[str], timeout: float = 10.0) -> str:
             stderr=subprocess.PIPE,
             timeout=timeout,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError as exc:
         raise ApplicationInputError("git is not available on PATH") from exc
@@ -251,6 +253,8 @@ def has_uncommitted_changes(repo_root: Path) -> bool:
             stderr=subprocess.PIPE,
             timeout=10.0,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except Exception as exc:
         raise ApplicationInputError(f"git status failed: {exc}") from exc
@@ -408,6 +412,8 @@ def create_isolated_worktree(
             stderr=subprocess.PIPE,
             timeout=30.0,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
     except FileNotFoundError as exc:
         # Cleanup parent before failing
@@ -497,6 +503,8 @@ def cleanup_isolated_worktree(
                 stderr=subprocess.PIPE,
                 timeout=30.0,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
             )
             # If worktree remove succeeded or path already gone, continue
             if result.returncode != 0:
@@ -552,14 +560,6 @@ def cleanup_parent_tmpdir(parent_tmpdir: Path, repo_root: Path) -> bool:
     Verified means: isolated filesystem path gone, parent gone, and `git
     worktree list --porcelain` no longer contains the isolated path.
     """
-    # Deterministic failure injection for the production-boundary cleanup test:
-    # a sentinel file inside the parent forces a verified-False outcome without
-    # requiring a mock in the worker child process.
-    try:
-        if (parent_tmpdir / ".inject-cleanup-failure").exists():
-            return False
-    except Exception:
-        pass
     isolated_path = None
     try:
         cand = parent_tmpdir / "worktree"
@@ -592,6 +592,8 @@ def cleanup_parent_tmpdir(parent_tmpdir: Path, repo_root: Path) -> bool:
             stderr=subprocess.PIPE,
             timeout=10.0,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode == 0:
             if isolated_path is not None:
@@ -651,10 +653,12 @@ def assert_path_inside_workspace(
 
 @dataclass(frozen=True)
 class LocalProjectTaskSpec:
-    """Immutable Local Project Debug session specification.
+    """Canonical Local Project Debug session specification (one schema).
 
-    Contains at minimum the fields required by the product task contract.
-    No secrets are persisted.
+    ``to_mapping`` / ``from_mapping`` are the single persisted contract for
+    ``local_project_task.json``: the app pre-writes it before the worker
+    starts, the source preserves it through terminal completion, and Apply
+    To Project / history-reopen read it back.  No secrets are persisted.
     """
 
     session_id: str
@@ -781,18 +785,19 @@ def check_apply_gates(
             return False, "project working tree is dirty"
     except ApplicationInputError as exc:
         return False, f"cannot check working tree: {exc}"
-    # Gate 4: git apply --check
+    # Gate 4: git apply --check (UTF-8 bytes so non-ASCII patch content is
+    # never re-encoded through the Windows locale code page)
     try:
         proc = subprocess.run(["git", "apply", "--check", "-p1", "-"],
             cwd=str(repo_root),
-            input=patch_text,
+            input=patch_text.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=10.0,
-            text=True,
         )
         if proc.returncode != 0:
-            return False, f"git apply --check failed: {(proc.stderr.strip() or proc.stdout.strip())[:300]}"
+            detail = (proc.stderr or proc.stdout).decode("utf-8", errors="replace")
+            return False, f"git apply --check failed: {detail.strip()[:300]}"
     except FileNotFoundError:
         return False, "git is not available"
     except subprocess.TimeoutExpired:
@@ -816,6 +821,8 @@ def has_tracked_root_repro(repo_root: Path) -> bool:
             stderr=subprocess.PIPE,
             timeout=5.0,
             text=True,
+            encoding="utf-8",
+            errors="replace",
         )
         if result.returncode != 0:
             return False
@@ -837,14 +844,14 @@ def apply_patch_to_project(
     try:
         proc = subprocess.run(["git", "apply", "-p1", "-"],
             cwd=str(repo_root),
-            input=patch_text,
+            input=patch_text.encode("utf-8"),
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=15.0,
-            text=True,
         )
         if proc.returncode != 0:
-            return False, f"git apply failed: {(proc.stderr.strip() or proc.stdout.strip())[:300]}"
+            detail = (proc.stderr or proc.stdout).decode("utf-8", errors="replace")
+            return False, f"git apply failed: {detail.strip()[:300]}"
     except Exception as exc:
         return False, f"apply failed: {exc}"
     return True, "Patch applied to project"

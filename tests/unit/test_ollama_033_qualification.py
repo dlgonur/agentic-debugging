@@ -673,13 +673,23 @@ def test_post_resource_cleanup_failure_still_reports_failed(tmp_path):
     assert len(cleanup_events) == 1
     assert cleanup_events[0].payload["verified"] is False
 
-def test_next_revision_naturally_becomes_V10():
-    # Existing evidence includes V9; next fresh should be V10 without hard-coding
+def test_next_revision_follows_existing_evidence():
+    # The next revision must be one beyond the highest existing historical
+    # treatment (never reuse); derive the expectation from the immutable
+    # on-disk evidence instead of freezing a specific campaign number.
+    import re as _re
+    root = REPO_ROOT / "experiments" / "pdb_capability_ladder"
+    highest = 0
+    for child in root.glob("level32-cookiecutter-967-deepseek-v4-flash-cloud-v*"):
+        match = _re.search(r"-v(\d+)$", child.name)
+        if match:
+            highest = max(highest, int(match.group(1)))
+    expected = highest + 1
     rev = operator.next_unused_treatment_revision(REPO_ROOT, "deepseek-v4-flash:cloud")
-    assert rev == 10
+    assert rev == expected
     # Also via application bridge
     from agentic_debugger.application.level32 import next_level32_treatment
     rev2, treatment_id, out = next_level32_treatment(REPO_ROOT, "deepseek-v4-flash:cloud")
-    assert rev2 == 10
-    assert treatment_id.endswith("-v10-workspace-derived-official-git-diff-v1")
-    assert "deepseek-v4-flash-cloud-v10" in str(out)
+    assert rev2 == expected
+    assert treatment_id.endswith(f"-v{expected}-workspace-derived-official-git-diff-v1")
+    assert f"deepseek-v4-flash-cloud-v{expected}" in str(out)

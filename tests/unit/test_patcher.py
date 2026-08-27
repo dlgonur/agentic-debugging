@@ -1010,7 +1010,7 @@ class TestAtomicWriteAndRollback:
         import agentic_debugger.runtime.patcher as patcher_mod
         patcher_mod._verify_file_hash = _failing_verify
         try:
-            with pytest.raises(PatchRevertError, match="snapshot preserved"):
+            with pytest.raises(PatchRevertError, match="partial rollback"):
                 pm.revert_patch()
             assert pm.has_active_patch is True
         finally:
@@ -1100,7 +1100,7 @@ class TestAtomicWriteAndRollback:
         import agentic_debugger.runtime.patcher as patcher_mod
         patcher_mod.os.replace = _failing_replace
         try:
-            with pytest.raises(PatchRevertError, match="snapshot preserved"):
+            with pytest.raises(PatchRevertError, match="pre-revert state"):
                 pm.revert_patch()
             assert self._count_tmp_files(ws) == 0
             assert pm.has_active_patch is True
@@ -1130,7 +1130,7 @@ class TestAtomicWriteAndRollback:
         import agentic_debugger.runtime.patcher as patcher_mod
         patcher_mod._verify_file_hash = _failing_then_ok
         try:
-            with pytest.raises(PatchRevertError, match="snapshot preserved"):
+            with pytest.raises(PatchRevertError, match="pre-revert state"):
                 pm.revert_patch()
             assert pm.has_active_patch is True
         finally:

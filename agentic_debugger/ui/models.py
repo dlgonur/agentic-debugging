@@ -386,12 +386,16 @@ class LiveSessionRunner:
         self._drive_events()
         if self._stop.is_set():
             # UI teardown requested: cancel and reap only within the
-            # accepted bounded worker semantics; no callback is needed.
+            # accepted bounded worker semantics; no event callback is needed.
             self._worker.cancel()
             try:
                 self._worker.wait()
             except Exception:
                 pass
+            # An honest terminal classification exists (worker.wait); keep
+            # the session visible in app-owned history instead of leaving an
+            # invisible session directory behind after teardown.
+            self._best_effort_register()
             self._worker.close()
             return
         self._finish_terminal()

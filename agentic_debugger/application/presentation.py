@@ -28,7 +28,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.application import (
@@ -139,6 +139,7 @@ __all__ = [
     "VerifierStageView",
     "VerifierSummaryView",
     "WorkstreamEntry",
+    "active_candidate_attempt",
     "current_source",
     "initial_session_view",
     "presentation_identity",
@@ -259,12 +260,19 @@ class SourceView:
 
 @dataclass(frozen=True)
 class DiagnosisView:
-    """Recorded diagnosis presentation copy (never chain-of-thought)."""
+    """Recorded diagnosis presentation copy (never chain-of-thought).
+
+    ``observed_values`` is the bounded structured mapping the durable
+    ``diagnosis.recorded`` event carried (for example the Local Project
+    session's recorded repository basename and source HEAD).  It is copied
+    verbatim from the event payload, never inferred.
+    """
 
     text: Optional[str] = None
     file_path: Optional[str] = None
     symbol: Optional[str] = None
     confidence: Optional[str] = None
+    observed_values: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -722,6 +730,27 @@ def _debugger_location_target(state: SessionViewState) -> Optional[str]:
     return debugger.script
 
 
+def active_candidate_attempt(state: SessionViewState) -> Optional["PatchAttemptView"]:
+    """The authoritative active candidate attempt (session-ledger semantics).
+
+    Mirrors the accepted SESSION-LEDGER provenance contract: an attempt
+    becomes the active candidate only when it reaches ``APPLIED`` (or the
+    verifier-upgraded ``VERIFIED``); a ``REVERTED`` recorded for that attempt
+    clears it; a later successful apply replaces it.  ``PROPOSED``,
+    ``REJECTED``, and ``APPLY_FAILED`` attempts never become the active
+    candidate — a later failed attempt must not replace an earlier applied
+    one.  Returns ``None`` when no candidate is active.
+    """
+    active: Optional[PatchAttemptView] = None
+    for attempt in sorted(state.patch_attempts, key=lambda item: item.attempt_index):
+        if attempt.stage in (PatchStage.APPLIED, PatchStage.VERIFIED):
+            active = attempt
+        elif attempt.stage is PatchStage.REVERTED:
+            if active is not None and attempt.attempt_index == active.attempt_index:
+                active = None
+    return active
+
+
 def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionViewState:
     """Reduce one validated event into a new immutable view state.
 
@@ -1036,6 +1065,11 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
         )
 
     if kind is SessionEventKind.DIAGNOSIS_RECORDED:
+        observed = payload.get("observed_values")
+        # Live events carry a frozen Mapping; replayed JSON carries a dict.
+        # Accept both (the durable payload contract is a JSON mapping).
+        if not isinstance(observed, Mapping):
+            observed = None
         return replace(
             state,
             diagnosis=DiagnosisView(
@@ -1043,6 +1077,7 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
                 file_path=payload.get("file_path"),
                 symbol=payload.get("symbol"),
                 confidence=payload.get("confidence"),
+                observed_values=dict(observed) if observed is not None else None,
             ),
             controller_phase=controller_phase,
             run_id=run_id,

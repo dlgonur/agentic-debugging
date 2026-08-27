@@ -161,7 +161,7 @@ not create an active patch; `revert_patch` and patch-dependent
 `syntax_check` apply only after a successful apply. The adapter does
 not normalize or repair malformed diffs.
 The adapter has zero provider retry and zero fallback, and preserves the
-25-logical-call and 25,000-byte public-request bounds.
+25-logical-call and 32,768-byte public-request bounds (raised from the original 25,000 to fit Kimi requests; see MAX_PUBLIC_REQUEST_BYTES).
 
 Malformed provider JSON is not rewritten. Invented aliases such as
 top-level `action`, `payload`, or `transition` remain invalid.

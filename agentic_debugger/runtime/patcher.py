@@ -296,6 +296,25 @@ class _ParserState(Enum):
     IN_HUNK = auto()
 
 
+def _split_diff_lines(diff_text: str) -> List[str]:
+    """Split a diff into lines on ``\\n`` only, keeping line terminators.
+
+    ``str.splitlines`` would additionally split on ``\\v``, ``\\f``,
+    ``\\x1c``-``\\x1e``, ``\\x85``, ``\\u2028`` and ``\\u2029`` — characters
+    that are legal inside source lines (a form feed in Python source is not
+    rare).  Splitting on those boundaries silently corrupts hunk line
+    accounting and wrongly rejects otherwise-valid patches.  A ``\\r``
+    preceding ``\\n`` stays part of the line and is stripped later as EOL.
+    """
+    if not diff_text:
+        return []
+    parts = diff_text.split("\n")
+    lines = [part + "\n" for part in parts[:-1]]
+    if parts[-1]:
+        lines.append(parts[-1])
+    return lines
+
+
 def _parse_unified_diff(diff_text: str) -> List[_ParsedFilePatch]:
     if not diff_text or not diff_text.strip():
         raise PatchValidationError("Empty patch")
@@ -305,7 +324,7 @@ def _parse_unified_diff(diff_text: str) -> List[_ParsedFilePatch]:
             f"Patch exceeds maximum length of {_MAX_PATCH_CHARS}"
         )
 
-    raw_lines = diff_text.splitlines(True)
+    raw_lines = _split_diff_lines(diff_text)
     file_patches: List[_ParsedFilePatch] = []
     current_path: Optional[str] = None
     current_hunk: Optional[_Hunk] = None
@@ -636,7 +655,9 @@ def _find_hunk_anchor(
 def _apply_hunks(
     original_text: str, hunks: List[_Hunk]
 ) -> Tuple[str, Tuple[Tuple[int, int], ...]]:
-    lines = original_text.splitlines(True)
+    # Same LF-only splitting as the parser: a form feed inside a source line
+    # is line content, not a boundary.
+    lines = _split_diff_lines(original_text)
     dominant_eol = _detect_line_ending(lines)
 
     delta = 0
@@ -870,6 +891,8 @@ def _check_official_patch_compatibility(workspace_root: str, diff_text: str) -> 
             cwd=probe_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=20,
             check=False,
         )
@@ -904,6 +927,8 @@ def _check_official_patch_compatibility(workspace_root: str, diff_text: str) -> 
             cwd=probe_root,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=20,
             check=False,
         )
@@ -1032,7 +1057,8 @@ class PatchManager:
             if fp.path.endswith(".py"):
                 encoding_map[fp.path], _ = _detect_encoding(resolved)
             else:
-                raw = open(resolved, "rb").read(4096)
+                with open(resolved, "rb") as sniff:
+                    raw = sniff.read(4096)
                 if raw[:3] == b"\xef\xbb\xbf":
                     encoding_map[fp.path] = "utf-8-sig"
                 else:
@@ -1139,10 +1165,12 @@ class PatchManager:
         snapshot = self._snapshot
 
         verify_hashes: Dict[str, str] = {}
+        pre_revert_bytes: Dict[str, bytes] = {}
         for path in snapshot.files:
             resolved = self._workspace.resolve_path(path, must_exist=True)
             with open(resolved, "rb") as f:
                 current = f.read()
+            pre_revert_bytes[path] = current
             verify_hashes[path] = hashlib.sha256(current).hexdigest()
 
         written: List[str] = []
@@ -1159,19 +1187,27 @@ class PatchManager:
                 replaced.append(path)
                 _verify_file_hash(resolved, snapshot.files[path])
         except Exception as e:
+            # Roll back to the PRE-REVERT (patched) bytes: re-writing the
+            # snapshot bytes would leave already-reverted files mixed with
+            # still-patched files while claiming the snapshot was preserved.
             for path in reversed(written):
                 if path in replaced:
                     try:
                         resolved = self._workspace.resolve_path(path)
                         tmp_path, _ = _write_temp_file(
-                            resolved, snapshot.files[path]
+                            resolved, pre_revert_bytes[path]
                         )
                         _replace_temp_file(tmp_path, resolved)
-                        _verify_file_hash(resolved, snapshot.files[path])
+                        _verify_file_hash(resolved, pre_revert_bytes[path])
                     except Exception:
                         rollback_ok = False
+            if rollback_ok:
+                raise PatchRevertError(
+                    f"Revert write failed, workspace restored to the pre-revert state: {e}"
+                ) from e
             raise PatchRevertError(
-                f"Revert write failed, snapshot preserved: {e}"
+                f"Revert write failed, partial rollback completed "
+                f"(some files may remain reverted): {e}"
             ) from e
 
         restored_hashes: Dict[str, str] = {}

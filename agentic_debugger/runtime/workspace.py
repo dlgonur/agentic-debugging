@@ -2,12 +2,27 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 import tempfile
 import uuid
 from pathlib import Path
 from typing import Optional
 
 from agentic_debugger.runtime.exceptions import WorkspaceError
+
+
+def _remove_readonly(function, path, _exc_info):  # noqa: ANN001
+    """rmtree recovery for read-only files (permissions are preserved by copy2).
+
+    Without this, a read-only file copied from the fixture source makes
+    ``shutil.rmtree`` raise ``PermissionError`` on Windows and the disposable
+    workspace leaks permanently.
+    """
+    try:
+        os.chmod(path, stat.S_IWRITE | stat.S_IREAD)
+        function(path)
+    except OSError:
+        pass
 
 
 class TaskWorkspace:
@@ -129,7 +144,7 @@ class TaskWorkspace:
         root = getattr(self, "_root", None)
         if root is not None and os.path.isdir(root):
             try:
-                shutil.rmtree(root, ignore_errors=False)
+                shutil.rmtree(root, ignore_errors=False, onerror=_remove_readonly)
             except Exception:
                 pass
 

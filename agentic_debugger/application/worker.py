@@ -39,6 +39,7 @@ from agentic_debugger.application.emitter import (
 )
 from agentic_debugger.application.events import (
     OperatorStage,
+    SessionEvent,
     SessionEventKind,
     SessionPhase,
     SessionStatus,
@@ -589,14 +590,21 @@ def run_worker(request: StartRequest) -> int:
             ),
             request.scenario_params,
         )
-        # Local Project terminal authority: typed return, not sidecar file
+        # Local Project terminal authority: the typed return value, never a
+        # sidecar file.  FIXED and UNRESOLVED are the only accepted
+        # dispositions; anything else is an honest controller failure.
         if request.scenario == "local_project":
             if disposition == "UNRESOLVED":
                 outcome = "unresolved"
             elif disposition == "FIXED":
                 outcome = "completed"
-            # Fallback to file for backward compatibility (audit only, not authority)
-            # but the return value is authoritative; file write failure does not affect outcome
+            else:
+                diagnostics.append(
+                    _bounded_diagnostic(
+                        f"local_project source returned an invalid disposition: {disposition!r}"
+                    )
+                )
+                outcome = "failed"
     except CancellationError as exc:
         if exc.reason is CancellationReason.CANCELLED:
             try:

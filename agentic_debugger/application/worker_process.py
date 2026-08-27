@@ -34,7 +34,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from agentic_debugger.application import ApplicationError, ApplicationInputError
 from agentic_debugger.application.events import SessionEvent
@@ -676,7 +676,42 @@ class SessionWorkerProcess:
             diagnostics.append(
                 _bounded_diagnostic(f"post-mortem cleanup failed: {exc}")
             )
+        diagnostics.extend(self._post_mortem_local_project_cleanup())
         return diagnostics
+
+    def _post_mortem_local_project_cleanup(self) -> List[str]:
+        """Remove a Local Project isolated worktree the worker could not.
+
+        The worker's own cleanup cycle owns the normal path; this runs only
+        post-mortem (worker confirmed dead without a terminal), so it never
+        races a live worker.  Without it, a crashed/killed Local Project
+        worker would leak the temporary worktree AND leave a stale ``git
+        worktree`` registration inside the owner repository's metadata.
+        Verification uses the accepted ``cleanup_parent_tmpdir`` contract
+        (filesystem gone + registration pruned).
+        """
+        if self._scenario != "local_project":
+            return []
+        parent = self._scenario_params.get("parent_tmpdir")
+        repo = self._scenario_params.get("project_repo_path")
+        if not parent or not repo:
+            return []
+        from agentic_debugger.application.local_project import cleanup_parent_tmpdir
+
+        # The worker must be confirmed dead before supervisor-side removal.
+        self._reap_or_terminate()
+        try:
+            verified = cleanup_parent_tmpdir(Path(parent), Path(repo))
+        except Exception as exc:
+            return [
+                _bounded_diagnostic(
+                    f"post-mortem isolated worktree cleanup failed: {exc}"
+                )
+            ]
+        return [
+            "post-mortem isolated worktree cleanup: "
+            + ("verified" if verified else "NOT verified")
+        ]
 
     def _startup_failure_result(self, notification: WorkerNotification) -> SessionResult:
         reason = SessionTerminationReason.CONTROLLER_FAILED
@@ -686,6 +721,7 @@ class SessionWorkerProcess:
             _bounded_diagnostic(f"worker startup failed: {notification.error_kind}"),
             *list(notification.diagnostics),
             *self._protocol_diagnostics,
+            *self._post_mortem_local_project_cleanup(),
         ]
         return SessionResult(
             session_id=SessionId(self._session_id),
@@ -712,6 +748,7 @@ class SessionWorkerProcess:
                 f"journal failure (out of band): {notification.error_kind}"
             ),
             *list(notification.diagnostics),
+            *self._post_mortem_local_project_cleanup(),
         ]
         return SessionResult(
             session_id=SessionId(self._session_id),

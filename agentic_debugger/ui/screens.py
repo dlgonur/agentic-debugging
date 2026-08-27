@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
 from rich.text import Text
@@ -208,7 +209,13 @@ def render_view_header(
         SourceKind.LOCAL_PROJECT: "Local Project Debug",
     }.get(view.source_kind, view.source_kind.value)
     if view.source_kind not in (SourceKind.OLLAMA_CLOUD_LADDER, SourceKind.LEVEL32_OPERATOR):
-        head.append(f"  ·  {source_label}")
+        # Local Project Debug already names the mode in its task title;
+        # repeating the source label duplicates it on the same line.
+        if not (
+            view.source_kind is SourceKind.LOCAL_PROJECT
+            and title == source_label
+        ):
+            head.append(f"  ·  {source_label}")
     head.append("\n")
     status_style = {
         SessionStatus.RUNNING: "bold blue",
@@ -2226,8 +2233,19 @@ class WorkspaceScreen(Screen):
             if self.controller is None:
                 bar.update("")
                 return
+            footer = REPLAY_FOOTER
+            if self._view.source_kind is SourceKind.LOCAL_PROJECT and self.size.width >= 100:
+                try:
+                    _, apply_patch = self._local_project_apply_candidate()
+                except Exception:
+                    apply_patch = None
+                if apply_patch:
+                    footer = (
+                        "left/right views   1-7 activity filters   events   phases   "
+                        "a apply to project   h history   n new session   ctrl+c quit"
+                    )
             bar.update(
-                f"[dim]{REPLAY_FOOTER}   ? help[/]"
+                f"[dim]{footer}   ? help[/]"
             )
         else:
             bar = self.query_one("#live-bar", LiveBar)
@@ -2253,9 +2271,18 @@ class WorkspaceScreen(Screen):
                 else:
                     bar.update(f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
             else:
-                bar.update(
-                    f"[dim]{WORKSPACE_FOOTER_IDLE}   ? help[/]"
-                )
+                footer = WORKSPACE_FOOTER_IDLE
+                if self._view.source_kind is SourceKind.LOCAL_PROJECT:
+                    try:
+                        _, apply_patch = self._local_project_apply_candidate()
+                    except Exception:
+                        apply_patch = None
+                    if apply_patch:
+                        footer = (
+                            "left/right views   1-7 activity filters   "
+                            "a apply to project   h history   n new session   ctrl+c quit"
+                        )
+                bar.update(f"[dim]{footer}   ? help[/]")
 
     # -- workspace view navigation ------------------------------------------
 
@@ -2360,6 +2387,41 @@ class WorkspaceScreen(Screen):
         self._render_all()
         self._runner.cancel()
 
+    def _full_session_view(self) -> Optional[SessionViewState]:
+        """The session-final view for owner-facing decisions.
+
+        LIVE mode tracks the terminal-updated view already; REPLAY mode must
+        reduce the complete recorded stream, because the replay cursor's
+        prefix view is navigation state, never session-final truth.
+        """
+        if self.mode is WorkspaceMode.REPLAY and self.controller is not None:
+            from agentic_debugger.application.presentation import (
+                initial_session_view,
+                reduce_event,
+            )
+
+            view = initial_session_view(self.controller.identity)
+            for event in self.controller.replay.events:
+                view = reduce_event(view, event)
+            return view
+        return self._view
+
+    def _local_project_apply_candidate(
+        self,
+    ) -> tuple[Optional[SessionViewState], Optional[str]]:
+        """(session-final view, active candidate patch text) or reasons."""
+        view = self._full_session_view()
+        if view is None or view.source_kind is not SourceKind.LOCAL_PROJECT:
+            return view, None
+        if not view.status.terminal:
+            return view, None
+        from agentic_debugger.application.presentation import active_candidate_attempt
+
+        attempt = active_candidate_attempt(view)
+        if attempt is None or not attempt.patch_text:
+            return view, None
+        return view, attempt.patch_text
+
     def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
         if action == "cancel_live":
             return bool(
@@ -2370,31 +2432,37 @@ class WorkspaceScreen(Screen):
                 and not self._view.status.terminal
             )
         if action == "apply_to_project":
-            # Only for Local Project Debug sessions with a candidate patch and terminal
-            if self._view.source_kind is not SourceKind.LOCAL_PROJECT:
+            # Only a finished Local Project Debug session with an
+            # authoritative ACTIVE candidate (applied, not later reverted)
+            # whose patch body is recorded.
+            if self.mode is not WorkspaceMode.LIVE and self.controller is None:
                 return False
-            if not self._view.patch_attempts:
+            view, patch_text = self._local_project_apply_candidate()
+            if view is None or view.source_kind is not SourceKind.LOCAL_PROJECT:
                 return False
-            # Patch text must be present (not withheld)
-            if not any(a.patch_text for a in self._view.patch_attempts):
-                return False
-            return True
+            return patch_text is not None
         return True
 
     def action_apply_to_project(self) -> None:
-        """Explicit Apply To Project with closed safety gates (no commit)."""
-        view = self._view
-        if view.source_kind is not SourceKind.LOCAL_PROJECT:
+        """Explicit Apply To Project with closed safety gates (no commit).
+
+        The candidate is the session-ledger's ACTIVE attempt (an applied
+        candidate that was not later reverted); proposed/rejected/failed
+        bodies are never applied to the owner project.  The gates and the
+        apply itself run off the UI event loop.
+        """
+        view, patch_text = self._local_project_apply_candidate()
+        if view is None or view.source_kind is not SourceKind.LOCAL_PROJECT:
             self.notify("Apply To Project is only for Local Project Debug sessions.", severity="warning")
             return
-        # Find candidate patch text (latest applied or first proposed)
-        patch_text: Optional[str] = None
-        for attempt in reversed(view.patch_attempts):
-            if attempt.patch_text:
-                patch_text = attempt.patch_text
-                break
+        if not view.status.terminal:
+            self.notify(
+                "The session is still running — wait for it to finish before applying.",
+                severity="warning",
+            )
+            return
         if not patch_text:
-            self.notify("No candidate patch available to apply.", severity="warning")
+            self.notify("No active candidate patch available to apply.", severity="warning")
             return
         # Locate the persisted local_project_task.json to find repo path and head
         session_dir: Optional[Path] = None
@@ -2414,28 +2482,56 @@ class WorkspaceScreen(Screen):
                 try:
                     import json as _json
                     data = _json.loads(task_path.read_text(encoding="utf-8"))
-                    repo_path = Path(data.get("source_repo_path", ""))
-                    expected_head = data.get("source_head_commit")
+                    # Canonical LocalProjectTaskSpec mapping; tolerate the
+                    # pre-fix legacy mapping from completed sessions.
+                    repo_path = Path(data.get("source_repo_path") or data.get("project_repo_path") or "")
+                    expected_head = data.get("source_head_commit") or data.get("project_head")
                 except Exception as exc:
                     self.notify(f"Cannot read local project task: {exc}", severity="error")
                     return
         if repo_path is None or expected_head is None:
-            # Fallback: try entry's task_id? but we need repo
             self.notify("Local project provenance not found; cannot verify gates.", severity="error")
             return
+        self.notify("Checking Apply gates (HEAD, clean tree, patch fit)…", timeout=3.0)
+        # Pass the callable itself: evaluating
+        # ``self._apply_to_project_worker(...)`` here would run the whole
+        # gate/apply chain synchronously on the UI event-loop thread before
+        # ``run_worker`` ever saw it.
+        self.run_worker(
+            lambda: self._apply_to_project_worker(repo_path, expected_head, patch_text),
+            thread=True,
+            exclusive=True,
+            group="apply-to-project",
+        )
+
+    def _apply_to_project_worker(
+        self, repo_path: Path, expected_head: str, patch_text: str
+    ) -> None:
+        """Gate + apply off the UI loop; report through the event loop."""
+        from agentic_debugger.application.local_project import (
+            apply_patch_to_project,
+            check_apply_gates,
+        )
+
         try:
-            from agentic_debugger.application.local_project import check_apply_gates, apply_patch_to_project
             ok, reason = check_apply_gates(repo_path, expected_head, patch_text)
             if not ok:
-                self.notify(f"Apply To Project blocked: {reason}", severity="error")
+                self._report_apply_outcome(False, f"Apply To Project blocked: {reason}")
                 return
             success, msg = apply_patch_to_project(repo_path, patch_text)
-            if success:
-                self.notify("Patch applied to project", severity="information")
-            else:
-                self.notify(f"Apply failed: {msg}", severity="error")
+            self._report_apply_outcome(success, msg if success else f"Apply failed: {msg}")
         except Exception as exc:
-            self.notify(f"Apply To Project failed: {exc}", severity="error")
+            self._report_apply_outcome(False, f"Apply To Project failed: {exc}")
+
+    def _report_apply_outcome(self, success: bool, message: str) -> None:
+        try:
+            # Only App provides call_from_thread; a Screen/DOMNode has no
+            # such method, so the marshal must go through the running app.
+            self.app.call_from_thread(
+                lambda: self.notify(message, severity="information" if success else "error")
+            )
+        except Exception:
+            pass
 
     def live_cancel_event_seen(self) -> None:
         self._cancel_requested_ui = True
@@ -2643,9 +2739,10 @@ class HelpModalScreen(Screen):
                 "[dim]Only the independent verifier decides whether a candidate is RESOLVED.[/]\n"
                 "\n"
                 "[bold #79c0ff]Navigation[/]\n"
-                "  • Home:      [bold]n[/] new session · [bold]o[/]/[bold]enter[/] open replay · [bold]r[/] refresh · [bold]ctrl+c[/] quit · [bold]?[/] help\n"
+                "  • Home:      [bold]n[/] new session · [bold]p[/] local project · [bold]o[/]/[bold]enter[/] open replay · [bold]r[/] refresh · [bold]ctrl+c[/] quit · [bold]?[/] help\n"
                 "  • Workspace: [bold]\\[[/]/[bold]][/] prev/next event · [bold]{{[/]/[bold]}}[/] prev/next phase · [bold]g[/]/[bold]G[/] begin/end\n"
-                "               [bold]j[/] jump to sequence · [bold]1[/]..[bold]7[/] activity filter · [bold]c[/] cancel live · [bold]h[/] history · [bold]n[/] new session · [bold]ctrl+c[/] quit · [bold]?[/] help",
+                "               [bold]j[/] jump to sequence · [bold]1[/]..[bold]7[/] activity filter · [bold]c[/] cancel live · [bold]h[/] history · [bold]n[/] new session\n"
+                "               [bold]a[/] apply candidate to project (Local Project, finished sessions) · [bold]ctrl+c[/] quit · [bold]?[/] help",
                 id="help-content",
             )
             yield Static(

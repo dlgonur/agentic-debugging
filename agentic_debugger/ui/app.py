@@ -231,9 +231,6 @@ class LocalApplicationV1(App):
         self._live_snapshot: Optional[EphemeralSnapshot] = None
         self._live_generation = 0
         self._live_workspace: Optional[WorkspaceScreen] = None
-        self._local_project_worktree_parent: Optional[Path] = None
-        self._local_project_repo_root: Optional[Path] = None
-        self._local_project_head: Optional[str] = None
 
     # -- properties ---------------------------------------------------------
 
@@ -641,6 +638,9 @@ class LocalApplicationV1(App):
             raise
         isolated_path = worktree.isolated_path
         parent_tmpdir = worktree.parent_tmpdir
+        # Ownership: the supervisor's post-mortem path removes the isolated
+        # worktree if the worker dies without a terminal; before the worker
+        # owns it, this start path itself cleans up on any failure below.
         # Build SessionSpec for Local Project (task_id is fixed, policy is None)
         from datetime import datetime, timezone
 
@@ -659,8 +659,10 @@ class LocalApplicationV1(App):
             ),
             budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
         )
-        # Also persist the LocalProjectTaskSpec contract as an artifact (immutable)
-        # but also keep it in memory for Apply-to-Project gates
+        # Persist the LocalProjectTaskSpec contract as the canonical
+        # ``local_project_task.json`` artifact.  The source preserves it
+        # through terminal completion; Apply To Project / history-reopen
+        # read ONLY this artifact (nothing is kept in memory for them).
         local_spec = LocalProjectTaskSpec(
             session_id=session_id,
             source_repo_path=str(validated.repo_root),
@@ -673,10 +675,6 @@ class LocalApplicationV1(App):
             budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
             created_at_utc=created_at,
         )
-        # Remember worktree for emergency fallback (parent owns until worker owns)
-        self._local_project_worktree_parent = parent_tmpdir
-        self._local_project_repo_root = validated.repo_root
-        self._local_project_head = validated.head_commit
 
         # Pre-validate profile fingerprint for worker
         worker_owned = False

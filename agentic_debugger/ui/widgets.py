@@ -820,6 +820,27 @@ class TimelinePanel(VerticalScroll):
         return timeline_export_text(target, phase_boundary_sequences=self._boundaries)
 
 
+def _local_project_identity(view: SessionViewState) -> tuple[str, str]:
+    """(repo basename, short HEAD) from the durable diagnosis record.
+
+    The Local Project session records both facts in the ``diagnosis.recorded``
+    observed_values at session start; the reducer copies them verbatim.  When
+    the record is absent the honest placeholder is shown — never an inferred
+    value from task ids or aliases.
+    """
+    observed = view.diagnosis.observed_values if view.diagnosis is not None else None
+    repo = "—"
+    head = "—"
+    if isinstance(observed, dict):
+        candidate_repo = observed.get("repo_basename")
+        candidate_head = observed.get("source_head")
+        if isinstance(candidate_repo, str) and candidate_repo:
+            repo = candidate_repo
+        if isinstance(candidate_head, str) and candidate_head:
+            head = candidate_head
+    return repo, head
+
+
 def _official_tests_label(view: SessionViewState) -> Optional[str]:
     """Official-verifier milestone label; only proven execution is 'Executed'."""
     if view.source_kind is not SourceKind.LEVEL32_OPERATOR:
@@ -910,28 +931,7 @@ class LiveRunContextPanel(VerticalScroll):
             verifier = "Pending"
         # Local Project Debug has distinct sidebar facts; hide ladder treatment
         if view.source_kind is SourceKind.LOCAL_PROJECT:
-            runtime = "Local Project Debug"
-            # Extract repo basename / HEAD from diagnosis observed_values if present
-            repo_basename = "—"
-            head_short = "—"
-            try:
-                diag = view.diagnosis
-                if diag is not None and getattr(diag, "text", None):
-                    # fallback to task_id basename
-                    pass
-                # presentation diagnosis doesn't expose observed_values, but we stored via diagnosis payload?
-                # Try to read from verifier summary classification or from timeline? For now use task_id
-                # Use view.task_id's repo info embedded in diagnosis text observed_values via raw: we stored in diagnosis.
-                # Since Presentation DiagnosisView doesn't have observed_values, we fallback to showing task_id
-                pass
-            except Exception:
-                pass
-            # Try to derive from view.timeline diagnosis recorded observed values? Not available in view; use simple
-            # Display the repo basename as task_id unless diagnosis provides better
-            # For local project, task_id is local-project-debug; we show it as Project
-            # and attempt to show head from model provenance alias if it looks like SHA
-            if view.model_provenance is not None and view.model_provenance.profile_id and len(view.model_provenance.profile_id) == 12:
-                head_short = view.model_provenance.profile_id
+            repo_basename, head_short = _local_project_identity(view)
             lines = [
                 "[bold #79c0ff]RUN[/]",
                 "[bright_white]Local Project Debug[/]",
@@ -999,8 +999,6 @@ class LiveRunContextPanel(VerticalScroll):
                 if value is None:
                     return "Not recorded"
                 return f"{value} / {maximum}" if maximum is not None else str(value)
-            def duration(value):
-                return "—" if value is None else f"{value:.1f}s"
             if view.pdb_observed:
                 pdb = "Observed"
             elif view.debugger.session_started:
@@ -1017,9 +1015,12 @@ class LiveRunContextPanel(VerticalScroll):
                 verifier = "Not started"
             def row(label: str, value: str) -> str:
                 return f"[#8b949e]{label:<10}[/] [bright_white]{_markup_escape(value)}[/]"
-            repo_basename = "—"
-            head_short = "—"
-            # Model field may hold repo basename for local project when stored as profile_id
+            repo_basename, head_short = _local_project_identity(view)
+            model_alias = (
+                view.model_provenance.profile_id
+                if view.model_provenance and view.model_provenance.profile_id
+                else "Not recorded"
+            )
             lines = [
                 "[bold #79c0ff]RUN[/]",
                 "[bright_white]Local Project Debug[/]",
@@ -1030,6 +1031,7 @@ class LiveRunContextPanel(VerticalScroll):
                 row("ATTEMPT", counter(state.candidate_attempt_ordinal, state.ceilings.candidate_attempts)),
                 row("PDB", pdb),
                 row("VERIFIER", verifier),
+                row("ALIAS", model_alias),
                 row("Project", repo_basename),
                 row("Source HEAD", head_short),
             ]

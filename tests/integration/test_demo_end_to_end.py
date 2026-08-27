@@ -661,4 +661,8 @@ class TestCommandLineDemonstration:
         listed = capsys.readouterr().out.split()
         assert listed == sorted(listed)
         assert TASK_ID in listed
-        assert len(listed) == 5
+        # The catalog is the single authority; the count is derived from it
+        # (5 curated fixtures + the 3 capability-ladder pdb-required fixtures).
+        from agentic_debugger.demo.catalog import scenario_ids
+
+        assert len(listed) == len(scenario_ids())

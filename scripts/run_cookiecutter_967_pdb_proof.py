@@ -64,7 +64,17 @@ PARQUET_SHA256 = "0e0bf9355f892ad74ae98d4e1c404f39fd6654a8e351ee3e6ab162e4a64cd3
 EVALUATOR_COMMIT = "c71902a8cf8d2b725f63d51f199f4d3e56f68d2d"
 MODEL = "gpt-oss:20b-cloud"
 DEFAULT_MODEL = MODEL
-EXPECTED_OLLAMA_VERSION = "0.33.0"
+# Single authority: import the adapter's pinned version so the operator can
+# never silently re-pin the gate to a drifted literal.  The fallback literal
+# only covers direct-file execution without the package importable; the
+# qualification test still asserts both stay at 0.33.0.
+try:
+    from scripts.ollama_cloud_command_adapter import (
+        EXPECTED_OLLAMA_VERSION as _ADAPTER_EXPECTED_OLLAMA_VERSION,
+    )
+except Exception:  # pragma: no cover - direct-file fallback
+    _ADAPTER_EXPECTED_OLLAMA_VERSION = None
+EXPECTED_OLLAMA_VERSION = _ADAPTER_EXPECTED_OLLAMA_VERSION or "0.33.0"
 IMAGE_GATE_OBSERVABILITY_POLICY_ID = "evaluator-image-gate-observability-v1"
 IMAGE_GATE_EVIDENCE_SCHEMA_VERSION = "level32-image-verification-v1"
 IMAGE_INSPECT_FORMAT = (

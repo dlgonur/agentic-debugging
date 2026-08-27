@@ -1,0 +1,5 @@
+# Frozen evidence capsules are byte-addressed artifacts: manifest sha256
+# values are computed over the committed bytes.  EOL conversion (core.autocrlf)
+# would rewrite them to CRLF on checkout and break every integrity check with
+# a false mismatch, so they are declared binary for all platforms.
+experiments/r6_debugger_training/runs/frozen/** -text

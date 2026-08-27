@@ -86,17 +86,31 @@ def build_trace(evidence: dict[str, Any], model_identity: dict[str, Any]) -> dic
     }
 
     # --- failure reproduction (sanitized) ----------------------------------
-    repro_text: Optional[str] = None
+    # Proof and display text are tracked independently: an observed
+    # ``failure_reproduced is True`` stays proof even when the observation
+    # captured no (or blank) output text.
+    reproduction_observed: bool = False
+    reproduction_summary: Optional[str] = None
     for obs in observations:
         if obs.get("name") == "run_reproduction" and obs.get("status") == "ok":
             payload = obs.get("payload") or {}
             if payload.get("failure_reproduced") is True:
-                repro_text = payload.get("failure_output") or None
+                reproduction_observed = True
+                reproduction_summary = payload.get("failure_output") or None
                 break
     failure_reproduction = {
-        "reproduced": True,
-        "sanitized_summary": repro_text or (
-            "baseline behavioral check failed after executing the target behavior"
+        # Truthful: only a real ``failure_reproduced is True`` observation
+        # proves reproduction; absence is reported as not reproduced.  Blank
+        # output never erases an observed reproduction.
+        "reproduced": reproduction_observed,
+        "sanitized_summary": (
+            reproduction_summary
+            if reproduction_summary is not None
+            else (
+                "baseline failure reproduced; no output captured"
+                if reproduction_observed
+                else "no successful baseline reproduction observation was recorded"
+            )
         ),
     }
 

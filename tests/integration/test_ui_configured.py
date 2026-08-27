@@ -95,6 +95,25 @@ def make_app(tmp_path: Path) -> LocalApplicationV1:
     return LocalApplicationV1(history_store=HistoryStore(tmp_path))
 
 
+@pytest.fixture(autouse=True)
+def _non_ladder_task_options(monkeypatch):
+    """Restore the non-ladder task option these configured-mode tests need.
+
+    At the current accepted HEAD the Start picker exposes only the
+    capability-ladder tasks, so the configured/deterministic UI modes cannot
+    be reached through the product picker and the default screen opens on a
+    ladder task (mode row hidden, configured start unavailable).  These tests
+    protect the configured-mode screen machinery itself, so they restore the
+    non-ladder task option through the app's task-options seam.
+    """
+    from agentic_debugger.ui.app import LocalApplicationV1
+
+    def _options(self):
+        return ((f"Configured fixture - {TASK_ID}", TASK_ID),)
+
+    monkeypatch.setattr(LocalApplicationV1, "curated_task_options", _options)
+
+
 class TestConfiguredStartScreen:
     def test_no_profiles_keeps_start_unavailable(self, tmp_path):
         async def scenario(pilot):
@@ -257,7 +276,7 @@ class TestConfiguredLiveSession:
                 if (state_dir / "phase.json").is_file()
                 else None
             )
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -346,7 +365,7 @@ class TestConfiguredLiveSession:
             assert "c cancel" not in live_bar_text(workspace)
             assert "1-7 activity filters" in live_bar_text(workspace)
             # return to history; the failure registered honestly
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -377,7 +396,7 @@ class TestConfiguredLiveSession:
                 label="stage2-second-failed-terminal",
             )
             assert workspace2._live_terminal.status is SessionStatus.FAILED
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -521,7 +540,7 @@ class TestMixedSequentialSessions:
             assert "c cancel" not in live_bar_text(workspace1)
             session1_id = app.live_view.session_id
             assert session1_id is not None
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -565,7 +584,7 @@ class TestMixedSequentialSessions:
             assert "Cancelled" in header_text(workspace2)
             session2_id = app.live_view.session_id
             assert session2_id != session1_id
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -630,7 +649,7 @@ class TestMixedSequentialSessionsExtra:
             assert "Cancelled" in header_text(workspace1)
             session1_id = app.live_view.session_id
             assert session1_id is not None
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -673,7 +692,7 @@ class TestMixedSequentialSessionsExtra:
             session2_id = app.live_view.session_id
             assert session2_id is not None
             assert session2_id != session1_id
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -733,7 +752,7 @@ class TestMixedSequentialSessionsExtra:
                 label="stage2-cancel-terminal",
             )
             assert workspace1._live_terminal.status is SessionStatus.CANCELLED
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -778,7 +797,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=120.0,
                 label="stage4-retry-terminal",
             )
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
@@ -919,7 +938,7 @@ class TestConfiguredAdversarial:
                 label="stage1-small-terminal-failure",
             )
             assert "Failed" in header_text(workspace)
-            await pilot.press("q")
+            await pilot.press("escape")
             await wait_until(
                 pilot,
                 lambda: isinstance(pilot.app.screen, HomeScreen),
