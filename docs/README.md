@@ -10,7 +10,8 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | **Current status authority** (2026-08-13 R1–R6 state, plus 2026-08-16/17 product closeout and 2026-08-18 Nemotron capability-probe closeout) |
+| `project-closeout.md` | **Current status authority** (2026-08-13 R1–R6 state, plus 2026-08-16/17 product closeout, 2026-08-18 Nemotron capability-probe closeout, and the 2026-08-27 pre-release hardening update) |
+| `pre-release-hardening-2026-08-27.md` | Durable PRE-RELEASE-HARDENING-01 closeout record (feature-freeze ready at `8fbea88`; PRH-D01..D09 dispositions) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
 | `final-report.md` | Current technical report through 2026-08-13 (R1-R6 phase; S8/S9 snapshot archived) |
 | `project-tracker.md` | Current execution tracker |

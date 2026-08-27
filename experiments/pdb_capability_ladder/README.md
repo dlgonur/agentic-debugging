@@ -57,6 +57,9 @@ in `../../analysis/level32_candidate_artifact_replay_20260823.md`; the local rev
 package is `_ai-review/L32-ARTIFACT-01/historical-replay/`.
 
 The capability-ladder evidence is sufficient for the current research cycle.
-Further difficulty escalation is paused/closed for now; the next active project
-direction is **Local Application / UI and UX refinement**, pending owner
-screenshot review.
+Further difficulty escalation is paused/closed for now. (The earlier
+"next active project direction = Local Application / UI and UX refinement"
+note is superseded by the 2026-08-27 pre-release hardening closeout:
+`docs/pre-release-hardening-2026-08-27.md` — no active required engineering
+campaign remains; the next phase is documentation/release/tag/closure under
+owner decision.)

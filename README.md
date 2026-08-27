@@ -13,10 +13,24 @@ interactive debugger-assisted agents.
 ## Current status
 
 **Authority:** [`docs/project-closeout.md`](docs/project-closeout.md) for the
-accepted project closeout. Level-32 artifact-boundary work is recorded as a
-new treatment and does not rewrite historical runs. Roadmap notes live in
-[`TODO.md`](TODO.md); the execution tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
+accepted project closeout; [`docs/pre-release-hardening-2026-08-27.md`](docs/pre-release-hardening-2026-08-27.md)
+for the pre-release hardening / feature-freeze record. Level-32
+artifact-boundary work is recorded as a new treatment and does not rewrite
+historical runs. Roadmap notes live in [`TODO.md`](TODO.md); the execution
+tracker is [`docs/project-tracker.md`](docs/project-tracker.md).
 
+- **Pre-release hardening / feature freeze** (2026-08-27):
+  PRE-RELEASE-HARDENING-01 ACCEPTED at `main` `8fbea88` (baseline
+  `5cbe856`). The final forensic audit + hardening repaired 9 RED blockers
+  (including two FirstMate repair rounds), closed 21 ORANGE findings
+  (17 fixed, 2 false positives, 2 bounded deferred), and documented
+  PRH-D01..D09 as accepted/deferred non-blocking debt. Validation was
+  deterministic only; external provider/Docker/WSL validations were not
+  rerun (accepted evidence stands). No known RED release blocker remains;
+  acceptance is feature-freeze ready and does not itself create a release
+  tag. No active required engineering campaign remains; the next phase is
+  documentation/release/tag/closure under owner decision. Durable record:
+  [`docs/pre-release-hardening-2026-08-27.md`](docs/pre-release-hardening-2026-08-27.md).
 - **Local Application V1** (2026-08-16): COMPLETE — Tasks 1–8 accepted
   ([`docs/architecture/local-application-v1.md`](docs/architecture/local-application-v1.md)).
 - **Real Ollama Cloud product proof** (2026-08-17): COMPLETE via
@@ -82,11 +96,12 @@ new treatment and does not rewrite historical runs. Roadmap notes live in
   were made, and candidate materialization was no longer the systemic blocker.
   Detailed leaderboard:
   [`analysis/level32_repaired_model_matrix_20260824.md`](analysis/level32_repaired_model_matrix_20260824.md).
-- **Capability-ladder stopping point and next direction** (2026-08-24): the
-  Level-32 evidence is sufficient for the current research cycle. Capability
-  escalation is paused/closed for now; the next active project direction is
-  **Local Application / UI and UX refinement**, pending owner screenshot
-  review.
+- **Capability-ladder stopping point** (2026-08-24): the Level-32 evidence is
+  sufficient for the current research cycle. Capability escalation is
+  paused/closed for now. (The 2026-08-24 "next direction = Local Application
+  / UI and UX refinement" note is superseded — Local Application V1, the real
+  Local Project path, and PRE-RELEASE-HARDENING-01 are complete/accepted; see
+  the 2026-08-27 entry above.)
 - **Nemotron 3 Nano capability probe** (2026-08-18): COMPLETE as closed
   evidence. After the multi-model Ollama Cloud generalization, selected
   `nemotron-3-nano:30b-cloud` was tested on the fixed five-task curated
@@ -115,7 +130,7 @@ new treatment and does not rewrite historical runs. Roadmap notes live in
 | Accepted scientific results | [`docs/results-index.md`](docs/results-index.md) |
 | Experiments and evidence | [`experiments/README.md`](experiments/README.md), [`analysis/s5_final_controlled_comparison/README.md`](analysis/s5_final_controlled_comparison/README.md), [`docs/professor_traces/`](docs/professor_traces/) |
 | Final technical report | [`docs/final-report.md`](docs/final-report.md) |
-| Current status | [`docs/project-closeout.md`](docs/project-closeout.md) |
+| Current status | [`docs/project-closeout.md`](docs/project-closeout.md); hardening/feature freeze: [`docs/pre-release-hardening-2026-08-27.md`](docs/pre-release-hardening-2026-08-27.md) |
 | Historical / archive material | [`docs/archive/`](docs/archive/), [`docs/README.md`](docs/README.md), and the archived historical README log |
 
 Recommended first reading order: this README → `docs/results-index.md` →

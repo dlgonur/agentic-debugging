@@ -1,11 +1,13 @@
-# Agentic Debugging — Project Closeout (current, 2026-08-24)
+# Agentic Debugging — Project Closeout (current, 2026-08-27)
 
 **Project:** Academic Agentic Debugging Internship Project
 **Owner:** Onur
 **Execution control:** Main FirstMate
-**Document date:** 2026-08-24
-**Accepted docs baseline HEAD before this reconciliation:**
-`70804d226f7e2d014e1edfa0760c2758e92acf94`
+**Document date:** 2026-08-27 (previous reconciliation: 2026-08-24)
+**Accepted docs baseline HEAD before this reconciliation (2026-08-27):**
+`8fbea883212d3fe4ad6434a366ca0898fbea68f1` (the accepted PRE-RELEASE-HARDENING-01
+commit; earlier historical docs-reconciliation baseline, 2026-08-24:
+`70804d226f7e2d014e1edfa0760c2758e92acf94`)
 **Supersedes:** `docs/archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
 snapshot) and the earlier `docs/archive/reports/final-report-v1.md`
@@ -132,16 +134,40 @@ their later forensic reclassification and repaired-treatment results are
 recorded in the tracked analysis files named by the results index.
 
 The capability-ladder objective is sufficient for the current research cycle;
-further difficulty escalation is paused/closed for now. The next active project
-direction is **Local Application / UI and UX refinement**, pending owner
-screenshot review. No detailed UI roadmap is implied by this status.
+further difficulty escalation is paused/closed for now. The then-current
+"next active project direction = Local Application / UI and UX refinement"
+note (pending owner screenshot review) was subsequently superseded — see the
+2026-08-27 status update below.
+
+**2026-08-27 status update:** PRE-RELEASE-HARDENING-01 is **ACCEPTED /
+FEATURE-FREEZE READY** at `main` `8fbea88` (baseline `5cbe856`). The final
+pre-release forensic audit + hardening was independently reviewed by
+FirstMate, repaired in two FirstMate rounds (PRH-025..028, PRH-029),
+accepted, committed as `8fbea88`, fast-forward merged to `main`, and pushed.
+Totals: 9 RED blockers repaired (PRH-001..004, PRH-025..029); 21 ORANGE
+findings — 17 fixed, 2 false positives, 2 bounded deferred; PRH-D01..D09
+documented as accepted/deferred non-blocking debt. Validation was
+deterministic only; external provider/Docker/WSL validations were not rerun
+(accepted evidence stands). No known RED release blocker remains. Acceptance
+is feature-freeze ready and does **not** itself mean a release tag was
+created. Durable record:
+`docs/pre-release-hardening-2026-08-27.md`. Current state: capability
+research cycle closed/paused; Local Application V1 complete; real Local
+Project path accepted; PRE-RELEASE-HARDENING-01 accepted / feature-freeze
+ready; no active required engineering campaign remains; next phase is
+documentation/release/tag/closure under owner decision. This update does not
+change any scientific finding, qualifier, metric, or the
+INCOMPLETE_HARDWARE_STOP boundary in this document.
 
 **PROJECT STATUS:**
 **POSITIVE REAL-MODEL DYNAMIC DEBUGGING + PROJECT-FINE-TUNED VALIDATION
 ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT
 INCOMPLETE DUE HARDWARE; R1-R6 DOCS CLOSEOUT COMMITTED, PUSHED, AND
 INTEGRATED TO MAIN; LEVEL-32 REPAIRED MATRIX COMPLETE; CAPABILITY ESCALATION
-PAUSED; NEXT DIRECTION LOCAL APPLICATION / UI AND UX REFINEMENT**
+PAUSED; LOCAL APPLICATION V1 + REAL LOCAL PROJECT PATH COMPLETE;
+PRE-RELEASE-HARDENING-01 ACCEPTED / FEATURE-FREEZE READY (8fbea88); NO KNOWN
+RED RELEASE BLOCKER REMAINS; NO ACTIVE REQUIRED ENGINEERING CAMPAIGN; NEXT
+PHASE: DOCUMENTATION / RELEASE / TAG / CLOSURE UNDER OWNER DECISION**
 
 ---
 

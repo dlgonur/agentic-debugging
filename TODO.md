@@ -2,6 +2,29 @@
 
 ## Durum notu
 
+**2026-08-27 PRE-RELEASE-HARDENING-01 — ACCEPTED / FEATURE-FREEZE READY.**
+The final pre-release forensic audit + hardening of the accepted product at
+`main` @ `5cbe856` was independently reviewed by FirstMate, repaired in two
+FirstMate rounds (PRH-025..028, PRH-029), accepted, and committed as
+`8fbea88` (fast-forward merged to `main` and pushed). Totals: 9 RED blockers
+repaired (PRH-001..004, PRH-025..029); 21 ORANGE findings — 17 fixed,
+2 false positives, 2 bounded deferred; PRH-D01..D09 documented as
+accepted/deferred non-blocking debt. Validation was deterministic only;
+external provider/Docker/WSL validations were not rerun (accepted evidence
+stands). No known RED release blocker remains. Acceptance is feature-freeze
+ready and does not itself create a release tag. Durable record:
+`docs/pre-release-hardening-2026-08-27.md`.
+
+**Current project direction (2026-08-27, supersedes the 2026-08-24 note):**
+The capability-ladder evidence is sufficient for the current research cycle;
+capability escalation remains paused/closed. The 2026-08-24 "next active
+direction = Local Application / UI and UX refinement" note is superseded:
+capability research is closed/paused, Local Application V1 is complete, the
+real Local Project path is accepted, and PRE-RELEASE-HARDENING-01 is
+accepted / feature-freeze ready at `8fbea88`. No active required engineering
+campaign remains; the next phase is documentation/release/tag/closure under
+owner decision. UI/UX refinement is not an active required campaign.
+
 **2026-08-24 Level-32 repaired model matrix — COMPLETE.** All 15 currently
 eligible `live_verified` models ran exactly once, sequentially, under the
 homogeneous `workspace-derived-official-git-diff-v1` treatment. GLM 5.1 and
@@ -12,11 +35,12 @@ reached at least F2P 4/5. There were no candidate-materialization failures or
 infrastructure blocks. The durable leaderboard is
 `analysis/level32_repaired_model_matrix_20260824.md`.
 
-**Current project direction (2026-08-24):** The capability-ladder evidence is
-sufficient for the current research cycle. Further capability escalation is
-paused/closed for now. The next active direction is **Local Application / UI
-and UX refinement**, pending owner screenshot review; no detailed UI roadmap is
-opened here.
+**Current project direction (2026-08-24 — superseded 2026-08-27):** The
+capability-ladder evidence is sufficient for the current research cycle.
+Further capability escalation is paused/closed for now. The 2026-08-24
+"next active direction = Local Application / UI and UX refinement" note was
+superseded by the 2026-08-27 pre-release hardening closeout above; no
+detailed UI roadmap is opened here.
 
 **2026-08-24 Level-32 repaired authoritative treatment — COMPLETE / RESOLVED.**
 Fresh GLM 5.2 V11 under

@@ -26,14 +26,31 @@ Rules:
   occurred. Detailed report:
   `analysis/level32_repaired_model_matrix_20260824.md`.
 
-## Current project direction (2026-08-24)
+## Current project direction (2026-08-27)
 
 - [x] **Capability-ladder stopping point — COMPLETE.** Level-32 evidence is
   sufficient for the current research cycle. Further capability escalation is
   paused/closed for now; no harder rung or remaining model queue is active.
-- [ ] **Next active direction — Local Application / UI and UX refinement.**
-  Keep this high-level pending owner screenshot review; no detailed UI roadmap
-  is opened in the tracker yet.
+- [x] **PRE-RELEASE-HARDENING-01 — ACCEPTED / FEATURE-FREEZE READY**
+  (2026-08-27, `main` `8fbea88`, baseline `5cbe856`). Forensic audit +
+  hardening across the accepted product: 9 RED blockers repaired
+  (PRH-001..004, plus FirstMate repair rounds PRH-025..028 and PRH-029);
+  21 ORANGE findings — 17 fixed, 2 false positives, 2 bounded deferred;
+  PRH-D01..D09 documented accepted/deferred non-blocking debt. FirstMate
+  independently reviewed and accepted after two repair rounds; committed,
+  fast-forward merged to `main`, and pushed. Durable record:
+  `docs/pre-release-hardening-2026-08-27.md`.
+- [ ] **Next phase — documentation / release / tag / closure under owner
+  decision.** No active required engineering campaign remains. The 2026-08-24
+  "next active direction = Local Application / UI and UX refinement" item is
+  superseded (Local Application V1 and the real Local Project path are
+  complete/accepted and hardened); UI/UX refinement is not an active required
+  campaign and is not marked complete here. Optional work stays optional:
+  OpenCode Go operator preflight RETAIN_OPTIONAL / OWNER-AUTHORIZED; PRH-D04
+  bounded pre-existing test flake (deferred); PRH-D08 owner product decision
+  on the unreachable configured/deterministic UI modes; PRH-D09 bounded
+  deferred harness debt; PRH-D01..D07 accepted risks. Hardening acceptance
+  does not itself create a release tag.
 
 ---
 
