@@ -578,6 +578,7 @@ Button {
     margin: 0;
 }
 
+#start-actions,
 #local-start-actions {
     width: 1fr;
     height: auto;
@@ -585,6 +586,7 @@ Button {
     margin: 1 0 0 0;
 }
 
+#start-session-button,
 #local-start-button {
     width: auto;
     min-width: 22;
@@ -597,10 +599,12 @@ Button {
     margin: 0;
 }
 
+#start-session-button:hover,
 #local-start-button:hover {
     background: #2ea043;
 }
 
+#start-session-button:focus,
 #local-start-button:focus {
     background: #2ea043;
     border: tall #3fb950;

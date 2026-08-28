@@ -37,7 +37,7 @@ Per the S5 task prompt (lines 36–43): no model run, no cp118 run, no S4 resume
 
 If new evidence later makes `scientific_necessity = GO` (e.g., a load-bearing final claim comes to depend on the cp118+RAG correctness result), a future authorized campaign would require:
 
-1. **Explicit owner (Onur) + Main FirstMate authorization** for live model execution and a new campaign.
+1. **Explicit project-owner authorization** for live model execution and a new campaign.
 2. **A fresh frozen contract** distinct from `966c2aaba413d6f688ad9095b47c2c0d3c6936ea67bc95acb52fd9a1df5745bd` (new contract SHA256, new run identity).
 3. **Strict separation from the existing 10 stock-generated tasks** — the old first-10 stock-generated pairs (`runs/run-1-live-2026-08-10/`) must not be mixed with optimized future tasks (per master plan §S4: "Do not mix stock-generated first 10 tasks with hypothetical optimized future tasks").
 4. **A full 40-task completion marker** (`S4_GENERATION_COMPLETE.json` with `valid_pairs==40`) before the frozen C9 v1.2.1 CPU evaluator runs (the evaluator fails closed if `len(rows) != len(manifest)`).
@@ -81,5 +81,5 @@ The Efficient SDPA capability (commit `10bdfa91...`) would remove the dominant c
 1. **Do NOT run a fresh optimized S4 rerun in S5.** (`scientific_necessity = NO-GO`; `current_execution_authorization = NOT_AUTHORIZED_IN_S5`.)
 2. **Record the Efficient SDPA capability as a future-work enabler** in the technical report (S8), with the precise future GO conditions in §2 above.
 3. **Carry the bounded negative debugger result (D1 + S2) forward as the accepted real-model debugger evidence**; do not open S3 (already skipped: trigger condition 1 false).
-4. **The immediate next stage per the master plan is S6 (Real-Model Dynamic Debugging Demo)** — but S6 is `BLOCKED BY REAL DEBUGGER TRAJECTORY`; no real positive trajectory exists in the accepted evidence. The demo must distinguish model decisions from deterministic tooling and must not replay a scripted success as if it were model behavior. Whether S6 can proceed with the bounded negative evidence (an honest "negative-result demo") or remains blocked is a Main FirstMate / owner decision.
-5. **No Git commit, push, merge, or stage** in S5. Candidate left for FirstMate review.
+4. **The immediate next stage per the master plan is S6 (Real-Model Dynamic Debugging Demo)** — but S6 is `BLOCKED BY REAL DEBUGGER TRAJECTORY`; no real positive trajectory exists in the accepted evidence. The demo must distinguish model decisions from deterministic tooling and must not replay a scripted success as if it were model behavior. Whether S6 can proceed with the bounded negative evidence (an honest "negative-result demo") or remains blocked is a project-owner decision.
+5. **No Git commit, push, merge, or stage** in S5. The candidate was left for independent review.

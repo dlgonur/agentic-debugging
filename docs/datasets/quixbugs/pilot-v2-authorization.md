@@ -114,8 +114,8 @@ contradictory subscription/fallback assertions are rejected before any
 artifact is written, and the materialized authorization passes the strict
 `authorization_failure` / `validate_authorization_artifact` validator. The
 `operator-bundle` flow is implemented and packaged but not executed by any
-implementation agent; real operator preflight remains pending FirstMate
-review and Onur's manual execution.
+implementation agent; real operator preflight remains pending independent
+review and project-owner execution.
 
 ## Interaction with the runner
 

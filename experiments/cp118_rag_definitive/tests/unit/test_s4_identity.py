@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import shutil
 from pathlib import Path
 
@@ -31,9 +32,8 @@ CONTRACT = json.loads(
 )
 EXPECTED_IDENTITY = CONTRACT["model"]["adapter_identity"]
 
-ACCEPTED_CP118_PATH = (
-    Path(r"C:\Users\benya\Downloads\selected-adapter-corrected-cp118-"
-         r"20260809T193500Z-1-001\selected-adapter-corrected-cp118")
+ACCEPTED_CP118_PATH = Path(
+    os.environ.get("AGENTIC_DEBUGGER_CP118_ADAPTER", "__missing_cp118_adapter__")
 )
 FROZEN_TREE = "65b5ed9a354d4b2c03ba86e2b8065118e11abab9c439cb481b5739f1b86e7c00"
 
@@ -74,7 +74,7 @@ def _synthetic_adapter(tmp_path: Path) -> Path:
 
 @pytest.mark.skipif(
     not ACCEPTED_CP118_PATH.is_dir(),
-    reason="accepted cp118 artifact not present at the recorded path",
+    reason="accepted cp118 artifact not configured through AGENTIC_DEBUGGER_CP118_ADAPTER",
 )
 def test_accepted_cp118_verifies_against_frozen_contract():
     """The accepted cp118 artifact must reproduce the frozen tree identity

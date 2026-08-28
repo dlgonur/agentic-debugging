@@ -1,4 +1,4 @@
-"""UI-owned presentation control models for the Local Application V1 TUI.
+"""UI-owned presentation control models for the Agentic Debugger TUI.
 
 This module is deliberately Textual-free so the navigation and live-session
 state machines stay unit-testable without a terminal.  It owns only UI

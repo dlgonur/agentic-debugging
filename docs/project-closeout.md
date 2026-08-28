@@ -1,22 +1,35 @@
-# Agentic Debugging — Project Closeout (current, 2026-08-27)
+# Agentic Debugging — Project Closeout (current, 2026-08-28)
 
-**Project:** Academic Agentic Debugging Internship Project
-**Owner:** Onur
-**Execution control:** Main FirstMate
-**Document date:** 2026-08-27 (previous reconciliation: 2026-08-24)
+**Project:** Agentic Debugger research prototype
+**Owner:** Repository owner
+**Execution control:** Repository owner
+**Document date:** 2026-08-28 (previous reconciliation: 2026-08-27)
 **Accepted docs baseline HEAD before this reconciliation (2026-08-27):**
 `8fbea883212d3fe4ad6434a366ca0898fbea68f1` (the accepted PRE-RELEASE-HARDENING-01
 commit; earlier historical docs-reconciliation baseline, 2026-08-24:
 `70804d226f7e2d014e1edfa0760c2758e92acf94`)
-**Supersedes:** `docs/archive/status/project-closeout-2026-08-11.md` (the
+**Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
-snapshot) and the earlier `docs/archive/reports/final-report-v1.md`
+snapshot) and the earlier `outdated/docs-archive/reports/final-report-v1.md`
 (2026-07-31).
 
 This is the single current reviewer/handoff status document. The full
 technical narrative through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
-`docs/archive/reports/final-report-2026-08-11.md`.
+`outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-08-28 closure update:** the mandatory project cycle is **CLOSED**.
+Release tag `v0.1.0` exists at `d01f7a5`. The post-tag application repair
+restored accepted curated/configured session sources to the Start picker and
+removed a transient cancellation-state race (`8b2479b`). Current code and
+tests also prove that campaign `updated_at` uses finalization time and that
+`ModelRequestBudgetExceeded` is raised before provider launch; the older debt
+statements were stale. Superseded roadmaps, status snapshots, reports, frozen
+Friday-delivery documents, and a conversation handoff now live under
+`outdated/`. Optional OpenCode Go execution and license-gated BugsInPy
+execution were closed as explicit **NOT EXECUTED** boundaries. No live
+provider, Docker, WSL, paid route, or licensed dataset was run during this
+closure. No required engineering campaign remains open.
 
 **2026-08-16 status update:** Local Application V1 Tasks 1–8 are COMPLETE /
 ACCEPTED (authoritative record `docs/architecture/local-application-v1.md`);
@@ -142,7 +155,7 @@ note (pending owner screenshot review) was subsequently superseded — see the
 **2026-08-27 status update:** PRE-RELEASE-HARDENING-01 is **ACCEPTED /
 FEATURE-FREEZE READY** at `main` `8fbea88` (baseline `5cbe856`). The final
 pre-release forensic audit + hardening was independently reviewed by
-FirstMate, repaired in two FirstMate rounds (PRH-025..028, PRH-029),
+independent review, repaired in two review rounds (PRH-025..028, PRH-029),
 accepted, committed as `8fbea88`, fast-forward merged to `main`, and pushed.
 Totals: 9 RED blockers repaired (PRH-001..004, PRH-025..029); 21 ORANGE
 findings — 17 fixed, 2 false positives, 2 bounded deferred; PRH-D01..D09
@@ -309,7 +322,7 @@ structured JSON trace export.
 
 ## 9. Git closeout and what remains
 
-The R1-R6 documentation candidate Git work is **COMPLETE**: FirstMate review
+The R1-R6 documentation candidate Git work is **COMPLETE**: independent review
 **ACCEPTED** (2026-08-13); commit/push and integration to `main` were
 performed by the Final Git operator; at the accepted Local Application V1
 closeout, owner Git evidence showed main == origin/main at `387a100`

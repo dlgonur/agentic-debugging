@@ -359,7 +359,7 @@ python scripts/quixbugs_opencode_go_adapter.py route-preflight-only `
 ```
 
 The implementation agent must not execute these real commands; real operator
-preflight remains pending FirstMate review and Onur's manual execution.
+preflight remains pending independent review and project-owner execution.
 `operator-bundle` binds the authorization and adapter configuration to the
 clean current HEAD present after Git closeout, so the manual sequence runs
 after the candidate is accepted and merged.
@@ -638,7 +638,7 @@ measure model performance or PDB effectiveness; or advance RAG, SFT, or DPO.
 The operator preparation flow (`route-capture` → `operator-bundle` →
 `adapter-validate` → `route-preflight-only`) is implemented and packaged, but
 no real OpenCode inspection command has been executed by an implementation
-agent. Real operator preflight remains pending FirstMate review and Onur's
+agent. Real operator preflight remains pending independent review and the project owner's
 manual execution.
 
 Until all five exist, `live-wire` remains blocked before any provider process.

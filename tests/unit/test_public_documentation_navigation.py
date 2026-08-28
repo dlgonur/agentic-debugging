@@ -1,4 +1,4 @@
-"""Structural checks for the professor-facing navigation layer.
+"""Structural checks for the public documentation navigation layer.
 
 These tests read the shipped README, results index, family notes, and
 ``.gitignore``. They do not invent scientific numbers: they assert that the
@@ -30,7 +30,7 @@ FAMILY_ENTRY_POINTS = {
     "local_inference": "experiments/local_inference_perf/README.md",
     "s5": "analysis/s5_final_controlled_comparison/README.md",
     "s5_report": "analysis/s5_final_controlled_comparison/s5_controlled_comparison_report.md",
-    "s6": "docs/archive/presentation/s6-real-debugging-evidence/README.md",
+    "s6": "outdated/docs-archive/presentation/s6-real-debugging-evidence/README.md",
     "quixbugs": "research/quixbugs/README.md",
     "bugsinpy": "research/bugsinpy/README.md",
     "professor_traces": "docs/professor_traces/README.md",
@@ -42,10 +42,10 @@ FAMILY_ENTRY_POINTS = {
     "local_app": "docs/architecture/local-application-v1.md",
     "ollama_adapter": "docs/architecture/ollama-cloud-command-adapter-v1.md",
     "archived_master_plan": (
-        "docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md"
+        "outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md"
     ),
     "archived_readme_log": (
-        "docs/archive/status/README-historical-status-log-through-2026-08-07.md"
+        "outdated/docs-archive/status/README-historical-status-log-through-2026-08-07.md"
     ),
 }
 
@@ -55,8 +55,8 @@ REQUIRED_README_POINTERS = (
     "docs/results-index.md",
     "docs/final-report.md",
     "docs/project-closeout.md",
-    "docs/archive/",
-    "docs/archive/status/README-historical-status-log-through-2026-08-07.md",
+    "outdated/docs-archive/",
+    "outdated/docs-archive/status/README-historical-status-log-through-2026-08-07.md",
     "experiments/README.md",
 )
 
@@ -98,7 +98,7 @@ def test_family_entry_points_exist() -> None:
         for relative in FAMILY_ENTRY_POINTS.values()
         if not (REPO_ROOT / relative).is_file()
     ]
-    assert missing == [], f"missing professor-facing entry points: {missing}"
+    assert missing == [], f"missing public documentation entry points: {missing}"
 
 
 def test_obsolete_master_plan_is_archived_not_at_root() -> None:
@@ -119,7 +119,7 @@ def test_readme_navigation_pointers() -> None:
     assert "docs/final-report.md" in README
     assert "docs/results-index.md" in README
     assert (
-        "docs/archive/status/README-historical-status-log-through-2026-08-07.md"
+        "outdated/docs-archive/status/README-historical-status-log-through-2026-08-07.md"
         in README
     )
 
@@ -136,7 +136,7 @@ def test_results_index_maps_accepted_boundaries() -> None:
         "research/quixbugs/PAIRED_PILOT_V4.json",
         "docs/datasets/bugsinpy/license-gate.md",
         "docs/professor_traces/",
-        "docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md",
+        "outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md",
     ):
         # Index uses repo-relative or docs-relative links; require the basename
         # plus a parent folder so the pointer is a real path, not a slogan.

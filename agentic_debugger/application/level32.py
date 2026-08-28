@@ -118,11 +118,23 @@ def level32_model_profiles() -> Tuple[Level32ModelProfile, ...]:
     own preflight remains the final availability gate at Start time.
     """
 
-    from scripts.ollama_cloud_command_adapter import (
-        CLOUD_MODELS,
-        is_treatment_eligible,
-        transport_config_fingerprint,
-    )
+    try:
+        from scripts.ollama_cloud_command_adapter import (
+            CLOUD_MODELS,
+            is_treatment_eligible,
+            transport_config_fingerprint,
+        )
+    except ModuleNotFoundError as exc:
+        # The research operator lives in the source checkout, outside the
+        # installable package.  A wheel-installed application must still open
+        # cleanly; it simply omits operator-only cloud profiles.  Missing
+        # dependencies *inside* an available adapter remain real errors.
+        if exc.name not in {
+            "scripts",
+            "scripts.ollama_cloud_command_adapter",
+        }:
+            raise
+        return ()
 
     return tuple(
         Level32ModelProfile(

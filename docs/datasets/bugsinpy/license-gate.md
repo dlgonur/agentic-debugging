@@ -298,6 +298,6 @@ All eight selected tasks: BLOCKED.
 Overall BugsInPy pilot: BLOCKED.
 
 The gate can be revisited only with authoritative BugsInPy licensing or
-written redistribution permission, resolved private-use ambiguity, Onur's
+written redistribution permission, resolved private-use ambiguity, the project owner's
 approval to proceed, exact evidence for that decision, and a new review that
 preserves the source/patch/evidence boundaries.

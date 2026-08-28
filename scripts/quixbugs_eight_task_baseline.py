@@ -21,6 +21,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import sys
 import time
 from collections import Counter as _Counter
@@ -50,7 +51,7 @@ from agentic_debugger.runtime.execution import DependencyPreparation  # noqa: E4
 from agentic_debugger.runtime.workspace import TaskWorkspace  # noqa: E402
 
 DISTRO = "Ubuntu-22.04"
-EXTERNAL_ROOT_POSIX = "/home/benya/.local/share/agentic-debugging-internship/quixbugs-smoke-v1"
+EXTERNAL_ROOT_POSIX = os.environ.get("AGENTIC_DEBUGGER_QUIXBUGS_ROOT", "").rstrip("/")
 PYTEST_VERSION = "7.4.4"
 PYTHON_VERSION = "3.10.12"
 PILOT_MANIFEST = REPO_ROOT / "research" / "quixbugs" / "EIGHT_TASK_PILOT_MANIFEST_V1.json"
@@ -108,6 +109,11 @@ def _phase(name: str) -> None:
 
 
 def _setup_environment() -> tuple[WslProcess, WslBubblewrapRunner, str, str, str, dict]:
+    if not EXTERNAL_ROOT_POSIX.startswith("/"):
+        raise SetupError(
+            "set AGENTIC_DEBUGGER_QUIXBUGS_ROOT to the absolute WSL path of "
+            "the prepared QuixBugs environment"
+        )
     process = WslProcess(DISTRO)
     venv_posix = f"{EXTERNAL_ROOT_POSIX}/python-env/py310"
     report: dict = {}

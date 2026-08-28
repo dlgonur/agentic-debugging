@@ -22,7 +22,7 @@ The immediate research choice is therefore **BugsInPy first, QuixBugs fallback, 
 The live checkout was clean at the requested branch and baseline. The source of truth for the architecture is the live repository, tests, and Git state. Codebase Memory MCP was used only as an auxiliary navigation aid:
 
 - project-specific index: `agentic-debugging-internship-dataset-evaluation-v1`
-- indexed path: `C:\Users\benya\Desktop\Projects\agentic-debugging-internship`
+- indexed path: `<repository-root>`
 - mode: fast
 - persistence: `false`
 - automatic indexing/watch: not enabled

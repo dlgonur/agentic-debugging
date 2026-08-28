@@ -13,8 +13,8 @@ historical engineering and S8/S9 narrative (sections 1–21 are the
 2026-08-11 report content, qualified where they were true only at that
 snapshot) and adds the post-S9 R1-R6 phase (sections 22–23). The 2026-08-11
 S8/S9 snapshot is archived verbatim at
-`docs/archive/reports/final-report-2026-08-11.md`; the 2026-07-31 v1
-snapshot remains at `docs/archive/reports/final-report-v1.md`.
+`outdated/docs-archive/reports/final-report-2026-08-11.md`; the 2026-07-31 v1
+snapshot remains at `outdated/docs-archive/reports/final-report-v1.md`.
 
 Every material experimental claim traces to a frozen run artifact, a tracked
 contract, or a committed canonical carrier; external literature claims cite
@@ -425,7 +425,7 @@ about fine-tuning.
   local, not Git-tracked). Reproducibility carrier: tracked S5 ledger +
   provenance map.
 - RAW Track B: `master_plan_prose_only` (values in the untracked S5 master plan
-  §2.5 and the tracked `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`
+  §2.5 and the tracked `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`
   §2.5; cross-referenced in tracked `s4_contract.json`). Reproducibility
   carrier: tracked S5 ledger + tracked 2026-08-10 master plan.
 - cp118 aggregates: `master_plan_prose_only` / `aggregate_external_per_task`
@@ -457,7 +457,7 @@ This result is auxiliary and is not collapsed into the primary repair score.
 It is `master_plan_prose_only` in provenance — the exact 27/30, 27/30, 21/30
 values are not in the tracked `docs/evaluation/model-rag-sft-dpo.md` but are
 carried by the tracked S5 ledger and the tracked 2026-08-10 master plan §2.6.
-No in-repo frozen result file exists. It is not reopened unless Main FirstMate
+No in-repo frozen result file exists. It is not reopened unless the project owner
 explicitly authorizes it based on new evidence.
 
 ---
@@ -708,7 +708,7 @@ evidence and are not rewritten.
 
 The professor's requirements map to three debugger-capability questions. The
 S5 coverage matrix
-(`analysis/s5_final_controlled_comparison/s5_professor_todo_coverage_matrix.md`)
+(`analysis/s5_final_controlled_comparison/s5_requirement_coverage_matrix.md`)
 assesses each against accepted evidence with eight columns kept separate.
 
 ### Summary verdict
@@ -841,7 +841,7 @@ collapsed into any repair score.
 ## 16. S6 evidence presentation
 
 The S6 professor-facing evidence presentation
-(`docs/archive/presentation/s6-real-debugging-evidence/`) is a self-contained static HTML
+(`outdated/docs-archive/presentation/s6-real-debugging-evidence/`) is a self-contained static HTML
 that opens locally with no external URLs, CDNs, scripts, or stylesheets. Every
 load-bearing fact carries a `data-claim-id` bound to an entry in
 `s6_presentation_manifest.json`.
@@ -1046,7 +1046,7 @@ through 2026-08-13:
 
 If a future load-bearing claim comes to depend on the cp118+RAG correctness
 result, a future authorized campaign would require: explicit owner +
-FirstMate authorization; a fresh frozen contract distinct from `966c2aab...`;
+project-owner authorization; a fresh frozen contract distinct from `966c2aab...`;
 strict separation from the existing 10 stock-generated tasks; a full 40-task
 completion marker before the frozen C9 evaluator runs; identical cp118
 adapter identity; and GPU-memory telemetry recorded with correct semantics
@@ -1149,7 +1149,7 @@ R1-R6 carriers are listed in §22.9/§23. Provenance tiers:
 - `master_plan_prose_only` — recorded only as narrative in a master execution
   plan; no frozen run-result file in the repo. The S5 master plan
   (`Agentic_Debugging_Master_Execution_Plan_2026-08-11_S5_CURRENT.md`) is
-  **untracked**; the older `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`
+  **untracked**; the older `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`
   is tracked and carries the same dataset/training/metric aggregates.
 - `local_untracked_accepted` — local accepted evidence on disk, SHA256
   recorded, NOT tracked in Git, NOT clean-checkout reproducible as a
@@ -1168,12 +1168,12 @@ when the tracked artifact has been verified to contain the exact claim.
 | Conclusion | Scientific source | Provenance tier | Source tracked? | Source clean-checkout? | Reproducibility carrier | Carrier contains exact claim? |
 |---|---|---|---|---|---|---|
 | RAW Track A: 33/40 strict, 14/40 apply, 5/40 resolved | `experiments/raw-pilot-v1.1/results/results_final.csv`, `metrics_summary.csv` | local_untracked_accepted | no | no | `s5_comparison_ledger.json` + `s5_provenance_source_map.md` | yes |
-| RAW Track B: 40/40 extracted, 20/40 apply, 5/40 resolved | untracked S5 master plan §2.5; tracked `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.5 | master_plan_prose_only | no (S5 plan); yes (2026-08-10 plan) | no (S5 plan); yes (2026-08-10 plan) | `s5_comparison_ledger.json` + `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | yes |
-| cp118: 40/40 extracted, 0/40 apply, 0/40 resolved, 19/40 truncation | untracked S5 master plan §2.5; tracked 2026-08-10 master plan §2.5; per-task Drive-hosted D7 bundle | aggregate_external_per_task | aggregates yes (2026-08-10 plan + S5); per-task no | aggregates yes (2026-08-10 plan + S5); per-task no | `s5_comparison_ledger.json` + `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | yes |
-| DPO: B1 27/30, SFT 27/30, DPO 21/30 | untracked S5 master plan §2.6; tracked 2026-08-10 master plan §2.6 | master_plan_prose_only | no (S5 plan); yes (2026-08-10 plan) | no (S5 plan); yes (2026-08-10 plan) | `s5_comparison_ledger.json` + `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | yes (values in both) |
+| RAW Track B: 40/40 extracted, 20/40 apply, 5/40 resolved | untracked S5 master plan §2.5; tracked `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.5 | master_plan_prose_only | no (S5 plan); yes (2026-08-10 plan) | no (S5 plan); yes (2026-08-10 plan) | `s5_comparison_ledger.json` + `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | yes |
+| cp118: 40/40 extracted, 0/40 apply, 0/40 resolved, 19/40 truncation | untracked S5 master plan §2.5; tracked 2026-08-10 master plan §2.5; per-task Drive-hosted D7 bundle | aggregate_external_per_task | aggregates yes (2026-08-10 plan + S5); per-task no | aggregates yes (2026-08-10 plan + S5); per-task no | `s5_comparison_ledger.json` + `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | yes |
+| DPO: B1 27/30, SFT 27/30, DPO 21/30 | untracked S5 master plan §2.6; tracked 2026-08-10 master plan §2.6 | master_plan_prose_only | no (S5 plan); yes (2026-08-10 plan) | no (S5 plan); yes (2026-08-10 plan) | `s5_comparison_ledger.json` + `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | yes (values in both) |
 | S4: 10/40, NOT_EVALUATED, 5/10 truncation | `PARTIAL_RUN_RECORD.json`, `run-identity.json` (local); `s4_contract.json` (tracked) | local_untracked_accepted (run records); frozen_in_repo (contract) | run records no; contract yes | run records no; contract yes | `s5_comparison_ledger.json` + `s5_provenance_source_map.md` | yes |
-| D1: `break 20` → tool_error, 0 obs, Gate B/C FAIL, 17,686 tokens | `experiments/debugger_interaction_v2_d1/runs/.../evidence.json` (SHA256 `c7a405cc...`) | local_untracked_accepted | no | no | `s5_professor_todo_coverage_matrix.json/.md` + `s5_comparison_ledger.json` | yes |
-| S2: `continue` → rejected, 0 obs, Gate B/C FAIL | untracked S5 master plan §S2 | master_plan_prose_only | no | no | `s5_professor_todo_coverage_matrix.json/.md` + `s5_comparison_ledger.json` | yes |
+| D1: `break 20` → tool_error, 0 obs, Gate B/C FAIL, 17,686 tokens | `experiments/debugger_interaction_v2_d1/runs/.../evidence.json` (SHA256 `c7a405cc...`) | local_untracked_accepted | no | no | `s5_requirement_coverage_matrix.json/.md` + `s5_comparison_ledger.json` | yes |
+| S2: `continue` → rejected, 0 obs, Gate B/C FAIL | untracked S5 master plan §S2 | master_plan_prose_only | no | no | `s5_requirement_coverage_matrix.json/.md` + `s5_comparison_ledger.json` | yes |
 | Static gcd: F2P 5/5, P2P 1/1, RESOLVED | `docs/datasets/quixbugs/baseline-8-task.md`, `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json` | frozen_in_repo | yes | yes | — (source is tracked) | — |
 | S1-P original live: 957 tokens, NOT RESOLVED | `AI_REVIEW/s1p_.../live-run-1/evidence.json` (source commit `c47be60e...`) | local_untracked_accepted | no | no | `s5_comparison_ledger.json` + `s5_controlled_comparison_report.md` | yes |
 | S1-P post-hoc: RESOLVED F2P 1/1 P2P 2/2 | untracked S5 master plan §S1-P (source commit `9e1b9dc9...`, ref valid) | master_plan_prose_only | no | no | `s5_comparison_ledger.json` + `s5_controlled_comparison_report.md` | yes |
@@ -1183,11 +1183,11 @@ when the tracked artifact has been verified to contain the exact claim.
 
 | Fact | Scientific source | Provenance tier | Source tracked? | Source clean-checkout? | Reproducibility carrier | Carrier contains exact claim? |
 |---|---|---|---|---|---|---|
-| SWE-rebench V2: 1,594 eligible, 347 repos | `experiments/swe_rebench_v2_corpus/b14_package_v2/B14_PACKAGE_MANIFEST.json` | local_untracked_accepted | no | no | `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.3 (tracked) | yes |
-| Split: 1000/150/444, overlap 0, seed 20260808 | `B14_PACKAGE_MANIFEST.json` → `frozen_b13_contract` | local_untracked_accepted | no | no | `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.3 (tracked) | yes |
-| SFT formulation: localized repair, oracle-file-localized source → gold diff | untracked S5 master plan §2.3; local `B14_PACKAGE_MANIFEST.json` → `method` | master_plan_prose_only + local_untracked_accepted | no (S5 plan); no (manifest) | no (S5 plan); no (manifest) | `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.3 (tracked) | yes |
+| SWE-rebench V2: 1,594 eligible, 347 repos | `experiments/swe_rebench_v2_corpus/b14_package_v2/B14_PACKAGE_MANIFEST.json` | local_untracked_accepted | no | no | `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.3 (tracked) | yes |
+| Split: 1000/150/444, overlap 0, seed 20260808 | `B14_PACKAGE_MANIFEST.json` → `frozen_b13_contract` | local_untracked_accepted | no | no | `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.3 (tracked) | yes |
+| SFT formulation: localized repair, oracle-file-localized source → gold diff | untracked S5 master plan §2.3; local `B14_PACKAGE_MANIFEST.json` → `method` | master_plan_prose_only + local_untracked_accepted | no (S5 plan); no (manifest) | no (S5 plan); no (manifest) | `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.3 (tracked) | yes |
 | cp118: step 118, eval_loss 0.45070546, adapter `65b5ed9a...` | `experiments/cp118_rag_definitive/s4_contract.json` | frozen_in_repo | yes | yes | — (source is tracked) | — |
-| Qwen2.5 revision: `c03e6d35...` | untracked S5 master plan §2.4 | master_plan_prose_only | no | no | `s5_comparison_ledger.json` (line 47) + `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.4 (both tracked) | yes |
+| Qwen2.5 revision: `c03e6d35...` | untracked S5 master plan §2.4 | master_plan_prose_only | no | no | `s5_comparison_ledger.json` (line 47) + `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` §2.4 (both tracked) | yes |
 | QuixBugs 40-task cohort: `pilot_manifest_frozen_v1.jsonl` (SHA256 `57208248...`) | `experiments/raw-pilot-v1.1/state/quix40-v1/` | local_untracked_accepted | no | no | `s5_provenance_source_map.md` (tracked) | yes (SHA256 + path) |
 
 ### Literature facts
@@ -1202,7 +1202,7 @@ evidence table (§11) and preserved throughout this report.
 
 | Fact | Source | Provenance tier | Tracked? | Clean-checkout? |
 |---|---|---|---|---|
-| S6: reproducible=YES, positive_demo=NO, bounded_negative=YES | `docs/archive/presentation/s6-real-debugging-evidence/s6_presentation_manifest.json` | frozen_in_repo | yes | yes |
+| S6: reproducible=YES, positive_demo=NO, bounded_negative=YES | `outdated/docs-archive/presentation/s6-real-debugging-evidence/s6_presentation_manifest.json` | frozen_in_repo | yes | yes |
 | PDB backend + deterministic tests pass | `agentic_debugger/runtime/pdb_*`, `tests/` | frozen_in_repo | yes | yes |
 | Golden reachability: 2 successful PDB observations | `tests/golden_trajectories/data/quixbugs-gcd-pdb-reachability-captured-result.json` | frozen_in_repo | yes | yes |
 
@@ -1222,9 +1222,9 @@ The following load-bearing sources were verified by `git ls-files
 | `AI_REVIEW/s1p_.../live-run-1/evidence.json` | no | local_untracked_accepted |
 | `_ai-review/perf-cp118-efficient-sdpa-v1/` | no | local_untracked_accepted |
 | `Agentic_Debugging_Master_Execution_Plan_2026-08-11_S5_CURRENT.md` | no | (untracked; not a carrier) |
-| `docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | **yes** | frozen_in_repo (carrier for dataset/training/metric facts) |
+| `outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md` | **yes** | frozen_in_repo (carrier for dataset/training/metric facts) |
 | `analysis/s5_final_controlled_comparison/*` (6 files) | **yes** | frozen_in_repo |
-| `docs/archive/presentation/s6-real-debugging-evidence/*` (2 files) | **yes** | frozen_in_repo |
+| `outdated/docs-archive/presentation/s6-real-debugging-evidence/*` (2 files) | **yes** | frozen_in_repo |
 | `research/literature/agentic_debugging_literature_closeout_2026-08-11.md` | **yes** | frozen_in_repo |
 | `docs/datasets/quixbugs/baseline-8-task.md` | **yes** | frozen_in_repo |
 | `research/quixbugs/GCD_SMOKE_MANIFEST_V1.json` | **yes** | frozen_in_repo |
@@ -1281,10 +1281,10 @@ where their content has been verified to contain the exact claim.
 
 *This report is synthesis of accepted project evidence through 2026-08-13.
 The 2026-08-11 S8/S9 snapshot is archived verbatim at
-`docs/archive/reports/final-report-2026-08-11.md` (blob
+`outdated/docs-archive/reports/final-report-2026-08-11.md` (blob
 `0dcd54773505f9a4797b6bf49ac3780552b85740`); the 2026-07-31 snapshot is at
-`docs/archive/reports/final-report-v1.md`. The 2026-08-11 closeout is
-archived at `docs/archive/status/project-closeout-2026-08-11.md`; the current
+`outdated/docs-archive/reports/final-report-v1.md`. The 2026-08-11 closeout is
+archived at `outdated/docs-archive/status/project-closeout-2026-08-11.md`; the current
 handoff status is `docs/project-closeout.md`.*
 
 ---
@@ -1581,7 +1581,7 @@ the accepted aggregates are stated to the level the frozen records support.
 The DOCS-STRUCTURE-V1 reorganisation (`34cce32`) renamed many paths. Active
 references in this report use current docs paths; the historical
 `Agentic_Debugging_Project_Closeout_2026-08-11.md` is archived unchanged at
-`docs/archive/status/project-closeout-2026-08-11.md` (git mv; internal
+`outdated/docs-archive/status/project-closeout-2026-08-11.md` (git mv; internal
 old-path strings are historical statements and were not rewritten). The old
 root closeout path and `docs/FINAL_TECHNICAL_REPORT_V2.md` survive only in
 frozen snapshots (historical intentional). Current entry points:

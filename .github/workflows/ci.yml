@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package
+        run: python -m pip install -e ".[app,test]"
+
+      - name: Compile source
+        run: python -m compileall -q agentic_debugger scripts
+
+      - name: Run public application checks
+        run: >-
+          python -m pytest
+          tests/unit/test_public_documentation_navigation.py
+          tests/unit/test_level32_application.py
+          tests/unit/test_local_project_start_action.py
+          tests/integration/test_ui_application.py
+          tests/integration/test_ui_capability_ladder.py
+          -q
+
+      - name: Build wheel
+        run: python -m pip wheel . --no-deps --wheel-dir dist
+
+      - name: Verify wheel resources
+        run: |
+          python - <<'PY'
+          import glob
+          import zipfile
+
+          wheel = glob.glob("dist/*.whl")
+          assert len(wheel) == 1, wheel
+          names = zipfile.ZipFile(wheel[0]).namelist()
+          assert "agentic_debugger/ui/app.tcss" in names
+          assert sum(name.endswith("/task.json") for name in names) >= 5
+          assert any(
+              name.startswith("agentic_debugger/evaluation/")
+              and name.endswith(".json")
+              for name in names
+          )
+          assert any(name.endswith(".dist-info/entry_points.txt") for name in names)
+          PY

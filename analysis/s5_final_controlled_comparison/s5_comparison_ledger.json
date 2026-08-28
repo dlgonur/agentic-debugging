@@ -265,7 +265,7 @@
       ],
       "evidence_path": null,
       "in_repo": false,
-      "notes": "No qlora* directory and no frozen result file exist; aggregate figures are master-plan prose only. Authentic new DPO is CLOSED; do not reopen unless Main FirstMate authorizes based on new evidence."
+      "notes": "No qlora* directory and no frozen result file exist; aggregate figures are master-plan prose only. Authentic new DPO is CLOSED; do not reopen unless the project owner authorizes it based on new evidence."
     },
     "s1p_model_generated_test_probe_original_live": {
       "axis": "model_generated_test_capability",

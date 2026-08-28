@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -39,7 +40,7 @@ from agentic_debugger.quixbugs.adapter import (  # noqa: E402
 from agentic_debugger.runtime.execution import DependencyPreparation  # noqa: E402
 
 DISTRO = "Ubuntu-22.04"
-EXTERNAL_ROOT_POSIX = "/home/benya/.local/share/agentic-debugging-internship/quixbugs-smoke-v1"
+EXTERNAL_ROOT_POSIX = os.environ.get("AGENTIC_DEBUGGER_QUIXBUGS_ROOT", "").rstrip("/")
 PYTEST_VERSION = "7.4.4"
 PYTHON_VERSION = "3.10.12"
 MANIFEST = REPO_ROOT / "research" / "quixbugs" / "GCD_SMOKE_MANIFEST_V1.json"
@@ -52,6 +53,13 @@ def _phase(name: str) -> None:
 
 
 def main() -> int:
+    if not EXTERNAL_ROOT_POSIX.startswith("/"):
+        print(
+            "Set AGENTIC_DEBUGGER_QUIXBUGS_ROOT to the absolute WSL path of "
+            "the prepared QuixBugs environment.",
+            file=sys.stderr,
+        )
+        return 2
     process = WslProcess(DISTRO)
     venv_posix = f"{EXTERNAL_ROOT_POSIX}/python-env/py310"
 

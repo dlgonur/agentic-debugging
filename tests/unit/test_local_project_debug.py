@@ -46,6 +46,7 @@ from agentic_debugger.application.worker_protocol import WorkerProtocolError
 
 FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "command_models" / "dummy_command_model.py"
 LOCAL_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "command_models" / "local_project_dummy.py"
+LOCAL_PDB_FIXTURE = Path(__file__).resolve().parents[1] / "fixtures" / "command_models" / "local_project_pdb_dummy.py"
 
 # ---------------------------------------------------------------------------
 # Helpers: tiny deterministic Git fixture (calculator)
@@ -1004,9 +1005,7 @@ def test_generic_tracked_inventory_nested(tmp_path):
         state_dir = store_root / "state-pricing"
         data_file = store_root / "data-pricing.json"
         data_file.write_text(_json.dumps({"symbol":"price","file":"src/inventory/pricing.py","hypothesis_id":"h1","statement":"price factor wrong","patch_file":str(patch_path),"expressions":[]}), encoding="utf-8")
-        from pathlib import Path as _PP
-        FIXTURE = _PP(r"C:\Users\benya\Desktop\Projects\agentic-debugging-internship\tests\fixtures\command_models\local_project_dummy.py")
-        (config_dir / "command-models.json").write_text(_json.dumps({"schema_version":"command-models-v1","profiles":[{"profile_id":"dummy-pricing","display_name":"Dummy pricing","executable": _sys.executable, "argv":[str(FIXTURE),"--state-dir",str(state_dir),"--data",str(data_file)], "request_timeout_seconds":10}]}), encoding="utf-8")
+        (config_dir / "command-models.json").write_text(_json.dumps({"schema_version":"command-models-v1","profiles":[{"profile_id":"dummy-pricing","display_name":"Dummy pricing","executable": _sys.executable, "argv":[str(LOCAL_FIXTURE),"--state-dir",str(state_dir),"--data",str(data_file)], "request_timeout_seconds":10}]}), encoding="utf-8")
         from agentic_debugger.application.history import HistoryStore
         store = HistoryStore(store_root)
         import uuid
@@ -1099,14 +1098,12 @@ def test_pdb_invocation_real(tmp_path):
     store_root = tmp_path / "hist_pdb"
     store_root.mkdir()
     import sys, json
-    from pathlib import Path as _P
-    FIXTURE_PDB = _P(r"C:\Users\benya\Desktop\Projects\agentic-debugging-internship\tests\fixtures\command_models\local_project_pdb_dummy.py")
     config_dir = store_root / "config"
     config_dir.mkdir(parents=True)
     state_dir = store_root / "state-pdb"
     data_file = store_root / "data-pdb.json"
     data_file.write_text(json.dumps({"symbol":"add","file":"calculator.py","hypothesis_id":"h1","statement":"add returns a - b","patch_file":str(patch_path),"expressions":[]}), encoding="utf-8")
-    (config_dir / "command-models.json").write_text(json.dumps({"schema_version":"command-models-v1","profiles":[{"profile_id":"dummy-pdb","display_name":"Dummy PDB","executable": sys.executable, "argv":[str(FIXTURE_PDB),"--state-dir",str(state_dir),"--data",str(data_file)], "request_timeout_seconds":10}]}), encoding="utf-8")
+    (config_dir / "command-models.json").write_text(json.dumps({"schema_version":"command-models-v1","profiles":[{"profile_id":"dummy-pdb","display_name":"Dummy PDB","executable": sys.executable, "argv":[str(LOCAL_PDB_FIXTURE),"--state-dir",str(state_dir),"--data",str(data_file)], "request_timeout_seconds":10}]}), encoding="utf-8")
     store = HistoryStore(store_root)
     import uuid
     session_id = f"sess-pdb-{uuid.uuid4().hex[:6]}"

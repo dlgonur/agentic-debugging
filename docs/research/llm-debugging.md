@@ -43,7 +43,7 @@ semantic correctness.
 
 The absence decisions are consistent with `docs/project-tracker.md` Phase 1.2
 and the corresponding item discussion in
-`docs/archive/status/instructor-status-map.md`. They are not claims that
+`outdated/docs-archive/status/instructor-status-map.md`. They are not claims that
 the studies do not exist outside this repository. They mean only that this
 review cannot responsibly summarize them from the permitted local evidence.
 
@@ -422,10 +422,10 @@ to findings. See `research/reports/synthesis/claims_to_verify_v1.md`.
 | `research/papers/TIER1_LOCAL_MANIFEST.md` | Tier 1 source identities and local-paper availability policy |
 | `research/papers/TIER2_LOCAL_MANIFEST.md` | Tier 2 source identities and local-paper availability policy |
 | `docs/project-tracker.md` | Explicit read/unread status for LLM-debugging studies, including missing Self-Debugging and DebugBench work |
-| `docs/archive/status/instructor-status-map.md` | Conservative instructor-item status and evidence gaps |
+| `outdated/docs-archive/status/instructor-status-map.md` | Conservative instructor-item status and evidence gaps |
 | `research/synthesis/pdb_debugger_agent_mvp_rationale.md` | Static/dynamic taxonomy, PDB rationale, APR distinction, and proposed experiment policies |
 | `research/synthesis/tier2_mvp_architecture_update.md` | Controller, typed tools, event stream, PDB, verifier, and metric implications |
-| `docs/archive/reports/final-report-v1.md` | Current architecture, verifier authority, reproducibility and claim boundaries |
+| `outdated/docs-archive/reports/final-report-v1.md` | Current architecture, verifier authority, reproducibility and claim boundaries |
 | `docs/datasets/selection.md` | F2P/P2P mapping, localization/RCA metric gaps, and external-evaluation limitations |
 | `research/reports/synthesis/claims_to_verify_v1.md` | Claims intentionally left unresolved |
 

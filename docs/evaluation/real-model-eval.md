@@ -39,7 +39,7 @@ not a semantic evaluator result. The official result also records whether
 test execution was proven, so pre-test application failures cannot be inferred
 from aggregate `0/5` counts alone. The durable provider-free replay summary is
 tracked in `../../analysis/level32_candidate_artifact_replay_20260823.md`; its local
-FirstMate package is `_ai-review/L32-ARTIFACT-01/`.
+The independent-review package is `_ai-review/L32-ARTIFACT-01/`.
 
 ## Level-32 repaired authoritative treatment (2026-08-24)
 

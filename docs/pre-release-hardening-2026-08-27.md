@@ -4,7 +4,7 @@
 **Baseline:** `main` @ `5cbe856` ("feat: add local project debugging")
 **Accepted hardening commit:** `8fbea88` ("Harden pre-release runtime and
 Local Project")
-**Review:** independently reviewed by FirstMate; repaired in two FirstMate
+**Review:** independently reviewed; repaired in two review
 rounds; ACCEPTED; committed as `8fbea88`, fast-forward merged to `main`, and
 pushed by the owner.
 **Evidence carrier:** the final hardening evidence lives in the untracked
@@ -26,7 +26,7 @@ performance, platform, test quality, and dead code.
 ## Findings and repairs
 
 - **RED (9 total, none remaining):** PRH-001..004 from the original audit,
-  all FIXED; PRH-025..028 found by FirstMate in the sealed candidate (repair
+  all FIXED; PRH-025..028 found during independent review of the sealed candidate (repair
   round 1) and PRH-029 (repair round 2), all REPAIRED with regression
   coverage.
 - **ORANGE (21):** 17 FIXED, 2 verified FALSE_POSITIVE, 2 bounded deferred
@@ -58,7 +58,7 @@ Major repaired trust/correctness areas:
   the true pre-revert bytes (PRH-011, PRH-012); production failure-injection
   sentinels were removed and tests inject real filesystem failures (PRH-005).
 
-## FirstMate repair rounds
+## Independent review rounds
 
 1. **Round 1 (PRH-025..028):** Apply To Project threading and outcome
    notification; professor-trace proof versus output text; Local Project
@@ -149,3 +149,25 @@ and QuixBugs suites.
   decisions.
 - Next phase: documentation/release/tag/closure under owner decision. No
   active required engineering campaign remains.
+
+## Post-freeze reconciliation (2026-08-28)
+
+The owner authorized the documentation/release/closure phase. Release tag
+`v0.1.0` exists at `d01f7a5`. This section supersedes only the stale debt
+dispositions below; it does not rewrite the accepted 2026-08-27 audit.
+
+- **PRH-D04 — RESOLVED.** The UI records cancellation intent before dispatch,
+  removing the fast-model race. The configured-request regression passed in
+  three consecutive runs after repair.
+- **PRH-D08 — RESOLVED.** The Start picker retains the frozen ladder first and
+  then exposes the remaining accepted curated tasks. Deterministic-offline and
+  configured-command modes are reachable again without altering ladder order.
+- **PRH-D09 — STALE FINDING / ALREADY RESOLVED.** Current source defines
+  `ModelRequestBudgetExceeded` as a live-evaluation error and raises it before
+  provider process launch. Focused tests cover the boundary.
+- **Campaign timestamp text debt — STALE FINDING / ALREADY RESOLVED.** Campaign
+  ledgers use a finalization timestamp for `updated_at`; tests require it to be
+  later than `created_at`.
+
+PRH-D01..D03 and PRH-D05..D07 remain accepted risks. No external validation
+was rerun during the reconciliation.

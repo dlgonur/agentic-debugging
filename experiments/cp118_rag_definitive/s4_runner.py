@@ -316,6 +316,11 @@ def validate_stage(args: argparse.Namespace, logger: RunLogger) -> Dict[str, Any
     )
 
     # Adapter identity (fail closed).
+    if not args.adapter_path:
+        raise RunnerError(
+            "--adapter-path is required; pass it explicitly or set "
+            "AGENTIC_DEBUGGER_CP118_ADAPTER"
+        )
     adapter_path = Path(args.adapter_path)
     expected = evidence["contract"]["model"]["adapter_identity"]
     from experiments.cp118_rag_definitive.s4_identity import (
@@ -1203,10 +1208,14 @@ def main(argv: Optional[List[str]] = None) -> int:
         ("smoke-eval", "offline evaluator smoke (canned candidate, no model)"),
     ):
         p = sub.add_parser(name, help=help_text)
-        p.add_argument("--adapter-path", default=(
-            r"C:\Users\benya\Downloads\selected-adapter-corrected-cp118-"
-            r"20260809T193500Z-1-001\selected-adapter-corrected-cp118"
-        ))
+        p.add_argument(
+            "--adapter-path",
+            default=os.environ.get("AGENTIC_DEBUGGER_CP118_ADAPTER"),
+            help=(
+                "path to the accepted cp118 adapter; defaults to the "
+                "AGENTIC_DEBUGGER_CP118_ADAPTER environment variable"
+            ),
+        )
         p.add_argument("--output-dir", default=str(DEFAULT_OUTPUT_DIR / "run-1"))
         p.add_argument("--quixbugs-root", default=None,
                        help="existing QuixBugs checkout parent dir "

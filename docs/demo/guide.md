@@ -17,7 +17,7 @@ are treated as expensive accepted campaigns, not push-button smoke tests.
 | For | Requirement |
 |---|---|
 | Section 2 (curated demo) | Python ≥ 3.11; `pip install -e .[test]`; `pytest` and `python` on `PATH`. No network, no WSL, no credentials. |
-| Sections 3–4 (QuixBugs) | Windows host with WSL2 and the `Ubuntu-22.04` distro installed and already provisioned per `docs/datasets/quixbugs/smoke-guide.md` (Bubblewrap available, pinned QuixBugs source and `python-env/py310` venv already acquired at `~/.local/share/agentic-debugging-internship/quixbugs-smoke-v1/` under WSL, outside `/mnt/c`). These scripts are operator scripts (`scripts/quixbugs_live_smoke.py`, `scripts/quixbugs_eight_task_baseline.py`), not part of the automated test suite, and are hardcoded to a specific WSL distro name and external root path. |
+| Sections 3–4 (QuixBugs) | Windows host with WSL2 and the `Ubuntu-22.04` distro installed and already provisioned per `docs/datasets/quixbugs/smoke-guide.md` (Bubblewrap available, pinned QuixBugs source and `python-env/py310` venv already acquired under WSL, outside `/mnt/c`). Set `AGENTIC_DEBUGGER_QUIXBUGS_ROOT` to that absolute WSL path. These operator scripts (`scripts/quixbugs_live_smoke.py`, `scripts/quixbugs_eight_task_baseline.py`) are not part of the automated test suite. |
 
 ## 2. In-repo deterministic smoke: the Task 9 demo (recommended first step)
 

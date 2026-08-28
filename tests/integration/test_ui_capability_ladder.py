@@ -42,23 +42,27 @@ def make_app(tmp_path: Path) -> LocalApplicationV1:
     return LocalApplicationV1(history_store=HistoryStore(tmp_path))
 
 
-def test_new_session_catalog_keeps_ladder_first_and_exposes_curated_sources(tmp_path: Path) -> None:
+def test_new_session_catalog_keeps_provider_free_tasks_first_and_exposes_ladder(tmp_path: Path) -> None:
     app = make_app(tmp_path)
     options = app.curated_task_options()
     ladder = tuple(
         (f"{item.title} · {item.task_id}", item.task_id)
         for item in LADDER_TASKS
     )
-    assert options[: len(ladder)] == ladder
-    assert [task_id for _, task_id in options[: len(ladder)]] == [
+    ladder_ids = {item.task_id for item in LADDER_TASKS}
+    curated = tuple(
+        option for option in options if option[1] not in ladder_ids
+    )
+    assert options[: len(curated)] == curated
+    assert [task_id for _, task_id in curated] == [
+        task_id for task_id in app.curated_task_ids() if task_id not in ladder_ids
+    ]
+    assert options[len(curated) :] == ladder
+    assert [task_id for _, task_id in options[len(curated) :]] == [
         "pdb-required-boundary-006",
         "pdb-required-caller-callee-007",
         "pdb-required-multistage-units-008",
         "audreyr__cookiecutter-967",
-    ]
-    ladder_ids = {item.task_id for item in LADDER_TASKS}
-    assert [task_id for _, task_id in options[len(ladder) :]] == [
-        task_id for task_id in app.curated_task_ids() if task_id not in ladder_ids
     ]
 
 
@@ -79,6 +83,7 @@ def test_ladder_start_has_provider_free_default_and_no_configured_warning(tmp_pa
     async def scenario(pilot):
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
+        start._choice_selected("task", "pdb-required-boundary-006")
         profiles = level32_model_profiles()
         assert start.profile_id == profiles[0].alias
         assert start.start_available is True
@@ -103,10 +108,10 @@ def test_ladder_start_has_provider_free_default_and_no_configured_warning(tmp_pa
         assert [choice.value for choice in pilot.app.screen.choices] == [
             task_id for _, task_id in app.curated_task_options()
         ]
-        assert [choice.value for choice in pilot.app.screen.choices[:4]] == [
+        assert [choice.value for choice in pilot.app.screen.choices[-4:]] == [
             item.task_id for item in LADDER_TASKS
         ]
-        assert any(choice.value.startswith("curated-") for choice in pilot.app.screen.choices[4:])
+        assert any(choice.value.startswith("curated-") for choice in pilot.app.screen.choices[:-4])
         await pilot.press("escape")
 
         start._choice_selected("task", "audreyr__cookiecutter-967")

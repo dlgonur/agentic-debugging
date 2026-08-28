@@ -1308,7 +1308,7 @@ accepted application architecture and complete release-quality V1 hardening.
   remained green;
 - compile/import/packaging/whitespace gates remained clean;
 - final review package path/count/integrity matched the declared 24-file
-  candidate, and FirstMate independently reconstructed the accepted lineage and
+  candidate, and independent review reconstructed the accepted lineage and
   re-ran 59 configuration, 22 transport, and 8 POSIX process-tree tests
   successfully.
 

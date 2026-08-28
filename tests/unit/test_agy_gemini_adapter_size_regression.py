@@ -27,9 +27,9 @@ MEASURED_REFERENCE_BYTES = _reference_size.MEASURED_REFERENCE_BYTES
 build_measured_reference_trajectory = _reference_size.build_measured_reference_trajectory
 run_real_trajectory = _reference_size.run_real_trajectory
 
-REPRESENTATIVE_EXECUTABLE = r"C:\Users\benya\AppData\Local\agy\bin\agy.exe"
+REPRESENTATIVE_EXECUTABLE = r"C:\Users\developer\AppData\Local\agy\bin\agy.exe"
 REPRESENTATIVE_SCHEMA = (
-    r"C:\Users\benya\AppData\Local\Temp\agy-gemini-run-abcdefgh\workspace\directive-schema.json"
+    r"C:\Users\developer\AppData\Local\Temp\agy-gemini-run-abcdefgh\workspace\directive-schema.json"
 )
 
 

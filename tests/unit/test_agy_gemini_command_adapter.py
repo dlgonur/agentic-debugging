@@ -529,7 +529,7 @@ def test_mcp_isolation_uses_current_agy_paths(tmp_path: Path) -> None:
 
 def test_build_agy_command_has_required_safety_flags_and_no_forbidden() -> None:
     command = adapter.build_agy_command(
-        r"C:\Users\benya\AppData\Local\agy\bin\agy.exe",
+        r"C:\Users\developer\AppData\Local\agy\bin\agy.exe",
         "gemini-3.7-flash-medium",
         "prompt",
         r"C:\Temp\agy-gemini-run-abc\workspace\directive-schema.json",

@@ -1,4 +1,4 @@
-"""Domain presentation panes of the Local Application V1 workspace.
+"""Domain presentation panes for the Agentic Debugger workspace.
 
 Every pane renders exclusively from the immutable
 :class:`~agentic_debugger.application.presentation.SessionViewState` produced

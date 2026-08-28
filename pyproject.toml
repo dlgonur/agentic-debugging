@@ -5,21 +5,40 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "agentic-debugger"
 version = "0.1.0"
-description = "Agentic debugging research prototype — Python/PDB-first debugger-assisted repair agent"
+description = "Evidence-driven software repair with deterministic tools, PDB, replay, and independent verification"
+readme = "README.md"
 requires-python = ">=3.11"
+keywords = ["automated-debugging", "program-repair", "pdb", "software-engineering"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Software Development :: Debuggers",
+  "Topic :: Software Development :: Testing",
+]
+
+[project.scripts]
+agentic-debugger = "agentic_debugger.ui.__main__:main"
 
 [project.optional-dependencies]
 test = ["pytest"]
-# Local Application V1 (Textual TUI).  The scientific core and existing CLI
-# paths never import this extra; the TUI is an optional application surface
-# (docs/architecture/local-application-v1.md section 5.1).
+# Textual terminal application. The scientific core and non-UI command paths
+# do not require this extra.
 app = ["textual>=8,<9"]
 
 # The repository is a flat layout with many top-level research/operator
 # directories; discovery is pinned to the one installable package so the
-# documented ``pip install -e .[test]`` / ``.[app]`` commands keep working.
+# documented editable-install commands remain predictable.
 [tool.setuptools.packages.find]
 include = ["agentic_debugger*"]
+
+[tool.setuptools.package-data]
+agentic_debugger = ["datasets/curated/*/task.json"]
+"agentic_debugger.evaluation" = ["*.json"]
+"agentic_debugger.ui" = ["*.tcss"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

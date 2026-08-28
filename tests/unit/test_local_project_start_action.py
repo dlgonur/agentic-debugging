@@ -1,4 +1,4 @@
-"""LOCAL-PROJECT-DEBUG-01 start-action repair — s and START DEBUGGING.
+"""LOCAL-PROJECT-DEBUG-01 start-action repair — keyboard and button.
 
 Covers the real smoke release blocker: valid clean form pressing s did nothing.
 Tests per task sections 6-10. No provider, no Docker, no Level.
@@ -167,7 +167,7 @@ def test_7_focus_matrix_s_starts_from_every_row(tmp_path, focus):
 
 
 # ---------------------------------------------------------------------------
-# 8. BUTTON TEST — click START DEBUGGING => same exact call as s
+# 8. BUTTON TEST — click Start debugging => same exact call as s
 # ---------------------------------------------------------------------------
 def test_8_button_click_same_as_s(tmp_path):
     async def _inner():
@@ -203,10 +203,10 @@ def test_8_button_click_same_as_s(tmp_path):
             # Ensure button exists
             btn = lp.query_one("#local-start-button")
             assert btn is not None
-            # Text should be START DEBUGGING family
+            # The primary action uses concise sentence case.
             label = getattr(btn, "label", None)
             plain = label.plain if hasattr(label, "plain") else str(label)
-            assert "START DEBUGGING" in plain, f"button label {plain!r} missing START DEBUGGING"
+            assert plain == "Start debugging"
             # Capture via s first
             s_calls: list[dict] = []
             app.start_local_project_session = lambda **kw: s_calls.append(dict(kw))  # type: ignore
@@ -376,12 +376,12 @@ def test_9_invalid_no_model_shows_error(tmp_path):
             assert len(calls) == 0, "no model must not call start"
             status = lp.query_one("#local-start-status", Static)
             txt = status.render().plain if hasattr(status.render(), "plain") else str(status.render())
-            if "no eligible models" not in txt.lower():
+            if "no eligible model" not in txt.lower():
                 try:
                     txt = str(status._renderable)
                 except Exception:
                     pass
-            assert "no eligible models" in txt.lower(), f"expected no eligible models, got {txt!r}"
+            assert "no eligible model" in txt.lower(), f"expected no eligible model, got {txt!r}"
 
         reset_launch_cwd()
 

@@ -13,6 +13,11 @@ Thumbs.db
 *.log
 tmp/
 temp/
+.ui-review/
+build/
+dist/
+.coverage
+htmlcov/
 
 # Local paper archive - keep PDFs locally, do not commit academic PDFs
 research/papers/**/*.pdf

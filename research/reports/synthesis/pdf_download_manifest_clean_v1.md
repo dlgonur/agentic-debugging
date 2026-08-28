@@ -3,7 +3,7 @@
 Download these into:
 
 ```text
-C:\Users\benya\Desktop\Projects\agentic-debugging-internship\research\papers
+<repository-root>\research\papers
 ```
 
 Suggested folder structure:

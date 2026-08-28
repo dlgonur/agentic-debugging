@@ -18,6 +18,7 @@ import pytest
 textual = pytest.importorskip("textual")
 
 from agentic_debugger.application.history import HistoryClassification, HistoryStore
+from agentic_debugger.application.events import SourceKind
 from agentic_debugger.application.presentation import (
     PresentationIdentity,
     SessionViewState,
@@ -107,6 +108,24 @@ class TestBootAndHome:
 
         run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
 
+    def test_primary_start_button_runs_the_provider_free_default(self, tmp_path):
+        app = make_standard_app(tmp_path)
+        calls: list[dict] = []
+        app.start_live_session = lambda **kwargs: calls.append(dict(kwargs))  # type: ignore[method-assign]
+
+        async def scenario(pilot):
+            start = pilot.app.screen
+            assert isinstance(start, StartSessionScreen)
+            button = start.query_one("#start-session-button")
+            assert button.label.plain == "Start session"
+            await pilot.click("#start-session-button")
+            assert len(calls) == 1
+            assert calls[0]["task_id"] == VALID_TASK_ID
+            assert calls[0]["source_kind"] is SourceKind.OFFLINE_DEMO
+            assert calls[0]["profile_id"] is None
+
+        run_headless(app, scenario, size=(80, 24))
+
     def test_new_session_is_flat_and_uses_one_shared_picker(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
@@ -117,7 +136,7 @@ class TestBootAndHome:
             assert len(start.query("RadioSet")) == 0
             assert len(start.query("Select")) == 0
             assert start.query_one("#start-context").display is False
-            assert "s start" in str(start.query_one("#start-footer").render())
+            assert "S start" in str(start.query_one("#start-footer").render())
 
             # Up/down move through rows, and Enter opens the shared picker.
             assert pilot.app.focused.row_key == "mode"
@@ -241,10 +260,10 @@ class TestLevel32NewSession:
     def test_level32_task_switches_to_frozen_model_configuration_and_back(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
-            # Open the shared task picker and select the Level-32 entry.  The
-            # picker also exposes accepted curated sessions after the frozen
+            # Open the shared task picker and select the Level-32 entry. The
+            # provider-free curated tasks are listed before the research
             # ladder, so locate the rung by identity instead of position.
-            await pilot.press("enter")
+            await pilot.press("down", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             picker = pilot.app.screen
             assert any("Level 32/100" in choice.title for choice in picker.choices)
@@ -291,7 +310,15 @@ class TestLevel32NewSession:
             # Selecting a lower ladder task keeps the frozen ladder shell.
             await pilot.press("up", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            await pilot.press("home", "enter")
+            lower_ladder_index = next(
+                index
+                for index, choice in enumerate(pilot.app.screen.choices)
+                if choice.value == "pdb-required-boundary-006"
+            )
+            await pilot.press("home")
+            for _ in range(lower_ladder_index):
+                await pilot.press("down")
+            await pilot.press("enter")
             assert start.task_id != "audreyr__cookiecutter-967"
             assert start.query_one("#mode-row").display is False
             assert start.query_one("#time-limit-row").display is False
@@ -316,7 +343,7 @@ class TestLevel32NewSession:
             context = start.query_one("#context-summary").render().plain
             assert "Model\nNot available" in context
             assert "Ready\nNo" in context
-            assert "start unavailable — no eligible Ollama Cloud models" in start.query_one("#start-status").render().plain
+            assert "Start unavailable — the research operator is not installed." in start.query_one("#start-status").render().plain
             assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
@@ -349,8 +376,7 @@ class TestLevel32NewSession:
                 assert widget.region.y >= 0
                 assert widget.region.y + widget.region.height <= pilot.app.size.height
             footer = str(start.query_one("#start-footer").render())
-            assert "s start" in footer and "up/down move" in footer and "ctrl+c quit" in footer
-            assert "↑" not in footer and "↓" not in footer
+            assert "S start" in footer and "↑/↓ move" in footer and "Esc back" in footer
             await pilot.press("down", "down", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             await pilot.press("escape")
@@ -422,8 +448,8 @@ class TestLevel32NewSession:
             assert "RESOLVED" in rendered
             columns = [col.label.plain for col in table.columns.values()]
             assert columns == [
-                "Record", "Session", "Task", "Source", "Started", "Duration",
-                "Result", "Verifier",
+                "Journal", "Session", "Task", "Source", "Started", "Duration",
+                "Outcome", "Verification",
             ]
 
         run_headless(app, scenario, size=(120, 35))

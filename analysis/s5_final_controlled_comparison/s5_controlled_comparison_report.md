@@ -239,5 +239,5 @@ Full reasoning and future GO conditions in `s5_remaining_gaps_next_action.md`.
 
 - Machine-readable ledger: `s5_comparison_ledger.json`
 - Provenance / source map: `s5_provenance_source_map.md`
-- Professor TODO #23/#24/#25 coverage: `s5_professor_todo_coverage_matrix.md` (+ `.json`)
+- Requirement #23/#24/#25 coverage: `s5_requirement_coverage_matrix.md` (+ `.json`)
 - Remaining gaps / next action / S4 GO/NO-GO: `s5_remaining_gaps_next_action.md`

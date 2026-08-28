@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import builtins
 import json
 import subprocess
 import sys
@@ -46,6 +47,20 @@ def test_roster_is_canonical_eligible_and_provider_free(monkeypatch):
     assert "kimi-k2.7-code:cloud" not in aliases
     assert "kimi-k3:cloud" not in aliases
     assert all(profile.readiness == "live_verified" for profile in profiles)
+
+
+def test_roster_is_empty_when_source_checkout_operator_is_unavailable(monkeypatch):
+    original_import = builtins.__import__
+
+    def without_operator(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "scripts.ollama_cloud_command_adapter":
+            error = ModuleNotFoundError(f"No module named {name!r}")
+            error.name = name
+            raise error
+        return original_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", without_operator)
+    assert level32_model_profiles() == ()
 
 
 def test_next_revision_uses_existing_operator_directory_convention(tmp_path):

@@ -11,7 +11,7 @@ Move from AI-generated literature reports to verified, locally archived primary 
 Run in PowerShell:
 
 ```powershell
-cd "C:\Users\benya\Desktop\Projects\agentic-debugging-internship"
+cd "<repository-root>"
 
 New-Item -ItemType Directory -Path "research\papers\tier1_must_read" -Force | Out-Null
 New-Item -ItemType Directory -Path "research\papers\tier2_core_sections" -Force | Out-Null

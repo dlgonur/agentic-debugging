@@ -1,4 +1,4 @@
-"""Local Application V1 — the replay-first Textual application.
+"""Agentic Debugger — the replay-first Textual terminal application.
 
 Launch surface (one documented command)::
 
@@ -176,10 +176,10 @@ def make_session_id() -> str:
 
 
 class LocalApplicationV1(App):
-    """The full-screen Local Application V1 TUI."""
+    """The full-screen Agentic Debugger terminal application."""
 
-    TITLE = "Agentic Debugging"
-    SUB_TITLE = "Start a debugging session"
+    TITLE = "Agentic Debugger"
+    SUB_TITLE = "Evidence-driven software repair"
     CSS_PATH = "app.tcss"
 
     BINDINGS = [
@@ -388,11 +388,10 @@ class LocalApplicationV1(App):
     def curated_task_options(self) -> Tuple[Tuple[str, str], ...]:
         """All accepted session tasks exposed by the product picker.
 
-        Capability-ladder rungs remain first and keep their frozen metadata.
-        The repository-native curated tasks follow them so the accepted
-        deterministic-offline and configured-command sources are reachable
-        through the ordinary Start flow instead of existing only as tested
-        worker seams.
+        Repository-native curated tasks come first so a fresh installation
+        opens on a provider-free, runnable workflow.  Research capability
+        rungs follow in their frozen relative order and remain available when
+        their source-checkout operator is present.
         """
 
         ladder = ladder_task_options()
@@ -402,7 +401,7 @@ class LocalApplicationV1(App):
             for task_id in self.curated_task_ids()
             if task_id not in ladder_ids
         )
-        return ladder + curated
+        return curated + ladder
 
     def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
         """Safe profile summaries for the Start screen, plus a load error.
@@ -420,7 +419,7 @@ class LocalApplicationV1(App):
             return (), str(exc)
 
     def level32_model_profiles(self):
-        """Return the canonical, local-only Ollama Cloud roster."""
+        """Return the source-checkout-only Ollama Cloud roster, if present."""
         return level32_model_profiles()
 
     def ollama_cloud_model_profiles(self):

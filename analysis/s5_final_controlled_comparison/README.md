@@ -37,7 +37,7 @@ Some aggregates are `master_plan_prose_only` or
 `aggregate_external_per_task` (Drive-hosted D7). The untracked
 `Agentic_Debugging_Master_Execution_Plan_2026-08-11_S5_CURRENT.md` is
 cited as the build-time plan; the tracked 2026-08-10 master plan (now at
-`docs/archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`)
+`outdated/docs-archive/status/Agentic_Debugging_Master_Execution_Plan_2026-08-10.md`)
 and the files in this directory are the clean-checkout carriers.
 
 ## Authoritative sources

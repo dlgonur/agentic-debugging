@@ -87,7 +87,7 @@ target is narrower: a Python/PDB-first single controller with deterministic
 tools, event trajectories, disposable workspaces, patching, and an independent
 verifier. See `research/notes/2025_debug_gym_notes.md`,
 `research/synthesis/tier2_mvp_architecture_update.md`, and
-`docs/archive/reports/final-report-v1.md`.
+`outdated/docs-archive/reports/final-report-v1.md`.
 
 The extra capability is not simply “more autonomy.” It is explicit control over
 what the model may do, what evidence it sees, when it may patch, and how a
@@ -221,7 +221,7 @@ patch application and allowed paths, syntax, fail-to-pass behavior,
 pass-to-pass regression behavior, full-suite consistency where configured, and
 cleanup. It should retain distinct outcome categories so a tool failure is not
 misreported as model success or model failure. See
-`docs/archive/reports/final-report-v1.md` and
+`outdated/docs-archive/reports/final-report-v1.md` and
 `docs/datasets/selection.md`.
 
 ### 5.5 Evaluation should compare policies, not slogans
@@ -247,7 +247,7 @@ repository-scale generalization.
   unseen correctness.
 - Self-Debugging, DebugBench, and several frontier agentic systems remain
   explicitly unresolved in the status map and are not used here as factual
-  evidence. See `docs/archive/status/instructor-status-map.md` and
+  evidence. See `outdated/docs-archive/status/instructor-status-map.md` and
   `research/reports/synthesis/claims_to_verify_v1.md`.
 - The comparison does not prove that PDB improves aggregate repair success.
   The repository has an experimental hypothesis and infrastructure, not a
@@ -298,9 +298,9 @@ passing claim, or a single benchmark result as proof of correctness.
 | `research/notes/2024_openhands_notes.md` | General tool/event/runtime architecture context; not a claim that this project should reproduce it |
 | `research/synthesis/pdb_debugger_agent_mvp_rationale.md` | Static/dynamic taxonomy, repository-vs-debugger comparison, APR distinction, PDB safety, and MVP hypothesis |
 | `research/synthesis/tier2_mvp_architecture_update.md` | Single-controller, typed-tool, event, metric, and verifier-oriented architecture |
-| `docs/archive/reports/final-report-v1.md` | Accepted repository architecture, evidence boundaries, verifier and reproducibility limits |
+| `outdated/docs-archive/reports/final-report-v1.md` | Accepted repository architecture, evidence boundaries, verifier and reproducibility limits |
 | `docs/datasets/selection.md` | F2P/P2P, localization/RCA metric gaps, containment and evaluation caveats |
-| `docs/archive/status/instructor-status-map.md` | Current completion boundary and unresolved literature items |
+| `outdated/docs-archive/status/instructor-status-map.md` | Current completion boundary and unresolved literature items |
 | `research/reports/synthesis/claims_to_verify_v1.md` | Claims deliberately excluded or retained as unresolved |
 
 The index identifies tracked evidence consulted for the synthesis; it does not

@@ -1,4 +1,4 @@
-"""Local Application V1 — the Textual TUI (optional application surface).
+"""Agentic Debugger's Textual terminal UI (optional application surface).
 
 This package is never imported by the scientific core or the existing CLI
 paths; it requires the optional ``app`` extra (``textual>=8,<9``).  It is

@@ -134,7 +134,7 @@ In `opencode-go` route mode the protocol wrapper independently recomputes the
 selected catalog entry fingerprint and compares it with the
 authorization-bound expected fingerprint before any model process may run.
 The flow is implemented and packaged but not executed by any implementation
-agent; real operator preflight remains pending FirstMate review and Onur's
+agent; real operator preflight remains pending independent review and the project owner's
 manual execution.
 
 ## Preflight-only versus live execution

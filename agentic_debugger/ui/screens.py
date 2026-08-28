@@ -1,4 +1,4 @@
-"""Screens of the Local Application V1 TUI.
+"""Screens for the Agentic Debugger terminal application.
 
 Screens are presentation-only.  The home screen exposes app-owned history
 through the accepted :class:`HistoryStore`; the workspace renders one
@@ -34,7 +34,7 @@ from textual.widgets import (
 
 
 class CopyAllButton(Button):
-    """Mouse-clickable COPY ALL control without keyboard focus trap."""
+    """Mouse-clickable copy control without adding a keyboard focus stop."""
 
     can_focus = False
 
@@ -97,8 +97,8 @@ _CLASSIFICATION_STYLE = {
 }
 
 # Canonical user-facing keyboard vocabulary shared by footers and help.
-START_FOOTER = "s start   h history   up/down navigate   enter edit   esc back   ctrl+c quit"
-START_FOOTER_COMPACT = "s start h history up/down move enter edit esc back ctrl+c quit"
+START_FOOTER = "S start   H history   ↑/↓ move   Enter edit   Esc back   Ctrl+C quit"
+START_FOOTER_COMPACT = "S start  H history  ↑/↓ move  Enter edit  Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 activity filters   c cancel   h history   n new session   ctrl+c quit"
 WORKSPACE_FOOTER_IDLE = "left/right views   1-7 activity filters   h history   n new session   ctrl+c quit"
 REPLAY_FOOTER = "left/right views   1-7 activity filters   events   phases   h history   n new session   ctrl+c quit"
@@ -299,15 +299,15 @@ class HomeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[bold #58a6ff]Agentic Debugging[/]\n"
-            "[dim]Session history[/]",
+            "[bold #58a6ff]Agentic Debugger[/]\n"
+            "[dim]Debugging sessions[/]",
             id="home-title",
         )
         yield Static("", id="home-empty", classes="empty-state")
         yield DataTable(id="history-table")
         yield Static(
-            "[dim]new: [bold]n[/]   open: [bold]o[/]/[bold]enter[/]   "
-            "refresh: [bold]r[/]   quit: [bold]ctrl+c[/]   help: [bold]?[/][/]",
+            "[dim]N new session · P local project · O/Enter open · "
+            "R refresh · Ctrl+C quit · ? help[/]",
             id="home-hint",
         )
 
@@ -315,8 +315,8 @@ class HomeScreen(Screen):
         table = self.query_one("#history-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(
-            "Record", "Session", "Task", "Source", "Started", "Duration",
-            "Result", "Verifier",
+            "Journal", "Session", "Task", "Source", "Started", "Duration",
+            "Outcome", "Verification",
         )
         self.refresh_history()
 
@@ -327,8 +327,8 @@ class HomeScreen(Screen):
         empty = self.query_one("#home-empty", Static)
         if not entries:
             empty.update(
-                "[dim]No sessions yet.  Press [bold]n[/] to start a "
-                "new session, or [bold]r[/] to refresh.[/]"
+                "[dim]No sessions yet. Press N to start a new session or "
+                "R to refresh.[/]"
             )
             empty.display = True
         else:
@@ -813,7 +813,7 @@ class StartSessionScreen(Screen):
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("[bold #79c0ff]Agentic Debugging[/]\n[bold #79c0ff]New debugging session[/]\n[dim]Configure the debugging run.[/]", id="start-title")
+                    yield Static("[bold #79c0ff]Agentic Debugger[/]\n[bold #79c0ff]New debugging session[/]\n[dim]Choose a task and execution mode.[/]", id="start-title")
                     yield SessionSettingRow("Mode", row_key="mode", id="mode-row")
                     yield SessionSettingRow("Model", row_key="model", id="model-row")
                     yield SessionSettingRow("Task", row_key="task", id="task-row")
@@ -823,16 +823,18 @@ class StartSessionScreen(Screen):
                     yield ReadonlySettingRow("Treatment", id="level32-treatment-row")
                     yield Static("", id="start-status")
                     yield Static("", id="start-trust")
+                    with Horizontal(id="start-actions"):
+                        yield Button("Start session", id="start-session-button", variant="success")
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
-                yield Static("[bold #79c0ff]SESSION SETUP[/]", id="context-title")
+                yield Static("[bold #79c0ff]Session setup[/]", id="context-title")
                 yield Static("", id="context-summary")
 
     def on_mount(self) -> None:
         if not self._task_options:
             self._task_options = list(self.app.curated_task_options())
             self._task_id = self._task_options[0][1] if self._task_options else None
-        if not is_ladder_task(self._task_id):
+        if not is_ladder_task(self._task_id) and self._mode == self.MODE_CONFIGURED:
             self._refresh_profiles()
         if is_ladder_task(self._task_id):
             profiles = self.app.ollama_cloud_model_profiles()
@@ -895,8 +897,8 @@ class StartSessionScreen(Screen):
     def _open_choice_picker(self, row_key: str) -> None:
         if row_key == "mode":
             choices = [
-                self._choice(self.MODE_DETERMINISTIC, "Deterministic offline", "Runs locally without a configured model."),
-                self._choice(self.MODE_CONFIGURED, "Configured command model", "Uses a configured model profile."),
+                self._choice(self.MODE_DETERMINISTIC, "Offline demo", "Deterministic and provider-free."),
+                self._choice(self.MODE_CONFIGURED, "Configured model", "Uses a command-model profile you control."),
             ]
             title, current = "Select execution mode", self._mode
         elif row_key == "task":
@@ -937,13 +939,15 @@ class StartSessionScreen(Screen):
     def _choice_selected(self, row_key: str, value: str) -> None:
         if row_key == "mode":
             self._mode = value
+            if value == self.MODE_CONFIGURED and not is_ladder_task(self._task_id):
+                self._refresh_profiles()
             self._refresh_mode()
         elif row_key == "task":
             self._task_id = value
             if is_ladder_task(self._task_id) and self._profile_id is None:
                 profiles = self.app.ollama_cloud_model_profiles()
                 self._profile_id = profiles[0].alias if profiles else None
-            elif not is_ladder_task(self._task_id):
+            elif not is_ladder_task(self._task_id) and self._mode == self.MODE_CONFIGURED:
                 self._refresh_profiles()
             self._refresh_mode()
         elif row_key == "debugger":
@@ -1003,7 +1007,7 @@ class StartSessionScreen(Screen):
         return title
 
     def _render_rows(self) -> None:
-        self.query_one("#mode-row", SessionSettingRow).set_value("Deterministic offline" if self._mode == self.MODE_DETERMINISTIC else "Configured command model")
+        self.query_one("#mode-row", SessionSettingRow).set_value("Offline demo" if self._mode == self.MODE_DETERMINISTIC else "Configured model")
         self.query_one("#model-row", SessionSettingRow).set_value(self._profile_display_name())
         self.query_one("#task-row", SessionSettingRow).set_value(self._task_display_name())
         self.query_one("#debugger-row", SessionSettingRow).set_value("On uncertainty" if self._policy == "pdb-on-uncertainty" else "Disabled")
@@ -1027,17 +1031,17 @@ class StartSessionScreen(Screen):
         self.query_one("#level32-treatment-row", ReadonlySettingRow).display = ladder
         status = self.query_one("#start-status", Static)
         if ladder and not self.app.ollama_cloud_model_profiles():
-            status.update("[yellow]start unavailable — no eligible Ollama Cloud models[/]")
+            status.update("[yellow]Start unavailable — the research operator is not installed.[/]")
         elif ladder and self._profile_id is None:
-            status.update("[yellow]choose an eligible Ollama model[/]")
+            status.update("[yellow]Choose an eligible Ollama model.[/]")
         elif self._config_error is not None and configured:
-            status.update(f"[red]configuration error: {_markup_escape(self._config_error)}[/]")
+            status.update(f"[red]Configuration error: {_markup_escape(self._config_error)}[/]")
         elif configured and not self._profiles:
-            status.update("[yellow]start unavailable — no configured model profiles[/]")
+            status.update("[yellow]Start unavailable — no configured model profiles.[/]")
         else:
             status.update("")
         trust = self.query_one("#start-trust", Static)
-        trust.update("[yellow]Capability ladder uses the canonical Ollama Cloud operator contract[/]" if ladder else ("[yellow]configured commands are trusted user configuration; network isolation is not enforced[/]" if configured else ""))
+        trust.update("[yellow]Research tasks use the canonical Ollama Cloud operator contract.[/]" if ladder else ("[yellow]Configured commands are trusted user configuration; network isolation is not enforced.[/]" if configured else ""))
         trust.display = (configured or ladder) and self.size.width < 100
         self._render_rows()
         self._update_context()
@@ -1065,10 +1069,11 @@ class StartSessionScreen(Screen):
             return
         ready = "Yes" if self.start_available and self._task_id else "No"
         lines = [
-            f"[#8b949e]Mode[/]\n{_markup_escape('Deterministic offline' if self._mode == self.MODE_DETERMINISTIC else 'Configured command model')}",
+            f"[#8b949e]Mode[/]\n{_markup_escape('Offline demo' if self._mode == self.MODE_DETERMINISTIC else 'Configured model')}",
             f"\n[#8b949e]Debugger[/]\n{_markup_escape('On uncertainty' if self._policy == 'pdb-on-uncertainty' else 'Disabled')}",
-            f"\n[#8b949e]Task[/]\n{_markup_escape(self._task_id or 'Not selected')}",
-            f"\n[#8b949e]Execution[/]\n{_markup_escape('Local' if self._mode == self.MODE_DETERMINISTIC else 'Configured command')}",
+            f"\n[#8b949e]Task[/]\n{_markup_escape(self._task_display_name())}",
+            f"\n[#8b949e]Task ID[/]\n{_markup_escape(self._task_id or 'Not selected')}",
+            f"\n[#8b949e]Execution[/]\n{_markup_escape('Local, provider-free' if self._mode == self.MODE_DETERMINISTIC else 'Configured command')}",
         ]
         if self._mode == self.MODE_CONFIGURED:
             lines += [f"\n[#8b949e]Model[/]\n{_markup_escape(self._profile_id or 'Not configured')}", "\n[#8b949e]Trust[/]\nconfigured user command"]
@@ -1107,15 +1112,15 @@ class StartSessionScreen(Screen):
         from agentic_debugger.application.events import SourceKind
         status = self.query_one("#start-status", Static)
         if not self._task_id:
-            status.update("[red]choose a task[/]")
+            status.update("[red]Choose a task.[/]")
             return
         if self._mode == self.MODE_CONFIGURED and not self.start_available:
-            status.update("[yellow]start unavailable — choose a configured model profile[/]")
+            status.update("[yellow]Start unavailable — choose a configured model profile.[/]")
             return
         try:
             if is_ladder_task(self._task_id):
                 if not self.start_available:
-                    status.update("[yellow]start unavailable — choose an eligible Ollama model[/]")
+                    status.update("[yellow]Start unavailable — choose an eligible Ollama model.[/]")
                     return
                 self.app.start_live_session(
                     task_id=str(self._task_id),
@@ -1137,6 +1142,11 @@ class StartSessionScreen(Screen):
 
     def action_start(self) -> None:
         self._start()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "start-session-button":
+            self._start()
+            event.stop()
 
 class BrowseScreen(Screen):
     """Minimal terminal-native directory picker (no OS dialog).
@@ -1372,8 +1382,8 @@ class LocalProjectStartScreen(Screen):
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("[bold #79c0ff]Agentic Debugging[/]\n[bold #79c0ff]New debugging session — Local Project Debug[/]\n[dim]Point at a local Git project and describe the bug.[/]", id="start-title")
-                    yield Static("[bold #8b949e]Mode[/]  Local Project Debug", id="local-mode-row")
+                    yield Static("[bold #79c0ff]Agentic Debugger[/]\n[bold #79c0ff]Debug a local project[/]\n[dim]Select a clean Git repository and describe the problem.[/]", id="start-title")
+                    yield Static("[bold #8b949e]Mode: Local repository[/]", id="local-mode-row")
                     yield SessionSettingRow("Project", row_key="project", id="project-row")
                     with Horizontal(id="local-project-actions"):
                         yield CopyAllButton("Use current directory", id="use-cwd-button", classes="copy-button")
@@ -1387,10 +1397,10 @@ class LocalProjectStartScreen(Screen):
                     yield Static("", id="local-start-status")
                     yield Static("", id="local-start-trust")
                     with Horizontal(id="local-start-actions"):
-                        yield CopyAllButton("START DEBUGGING", id="local-start-button")
-                yield Static("s start   up/down navigate   enter edit   esc back   h history   ctrl+c quit", id="start-footer")
+                        yield Button("Start debugging", id="local-start-button", variant="success")
+                yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
-                yield Static("[bold #79c0ff]LOCAL PROJECT[/]", id="context-title")
+                yield Static("[bold #79c0ff]Project status[/]", id="context-title")
                 yield Static("", id="local-context-summary")
 
     def on_mount(self) -> None:
@@ -1415,7 +1425,7 @@ class LocalProjectStartScreen(Screen):
 
     def _update_footer(self, width: int) -> None:
         footer = self.query_one("#start-footer", Static)
-        footer.update("s start   up/down move   enter edit   esc back   h history   ctrl+c quit")
+        footer.update(START_FOOTER_COMPACT if width < 70 else START_FOOTER)
 
     def _refresh_profiles(self) -> None:
         # Prefer Ollama Cloud roster (actual product) with fallback to configured profiles.
@@ -1500,11 +1510,11 @@ class LocalProjectStartScreen(Screen):
             except Exception as exc:
                 msg = str(exc)
                 if "not a Git repository" in msg:
-                    status_text = "[red]not a Git repository[/]"
+                    status_text = "[red]Not a Git repository.[/]"
                 elif "project path not found" in msg or "not found" in msg:
-                    status_text = "[red]project path not found[/]"
+                    status_text = "[red]Project path not found.[/]"
                 elif "not a directory" in msg:
-                    status_text = "[red]not a directory[/]"
+                    status_text = "[red]Project path is not a directory.[/]"
                 elif "Git worktree" in msg:
                     status_text = f"[red]{_markup_escape(msg)[:80]}[/]"
                 else:
@@ -1725,10 +1735,10 @@ class LocalProjectStartScreen(Screen):
         status = self.query_one("#local-start-status", Static)
         # Validation gates
         if not self._profiles or not self._profile_id:
-            status.update("[red]No eligible models available — cannot start[/]")
+            status.update("[red]No eligible model is available. Configure a model profile first.[/]")
             return
         if not self._bug_description.strip():
-            status.update("[red]bug description is required[/]")
+            status.update("[red]Bug description is required.[/]")
             return
         try:
             from agentic_debugger.application.local_project import validate_local_project
@@ -1936,12 +1946,12 @@ class WorkspaceScreen(Screen):
                     with TabPane("Activity", id="tab-activity"):
                         with Vertical(id="activity-container"):
                             with Horizontal(id="activity-copy-bar"):
-                                yield CopyAllButton("COPY ALL", id="copy-activity", classes="copy-button")
+                                yield CopyAllButton("Copy all", id="copy-activity", classes="copy-button")
                             yield ActivityPanel(id="activity-pane")
                     with TabPane("Timeline", id="tab-timeline"):
                         with Vertical(id="timeline-container"):
                             with Horizontal(id="timeline-copy-bar"):
-                                yield CopyAllButton("COPY ALL", id="copy-timeline", classes="copy-button")
+                                yield CopyAllButton("Copy all", id="copy-timeline", classes="copy-button")
                             yield TimelinePanel(id="timeline-pane")
             if self.mode is WorkspaceMode.LIVE:
                 yield LiveRunContextPanel(id="live-run-context")
@@ -2723,35 +2733,37 @@ class HelpModalScreen(Screen):
     def compose(self) -> ComposeResult:
         with Static(id="help-dialog"):
             yield Static(
-                "[bold #58a6ff]Agentic Debugging — Local Application V1[/]\n"
-                "[dim]Developer Guide & Conceptual Legend[/]",
+                "[bold #58a6ff]Agentic Debugger[/]\n"
+                "[dim]Keyboard reference and evidence guide[/]",
                 id="help-title",
             )
             yield Static(
-                "[bold #79c0ff]Core Concepts[/]\n"
-                "  • [bold]LIVE[/]       Executing session (deterministic offline or configured command)\n"
-                "  • [bold]REPLAY[/]     Read-only recorded session from authoritative journal\n"
+                "[bold #79c0ff]Session modes[/]\n"
+                "  • LIVE — Executing session (deterministic offline or configured command)\n"
+                "  • REPLAY — Read-only recorded session from authoritative journal\n"
                 "\n"
-                "[bold #79c0ff]Workspace Panes[/]\n"
-                "  • [bold]Source[/]     Recorded workspace source with execution line markers\n"
-                "  • [bold]Debugger[/]   PDB location, stack frames, locals, breakpoints\n"
-                "  • [bold]Patch[/]      Candidate lifecycle and unified diff\n"
-                "  • [bold]Verifier[/]   Independent correctness authority (RESOLVED / UNRESOLVED)\n"
-                "  • [bold]Activity[/]   Filtered operational events (keys 1..7)\n"
-                "  • [bold]Timeline[/]   Full ordered SessionEvent stream with phase boundaries\n"
+                "[bold #79c0ff]Workspace views[/]\n"
+                "  • Source — Recorded workspace source with execution line markers\n"
+                "  • Debugger — PDB location, stack frames, locals, and breakpoints\n"
+                "  • Patch — Candidate lifecycle and unified diff\n"
+                "  • Verifier — Independent correctness authority (RESOLVED / UNRESOLVED)\n"
+                "  • Activity — Filtered operational events (keys 1–7)\n"
+                "  • Timeline — Full ordered SessionEvent stream with phase boundaries\n"
                 "\n"
-                "[bold yellow]Important Principle:[/] [bold]APPLIED does not mean FIXED.[/]\n"
-                "[dim]Only the independent verifier decides whether a candidate is RESOLVED.[/]\n"
+                "[bold yellow]Evidence rule:[/] [bold]An applied patch is not automatically a fix.[/]\n"
+                "[dim]Only the independent verifier can mark a candidate RESOLVED.[/]\n"
                 "\n"
                 "[bold #79c0ff]Navigation[/]\n"
-                "  • Home:      [bold]n[/] new session · [bold]p[/] local project · [bold]o[/]/[bold]enter[/] open replay · [bold]r[/] refresh · [bold]ctrl+c[/] quit · [bold]?[/] help\n"
-                "  • Workspace: [bold]\\[[/]/[bold]][/] prev/next event · [bold]{{[/]/[bold]}}[/] prev/next phase · [bold]g[/]/[bold]G[/] begin/end\n"
-                "               [bold]j[/] jump to sequence · [bold]1[/]..[bold]7[/] activity filter · [bold]c[/] cancel live · [bold]h[/] history · [bold]n[/] new session\n"
-                "               [bold]a[/] apply candidate to project (Local Project, finished sessions) · [bold]ctrl+c[/] quit · [bold]?[/] help",
+                "  • Home — N new session · P local project · O/Enter open replay · R refresh\n"
+                "           Ctrl+C quit · ? help\n"
+                "  • Workspace — \\[ / ] previous/next event · { / } previous/next phase\n"
+                "                G/Shift+G begin/end · J jump · 1–7 activity filter\n"
+                "                C cancel live · H history · N new session\n"
+                "                A apply candidate · Ctrl+C quit · ? help",
                 id="help-content",
             )
             yield Static(
-                "[dim]Press escape or enter to close help[/]", id="help-hint"
+                "[dim]Press Esc or Enter to close help[/]", id="help-hint"
             )
 
     def action_close_help(self) -> None:

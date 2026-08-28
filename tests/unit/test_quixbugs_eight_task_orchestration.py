@@ -36,6 +36,7 @@ def _load_script_module():
 
 
 M = _load_script_module()
+M.EXTERNAL_ROOT_POSIX = "/tmp/agentic-debugger-quixbugs-test"
 
 DECLARED = list(M.EXPECTED_SELECTED_ALGORITHMS)
 EIGHT = list(M.EXPECTED_SELECTED_ALGORITHMS)
@@ -344,6 +345,12 @@ def test_setup_error_is_runtimeerror_not_assertion(monkeypatch) -> None:
     assert 'assert result.exit_code == 0, "failed to build task-local venv"' not in source
     assert "assert all(entry[\"passed\"] for entry in bwrap_results.values())" not in source
     assert "assert runner.resource_isolation_ready is True" not in source
+
+
+def test_setup_requires_an_explicit_external_root(monkeypatch) -> None:
+    monkeypatch.setattr(M, "EXTERNAL_ROOT_POSIX", "")
+    with pytest.raises(M.SetupError, match="AGENTIC_DEBUGGER_QUIXBUGS_ROOT"):
+        M._setup_environment()
 
 
 def test_setup_raises_on_layout_failure(monkeypatch) -> None:

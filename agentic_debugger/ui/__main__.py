@@ -1,4 +1,4 @@
-"""``python -m agentic_debugger.ui`` — the Local Application V1 launch command.
+"""``python -m agentic_debugger.ui`` — launch Agentic Debugger.
 
 Usage::
 
@@ -27,8 +27,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="python -m agentic_debugger.ui",
         description=(
-            "Launch the Local Application V1 replay-first Textual "
-            "application over app-owned session history, deterministic "
+            "Launch the Agentic Debugger terminal application over local "
+            "session history, deterministic "
             "offline sessions, configured command-model sessions, and "
             "Local Project Debug sessions."
         ),
@@ -58,7 +58,7 @@ def _require_textual() -> None:
         import textual  # noqa: F401
     except ImportError as exc:
         print(
-            "The Local Application V1 TUI requires the optional 'app' extra "
+            "Agentic Debugger requires the optional 'app' extra "
             "(Textual).\n"
             "Install it with:  python -m pip install -e '.[app]'\n"
             f"(missing import: {exc.name})",
