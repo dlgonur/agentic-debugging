@@ -17,9 +17,8 @@ Contents:
 - `friday-delivery/` — frozen 2026-08-05 professor-delivery package.
 - `roadmap/` — full pre-closure TODO and project tracker snapshots.
 - `internship-materials/` — original requirements, diary, progress report,
-  and presentation retained as historical academic artifacts.
-- `firstmate-conversation-summary-2026-08-21.md` — superseded conversation
-  handoff; later tracked results and closeout documents are authoritative.
+  presentation, and early diary draft retained as historical academic
+  artifacts.
 
 Historical files may retain delivery-time paths in their prose. Current code
 and navigation resolve those paths through the repository's documented legacy

@@ -124,7 +124,6 @@ Key reviewed files:
 - `reports/synthesis/claims_to_verify_v1.md`
 - `reports/synthesis/pdf_download_manifest_clean_v1.md`
 - `reports/synthesis/project_next_steps_v1.md`
-- `reports/synthesis/diary_day_02_draft.md`
 
 ## 2.2 Phase 2 — Primary-paper reading and manual notes
 
@@ -1144,7 +1143,6 @@ Reviewed research-process artifacts:
 - `claims_to_verify_v1.md`
 - `pdf_download_manifest_clean_v1.md`
 - `project_next_steps_v1.md`
-- `diary_day_02_draft.md`
 
 These document how broad AI-assisted discovery was converted into a controlled primary-source reading process.
 

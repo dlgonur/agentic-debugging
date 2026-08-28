@@ -351,7 +351,7 @@ class TestUtf8TruncationBoundary:
         self._assert_snapshot_ok(obs, snapshot)
         assert snapshot.text.endswith(self.CHARS[width])
 
-    def test_firstmate_reproduction(self, tmp_path):
+    def test_regression_reproduction(self, tmp_path):
         # The exact reproduction: 'a' * 65535 + first byte of '€' expands to
         # 65538 bytes after replace-decoding and must not be returned.
         obs = make_obs()

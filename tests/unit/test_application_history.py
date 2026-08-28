@@ -460,7 +460,7 @@ class TestReadContainment:
 
     def _external_registered_store(self, tmp_path):
         """A fully registered external session inside a *victim* runs/ root
-        via a symlink, mirroring the FirstMate reproduction."""
+        via a symlink, mirroring the original regression reproduction."""
         victim = HistoryStore(tmp_path / "victim")
         external = HistoryStore(tmp_path / "external-store")
         external_dir = _write_session_journal(
@@ -628,7 +628,7 @@ class TestEffectivePhaseBoundaries:
     ordinary events never reset a phase to None."""
 
     def test_status_phase_followed_by_ordinary_events(self):
-        # The FirstMate reproduction: tool.started/tool.completed do not
+        # Original regression reproduction: tool.started/tool.completed do not
         # restate the session phase, so no phase transition occurs there.
         events = (
             make_event(SessionEventKind.SESSION_CREATED, {"spec_fingerprint": "a" * 64}, sequence=0),

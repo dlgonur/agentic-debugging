@@ -34,7 +34,7 @@ from agentic_debugger.rag.indexer import build_index, index_to_text, load_index_
 from agentic_debugger.rag.retrieval import retrieve
 from agentic_debugger.rag.schema import canonical_json
 
-DEFAULT_EXPERIMENT_ID = "friday-rag-comparison-demo"
+DEFAULT_EXPERIMENT_ID = "rag-comparison-demo"
 
 
 def _repository_root(value: Optional[str]) -> str:

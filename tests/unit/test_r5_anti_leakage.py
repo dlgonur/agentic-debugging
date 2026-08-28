@@ -5,7 +5,7 @@ exact live ``telemetry[*].request.user_prompt_full``.
 
 The decisive regression test: the OLD r5.7 evidence (raw pytest failure
 output + unfiltered stacks + raw verifier-record tails in the prompts)
-MUST FAIL the new audit — with the exact leak forms FirstMate found
+MUST FAIL the new audit — with the exact leak forms found during review
 (hidden test source, assertion expressions, expected literals, node ids,
 test function names).  Clean scripted prompts built by the r5.9 treatment
 must PASS.
@@ -72,7 +72,7 @@ class TestDeriveForbiddenContent:
         assert forbidden.production_source_lines
         assert forbidden.production_module_path
 
-    def test_001_contains_firstmate_examples(self):
+    def test_001_contains_review_examples(self):
         forbidden = _forbidden("curated-none-handling-001")
         assert "test_missing_display_name_returns_fallback" in (
             forbidden.hidden_test_function_names
@@ -170,8 +170,8 @@ class TestScanPrompt:
 
 class TestOldR57EvidenceFailsAudit:
     """THE regression test: the old leaking r5.7 prompt forms must FAIL the
-    fail-closed actual-prompt audit, with the exact leak forms FirstMate
-    found in the live prompts.
+    fail-closed actual-prompt audit, with the exact leak forms found during
+    independent review of the live prompts.
 
     Self-contained: the decisive leaked prompt excerpts are embedded in the
     TRACKED fixture ``tests/fixtures/old_r57_leakage/`` (extracted from the
@@ -189,14 +189,14 @@ class TestOldR57EvidenceFailsAudit:
         )
         assert audit["passed"] is False
 
-    def test_old_001_contains_firstmate_exact_leak_forms(self):
+    def test_old_001_contains_reviewed_exact_leak_forms(self):
         fixture = _old_r57_fixture("curated-none-handling-001")
         all_prompts = "\n".join(
             (rec.get("request") or {}).get("user_prompt_full") or ""
             for rec in fixture.get("telemetry") or []
             if type(rec) is dict
         )
-        # The exact leaked forms FirstMate quoted from the live prompts.
+        # The exact leaked forms identified in the live prompts.
         assert "def test_missing_display_name_returns_fallback() -> None:" in all_prompts
         assert "assert format_display_name(None) == \"Anonymous\"" in all_prompts
         # Verifier retry feedback exposes P2P hidden-test source/values.

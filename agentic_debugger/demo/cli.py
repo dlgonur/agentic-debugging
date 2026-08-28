@@ -171,7 +171,7 @@ def render_reproduction(report: DemoReport, entry_point: str) -> str:
             "git clone <repository-url> agentic-debugging-internship",
             "cd agentic-debugging-internship",
             f"git checkout {environment.get('git_head') or '<commit>'}",
-            "# Apply the uncommitted candidate from the FirstMate package if starting from that base:",
+            "# Apply the uncommitted candidate from the review package if starting from that base:",
             "git apply <path-to-review-package>/candidate.patch",
             "python -m pip install -e .[test]",
             entry_point,

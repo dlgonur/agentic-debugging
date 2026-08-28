@@ -24,9 +24,9 @@ restored accepted curated/configured session sources to the Start picker and
 removed a transient cancellation-state race (`8b2479b`). Current code and
 tests also prove that campaign `updated_at` uses finalization time and that
 `ModelRequestBudgetExceeded` is raised before provider launch; the older debt
-statements were stale. Superseded roadmaps, status snapshots, reports, frozen
-Friday-delivery documents, and a conversation handoff now live under
-`outdated/`. Optional OpenCode Go execution and license-gated BugsInPy
+statements were stale. Superseded roadmaps, status snapshots, reports, and
+frozen Friday-delivery documents now live under `outdated/`. Optional OpenCode
+Go execution and license-gated BugsInPy
 execution were closed as explicit **NOT EXECUTED** boundaries. No live
 provider, Docker, WSL, paid route, or licensed dataset was run during this
 closure. No required engineering campaign remains open.

@@ -225,7 +225,7 @@ class TestPosixNormalExitCleansRequestGroup:
     """
 
     def test_successful_request_kills_child_and_grandchild(self, tmp_path):
-        # The exact FirstMate reproduction: command -> child -> grandchild,
+        # The exact regression reproduction: command -> child -> grandchild,
         # the command emits a valid response and exits 0.  After request()
         # RETURNS SUCCESSFULLY the whole tree must be dead.  delay=0: the
         # command exits naturally right after the tree is confirmed alive

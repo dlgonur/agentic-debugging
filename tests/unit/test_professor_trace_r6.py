@@ -924,12 +924,11 @@ def test_deliverable_schema_is_synced_with_module_schema() -> None:
 
 
 def test_every_checked_in_trace_is_schema_valid_and_audit_clean() -> None:
+    resolver = EvidenceResolver(CAPSULE_DIR)
     for path in _docs_trace_paths():
         trace = json.loads(path.read_text(encoding="utf-8"))
         validate_trace(trace)
         task_id = trace["task_id"]
-        fixture = CURATED / task_id
-        assert (fixture / "task.json").is_file()
         # The checked-in trace must carry no hidden-test/oracle content
         # beyond the legitimately observed debugger evidence (production
         # function names the debugger really paused in) and the
@@ -958,6 +957,7 @@ def test_every_checked_in_trace_is_schema_valid_and_audit_clean() -> None:
             task_id,
             legitimate_texts=legitimate,
             curated_root=CURATED,
+            resolver=resolver,
         )
         assert audit["passed"], (
             f"{path.name} fails the professor-safe audit: "
@@ -1163,7 +1163,8 @@ def test_professor_manifest_has_no_machine_paths() -> None:
     text = json.dumps(manifest)
     assert "C:\\" not in text
     assert "C:/tmp" not in text
-    assert "benya" not in text
+    assert "wsl.localhost" not in text.lower()
+    assert "/home/" not in text
     entry = manifest["evidence"]["validation:quixbugs-depth-first-search"]
     assert entry["logical_identity"] == (
         "validation/stage-a/quixbugs-depth-first-search"
@@ -1176,7 +1177,8 @@ def test_traces_have_no_machine_paths() -> None:
         text = path.read_text(encoding="utf-8")
         assert "C:\\" not in text
         assert "C:/tmp" not in text
-        assert "benya" not in text
+        assert "wsl.localhost" not in text.lower()
+        assert "/home/" not in text
 
 
 def test_exporter_verify_evidence_accepts_capsule_root() -> None:

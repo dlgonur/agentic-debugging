@@ -28,7 +28,7 @@ FIXTURE = REPO_ROOT / "tests" / "fixtures" / "r31_model_patch_raw.patch"
 
 # Frozen R3.1 live B (exact bytes from run-r3-1-live-2026-08-11 trajectory)
 R31_B_SHA256 = "831b1c2bc347c9812296de5ddb7ebac5f6f414bbd6512561b4cb29066e6e2c76"
-# FirstMate-verified metadata-only correction: only -7,7 +7,7 -> -7,6 +7,6
+# Review-verified metadata-only correction: only -7,7 +7,7 -> -7,6 +7,6
 R31_C_HEADER = "@@ -7,6 +7,6 @@ def recent_window(values: list[int], size: int) -> list[int]:"
 
 
