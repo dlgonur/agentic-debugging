@@ -42,9 +42,13 @@ from textual.binding import Binding
 from agentic_debugger.application.command_config import (
     CommandConfigError,
     CommandModelConfigStore,
+    ProfileSummary,
 )
 from agentic_debugger.application.events import SessionEvent, SourceKind
-from agentic_debugger.application.history import HistoryStore
+from agentic_debugger.application.history import (
+    HistoryStore,
+    default_history_root as application_default_history_root,
+)
 from agentic_debugger.application.live_execution import (
     EphemeralSnapshot, ExecutionMode, KnownCeilings, LiveExecutionState,
     project_live_execution,
@@ -78,8 +82,6 @@ from agentic_debugger.ui.screens import (
     WorkspaceMode,
     WorkspaceScreen,
 )
-
-DEFAULT_HISTORY_DIR_NAME = "AgenticDebugger"
 
 _COOPERATIVE_GRACE_SECONDS = 10.0
 _READY_TIMEOUT_SECONDS = 30.0
@@ -158,8 +160,7 @@ def configured_source_name() -> str:
 
 def default_history_root() -> Path:
     """The application-owned run root (``%LOCALAPPDATA%/AgenticDebugger``)."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    return Path(base) / DEFAULT_HISTORY_DIR_NAME
+    return application_default_history_root()
 
 
 def repository_root() -> Path:
@@ -403,7 +404,7 @@ class LocalApplicationV1(App):
         )
         return curated + ladder
 
-    def configured_profiles(self) -> Tuple[Tuple["ProfileSummary", ...], Optional[str]]:
+    def configured_profiles(self) -> Tuple[Tuple[ProfileSummary, ...], Optional[str]]:
         """Safe profile summaries for the Start screen, plus a load error.
 
         Returns ``(summaries, error)``: an empty summary tuple with a
@@ -411,8 +412,6 @@ class LocalApplicationV1(App):
         loaded (a malformed config must never crash the TUI; the Start
         screen shows the reason and disables configured mode).
         """
-        from agentic_debugger.application.command_config import ProfileSummary
-
         try:
             return self._config_store.summaries(), None
         except CommandConfigError as exc:
@@ -595,7 +594,6 @@ class LocalApplicationV1(App):
         """
         from agentic_debugger.application.local_project import (
             LocalProjectTaskSpec,
-            capture_launch_cwd,
             cleanup_parent_tmpdir,
             create_isolated_worktree,
             get_launch_cwd,
@@ -769,7 +767,7 @@ class LocalApplicationV1(App):
                 self.push_screen(workspace)
             runner.start()
             worker_owned = True
-        except Exception as exc:
+        except Exception:
             # Before worker ownership: parent must clean worktree (verified)
             if not worker_owned:
                 try:

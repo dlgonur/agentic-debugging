@@ -37,7 +37,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import Enum
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from agentic_debugger.application import (
     ApplicationError,
@@ -63,9 +63,21 @@ MANIFEST_SCHEMA_VERSION = "app-session-manifest-v1"
 RUNS_DIR_NAME = "runs"
 JOURNAL_FILE_NAME = "session.events.jsonl"
 RESULT_FILE_NAME = "result.json"
+DEFAULT_HISTORY_DIR_NAME = "AgenticDebugger"
 
 _MAX_MANIFEST_ARTIFACTS = 64
 _MAX_TEXT_BYTES = 512
+
+
+def default_history_root() -> Path:
+    """Return the platform-local root used for app-owned session history.
+
+    This path helper lives in the UI-independent application layer so
+    headless history/reporting commands do not need to import Textual.
+    """
+
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / DEFAULT_HISTORY_DIR_NAME
 
 
 class HistoryError(ApplicationError):

@@ -24,8 +24,8 @@ provider. You can also run the scientific demo directly:
 python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002
 ```
 
-Configured-model and local-project sessions require a model profile supplied by
-the operator. Live provider execution is always explicit.
+Configured-model and local-project sessions require an operator profile; live execution is explicit. Headless history:
+`agentic-debugger --list-sessions`; safe report: `agentic-debugger --export-session SESSION_ID --output session-report.md`.
 
 ## How it works
 

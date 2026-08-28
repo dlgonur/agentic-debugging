@@ -131,6 +131,18 @@ python -m pip install -e .[app]
 python -m agentic_debugger.ui [--root DIR]
 ```
 
+History inspection and evidence export are also available headlessly:
+
+```powershell
+agentic-debugger --list-sessions [--root DIR]
+agentic-debugger --export-session SESSION_ID --output session-report.md [--root DIR]
+```
+
+These commands do not import Textual or re-run recorded work. The report is
+derived from the validated journal through the shared presentation reducer.
+It omits source text, patch bodies, and session/home storage roots. An existing
+output file is never overwritten.
+
 - `--root` selects the application-owned history root (default:
   `%LOCALAPPDATA%\AgenticDebugger` on Windows, `~/AgenticDebugger`
   elsewhere); every session the application runs and registers lives there,

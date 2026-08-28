@@ -4,6 +4,8 @@ Usage::
 
     agentic-debugger [--root DIR] [--project DIR]
     agentic-debugger --doctor
+    agentic-debugger --list-sessions [--root DIR]
+    agentic-debugger --export-session SESSION_ID [--output REPORT.md] [--root DIR]
 
 ``--root`` selects the application-owned history root (default:
 ``%LOCALAPPDATA%\\AgenticDebugger`` on Windows, ``~/AgenticDebugger``
@@ -98,12 +100,26 @@ def build_parser() -> argparse.ArgumentParser:
         action="version",
         version=f"%(prog)s {__version__}",
     )
-    parser.add_argument(
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument(
         "--doctor",
         action="store_true",
         help=(
             "Check Python, Textual, and packaged task resources without "
             "launching the UI or contacting a provider."
+        ),
+    )
+    modes.add_argument(
+        "--list-sessions",
+        action="store_true",
+        help="List app-owned sessions without launching the UI.",
+    )
+    modes.add_argument(
+        "--export-session",
+        metavar="SESSION_ID",
+        help=(
+            "Render one validated session as a safe Markdown report without "
+            "executing any recorded work."
         ),
     )
     parser.add_argument(
@@ -120,6 +136,14 @@ def build_parser() -> argparse.ArgumentParser:
         help=(
             "Prefill Local Project Debug with a project path "
             "(absolute or relative to the shell launch cwd; '.' means launch cwd)."
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        metavar="REPORT.md",
+        help=(
+            "Write --export-session to a new file instead of stdout; existing "
+            "files are never overwritten."
         ),
     )
     return parser
@@ -141,9 +165,41 @@ def _require_textual() -> None:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    if args.output is not None and args.export_session is None:
+        parser.error("--output requires --export-session")
     if args.doctor:
         return render_diagnostics(collect_diagnostics())
+    if args.list_sessions or args.export_session is not None:
+        from pathlib import Path
+
+        from agentic_debugger import AgenticDebuggerError
+        from agentic_debugger.application.history import (
+            HistoryStore,
+            default_history_root,
+        )
+        from agentic_debugger.application.reporting import (
+            render_session_listing,
+            render_session_report,
+            write_session_report,
+        )
+
+        store = HistoryStore(Path(args.root) if args.root else default_history_root())
+        if args.list_sessions:
+            print(render_session_listing(store.list_sessions()), end="")
+            return 0
+        try:
+            reopened = store.reopen(args.export_session)
+            if args.output is None:
+                print(render_session_report(reopened), end="")
+            else:
+                written = write_session_report(reopened, args.output)
+                print(f"Session report written: {written}")
+        except AgenticDebuggerError as exc:
+            print(f"error: {exc}", file=sys.stderr)
+            return 2
+        return 0
     _require_textual()
     from agentic_debugger.ui.app import LocalApplicationV1
     from agentic_debugger.application.local_project import capture_launch_cwd
