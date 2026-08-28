@@ -68,6 +68,7 @@ from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
     DebuggerPanel,
+    EvidenceReviewPanel,
     EvidenceState,
     LiveBar,
     LiveRunContextPanel,
@@ -99,9 +100,9 @@ _CLASSIFICATION_STYLE = {
 # Canonical user-facing keyboard vocabulary shared by footers and help.
 START_FOOTER = "S start   H history   ↑/↓ move   Enter edit   Esc back   Ctrl+C quit"
 START_FOOTER_COMPACT = "S start  H history  ↑/↓ move  Enter edit  Esc back"
-WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 activity filters   c cancel   h history   n new session   ctrl+c quit"
-WORKSPACE_FOOTER_IDLE = "left/right views   1-7 activity filters   h history   n new session   ctrl+c quit"
-REPLAY_FOOTER = "left/right views   1-7 activity filters   events   phases   h history   n new session   ctrl+c quit"
+WORKSPACE_FOOTER_ACTIVE = "left/right views   1-8 activity filters   c cancel   h history   n new session   ctrl+c quit"
+WORKSPACE_FOOTER_IDLE = "left/right views   1-8 activity filters   h history   n new session   ctrl+c quit"
+REPLAY_FOOTER = "left/right views   1-8 activity filters   events   phases   h history   n new session   ctrl+c quit"
 
 
 def _markup_escape(value: Any) -> str:
@@ -781,8 +782,8 @@ class StartSessionScreen(Screen):
     """Keyboard-first workspace shell for starting one live session."""
 
     BINDINGS = [
-        Binding("up", "move_up", "Previous setting", show=False),
-        Binding("down", "move_down", "Next setting", show=False),
+        Binding("up", "move_up", "Previous setting", show=False, priority=True),
+        Binding("down", "move_down", "Next setting", show=False, priority=True),
         Binding("s", "start", "Start"),
         Binding("h", "history", "History"),
         Binding("enter", "confirm", "Confirm", show=False),
@@ -813,7 +814,7 @@ class StartSessionScreen(Screen):
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("[bold #79c0ff]Agentic Debugger[/]\n[bold #79c0ff]New debugging session[/]\n[dim]Choose a task and execution mode.[/]", id="start-title")
+                    yield Static("[bold #79c0ff]Agentic Debugger[/]\n[bold #f0f6fc]Evidence-led repair session[/]\n[dim]Run a bounded case from failure to independent verification.[/]", id="start-title")
                     yield SessionSettingRow("Mode", row_key="mode", id="mode-row")
                     yield SessionSettingRow("Model", row_key="model", id="model-row")
                     yield SessionSettingRow("Task", row_key="task", id="task-row")
@@ -825,6 +826,12 @@ class StartSessionScreen(Screen):
                     yield Static("", id="start-trust")
                     with Horizontal(id="start-actions"):
                         yield Button("Start session", id="start-session-button", variant="success")
+                    yield Static(
+                        "[bold #8b949e]EVIDENCE PROTOCOL[/]\n"
+                        "[#c9d1d9]Reproduce  ->  Inspect  ->  Diagnose  ->  Change  ->  Verify  ->  Cleanup[/]\n"
+                        "[dim]Claims stay separate from verifier authority.[/]",
+                        id="start-method",
+                    )
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
                 yield Static("[bold #79c0ff]Session setup[/]", id="context-title")
@@ -1012,6 +1019,11 @@ class StartSessionScreen(Screen):
         self.query_one("#task-row", SessionSettingRow).set_value(self._task_display_name())
         self.query_one("#debugger-row", SessionSettingRow).set_value("On uncertainty" if self._policy == "pdb-on-uncertainty" else "Disabled")
         self.query_one("#time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
+        self.query_one("#start-session-button", Button).label = (
+            "Run evidence demo"
+            if self._mode == self.MODE_DETERMINISTIC and not is_ladder_task(self._task_id)
+            else "Start session"
+        )
         if is_ladder_task(self._task_id):
             metadata = ladder_task_metadata(self._task_id)
             self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value(metadata.debugger)
@@ -1111,31 +1123,41 @@ class StartSessionScreen(Screen):
     def _start(self) -> None:
         from agentic_debugger.application.events import SourceKind
         status = self.query_one("#start-status", Static)
-        if not self._task_id:
+        # The displayed task/mode are the single authoritative source for the CTA.
+        # No stale default, history, or scientific task may be substituted.
+        selected_task = str(self._task_id) if self._task_id else None
+        selected_mode = self._mode
+        if not selected_task:
             status.update("[red]Choose a task.[/]")
             return
-        if self._mode == self.MODE_CONFIGURED and not self.start_available:
+        # Validate that the selected task is actually offered in the picker.
+        if not any(task_id == selected_task for _, task_id in self._task_options):
+            status.update("[red]Selected task is not available.[/]")
+            return
+        if selected_mode == self.MODE_CONFIGURED and not self.start_available:
             status.update("[yellow]Start unavailable — choose a configured model profile.[/]")
             return
         try:
-            if is_ladder_task(self._task_id):
+            if is_ladder_task(selected_task):
                 if not self.start_available:
                     status.update("[yellow]Start unavailable — choose an eligible Ollama model.[/]")
                     return
                 self.app.start_live_session(
-                    task_id=str(self._task_id),
-                    policy=("exact-pdb-level32-frozen" if self._task_id == LEVEL32_TASK_ID else "pdb-on-uncertainty"),
+                    task_id=selected_task,
+                    policy=("exact-pdb-level32-frozen" if selected_task == LEVEL32_TASK_ID else "pdb-on-uncertainty"),
                     max_elapsed_seconds=None,
-                    source_kind=(SourceKind.LEVEL32_OPERATOR if self._task_id == LEVEL32_TASK_ID else SourceKind.OLLAMA_CLOUD_LADDER),
+                    source_kind=(SourceKind.LEVEL32_OPERATOR if selected_task == LEVEL32_TASK_ID else SourceKind.OLLAMA_CLOUD_LADDER),
                     profile_id=self._profile_id,
                 )
                 return
+            # Non-ladder (curated) tasks: the mode-selected source is authoritative.
+            # An Offline demo task must never be routed to a Level-32/Ollama worker.
             self.app.start_live_session(
-                task_id=str(self._task_id),
+                task_id=selected_task,
                 policy=self._policy,
                 max_elapsed_seconds=self._max_elapsed_seconds,
-                source_kind=SourceKind.CONFIGURED_MODEL if self._mode == self.MODE_CONFIGURED else SourceKind.OFFLINE_DEMO,
-                profile_id=self._profile_id if self._mode == self.MODE_CONFIGURED else None,
+                source_kind=SourceKind.CONFIGURED_MODEL if selected_mode == self.MODE_CONFIGURED else SourceKind.OFFLINE_DEMO,
+                profile_id=self._profile_id if selected_mode == self.MODE_CONFIGURED else None,
             )
         except Exception as exc:
             status.update(f"[red]{_markup_escape(exc)}[/]")
@@ -1885,6 +1907,7 @@ class WorkspaceScreen(Screen):
         Binding("5", "filter_debugger", "Filter: debugger", show=False),
         Binding("6", "filter_patch", "Filter: patch", show=False),
         Binding("7", "filter_verifier", "Filter: verifier", show=False),
+        Binding("8", "filter_tools", "Filter: tools", show=False),
         Binding("c", "cancel_live", "Cancel session"),
         Binding("h", "history", "History", priority=True),
         Binding("n", "new_session", "New session", priority=True),
@@ -1931,6 +1954,8 @@ class WorkspaceScreen(Screen):
         with Horizontal(id="workspace-body"):
             with Vertical(id="workspace-main"):
                 with TabbedContent(id="pane-tabs"):
+                    with TabPane("Evidence", id="tab-evidence"):
+                        yield EvidenceReviewPanel(id="evidence-pane")
                     with TabPane("Source", id="tab-source"):
                         yield SourcePanel(id="source-pane")
                         yield WorkstreamPanel(id="source-workstream")
@@ -2097,6 +2122,8 @@ class WorkspaceScreen(Screen):
         )
         self.query_one("#status-header", StatusHeader).update(header)
 
+        self.query_one("#evidence-pane", EvidenceReviewPanel).update_view(view)
+
         # Determine the domain evidence state for each pane
         is_live_running = (
             self.mode is WorkspaceMode.LIVE
@@ -2251,7 +2278,7 @@ class WorkspaceScreen(Screen):
                     apply_patch = None
                 if apply_patch:
                     footer = (
-                        "left/right views   1-7 activity filters   events   phases   "
+                        "left/right views   1-8 activity filters   events   phases   "
                         "a apply to project   h history   n new session   ctrl+c quit"
                     )
             bar.update(
@@ -2289,7 +2316,7 @@ class WorkspaceScreen(Screen):
                         apply_patch = None
                     if apply_patch:
                         footer = (
-                            "left/right views   1-7 activity filters   "
+                            "left/right views   1-8 activity filters   "
                             "a apply to project   h history   n new session   ctrl+c quit"
                         )
                 bar.update(f"[dim]{footer}   ? help[/]")
@@ -2297,6 +2324,7 @@ class WorkspaceScreen(Screen):
     # -- workspace view navigation ------------------------------------------
 
     _VIEW_IDS = (
+        "tab-evidence",
         "tab-source",
         "tab-debugger",
         "tab-patch",
@@ -2437,6 +2465,80 @@ class WorkspaceScreen(Screen):
             return view, None
         return view, attempt.patch_text
 
+    def _session_directory(self) -> Optional[Path]:
+        if self._runner is not None:
+            try:
+                return Path(self._runner.worker.session_dir)
+            except Exception:
+                return None
+        if self.entry is not None and self.entry.directory:
+            return Path(self.entry.directory)
+        return None
+
+    def _local_project_apply_proof(
+        self,
+        view: SessionViewState,
+        patch_text: str,
+    ) -> tuple[Optional[Path], Optional[str], str]:
+        """Resolve and validate the independent certificate for one Apply.
+
+        Old sessions without the versioned certificate remain inspectable but
+        are deliberately not applyable.  A terminal/session-success claim is
+        insufficient: the independent verifier must have returned RESOLVED,
+        and its certificate must match both the recorded source HEAD and the
+        exact candidate bytes.
+        """
+        summary = view.verifier_summary
+        if (
+            summary is None
+            or summary.status != "COMPLETED"
+            or summary.outcome is None
+            or summary.outcome.value != "RESOLVED"
+        ):
+            return None, None, "candidate is not independently verified as RESOLVED"
+        session_dir = self._session_directory()
+        if session_dir is None:
+            return None, None, "session artifact directory is unavailable"
+        try:
+            import json as _json
+            from agentic_debugger.application.local_project import (
+                LOCAL_PROJECT_VERIFICATION_FILE_NAME,
+                LocalProjectTaskSpec,
+                LocalProjectVerificationCertificate,
+                check_verification_certificate,
+                local_project_task_spec_sha256,
+            )
+
+            task = LocalProjectTaskSpec.from_mapping(
+                _json.loads(
+                    (session_dir / "local_project_task.json").read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+            certificate = LocalProjectVerificationCertificate.from_mapping(
+                _json.loads(
+                    (session_dir / LOCAL_PROJECT_VERIFICATION_FILE_NAME).read_text(
+                        encoding="utf-8"
+                    )
+                )
+            )
+        except FileNotFoundError:
+            return None, None, "independent verification certificate is missing"
+        except Exception as exc:
+            return None, None, f"independent verification certificate is invalid: {exc}"
+        ok, reason = check_verification_certificate(
+            certificate,
+            expected_task_id=view.task_id,
+            expected_session_id=view.session_id or "",
+            expected_task_spec_sha256=local_project_task_spec_sha256(task),
+            expected_head=task.source_head_commit,
+            patch_text=patch_text,
+        )
+        if not ok:
+            return None, None, reason
+        return Path(task.source_repo_path), task.source_head_commit, "verified"
+
     def check_action(self, action: str, parameters: tuple[Any, ...]) -> bool | None:
         if action == "cancel_live":
             return bool(
@@ -2447,15 +2549,19 @@ class WorkspaceScreen(Screen):
                 and not self._view.status.terminal
             )
         if action == "apply_to_project":
-            # Only a finished Local Project Debug session with an
-            # authoritative ACTIVE candidate (applied, not later reverted)
-            # whose patch body is recorded.
+            # Only a finished Local Project Debug session with an active
+            # candidate and an exact, RESOLVED independent-verifier proof.
             if self.mode is not WorkspaceMode.LIVE and self.controller is None:
                 return False
             view, patch_text = self._local_project_apply_candidate()
             if view is None or view.source_kind is not SourceKind.LOCAL_PROJECT:
                 return False
-            return patch_text is not None
+            if patch_text is None:
+                return False
+            repo_path, expected_head, _ = self._local_project_apply_proof(
+                view, patch_text
+            )
+            return repo_path is not None and expected_head is not None
         return True
 
     def action_apply_to_project(self) -> None:
@@ -2479,33 +2585,14 @@ class WorkspaceScreen(Screen):
         if not patch_text:
             self.notify("No active candidate patch available to apply.", severity="warning")
             return
-        # Locate the persisted local_project_task.json to find repo path and head
-        session_dir: Optional[Path] = None
-        repo_path: Optional[Path] = None
-        expected_head: Optional[str] = None
-        # Live case: runner's session_dir
-        if self._runner is not None:
-            try:
-                session_dir = self._runner.worker.session_dir
-            except Exception:
-                session_dir = None
-        elif self.entry is not None and self.entry.directory:
-            session_dir = Path(self.entry.directory)
-        if session_dir is not None:
-            task_path = session_dir / "local_project_task.json"
-            if task_path.is_file():
-                try:
-                    import json as _json
-                    data = _json.loads(task_path.read_text(encoding="utf-8"))
-                    # Canonical LocalProjectTaskSpec mapping; tolerate the
-                    # pre-fix legacy mapping from completed sessions.
-                    repo_path = Path(data.get("source_repo_path") or data.get("project_repo_path") or "")
-                    expected_head = data.get("source_head_commit") or data.get("project_head")
-                except Exception as exc:
-                    self.notify(f"Cannot read local project task: {exc}", severity="error")
-                    return
+        repo_path, expected_head, proof_reason = self._local_project_apply_proof(
+            view, patch_text
+        )
         if repo_path is None or expected_head is None:
-            self.notify("Local project provenance not found; cannot verify gates.", severity="error")
+            self.notify(
+                f"Apply To Project blocked: {proof_reason}.",
+                severity="error",
+            )
             return
         self.notify("Checking Apply gates (HEAD, clean tree, patch fit)…", timeout=3.0)
         # Pass the callable itself: evaluating
@@ -2533,7 +2620,11 @@ class WorkspaceScreen(Screen):
             if not ok:
                 self._report_apply_outcome(False, f"Apply To Project blocked: {reason}")
                 return
-            success, msg = apply_patch_to_project(repo_path, patch_text)
+            success, msg = apply_patch_to_project(
+                repo_path,
+                patch_text,
+                expected_head=expected_head,
+            )
             self._report_apply_outcome(success, msg if success else f"Apply failed: {msg}")
         except Exception as exc:
             self._report_apply_outcome(False, f"Apply To Project failed: {exc}")
@@ -2593,6 +2684,9 @@ class WorkspaceScreen(Screen):
 
     def action_filter_verifier(self) -> None:
         self._set_filter("verifier")
+
+    def action_filter_tools(self) -> None:
+        self._set_filter("tools")
 
     def _set_filter(self, name: str) -> None:
         panel = self._activity_panel()
@@ -2731,7 +2825,7 @@ class HelpModalScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        with Static(id="help-dialog"):
+        with VerticalScroll(id="help-dialog"):
             yield Static(
                 "[bold #58a6ff]Agentic Debugger[/]\n"
                 "[dim]Keyboard reference and evidence guide[/]",
@@ -2743,11 +2837,12 @@ class HelpModalScreen(Screen):
                 "  • REPLAY — Read-only recorded session from authoritative journal\n"
                 "\n"
                 "[bold #79c0ff]Workspace views[/]\n"
+                "  • Evidence — Causal case brief and authoritative verdict\n"
                 "  • Source — Recorded workspace source with execution line markers\n"
                 "  • Debugger — PDB location, stack frames, locals, and breakpoints\n"
                 "  • Patch — Candidate lifecycle and unified diff\n"
                 "  • Verifier — Independent correctness authority (RESOLVED / UNRESOLVED)\n"
-                "  • Activity — Filtered operational events (keys 1–7)\n"
+                "  • Activity — Filtered operational events (keys 1–8)\n"
                 "  • Timeline — Full ordered SessionEvent stream with phase boundaries\n"
                 "\n"
                 "[bold yellow]Evidence rule:[/] [bold]An applied patch is not automatically a fix.[/]\n"
@@ -2757,7 +2852,7 @@ class HelpModalScreen(Screen):
                 "  • Home — N new session · P local project · O/Enter open replay · R refresh\n"
                 "           Ctrl+C quit · ? help\n"
                 "  • Workspace — \\[ / ] previous/next event · { / } previous/next phase\n"
-                "                G/Shift+G begin/end · J jump · 1–7 activity filter\n"
+                "                G/Shift+G begin/end · J jump · 1–8 activity filter\n"
                 "                C cancel live · H history · N new session\n"
                 "                A apply candidate · Ctrl+C quit · ? help",
                 id="help-content",
@@ -2765,6 +2860,9 @@ class HelpModalScreen(Screen):
             yield Static(
                 "[dim]Press Esc or Enter to close help[/]", id="help-hint"
             )
+
+    def on_mount(self) -> None:
+        self.query_one("#help-dialog", VerticalScroll).focus()
 
     def action_close_help(self) -> None:
         self.app.pop_screen()

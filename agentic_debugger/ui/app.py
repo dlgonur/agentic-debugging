@@ -453,6 +453,18 @@ class LocalApplicationV1(App):
         """
         if self._live_runner is not None:
             raise RuntimeError("a live session is already active")
+        # Fail closed on inconsistent task/source pairing: the startup screen's
+        # displayed selection is authoritative.  A curated offline task must not
+        # be executed as a Level-32/Ollama Cloud session via a stale fallback,
+        # and a ladder task must not be executed as a local offline demo.
+        if source_kind is SourceKind.OFFLINE_DEMO and task_id in LADDER_TASK_IDS:
+            raise ValueError("offline demo source cannot start a ladder task")
+        if source_kind is SourceKind.CONFIGURED_MODEL and task_id in LADDER_TASK_IDS:
+            raise ValueError("configured model source cannot start a ladder task")
+        if source_kind is SourceKind.OLLAMA_CLOUD_LADDER and task_id not in LADDER_TASK_IDS:
+            raise ValueError("Ollama Cloud ladder source requires a ladder task")
+        if source_kind is SourceKind.OFFLINE_DEMO and task_id == LEVEL32_TASK_ID:
+            raise ValueError("offline demo source cannot start the Level-32 task")
         session_id = make_session_id()
         generation = self._live_generation + 1
         run_id = f"run-{session_id}"

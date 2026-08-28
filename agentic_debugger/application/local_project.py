@@ -23,6 +23,8 @@ owner working tree.
 from __future__ import annotations
 
 import os
+import hashlib
+import json
 import re
 import shutil
 import subprocess
@@ -30,10 +32,17 @@ import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 from agentic_debugger.application import ApplicationInputError
 from agentic_debugger.application.session import SessionBudgets
+
+
+LOCAL_PROJECT_VERIFICATION_FILE_NAME = "local_project_verification.json"
+LOCAL_PROJECT_VERIFICATION_SCHEMA_VERSION = 2
+LOCAL_PROJECT_VERIFICATION_AUTHORITY = (
+    "agentic-debugger.independent-local-project-verifier"
+)
 
 
 # ---------------------------------------------------------------------------
@@ -726,6 +735,20 @@ class LocalProjectTaskSpec:
     def from_mapping(m: dict) -> "LocalProjectTaskSpec":
         if not isinstance(m, dict):
             raise ApplicationInputError("spec mapping must be a dict")
+        required = {
+            "session_id",
+            "source_repo_path",
+            "source_head_commit",
+            "isolated_workspace_path",
+            "bug_description",
+            "reproduction_command",
+            "verification_command",
+            "model_runtime",
+            "budgets",
+            "created_at_utc",
+        }
+        if set(m) != required:
+            raise ApplicationInputError("spec mapping fields are invalid")
         return LocalProjectTaskSpec(
             session_id=m["session_id"],
             source_repo_path=m["source_repo_path"],
@@ -738,6 +761,216 @@ class LocalProjectTaskSpec:
             budgets=SessionBudgets(**m.get("budgets", {})),
             created_at_utc=m["created_at_utc"],
         )
+
+
+def local_project_task_spec_sha256(spec: LocalProjectTaskSpec) -> str:
+    """Hash the canonical semantic task contract for certificate binding."""
+    if type(spec) is not LocalProjectTaskSpec:
+        raise ApplicationInputError("spec must be a LocalProjectTaskSpec")
+    encoded = json.dumps(
+        spec.to_mapping(),
+        ensure_ascii=False,
+        allow_nan=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+@dataclass(frozen=True)
+class LocalProjectVerificationCertificate:
+    """Portable Apply-gate proof produced by the independent verifier.
+
+    The certificate intentionally contains no command text, filesystem path,
+    captured output, model claim, or controller classification.  It binds the
+    verifier's fail-closed result to exactly one source commit and candidate
+    patch while retaining only the facts required for an owner-facing Apply
+    decision.
+    """
+
+    task_id: str
+    session_id: str
+    task_spec_sha256: str
+    source_head_commit: str
+    candidate_sha256: str
+    status: str
+    outcome: Optional[str]
+    baseline_failure_reproduced: bool
+    baseline_regression_passed: bool
+    post_patch_reproduction_passed: bool
+    regression_passed: bool
+    f2p_passed: int
+    f2p_total: int
+    p2p_passed: int
+    p2p_total: int
+    verifier_workspace_cleaned: bool
+    source_repo_unchanged: bool
+
+    def __post_init__(self) -> None:
+        if type(self.task_id) is not str or not self.task_id:
+            raise ApplicationInputError("verification task_id must be non-empty")
+        from agentic_debugger.application.events import validate_session_id
+
+        try:
+            validate_session_id(self.session_id)
+        except Exception as exc:
+            raise ApplicationInputError(
+                f"verification session_id is invalid: {exc}"
+            ) from exc
+        if not re.fullmatch(r"[0-9a-f]{64}", self.task_spec_sha256):
+            raise ApplicationInputError(
+                "verification task_spec_sha256 must be a 64-hex SHA"
+            )
+        if not re.fullmatch(r"[0-9a-f]{40}", self.source_head_commit):
+            raise ApplicationInputError(
+                "verification source_head_commit must be a 40-hex SHA"
+            )
+        if not re.fullmatch(r"[0-9a-f]{64}", self.candidate_sha256):
+            raise ApplicationInputError(
+                "verification candidate_sha256 must be a 64-hex SHA"
+            )
+        if type(self.status) is not str or not self.status:
+            raise ApplicationInputError("verification status must be non-empty")
+        if self.outcome is not None and type(self.outcome) is not str:
+            raise ApplicationInputError("verification outcome must be a string or null")
+        for name in (
+            "baseline_failure_reproduced",
+            "baseline_regression_passed",
+            "post_patch_reproduction_passed",
+            "regression_passed",
+            "verifier_workspace_cleaned",
+            "source_repo_unchanged",
+        ):
+            if type(getattr(self, name)) is not bool:
+                raise ApplicationInputError(f"verification {name} must be boolean")
+        for name in ("f2p_passed", "f2p_total", "p2p_passed", "p2p_total"):
+            value = getattr(self, name)
+            if type(value) is not int or value < 0:
+                raise ApplicationInputError(
+                    f"verification {name} must be a non-negative integer"
+                )
+        if self.f2p_passed > self.f2p_total or self.p2p_passed > self.p2p_total:
+            raise ApplicationInputError("verification passed counts exceed totals")
+
+    @property
+    def permits_apply(self) -> bool:
+        """Whether this exact certificate proves a resolved, clean result."""
+        return bool(
+            self.status == "COMPLETED"
+            and self.outcome == "RESOLVED"
+            and self.baseline_failure_reproduced
+            and self.baseline_regression_passed
+            and self.post_patch_reproduction_passed
+            and self.regression_passed
+            and self.f2p_total == 1
+            and self.f2p_passed == 1
+            and self.p2p_total == 1
+            and self.p2p_passed == 1
+            and self.verifier_workspace_cleaned
+            and self.source_repo_unchanged
+        )
+
+    def to_mapping(self) -> dict[str, Any]:
+        return {
+            "schema_version": LOCAL_PROJECT_VERIFICATION_SCHEMA_VERSION,
+            "authority": LOCAL_PROJECT_VERIFICATION_AUTHORITY,
+            "task_id": self.task_id,
+            "session_id": self.session_id,
+            "task_spec_sha256": self.task_spec_sha256,
+            "source_head_commit": self.source_head_commit,
+            "candidate_sha256": self.candidate_sha256,
+            "status": self.status,
+            "outcome": self.outcome,
+            "baseline_failure_reproduced": self.baseline_failure_reproduced,
+            "baseline_regression_passed": self.baseline_regression_passed,
+            "post_patch_reproduction_passed": self.post_patch_reproduction_passed,
+            "regression_passed": self.regression_passed,
+            "f2p_passed": self.f2p_passed,
+            "f2p_total": self.f2p_total,
+            "p2p_passed": self.p2p_passed,
+            "p2p_total": self.p2p_total,
+            "verifier_workspace_cleaned": self.verifier_workspace_cleaned,
+            "source_repo_unchanged": self.source_repo_unchanged,
+        }
+
+    @staticmethod
+    def from_mapping(value: Mapping[str, Any]) -> "LocalProjectVerificationCertificate":
+        if not isinstance(value, Mapping):
+            raise ApplicationInputError("verification certificate must be a mapping")
+        required = {
+            "schema_version",
+            "authority",
+            "task_id",
+            "session_id",
+            "task_spec_sha256",
+            "source_head_commit",
+            "candidate_sha256",
+            "status",
+            "outcome",
+            "baseline_failure_reproduced",
+            "baseline_regression_passed",
+            "post_patch_reproduction_passed",
+            "regression_passed",
+            "f2p_passed",
+            "f2p_total",
+            "p2p_passed",
+            "p2p_total",
+            "verifier_workspace_cleaned",
+            "source_repo_unchanged",
+        }
+        if set(value) != required:
+            raise ApplicationInputError("verification certificate fields are invalid")
+        if value["schema_version"] != LOCAL_PROJECT_VERIFICATION_SCHEMA_VERSION:
+            raise ApplicationInputError("unsupported verification certificate version")
+        if value["authority"] != LOCAL_PROJECT_VERIFICATION_AUTHORITY:
+            raise ApplicationInputError("verification certificate authority is invalid")
+        return LocalProjectVerificationCertificate(
+            task_id=value["task_id"],
+            session_id=value["session_id"],
+            task_spec_sha256=value["task_spec_sha256"],
+            source_head_commit=value["source_head_commit"],
+            candidate_sha256=value["candidate_sha256"],
+            status=value["status"],
+            outcome=value["outcome"],
+            baseline_failure_reproduced=value["baseline_failure_reproduced"],
+            baseline_regression_passed=value["baseline_regression_passed"],
+            post_patch_reproduction_passed=value["post_patch_reproduction_passed"],
+            regression_passed=value["regression_passed"],
+            f2p_passed=value["f2p_passed"],
+            f2p_total=value["f2p_total"],
+            p2p_passed=value["p2p_passed"],
+            p2p_total=value["p2p_total"],
+            verifier_workspace_cleaned=value["verifier_workspace_cleaned"],
+            source_repo_unchanged=value["source_repo_unchanged"],
+        )
+
+
+def check_verification_certificate(
+    certificate: LocalProjectVerificationCertificate,
+    *,
+    expected_task_id: str,
+    expected_session_id: str,
+    expected_task_spec_sha256: str,
+    expected_head: str,
+    patch_text: str,
+) -> tuple[bool, str]:
+    """Bind Apply to one journal identity, task contract, HEAD, and patch."""
+    if type(certificate) is not LocalProjectVerificationCertificate:
+        return False, "independent verification certificate is malformed"
+    if certificate.task_id != expected_task_id:
+        return False, "verification certificate belongs to a different task"
+    if certificate.session_id != expected_session_id:
+        return False, "verification certificate belongs to a different session"
+    if certificate.task_spec_sha256 != expected_task_spec_sha256:
+        return False, "verification certificate belongs to a different task contract"
+    if certificate.source_head_commit != expected_head:
+        return False, "verification certificate belongs to a different source commit"
+    candidate_sha256 = hashlib.sha256(patch_text.encode("utf-8")).hexdigest()
+    if certificate.candidate_sha256 != candidate_sha256:
+        return False, "verification certificate belongs to a different candidate patch"
+    if not certificate.permits_apply:
+        return False, "candidate is not independently verified as RESOLVED"
+    return True, "verified"
 
 
 # ---------------------------------------------------------------------------
@@ -835,12 +1068,20 @@ def has_tracked_root_repro(repo_root: Path) -> bool:
 def apply_patch_to_project(
     repo_root: Path,
     patch_text: str,
+    *,
+    expected_head: Optional[str] = None,
 ) -> tuple[bool, str]:
     """Apply the canonical candidate patch to the owner project (no commit).
 
-    Assumes :func:`check_apply_gates` already passed; fails closed on any
-    error.  Leaves changes uncommitted for owner review.  No branch creation.
+    When ``expected_head`` is supplied, repeats every read-only gate inside
+    this mutation helper immediately before ``git apply``.  This narrows the
+    caller/helper TOCTOU window; it cannot lock out unrelated external Git
+    writers.  Leaves changes uncommitted for owner review.  No branch creation.
     """
+    if expected_head is not None:
+        ok, reason = check_apply_gates(repo_root, expected_head, patch_text)
+        if not ok:
+            return False, f"apply-time gate failed: {reason}"
     try:
         proc = subprocess.run(["git", "apply", "-p1", "-"],
             cwd=str(repo_root),
@@ -860,12 +1101,14 @@ def apply_patch_to_project(
 __all__ = [
     "IsolatedWorktree",
     "LocalProjectTaskSpec",
+    "LocalProjectVerificationCertificate",
     "LocalProjectValidationError",
     "ValidatedProject",
     "apply_patch_to_project",
     "assert_path_inside_workspace",
     "capture_launch_cwd",
     "check_apply_gates",
+    "check_verification_certificate",
     "cleanup_isolated_worktree",
     "cleanup_parent_tmpdir",
     "create_isolated_worktree",
@@ -877,6 +1120,7 @@ __all__ = [
     "has_uncommitted_changes",
     "is_git_worktree",
     "list_child_directories",
+    "local_project_task_spec_sha256",
     "resolve_project_path",
     "reset_launch_cwd",
     "set_launch_cwd_for_tests",

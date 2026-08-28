@@ -25,6 +25,10 @@ from textual.app import ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.widgets import Static
 
+from agentic_debugger.application.case_brief import (
+    EvidenceStageState,
+    project_case_brief,
+)
 from agentic_debugger.application.events import (
     OperatorStage,
     SessionEventKind,
@@ -283,6 +287,76 @@ def _highlight_source_lines(source_text: str, source_path: str) -> list[Text]:
             if chunk_index < len(chunks) - 1:
                 line_index += 1
     return lines
+
+
+class EvidenceReviewPanel(VerticalScroll):
+    """One-screen causal review of the session's recorded evidence prefix."""
+
+    _STATE_LABELS = {
+        EvidenceStageState.PROVEN: "PROVEN",
+        EvidenceStageState.RECORDED: "RECORDED",
+        EvidenceStageState.FAILED: "FAILED",
+        EvidenceStageState.PENDING: "PENDING",
+        EvidenceStageState.NOT_RECORDED: "NOT RECORDED",
+        EvidenceStageState.NOT_REQUIRED: "NOT REQUIRED",
+    }
+    _STATE_STYLES = {
+        EvidenceStageState.PROVEN: "bold #3fb950",
+        EvidenceStageState.RECORDED: "bold #79c0ff",
+        EvidenceStageState.FAILED: "bold #ff7b72",
+        EvidenceStageState.PENDING: "bold #d29922",
+        EvidenceStageState.NOT_RECORDED: "dim",
+        EvidenceStageState.NOT_REQUIRED: "#8b949e",
+    }
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._text = Static("")
+
+    def compose(self) -> ComposeResult:
+        yield self._text
+
+    def update_view(self, view: SessionViewState) -> None:
+        brief = project_case_brief(view)
+        text = Text()
+        text.append("Evidence Review", style="bold #79c0ff")
+        text.append("  /  causal case brief\n", style="#8b949e")
+        text.append("VERDICT  ", style="bold #8b949e")
+        verdict_style = (
+            "bold #3fb950"
+            if brief.verdict == "RESOLVED"
+            else "bold #ff7b72"
+            if brief.verdict_authoritative
+            else "bold #d29922"
+        )
+        text.append(brief.verdict, style=verdict_style)
+        text.append(
+            "  AUTHORITATIVE\n" if brief.verdict_authoritative else "  NOT YET AUTHORITATIVE\n",
+            style="bold #8b949e" if brief.verdict_authoritative else "#8b949e",
+        )
+        text.append(
+            "Controller diagnosis is a claim. The independent verifier is the correctness authority.\n",
+            style="#8b949e",
+        )
+        text.append("─" * 72 + "\n", style="#30363d")
+        for index, stage in enumerate(brief.stages):
+            label = self._STATE_LABELS[stage.state]
+            text.append(f"{label:<13}", style=self._STATE_STYLES[stage.state])
+            text.append(f"{stage.kind.value.upper():<11}", style="bold #c9d1d9")
+            text.append(stage.title, style="#f0f6fc")
+            text.append("\n")
+            text.append(" " * 13)
+            text.append(stage.detail, style="#8b949e")
+            text.append("\n")
+            if stage.references:
+                references = ", ".join(stage.references[:4])
+                if len(stage.references) > 4:
+                    references += f", +{len(stage.references) - 4} more"
+                text.append(" " * 13)
+                text.append(f"evidence: {references}\n", style="dim #79c0ff")
+            if index < len(brief.stages) - 1:
+                text.append("\n")
+        self._text.update(text)
 
 
 class SourcePanel(VerticalScroll):

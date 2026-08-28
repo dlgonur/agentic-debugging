@@ -1065,6 +1065,25 @@ def test_capsule_manifest_schema_and_identity() -> None:
         ][key]["sha256"]
 
 
+def test_capsule_manifest_has_no_machine_paths() -> None:
+    """The public chain manifest contains logical identities, never the
+    builder machine's source locations."""
+    _require_capsule()
+    manifest = json.loads(
+        (CAPSULE_DIR / "capsule_manifest.json").read_text(encoding="utf-8")
+    )
+    text = json.dumps(manifest)
+    assert "C:\\" not in text
+    assert "C:/tmp" not in text
+    assert "wsl.localhost" not in text.lower()
+    assert "/home/" not in text
+    assert "source_identity" not in manifest
+    for entry in manifest["evidence"].values():
+        assert "capture_source" not in entry
+    for entry in manifest["ancillary"].values():
+        assert "source_path" not in entry
+
+
 def test_capsule_protected_fields_absent() -> None:
     """The capsule must not carry model prompts or answer-bearing patch
     bodies (protected by the accepted clean-holdout policy)."""

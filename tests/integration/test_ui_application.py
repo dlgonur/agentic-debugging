@@ -99,7 +99,7 @@ class TestBootAndHome:
         async def scenario(pilot):
             app = pilot.app
             assert isinstance(app.screen, StartSessionScreen)
-            assert "New debugging session" in str(app.screen.query_one("#start-title").render())
+            assert "Evidence-led repair session" in str(app.screen.query_one("#start-title").render())
             assert app.screen.query_one("#start-footer")
             await pilot.press("h")
             assert isinstance(app.screen, HomeScreen)
@@ -117,7 +117,7 @@ class TestBootAndHome:
             start = pilot.app.screen
             assert isinstance(start, StartSessionScreen)
             button = start.query_one("#start-session-button")
-            assert button.label.plain == "Start session"
+            assert button.label.plain == "Run evidence demo"
             await pilot.click("#start-session-button")
             assert len(calls) == 1
             assert calls[0]["task_id"] == VALID_TASK_ID
@@ -507,10 +507,12 @@ class TestOpenReplay:
             # header shows REPLAY identity and position
             header = str(workspace.query_one("#status-header", StatusHeader).render())
             assert "REPLAY" in header
-            assert "0/28" in header
-            assert "before first event" in header
-            # replay to the end so every recorded fact is in the view
-            await pilot.press("G")
+            assert "28/28" in header
+            assert "at end" in header
+            evidence = pane_text(workspace, "#evidence-pane")
+            assert "Evidence Review" in evidence
+            assert "VERDICT  RESOLVED" in evidence
+            assert "independent verifier is the correctness authority" in evidence
             # source pane renders recorded source with the execution line
             source = pane_text(workspace, "#source-pane")
             assert "recent_window.py" in source
@@ -580,10 +582,14 @@ class TestOpenReplay:
             workspace = pilot.app.screen
             bar = workspace.query_one("#replay-bar", ReplayBar)
             header = workspace.query_one("#status-header", StatusHeader)
-            assert "0/28" in str(header.render())
+            assert "28/28" in str(header.render())
             bar_text = str(bar.render())
             assert "left/right views" in bar_text
-            assert "1-7 activity filters" in bar_text
+            assert "1-8 activity filters" in bar_text
+            # Reopened cases start at the complete recorded prefix; rewind to
+            # exercise event-by-event navigation.
+            await pilot.press("g")
+            assert "0/28" in str(header.render())
             # next events
             await pilot.press("]")
             assert "1/28" in str(header.render())
@@ -624,7 +630,9 @@ class TestOpenReplay:
         async def scenario(pilot):
             await open_first_row(pilot)
             workspace = pilot.app.screen
-            # No events reduced yet: no recorded source exists at the start.
+            # Reopened cases start at the final prefix; rewind for causal
+            # source-prefix navigation.
+            await pilot.press("g")
             source = pane_text(workspace, "#source-pane")
             assert "Source snapshot not yet available" in source
             # Reduce through the source snapshot (sequence 13 -> index 14):

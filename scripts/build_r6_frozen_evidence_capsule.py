@@ -37,11 +37,11 @@ Chain of custody is explicit and fail-closed:
      hidden-test failure text and the hidden reproduction node id).
    - everything else is preserved byte-structurally (LF endings).
 3. ``capsule_manifest.json`` records, per file: the accepted raw SHA256,
-   the capsule SHA256, the captured/cleared field list, the source identity
-   (logical identity + optional machine-local capture path), and the
-   exporter verification status.  The raw SHA256 stays the scientific
-   evidence identity; the capsule is a deterministic, schema-validated
-   derived capsule of the same record.
+   the capsule SHA256, the captured/cleared field list, and a portable
+   logical source identity.  Machine-local capture paths are deliberately
+   excluded.  The raw SHA256 stays the scientific evidence identity; the
+   capsule is a deterministic, schema-validated derived record of the same
+   evidence.
 
 The exporter's default root-resolution policy ALREADY prefers
 ``experiments/r6_debugger_training/runs/frozen``; the capsule registry
@@ -298,7 +298,6 @@ def build_capsule_record(
             "trajectory_jsonl/*/observation.payload.failure_output_raw",
             "trajectory_jsonl/*/observation.payload.node_id",
         ],
-        "capture_source": str(raw_path),
         "capsule_path": f"{scope}/{task_id}/evidence.json",
         "capsule": capsule_text,
     }
@@ -355,10 +354,6 @@ def main() -> int:
             "identity (SHA256) is preserved; protected model-prompt / "
             "answer-bearing fields are cleared (see cleared_fields)."
         ),
-        "source_identity": {
-            "review_package": str(_PKG),
-            "live_run_root": str(_LIVE),
-        },
         "evidence": {},
         "ancillary": {},
         "audit_needles": {},
@@ -410,7 +405,6 @@ def main() -> int:
         out_path.write_bytes(data)
         manifest["ancillary"][key] = {
             "logical_identity": f"ancillary/{key}",
-            "source_path": str(path),
             "sha256": _sha256_bytes(data),
             "bytes": len(data),
         }

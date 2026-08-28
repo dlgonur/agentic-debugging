@@ -9,6 +9,25 @@ permissions:
   contents: read
 
 jobs:
+  public-evidence:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install evidence dependencies
+        run: python -m pip install -e ".[test]"
+
+      - name: Verify public evidence chain
+        run: >-
+          python scripts/verify_public_evidence.py
+          --output public-evidence-attestation.json
+
   test:
     runs-on: ubuntu-latest
     strategy:

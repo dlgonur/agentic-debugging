@@ -1,10 +1,6 @@
 {
   "schema_version": "r6-frozen-evidence-capsule-v1",
   "description": "Minimum tracked frozen evidence for deterministic regeneration of docs/professor_traces from a pristine checkout.  Raw evidence identity (SHA256) is preserved; protected model-prompt / answer-bearing fields are cleared (see cleared_fields).",
-  "source_identity": {
-    "review_package": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP",
-    "live_run_root": "C:\\tmp\\r6-bounded"
-  },
   "evidence": {
     "validation:quixbugs-depth-first-search": {
       "logical_identity": "validation/stage-a/quixbugs-depth-first-search",
@@ -20,7 +16,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-a-7c9881\\adapter-checkpoint-30\\quixbugs-depth-first-search\\evidence.json",
       "capsule_path": "validation/quixbugs-depth-first-search/evidence.json"
     },
     "validation:quixbugs-find-in-sorted": {
@@ -37,7 +32,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-find-in-sorted\\evidence.json",
       "capsule_path": "validation/quixbugs-find-in-sorted/evidence.json"
     },
     "validation:quixbugs-flatten": {
@@ -54,7 +48,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-b-7c9881\\adapter-checkpoint-30\\quixbugs-flatten\\evidence.json",
       "capsule_path": "validation/quixbugs-flatten/evidence.json"
     },
     "validation:quixbugs-kth": {
@@ -71,7 +64,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-kth\\evidence.json",
       "capsule_path": "validation/quixbugs-kth/evidence.json"
     },
     "validation:quixbugs-quicksort": {
@@ -88,7 +80,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-b-7c9881\\adapter-checkpoint-30\\quixbugs-quicksort\\evidence.json",
       "capsule_path": "validation/quixbugs-quicksort/evidence.json"
     },
     "validation:quixbugs-reverse-linked-list": {
@@ -105,7 +96,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-reverse-linked-list\\evidence.json",
       "capsule_path": "validation/quixbugs-reverse-linked-list/evidence.json"
     },
     "validation:quixbugs-rpn-eval": {
@@ -122,7 +112,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-rpn-eval\\evidence.json",
       "capsule_path": "validation/quixbugs-rpn-eval/evidence.json"
     },
     "validation:quixbugs-shortest-path-length": {
@@ -139,7 +128,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\tmp\\r6-bounded\\v3c30-r68-c-7c9881\\adapter-checkpoint-30\\quixbugs-shortest-path-length\\evidence.json",
       "capsule_path": "validation/quixbugs-shortest-path-length/evidence.json"
     },
     "final_holdout_partial:curated-none-handling-001": {
@@ -156,7 +144,6 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\interrupted-holdout\\completed-evidence\\curated-none-handling-001.json",
       "capsule_path": "final_holdout_partial/curated-none-handling-001/evidence.json"
     },
     "final_holdout_partial:curated-off-by-one-002": {
@@ -173,38 +160,32 @@
         "trajectory_jsonl/*/observation.payload.failure_output_raw",
         "trajectory_jsonl/*/observation.payload.node_id"
       ],
-      "capture_source": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\interrupted-holdout\\completed-evidence\\curated-off-by-one-002.json",
       "capsule_path": "final_holdout_partial/curated-off-by-one-002/evidence.json"
     }
   },
   "ancillary": {
     "checkpoint_selection": {
       "logical_identity": "ancillary/checkpoint_selection",
-      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\selection\\checkpoint-selection.json",
       "sha256": "f966ddee6dad353e9f2887be4a70ed4036abef0b479d80fc2d806ec2b79b9ee4",
       "bytes": 4133
     },
     "stage_a_report": {
       "logical_identity": "ancillary/stage_a_report",
-      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\validation\\stage-a\\eval_report.json",
       "sha256": "3fdfd517dd379d2fdb9f74820ceaf444b4b129103477b37baf18506336905967",
       "bytes": 38655
     },
     "stage_b_report": {
       "logical_identity": "ancillary/stage_b_report",
-      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\validation\\stage-b\\eval_report.json",
       "sha256": "677ab79a7513a8a00cc50f66ba9bc37e36416f458b71fce7edcf19969f03baa7",
       "bytes": 40123
     },
     "stage_c_report": {
       "logical_identity": "ancillary/stage_c_report",
-      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\validation\\stage-c\\eval_report.json",
       "sha256": "f7e24be432675b94ebea6167f37a41ddcfcde276c21e891bc7ebf603c6311d85",
       "bytes": 44676
     },
     "holdout_report": {
       "logical_identity": "ancillary/holdout_report",
-      "source_path": "C:\\Users\\benya\\Desktop\\Projects\\agentic-debugging-internship\\_ai-review\\R6-HARDWARE-STOP\\interrupted-holdout\\eval_report.json",
       "sha256": "ee77c88b0a44ddc8da1056a9efff13079735fabc83f08b42b32bb6f3c65d1f00",
       "bytes": 41003
     }

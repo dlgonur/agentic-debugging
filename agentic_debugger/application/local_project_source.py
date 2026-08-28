@@ -79,6 +79,18 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
     if type(config_root) is not str or not config_root: raise ScenarioInputError("config_root is required")
     repro=_require_text(params,"reproduction_command",_MAX_CMD_CHARS)
     verify=_require_text(params,"verification_command",_MAX_CMD_CHARS)
+    for label, command in (
+        ("reproduction_command", repro),
+        ("verification_command", verify),
+    ):
+        if command is None:
+            continue
+        try:
+            argv=_split_command(command)
+        except ValueError as exc:
+            raise ScenarioInputError(f"{label} cannot be parsed: {exc}") from exc
+        if not argv:
+            raise ScenarioInputError(f"{label} must contain an executable")
     policy_str=params.get("policy") or "pdb-on-uncertainty"
     if policy_str not in {c.value for c in DemoPolicy}: raise ScenarioInputError(f"unknown policy: {policy_str!r}")
     return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str}
@@ -925,29 +937,87 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                 raise ModelExecutionError(f"{exc} (model transport: {tr})", SessionTerminationReason.MODEL_ERROR if tr=="model_error" else SessionTerminationReason.CONTROLLER_FAILED) from exc
         raise LocalProjectSourceError(f"controller failed: {exc}") from exc
     ctx.token.check()
+    has_active_candidate=bool(
+        demo_context.patch_applied and demo_context.candidate_patch
+    )
     if result.stop_reason is not ControllerStopReason.DONE:
+        # A controller classification is not the correctness authority.  If
+        # it left an active, schema-valid candidate, retain the candidate and
+        # let the independent verifier decide.  Transport failure or a run
+        # with no candidate remains an operational controller failure.
         from agentic_debugger.application.local_source import _controller_failure_category
         _, term_reason=_controller_failure_category(result)
-        ctx.emitter.emit(SessionEventKind.DIAGNOSIS_RECORDED, {"text": f"controller did not complete: {result.stop_reason.value}", "file_path": None, "symbol": None, "confidence": "observed"})
-        if adapters and adapters[-1].metrics.termination_reason:
-            tr=adapters[-1].metrics.termination_reason
-            raise ModelExecutionError(f"controller run ended without completion (stop: {result.stop_reason.value}) (model transport: {tr})", term_reason)
-        raise ModelExecutionError(f"controller run ended without completion (stop: {result.stop_reason.value})", term_reason)
-    has_active_candidate=bool(demo_context.patch_applied and demo_context.candidate_patch)
+        transport_reason=(
+            adapters[-1].metrics.termination_reason if adapters else None
+        )
+        if transport_reason:
+            ctx.emitter.emit(SessionEventKind.DIAGNOSIS_RECORDED, {"text": f"controller did not complete: {result.stop_reason.value}", "file_path": None, "symbol": None, "confidence": "observed"})
+            raise ModelExecutionError(f"controller run ended without completion (stop: {result.stop_reason.value}) (model transport: {transport_reason})", term_reason)
+        if not has_active_candidate:
+            ctx.emitter.emit(SessionEventKind.DIAGNOSIS_RECORDED, {"text": f"controller did not complete: {result.stop_reason.value}", "file_path": None, "symbol": None, "confidence": "observed"})
+            raise ModelExecutionError(f"controller run ended without completion (stop: {result.stop_reason.value})", term_reason)
+        ctx.emitter.emit(
+            SessionEventKind.DIAGNOSIS_RECORDED,
+            {
+                "text": (
+                    "controller stopped without a success claim; active candidate "
+                    "retained for independent verification"
+                ),
+                "file_path": None,
+                "symbol": None,
+                "confidence": "system",
+            },
+        )
     patch_text: Optional[str]=demo_context.candidate_patch if has_active_candidate else None
-    ctx.emitter.emit(SessionEventKind.VERIFIER_STARTED, {})
-    ctx.emitter.emit(SessionEventKind.VERIFIER_STAGE_STARTED, {"stage": "f2p_p2p_checks"})
-    verification_passed: Optional[bool]=None
-    if verify_cmd:
-        verify_exit, _, _, _=_run_command_bounded(verify_cmd, isolated, timeout=30.0, cancel_check=ctx.token.check)
-        verification_passed=(verify_exit==0)
+    verification_result: Optional[Any]=None
+    verified_fixed=False
+    if has_active_candidate and patch_text is not None:
+        from agentic_debugger.application.verifier_observer import (
+            VerifierSessionEventAdapter,
+        )
+        from agentic_debugger.evaluation.local_project_verifier import (
+            LocalProjectEvaluationPlan,
+            LocalProjectVerifier,
+        )
+
+        verifier_events=VerifierSessionEventAdapter(
+            ObservabilityContext(
+                session_id=session_id,
+                task_id=task_id,
+                source_kind=source_kind,
+                run_id=ctx.run_id,
+            ),
+            emitter=ctx.emitter,
+        )
+        verifier_events.started()
+        verification_plan=LocalProjectEvaluationPlan(
+            source_repo_path=str(repo_root),
+            source_head_commit=validated["project_head"],
+            candidate_patch=patch_text,
+            reproduction_argv=(tuple(_split_command(repro_cmd)) if repro_cmd else None),
+            regression_argv=(tuple(_split_command(verify_cmd)) if verify_cmd else None),
+            allowed_paths=tuple(tracked),
+            denied_paths=("tests", "task.json"),
+            timeout_seconds=30.0,
+            workspace_parent=validated.get("parent_tmpdir"),
+        )
+        independent_verifier=LocalProjectVerifier(
+            progress_observer=verifier_events,
+            cancel_check=ctx.token.check,
+        )
+        verification_result=independent_verifier.evaluate(verification_plan)
+        verifier_events.completed(verification_result)
+        verified_fixed=verification_result.resolved
     else:
-        verification_passed=False
-    if not has_active_candidate:
-        verification_passed=False
-    ctx.emitter.emit(SessionEventKind.VERIFIER_STAGE_COMPLETED, {"stage": "f2p_p2p_checks", "status": "completed" if verification_passed else "failed"})
-    verified_fixed=bool(has_active_candidate and verification_passed is True)
-    ctx.emitter.emit(SessionEventKind.VERIFIER_COMPLETED, {"status": "COMPLETED","outcome": "RESOLVED" if verified_fixed else None,"f2p_passed": 1 if verified_fixed else 0,"f2p_total": 1,"p2p_passed": 1 if verified_fixed else 0,"p2p_total": 1,"workspace_cleaned": None,"classification": "Fixed" if verified_fixed else "Unresolved"})
+        ctx.emitter.emit(
+            SessionEventKind.DIAGNOSIS_RECORDED,
+            {
+                "text": "independent verification not run: no active candidate patch",
+                "file_path": None,
+                "symbol": None,
+                "confidence": "system",
+            },
+        )
     session_dir=ctx.session_dir
     disposition="FIXED" if verified_fixed else "UNRESOLVED"
     artifact_failures: list[str]=[]
@@ -973,6 +1043,78 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                 # The candidate artifact is required for Apply To Project;
                 # its absence must be visible, not silent.
                 artifact_failures.append(f"candidate.patch write failed: {exc}")
+        if verification_result is not None:
+            try:
+                from agentic_debugger.application.local_project import (
+                    LOCAL_PROJECT_VERIFICATION_FILE_NAME,
+                    LocalProjectTaskSpec,
+                    LocalProjectVerificationCertificate,
+                    local_project_task_spec_sha256,
+                )
+                from agentic_debugger.evaluation.runner import TestRecordStatus
+
+                task_spec = LocalProjectTaskSpec.from_mapping(
+                    json.loads(
+                        (session_dir / "local_project_task.json").read_text(
+                            encoding="utf-8"
+                        )
+                    )
+                )
+                certificate=LocalProjectVerificationCertificate(
+                    task_id=task_id,
+                    session_id=task_spec.session_id,
+                    task_spec_sha256=local_project_task_spec_sha256(task_spec),
+                    source_head_commit=verification_result.source_head_commit,
+                    candidate_sha256=verification_result.candidate_sha256,
+                    status=verification_result.status.value,
+                    outcome=(
+                        verification_result.outcome.value
+                        if verification_result.outcome is not None
+                        else None
+                    ),
+                    baseline_failure_reproduced=bool(
+                        verification_result.baseline_reproduction is not None
+                        and verification_result.baseline_reproduction.status
+                        is TestRecordStatus.FAIL
+                    ),
+                    baseline_regression_passed=bool(
+                        verification_result.baseline_regression is not None
+                        and verification_result.baseline_regression.passed
+                    ),
+                    post_patch_reproduction_passed=bool(
+                        verification_result.post_patch_reproduction is not None
+                        and verification_result.post_patch_reproduction.passed
+                    ),
+                    regression_passed=bool(
+                        verification_result.regression is not None
+                        and verification_result.regression.passed
+                    ),
+                    f2p_passed=verification_result.f2p_passed,
+                    f2p_total=verification_result.f2p_total,
+                    p2p_passed=verification_result.p2p_passed,
+                    p2p_total=verification_result.p2p_total,
+                    verifier_workspace_cleaned=verification_result.workspace.cleaned,
+                    source_repo_unchanged=(
+                        verification_result.workspace.canonical_fixture_unchanged
+                    ),
+                )
+                certificate_path=session_dir / LOCAL_PROJECT_VERIFICATION_FILE_NAME
+                certificate_path.write_text(
+                    json.dumps(certificate.to_mapping(), indent=2, sort_keys=True),
+                    encoding="utf-8",
+                )
+                certificate_sha=hashlib.sha256(certificate_path.read_bytes()).hexdigest()
+                ctx.emitter.emit(
+                    SessionEventKind.ARTIFACT_WRITTEN,
+                    {
+                        "path": LOCAL_PROJECT_VERIFICATION_FILE_NAME,
+                        "sha256": certificate_sha,
+                    },
+                )
+            except Exception as exc:
+                artifact_failures.append(
+                    f"local_project_verification.json write failed: {exc}"
+                )
         try:
             # Keep the canonical artifact authoritative.  The app pre-writes
             # this file as ``LocalProjectTaskSpec.to_mapping()`` before the
@@ -1010,7 +1152,27 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         # Audit sidecar (not authority; the typed return is authoritative).
         try:
             disp_path=session_dir / "local_project_disposition.json"
-            disp_path.write_text(json.dumps({"disposition": disposition, "has_active_candidate": has_active_candidate, "verification_passed": bool(verification_passed)}), encoding="utf-8")
+            disp_path.write_text(
+                json.dumps(
+                    {
+                        "disposition": disposition,
+                        "has_active_candidate": has_active_candidate,
+                        "verifier_status": (
+                            verification_result.status.value
+                            if verification_result is not None
+                            else None
+                        ),
+                        "verifier_outcome": (
+                            verification_result.outcome.value
+                            if verification_result is not None
+                            and verification_result.outcome is not None
+                            else None
+                        ),
+                    },
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
         except Exception as exc:
             artifact_failures.append(f"local_project_disposition.json write failed: {exc}")
     for failure in artifact_failures[:4]:

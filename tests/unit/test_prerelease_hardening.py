@@ -23,6 +23,7 @@ Each test protects one repaired defect:
 from __future__ import annotations
 
 import json
+import hashlib
 import os
 import stat
 import subprocess
@@ -39,10 +40,12 @@ from agentic_debugger.application.presentation import (
     PatchStage,
     PresentationIdentity,
     SessionViewState,
+    VerifierSummaryView,
     active_candidate_attempt,
     initial_session_view,
 )
 from agentic_debugger.application import events as app_events
+from agentic_debugger.evaluation.outcome_taxonomy import SemanticOutcome
 from agentic_debugger.runtime.patcher import PatchManager, PatchValidationError
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
@@ -54,6 +57,75 @@ from agentic_debugger.runtime.workspace import TaskWorkspace
 
 def _attempt(index: int, stage: PatchStage, text: str | None = None) -> PatchAttemptView:
     return PatchAttemptView(attempt_index=index, stage=stage, patch_text=text)
+
+
+def _resolved_verifier_summary() -> VerifierSummaryView:
+    return VerifierSummaryView(
+        status="COMPLETED",
+        outcome=SemanticOutcome.RESOLVED,
+        f2p_passed=1,
+        f2p_total=1,
+        p2p_passed=1,
+        p2p_total=1,
+        workspace_cleaned=True,
+        classification="Fixed",
+    )
+
+
+def _write_apply_proof(
+    session_dir: Path,
+    *,
+    session_id: str,
+    owner_repo: Path,
+    expected_head: str,
+    patch_text: str,
+) -> None:
+    """Write the strict task/certificate pair required by the Apply gate."""
+    from agentic_debugger.application.local_project import (
+        LOCAL_PROJECT_VERIFICATION_FILE_NAME,
+        LocalProjectTaskSpec,
+        LocalProjectVerificationCertificate,
+        SessionBudgets,
+        local_project_task_spec_sha256,
+    )
+
+    task = LocalProjectTaskSpec(
+        session_id=session_id,
+        source_repo_path=str(owner_repo),
+        source_head_commit=expected_head,
+        isolated_workspace_path=str(owner_repo),
+        bug_description="test apply proof",
+        reproduction_command="python -c \"raise SystemExit(1)\"",
+        verification_command="python -c \"raise SystemExit(0)\"",
+        model_runtime=None,
+        budgets=SessionBudgets(),
+        created_at_utc="2026-08-28T12:00:00Z",
+    )
+    certificate = LocalProjectVerificationCertificate(
+        task_id="local-project-debug",
+        session_id=session_id,
+        task_spec_sha256=local_project_task_spec_sha256(task),
+        source_head_commit=expected_head,
+        candidate_sha256=hashlib.sha256(patch_text.encode("utf-8")).hexdigest(),
+        status="COMPLETED",
+        outcome="RESOLVED",
+        baseline_failure_reproduced=True,
+        baseline_regression_passed=True,
+        post_patch_reproduction_passed=True,
+        regression_passed=True,
+        f2p_passed=1,
+        f2p_total=1,
+        p2p_passed=1,
+        p2p_total=1,
+        verifier_workspace_cleaned=True,
+        source_repo_unchanged=True,
+    )
+    (session_dir / "local_project_task.json").write_text(
+        json.dumps(task.to_mapping()), encoding="utf-8"
+    )
+    (session_dir / LOCAL_PROJECT_VERIFICATION_FILE_NAME).write_text(
+        json.dumps(certificate.to_mapping()), encoding="utf-8"
+    )
 
 
 def test_active_candidate_survives_later_failed_attempt():
@@ -587,7 +659,10 @@ def test_apply_to_project_runs_off_ui_thread(tmp_path, monkeypatch):
             return False, "test gate block timed out"
         return True, "gates ok (mock)"
 
-    def fake_apply_patch_to_project(repo_path, patch_text):  # type: ignore[no-untyped-def]
+    def fake_apply_patch_to_project(  # type: ignore[no-untyped-def]
+        repo_path, patch_text, *, expected_head=None
+    ):
+        assert expected_head == "0" * 40
         apply_thread["ident"] = threading.get_ident()
         apply_done.set()
         return True, "applied (mock)"
@@ -603,22 +678,24 @@ def test_apply_to_project_runs_off_ui_thread(tmp_path, monkeypatch):
     owner_repo.mkdir()
     session_dir = tmp_path / "sess_apply_thread"
     session_dir.mkdir()
-    (session_dir / "local_project_task.json").write_text(
-        json.dumps(
-            {
-                "source_repo_path": str(owner_repo),
-                "source_head_commit": "0" * 40,
-            }
-        ),
-        encoding="utf-8",
+    patch_text = "--- a/calculator.py\n+++ b/calculator.py\n"
+    _write_apply_proof(
+        session_dir,
+        session_id="sess-apply-thread",
+        owner_repo=owner_repo,
+        expected_head="0" * 40,
+        patch_text=patch_text,
     )
 
     view = SessionViewState(
+        session_id="sess-apply-thread",
+        task_id="local-project-debug",
         source_kind=app_events.SourceKind.LOCAL_PROJECT,
         status=SessionStatus.SUCCEEDED,
         patch_attempts=(
-            _attempt(0, PatchStage.APPLIED, "--- a/calculator.py\n+++ b/calculator.py\n"),
+            _attempt(0, PatchStage.APPLIED, patch_text),
         ),
+        verifier_summary=_resolved_verifier_summary(),
     )
 
     async def scenario() -> None:
@@ -1054,13 +1131,35 @@ def test_completed_local_project_session_preserves_canonical_task_spec(tmp_path)
     # the journal; manifest registration is the runner's job, not the raw
     # harness worker's — replay here is the dependency-free proof).
     assert [e.event_kind.value for e in reopened.replay.events]
+    replayed_view = initial_session_view(
+        PresentationIdentity(
+            task_id=reopened.replay.task_id,
+            source_kind=reopened.replay.source_kind,
+            session_id=reopened.replay.session_id,
+        )
+    )
+    from agentic_debugger.application.presentation import reduce_event
+
+    for event in reopened.replay.events:
+        replayed_view = reduce_event(replayed_view, event)
+    candidate = active_candidate_attempt(replayed_view)
+    assert candidate is not None and candidate.patch_text
 
     # F. the REAL Apply provenance reader recovers repo+HEAD from the
     #    completed session (no manual artifact construction, worktree gone).
-    _apply_provenance_task(session_id, task_path, repo, head_before, tmp_path)
+    _apply_provenance_task(
+        session_id,
+        task_path,
+        repo,
+        head_before,
+        tmp_path,
+        candidate.patch_text,
+    )
 
 
-def _apply_provenance_task(session_id, task_path, owner_repo, expected_head, tmp_path):  # type: ignore[no-untyped-def]
+def _apply_provenance_task(
+    session_id, task_path, owner_repo, expected_head, tmp_path, patch_text
+):  # type: ignore[no-untyped-def]
     """Exercise the real action_apply_to_project provenance path headlessly.
 
     The completed session's session dir is opened directly in the live
@@ -1085,6 +1184,7 @@ def _apply_provenance_task(session_id, task_path, owner_repo, expected_head, tmp
 
     gate_called: dict[str, bool] = {}
     apply_called: dict[str, bool] = {}
+    bound_expected_head = expected_head
 
     def fake_check_apply_gates(repo_path, expected_head_actual, patch_text):  # type: ignore[no-untyped-def]
         gate_called["yes"] = True
@@ -1092,7 +1192,10 @@ def _apply_provenance_task(session_id, task_path, owner_repo, expected_head, tmp
         assert expected_head_actual == expected_head
         return True, "gates ok"
 
-    def fake_apply_patch_to_project(repo_path, patch_text):  # type: ignore[no-untyped-def]
+    def fake_apply_patch_to_project(  # type: ignore[no-untyped-def]
+        repo_path, patch_text, *, expected_head: str | None = None
+    ):
+        assert expected_head == bound_expected_head
         apply_called["yes"] = True
         return True, "applied (mock)"
 
@@ -1105,11 +1208,14 @@ def _apply_provenance_task(session_id, task_path, owner_repo, expected_head, tmp
     )
     try:
         view = SessionViewState(
+            session_id=session_id,
+            task_id="local-project-debug",
             source_kind=app_events.SourceKind.LOCAL_PROJECT,
             status=SessionStatus.SUCCEEDED,
             patch_attempts=(
-                _attempt(0, PatchStage.APPLIED, "--- a/calculator.py\n+++ b/calculator.py\n"),
+                _attempt(0, PatchStage.APPLIED, patch_text),
             ),
+            verifier_summary=_resolved_verifier_summary(),
         )
 
         async def scenario() -> None:

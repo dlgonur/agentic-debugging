@@ -19,11 +19,14 @@ from pathlib import Path
 import pytest
 
 from agentic_debugger.application.local_project import (
+    LOCAL_PROJECT_VERIFICATION_AUTHORITY,
+    LocalProjectVerificationCertificate,
     LocalProjectTaskSpec,
     LocalProjectValidationError,
     assert_path_inside_workspace,
     capture_launch_cwd,
     check_apply_gates,
+    check_verification_certificate,
     cleanup_parent_tmpdir,
     create_isolated_worktree,
     get_head_commit,
@@ -124,7 +127,7 @@ def write_local_profile(root: Path, profile_id: str, patch_path: Path, mode: str
     }), encoding="utf-8")
     return state_dir, data_file
 
-def make_local_worker(store: HistoryStore, session_id: str, repo: Path, head: str, isolated: Path, parent: Path, profile_id: str, repro: str | None = 'python -c "print(1)"', verify: str | None = 'python -c "print(1)"', bug: str = "add returns a - b"):
+def make_local_worker(store: HistoryStore, session_id: str, repo: Path, head: str, isolated: Path, parent: Path, profile_id: str, repro: str | None = 'python -c "from calculator import add; raise SystemExit(0 if add(1,2)==3 else 1)"', verify: str | None = 'python -c "from calculator import add; raise SystemExit(0 if add(0,0)==0 else 1)"', bug: str = "add returns a - b"):
     from agentic_debugger.application.worker_process import SessionWorkerProcess
     spec = SessionSpec(task_id="local-project-debug", source=ExecutionSourceSpec(kind=SourceKind.LOCAL_PROJECT, task_id="local-project-debug", model_config_ref=profile_id))
     worker = SessionWorkerProcess(
@@ -551,6 +554,111 @@ def test_apply_to_project_succeeds(tmp_path):
     assert "# fix" in (repo / "calculator.py").read_text(encoding="utf-8")
     _run(["git","checkout","--","calculator.py"], repo)
 
+
+def test_apply_certificate_is_bound_to_head_patch_and_resolved_evidence():
+    import hashlib
+
+    patch = "--- a/a.py\n+++ b/a.py\n@@ -1 +1 @@\n-a\n+b\n"
+    head = "a" * 40
+    task_spec = LocalProjectTaskSpec(
+        session_id="sess-cert-binding-0001",
+        source_repo_path="C:/project",
+        source_head_commit=head,
+        isolated_workspace_path="C:/workspace",
+        bug_description="binding test",
+        reproduction_command="python reproduce.py",
+        verification_command="python regression.py",
+        model_runtime=None,
+        budgets=SessionBudgets(),
+        created_at_utc="2026-08-28T12:00:00Z",
+    )
+    from agentic_debugger.application.local_project import (
+        local_project_task_spec_sha256,
+    )
+
+    task_hash = local_project_task_spec_sha256(task_spec)
+    certificate = LocalProjectVerificationCertificate(
+        task_id="local-project-debug",
+        session_id=task_spec.session_id,
+        task_spec_sha256=task_hash,
+        source_head_commit=head,
+        candidate_sha256=hashlib.sha256(patch.encode("utf-8")).hexdigest(),
+        status="COMPLETED",
+        outcome="RESOLVED",
+        baseline_failure_reproduced=True,
+        baseline_regression_passed=True,
+        post_patch_reproduction_passed=True,
+        regression_passed=True,
+        f2p_passed=1,
+        f2p_total=1,
+        p2p_passed=1,
+        p2p_total=1,
+        verifier_workspace_cleaned=True,
+        source_repo_unchanged=True,
+    )
+    mapping = certificate.to_mapping()
+    assert mapping["authority"] == LOCAL_PROJECT_VERIFICATION_AUTHORITY
+    reopened = LocalProjectVerificationCertificate.from_mapping(mapping)
+    assert check_verification_certificate(
+        reopened,
+        expected_task_id="local-project-debug",
+        expected_session_id=task_spec.session_id,
+        expected_task_spec_sha256=task_hash,
+        expected_head=head,
+        patch_text=patch,
+    ) == (True, "verified")
+
+    ok, reason = check_verification_certificate(
+        reopened,
+        expected_task_id="local-project-debug",
+        expected_session_id=task_spec.session_id,
+        expected_task_spec_sha256=task_hash,
+        expected_head="b" * 40,
+        patch_text=patch,
+    )
+    assert ok is False and "source commit" in reason
+    ok, reason = check_verification_certificate(
+        reopened,
+        expected_task_id="local-project-debug",
+        expected_session_id=task_spec.session_id,
+        expected_task_spec_sha256=task_hash,
+        expected_head=head,
+        patch_text=patch + "\n",
+    )
+    assert ok is False and "candidate patch" in reason
+
+    unresolved = LocalProjectVerificationCertificate.from_mapping(
+        dict(mapping, outcome="NO_OP")
+    )
+    ok, reason = check_verification_certificate(
+        unresolved,
+        expected_task_id="local-project-debug",
+        expected_session_id=task_spec.session_id,
+        expected_task_spec_sha256=task_hash,
+        expected_head=head,
+        patch_text=patch,
+    )
+    assert ok is False and "not independently verified" in reason
+
+    ok, reason = check_verification_certificate(
+        reopened,
+        expected_task_id="local-project-debug",
+        expected_session_id="sess-cert-binding-9999",
+        expected_task_spec_sha256=task_hash,
+        expected_head=head,
+        patch_text=patch,
+    )
+    assert ok is False and "different session" in reason
+    ok, reason = check_verification_certificate(
+        reopened,
+        expected_task_id="local-project-debug",
+        expected_session_id=task_spec.session_id,
+        expected_task_spec_sha256="b" * 64,
+        expected_head=head,
+        patch_text=patch,
+    )
+    assert ok is False and "different task contract" in reason
+
 def test_apply_refuses_changed_head(tmp_path):
     repo = make_git_fixture(tmp_path, "apply_head")
     head = get_head_commit(repo)
@@ -803,7 +911,8 @@ def test_worker_terminal_distinguishes_fixed_vs_unresolved(tmp_path):
     finally:
         worker.close()
         cleanup_parent_tmpdir(wt.parent_tmpdir, validated.repo_root)
-    # Unresolved case: bad patch + verify 0
+    # No-candidate case: an unappliable patch is an operational controller
+    # failure, not an independently evaluated repair.
     repo2 = make_git_fixture(tmp_path, "unres_term")
     validated2 = validate_local_project(str(repo2), launch_cwd=tmp_path)
     wt2 = create_isolated_worktree(validated2.repo_root, validated2.head_commit)
@@ -818,8 +927,8 @@ def test_worker_terminal_distinguishes_fixed_vs_unresolved(tmp_path):
     try:
         assert worker2.start() is None
         result2 = worker2.wait()
-        assert result2.status.value == "unresolved"
-        assert result2.termination_reason.value == "unresolved"
+        assert result2.status.value == "failed"
+        assert result2.termination_reason.value == "controller_failed"
     finally:
         worker2.close()
         cleanup_parent_tmpdir(wt2.parent_tmpdir, validated2.repo_root)
@@ -1014,8 +1123,10 @@ def test_generic_tracked_inventory_nested(tmp_path):
         try:
             assert worker.start() is None
             result = worker.wait()
-            # Should succeed with FIXED (patch applied and verify passes)
-            assert result.status.value == "succeeded"
+            # A command that already passes on the clean baseline is not
+            # reproduction evidence.  The candidate remains inspectable but
+            # cannot be promoted to FIXED by two zero-exit placeholders.
+            assert result.status.value == "unresolved"
             cand = store.session_dir(session_id) / "candidate.patch"
             assert cand.is_file()
             assert "price" in cand.read_text(encoding="utf-8")
@@ -1143,11 +1254,11 @@ def test_sidecar_write_failure_still_unresolved(tmp_path):
     repo = make_git_fixture(tmp_path, "sidecar_fail")
     validated = validate_local_project(str(repo), launch_cwd=tmp_path)
     wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
-    bad_patch = tmp_path / "bad_sidecar.patch"
-    write_calculator_patch(bad_patch, bad=True)
+    candidate_patch = tmp_path / "sidecar.patch"
+    write_calculator_patch(candidate_patch)
     store_root = tmp_path / "hist_sidecar"
     store_root.mkdir()
-    write_local_profile(store_root, "dummy-sidecar", bad_patch)
+    write_local_profile(store_root, "dummy-sidecar", candidate_patch)
     store = HistoryStore(store_root)
     import uuid, json
     session_id = f"sess-sidecar-{uuid.uuid4().hex[:6]}"

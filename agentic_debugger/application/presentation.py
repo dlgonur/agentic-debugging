@@ -273,6 +273,8 @@ class DiagnosisView:
     symbol: Optional[str] = None
     confidence: Optional[str] = None
     observed_values: Optional[Mapping[str, Any]] = None
+    evidence_refs: Tuple[str, ...] = ()
+    proof_contract: Optional[Mapping[str, Any]] = None
 
 
 @dataclass(frozen=True)
@@ -1066,10 +1068,13 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
 
     if kind is SessionEventKind.DIAGNOSIS_RECORDED:
         observed = payload.get("observed_values")
+        proof_contract = payload.get("proof_contract")
         # Live events carry a frozen Mapping; replayed JSON carries a dict.
         # Accept both (the durable payload contract is a JSON mapping).
         if not isinstance(observed, Mapping):
             observed = None
+        if not isinstance(proof_contract, Mapping):
+            proof_contract = None
         return replace(
             state,
             diagnosis=DiagnosisView(
@@ -1078,6 +1083,10 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
                 symbol=payload.get("symbol"),
                 confidence=payload.get("confidence"),
                 observed_values=dict(observed) if observed is not None else None,
+                evidence_refs=tuple(payload.get("evidence_refs", ())),
+                proof_contract=(
+                    dict(proof_contract) if proof_contract is not None else None
+                ),
             ),
             controller_phase=controller_phase,
             run_id=run_id,

@@ -447,7 +447,7 @@ _SingleLineEditorScreen {
     padding: 0 1;
 }
 
-SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, ActivityPanel, TimelinePanel {
+EvidenceReviewPanel, SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, ActivityPanel, TimelinePanel {
     height: 1fr;
     background: #0d1117;
     color: #c9d1d9;
@@ -465,7 +465,7 @@ WorkstreamPanel Static {
     width: 1fr;
 }
 
-SourcePanel Static, DebuggerPanel Static, PatchPanel Static,
+EvidenceReviewPanel Static, SourcePanel Static, DebuggerPanel Static, PatchPanel Static,
 VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     width: 1fr;
 }
@@ -584,6 +584,16 @@ Button {
     height: auto;
     align: center middle;
     margin: 1 0 0 0;
+}
+
+#start-method {
+    width: 1fr;
+    height: auto;
+    margin: 2 0 0 0;
+    padding: 1 2;
+    background: #111820;
+    border: round #2c3a47;
+    color: #c9d1d9;
 }
 
 #start-session-button,

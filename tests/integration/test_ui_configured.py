@@ -118,14 +118,12 @@ class TestConfiguredStartScreen:
     def test_no_profiles_keeps_start_unavailable(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             await pilot.pause()
             assert start.start_available is False
             assert start.query_one("#model-row").display is True
             assert "no configured model profiles" in str(start.query_one("#start-status").render())
-            start._mode = start.MODE_DETERMINISTIC
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_DETERMINISTIC)
             assert start.start_available is True
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
@@ -137,10 +135,11 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             await pilot.pause()
-            assert "configuration error" in str(start.query_one("#start-status").render())
+            assert "configuration error" in str(
+                start.query_one("#start-status").render()
+            ).casefold()
             await pilot.press("escape")
             assert isinstance(pilot.app.screen, HomeScreen)
 
@@ -156,8 +155,7 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             await pilot.pause()
             info = str(start.query_one("#start-status").render())
             assert "unsupported command-model configuration version" in info
@@ -171,8 +169,7 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._open_choice_picker("model")
             await pilot.pause()
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
@@ -193,8 +190,7 @@ class TestConfiguredStartScreen:
         async def scenario(pilot):
             start = pilot.app.screen
             assert "network isolation" not in str(start.query_one("#start-trust").render())
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             await pilot.pause()
             trust = str(start.query_one("#start-trust").render())
             assert "trusted user configuration" in trust
@@ -221,8 +217,7 @@ class TestConfiguredLiveSession:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -325,8 +320,7 @@ class TestConfiguredLiveSession:
         async def scenario(pilot):
             def open_configured_start():
                 start_screen = pilot.app.screen
-                start_screen._mode = start_screen.MODE_CONFIGURED
-                start_screen._refresh_mode()
+                start_screen._choice_selected("mode", start_screen.MODE_CONFIGURED)
                 start_screen._profile_id = "dummy"
                 start_screen._render_rows()
                 start_screen._task_id = TASK_ID
@@ -363,7 +357,7 @@ class TestConfiguredLiveSession:
             assert workspace._live_terminal.termination_reason.value == "model_error"
             assert "Failed" in header_text(workspace)
             assert "c cancel" not in live_bar_text(workspace)
-            assert "1-7 activity filters" in live_bar_text(workspace)
+            assert "1-8 activity filters" in live_bar_text(workspace)
             # return to history; the failure registered honestly
             await pilot.press("escape")
             await wait_until(
@@ -429,8 +423,7 @@ class TestConfiguredCancellation:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -508,8 +501,7 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -664,8 +656,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2._mode = start2.MODE_CONFIGURED
-            start2._refresh_mode()
+            start2._choice_selected("mode", start2.MODE_CONFIGURED)
             start2._profile_id = "dummy"
             start2._render_rows()
             start2._task_id = TASK_ID
@@ -722,8 +713,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -767,8 +757,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2._mode = start2.MODE_CONFIGURED
-            start2._refresh_mode()
+            start2._choice_selected("mode", start2.MODE_CONFIGURED)
             start2._profile_id = "dummy"
             start2._render_rows()
             start2._task_id = TASK_ID
@@ -823,8 +812,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -866,8 +854,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -915,8 +902,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._mode = start.MODE_CONFIGURED
-            start._refresh_mode()
+            start._choice_selected("mode", start.MODE_CONFIGURED)
             start._profile_id = "dummy"
             start._render_rows()
             start._task_id = TASK_ID
@@ -982,8 +968,7 @@ class TestAppExitDuringConfiguredRequest:
                     timeout_seconds=30.0,
                 )
                 start = pilot.app.screen
-                start._mode = start.MODE_CONFIGURED
-                start._refresh_mode()
+                start._choice_selected("mode", start.MODE_CONFIGURED)
                 start._profile_id = "dummy"
                 start._render_rows()
                 start._task_id = TASK_ID
