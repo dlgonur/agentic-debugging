@@ -40,11 +40,27 @@ mutation of `research/quixbugs/PAIRED_PILOT_V4.json`.
 
 ## Product runtime decision-model route
 
-- The current accepted **product runtime** route is the Local Application
-  configured-command path through Ollama Cloud `gpt-oss:20b-cloud`
-  (successful session `sess-20260817-103258-3d1193`). See
+- The current accepted **product runtime** route is the unified provider
+  registry (`agentic_debugger/application/model_providers.py`, accepted
+  2026-08-28 — see `docs/architecture/model-providers-v1.md`): Local
+  Project Debug and other live surfaces may be served by
+  **Ollama Cloud** (repository roster, unchanged accepted route), the
+  operator's **OpenCode Go** subscription through the verified local CLI
+  (`scripts/opencode_provider_adapter.py`), or the operator's
+  **Command Code GOAT** plan through the local CLI
+  (`scripts/commandcode_goat_adapter.py`), plus the existing configured
+  command profiles.  See
   `docs/architecture/ollama-cloud-command-adapter-v1.md` and
-  `docs/architecture/local-application-v1.md`.
+  `docs/architecture/local-application-v1.md` for the earlier Ollama-only
+  accepted proof (successful session `sess-20260817-103258-3d1193`).
+- Real end-to-end evidence (2026-08-28): one Local Project session on
+  CommandCode GOAT `deepseek/deepseek-v4-flash` reached RESOLVED with
+  independent verifier F2P 1/1 and P2P 1/1 (`_ai-review/goal-mode-2026-08-28`).
+  This proves the product path over that provider; it is one session, not
+  a model-ability benchmark.
+- Subscription adapters run the operator's authenticated CLIs; credential
+  bytes stay in the operator-owned auth stores and never enter tracked
+  source, argv, journals, or evidence.
 - The same Ollama Cloud adapter also accepts an experimental
   `nemotron-3-nano:30b-cloud` profile through `--model`. A completed
   five-task Harness V2 capability probe for that profile is closed

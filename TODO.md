@@ -2,16 +2,55 @@
 
 ## Status
 
-**CLOSED — PROJECT CYCLE COMPLETE (2026-08-28).**
+**GOAL-MODE CYCLE 2 (2026-08-28, owner-authorized overnight goal mode).**
 
-Release tag `v0.1.0` exists at `d01f7a5`. The mandatory engineering roadmap is
-complete. No provider, Docker, WSL, paid route, or license-gated dataset was
-executed during closure.
+Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
+`docs/project-closeout.md`. The current cycle is the owner-directed
+"make it fly" pass: multi-provider model access, failure visibility,
+and retry.
+
+## Cycle 2 outcomes
+
+- [x] Commit the completed-but-uncommitted public-evidence/verifier work
+  from the previous session (independent Local Project verifier, public
+  evidence gate + CI job, case briefs) — validated, committed `ebc7787`.
+- [x] Close real application defects: liveness reporting now wired for
+  configured-command and Local Project transports; magic-string scenario
+  dispatch replaced with the source-name constant; strict validation for
+  is_ollama/ollama_alias; one canonical tracked-file inventory; dead code
+  removed — committed `19b3c19`.
+- [x] Unified model-provider platform: registry + CommandCode GOAT and
+  OpenCode Go subscription adapters, provider-grouped model picker,
+  provider provenance in `model.configured`, doctor provider readiness —
+  committed `e2741da`, contract alignment `42e0301`.
+- [x] Effort visibility: journal-derived "what the agent tried"
+  projection in the workspace (`w`), terminal footer, and exported
+  reports — committed `2c4fbea`.
+- [x] Linked retry: journal-authoritative `retry_of_session_id` through
+  the worker protocol into manifests/history; manual `r` retry; bounded
+  auto-retry (0-3, default 1) for retryable Local Project failures —
+  committed `2c4fbea`.
+- [x] Real end-to-end proof: one Local Project session on CommandCode
+  GOAT `deepseek/deepseek-v4-flash` reached RESOLVED (F2P 1/1, P2P 1/1)
+  with a model-authored correct patch; evidence in
+  `_ai-review/goal-mode-2026-08-28`.
+
+## Follow-up candidates (not hidden debt)
+
+- [ ] OpenCode Go end-to-end Local Project session (adapters proven at
+  the transport level and by unit tests; a full product session on the
+  subscription remains to be run and recorded).
+- [ ] Claude models through CommandCode route via the CLI (works through
+  `cmdc`; raw-API `/messages` not implemented).
+- [ ] Headless Local Project CLI (the smoke script demonstrates the
+  worker path; a tracked operator CLI would make it a first-class entry).
+- [ ] Providers management screen (availability + live catalog refresh +
+  app-managed configured profiles for curated tasks).
 
 The former chronological TODO is retained at
 `outdated/roadmap/TODO-pre-closure-2026-08-28.md`.
 
-## Completed outcomes
+## Completed outcomes (cycle 1)
 
 - [x] Single-controller Python/PDB repair architecture with typed directives,
   deterministic tools, explicit budgets, and fail-closed state transitions.

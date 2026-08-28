@@ -17,8 +17,9 @@ python -m agentic_debugger.ui --doctor
 python -m agentic_debugger.ui
 ```
 
-The first task is an offline, deterministic demo. It does not contact a model
-provider. You can also run the scientific demo directly:
+`--doctor` also reports model-provider readiness. The first task is an
+offline, deterministic demo. It does not contact a model provider. You can
+also run the scientific demo directly:
 
 ```powershell
 python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002
@@ -37,6 +38,32 @@ the professor-facing traces byte-for-byte, and reruns their leakage audit. The
 attestation states its limits: the scripted offline repair proves the product
 path, not live-model ability; the R6 step verifies accepted frozen evidence
 rather than rerunning the external campaign.
+
+## Model providers
+
+Live sessions can be served by any of the configured providers (see
+[`docs/architecture/model-providers-v1.md`](docs/architecture/model-providers-v1.md)):
+
+| Provider | Route | Readiness |
+|---|---|---|
+| Ollama Cloud | repository-owned qualified roster | always listed |
+| OpenCode Go | local `opencode` CLI (operator auth store) | CLI + auth store present |
+| CommandCode GOAT | local `cmdc` CLI (operator auth store) | CLI + auth store present |
+| Configured profiles | app-owned command-model store | profile configured |
+
+Credentials never enter tracked source, argv, journals, or evidence: each
+subscription adapter runs the operator's CLI, which reads its own auth store.
+
+## Failures, effort, and retries
+
+A failed session is not an empty session. Press `w` in a workspace for the
+counted "what the agent tried" projection (model requests by status,
+directives, tool calls, PDB observations, patches, states, verifier outcome);
+the same section appears in exported session reports. Press `r` to retry a
+session with identical parameters — retries are journal-linked
+(`retry_of_session_id`) so attempt chains stay auditable. Local Project
+sessions support bounded automatic retries (picker, default 1) for transient
+failures such as transport errors and timeouts.
 
 Configured-model and local-project sessions require an operator profile; live execution is explicit. Headless history:
 `agentic-debugger --list-sessions`; safe report: `agentic-debugger --export-session SESSION_ID --output session-report.md`.

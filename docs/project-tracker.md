@@ -2,7 +2,33 @@
 
 ## Current state
 
-**CLOSED — PROJECT CYCLE COMPLETE (2026-08-28).**
+**GOAL-MODE CYCLE 2 — IN PROGRESS (2026-08-28).**
+
+- Release tag: `v0.1.0` at `d01f7a5` (cycle 1 closed).
+- Cycle 2 (owner-authorized overnight goal mode): multi-provider model
+  access, failure visibility, retry — see `TODO.md`.
+- Merge/push: none (goal-mode local commits only, per the workflow's
+  Git policy).
+- Full historical tracker:
+  `outdated/roadmap/project-tracker-pre-closure-2026-08-28.md`.
+
+## 2026-08-28 goal-mode work
+
+- [x] Committed the previous session's completed public-evidence and
+  independent-verifier work after validation (181 tests).
+- [x] Closed application defects (liveness wiring, dispatch constants,
+  strict provider-adjacent params, canonical inventory, dead code).
+- [x] Unified provider platform: Ollama Cloud + OpenCode Go +
+  CommandCode GOAT + configured profiles through one registry;
+  doctor readiness; provider-grouped Local Project model picker;
+  `provider` provenance in `model.configured` (additive schema field).
+- [x] Effort projection ("what the agent tried") in workspace modal,
+  terminal footer, and exported reports.
+- [x] Journal-linked retry (`retry_of_session_id`) with manual `r` and
+  bounded auto-retry (0-3, default 1) on retryable failures.
+- [x] Real product proof: Local Project session on CommandCode GOAT
+  `deepseek/deepseek-v4-flash` — RESOLVED, F2P 1/1, P2P 1/1, 13/13 model
+  requests ok, model-authored correct one-line patch, 107 s.
 
 - Release tag: `v0.1.0` at `d01f7a5`.
 - Mandatory roadmap: complete.
