@@ -43,7 +43,9 @@ except ImportError:  # pragma: no cover - defensive import path
     import opencode_go_command_adapter as frozen
 
 OPENCODE_PROVIDER_NAME = "opencode_go"
-PROVIDER_COMPLETION_SCHEMA_VERSION = "opencode-provider-v1"
+# The accepted provider-completion envelope schema (must match the
+# app-side resolver exactly; same constant as the Ollama adapter).
+PROVIDER_COMPLETION_SCHEMA_VERSION = "provider-completion-v1"
 TOOL_VERSION = "opencode-provider-adapter-v1"
 
 DEFAULT_TIMEOUT_SECONDS = 300.0
@@ -88,10 +90,26 @@ def read_request(stdin_stream: Any) -> Mapping[str, Any]:
 
 
 def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> None:
-    error = frozen.validate_logical_call_index(request, maximum)
-    if error is not None:
-        kind = "logical_call_limit" if "exceeds" in error else "invalid_request"
-        raise OpenCodeProviderAdapterError(error, kind=kind)
+    # The frozen campaign adapter validated a 1-based micro-run envelope;
+    # the live product controller uses zero-based model-call indices
+    # (first request 0, envelope 0..N-1), same as the accepted Ollama
+    # adapter.  Validate that contract here instead of delegating.
+    protocol = request.get("protocol")
+    if not isinstance(protocol, Mapping):
+        raise OpenCodeProviderAdapterError(
+            "request is missing the protocol envelope", kind="invalid_request"
+        )
+    index = protocol.get("logical_model_call_index")
+    if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
+        if type(index) is int and not isinstance(index, bool) and index >= maximum:
+            raise OpenCodeProviderAdapterError(
+                f"logical model call {index} is outside the session envelope (0..{maximum - 1})",
+                kind="logical_call_limit",
+            )
+        raise OpenCodeProviderAdapterError(
+            "logical_model_call_index must be an integer within the session envelope",
+            kind="invalid_request",
+        )
 
 
 def resolve_default_opencode_executable() -> Optional[str]:

@@ -1460,7 +1460,7 @@ class LocalProjectStartScreen(Screen):
                     yield Static("", id="local-project-resolved")
                     yield SessionSettingRow("Bug", row_key="bug", id="bug-row")
                     yield SessionSettingRow("Repro", row_key="repro", id="repro-row")
-                    yield SessionSettingRow("Verify", row_key="verify", id="verify-row")
+                    yield SessionSettingRow("Verify (P2P)", row_key="verify", id="verify-row")
                     yield SessionSettingRow("Model", row_key="model", id="local-model-row")
                     yield SessionSettingRow("Auto-retry", row_key="auto_retry", id="local-auto-retry-row")
                     yield TimeLimitRow(id="local-time-limit-row")
@@ -1567,7 +1567,7 @@ class LocalProjectStartScreen(Screen):
         elif row_key == "repro":
             self._open_text_editor("Reproduction command (optional)", self._repro_command or "", self._on_repro_saved)
         elif row_key == "verify":
-            self._open_text_editor("Verification command (optional)", self._verify_command or "", self._on_verify_saved)
+            self._open_text_editor("Regression check command (optional; must pass BEFORE and after the fix)", self._verify_command or "", self._on_verify_saved)
         elif row_key == "model":
             self._open_model_picker()
         elif row_key == "auto_retry":

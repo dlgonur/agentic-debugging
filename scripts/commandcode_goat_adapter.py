@@ -58,7 +58,9 @@ except ImportError:  # pragma: no cover - defensive import path
     import ollama_cloud_command_adapter as ollama_adapter
 
 COMMANDCODE_PROVIDER_NAME = "commandcode_goat"
-PROVIDER_COMPLETION_SCHEMA_VERSION = "commandcode-provider-v1"
+# The accepted provider-completion envelope schema (must match the
+# app-side resolver exactly; same constant as the Ollama adapter).
+PROVIDER_COMPLETION_SCHEMA_VERSION = "provider-completion-v1"
 TOOL_VERSION = "commandcode-goat-adapter-v1"
 
 #: Closed, provider-safe error kinds (subset of the accepted vocabulary).
@@ -254,12 +256,18 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
     if not isinstance(protocol, Mapping):
         raise CommandCodeAdapterError("request is missing the protocol envelope", kind=ERROR_KIND_INVALID_REQUEST)
     index = protocol.get("logical_model_call_index")
-    if type(index) is not int or isinstance(index, bool) or index < 1:
-        raise CommandCodeAdapterError("logical_model_call_index must be a positive integer", kind=ERROR_KIND_INVALID_REQUEST)
-    if index > maximum:
+    # The live Local Application controller uses zero-based model-call
+    # indices: the first request is 0 and an N-call envelope is 0..N-1
+    # (same contract as the accepted Ollama Cloud adapter).
+    if type(index) is not int or isinstance(index, bool) or not 0 <= index < maximum:
+        if type(index) is int and not isinstance(index, bool) and index >= maximum:
+            raise CommandCodeAdapterError(
+                f"logical model call {index} is outside the session envelope (0..{maximum - 1})",
+                kind=ERROR_KIND_LOGICAL_CALL,
+            )
         raise CommandCodeAdapterError(
-            f"logical model call {index} exceeds the session envelope ({maximum})",
-            kind=ERROR_KIND_LOGICAL_CALL,
+            "logical_model_call_index must be an integer within the session envelope",
+            kind=ERROR_KIND_INVALID_REQUEST,
         )
 
 
