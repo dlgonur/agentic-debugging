@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Optional, Sequence
 
 from agentic_debugger.application import ApplicationError, ApplicationInputError
+from agentic_debugger.application.case_brief import project_case_brief
 from agentic_debugger.application.events import contains_credential_shape
 from agentic_debugger.application.history import ReopenedSession, SessionHistoryEntry
 from agentic_debugger.application.presentation import (
@@ -129,6 +130,7 @@ def render_session_report(reopened: ReopenedSession) -> str:
         if view.cleanup_verified is False
         else "Not recorded"
     )
+    brief = project_case_brief(view)
 
     lines = [
         "# Agentic Debugger Session Report",
@@ -154,9 +156,36 @@ def render_session_report(reopened: ReopenedSession) -> str:
         f"- Cleanup: {cleanup}",
         f"- Configuration fingerprint: {display(entry.config_fingerprint)}",
         "",
-        "## Independent verification",
+        "## Evidence chain",
+        "",
+        (
+            "A controller diagnosis is a claim. The independent verifier is "
+            "the correctness authority."
+        ),
         "",
     ]
+
+    for stage in brief.stages:
+        lines.append(
+            f"- {display(stage.kind.value.title())} "
+            f"[{display(stage.state.value.upper())}]: "
+            f"{display(stage.title)} - {display(stage.detail)}"
+        )
+
+    lines.extend(
+        [
+            "",
+            f"Case verdict: {display(brief.verdict)}",
+            (
+                "Verdict authority: Independent verifier"
+                if brief.verdict_authoritative
+                else "Verdict authority: Not yet authoritative"
+            ),
+            "",
+            "## Independent verification",
+            "",
+        ]
+    )
 
     verifier = view.verifier_summary
     if verifier is None:

@@ -338,6 +338,10 @@ class LocalApplicationV1(App):
             session_id=replay.session_id,
         )
         controller = ReplayController(replay, identity)
+        # A reopened case is primarily a review surface: show the complete
+        # recorded prefix immediately so its Evidence Review has a verdict.
+        # Replay remains fully reversible; ``g`` returns to event zero.
+        controller.end()
         self.push_screen(
             WorkspaceScreen(
                 mode=WorkspaceMode.REPLAY,

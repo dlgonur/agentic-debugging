@@ -870,6 +870,8 @@ def _derive_manifest(directory: Path, read: Any) -> SessionManifest:
     for name in (
         RESULT_FILE_NAME,
         "candidate.patch",
+        "local_project_task.json",
+        "local_project_verification.json",
         "evaluation.json",
         "operator.command.json",
         "operator.process.json",

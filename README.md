@@ -24,6 +24,20 @@ provider. You can also run the scientific demo directly:
 python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002
 ```
 
+Before relying on the public results, run the repository's fail-closed evidence
+gate:
+
+```powershell
+python scripts/verify_public_evidence.py --output public-evidence-attestation.json
+```
+
+It executes a representative offline repair through independent verification,
+checks replay and cleanup, verifies the frozen R6 chain of custody, regenerates
+the professor-facing traces byte-for-byte, and reruns their leakage audit. The
+attestation states its limits: the scripted offline repair proves the product
+path, not live-model ability; the R6 step verifies accepted frozen evidence
+rather than rerunning the external campaign.
+
 Configured-model and local-project sessions require an operator profile; live execution is explicit. Headless history:
 `agentic-debugger --list-sessions`; safe report: `agentic-debugger --export-session SESSION_ID --output session-report.md`.
 
