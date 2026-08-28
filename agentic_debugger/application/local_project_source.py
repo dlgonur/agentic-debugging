@@ -46,7 +46,8 @@ from agentic_debugger.evaluation.live import LiveModelAdapter, LiveModelConfig, 
 from agentic_debugger.evaluation.task_schema import Constraints
 
 LOCAL_PROJECT_SOURCE_NAME = "local_project"
-_KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspace","bug_description","reproduction_command","verification_command","config_root","profile_id","expected_fingerprint","parent_tmpdir","policy","is_ollama","ollama_alias"})
+_KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspace","bug_description","reproduction_command","verification_command","config_root","profile_id","expected_fingerprint","parent_tmpdir","policy","is_ollama","ollama_alias","provider","model_id"})
+_PROVIDER_KINDS = frozenset({"ollama_cloud","opencode_go","commandcode_goat","configured"})
 _MAX_CMD_CHARS=2048
 _MAX_BUG_CHARS=4096
 _DEFAULT_MAX_MODEL_REQUESTS=32
@@ -100,7 +101,17 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if len(ollama_alias.encode("utf-8"))>128: raise ScenarioInputError("ollama_alias exceeds bound")
         if contains_credential_shape(ollama_alias): raise ScenarioInputError("ollama_alias contains credential shape")
     if ollama_alias is not None and not is_ollama: raise ScenarioInputError("ollama_alias requires is_ollama=true")
-    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias}
+    provider=params.get("provider")
+    if provider is not None:
+        if type(provider) is not str or provider not in _PROVIDER_KINDS: raise ScenarioInputError(f"provider must be one of {sorted(_PROVIDER_KINDS)}")
+    model_id=params.get("model_id")
+    if model_id is not None:
+        if type(model_id) is not str or not model_id: raise ScenarioInputError("model_id must be a non-empty string or null")
+        if len(model_id.encode("utf-8"))>128: raise ScenarioInputError("model_id exceeds bound")
+        if contains_credential_shape(model_id): raise ScenarioInputError("model_id contains credential shape")
+    if provider in ("opencode_go","commandcode_goat") and model_id is None:
+        raise ScenarioInputError(f"provider {provider} requires model_id")
+    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id}
 
 def _bounded(output: str, limit: int=4000) -> str:
     return output[:limit-3]+"..." if len(output)>limit else output
@@ -807,10 +818,32 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     if ctx.emitter is None: raise ScenarioInputError("local_project requires emitter")
     if not isolated.is_dir(): raise ScenarioInputError(f"isolated workspace missing: {isolated}")
     is_ollama = validated["is_ollama"]
-    ollama_alias = validated["ollama_alias"] or (profile_id if is_ollama else None)
+    provider = validated["provider"]
+    model_id = validated["model_id"]
+    ollama_alias = validated["ollama_alias"] or (
+        (model_id or profile_id) if (provider == "ollama_cloud" or is_ollama) else None
+    )
     profile = None
     ollama_profile = None
-    if is_ollama and ollama_alias:
+    provider_live_config = None
+    provider_provenance = None
+    if provider in ("opencode_go", "commandcode_goat"):
+        # Subscription providers resolve through the unified registry: one
+        # validated construction path, fail-closed availability, and no
+        # credential material anywhere near the journal.
+        from agentic_debugger.application.model_providers import (
+            ProviderRegistryError,
+            resolve_provider_live_config,
+        )
+        try:
+            provider_live_config, provider_provenance = resolve_provider_live_config(
+                provider,
+                model_id,
+                logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS,
+            )
+        except ProviderRegistryError as exc:
+            raise ScenarioInputError(f"provider model unavailable: {exc}") from exc
+    elif ((provider == "ollama_cloud") or (provider is None and is_ollama)) and ollama_alias:
         try:
             from agentic_debugger.application.level32 import level32_model_profiles
             for m in level32_model_profiles():
@@ -865,7 +898,11 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             continue
     demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability)
     registry=_build_local_registry(demo_context, pdb_policy=pdb_policy_for(policy), interactive_debugger_controls=False)
-    if ollama_profile is not None:
+    if provider_live_config is not None:
+        live_config=provider_live_config
+        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
+        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter)
+    elif ollama_profile is not None:
         from scripts.ollama_cloud_command_adapter import build_ollama_live_config
         live_config = build_ollama_live_config(ollama_profile.alias, logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS)
         limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
@@ -882,8 +919,12 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     # propagates through the existing journal-fatal worker contract and no
     # model request may start.  The payload carries only profile identity
     # fields, never credentials.
-    if ollama_profile is not None:
+    if provider_provenance is not None:
+        model_provenance_payload=dict(provider_provenance)
+        model_provenance_payload["config_fingerprint"]=live_config.configuration_fingerprint
+    elif ollama_profile is not None:
         model_provenance_payload={
+            "provider": "ollama_cloud",
             "profile_id": ollama_profile.alias,
             "config_fingerprint": ollama_profile.transport_config_fingerprint,
             "display_name": ollama_profile.display_name,
@@ -892,6 +933,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         }
     else:
         model_provenance_payload={
+            "provider": "configured",
             "profile_id": profile.profile_id,
             "config_fingerprint": profile.configuration_fingerprint,
             "display_name": profile.display_name,

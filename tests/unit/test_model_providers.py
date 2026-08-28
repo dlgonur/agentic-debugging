@@ -1,0 +1,131 @@
+"""Unit gates for the unified model-provider registry.
+
+Covers availability probing (presence-only, fail-closed reasons, never
+credential material), grouped model listing with availability annotation,
+fail-closed transport resolution per provider, and the live model-listing
+helpers (monkeypatched; no real provider contact).
+"""
+
+from __future__ import annotations
+
+import sys
+from pathlib import Path
+
+import pytest
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))
+
+from agentic_debugger.application import model_providers as mp  # noqa: E402
+
+
+class TestAvailability:
+    def test_availability_shapes(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        monkeypatch.setattr(mp, "_commandcode_auth_store_path", lambda: tmp_path / "cc-auth.json")
+        monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
+        monkeypatch.setattr(mp, "_first_on_path", lambda candidates: None)
+        monkeypatch.setattr(mp.shutil, "which", lambda name: None)
+        results = {kind: (ok, reason) for kind, ok, reason in mp.provider_availability()}
+        assert results[mp.PROVIDER_KIND_OLLAMA] == (True, None)
+        assert results[mp.PROVIDER_KIND_OPENCODE][0] is False
+        assert results[mp.PROVIDER_KIND_COMMANDCODE][0] is False
+        assert "auth store" in results[mp.PROVIDER_KIND_OPENCODE][1]
+
+    def test_ready_when_stores_and_clis_exist(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        (tmp_path / "cc-auth.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "oc-auth.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mp, "_commandcode_auth_store_path", lambda: tmp_path / "cc-auth.json")
+        monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
+        monkeypatch.setattr(mp, "_first_on_path", lambda candidates: "x")
+        monkeypatch.setattr(mp.shutil, "which", lambda name: "x")
+        results = {kind: ok for kind, ok, _ in mp.provider_availability()}
+        assert all(results.values())
+
+
+class TestModelListing:
+    def test_grouped_listing_annotates_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mp, "_opencode_availability", lambda: (False, "no auth store"))
+        monkeypatch.setattr(mp, "_commandcode_availability", lambda: (True, None))
+        monkeypatch.setattr(
+            mp,
+            "list_provider_models",
+            mp.list_provider_models,
+        )
+        models = mp.list_provider_models(include_ollama=False)
+        kinds = {m.kind for m in models}
+        assert kinds == {mp.PROVIDER_KIND_OPENCODE, mp.PROVIDER_KIND_COMMANDCODE}
+        opencode = [m for m in models if m.kind == mp.PROVIDER_KIND_OPENCODE]
+        assert opencode and all(not m.available for m in opencode)
+        assert all(m.unavailable_reason == "no auth store" for m in opencode)
+        commandcode = [m for m in models if m.kind == mp.PROVIDER_KIND_COMMANDCODE]
+        assert commandcode and all(m.available for m in commandcode)
+
+    def test_ollama_roster_included(self) -> None:
+        models = mp.list_provider_models(include_ollama=True)
+        assert any(m.kind == mp.PROVIDER_KIND_OLLAMA for m in models)
+
+
+class TestResolution:
+    def test_unknown_provider_fails_closed(self) -> None:
+        with pytest.raises(mp.ProviderRegistryError):
+            mp.resolve_provider_live_config("mystery", "model")
+
+    def test_empty_model_fails_closed(self) -> None:
+        with pytest.raises(mp.ProviderRegistryError):
+            mp.resolve_provider_live_config(mp.PROVIDER_KIND_COMMANDCODE, "  ")
+
+    def test_unavailable_commandcode_fails_closed(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mp, "_commandcode_availability", lambda: (False, "no auth"))
+        with pytest.raises(mp.ProviderRegistryError) as excinfo:
+            mp.resolve_provider_live_config(mp.PROVIDER_KIND_COMMANDCODE, "deepseek/deepseek-v4-flash")
+        assert "no auth" in str(excinfo.value)
+
+    def test_commandcode_resolution_and_provenance(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mp, "_commandcode_availability", lambda: (True, None))
+        config, provenance = mp.resolve_provider_live_config(
+            mp.PROVIDER_KIND_COMMANDCODE, "deepseek/deepseek-v4-flash"
+        )
+        assert provenance["provider"] == mp.PROVIDER_KIND_COMMANDCODE
+        assert provenance["profile_id"] == "deepseek/deepseek-v4-flash"
+        assert provenance["display_name"] == "deepseek-v4-flash"
+        assert config.request_timeout_seconds > 0
+
+    def test_opencode_resolution_rejects_free_tier(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(mp, "_opencode_availability", lambda: (True, None))
+        with pytest.raises(mp.ProviderRegistryError):
+            mp.resolve_provider_live_config(mp.PROVIDER_KIND_OPENCODE, "opencode/hy3-free")
+
+    def test_configured_profiles_do_not_resolve_here(self) -> None:
+        with pytest.raises(mp.ProviderRegistryError):
+            mp.resolve_provider_live_config(mp.PROVIDER_KIND_CONFIGURED, "anything")
+
+
+class TestLiveModelListing:
+    def test_commandcode_listing_parses_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        import io
+
+        def fake_run_list_models(stream, executable=None, timeout_seconds=60.0):
+            stream.write('{"schema_version":"commandcode-models-v1","models":["zai-org/glm-5.2","gpt-5.6-sol"]}')
+
+        monkeypatch.setattr(mp, "run_list_models", None, raising=False)
+        import scripts.commandcode_goat_adapter as cca
+
+        monkeypatch.setattr(cca, "run_list_models", fake_run_list_models)
+        models = mp.list_live_models(mp.PROVIDER_KIND_COMMANDCODE)
+        assert "zai-org/glm-5.2" in models and "gpt-5.6-sol" in models
+
+    def test_opencode_listing_filters_go_models(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        class _Result:
+            returncode = 0
+            stdout = "opencode-go/glm-5.3\nopencode-go/kimi-k3\nopencode/hy3-free\nrandom text\n"
+            stderr = ""
+
+        monkeypatch.setattr(mp.shutil, "which", lambda name: "opencode")
+        monkeypatch.setattr("subprocess.run", lambda *a, **k: _Result())
+        models = mp.list_live_models(mp.PROVIDER_KIND_OPENCODE)
+        assert "opencode-go/glm-5.3" in models
+        assert all(m.startswith("opencode-go/") for m in models)
+
+    def test_unsupported_listing_fails_closed(self) -> None:
+        with pytest.raises(mp.ProviderRegistryError):
+            mp.list_live_models(mp.PROVIDER_KIND_OLLAMA)

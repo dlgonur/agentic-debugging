@@ -863,7 +863,7 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         "protocol_version",
         "tool_version",
     }
-    optional = {"treatment_revision", "treatment_id", "result_location"}
+    optional = {"treatment_revision", "treatment_id", "result_location", "provider"}
     _check_required(payload, required, "model.configured payload")
     _check_no_unknown(payload, required | optional, "model.configured payload")
     result = {
@@ -889,6 +889,8 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         result["treatment_id"] = _bounded_text(payload["treatment_id"], "treatment_id", MAX_IDENTIFIER_CHARS)
     if "result_location" in payload:
         result["result_location"] = _bounded_text(payload["result_location"], "result_location", MAX_SHORT_TEXT_CHARS)
+    if "provider" in payload:
+        result["provider"] = _bounded_text(payload["provider"], "provider", MAX_SHORT_TEXT_CHARS)
     return result
 
 

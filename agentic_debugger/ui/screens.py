@@ -16,6 +16,13 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
+from agentic_debugger.application.model_providers import (
+    PROVIDER_KIND_CONFIGURED,
+    PROVIDER_KIND_OLLAMA,
+    ProviderModel,
+    list_provider_models,
+)
+
 from rich.text import Text
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -1282,6 +1289,19 @@ class BrowseScreen(Screen):
         self.app.pop_screen()
 
 
+@dataclass(frozen=True)
+class _ConfiguredProfileModel(ProviderModel):
+    """A configured command profile presented through the provider registry."""
+
+    executable: str = ""
+    provider_label: str = "Configured profiles"
+    available: bool = True
+    unavailable_reason: Optional[str] = None
+
+    def __post_init__(self) -> None:
+        pass
+
+
 class LocalProjectStartScreen(Screen):
     """Professional terminal form for Local Project Debug new session.
 
@@ -1327,6 +1347,7 @@ class LocalProjectStartScreen(Screen):
         self._repro_command: Optional[str] = None
         self._verify_command: Optional[str] = None
         self._profile_id: Optional[str] = None
+        self._model_provider: Optional[str] = None
         self._profiles: Tuple[Any, ...] = ()
         self._config_error: Optional[str] = None
         self._max_elapsed_seconds: Optional[int] = None
@@ -1450,28 +1471,42 @@ class LocalProjectStartScreen(Screen):
         footer.update(START_FOOTER_COMPACT if width < 70 else START_FOOTER)
 
     def _refresh_profiles(self) -> None:
-        # Prefer Ollama Cloud roster (actual product) with fallback to configured profiles.
-        # Local Project default: qwen3.5:cloud when canonical eligible, else first eligible
-        # deterministically. Never fail merely because qwen3.5 is unavailable.
+        """Unified provider registry listing (offline, read-only).
+
+        Ollama Cloud roster, OpenCode Go models, CommandCode GOAT models,
+        and configured command profiles appear as one availability-annotated
+        list.  Local Project default: qwen3.5:cloud when canonical eligible,
+        else the first available model deterministically.
+        """
+        models: list = []
         try:
-            ollama = list(self.app.ollama_cloud_model_profiles())
+            models = list_provider_models(include_ollama=True)
         except Exception:
-            ollama = []
-        if ollama:
-            # Wrap Ollama profiles as ProfileSummary-like objects for UI
-            self._profiles = tuple(type("P", (), {"profile_id": m.alias, "display_name": m.display_name, "executable": "ollama", "is_ollama": True, "alias": m.alias})() for m in ollama)
-            self._config_error = None
-            if not getattr(self, "_model_user_edited", False):
-                preferred = next((m for m in ollama if m.alias == "qwen3.5:cloud"), None)
-                chosen = preferred if preferred is not None else ollama[0]
-                self._profile_id = chosen.alias
-            return
+            models = []
         try:
-            self._profiles, self._config_error = self.app.configured_profiles()
+            configured, config_error = self.app.configured_profiles()
         except Exception as exc:
-            self._profiles, self._config_error = (), str(exc)
-        if self._profiles and not getattr(self, "_model_user_edited", False):
-            self._profile_id = self._profiles[0].profile_id
+            configured, config_error = (), str(exc)
+        self._config_error = config_error
+        for profile in configured:
+            models.append(
+                _ConfiguredProfileModel(
+                    kind=PROVIDER_KIND_CONFIGURED,
+                    model_id=profile.profile_id,
+                    display_name=profile.display_name,
+                    executable=profile.executable,
+                )
+            )
+        available = [m for m in models if m.available]
+        self._profiles = tuple(models)
+        if available and not getattr(self, "_model_user_edited", False):
+            preferred = next(
+                (m for m in available if m.kind == PROVIDER_KIND_OLLAMA and m.model_id == "qwen3.5:cloud"),
+                None,
+            )
+            chosen = preferred if preferred is not None else available[0]
+            self._profile_id = chosen.model_id
+            self._model_provider = chosen.kind
 
     def _focusable_row_ids(self) -> list[str]:
         return ["project", "bug", "repro", "verify", "model", "time_limit"]
@@ -1558,9 +1593,9 @@ class LocalProjectStartScreen(Screen):
         # Model row
         model_name = "No eligible models available"
         if self._profiles and self._profile_id:
-            match = next((p for p in self._profiles if getattr(p, "profile_id", None) == self._profile_id), None)
+            match = next((p for p in self._profiles if p.model_id == self._profile_id), None)
             if match:
-                model_name = match.display_name
+                model_name = f"{match.display_name} · {match.provider_label}"
             else:
                 model_name = self._profile_id
         elif self._config_error:
@@ -1707,14 +1742,16 @@ class LocalProjectStartScreen(Screen):
         choices: list[ChoiceOption] = []
         if self._profiles:
             for p in self._profiles:
-                # Ollama vs configured
-                if getattr(p, "is_ollama", False):
-                    choices.append(ChoiceOption(p.profile_id, p.display_name, f"Ollama Cloud · {p.profile_id}"))
+                if not p.available:
+                    continue
+                if p.kind == PROVIDER_KIND_CONFIGURED:
+                    detail = f"command: {p.executable}"
                 else:
-                    choices.append(ChoiceOption(p.profile_id, p.display_name, f"command: {p.executable}"))
+                    detail = f"{p.provider_label} · {p.model_id}"
+                choices.append(ChoiceOption(p.model_id, p.display_name, detail))
         if not choices:
             # No eligible models
-            choices.append(ChoiceOption("", "No eligible models available", "No Ollama Cloud models qualified"))
+            choices.append(ChoiceOption("", "No eligible models available", "No provider models qualified"))
             self.app.push_screen(ChoicePickerScreen(
                 title="Select model", choices=choices, current="",
                 on_select=lambda v: None,
@@ -1727,7 +1764,9 @@ class LocalProjectStartScreen(Screen):
 
     def _model_selected(self, value: str) -> None:
         self._model_user_edited = True
-        self._profile_id = None if value == "offline" else value
+        match = next((p for p in self._profiles if p.available and p.model_id == value), None)
+        self._profile_id = value if match is not None else None
+        self._model_provider = match.kind if match is not None else None
         self._render_rows()
         self._focus_row("model")
 
@@ -1778,6 +1817,7 @@ class LocalProjectStartScreen(Screen):
                 reproduction_command=self._repro_command,
                 verification_command=self._verify_command,
                 profile_id=self._profile_id,
+                model_provider=self._model_provider,
                 max_elapsed_seconds=self._max_elapsed_seconds,
             )
         except Exception as exc:

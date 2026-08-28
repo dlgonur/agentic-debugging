@@ -599,6 +599,7 @@ class LocalApplicationV1(App):
         reproduction_command: Optional[str] = None,
         verification_command: Optional[str] = None,
         profile_id: Optional[str] = None,
+        model_provider: Optional[str] = None,
         max_elapsed_seconds: Optional[int] = None,
     ) -> None:
         """Start one Local Project Debug session.
@@ -630,7 +631,20 @@ class LocalApplicationV1(App):
         # Support both Ollama Cloud roster (primary) and configured command-model profiles (additional)
         if profile_id is None or not str(profile_id).strip():
             raise RuntimeError("Local Project Debug requires a selected model profile")
-        # Try Ollama Cloud roster first (actual product)
+        subscription_provider = None
+        if model_provider in ("opencode_go", "commandcode_goat"):
+            # Subscription providers resolve through the unified registry,
+            # fail-closed before any worktree or worker resource exists.
+            from agentic_debugger.application.model_providers import (
+                ProviderRegistryError,
+                resolve_provider_live_config,
+            )
+
+            try:
+                resolve_provider_live_config(model_provider, profile_id)
+            except ProviderRegistryError as exc:
+                raise RuntimeError(f"Selected provider model unavailable: {exc}") from exc
+            subscription_provider = model_provider
         ollama_profile = None
         expected_fp = None
         model_config_ref = None
@@ -644,13 +658,15 @@ class LocalApplicationV1(App):
                     break
         except Exception:
             pass
-        if ollama_profile is None:
+        if ollama_profile is None and subscription_provider is None:
             try:
                 prof = self._config_store.get(profile_id)
                 expected_fp = prof.configuration_fingerprint
                 model_config_ref = prof.profile_id
             except Exception as exc:
                 raise RuntimeError(f"Selected model profile unavailable: {exc}") from exc
+        if subscription_provider is not None:
+            model_config_ref = profile_id
         validated = validate_local_project(project_path, launch_cwd=launch_cwd)
         if validated.dirty:
             raise RuntimeError(
@@ -716,12 +732,22 @@ class LocalApplicationV1(App):
                 "parent_tmpdir": str(parent_tmpdir),
                 "policy": "pdb-on-uncertainty",
             }
-            # Mark Ollama for worker
+            # Mark the selected provider for the worker (explicit provider
+            # wins; the Ollama roster keeps its legacy markers for replay
+            # compatibility).
             try:
-                from agentic_debugger.application.level32 import level32_model_profiles
-                if any(m.alias == profile_id for m in level32_model_profiles()):
-                    scenario_params["is_ollama"] = True
-                    scenario_params["ollama_alias"] = profile_id
+                if subscription_provider is not None:
+                    scenario_params["provider"] = subscription_provider
+                    scenario_params["model_id"] = profile_id
+                else:
+                    from agentic_debugger.application.level32 import level32_model_profiles
+                    if any(m.alias == profile_id for m in level32_model_profiles()):
+                        scenario_params["provider"] = "ollama_cloud"
+                        scenario_params["model_id"] = profile_id
+                        scenario_params["is_ollama"] = True
+                        scenario_params["ollama_alias"] = profile_id
+                    else:
+                        scenario_params["provider"] = "configured"
             except Exception:
                 pass
             worker = SessionWorkerProcess(

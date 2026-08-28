@@ -55,6 +55,15 @@ def collect_diagnostics() -> dict[str, object]:
         curated_tasks = 0
 
     python_supported = sys.version_info >= (3, 11)
+    providers: list[tuple[str, bool, Optional[str]]] = []
+    try:
+        from agentic_debugger.application.model_providers import (
+            provider_availability,
+        )
+
+        providers = provider_availability()
+    except Exception:
+        providers = []
     ready = python_supported and textual_version is not None and curated_tasks >= 5
     return {
         "version": __version__,
@@ -62,6 +71,7 @@ def collect_diagnostics() -> dict[str, object]:
         "python_supported": python_supported,
         "textual_version": textual_version,
         "curated_tasks": curated_tasks,
+        "providers": providers,
         "ready": ready,
     }
 
@@ -79,6 +89,11 @@ def render_diagnostics(diagnostics: dict[str, object]) -> int:
     print(f"Python: {diagnostics['python_version']} ({python_status})")
     print(f"Textual: {textual_status}")
     print(f"Curated task manifests: {curated_tasks} ({task_status})")
+    for kind, available, reason in diagnostics["providers"]:  # type: ignore[union-attr]
+        if available:
+            print(f"Model provider {kind}: ready")
+        else:
+            print(f"Model provider {kind}: unavailable ({reason})")
     print(f"Status: {'READY' if diagnostics['ready'] else 'NOT READY'}")
     if textual_version is None:
         print('Install the UI dependency with: python -m pip install -e ".[app]"')
