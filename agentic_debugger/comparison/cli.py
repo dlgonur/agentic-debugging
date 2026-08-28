@@ -24,6 +24,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Sequence
 
+from agentic_debugger import __version__
 from agentic_debugger.comparison.runner import (
     DEMO_TASKS,
     claim_output_root,
@@ -286,6 +287,11 @@ def build_parser() -> object:
             "Deterministic offline RAG/comparison/preference harness over the "
             "accepted debugging infrastructure. Never contacts a provider."
         ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 

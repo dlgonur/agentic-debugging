@@ -20,6 +20,7 @@ import tempfile
 from pathlib import Path
 from typing import Optional, Sequence
 
+from agentic_debugger import __version__
 from agentic_debugger.demo.policies import DEMO_POLICIES, DemoPolicy, policy_from_value
 from agentic_debugger.demo.report import render_summary
 from agentic_debugger.demo.runner import (
@@ -52,6 +53,11 @@ def build_parser() -> argparse.ArgumentParser:
             "Run the deterministic offline end-to-end demonstration of the "
             "agentic-debugging MVP over the curated benchmark set."
         ),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
     )
     parser.add_argument(
         "--output-dir",

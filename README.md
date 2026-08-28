@@ -13,7 +13,8 @@ Requires Python 3.11 or newer.
 
 ```powershell
 python -m pip install -e ".[app,test]"
-agentic-debugger
+python -m agentic_debugger.ui --doctor
+python -m agentic_debugger.ui
 ```
 
 The first task is an offline, deterministic demo. It does not contact a model
@@ -23,7 +24,6 @@ provider. You can also run the scientific demo directly:
 python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002
 ```
 
-Use `python -m agentic_debugger.ui` if the console script is unavailable.
 Configured-model and local-project sessions require a model profile supplied by
 the operator. Live provider execution is always explicit.
 
