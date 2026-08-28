@@ -220,6 +220,26 @@ def render_session_report(reopened: ReopenedSession) -> str:
             ]
         )
 
+    lines.extend(["", "## What the agent tried", ""])
+    from agentic_debugger.application.effort_summary import (
+        render_effort_summary,
+        summarize_events,
+    )
+
+    lines.append(
+        render_effort_summary(
+            summarize_events(reopened.replay.events),
+            title="Counted effort (journal-derived)",
+        )
+    )
+    if entry.retry_of_session_id is not None:
+        lines.extend(
+            [
+                "",
+                f"- Retry of session: {display(entry.retry_of_session_id)}",
+            ]
+        )
+
     lines.extend(["", "## Debugger evidence", ""])
     debugger = view.debugger
     if not view.pdb_observed and not debugger.session_started:

@@ -216,6 +216,7 @@ class SessionManifest:
     artifacts: Tuple[ManifestArtifact, ...] = ()
     verifier_status: Optional[str] = None
     verifier_outcome: Optional[str] = None
+    retry_of_session_id: Optional[str] = None
 
     def __post_init__(self) -> None:
         if self.schema_version != MANIFEST_SCHEMA_VERSION:
@@ -303,6 +304,7 @@ class SessionManifest:
             ],
             "verifier_status": self.verifier_status,
             "verifier_outcome": self.verifier_outcome,
+            "retry_of_session_id": self.retry_of_session_id,
         }
 
 
@@ -315,6 +317,7 @@ def validate_manifest_mapping(m: Any) -> SessionManifest:
         "started_at_utc", "ended_at_utc", "status", "termination_reason",
         "config_fingerprint", "cleanup_verified", "journal_path",
         "journal_sha256", "artifacts", "verifier_status", "verifier_outcome",
+        "retry_of_session_id",
     }
     missing = known - set(m.keys())
     if missing:
@@ -355,6 +358,7 @@ def validate_manifest_mapping(m: Any) -> SessionManifest:
         artifacts=tuple(parsed_artifacts),
         verifier_status=m["verifier_status"],
         verifier_outcome=m["verifier_outcome"],
+        retry_of_session_id=m["retry_of_session_id"],
     )
 
 
@@ -421,6 +425,7 @@ class SessionHistoryEntry:
     cleanup_verified: Optional[bool] = None
     verifier_status: Optional[str] = None
     verifier_outcome: Optional[str] = None
+    retry_of_session_id: Optional[str] = None
     manifest_path: Optional[str] = None
     journal_path: Optional[str] = None
     note: Optional[str] = None
@@ -675,6 +680,7 @@ class HistoryStore:
                 cleanup_verified=manifest.cleanup_verified,
                 verifier_status=manifest.verifier_status,
                 verifier_outcome=manifest.verifier_outcome,
+                retry_of_session_id=manifest.retry_of_session_id,
                 manifest_path=str(directory / "manifest.json"),
                 journal_path=str(directory / JOURNAL_FILE_NAME),
             )
@@ -840,9 +846,13 @@ def _derive_manifest(directory: Path, read: Any) -> SessionManifest:
     config_fingerprint: Optional[str] = None
     verifier_status: Optional[str] = None
     verifier_outcome: Optional[str] = None
+    retry_of_session_id: Optional[str] = None
     for event in events:
         if event.event_kind is SessionEventKind.SESSION_CREATED:
             config_fingerprint = event.payload.get("spec_fingerprint")
+            linkage = event.payload.get("retry_of_session_id")
+            if isinstance(linkage, str) and linkage:
+                retry_of_session_id = linkage
         elif event.event_kind is SessionEventKind.SESSION_STARTED:
             run_id = event.run_id
             started_at = event.timestamp_utc
@@ -900,6 +910,7 @@ def _derive_manifest(directory: Path, read: Any) -> SessionManifest:
         artifacts=tuple(artifacts),
         verifier_status=verifier_status,
         verifier_outcome=verifier_outcome,
+        retry_of_session_id=retry_of_session_id,
     )
 
 

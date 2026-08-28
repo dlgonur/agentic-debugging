@@ -119,6 +119,7 @@ class SessionWorkerProcess:
         ready_timeout_seconds: float = 30.0,
         max_elapsed_seconds: Optional[int] = None,
         pre_start_delay_seconds: float = 0.0,
+        retry_of_session_id: Optional[str] = None,
         job_factory: Optional[Callable[[], WindowsProcessTreeJob]] = None,
     ) -> None:
         from agentic_debugger.application.events import validate_session_id
@@ -153,6 +154,12 @@ class SessionWorkerProcess:
         ):
             raise ApplicationInputError("pre_start_delay_seconds must be a number")
         self._pre_start_delay_seconds = float(pre_start_delay_seconds)
+        if retry_of_session_id is not None:
+            if type(retry_of_session_id) is not str or not retry_of_session_id:
+                raise ApplicationInputError("retry_of_session_id must be a non-empty string or None")
+            if len(retry_of_session_id.encode("utf-8")) > 128:
+                raise ApplicationInputError("retry_of_session_id exceeds the bound")
+        self._retry_of_session_id = retry_of_session_id
         if job_factory is not None and not callable(job_factory):
             raise ApplicationInputError("job_factory must be callable or None")
         self._job_factory: Callable[[], WindowsProcessTreeJob] = (
@@ -308,6 +315,7 @@ class SessionWorkerProcess:
                     scenario_params=self._scenario_params,
                     max_elapsed_seconds=self._max_elapsed_seconds,
                     pre_start_delay_seconds=self._pre_start_delay_seconds,
+                    retry_of_session_id=self._retry_of_session_id,
                 )
             )
             self._proc.stdin.flush()

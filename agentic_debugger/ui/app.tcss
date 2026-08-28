@@ -513,6 +513,19 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     max-height: 90%;
 }
 
+#effort-dialog {
+    padding: 1 2;
+    margin: 1 4;
+    background: #161b22;
+    border: round #d29922;
+    height: auto;
+    max-height: 90%;
+}
+
+#effort-body {
+    padding: 0 0 1 0;
+}
+
 #help-title {
     padding: 0 0 1 0;
     text-style: bold;

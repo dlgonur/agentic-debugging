@@ -549,9 +549,12 @@ def run_worker(request: StartRequest) -> int:
     diagnostics: List[str] = []
 
     try:
+        created_payload = {"spec_fingerprint": request.spec.fingerprint()}
+        if request.retry_of_session_id is not None:
+            created_payload["retry_of_session_id"] = request.retry_of_session_id
         coordinator.emit(
             SessionEventKind.SESSION_CREATED,
-            {"spec_fingerprint": request.spec.fingerprint()},
+            created_payload,
         )
     except (JournalError, EmitterFatalError) as exc:
         return _fatal_journal_exit(work_dir, diagnostics, journal, exc)

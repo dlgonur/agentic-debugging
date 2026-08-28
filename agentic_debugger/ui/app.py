@@ -44,7 +44,12 @@ from agentic_debugger.application.command_config import (
     CommandModelConfigStore,
     ProfileSummary,
 )
-from agentic_debugger.application.events import SessionEvent, SourceKind
+from agentic_debugger.application.events import (
+    SessionEvent,
+    SessionStatus,
+    SessionTerminationReason,
+    SourceKind,
+)
 from agentic_debugger.application.history import (
     HistoryStore,
     default_history_root as application_default_history_root,
@@ -225,6 +230,12 @@ class LocalApplicationV1(App):
         # history) does not cancel the worker; it keeps journaling and the
         # finished session registers into app-owned history.
         self._live_runner: Optional[LiveSessionRunner] = None
+        # Retry support: the exact start request of the most recent
+        # retryable live session (never Level-32; its frozen treatment
+        # boundary must not be re-allocated by a retry).
+        self._live_retry_request: Optional[dict] = None
+        self._live_auto_retry_budget: int = 0
+        self._live_auto_retry_max: int = 0
         self._live_identity: Optional[PresentationIdentity] = None
         self._live_view: Optional[SessionViewState] = None
         self._live_events: Tuple[SessionEvent, ...] = ()
@@ -436,6 +447,7 @@ class LocalApplicationV1(App):
         max_elapsed_seconds: Optional[int],
         source_kind: SourceKind = SourceKind.OFFLINE_DEMO,
         profile_id: Optional[str] = None,
+        retry_of_session_id: Optional[str] = None,
     ) -> None:
         """Start one real live session in the worker.
 
@@ -553,7 +565,23 @@ class LocalApplicationV1(App):
                 cooperative_grace_seconds=_COOPERATIVE_GRACE_SECONDS,
                 ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
                 max_elapsed_seconds=max_elapsed_seconds,
+                retry_of_session_id=retry_of_session_id,
             )
+        if source_kind is not SourceKind.LEVEL32_OPERATOR:
+            self._live_retry_request = {
+                "session_id": session_id,
+                "invoke": lambda retry_of: self.start_live_session(
+                    task_id=task_id,
+                    policy=policy,
+                    max_elapsed_seconds=max_elapsed_seconds,
+                    source_kind=source_kind,
+                    profile_id=profile_id,
+                    retry_of_session_id=retry_of,
+                ),
+            }
+            self._live_auto_retry_budget = 0
+        else:
+            self._live_retry_request = None
         identity = presentation_identity(spec)
         view = initial_session_view(identity)
         runner = LiveSessionRunner(
@@ -601,6 +629,8 @@ class LocalApplicationV1(App):
         profile_id: Optional[str] = None,
         model_provider: Optional[str] = None,
         max_elapsed_seconds: Optional[int] = None,
+        retry_of_session_id: Optional[str] = None,
+        auto_retries: int = 0,
     ) -> None:
         """Start one Local Project Debug session.
 
@@ -760,7 +790,24 @@ class LocalApplicationV1(App):
                 cooperative_grace_seconds=_COOPERATIVE_GRACE_SECONDS,
                 ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
                 max_elapsed_seconds=max_elapsed_seconds,
+                retry_of_session_id=retry_of_session_id,
             )
+            self._live_retry_request = {
+                "session_id": session_id,
+                "invoke": lambda retry_of: self.start_local_project_session(
+                    project_path=project_path,
+                    bug_description=bug_description,
+                    reproduction_command=reproduction_command,
+                    verification_command=verification_command,
+                    profile_id=profile_id,
+                    model_provider=model_provider,
+                    max_elapsed_seconds=max_elapsed_seconds,
+                    retry_of_session_id=retry_of,
+                    auto_retries=self._live_auto_retry_max,
+                ),
+            }
+            self._live_auto_retry_budget = max(0, min(int(auto_retries), 3))
+            self._live_auto_retry_max = self._live_auto_retry_budget
             # Pre-write the contract artifact so history can replay without workspace
             try:
                 worker.session_dir.mkdir(parents=True, exist_ok=True)
@@ -887,6 +934,70 @@ class LocalApplicationV1(App):
         if workspace is not None and workspace.is_mounted:
             workspace.refresh_live()
 
+    def retry_live_session(self) -> bool:
+        """Restart the most recent retryable live session with identical
+        parameters, linked to the original session in the journal.
+
+        Returns False when a session is active or no retryable start
+        request is captured.  The re-start re-validates everything (model
+        availability, project cleanliness); a changed environment fails
+        closed instead of silently degrading.
+        """
+        if self._live_runner is not None:
+            return False
+        request = self._live_retry_request
+        if not request:
+            return False
+        original = request["session_id"]
+        self._live_retry_request = None
+        try:
+            request["invoke"](original)
+            return True
+        except Exception as exc:
+            self.notify(f"Retry failed: {exc}", severity="error", title="Retry")
+            return False
+
+    def _maybe_auto_retry(self, result: object) -> None:
+        """Start one linked retry when the terminal failure is retryable.
+
+        Retryable failures are transient or model-capability failures where
+        a fresh attempt can genuinely succeed: transport/provider errors,
+        timeouts, controller crashes, and directive exhaustion.  User
+        cancellations, interrupts, cleanup failures, and honest unresolved
+        verifier outcomes are never auto-retried.
+        """
+        from agentic_debugger.application.events import SessionStatus, SessionTerminationReason
+
+        if self._live_auto_retry_budget <= 0 or not isinstance(result, SessionResult):
+            return
+        if result.status is not SessionStatus.FAILED:
+            return
+        retryable = {
+            SessionTerminationReason.MODEL_ERROR,
+            SessionTerminationReason.TIMEOUT,
+            SessionTerminationReason.CONTROLLER_FAILED,
+            SessionTerminationReason.DIRECTIVE_EXHAUSTED,
+        }
+        if result.termination_reason not in retryable:
+            return
+        self._live_auto_retry_budget -= 1
+        request = self._live_retry_request
+        if not request:
+            return
+        original = request["session_id"]
+        attempt = self._live_auto_retry_max - self._live_auto_retry_budget
+        self._live_retry_request = None
+        try:
+            request["invoke"](original)
+            self.notify(
+                f"Session failed ({result.termination_reason.value}); "
+                f"auto-retry attempt {attempt}.",
+                severity="warning",
+                title="Auto-retry",
+            )
+        except Exception as exc:
+            self.notify(f"Auto-retry failed: {exc}", severity="error", title="Auto-retry")
+
     def _on_live_terminal(self, result: SessionResult, registration_error: Optional[str]) -> None:
         try:
             self.call_from_thread(self._live_terminal_ui, result, registration_error)
@@ -903,6 +1014,7 @@ class LocalApplicationV1(App):
         # supervision thread closes the worker right after this callback), so
         # the app no longer considers it active and another session may start.
         self._release_live_runner()
+        self._maybe_auto_retry(result)
         home = self.screen
         if isinstance(home, HomeScreen):
             home.refresh_history()

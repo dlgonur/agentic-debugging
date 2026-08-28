@@ -359,6 +359,7 @@ class StartRequest:
     scenario_params: Dict[str, Any]
     max_elapsed_seconds: Optional[int]
     pre_start_delay_seconds: float
+    retry_of_session_id: Optional[str] = None
 
 
 def parse_start_request(m: Any) -> StartRequest:
@@ -370,10 +371,11 @@ def parse_start_request(m: Any) -> StartRequest:
         "scenario", "scenario_params", "max_elapsed_seconds",
         "pre_start_delay_seconds",
     }
+    optional = {"retry_of_session_id"}
     missing = required - set(m.keys())
     if missing:
         raise _invalid(f"start message is missing required fields: {sorted(missing)}")
-    extra = set(m.keys()) - required
+    extra = set(m.keys()) - required - optional
     if extra:
         raise _invalid(f"start message has unknown fields: {sorted(extra)}")
     if m["type"] != _MSG_START:
@@ -394,6 +396,11 @@ def parse_start_request(m: Any) -> StartRequest:
             m["max_elapsed_seconds"], "max_elapsed_seconds"
         ),
         pre_start_delay_seconds=_delay_seconds(m["pre_start_delay_seconds"]),
+        retry_of_session_id=(
+            _bounded_text(m["retry_of_session_id"], "retry_of_session_id", 128)
+            if "retry_of_session_id" in m and m["retry_of_session_id"] is not None
+            else None
+        ),
     )
 
 
@@ -564,6 +571,7 @@ def start_message(
     scenario_params: Optional[Mapping[str, Any]] = None,
     max_elapsed_seconds: Optional[int] = None,
     pre_start_delay_seconds: float = 0.0,
+    retry_of_session_id: Optional[str] = None,
 ) -> bytes:
     """Build the validated ``start`` envelope bytes."""
     mapping: Dict[str, Any] = {
@@ -577,6 +585,7 @@ def start_message(
         "scenario_params": dict(scenario_params or {}),
         "max_elapsed_seconds": max_elapsed_seconds,
         "pre_start_delay_seconds": pre_start_delay_seconds,
+        "retry_of_session_id": retry_of_session_id,
     }
     parse_start_request(mapping)  # fail closed before any byte crosses the pipe
     return serialize_message(mapping)

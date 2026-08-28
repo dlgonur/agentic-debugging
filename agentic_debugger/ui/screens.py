@@ -108,7 +108,7 @@ _CLASSIFICATION_STYLE = {
 START_FOOTER = "S start   H history   ↑/↓ move   Enter edit   Esc back   Ctrl+C quit"
 START_FOOTER_COMPACT = "S start  H history  ↑/↓ move  Enter edit  Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-8 activity filters   c cancel   h history   n new session   ctrl+c quit"
-WORKSPACE_FOOTER_IDLE = "left/right views   1-8 activity filters   h history   n new session   ctrl+c quit"
+WORKSPACE_FOOTER_IDLE = "left/right views   1-8 activity filters   h history   n new session   w effort   r retry   ctrl+c quit"
 REPLAY_FOOTER = "left/right views   1-8 activity filters   events   phases   h history   n new session   ctrl+c quit"
 
 
@@ -1099,6 +1099,28 @@ class StartSessionScreen(Screen):
         lines.append(f"\n[#8b949e]Ready[/]\n{ready}")
         self.query_one("#context-summary", Static).update("\n".join(lines))
 
+    def _open_auto_retry_picker(self) -> None:
+        choices = [
+            ChoiceOption("0", "No auto-retry", "fail fast; retry manually with r"),
+            ChoiceOption("1", "1 auto-retry", "default: one fresh attempt on retryable failure"),
+            ChoiceOption("2", "2 auto-retries", "two fresh attempts"),
+            ChoiceOption("3", "3 auto-retries", "maximum"),
+        ]
+        self.app.push_screen(ChoicePickerScreen(
+            title="Auto-retry on failure",
+            choices=choices,
+            current=str(self._auto_retries),
+            on_select=self._auto_retry_selected,
+        ))
+
+    def _auto_retry_selected(self, value: str) -> None:
+        try:
+            self._auto_retries = max(0, min(int(value), 3))
+        except ValueError:
+            return
+        self._render_rows()
+        self._focus_row("auto_retry")
+
     def _open_time_limit_editor(self) -> None:
         self.app.push_screen(TimeLimitEditorScreen(
             current=self._max_elapsed_seconds,
@@ -1351,6 +1373,10 @@ class LocalProjectStartScreen(Screen):
         self._profiles: Tuple[Any, ...] = ()
         self._config_error: Optional[str] = None
         self._max_elapsed_seconds: Optional[int] = None
+        # Bounded automatic retries of failed sessions (0-3).  Default 1:
+        # a transient model/transport failure should not end the effort,
+        # while the counter keeps total cost bounded and visible.
+        self._auto_retries: int = 1
         # Tracks whether the user has manually edited a field; automatic
         # project-derived defaults must not overwrite manual values.
         self._repro_user_edited: bool = False
@@ -1436,6 +1462,7 @@ class LocalProjectStartScreen(Screen):
                     yield SessionSettingRow("Repro", row_key="repro", id="repro-row")
                     yield SessionSettingRow("Verify", row_key="verify", id="verify-row")
                     yield SessionSettingRow("Model", row_key="model", id="local-model-row")
+                    yield SessionSettingRow("Auto-retry", row_key="auto_retry", id="local-auto-retry-row")
                     yield TimeLimitRow(id="local-time-limit-row")
                     yield Static("", id="local-start-status")
                     yield Static("", id="local-start-trust")
@@ -1509,11 +1536,11 @@ class LocalProjectStartScreen(Screen):
             self._model_provider = chosen.kind
 
     def _focusable_row_ids(self) -> list[str]:
-        return ["project", "bug", "repro", "verify", "model", "time_limit"]
+        return ["project", "bug", "repro", "verify", "model", "auto_retry", "time_limit"]
 
     def _focus_row(self, row_key: str) -> None:
         row_type = TimeLimitRow if row_key == "time_limit" else SessionSettingRow
-        row_id = "local-time-limit-row" if row_key == "time_limit" else ("local-model-row" if row_key == "model" else f"{row_key}-row")
+        row_id = "local-time-limit-row" if row_key == "time_limit" else ("local-model-row" if row_key == "model" else ("local-auto-retry-row" if row_key == "auto_retry" else f"{row_key}-row"))
         try:
             self.query_one(f"#{row_id}", row_type).focus()
         except Exception:
@@ -1543,6 +1570,8 @@ class LocalProjectStartScreen(Screen):
             self._open_text_editor("Verification command (optional)", self._verify_command or "", self._on_verify_saved)
         elif row_key == "model":
             self._open_model_picker()
+        elif row_key == "auto_retry":
+            self._open_auto_retry_picker()
         elif row_key == "time_limit":
             self._open_time_limit_editor()
         else:
@@ -1603,6 +1632,9 @@ class LocalProjectStartScreen(Screen):
         elif not self._profiles:
             model_name = "No eligible models available"
         self.query_one("#local-model-row", SessionSettingRow).set_value(model_name)
+        self.query_one("#local-auto-retry-row", SessionSettingRow).set_value(
+            f"{self._auto_retries} on retryable failure"
+        )
         self.query_one("#local-time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
         self._update_context()
 
@@ -1819,6 +1851,7 @@ class LocalProjectStartScreen(Screen):
                 profile_id=self._profile_id,
                 model_provider=self._model_provider,
                 max_elapsed_seconds=self._max_elapsed_seconds,
+                auto_retries=self._auto_retries,
             )
         except Exception as exc:
             status.update(f"[red]{_markup_escape(exc)[:200]}[/]")
@@ -1952,6 +1985,8 @@ class WorkspaceScreen(Screen):
         Binding("h", "history", "History", priority=True),
         Binding("n", "new_session", "New session", priority=True),
         Binding("a", "apply_to_project", "Apply To Project"),
+        Binding("w", "show_effort", "What the agent tried"),
+        Binding("r", "retry_session", "Retry session"),
         Binding("escape", "back_home", "Back", show=False),
         Binding("?", "show_help", "Help"),
     ]
@@ -2275,6 +2310,29 @@ class WorkspaceScreen(Screen):
                 self.query_one("#live-run-context", LiveRunContextPanel).update_execution(execution)
         self._render_bar()
 
+    def _terminal_effort_phrase(self) -> Optional[str]:
+        """One-line counted effort shown once the session is terminal.
+
+        Derived from the same journal projection as the ``w`` modal; empty
+        while the session still runs.
+        """
+        if self._live_terminal is None and self._live_failure is None:
+            return None
+        from agentic_debugger.application.effort_summary import summarize_events
+
+        summary = summarize_events(self._session_events_for_effort())
+        parts = [
+            f"tried: {summary.model_requests} req",
+            f"{summary.directives_accepted} directives",
+        ]
+        if summary.tool_calls:
+            parts.append(f"{summary.tool_calls} tools")
+        if summary.patches_proposed:
+            parts.append(f"{summary.patches_proposed} patch")
+        if summary.debugger_observations:
+            parts.append(f"{summary.debugger_observations} pdb obs")
+        return "[bold #d29922]" + ", ".join(parts) + "[/]"
+
     def _live_elapsed(self) -> str:
         if len(self._live_events) < 2:
             return "—"
@@ -2357,8 +2415,11 @@ class WorkspaceScreen(Screen):
                     if apply_patch:
                         footer = (
                             "left/right views   1-8 activity filters   "
-                            "a apply to project   h history   n new session   ctrl+c quit"
+                            "a apply to project   h history   n new session   w effort   r retry   ctrl+c quit"
                         )
+                effort_phrase = self._terminal_effort_phrase()
+                if effort_phrase:
+                    footer = f"{effort_phrase}   {footer}"
                 bar.update(f"[dim]{footer}   ? help[/]")
 
     # -- workspace view navigation ------------------------------------------
@@ -2391,6 +2452,43 @@ class WorkspaceScreen(Screen):
 
     def action_workspace_next_view(self) -> None:
         self._switch_workspace_view(1)
+
+    # -- effort + retry actions ---------------------------------------------
+
+    def _session_events_for_effort(self) -> tuple:
+        if self.mode is WorkspaceMode.REPLAY and self.controller is not None:
+            return tuple(self.controller.replay.events)
+        return tuple(self._live_events)
+
+    def action_show_effort(self) -> None:
+        """Show the counted 'what the agent tried' projection as a modal."""
+        from agentic_debugger.application.effort_summary import (
+            render_effort_summary,
+            summarize_events,
+        )
+
+        summary = summarize_events(self._session_events_for_effort())
+        title = "What the agent tried"
+        if self.mode is WorkspaceMode.LIVE and self._live_terminal is not None:
+            status = getattr(self._live_terminal, "status", None)
+            reason = getattr(self._live_terminal, "termination_reason", None)
+            if status is not None:
+                title += f"  ·  terminal: {status.value}"
+                if reason is not None:
+                    title += f" ({reason.value})"
+        body = render_effort_summary(summary, title=title)
+        self.app.push_screen(EffortModalScreen(body))
+
+    def action_retry_session(self) -> None:
+        """Restart the same session setup, linked to the original session."""
+        retried = self.app.retry_live_session()
+        if not retried:
+            self.notify(
+                "Retry unavailable: a session may be active, or this session "
+                "type does not support retry.",
+                severity="warning",
+                title="Retry",
+            )
 
     # -- replay actions -----------------------------------------------------
 
@@ -2852,6 +2950,27 @@ class JumpToSequenceScreen(Screen):
         self.app.pop_screen()
 
     def action_cancel(self) -> None:
+        self.app.pop_screen()
+
+
+class EffortModalScreen(Screen):
+    """Read-only 'what the agent tried' projection modal."""
+
+    BINDINGS = [
+        Binding("escape", "close_effort", "Close"),
+        Binding("enter", "close_effort", "Close"),
+        Binding("w", "close_effort", "Close"),
+    ]
+
+    def __init__(self, body: str) -> None:
+        super().__init__()
+        self._body = body
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="effort-dialog"):
+            yield Static(self._body, id="effort-body")
+
+    def action_close_effort(self) -> None:
         self.app.pop_screen()
 
 

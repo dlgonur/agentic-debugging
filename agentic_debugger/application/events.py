@@ -741,9 +741,15 @@ def _thaw(value: Any) -> Any:
 
 def _payload_created(payload: Mapping[str, Any]) -> dict[str, Any]:
     required = {"spec_fingerprint"}
+    optional = {"retry_of_session_id"}
     _check_required(payload, required, "session.created payload")
-    _check_no_unknown(payload, required, "session.created payload")
-    return {"spec_fingerprint": _sha256_hex(payload["spec_fingerprint"], "spec_fingerprint")}
+    _check_no_unknown(payload, required | optional, "session.created payload")
+    result = {"spec_fingerprint": _sha256_hex(payload["spec_fingerprint"], "spec_fingerprint")}
+    if "retry_of_session_id" in payload:
+        result["retry_of_session_id"] = _bounded_text(
+            payload["retry_of_session_id"], "retry_of_session_id", 128
+        )
+    return result
 
 
 def _payload_empty(payload: Mapping[str, Any], label: str) -> dict[str, Any]:
