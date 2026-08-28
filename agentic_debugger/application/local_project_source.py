@@ -31,6 +31,7 @@ from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, Con
 from agentic_debugger.agent.model_adapter import ControllerSnapshot
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import ToolExecutionError, ToolRegistry, ToolRejectedError, ToolResult, ToolSpec, ToolTimeoutError
+from agentic_debugger.application import ApplicationInputError
 from agentic_debugger.application.command_config import CommandModelConfigStore
 from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
 from agentic_debugger.application.events import SessionEventKind, SessionTerminationReason, contains_credential_shape
@@ -51,8 +52,6 @@ _MAX_BUG_CHARS=4096
 _DEFAULT_MAX_MODEL_REQUESTS=32
 _DEFAULT_MAX_CONTROLLER_STEPS=64
 _DEFAULT_MAX_RETRIES=2
-_MAX_TRACKED_FILES=200
-_MAX_FILE_SIZE=1024*1024
 
 class LocalProjectSourceError(RuntimeError):
     pass
@@ -93,7 +92,15 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
             raise ScenarioInputError(f"{label} must contain an executable")
     policy_str=params.get("policy") or "pdb-on-uncertainty"
     if policy_str not in {c.value for c in DemoPolicy}: raise ScenarioInputError(f"unknown policy: {policy_str!r}")
-    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str}
+    is_ollama=params.get("is_ollama", False)
+    if type(is_ollama) is not bool: raise ScenarioInputError("is_ollama must be a boolean")
+    ollama_alias=params.get("ollama_alias")
+    if ollama_alias is not None:
+        if type(ollama_alias) is not str or not ollama_alias: raise ScenarioInputError("ollama_alias must be a non-empty string or null")
+        if len(ollama_alias.encode("utf-8"))>128: raise ScenarioInputError("ollama_alias exceeds bound")
+        if contains_credential_shape(ollama_alias): raise ScenarioInputError("ollama_alias contains credential shape")
+    if ollama_alias is not None and not is_ollama: raise ScenarioInputError("ollama_alias requires is_ollama=true")
+    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias}
 
 def _bounded(output: str, limit: int=4000) -> str:
     return output[:limit-3]+"..." if len(output)>limit else output
@@ -164,38 +171,14 @@ def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=
     )
 
 def _inventory_tracked_python_files(isolated: Path) -> List[str]:
+    # One canonical bounded inventory (local_project.py); this boundary only
+    # translates its input errors into the worker's scenario vocabulary.
+    from agentic_debugger.application.local_project import inventory_tracked_python_files
+
     try:
-        result=subprocess.run(["git","ls-files","-z"], stdin=subprocess.DEVNULL, cwd=str(isolated), stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=10)
-    except Exception as exc:
-        raise ScenarioInputError(f"git ls-files failed: {exc}") from exc
-    if result.returncode!=0:
-        raise ScenarioInputError(f"git ls-files failed: {result.stderr.decode(errors='replace')[:200]}")
-    raw=result.stdout.split(b"\x00")
-    files=[]
-    for b in raw:
-        if not b: continue
-        try:
-            p=b.decode("utf-8")
-        except: continue
-        if p.startswith(".git/") or p==".git": continue
-        if not p.endswith(".py"): continue
-        full=isolated / p
-        try:
-            assert_path_inside_workspace(isolated, p)
-        except Exception:
-            continue
-        try:
-            size=full.stat().st_size
-            if size>_MAX_FILE_SIZE:
-                continue
-        except: continue
-        files.append(p.replace("\\","/"))
-    files=sorted(set(files))
-    if not files:
-        raise ScenarioInputError("No supported Python source files found.")
-    if len(files)>_MAX_TRACKED_FILES:
-        raise ScenarioInputError(f"Repository too large for bounded v1 inventory: {len(files)} Python files exceed {_MAX_TRACKED_FILES} limit.")
-    return files
+        return inventory_tracked_python_files(isolated)
+    except ApplicationInputError as exc:
+        raise ScenarioInputError(str(exc)) from exc
 
 # ---------------------------------------------------------------------------
 # Honest Local Project task adapter (no invented DebugTask facts)
@@ -823,8 +806,8 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     policy=DemoPolicy(validated["policy"])
     if ctx.emitter is None: raise ScenarioInputError("local_project requires emitter")
     if not isolated.is_dir(): raise ScenarioInputError(f"isolated workspace missing: {isolated}")
-    is_ollama = bool(params.get("is_ollama") or params.get("ollama_alias"))
-    ollama_alias = params.get("ollama_alias") or (profile_id if is_ollama else None)
+    is_ollama = validated["is_ollama"]
+    ollama_alias = validated["ollama_alias"] or (profile_id if is_ollama else None)
     profile = None
     ollama_profile = None
     if is_ollama and ollama_alias:
@@ -886,11 +869,11 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         from scripts.ollama_cloud_command_adapter import build_ollama_live_config
         live_config = build_ollama_live_config(ollama_profile.alias, logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS)
         limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
-        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check)
+        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter)
     else:
         live_config=LiveModelConfig(model_name=profile.display_name, command=profile.live_command(), request_timeout_seconds=profile.request_timeout_seconds, tool_version=profile.tool_version)
         limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
-        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, cwd=profile.cwd, environment=dict(profile.environment) if profile.environment else None)
+        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter, cwd=profile.cwd, environment=dict(profile.environment) if profile.environment else None)
     # Safe durable model provenance (same contract as the configured/ladder
     # sources): the journal records which model actually serves this Local
     # Project session, so replay needs no live workspace or sidecar file.

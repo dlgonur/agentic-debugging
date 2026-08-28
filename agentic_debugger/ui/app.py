@@ -658,11 +658,7 @@ class LocalApplicationV1(App):
                 "Commit/stash them first or choose a clean repository."
             )
         # Create isolated worktree (Git-native, no owner mutation) — parent owns until worker owns
-        worktree = None
-        try:
-            worktree = create_isolated_worktree(validated.repo_root, validated.head_commit)
-        except Exception:
-            raise
+        worktree = create_isolated_worktree(validated.repo_root, validated.head_commit)
         isolated_path = worktree.isolated_path
         parent_tmpdir = worktree.parent_tmpdir
         # Ownership: the supervisor's post-mortem path removes the isolated

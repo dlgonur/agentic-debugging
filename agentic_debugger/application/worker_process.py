@@ -690,13 +690,17 @@ class SessionWorkerProcess:
         Verification uses the accepted ``cleanup_parent_tmpdir`` contract
         (filesystem gone + registration pruned).
         """
-        if self._scenario != "local_project":
+        from agentic_debugger.application.local_project import cleanup_parent_tmpdir
+        from agentic_debugger.application.local_project_source import (
+            LOCAL_PROJECT_SOURCE_NAME,
+        )
+
+        if self._scenario != LOCAL_PROJECT_SOURCE_NAME:
             return []
         parent = self._scenario_params.get("parent_tmpdir")
         repo = self._scenario_params.get("project_repo_path")
         if not parent or not repo:
             return []
-        from agentic_debugger.application.local_project import cleanup_parent_tmpdir
 
         # The worker must be confirmed dead before supervisor-side removal.
         self._reap_or_terminate()

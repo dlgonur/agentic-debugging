@@ -543,20 +543,9 @@ def cleanup_isolated_worktree(
     # The parent tmpdir should be removed; if isolated_path was inside parent,
     # its parent may still exist
     parent = isolated_path.parent
-    # If parent is a temp dir with prefix, try to remove it if empty or contains only worktree remnants
-    # We stored parent separately in IsolatedWorktree; but for direct cleanup we try both
-    for candidate_parent in (parent,):
-        if candidate_parent.exists() and "agentic-debugger-local" in candidate_parent.name:
-            try:
-                shutil.rmtree(candidate_parent, ignore_errors=True)
-            except Exception:
-                pass
-        # Also try parent of isolated_path if it looks like temp
-        # The parent may be the mkdtemp itself
+    if parent.exists() and "agentic-debugger-local" in parent.name:
         try:
-            # Walk up one more level if parent still has temp prefix
-            grand = candidate_parent.parent if candidate_parent.is_dir() else candidate_parent
-            _ = grand
+            shutil.rmtree(parent, ignore_errors=True)
         except Exception:
             pass
     # Verification

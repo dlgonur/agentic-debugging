@@ -228,6 +228,7 @@ def run_configured_session(
             live_config,
             max_output_bytes=limits.max_response_bytes,
             cancel_check=ctx.token.check,
+            activity_observer=ctx.liveness_reporter,
             cwd=profile.cwd,
             environment=dict(profile.environment) if profile.environment else None,
         )

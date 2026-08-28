@@ -14,7 +14,7 @@ from typing import Any, Mapping, Optional
 
 from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
 from agentic_debugger.application.events import OperatorStage, SessionEventKind
-from agentic_debugger.application.local_source import LocalSourceError, run_local_session
+from agentic_debugger.application.local_source import run_local_session
 from agentic_debugger.application.sources import ModelExecutionError
 from agentic_debugger.application.worker_scenarios import ScenarioContext, ScenarioInputError
 from agentic_debugger.agent.state_machine import ControllerState
@@ -230,8 +230,6 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
         )
     except ModelExecutionError:
         raise
-    except LocalSourceError as exc:
-        raise LocalSourceError(str(exc)) from exc
 
 
 __all__ = [

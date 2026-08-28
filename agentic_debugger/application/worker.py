@@ -47,6 +47,9 @@ from agentic_debugger.application.events import (
     SourceKind,
 )
 from agentic_debugger.application.journal import JournalError, SessionEventJournal
+from agentic_debugger.application.local_project_source import (
+    LOCAL_PROJECT_SOURCE_NAME,
+)
 from agentic_debugger.application.session import (
     MAX_DIAGNOSTIC_CHARS,
     SessionId,
@@ -160,7 +163,6 @@ def run_worker_source(
         run_ollama_cloud_session,
     )
     from agentic_debugger.application.local_project_source import (
-        LOCAL_PROJECT_SOURCE_NAME,
         run_local_project_session,
     )
 
@@ -593,7 +595,7 @@ def run_worker(request: StartRequest) -> int:
         # Local Project terminal authority: the typed return value, never a
         # sidecar file.  FIXED and UNRESOLVED are the only accepted
         # dispositions; anything else is an honest controller failure.
-        if request.scenario == "local_project":
+        if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
             if disposition == "UNRESOLVED":
                 outcome = "unresolved"
             elif disposition == "FIXED":
@@ -659,7 +661,7 @@ def run_worker(request: StartRequest) -> int:
             work_ok = _cleanup_work_dir(work_dir, diagnostics)
             cleanup_ok = work_ok
             # Local Project isolated worktree is also session-owned; must be verified before terminal
-            if request.scenario == "local_project":
+            if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
                 parent = request.scenario_params.get("parent_tmpdir")
                 repo = request.scenario_params.get("project_repo_path")
                 if parent and repo:
@@ -753,7 +755,6 @@ def main() -> None:
     from agentic_debugger.application.deterministic_source import (
         DETERMINISTIC_SOURCE_NAME,
     )
-    from agentic_debugger.application.local_project_source import LOCAL_PROJECT_SOURCE_NAME
     from agentic_debugger.application.ollama_cloud_source import OLLAMA_CLOUD_SOURCE_NAME
 
     first_line = sys.stdin.buffer.readline(MAX_WORKER_LINE_BYTES + 1)
