@@ -33,7 +33,21 @@ def _make_repo(tmp: Path, name: str = "proj") -> Path:
 
 
 def _dummy_profile(pid: str = "dummy-1", display: str = "Dummy Model"):
-    return type("P", (), {"profile_id": pid, "display_name": display, "executable": "python", "is_ollama": False, "alias": pid})()
+    return type(
+        "P",
+        (),
+        {
+            "profile_id": pid,
+            "model_id": pid,
+            "display_name": display,
+            "provider_label": "Configured",
+            "kind": "configured",
+            "available": True,
+            "executable": "python",
+            "is_ollama": False,
+            "alias": pid,
+        },
+    )()
 
 
 def _run_async(coro):
@@ -228,7 +242,7 @@ def test_C_verify_editor_same_behavior(tmp_path):
             await pilot.pause()
             await asyncio.sleep(0.15)
             assert isinstance(app.screen, SingleLineFieldEditorScreen)
-            assert "Verification command" in app.screen.title_text
+            assert "Regression check command" in app.screen.title_text
             inp = app.screen.query_one("#single-line-editor", Input)
             assert inp.value == "pytest -q"
             assert inp.has_focus
@@ -540,6 +554,7 @@ def test_G_start_uses_exact_saved_values(tmp_path):
             lp._bug_description = multiline
             lp._render_rows()
             await pilot.pause()
+            assert lp.query_one("#local-start-button").disabled is False
             lp._start()
             await pilot.pause()
             await asyncio.sleep(0.1)
@@ -566,6 +581,13 @@ def test_G_start_uses_exact_saved_values(tmp_path):
             lp._start()
             await pilot.pause()
             assert captured2.get("reproduction_command") == "python repro.py"
+
+            # A newly dirty repository is a visible pre-flight gate, not an
+            # apparently clickable primary action that fails only afterward.
+            (repo / "uncommitted.txt").write_text("dirty\n", encoding="utf-8")
+            lp._render_rows()
+            await pilot.pause()
+            assert lp.query_one("#local-start-button").disabled is True
         reset_launch_cwd()
     _run_async(_inner())
 
@@ -592,7 +614,7 @@ def test_H_legacy_no_tiny_editor(tmp_path):
     # Verify BugDescriptionEditorScreen still multiline contract
     assert "BugDescriptionEditorScreen" in css
     # Verify SingleLine and Bug share same background and align family
-    assert "background: #161b22;" in css
+    assert "background: $surface;" in css
     assert "align: center middle;" in css
     # Runtime check: each LocalProject field opens proper screen family
     async def _inner():

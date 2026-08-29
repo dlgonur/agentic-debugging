@@ -87,6 +87,19 @@ from agentic_debugger.ui.widgets import (
     VerifierPanel,
     WorkstreamPanel,
 )
+from agentic_debugger.ui.theme import (
+    CANVAS,
+    ERROR,
+    EVIDENCE,
+    FAINT,
+    FOREGROUND,
+    LINE,
+    MUTED,
+    PRIMARY,
+    SECONDARY,
+    SUCCESS,
+    WARNING,
+)
 
 _TERMINAL_KINDS = frozenset(
     {
@@ -97,16 +110,16 @@ _TERMINAL_KINDS = frozenset(
 )
 
 _CLASSIFICATION_STYLE = {
-    HistoryClassification.COMPLETE: "green",
-    HistoryClassification.INTERRUPTED: "yellow",
-    HistoryClassification.MALFORMED: "red",
-    HistoryClassification.INVALID_MANIFEST: "red",
-    HistoryClassification.UNREGISTERED: "dim",
+    HistoryClassification.COMPLETE: f"bold {SUCCESS}",
+    HistoryClassification.INTERRUPTED: f"bold {WARNING}",
+    HistoryClassification.MALFORMED: f"bold {ERROR}",
+    HistoryClassification.INVALID_MANIFEST: f"bold {ERROR}",
+    HistoryClassification.UNREGISTERED: FAINT,
 }
 
 # Canonical user-facing keyboard vocabulary shared by footers and help.
-START_FOOTER = "S start   H history   ↑/↓ move   Enter edit   Esc back   Ctrl+C quit"
-START_FOOTER_COMPACT = "S start  H history  ↑/↓ move  Enter edit  Esc back"
+START_FOOTER = "P local project   S start session   H history   ↑/↓ move   Enter edit   Esc back   Ctrl+C quit"
+START_FOOTER_COMPACT = "P local   S start   H history   ↑/↓ move   Enter edit   Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-8 activity filters   c cancel   h history   n new session   ctrl+c quit"
 WORKSPACE_FOOTER_IDLE = "left/right views   1-8 activity filters   h history   n new session   w effort   r retry   ctrl+c quit"
 REPLAY_FOOTER = "left/right views   1-8 activity filters   events   phases   h history   n new session   ctrl+c quit"
@@ -173,16 +186,16 @@ def _compact_source_label(source_kind: Optional[SourceKind]) -> str:
 
 
 _RESULT_STYLE: dict[SessionStatus, str] = {
-    SessionStatus.SUCCEEDED: "bold green",
-    SessionStatus.CANCELLED: "bold yellow",
-    SessionStatus.FAILED: "bold red",
-    SessionStatus.TIMED_OUT: "bold red",
-    SessionStatus.INTERRUPTED: "bold red",
-    SessionStatus.CLEANUP_FAILED: "bold red",
-    SessionStatus.UNRESOLVED: "yellow",
-    SessionStatus.RUNNING: "bold blue",
-    SessionStatus.STARTING: "blue",
-    SessionStatus.CREATED: "dim",
+    SessionStatus.SUCCEEDED: f"bold {SUCCESS}",
+    SessionStatus.CANCELLED: f"bold {WARNING}",
+    SessionStatus.FAILED: f"bold {ERROR}",
+    SessionStatus.TIMED_OUT: f"bold {ERROR}",
+    SessionStatus.INTERRUPTED: f"bold {ERROR}",
+    SessionStatus.CLEANUP_FAILED: f"bold {ERROR}",
+    SessionStatus.UNRESOLVED: WARNING,
+    SessionStatus.RUNNING: f"bold {PRIMARY}",
+    SessionStatus.STARTING: PRIMARY,
+    SessionStatus.CREATED: FAINT,
 }
 
 
@@ -226,16 +239,16 @@ def render_view_header(
             head.append(f"  ·  {source_label}")
     head.append("\n")
     status_style = {
-        SessionStatus.RUNNING: "bold blue",
-        SessionStatus.STARTING: "blue",
-        SessionStatus.SUCCEEDED: "bold green",
-        SessionStatus.UNRESOLVED: "yellow",
-        SessionStatus.FAILED: "bold red",
-        SessionStatus.CANCELLED: "bold yellow",
-        SessionStatus.TIMED_OUT: "bold red",
-        SessionStatus.INTERRUPTED: "bold red",
-        SessionStatus.CLEANUP_FAILED: "bold red",
-        SessionStatus.CREATED: "dim",
+        SessionStatus.RUNNING: f"bold {PRIMARY}",
+        SessionStatus.STARTING: PRIMARY,
+        SessionStatus.SUCCEEDED: f"bold {SUCCESS}",
+        SessionStatus.UNRESOLVED: WARNING,
+        SessionStatus.FAILED: f"bold {ERROR}",
+        SessionStatus.CANCELLED: f"bold {WARNING}",
+        SessionStatus.TIMED_OUT: f"bold {ERROR}",
+        SessionStatus.INTERRUPTED: f"bold {ERROR}",
+        SessionStatus.CLEANUP_FAILED: f"bold {ERROR}",
+        SessionStatus.CREATED: FAINT,
     }.get(view.status, "default")
     status_text = (
         "Completed"
@@ -306,11 +319,26 @@ class HomeScreen(Screen):
     ]
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            "[bold #58a6ff]Agentic Debugger[/]\n"
-            "[dim]Debugging sessions[/]",
-            id="home-title",
-        )
+        with Vertical(id="home-header"):
+            yield Static(
+                "[bold $primary]AGENTIC DEBUGGER[/]  "
+                "[$text-faint]// SESSION ARCHIVE[/]\n"
+                "[bold $foreground]Every repair leaves a trail.[/]\n"
+                "[$foreground-muted]Reopen the evidence, inspect the verdict, or begin a new case.[/]",
+                id="home-title",
+            )
+            yield Static("", id="home-summary")
+            with Horizontal(id="home-actions"):
+                yield Button(
+                    "Debug local project",
+                    id="home-local-button",
+                    classes="primary-action",
+                )
+                yield Button(
+                    "New evidence session",
+                    id="home-new-button",
+                    classes="secondary-action",
+                )
         yield Static("", id="home-empty", classes="empty-state")
         yield DataTable(id="history-table")
         yield Static(
@@ -323,8 +351,8 @@ class HomeScreen(Screen):
         table = self.query_one("#history-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(
-            "Journal", "Session", "Task", "Source", "Started", "Duration",
-            "Outcome", "Verification",
+            "State", "Session", "Verification", "Outcome", "Task", "Source",
+            "Started", "Duration",
         )
         self.refresh_history()
 
@@ -333,14 +361,31 @@ class HomeScreen(Screen):
         table.clear()
         entries = self.app.history_store.list_sessions()
         empty = self.query_one("#home-empty", Static)
+        summary = self.query_one("#home-summary", Static)
         if not entries:
             empty.update(
-                "[dim]No sessions yet. Press N to start a new session or "
-                "R to refresh.[/]"
+                "[bold $foreground]No sessions yet.[/]\n\n"
+                "[$foreground-muted]Press P to debug a local repository, or N to run "
+                "a bounded evidence session.[/]"
             )
             empty.display = True
+            table.display = False
+            summary.update("[$text-faint]0 recorded runs  ·  verifier evidence will appear here[/]")
         else:
             empty.display = False
+            table.display = True
+            resolved = sum(
+                1 for entry in entries
+                if (entry.verifier_outcome or "").upper() == "RESOLVED"
+            )
+            attention = sum(
+                1 for entry in entries
+                if entry.classification is not HistoryClassification.COMPLETE
+            )
+            summary.update(
+                f"[$text-faint]{len(entries)} recorded runs  ·  "
+                f"{resolved} independently resolved  ·  {attention} need review[/]"
+            )
         for entry in entries:
             result_style = (
                 _RESULT_STYLE.get(entry.status, "default")
@@ -351,17 +396,21 @@ class HomeScreen(Screen):
                 Text(entry.classification.value, style=_CLASSIFICATION_STYLE.get(
                     entry.classification, "default")),
                 Text(_compact_session_id(entry.session_id)),
+                Text(verifier_cell(entry)),
+                Text(entry.status.value if entry.status else "—", style=result_style),
                 Text(entry.task_id or "—"),
                 Text(_compact_source_label(entry.source_kind)),
                 Text(_format_timestamp(entry.started_at_utc)),
                 Text(_format_duration(entry.started_at_utc, entry.ended_at_utc)),
-                Text(entry.status.value if entry.status else "—", style=result_style),
-                Text(verifier_cell(entry)),
                 key=entry.session_id or entry.directory or "",
             )
+        if entries:
+            table.focus()
 
     def _selected_entry(self) -> Optional[SessionHistoryEntry]:
         table = self.query_one("#history-table", DataTable)
+        if not table.is_valid_coordinate(table.cursor_coordinate):
+            return None
         row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
         if row_key is None or row_key.value is None:
             return None
@@ -421,6 +470,14 @@ class HomeScreen(Screen):
     def action_show_help(self) -> None:
         self.app.push_screen(HelpModalScreen())
 
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "home-local-button":
+            self.action_start_local_project()
+            event.stop()
+        elif event.button.id == "home-new-button":
+            self.action_start_session()
+            event.stop()
+
 
 def verifier_cell(entry: SessionHistoryEntry) -> str:
     if entry.verifier_outcome:
@@ -460,11 +517,11 @@ class SessionSettingRow(Static):
     def _render_row(self) -> None:
         text = Text()
         focused = self._focused
-        text.append("> " if focused else "  ", style="bold #58a6ff" if focused else "dim")
-        text.append(f"{self.label:<12}", style="#8b949e")
-        text.append(self._value, style="bold #ffffff" if focused else "#c9d1d9")
+        text.append("> " if focused else "  ", style=f"bold {PRIMARY}" if focused else FAINT)
+        text.append(f"{self.label:<12}", style=MUTED)
+        text.append(self._value, style=f"bold {FOREGROUND}" if focused else FOREGROUND)
         if self._secondary:
-            text.append(f"  {self._secondary}", style="#8b949e")
+            text.append(f"  {self._secondary}", style=MUTED)
         self.update(text)
 
     def on_focus(self) -> None:
@@ -498,9 +555,9 @@ class ReadonlySettingRow(Static):
     def set_value(self, value: str) -> None:
         self._value = value
         text = Text()
-        text.append("  ", style="dim")
-        text.append(f"{self.label:<12}", style="#8b949e")
-        text.append(self._value, style="#c9d1d9")
+        text.append("  ", style=FAINT)
+        text.append(f"{self.label:<12}", style=MUTED)
+        text.append(self._value, style=FOREGROUND)
         self.update(text)
 
 class TimeLimitRow(Static):
@@ -520,9 +577,9 @@ class TimeLimitRow(Static):
     def _render_row(self) -> None:
         text = Text()
         focused = self._focused
-        text.append("> " if focused else "  ", style="bold #58a6ff" if focused else "dim")
-        text.append("Time limit  ", style="#8b949e")
-        text.append(self._value, style="bold #ffffff" if focused else "#c9d1d9")
+        text.append("> " if focused else "  ", style=f"bold {PRIMARY}" if focused else FAINT)
+        text.append("Time limit  ", style=MUTED)
+        text.append(self._value, style=f"bold {FOREGROUND}" if focused else FOREGROUND)
         self.update(text)
 
     def set_value(self, value: Optional[int]) -> None:
@@ -638,8 +695,8 @@ class SingleLineEditorInput(Input):
 class SingleLineFieldEditorScreen(Screen):
     """Reusable centered single-line editor in the same family as Bug picker.
 
-    Visual: centered dialog width 70, dark #161b22, Input #0d1117 with rounded
-    border, green Save button, footer "Enter save    Esc cancel".
+    Visual: centered semantic dialog, dark input with a rounded focus border,
+    primary Save action, and footer "Enter save    Esc cancel".
 
     Keyboard contract (single-line):
         Enter => save
@@ -677,7 +734,7 @@ class SingleLineFieldEditorScreen(Screen):
                 id="single-line-editor",
             )
             with Horizontal(id="single-line-actions"):
-                yield Button("Save", id="single-line-save-button", variant="primary")
+                yield Button("Save", id="single-line-save-button", classes="primary-action")
             yield Static("Enter save    Esc cancel", id="single-line-hint")
             yield Static("", id="single-line-error")
 
@@ -735,12 +792,12 @@ class ChoicePickerScreen(Screen):
     def on_mount(self) -> None:
         option_list = self.query_one("#choice-picker-list", OptionList)
         for choice in self.choices:
-            text = Text("> " if choice.value == self.current else "  ", style="#58a6ff" if choice.value == self.current else "#8b949e")
-            text.append(choice.title, style="bold #ffffff" if choice.value == self.current else "#c9d1d9")
+            text = Text("> " if choice.value == self.current else "  ", style=PRIMARY if choice.value == self.current else MUTED)
+            text.append(choice.title, style=f"bold {FOREGROUND}" if choice.value == self.current else FOREGROUND)
             if choice.secondary:
-                text.append(f"\n    {choice.secondary}", style="#8b949e")
+                text.append(f"\n    {choice.secondary}", style=MUTED)
             if choice.description:
-                text.append(f"\n    {choice.description}", style="#8b949e")
+                text.append(f"\n    {choice.description}", style=MUTED)
             option_list.add_option(text)
         if self.choices:
             option_list.highlighted = next(
@@ -756,12 +813,12 @@ class ChoicePickerScreen(Screen):
     def _option_renderable(self, index: int) -> Text:
         choice = self.choices[index]
         selected = index == self.query_one("#choice-picker-list", OptionList).highlighted
-        text = Text("> " if selected else "  ", style="#58a6ff" if selected else "#8b949e")
-        text.append(choice.title, style="bold #ffffff" if selected else "#c9d1d9")
+        text = Text("> " if selected else "  ", style=PRIMARY if selected else MUTED)
+        text.append(choice.title, style=f"bold {FOREGROUND}" if selected else FOREGROUND)
         if choice.secondary:
-            text.append(f"\n    {choice.secondary}", style="#8b949e")
+            text.append(f"\n    {choice.secondary}", style=MUTED)
         if choice.description:
-            text.append(f"\n    {choice.description}", style="#8b949e")
+            text.append(f"\n    {choice.description}", style=MUTED)
         return text
 
     def _refresh_option_markers(self) -> None:
@@ -792,6 +849,7 @@ class StartSessionScreen(Screen):
         Binding("up", "move_up", "Previous setting", show=False, priority=True),
         Binding("down", "move_down", "Next setting", show=False, priority=True),
         Binding("s", "start", "Start"),
+        Binding("p", "start_local_project", "Local project"),
         Binding("h", "history", "History"),
         Binding("enter", "confirm", "Confirm", show=False),
         Binding("escape", "cancel", "Back"),
@@ -821,7 +879,15 @@ class StartSessionScreen(Screen):
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("[bold #79c0ff]Agentic Debugger[/]\n[bold #f0f6fc]Evidence-led repair session[/]\n[dim]Run a bounded case from failure to independent verification.[/]", id="start-title")
+                    yield Static(
+                        "[bold $primary]AGENTIC DEBUGGER[/]  "
+                        "[$text-faint]// REPAIR CONSOLE[/]\n"
+                        "[bold $foreground]Trace the failure. Prove the repair.[/]\n"
+                        "[$foreground-muted]Evidence-led repair session: reproducible bug to "
+                        "independent verdict.[/]",
+                        id="start-title",
+                    )
+                    yield Static("SESSION PARAMETERS", id="start-section-label")
                     yield SessionSettingRow("Mode", row_key="mode", id="mode-row")
                     yield SessionSettingRow("Model", row_key="model", id="model-row")
                     yield SessionSettingRow("Task", row_key="task", id="task-row")
@@ -832,16 +898,25 @@ class StartSessionScreen(Screen):
                     yield Static("", id="start-status")
                     yield Static("", id="start-trust")
                     with Horizontal(id="start-actions"):
-                        yield Button("Start session", id="start-session-button", variant="success")
+                        yield Button(
+                            "Debug local project",
+                            id="local-project-button",
+                            classes="primary-action",
+                        )
+                        yield Button(
+                            "Start session",
+                            id="start-session-button",
+                            classes="secondary-action",
+                        )
                     yield Static(
-                        "[bold #8b949e]EVIDENCE PROTOCOL[/]\n"
-                        "[#c9d1d9]Reproduce  ->  Inspect  ->  Diagnose  ->  Change  ->  Verify  ->  Cleanup[/]\n"
-                        "[dim]Claims stay separate from verifier authority.[/]",
+                        "[bold $evidence]INDEPENDENT PROOF CHAIN[/]\n"
+                        "[$foreground]FAILURE  →  PDB EVIDENCE  →  PATCH  →  VERIFIER VERDICT[/]\n"
+                        "[$foreground-muted]The run may finish; only the verifier can close the case.[/]",
                         id="start-method",
                     )
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
-                yield Static("[bold #79c0ff]Session setup[/]", id="context-title")
+                yield Static("[bold $primary]SESSION / PRE-FLIGHT[/]", id="context-title")
                 yield Static("", id="context-summary")
 
     def on_mount(self) -> None:
@@ -871,7 +946,7 @@ class StartSessionScreen(Screen):
         footer = self.query_one("#start-footer", Static)
         footer.update(
             START_FOOTER_COMPACT
-            if width < 70
+            if width < 100
             else START_FOOTER
         )
 
@@ -1050,17 +1125,26 @@ class StartSessionScreen(Screen):
         self.query_one("#level32-treatment-row", ReadonlySettingRow).display = ladder
         status = self.query_one("#start-status", Static)
         if ladder and not self.app.ollama_cloud_model_profiles():
-            status.update("[yellow]Start unavailable — the research operator is not installed.[/]")
+            status.update(f"[{WARNING}]Start unavailable — the research operator is not installed.[/]")
         elif ladder and self._profile_id is None:
-            status.update("[yellow]Choose an eligible Ollama model.[/]")
+            status.update(f"[{WARNING}]Choose an eligible Ollama model.[/]")
         elif self._config_error is not None and configured:
-            status.update(f"[red]Configuration error: {_markup_escape(self._config_error)}[/]")
+            status.update(f"[{ERROR}]Configuration error: {_markup_escape(self._config_error)}[/]")
         elif configured and not self._profiles:
-            status.update("[yellow]Start unavailable — no configured model profiles.[/]")
+            status.update(f"[{WARNING}]Start unavailable — no configured model profiles.[/]")
         else:
             status.update("")
         trust = self.query_one("#start-trust", Static)
-        trust.update("[yellow]Research tasks use the canonical Ollama Cloud operator contract.[/]" if ladder else ("[yellow]Configured commands are trusted user configuration; network isolation is not enforced.[/]" if configured else ""))
+        trust.update(
+            f"[{WARNING}]Research tasks use the canonical Ollama Cloud operator contract.[/]"
+            if ladder
+            else (
+                f"[{WARNING}]Configured commands are trusted user configuration; "
+                "network isolation is not enforced.[/]"
+                if configured
+                else ""
+            )
+        )
         trust.display = (configured or ladder) and self.size.width < 100
         self._render_rows()
         self._update_context()
@@ -1076,27 +1160,30 @@ class StartSessionScreen(Screen):
             else:
                 alias = "Not available"
             lines = [
-                f"[#8b949e]Task[/]\n{_markup_escape(ladder_task_metadata(self._task_id).title)}",
-                f"\n[#8b949e]Model[/]\n{_markup_escape(self._profile_display_name())}",
-                f"\n[#8b949e]Alias[/]\n{_markup_escape(alias)}",
-                f"\n[#8b949e]Debugger[/]\n{_markup_escape(ladder_task_metadata(self._task_id).debugger)}",
-                f"\n[#8b949e]Treatment[/]\n{_markup_escape(ladder_task_metadata(self._task_id).treatment)}",
-                f"\n[#8b949e]Evaluation[/]\n{_markup_escape(ladder_task_metadata(self._task_id).evaluation)}",
-                f"\n[#8b949e]Ready[/]\n{ready}",
+                f"[{MUTED}]Task[/]\n{_markup_escape(ladder_task_metadata(self._task_id).title)}",
+                f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_display_name())}",
+                f"\n[{MUTED}]Alias[/]\n{_markup_escape(alias)}",
+                f"\n[{MUTED}]Debugger[/]\n{_markup_escape(ladder_task_metadata(self._task_id).debugger)}",
+                f"\n[{MUTED}]Treatment[/]\n{_markup_escape(ladder_task_metadata(self._task_id).treatment)}",
+                f"\n[{MUTED}]Evaluation[/]\n{_markup_escape(ladder_task_metadata(self._task_id).evaluation)}",
+                f"\n[{MUTED}]Ready[/]\n{ready}",
             ]
             self.query_one("#context-summary", Static).update("\n".join(lines))
             return
         ready = "Yes" if self.start_available and self._task_id else "No"
         lines = [
-            f"[#8b949e]Mode[/]\n{_markup_escape('Offline demo' if self._mode == self.MODE_DETERMINISTIC else 'Configured model')}",
-            f"\n[#8b949e]Debugger[/]\n{_markup_escape('On uncertainty' if self._policy == 'pdb-on-uncertainty' else 'Disabled')}",
-            f"\n[#8b949e]Task[/]\n{_markup_escape(self._task_display_name())}",
-            f"\n[#8b949e]Task ID[/]\n{_markup_escape(self._task_id or 'Not selected')}",
-            f"\n[#8b949e]Execution[/]\n{_markup_escape('Local, provider-free' if self._mode == self.MODE_DETERMINISTIC else 'Configured command')}",
+            f"[{MUTED}]Mode[/]\n{_markup_escape('Offline demo' if self._mode == self.MODE_DETERMINISTIC else 'Configured model')}",
+            f"\n[{MUTED}]Debugger[/]\n{_markup_escape('On uncertainty' if self._policy == 'pdb-on-uncertainty' else 'Disabled')}",
+            f"\n[{MUTED}]Task[/]\n{_markup_escape(self._task_display_name())}",
+            f"\n[{MUTED}]Task ID[/]\n{_markup_escape(self._task_id or 'Not selected')}",
+            f"\n[{MUTED}]Execution[/]\n{_markup_escape('Local, provider-free' if self._mode == self.MODE_DETERMINISTIC else 'Configured command')}",
         ]
         if self._mode == self.MODE_CONFIGURED:
-            lines += [f"\n[#8b949e]Model[/]\n{_markup_escape(self._profile_id or 'Not configured')}", "\n[#8b949e]Trust[/]\nconfigured user command"]
-        lines.append(f"\n[#8b949e]Ready[/]\n{ready}")
+            lines += [
+                f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_id or 'Not configured')}",
+                f"\n[{MUTED}]Trust[/]\nconfigured user command",
+            ]
+        lines.append(f"\n[{MUTED}]Ready[/]\n{ready}")
         self.query_one("#context-summary", Static).update("\n".join(lines))
 
     def _open_auto_retry_picker(self) -> None:
@@ -1146,6 +1233,17 @@ class StartSessionScreen(Screen):
     def action_history(self) -> None:
         self.app.pop_screen()
 
+    def action_start_local_project(self) -> None:
+        """Open the primary product route directly from the welcome screen."""
+        initial = None
+        try:
+            from agentic_debugger.application.local_project import get_launch_cwd
+
+            initial = str(get_launch_cwd())
+        except Exception:
+            pass
+        self.app.push_screen(LocalProjectStartScreen(initial_project=initial))
+
     def action_quit_app(self) -> None:
         self.app.action_quit()
 
@@ -1157,19 +1255,19 @@ class StartSessionScreen(Screen):
         selected_task = str(self._task_id) if self._task_id else None
         selected_mode = self._mode
         if not selected_task:
-            status.update("[red]Choose a task.[/]")
+            status.update(f"[{ERROR}]Choose a task.[/]")
             return
         # Validate that the selected task is actually offered in the picker.
         if not any(task_id == selected_task for _, task_id in self._task_options):
-            status.update("[red]Selected task is not available.[/]")
+            status.update(f"[{ERROR}]Selected task is not available.[/]")
             return
         if selected_mode == self.MODE_CONFIGURED and not self.start_available:
-            status.update("[yellow]Start unavailable — choose a configured model profile.[/]")
+            status.update(f"[{WARNING}]Start unavailable — choose a configured model profile.[/]")
             return
         try:
             if is_ladder_task(selected_task):
                 if not self.start_available:
-                    status.update("[yellow]Start unavailable — choose an eligible Ollama model.[/]")
+                    status.update(f"[{WARNING}]Start unavailable — choose an eligible Ollama model.[/]")
                     return
                 self.app.start_live_session(
                     task_id=selected_task,
@@ -1189,13 +1287,16 @@ class StartSessionScreen(Screen):
                 profile_id=self._profile_id if selected_mode == self.MODE_CONFIGURED else None,
             )
         except Exception as exc:
-            status.update(f"[red]{_markup_escape(exc)}[/]")
+            status.update(f"[{ERROR}]{_markup_escape(exc)}[/]")
 
     def action_start(self) -> None:
         self._start()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-session-button":
+        if event.button.id == "local-project-button":
+            self.action_start_local_project()
+            event.stop()
+        elif event.button.id == "start-session-button":
             self._start()
             event.stop()
 
@@ -1238,25 +1339,32 @@ class BrowseScreen(Screen):
             cur_text = str(self._current)
         except Exception:
             cur_text = "—"
-        self.query_one("#browse-current", Static).update(f"[bold #79c0ff]Current:[/] {_markup_escape(cur_text)}")
+        self.query_one("#browse-current", Static).update(
+            f"[bold {PRIMARY}]Current:[/] {_markup_escape(cur_text)}"
+        )
         option_list = self.query_one("#browse-list", OptionList)
         option_list.clear_options()
         # First option is "Select current directory"
-        option_list.add_option(Text(f"▶ Use current directory: {self._current.name or str(self._current)}", style="bold green"))
+        option_list.add_option(
+            Text(
+                f"▶ Use current directory: {self._current.name or str(self._current)}",
+                style=f"bold {SUCCESS}",
+            )
+        )
         # Parent
         parent = self._current.parent
         if parent != self._current:
-            option_list.add_option(Text(f"↑ Parent: {parent}", style="#8b949e"))
+            option_list.add_option(Text(f"↑ Parent: {parent}", style=MUTED))
         # Children
         try:
             from agentic_debugger.application.local_project import list_child_directories
             children = list_child_directories(self._current)
             for child in children[:64]:
-                option_list.add_option(Text(f"  {child.name}/", style="#c9d1d9"))
+                option_list.add_option(Text(f"  {child.name}/", style=FOREGROUND))
             if len(children) > 64:
                 option_list.add_option(Text(f"  … +{len(children)-64} more", style="dim"))
         except Exception as exc:
-            option_list.add_option(Text(f"(cannot list: {exc})", style="red"))
+            option_list.add_option(Text(f"(cannot list: {exc})", style=ERROR))
         option_list.highlighted = 0
         option_list.focus()
 
@@ -1451,8 +1559,16 @@ class LocalProjectStartScreen(Screen):
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("[bold #79c0ff]Agentic Debugger[/]\n[bold #79c0ff]Debug a local project[/]\n[dim]Select a clean Git repository and describe the problem.[/]", id="start-title")
-                    yield Static("[bold #8b949e]Mode: Local repository[/]", id="local-mode-row")
+                    yield Static(
+                        "[bold $primary]AGENTIC DEBUGGER[/]  "
+                        "[$text-faint]// LOCAL REPAIR[/]\n"
+                        "[bold $foreground]Bring a real failure into focus.[/]\n"
+                        "[$foreground-muted]Choose a clean repository, describe the bug, "
+                        "and define the proof.[/]",
+                        id="start-title",
+                    )
+                    yield Static("REPAIR INPUTS", id="start-section-label")
+                    yield Static("Mode: isolated local repository", id="local-mode-row")
                     yield SessionSettingRow("Project", row_key="project", id="project-row")
                     with Horizontal(id="local-project-actions"):
                         yield CopyAllButton("Use current directory", id="use-cwd-button", classes="copy-button")
@@ -1467,10 +1583,14 @@ class LocalProjectStartScreen(Screen):
                     yield Static("", id="local-start-status")
                     yield Static("", id="local-start-trust")
                     with Horizontal(id="local-start-actions"):
-                        yield Button("Start debugging", id="local-start-button", variant="success")
+                        yield Button(
+                            "Start debugging",
+                            id="local-start-button",
+                            classes="primary-action",
+                        )
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
-                yield Static("[bold #79c0ff]Project status[/]", id="context-title")
+                yield Static("[bold $primary]PROJECT / PRE-FLIGHT[/]", id="context-title")
                 yield Static("", id="local-context-summary")
 
     def on_mount(self) -> None:
@@ -1495,7 +1615,7 @@ class LocalProjectStartScreen(Screen):
 
     def _update_footer(self, width: int) -> None:
         footer = self.query_one("#start-footer", Static)
-        footer.update(START_FOOTER_COMPACT if width < 70 else START_FOOTER)
+        footer.update(START_FOOTER_COMPACT if width < 100 else START_FOOTER)
 
     def _refresh_profiles(self) -> None:
         """Unified provider registry listing (offline, read-only).
@@ -1580,6 +1700,7 @@ class LocalProjectStartScreen(Screen):
     def _render_rows(self) -> None:
         # Project row shows basename or truncated path
         proj = self._project_path or "Not selected"
+        project_ready = False
         if len(proj) > 60 and self.size.width and self.size.width < 100:
             proj = proj[:57] + "…"
         self.query_one("#project-row", SessionSettingRow).set_value(proj)
@@ -1590,21 +1711,28 @@ class LocalProjectStartScreen(Screen):
             try:
                 validated = validate_local_project(self._project_path, launch_cwd=self._launch_cwd)
                 if validated.dirty:
-                    status_text = "[yellow]Project has uncommitted changes. Commit/stash them first or choose a clean repository.[/]"
+                    status_text = (
+                        f"[{WARNING}]Project has uncommitted changes. Commit/stash them "
+                        "first or choose a clean repository.[/]"
+                    )
                 else:
-                    status_text = f"[green]Git: {validated.repo_root.name} @ {validated.head_commit[:7]}[/]"
+                    project_ready = True
+                    status_text = (
+                        f"[{SUCCESS}]Git: {validated.repo_root.name} @ "
+                        f"{validated.head_commit[:7]}[/]"
+                    )
             except Exception as exc:
                 msg = str(exc)
                 if "not a Git repository" in msg:
-                    status_text = "[red]Not a Git repository.[/]"
+                    status_text = f"[{ERROR}]Not a Git repository.[/]"
                 elif "project path not found" in msg or "not found" in msg:
-                    status_text = "[red]Project path not found.[/]"
+                    status_text = f"[{ERROR}]Project path not found.[/]"
                 elif "not a directory" in msg:
-                    status_text = "[red]Project path is not a directory.[/]"
+                    status_text = f"[{ERROR}]Project path is not a directory.[/]"
                 elif "Git worktree" in msg:
-                    status_text = f"[red]{_markup_escape(msg)[:80]}[/]"
+                    status_text = f"[{ERROR}]{_markup_escape(msg)[:80]}[/]"
                 else:
-                    status_text = f"[red]{_markup_escape(msg)[:80]}[/]"
+                    status_text = f"[{ERROR}]{_markup_escape(msg)[:80]}[/]"
             self.query_one("#local-project-resolved", Static).update(status_text)
         except Exception:
             self.query_one("#local-project-resolved", Static).update("")
@@ -1636,6 +1764,13 @@ class LocalProjectStartScreen(Screen):
             f"{self._auto_retries} on retryable failure"
         )
         self.query_one("#local-time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
+        model_ready = any(
+            profile.available and profile.model_id == self._profile_id
+            for profile in self._profiles
+        )
+        self.query_one("#local-start-button", Button).disabled = not (
+            project_ready and bool(self._bug_description.strip()) and model_ready
+        )
         self._update_context()
 
     def _update_context(self) -> None:
@@ -1663,14 +1798,14 @@ class LocalProjectStartScreen(Screen):
             else:
                 bug_ctx = "Not described"
             lines = [
-                f"[#8b949e]Project[/]\n{_markup_escape(self._project_path or '—')}",
-                f"\n[#8b949e]Repo[/]\n{_markup_escape(repo)}",
-                f"\n[#8b949e]HEAD[/]\n{head}",
-                f"\n[#8b949e]State[/]\n{dirty}",
-                f"\n[#8b949e]Bug[/]\n{_markup_escape(bug_ctx)}",
-                f"\n[#8b949e]Repro[/]\n{_markup_escape(self._repro_command or 'Not set')}",
-                f"\n[#8b949e]Verify[/]\n{_markup_escape(self._verify_command or 'Not set')}",
-                f"\n[#8b949e]Model[/]\n{_markup_escape(self._profile_id or 'offline')}",
+                f"[{MUTED}]Project[/]\n{_markup_escape(self._project_path or '—')}",
+                f"\n[{MUTED}]Repo[/]\n{_markup_escape(repo)}",
+                f"\n[{MUTED}]HEAD[/]\n{head}",
+                f"\n[{MUTED}]State[/]\n{dirty}",
+                f"\n[{MUTED}]Bug[/]\n{_markup_escape(bug_ctx)}",
+                f"\n[{MUTED}]Repro[/]\n{_markup_escape(self._repro_command or 'Not set')}",
+                f"\n[{MUTED}]Verify[/]\n{_markup_escape(self._verify_command or 'Not set')}",
+                f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_id or 'offline')}",
             ]
             self.query_one("#local-context-summary", Static).update("\n".join(lines))
         except Exception:
@@ -1828,19 +1963,24 @@ class LocalProjectStartScreen(Screen):
         status = self.query_one("#local-start-status", Static)
         # Validation gates
         if not self._profiles or not self._profile_id:
-            status.update("[red]No eligible model is available. Configure a model profile first.[/]")
+            status.update(
+                f"[{ERROR}]No eligible model is available. Configure a model profile first.[/]"
+            )
             return
         if not self._bug_description.strip():
-            status.update("[red]Bug description is required.[/]")
+            status.update(f"[{ERROR}]Bug description is required.[/]")
             return
         try:
             from agentic_debugger.application.local_project import validate_local_project
             validated = validate_local_project(self._project_path, launch_cwd=self._launch_cwd)
             if validated.dirty:
-                status.update("[yellow]Project has uncommitted changes. Commit/stash them first or choose a clean repository.[/]")
+                status.update(
+                    f"[{WARNING}]Project has uncommitted changes. Commit/stash them first "
+                    "or choose a clean repository.[/]"
+                )
                 return
         except Exception as exc:
-            status.update(f"[red]{_markup_escape(exc)[:120]}[/]")
+            status.update(f"[{ERROR}]{_markup_escape(exc)[:120]}[/]")
             return
         try:
             self.app.start_local_project_session(
@@ -1854,7 +1994,7 @@ class LocalProjectStartScreen(Screen):
                 auto_retries=self._auto_retries,
             )
         except Exception as exc:
-            status.update(f"[red]{_markup_escape(exc)[:200]}[/]")
+            status.update(f"[{ERROR}]{_markup_escape(exc)[:200]}[/]")
 
     def action_start(self) -> None:
         self._start()
@@ -1910,7 +2050,7 @@ class BugDescriptionEditorScreen(Screen):
                 show_line_numbers=False,
             )
             with Horizontal(id="bug-editor-actions"):
-                yield Button("Save", id="bug-save-button", variant="primary")
+                yield Button("Save", id="bug-save-button", classes="primary-action")
             yield Static("Ctrl+Enter save    Esc cancel", id="bug-editor-hint")
             yield Static("", id="bug-editor-error")
 
@@ -2139,10 +2279,10 @@ class WorkspaceScreen(Screen):
 
     def _mode_parts(self) -> tuple[str, str]:
         if self.mode is WorkspaceMode.LIVE:
-            return "LIVE", "bold white on #1f6feb"
+            return "LIVE", f"bold {CANVAS} on {PRIMARY}"
         if self.entry is not None and self.entry.source_kind is not None and self.entry.source_kind.recorded:
-            return "RECORDED", "bold white on #8957e5"
-        return "REPLAY", "bold white on #238636"
+            return "RECORDED", f"bold {CANVAS} on {SECONDARY}"
+        return "REPLAY", f"bold {CANVAS} on {SUCCESS}"
 
     def _render_all(self) -> None:
         if not self.query("#status-header"):
@@ -2334,7 +2474,7 @@ class WorkspaceScreen(Screen):
             parts.append(f"{summary.patches_proposed} patch")
         if summary.debugger_observations:
             parts.append(f"{summary.debugger_observations} pdb obs")
-        return "[bold #d29922]" + ", ".join(parts) + "[/]"
+        return f"[bold {EVIDENCE}]" + ", ".join(parts) + "[/]"
 
     def _live_elapsed(self) -> str:
         if len(self._live_events) < 2:
@@ -2957,7 +3097,7 @@ class JumpToSequenceScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Static(id="jump-dialog"):
-            yield Static("[bold #58a6ff]Jump to sequence[/]", id="jump-title")
+            yield Static(f"[bold {PRIMARY}]Jump to sequence[/]", id="jump-title")
             placeholder = (
                 f"sequence number ({self._min_sequence}–{self._max_sequence})"
                 if self._max_sequence is not None
@@ -3025,16 +3165,16 @@ class HelpModalScreen(Screen):
     def compose(self) -> ComposeResult:
         with VerticalScroll(id="help-dialog"):
             yield Static(
-                "[bold #58a6ff]Agentic Debugger[/]\n"
+                f"[bold {PRIMARY}]Agentic Debugger[/]\n"
                 "[dim]Keyboard reference and evidence guide[/]",
                 id="help-title",
             )
             yield Static(
-                "[bold #79c0ff]Session modes[/]\n"
+                f"[bold {PRIMARY}]Session modes[/]\n"
                 "  • LIVE — Executing session (deterministic offline or configured command)\n"
                 "  • REPLAY — Read-only recorded session from authoritative journal\n"
                 "\n"
-                "[bold #79c0ff]Workspace views[/]\n"
+                f"[bold {PRIMARY}]Workspace views[/]\n"
                 "  • Evidence — Causal case brief and authoritative verdict\n"
                 "  • Source — Recorded workspace source with execution line markers\n"
                 "  • Debugger — PDB location, stack frames, locals, and breakpoints\n"
@@ -3043,10 +3183,10 @@ class HelpModalScreen(Screen):
                 "  • Activity — Filtered operational events (keys 1–8)\n"
                 "  • Timeline — Full ordered SessionEvent stream with phase boundaries\n"
                 "\n"
-                "[bold yellow]Evidence rule:[/] [bold]An applied patch is not automatically a fix.[/]\n"
+                f"[bold {EVIDENCE}]Evidence rule:[/] [bold]An applied patch is not automatically a fix.[/]\n"
                 "[dim]Only the independent verifier can mark a candidate RESOLVED.[/]\n"
                 "\n"
-                "[bold #79c0ff]Navigation[/]\n"
+                f"[bold {PRIMARY}]Navigation[/]\n"
                 "  • Home — N new session · P local project · O/Enter open replay · R refresh\n"
                 "           Ctrl+C quit · ? help\n"
                 "  • Workspace — \\[ / ] previous/next event · { / } previous/next phase\n"

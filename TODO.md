@@ -2,14 +2,38 @@
 
 ## Status
 
-**GOAL-MODE CYCLE 2 (2026-08-28, owner-authorized overnight goal mode).**
+**GOAL-MODE CYCLE 3 COMPLETE (2026-08-29, owner-authorized goal mode).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
-`docs/project-closeout.md`. The current cycle is the owner-directed
-"make it fly" pass: multi-provider model access, failure visibility,
-and retry.
+`docs/project-closeout.md`. Cycle 3 raised the terminal product from a
+functional developer shell to one coherent evidence-led visual system.
 
-## Cycle 2 outcomes
+## Cycle 3 outcomes
+
+- [x] Established one semantic Textual/Rich design system: cyan for live
+  focus/action, amber for evidence and verifier authority, green for
+  independently verified success, and layered blue-black surfaces.
+- [x] Rebuilt the welcome screen as a distinctive repair console with a
+  direct Local Project route, clear evidence chain, pre-flight context,
+  and compact 80x24 behavior.
+- [x] Upgraded the session archive, Local Project form, editor dialogs,
+  replay workspace, syntax/evidence renderers, and keyboard focus language.
+- [x] Fixed the empty-history `O` crash, restored table-first replay focus,
+  prioritized verifier status in compact history, and disabled Local Project
+  start while pre-flight gates are unmet.
+- [x] Added focused regression coverage, wide/compact visual evidence, and a
+  durable root `DESIGN.md`; review evidence is under the cycle's `_ai-review`
+  package.
+
+The requested checkpoint commits could not be created because the host Git
+guard rejected commit execution. The combined candidate remains split across
+the index and working tree for owner/FirstMate review; merge and push were not
+attempted.
+
+## Cycle 2 outcomes (completed 2026-08-28)
+
+The owner-directed "make it fly" pass covered multi-provider model access,
+failure visibility, and retry.
 
 - [x] Commit the completed-but-uncommitted public-evidence/verifier work
   from the previous session (independent Local Project verifier, public

@@ -13,6 +13,7 @@ from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     ChoicePickerScreen,
     HomeScreen,
+    LocalProjectStartScreen,
     StartSessionScreen,
     TimeLimitEditorScreen,
     WorkspaceScreen,
@@ -38,6 +39,23 @@ def test_ctrl_c_exits_from_new_session(tmp_path: Path) -> None:
         assert isinstance(pilot.app.screen, StartSessionScreen)
         await pilot.press("ctrl+c")
         assert pilot.app.is_running is False
+
+    run_headless(_app(tmp_path), scenario)
+
+
+def test_welcome_screen_exposes_local_project_by_key_and_button(tmp_path: Path) -> None:
+    async def scenario(pilot) -> None:
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+        assert start.query_one("#local-project-button").label.plain == "Debug local project"
+
+        await pilot.press("p")
+        assert isinstance(pilot.app.screen, LocalProjectStartScreen)
+        await pilot.press("escape")
+        assert isinstance(pilot.app.screen, StartSessionScreen)
+
+        await pilot.click("#local-project-button")
+        assert isinstance(pilot.app.screen, LocalProjectStartScreen)
 
     run_headless(_app(tmp_path), scenario)
 

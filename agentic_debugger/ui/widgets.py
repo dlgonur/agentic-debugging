@@ -54,6 +54,23 @@ from agentic_debugger.application.workstream import (
     WorkstreamStatus,
     build_change_preview,
 )
+from agentic_debugger.ui.theme import (
+    CODE_FUNCTION,
+    CODE_STRING,
+    DEBUGGER,
+    ERROR,
+    EVIDENCE,
+    EVIDENCE_SURFACE,
+    FAINT,
+    FOREGROUND,
+    LINE,
+    MUTED,
+    PRIMARY,
+    SECONDARY,
+    SUCCESS,
+    TOOL,
+    WARNING,
+)
 
 _NOT_RECORDED = "NOT RECORDED"
 
@@ -160,41 +177,41 @@ _ACTIVITY_FILTER_KINDS: dict[str, frozenset[str]] = {
 }
 
 _KIND_STYLE: dict[str, str] = {
-    SessionEventKind.SESSION_CREATED.value: "dim",
-    SessionEventKind.SESSION_STARTED.value: "bold green",
+    SessionEventKind.SESSION_CREATED.value: FAINT,
+    SessionEventKind.SESSION_STARTED.value: f"bold {SUCCESS}",
     SessionEventKind.SESSION_STATUS_CHANGED.value: "bold",
-    SessionEventKind.SESSION_CANCEL_REQUESTED.value: "bold yellow",
-    SessionEventKind.SESSION_COMPLETED.value: "bold green",
-    SessionEventKind.SESSION_FAILED.value: "bold red",
-    SessionEventKind.SESSION_CANCELLED.value: "bold yellow",
-    SessionEventKind.CLEANUP_STARTED.value: "dim",
-    SessionEventKind.CLEANUP_COMPLETED.value: "dim green",
-    SessionEventKind.ARTIFACT_WRITTEN.value: "dim cyan",
-    SessionEventKind.CONTROLLER_STEP.value: "#8fb7d9",
-    SessionEventKind.CONTROLLER_TRANSITION.value: "bold #8fb7d9",
-    SessionEventKind.MODEL_REQUEST_STARTED.value: "#a371f7",
-    SessionEventKind.MODEL_REQUEST_COMPLETED.value: "#a371f7",
-    SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value: "bold #a371f7",
-    SessionEventKind.MODEL_DIRECTIVE_REJECTED.value: "yellow",
-    SessionEventKind.MODEL_CONFIGURED.value: "bold #a371f7",
-    SessionEventKind.OPERATOR_PROGRESS.value: "bold #79c0ff",
-    SessionEventKind.TOOL_STARTED.value: "dark_cyan",
-    SessionEventKind.TOOL_COMPLETED.value: "dark_cyan",
-    SessionEventKind.DEBUGGER_STARTED.value: "magenta",
-    SessionEventKind.DEBUGGER_LOCATION_CHANGED.value: "magenta",
-    SessionEventKind.DEBUGGER_STACK_OBSERVED.value: "magenta",
-    SessionEventKind.DEBUGGER_LOCALS_OBSERVED.value: "magenta",
-    SessionEventKind.PATCH_PROPOSED.value: "yellow",
-    SessionEventKind.PATCH_REJECTED.value: "yellow",
-    SessionEventKind.PATCH_APPLY_FAILED.value: "bold red",
-    SessionEventKind.PATCH_APPLIED.value: "orange1",
-    SessionEventKind.PATCH_REVERTED.value: "orange1",
-    SessionEventKind.SOURCE_SNAPSHOT.value: "dim cyan",
-    SessionEventKind.DIAGNOSIS_RECORDED.value: "cyan",
-    SessionEventKind.VERIFIER_STARTED.value: "blue",
-    SessionEventKind.VERIFIER_STAGE_STARTED.value: "dim blue",
-    SessionEventKind.VERIFIER_STAGE_COMPLETED.value: "green",
-    SessionEventKind.VERIFIER_COMPLETED.value: "bold green",
+    SessionEventKind.SESSION_CANCEL_REQUESTED.value: f"bold {WARNING}",
+    SessionEventKind.SESSION_COMPLETED.value: f"bold {SUCCESS}",
+    SessionEventKind.SESSION_FAILED.value: f"bold {ERROR}",
+    SessionEventKind.SESSION_CANCELLED.value: f"bold {WARNING}",
+    SessionEventKind.CLEANUP_STARTED.value: FAINT,
+    SessionEventKind.CLEANUP_COMPLETED.value: SUCCESS,
+    SessionEventKind.ARTIFACT_WRITTEN.value: TOOL,
+    SessionEventKind.CONTROLLER_STEP.value: PRIMARY,
+    SessionEventKind.CONTROLLER_TRANSITION.value: f"bold {PRIMARY}",
+    SessionEventKind.MODEL_REQUEST_STARTED.value: SECONDARY,
+    SessionEventKind.MODEL_REQUEST_COMPLETED.value: SECONDARY,
+    SessionEventKind.MODEL_DIRECTIVE_ACCEPTED.value: f"bold {SECONDARY}",
+    SessionEventKind.MODEL_DIRECTIVE_REJECTED.value: WARNING,
+    SessionEventKind.MODEL_CONFIGURED.value: f"bold {SECONDARY}",
+    SessionEventKind.OPERATOR_PROGRESS.value: f"bold {PRIMARY}",
+    SessionEventKind.TOOL_STARTED.value: TOOL,
+    SessionEventKind.TOOL_COMPLETED.value: TOOL,
+    SessionEventKind.DEBUGGER_STARTED.value: DEBUGGER,
+    SessionEventKind.DEBUGGER_LOCATION_CHANGED.value: DEBUGGER,
+    SessionEventKind.DEBUGGER_STACK_OBSERVED.value: DEBUGGER,
+    SessionEventKind.DEBUGGER_LOCALS_OBSERVED.value: DEBUGGER,
+    SessionEventKind.PATCH_PROPOSED.value: EVIDENCE,
+    SessionEventKind.PATCH_REJECTED.value: WARNING,
+    SessionEventKind.PATCH_APPLY_FAILED.value: f"bold {ERROR}",
+    SessionEventKind.PATCH_APPLIED.value: EVIDENCE,
+    SessionEventKind.PATCH_REVERTED.value: EVIDENCE,
+    SessionEventKind.SOURCE_SNAPSHOT.value: TOOL,
+    SessionEventKind.DIAGNOSIS_RECORDED.value: PRIMARY,
+    SessionEventKind.VERIFIER_STARTED.value: SUCCESS,
+    SessionEventKind.VERIFIER_STAGE_STARTED.value: f"dim {SUCCESS}",
+    SessionEventKind.VERIFIER_STAGE_COMPLETED.value: SUCCESS,
+    SessionEventKind.VERIFIER_COMPLETED.value: f"bold {SUCCESS}",
 }
 
 
@@ -202,10 +219,10 @@ def _entry_style(entry: TimelineEntry) -> str:
     """Return styling for a timeline entry using kind and status information."""
     if entry.event_kind == SessionEventKind.TOOL_COMPLETED:
         if "(error" in entry.summary or "(failed" in entry.summary:
-            return "bold red"
+            return f"bold {ERROR}"
         if "(rejected" in entry.summary:
-            return "yellow"
-        return "dark_cyan"
+            return WARNING
+        return TOOL
     return _KIND_STYLE.get(entry.event_kind.value, "default")
 
 
@@ -217,7 +234,7 @@ def _append_section(text: Text, title: str) -> None:
     preconstructed ``Text`` object.
     """
     text.append("\n")
-    text.append(title, style="bold #8fb7d9")
+    text.append(title, style=f"bold {PRIMARY}")
     text.append("\n")
 
 
@@ -229,33 +246,33 @@ def _append_kv(text: Text, key: str, value: str) -> None:
 
 def _stage_style(stage: PatchStage) -> str:
     return {
-        PatchStage.PROPOSED: "yellow",
-        PatchStage.REJECTED: "red",
-        PatchStage.APPLY_FAILED: "red",
-        PatchStage.APPLIED: "orange1",
-        PatchStage.REVERTED: "orange1",
-        PatchStage.VERIFIED: "green",
+        PatchStage.PROPOSED: EVIDENCE,
+        PatchStage.REJECTED: WARNING,
+        PatchStage.APPLY_FAILED: ERROR,
+        PatchStage.APPLIED: EVIDENCE,
+        PatchStage.REVERTED: EVIDENCE,
+        PatchStage.VERIFIED: SUCCESS,
     }[stage]
 
 
 def _source_token_style(token_type: Token) -> Optional[str]:
     """Map common Pygments categories to the restrained application palette."""
     if token_type in Comment:
-        return "dim italic #8b949e"
+        return f"dim italic {MUTED}"
     if token_type in Keyword:
-        return "bold #ff7b72"
+        return f"bold {ERROR}"
     if token_type in Name.Function:
-        return "#d2a8ff"
+        return CODE_FUNCTION
     if token_type in Name.Class:
-        return "bold #ffa657"
+        return f"bold {EVIDENCE}"
     if token_type in String:
-        return "#a5d6ff"
+        return CODE_STRING
     if token_type in Number:
-        return "#79c0ff"
+        return PRIMARY
     if token_type in Operator:
-        return "#ff7b72"
+        return ERROR
     if token_type in Token.Punctuation:
-        return "#c9d1d9"
+        return FOREGROUND
     return None
 
 
@@ -301,12 +318,12 @@ class EvidenceReviewPanel(VerticalScroll):
         EvidenceStageState.NOT_REQUIRED: "NOT REQUIRED",
     }
     _STATE_STYLES = {
-        EvidenceStageState.PROVEN: "bold #3fb950",
-        EvidenceStageState.RECORDED: "bold #79c0ff",
-        EvidenceStageState.FAILED: "bold #ff7b72",
-        EvidenceStageState.PENDING: "bold #d29922",
-        EvidenceStageState.NOT_RECORDED: "dim",
-        EvidenceStageState.NOT_REQUIRED: "#8b949e",
+        EvidenceStageState.PROVEN: f"bold {SUCCESS}",
+        EvidenceStageState.RECORDED: f"bold {PRIMARY}",
+        EvidenceStageState.FAILED: f"bold {ERROR}",
+        EvidenceStageState.PENDING: f"bold {WARNING}",
+        EvidenceStageState.NOT_RECORDED: FAINT,
+        EvidenceStageState.NOT_REQUIRED: MUTED,
     }
 
     def __init__(self, **kwargs: Any) -> None:
@@ -319,41 +336,41 @@ class EvidenceReviewPanel(VerticalScroll):
     def update_view(self, view: SessionViewState) -> None:
         brief = project_case_brief(view)
         text = Text()
-        text.append("Evidence Review", style="bold #79c0ff")
-        text.append("  /  causal case brief\n", style="#8b949e")
-        text.append("VERDICT  ", style="bold #8b949e")
+        text.append("Evidence Review", style=f"bold {PRIMARY}")
+        text.append("  /  causal case brief\n", style=MUTED)
+        text.append("VERDICT  ", style=f"bold {MUTED}")
         verdict_style = (
-            "bold #3fb950"
+            f"bold {SUCCESS}"
             if brief.verdict == "RESOLVED"
-            else "bold #ff7b72"
+            else f"bold {ERROR}"
             if brief.verdict_authoritative
-            else "bold #d29922"
+            else f"bold {WARNING}"
         )
         text.append(brief.verdict, style=verdict_style)
         text.append(
             "  AUTHORITATIVE\n" if brief.verdict_authoritative else "  NOT YET AUTHORITATIVE\n",
-            style="bold #8b949e" if brief.verdict_authoritative else "#8b949e",
+            style=f"bold {EVIDENCE}" if brief.verdict_authoritative else MUTED,
         )
         text.append(
             "Controller diagnosis is a claim. The independent verifier is the correctness authority.\n",
-            style="#8b949e",
+            style=MUTED,
         )
-        text.append("─" * 72 + "\n", style="#30363d")
+        text.append("─" * 72 + "\n", style=LINE)
         for index, stage in enumerate(brief.stages):
             label = self._STATE_LABELS[stage.state]
             text.append(f"{label:<13}", style=self._STATE_STYLES[stage.state])
-            text.append(f"{stage.kind.value.upper():<11}", style="bold #c9d1d9")
-            text.append(stage.title, style="#f0f6fc")
+            text.append(f"{stage.kind.value.upper():<11}", style=f"bold {FOREGROUND}")
+            text.append(stage.title, style=FOREGROUND)
             text.append("\n")
             text.append(" " * 13)
-            text.append(stage.detail, style="#8b949e")
+            text.append(stage.detail, style=MUTED)
             text.append("\n")
             if stage.references:
                 references = ", ".join(stage.references[:4])
                 if len(stage.references) > 4:
                     references += f", +{len(stage.references) - 4} more"
                 text.append(" " * 13)
-                text.append(f"evidence: {references}\n", style="dim #79c0ff")
+                text.append(f"evidence: {references}\n", style=f"dim {PRIMARY}")
             if index < len(brief.stages) - 1:
                 text.append("\n")
         self._text.update(text)
@@ -394,7 +411,7 @@ class SourcePanel(VerticalScroll):
                 text = Text(
                     "The debugger's current file has no recorded source snapshot "
                     "(source for the current execution location is not recorded).\n\n",
-                    style="yellow",
+                    style=WARNING,
                 )
                 text.append("NOT RECORDED", style="bold dim")
                 return text
@@ -425,10 +442,10 @@ class SourcePanel(VerticalScroll):
             f"{source.sha256[:12]}…"
         )
         if source.truncated:
-            text.append("  ·  [truncated]", style="yellow")
-        text.append(f"  ·  {source.line_count} lines", style="dim")
+            text.append("  ·  [truncated]", style=WARNING)
+        text.append(f"  ·  {source.line_count} lines", style=FAINT)
         text.append("\n")
-        text.append("─" * 40, style="dim")
+        text.append("─" * 40, style=LINE)
         text.append("\n")
         highlight_line = (
             debugger.line
@@ -439,15 +456,15 @@ class SourcePanel(VerticalScroll):
         highlighted = highlight_line is not None and 1 <= highlight_line <= len(lines)
         gutter_width = max(3, len(str(len(lines))))
         for index, line in enumerate(lines, start=1):
-            gutter = Text(f"{index:>{gutter_width}} ", style="dim")
+            gutter = Text(f"{index:>{gutter_width}} ", style=FAINT)
             if index == highlight_line:
-                gutter.stylize("bold yellow")
+                gutter.stylize(f"bold {EVIDENCE}")
             text.append_text(gutter)
             if index == highlight_line:
                 # Keep the syntax foreground colors and add only the current
                 # line emphasis/background on top of them.
-                line.stylize("bold on #3a2f00")
-                text.append("▶ ", style="bold yellow")
+                line.stylize(f"bold on {EVIDENCE_SURFACE}")
+                text.append("▶ ", style=f"bold {EVIDENCE}")
             else:
                 text.append("  ")
             text.append_text(line)
@@ -545,8 +562,8 @@ class DebuggerPanel(VerticalScroll):
         if debugger.locals:
             for local in debugger.locals:
                 if "redacted" in local.summary:
-                    text.append(f"  {local.name} = ", style="yellow")
-                    text.append(local.summary, style="bold red")
+                    text.append(f"  {local.name} = ", style=WARNING)
+                    text.append(local.summary, style=f"bold {ERROR}")
                     text.append("\n")
                 else:
                     text.append(f"  {local.name} = {local.summary}\n")
@@ -593,7 +610,7 @@ class PatchPanel(VerticalScroll):
         if not view.patch_attempts:
             if evidence_state == EvidenceState.LIVE_PENDING:
                 if view.current_tool_name == "apply_patch":
-                    text.append("Candidate attempt 1\n", style="bold #ffa657")
+                    text.append("Candidate attempt 1\n", style=f"bold {EVIDENCE}")
                     text.append("Applying change…\n", style="dim")
                 else:
                     text.append("No patch attempt yet.\n")
@@ -629,11 +646,11 @@ class PatchPanel(VerticalScroll):
             if attempt.syntax_passed is not None:
                 text.append(f"  syntax passed: {attempt.syntax_passed}\n")
             if attempt.rejection_reason:
-                text.append(f"  rejection: {attempt.rejection_reason}\n", style="yellow")
+                text.append(f"  rejection: {attempt.rejection_reason}\n", style=WARNING)
             if attempt.apply_failure_reason:
                 text.append(
                     f"  apply failure: {attempt.apply_failure_reason}\n",
-                    style="red",
+                    style=ERROR,
                 )
             preview = (
                 build_change_preview(attempt.patch_text, PATCH_PANE_PREVIEW_LIMITS)
@@ -645,30 +662,30 @@ class PatchPanel(VerticalScroll):
                     f"\n  CHANGED FILES · +{preview.additions} -{preview.deletions}"
                     f" across {len(preview.files) + preview.omitted_files}"
                     f" file{'s' if len(preview.files) + preview.omitted_files > 1 else ''}\n",
-                    style="bold #8fb7d9",
+                    style=f"bold {PRIMARY}",
                 )
                 for file_summary in preview.files:
                     text.append(
                         f"  {file_summary.operation.value} {file_summary.path}"
                         f"  +{file_summary.additions}"
                         f" -{file_summary.deletions}\n",
-                        style="#c9d1d9",
+                        style=FOREGROUND,
                     )
                 if preview.omitted_files:
                     text.append(
                         f"  … +{preview.omitted_files} more file{'s' if preview.omitted_files > 1 else ''}\n",
                         style="dim",
                     )
-                text.append("\n  DIFF", style="bold #8fb7d9")
+                text.append("\n  DIFF", style=f"bold {PRIMARY}")
                 if preview.primary_path:
-                    text.append(f" · {preview.primary_path}", style="#c9d1d9")
+                    text.append(f" · {preview.primary_path}", style=FOREGROUND)
                 text.append("\n")
                 _append_diff_lines(text, preview, indent="  ")
                 text.append("\n")
             elif attempt.patch_text:
                 text.append(
                     "\n  (diff body withheld: patch content did not parse as a bounded unified diff)\n",
-                    style="yellow",
+                    style=WARNING,
                 )
         text.append(
             "\nPatch application only mutates the recorded workspace. "
@@ -712,11 +729,11 @@ class VerifierPanel(VerticalScroll):
             _append_section(text, "Stages (progress only)")
             for stage in view.verifier_stages:
                 style = {
-                    "running": "blue",
-                    "completed": "green",
-                    "failed": "red",
-                    "skipped": "dim",
-                    "cancelled": "yellow",
+                    "running": PRIMARY,
+                    "completed": SUCCESS,
+                    "failed": ERROR,
+                    "skipped": FAINT,
+                    "cancelled": WARNING,
                 }.get(stage.status.value, "default")
                 text.append(
                     f"  {stage.stage.value:<32} {stage.status.value}", style=style
@@ -727,7 +744,7 @@ class VerifierPanel(VerticalScroll):
             if view.verifier_stages:
                 text.append(
                     "\nVerifier is in progress or was interrupted.\n",
-                    style="yellow",
+                    style=WARNING,
                 )
             elif evidence_state == EvidenceState.LIVE_PENDING:
                 text.append(
@@ -1007,14 +1024,14 @@ class LiveRunContextPanel(VerticalScroll):
         if view.source_kind is SourceKind.LOCAL_PROJECT:
             repo_basename, head_short = _local_project_identity(view)
             lines = [
-                "[bold #79c0ff]RUN[/]",
-                "[bright_white]Local Project Debug[/]",
-                "[#8b949e]Stage[/]", "[bright_white]" + _markup_escape(stage) + "[/]",
-                "[#8b949e]Elapsed[/]", "[bright_white]" + _markup_escape(elapsed) + "[/]",
-                "[#8b949e]PDB[/]", "[bright_white]" + pdb + "[/]",
-                "[#8b949e]Verifier[/]", "[bright_white]" + _markup_escape(verifier) + "[/]",
-                "[#8b949e]Project[/]", "[bright_white]" + _markup_escape(repo_basename) + "[/]",
-                "[#8b949e]Source HEAD[/]", "[bright_white]" + _markup_escape(head_short) + "[/]",
+                f"[bold {PRIMARY}]RUN[/]",
+                f"[{FOREGROUND}]Local Project Debug[/]",
+                f"[{MUTED}]Stage[/]", f"[{FOREGROUND}]" + _markup_escape(stage) + "[/]",
+                f"[{MUTED}]Elapsed[/]", f"[{FOREGROUND}]" + _markup_escape(elapsed) + "[/]",
+                f"[{MUTED}]PDB[/]", f"[{FOREGROUND}]" + pdb + "[/]",
+                f"[{MUTED}]Verifier[/]", f"[{FOREGROUND}]" + _markup_escape(verifier) + "[/]",
+                f"[{MUTED}]Project[/]", f"[{FOREGROUND}]" + _markup_escape(repo_basename) + "[/]",
+                f"[{MUTED}]Source HEAD[/]", f"[{FOREGROUND}]" + _markup_escape(head_short) + "[/]",
             ]
             self._text.update("\n".join(lines))
             return
@@ -1039,21 +1056,24 @@ class LiveRunContextPanel(VerticalScroll):
         }.get(view.source_kind, "Recorded source")
         official = _official_tests_label(view)
         lines = [
-            "[bold #79c0ff]RUN[/]",
-            "[#8b949e]Task[/]", "[bright_white]" + _markup_escape(task_display_title(view.task_id)) + "[/]",
-            "[#8b949e]ID[/]", "[bright_white]" + _markup_escape(view.task_id) + "[/]",
-            "[#8b949e]Model[/]", "[bright_white]" + _markup_escape(model.display_name if model and model.display_name else "Not recorded") + "[/]",
-            "[#8b949e]Alias[/]", "[bright_white]" + _markup_escape(model.profile_id if model and model.profile_id else "Not recorded") + "[/]",
-            "[#8b949e]Runtime[/]", "[bright_white]" + runtime + "[/]",
-            *(["[#8b949e]Evaluation[/]", "[bright_white]" + evaluation + "[/]"] if evaluation else []),
-            "[#8b949e]Treatment[/]", "[bright_white]" + treatment + "[/]",
-            "[#8b949e]Stage[/]", "[bright_white]" + _markup_escape(stage) + "[/]",
-            "[#8b949e]Elapsed[/]", "[bright_white]" + _markup_escape(elapsed) + "[/]",
-            "[#8b949e]PDB[/]", "[bright_white]" + pdb + "[/]",
-            "[#8b949e]Verifier[/]", "[bright_white]" + _markup_escape(verifier) + "[/]",
+            f"[bold {PRIMARY}]RUN[/]",
+            f"[{MUTED}]Task[/]", f"[{FOREGROUND}]" + _markup_escape(task_display_title(view.task_id)) + "[/]",
+            f"[{MUTED}]ID[/]", f"[{FOREGROUND}]" + _markup_escape(view.task_id) + "[/]",
+            f"[{MUTED}]Model[/]", f"[{FOREGROUND}]" + _markup_escape(model.display_name if model and model.display_name else "Not recorded") + "[/]",
+            f"[{MUTED}]Alias[/]", f"[{FOREGROUND}]" + _markup_escape(model.profile_id if model and model.profile_id else "Not recorded") + "[/]",
+            f"[{MUTED}]Runtime[/]", f"[{FOREGROUND}]" + runtime + "[/]",
+            *([f"[{MUTED}]Evaluation[/]", f"[{FOREGROUND}]" + evaluation + "[/]"] if evaluation else []),
+            f"[{MUTED}]Treatment[/]", f"[{FOREGROUND}]" + treatment + "[/]",
+            f"[{MUTED}]Stage[/]", f"[{FOREGROUND}]" + _markup_escape(stage) + "[/]",
+            f"[{MUTED}]Elapsed[/]", f"[{FOREGROUND}]" + _markup_escape(elapsed) + "[/]",
+            f"[{MUTED}]PDB[/]", f"[{FOREGROUND}]" + pdb + "[/]",
+            f"[{MUTED}]Verifier[/]", f"[{FOREGROUND}]" + _markup_escape(verifier) + "[/]",
         ]
         if official is not None:
-            lines.extend(("[#8b949e]Official tests[/]", "[bright_white]" + official + "[/]"))
+            lines.extend((
+                f"[{MUTED}]Official tests[/]",
+                f"[{FOREGROUND}]" + official + "[/]",
+            ))
         self._text.update("\n".join(lines))
 
     def update_execution(self, state: LiveExecutionState) -> None:
@@ -1088,7 +1108,7 @@ class LiveRunContextPanel(VerticalScroll):
             else:
                 verifier = "Not started"
             def row(label: str, value: str) -> str:
-                return f"[#8b949e]{label:<10}[/] [bright_white]{_markup_escape(value)}[/]"
+                return f"[{MUTED}]{label:<10}[/] [{FOREGROUND}]{_markup_escape(value)}[/]"
             repo_basename, head_short = _local_project_identity(view)
             model_alias = (
                 view.model_provenance.profile_id
@@ -1096,8 +1116,8 @@ class LiveRunContextPanel(VerticalScroll):
                 else "Not recorded"
             )
             lines = [
-                "[bold #79c0ff]RUN[/]",
-                "[bright_white]Local Project Debug[/]",
+                f"[bold {PRIMARY}]RUN[/]",
+                f"[{FOREGROUND}]Local Project Debug[/]",
                 row("NOW", state.operation_label),
                 row("TARGET", state.current_target or "Not observed"),
                 row("MODEL", f"Request {counter(state.request_ordinal, state.ceilings.model_requests)}"),
@@ -1160,13 +1180,13 @@ class LiveRunContextPanel(VerticalScroll):
 
         def row(label: str, value: str) -> str:
             return (
-                f"[#8b949e]{label:<10}[/] "
-                f"[bright_white]{_markup_escape(value)}[/]"
+                f"[{MUTED}]{label:<10}[/] "
+                f"[{FOREGROUND}]{_markup_escape(value)}[/]"
             )
 
         lines = [
-            "[bold #79c0ff]RUN[/]",
-            f"[bright_white]{_markup_escape(task_display_title(view.task_id))}[/]",
+            f"[bold {PRIMARY}]RUN[/]",
+            f"[{FOREGROUND}]{_markup_escape(task_display_title(view.task_id))}[/]",
             row("NOW", state.operation_label),
             row("TARGET", state.current_target or "Not observed"),
             row("MODEL", f"Request {counter(state.request_ordinal, state.ceilings.model_requests)}"),
@@ -1208,22 +1228,22 @@ class LiveRunContextPanel(VerticalScroll):
 
 
 _STATUS_MARKER: dict[WorkstreamStatus, tuple[str, str]] = {
-    WorkstreamStatus.ACTIVE: ("→", "bold #79c0ff"),
-    WorkstreamStatus.COMPLETED: ("✓", "green"),
-    WorkstreamStatus.FAILED: ("×", "red"),
-    WorkstreamStatus.WAITING: ("~", "yellow"),
+    WorkstreamStatus.ACTIVE: ("→", f"bold {PRIMARY}"),
+    WorkstreamStatus.COMPLETED: ("✓", SUCCESS),
+    WorkstreamStatus.FAILED: ("×", ERROR),
+    WorkstreamStatus.WAITING: ("~", WARNING),
 }
 
 _KIND_LABEL_STYLE = {
-    "change": "bold #ffa657",
-    "official_verification": "bold #d2a8ff",
-    "verification": "#a371f7",
-    "error": "bold red",
+    "change": f"bold {EVIDENCE}",
+    "official_verification": f"bold {SECONDARY}",
+    "verification": SECONDARY,
+    "error": f"bold {ERROR}",
 }
 
 
 def _kind_style(entry: WorkstreamEntry) -> str:
-    return _KIND_LABEL_STYLE.get(entry.kind.value, "bright_white")
+    return _KIND_LABEL_STYLE.get(entry.kind.value, FOREGROUND)
 
 
 def _change_stats_text(change: ChangePreview) -> str:
@@ -1237,7 +1257,7 @@ def _append_diff_lines(text: "Text", change: ChangePreview, *, indent: str) -> N
     for line in change.lines:
         pad = " " * len(indent)
         if line.kind is DiffLineKind.HUNK:
-            text.append(f"{pad}{line.text}\n", style="cyan")
+            text.append(f"{pad}{line.text}\n", style=PRIMARY)
             continue
         number = line.old_lineno if line.old_lineno is not None else line.new_lineno
         prefix = {
@@ -1246,9 +1266,9 @@ def _append_diff_lines(text: "Text", change: ChangePreview, *, indent: str) -> N
             DiffLineKind.REMOVED: "-",
         }[line.kind]
         style = {
-            DiffLineKind.CONTEXT: "#8b949e",
-            DiffLineKind.ADDED: "green",
-            DiffLineKind.REMOVED: "red",
+            DiffLineKind.CONTEXT: MUTED,
+            DiffLineKind.ADDED: SUCCESS,
+            DiffLineKind.REMOVED: ERROR,
         }[line.kind]
         text.append(f"{pad}{number:>4} │{prefix}", style=style)
         text.append(f"{line.text}\n", style=style)
@@ -1273,22 +1293,22 @@ def _append_entry(
     text.append(f"{marker} ", style=marker_style)
     text.append(entry.label.upper() if not narrow else entry.label, style=_kind_style(entry))
     if entry.ordinal is not None:
-        text.append(f" {entry.ordinal}", style="#c9d1d9")
+        text.append(f" {entry.ordinal}", style=FOREGROUND)
     target = entry.target
     if not target and entry.change is not None and entry.change.primary_path:
         # A rejected candidate has no authoritative changed-file list; the
         # preview's primary path is the honest fallback.
         target = entry.change.primary_path
     if target:
-        text.append(f"  {target}", style="#c9d1d9")
+        text.append(f"  {target}", style=FOREGROUND)
     if entry.change is not None:
-        text.append(f"  {_change_stats_text(entry.change)}", style="bold green")
+        text.append(f"  {_change_stats_text(entry.change)}", style=f"bold {SUCCESS}")
     detail = entry.detail
     if entry.change is not None and detail and detail.startswith("+") and detail.endswith("more"):
         # The preview's file summary already states what was changed.
         detail = None
     if detail:
-        text.append(f"  · {detail}", style="#8b949e")
+        text.append(f"  · {detail}", style=MUTED)
     text.append("\n")
     if with_change_body and entry.change is not None and not narrow:
         change = entry.change
@@ -1297,12 +1317,12 @@ def _append_entry(
                 text.append(
                     f"    {file_summary.operation.value} {file_summary.path}"
                     f"  +{file_summary.additions} -{file_summary.deletions}\n",
-                    style="#8b949e",
+                    style=MUTED,
                 )
             if change.omitted_files:
                 text.append(f"    … +{change.omitted_files} more\n", style="dim")
         if change.primary_path and change.multi_file:
-            text.append(f"    {change.primary_path}\n", style="#c9d1d9")
+            text.append(f"    {change.primary_path}\n", style=FOREGROUND)
         _append_diff_lines(text, change, indent="  ")
 
 
@@ -1335,9 +1355,9 @@ def render_workstream(
         header = (
             f"{header} / {ceiling}" if ceiling is not None else header
         )
-    text.append(f"{prefix} · ", style="bold #8b949e")
-    text.append(f"{header}\n", style="bold #ffffff")
-    text.append("─" * 40 + "\n", style="dim")
+    text.append(f"{prefix} · ", style=f"bold {MUTED}")
+    text.append(f"{header}\n", style=f"bold {FOREGROUND}")
+    text.append("─" * 40 + "\n", style=LINE)
     if not entries:
         text.append("Waiting for operational activity…\n", style="dim")
         return text

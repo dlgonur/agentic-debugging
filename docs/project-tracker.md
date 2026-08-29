@@ -2,15 +2,41 @@
 
 ## Current state
 
-**GOAL-MODE CYCLE 2 — IN PROGRESS (2026-08-28).**
+**GOAL-MODE CYCLE 3 — COMPLETE (2026-08-29).**
 
 - Release tag: `v0.1.0` at `d01f7a5` (cycle 1 closed).
-- Cycle 2 (owner-authorized overnight goal mode): multi-provider model
-  access, failure visibility, retry — see `TODO.md`.
-- Merge/push: none (goal-mode local commits only, per the workflow's
-  Git policy).
+- Cycle 3 (owner-authorized goal mode): shared visual language, welcome
+  redesign, full terminal UI polish, and UI bug repair — see `TODO.md`.
+- Git: requested local checkpoints were attempted, but the host Git guard
+  rejected commit execution; the combined candidate remains split across the
+  index and working tree.
+- Merge/push: none.
 - Full historical tracker:
   `outdated/roadmap/project-tracker-pre-closure-2026-08-28.md`.
+
+## 2026-08-29 goal-mode UI work
+
+- [x] Registered a semantic Textual theme shared by TCSS and Rich renderers.
+- [x] Rebuilt the welcome surface around the primary Local Project route and
+  an explicit failure → PDB evidence → patch → verifier verdict chain.
+- [x] Restyled archive, local pre-flight, dialogs, replay panes, event syntax,
+  workstream, context panels, and help surfaces into one forensic-console
+  language.
+- [x] Preserved 80x24 navigation and expanded wide-terminal context; verified
+  empty, recorded, local form, workspace, and modal states visually.
+- [x] Fixed empty archive open, replay table focus, compact verifier priority,
+  and invalid Local Project start affordance.
+- [x] Added a durable `DESIGN.md` contract and focused regression coverage.
+
+Validation evidence:
+
+- `python -m compileall -q agentic_debugger/ui` — passed.
+- UI rendering contracts — 30 passed.
+- Keyboard contracts — 13 passed.
+- Local Project form consistency — 9 passed; the final dirty-gate node also
+  passed after its assertion was added.
+- Home/replay/terminal-size matrix — 12 passed.
+- Independent visual finish review — `ready` after one bounded polish round.
 
 ## 2026-08-28 goal-mode work
 

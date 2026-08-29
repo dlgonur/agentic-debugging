@@ -87,6 +87,11 @@ from agentic_debugger.ui.screens import (
     WorkspaceMode,
     WorkspaceScreen,
 )
+from agentic_debugger.ui.theme import (
+    AGENTIC_DEBUGGER_THEME,
+    APP_THEME_VARIABLES,
+    THEME_NAME,
+)
 
 _COOPERATIVE_GRACE_SECONDS = 10.0
 _READY_TIMEOUT_SECONDS = 30.0
@@ -212,6 +217,10 @@ class LocalApplicationV1(App):
         Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
     ]
 
+    def get_theme_variable_defaults(self) -> dict[str, str]:
+        """Expose the app's semantic design tokens to TCSS."""
+        return dict(APP_THEME_VARIABLES)
+
     def __init__(
         self,
         history_root: Optional[str | os.PathLike[str]] = None,
@@ -317,6 +326,8 @@ class LocalApplicationV1(App):
     # -- boot ---------------------------------------------------------------
 
     def on_mount(self) -> None:
+        self.register_theme(AGENTIC_DEBUGGER_THEME)
+        self.theme = THEME_NAME
         # History remains the base navigation surface, but a new debugging
         # session is the product's primary first-run action.
         self.push_screen(HomeScreen())

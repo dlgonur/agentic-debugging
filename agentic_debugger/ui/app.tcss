@@ -1,49 +1,81 @@
-/* Agentic Debugging — one deliberate default theme (dark, developer-tool).
+/* Agentic Debugger — forensic instrument console.
 
-   Layout rule: the workspace is a compact vertical stack (header / tabbed
-   panes / status bar) that stays navigable at 80x24 and uses the extra
-   space at larger sizes.  No hard-coded pane widths; tabs collapse the
-   domain panes instead of shrinking them to unreadable slivers.
+   Cyan is live signal and interaction. Amber belongs to evidence and
+   verifier authority. Layered blue-black surfaces provide depth without
+   glow or decorative chrome. The compact stack remains navigable at 80x24;
+   wider terminals earn context rather than stretched line length.
  */
 
 Screen {
-    background: #0d1117;
-    color: #c9d1d9;
+    background: $background;
+    color: $foreground;
+    scrollbar-color: $line-strong;
+    scrollbar-background: $surface;
+    scrollbar-color-hover: $primary;
+    scrollbar-color-active: $primary;
 }
 
 /* -- history screen ----------------------------------------------------- */
 
+#home-header {
+    width: 1fr;
+    height: auto;
+    padding: 1 3 1 3;
+    background: $background;
+}
+
 #home-title {
-    padding: 1 2 0 2;
+    height: 4;
+    padding: 0;
     text-style: bold;
 }
 
+#home-summary {
+    width: 1fr;
+    height: 1;
+    color: $text-faint;
+}
+
+#home-actions {
+    width: 1fr;
+    height: 1;
+    margin: 1 0 0 0;
+    align: left middle;
+}
+
 #home-empty {
-    padding: 1 2;
-    margin: 1 2;
-    background: #161b22;
-    border: round #2c3a47;
+    width: 1fr;
+    height: 1fr;
+    padding: 2 4;
+    margin: 0 3 1 3;
+    background: $surface;
+    border: round $line;
+    content-align: center middle;
 }
 
 #history-table {
-    margin: 0 1;
+    margin: 0 2;
     height: 1fr;
+    border: round $line;
 }
 
 #history-table > .datatable--header {
-    background: #161b22;
-    color: #8b949e;
+    background: $surface;
+    color: $foreground-muted;
     text-style: bold;
 }
 
 #history-table > .datatable--cursor {
-    background: #1f6feb;
-    color: #ffffff;
+    background: $primary;
+    color: $background;
+    text-style: bold;
 }
 
 #home-hint {
-    padding: 0 2 1 2;
-    color: #8b949e;
+    height: 1;
+    padding: 0 3;
+    color: $text-faint;
+    background: $surface;
 }
 
 /* -- new-session workspace --------------------------------------------- */
@@ -51,6 +83,7 @@ Screen {
 #start-workspace {
     height: 1fr;
     width: 1fr;
+    background: $background;
 }
 
 #start-main {
@@ -61,14 +94,22 @@ Screen {
 #start-config {
     width: 1fr;
     height: 1fr;
-    padding: 1 2 0 2;
+    padding: 1 3 0 3;
     scrollbar-size: 1 1;
 }
 
 #start-title {
-    height: 3;
+    height: 4;
     padding: 0;
-    color: #c9d1d9;
+    color: $foreground;
+}
+
+#start-section-label {
+    width: 1fr;
+    height: 1;
+    margin: 1 0 0 0;
+    color: $foreground-muted;
+    text-style: bold;
 }
 
 SessionSettingRow,
@@ -77,13 +118,14 @@ TimeLimitRow {
     height: 1;
     padding: 0;
     margin: 0;
-    color: #c9d1d9;
+    color: $foreground;
 }
 
 SessionSettingRow:focus,
 TimeLimitRow:focus {
-    background: #161b22;
-    color: #ffffff;
+    background: $selection;
+    color: $foreground;
+    text-style: bold;
 }
 
 #model-row {
@@ -100,36 +142,36 @@ TimeLimitRow:focus {
     width: 1fr;
     height: auto;
     padding: 0;
-    margin: 1 0 0 2;
-    color: #8b949e;
+    margin: 1 0 0 0;
+    color: $foreground-muted;
 }
 
 #start-footer {
     width: 1fr;
     height: 1;
     padding: 0 2;
-    color: #8b949e;
-    background: #161b22;
+    color: $text-faint;
+    background: $surface;
 }
 
 #start-context {
-    width: 34;
+    width: 36;
     height: 1fr;
     padding: 1 2;
-    background: #111820;
+    background: $surface;
     scrollbar-size: 1 1;
 }
 
 #context-title {
     height: 1;
-    color: #79c0ff;
+    color: $primary;
     text-style: bold;
 }
 
 #context-summary {
     height: auto;
     padding: 1 0 0 0;
-    color: #c9d1d9;
+    color: $foreground;
 }
 
 #choice-picker-dialog {
@@ -138,14 +180,15 @@ TimeLimitRow:focus {
     height: auto;
     max-height: 80%;
     padding: 1 2;
-    background: #161b22;
+    background: $surface;
+    border: round $line;
 }
 
 #choice-picker-title {
     height: 1;
     padding: 0;
     margin: 0 0 1 0;
-    color: #79c0ff;
+    color: $primary;
     text-style: bold;
 }
 
@@ -154,34 +197,34 @@ TimeLimitRow:focus {
     height: auto;
     max-height: 16;
     padding: 0;
-    background: #161b22;
+    background: $surface;
     border: none;
     scrollbar-size: 1 1;
-    scrollbar-color: #30363d;
-    scrollbar-background: #161b22;
+    scrollbar-color: $line-strong;
+    scrollbar-background: $surface;
 }
 
 #choice-picker-list > .option-list--option {
     padding: 0 1;
-    color: #c9d1d9;
+    color: $foreground;
 }
 
 #choice-picker-list > .option-list--option-highlighted,
 #choice-picker-list:focus > .option-list--option-highlighted {
-    background: #3b4652;
-    color: #ffffff;
+    background: $selection;
+    color: $foreground;
 }
 
 #choice-picker-empty {
     height: 1;
     padding: 0 1;
-    color: #f2cc60;
+    color: $warning;
 }
 
 #choice-picker-hint {
     height: 2;
     padding: 1 0 0 0;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #time-limit-dialog {
@@ -189,19 +232,20 @@ TimeLimitRow:focus {
     max-width: 90%;
     height: auto;
     padding: 1 2;
-    background: #161b22;
+    background: $surface;
+    border: round $line;
 }
 
 #time-limit-title {
     height: 1;
     margin: 0 0 1 0;
-    color: #79c0ff;
+    color: $primary;
     text-style: bold;
 }
 
 #time-limit-label {
     height: 1;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #time-limit-editor {
@@ -210,34 +254,34 @@ TimeLimitRow:focus {
     margin: 0 0 1 0;
     padding: 0 1;
     border: none;
-    background: #0d1117;
-    color: #c9d1d9;
+    background: $background;
+    color: $foreground;
 }
 
 #time-limit-help,
 #time-limit-hint {
     height: 1;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #time-limit-error {
     height: auto;
-    color: #f85149;
+    color: $error;
 }
 
 TimeLimitEditorScreen {
     align: center middle;
-    background: #0d1117 90%;
+    background: $background 90%;
 }
 
 ChoicePickerScreen {
     align: center middle;
-    background: #0d1117 90%;
+    background: $background 90%;
 }
 
 BugDescriptionEditorScreen {
     align: center middle;
-    background: #0d1117 90%;
+    background: $background 90%;
 }
 
 #bug-editor-dialog {
@@ -246,13 +290,14 @@ BugDescriptionEditorScreen {
     height: auto;
     max-height: 85%;
     padding: 1 2;
-    background: #161b22;
+    background: $surface;
+    border: round $line;
 }
 
 #bug-editor-title {
     height: 1;
     margin: 0 0 1 0;
-    color: #79c0ff;
+    color: $primary;
     text-style: bold;
 }
 
@@ -261,14 +306,14 @@ BugDescriptionEditorScreen {
     height: 10;
     min-height: 8;
     max-height: 14;
-    background: #0d1117;
-    color: #c9d1d9;
-    border: round #2c3a47;
+    background: $background;
+    color: $foreground;
+    border: round $line;
     padding: 0 1;
 }
 
 #bug-editor:focus {
-    border: round #58a6ff;
+    border: round $focus-ring;
 }
 
 #bug-editor-actions {
@@ -283,35 +328,39 @@ BugDescriptionEditorScreen {
     min-width: 12;
     height: 1;
     padding: 0 2;
-    background: #238636;
-    color: #ffffff;
+    background: $primary;
+    color: $background;
     border: none;
     text-style: bold;
 }
 
 #bug-save-button:hover {
-    background: #2ea043;
+    background: $primary;
+    color: $background;
+    text-style: bold underline;
 }
 
 #bug-save-button:focus {
-    background: #2ea043;
-    border: tall #3fb950;
+    background: $primary;
+    color: $background;
+    border: none;
+    text-style: bold underline;
 }
 
 #bug-editor-hint {
     height: 1;
     margin: 1 0 0 0;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #bug-editor-error {
     height: auto;
-    color: #f85149;
+    color: $error;
 }
 
 SingleLineFieldEditorScreen {
     align: center middle;
-    background: #0d1117 90%;
+    background: $background 90%;
 }
 
 #single-line-dialog {
@@ -320,13 +369,14 @@ SingleLineFieldEditorScreen {
     height: auto;
     max-height: 85%;
     padding: 1 2;
-    background: #161b22;
+    background: $surface;
+    border: round $line;
 }
 
 #single-line-title {
     height: 1;
     margin: 0 0 1 0;
-    color: #79c0ff;
+    color: $primary;
     text-style: bold;
 }
 
@@ -334,14 +384,14 @@ SingleLineFieldEditorScreen {
     width: 1fr;
     height: 1;
     min-height: 1;
-    background: #0d1117;
-    color: #c9d1d9;
-    border: round #2c3a47;
+    background: $background;
+    color: $foreground;
+    border: round $line;
     padding: 0 1;
 }
 
 #single-line-editor:focus {
-    border: round #58a6ff;
+    border: round $focus-ring;
 }
 
 #single-line-actions {
@@ -356,36 +406,40 @@ SingleLineFieldEditorScreen {
     min-width: 12;
     height: 1;
     padding: 0 2;
-    background: #238636;
-    color: #ffffff;
+    background: $primary;
+    color: $background;
     border: none;
     text-style: bold;
 }
 
 #single-line-save-button:hover {
-    background: #2ea043;
+    background: $primary;
+    color: $background;
+    text-style: bold underline;
 }
 
 #single-line-save-button:focus {
-    background: #2ea043;
-    border: tall #3fb950;
+    background: $primary;
+    color: $background;
+    border: none;
+    text-style: bold underline;
 }
 
 #single-line-hint {
     height: 1;
     margin: 1 0 0 0;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #single-line-error {
     height: auto;
-    color: #f85149;
+    color: $error;
 }
 
 /* Legacy alias also centered (the tiny upper-left implementation is removed) */
 _SingleLineEditorScreen {
     align: center middle;
-    background: #0d1117 90%;
+    background: $background 90%;
 }
 
 /* -- workspace ----------------------------------------------------------- */
@@ -405,16 +459,16 @@ _SingleLineEditorScreen {
     width: 46;
     height: 1fr;
     padding: 1 2;
-    background: #111820;
-    color: #c9d1d9;
+    background: $panel;
+    color: $foreground;
     scrollbar-size: 1 1;
 }
 
 #status-header {
     dock: top;
     padding: 0 2;
-    background: #161b22;
-    color: #c9d1d9;
+    background: $surface;
+    color: $foreground;
     text-style: bold;
     height: auto;
 }
@@ -425,39 +479,39 @@ _SingleLineEditorScreen {
 }
 
 #pane-tabs ContentTabs {
-    background: #161b22;
+    background: $surface;
 }
 
 #pane-tabs ContentTabs > Tab {
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #pane-tabs ContentTabs > Tab.--active {
-    color: #58a6ff;
+    color: $focus-ring;
     text-style: bold;
 }
 
 #pane-tabs ContentTabs > Tab:focus {
-    color: #ffffff;
+    color: $foreground;
 }
 
 #pane-tabs ContentSwitcher {
-    background: #0d1117;
-    border: round #2c3a47;
+    background: $background;
+    border: round $line;
     padding: 0 1;
 }
 
 EvidenceReviewPanel, SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, ActivityPanel, TimelinePanel {
     height: 1fr;
-    background: #0d1117;
-    color: #c9d1d9;
+    background: $background;
+    color: $foreground;
 }
 
 WorkstreamPanel {
     height: auto;
     padding: 0 1;
-    background: #0d1117;
-    color: #c9d1d9;
+    background: $background;
+    color: $foreground;
     scrollbar-size: 1 1;
 }
 
@@ -473,8 +527,8 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 #replay-bar, #live-bar {
     dock: bottom;
     padding: 0 2;
-    background: #161b22;
-    color: #8b949e;
+    background: $surface;
+    color: $foreground-muted;
     height: auto;
 }
 
@@ -483,8 +537,8 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 #jump-dialog {
     padding: 1 2;
     margin: 2 4;
-    background: #161b22;
-    border: round #58a6ff;
+    background: $surface;
+    border: round $focus-ring;
     height: auto;
 }
 
@@ -495,7 +549,7 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 
 #jump-hint {
     padding: 0 0 1 0;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 #jump-input {
@@ -507,8 +561,8 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 #help-dialog {
     padding: 1 2;
     margin: 1 4;
-    background: #161b22;
-    border: round #58a6ff;
+    background: $surface;
+    border: round $focus-ring;
     height: auto;
     max-height: 90%;
 }
@@ -516,8 +570,8 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 #effort-dialog {
     padding: 1 2;
     margin: 1 4;
-    background: #161b22;
-    border: round #d29922;
+    background: $surface;
+    border: round $evidence;
     height: auto;
     max-height: 90%;
 }
@@ -537,7 +591,7 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
 
 #help-hint {
     padding: 0 0 0 0;
-    color: #8b949e;
+    color: $foreground-muted;
 }
 
 /* -- activity / timeline copy bar ---------------------------------------- */
@@ -552,7 +606,7 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     width: 1fr;
     align: right middle;
     padding: 0 1;
-    background: #0d1117;
+    background: $background;
 }
 
 .copy-button {
@@ -560,31 +614,74 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     min-width: 10;
     height: 1;
     padding: 0 1;
-    background: #21262d;
-    color: #8b949e;
+    background: $panel;
+    color: $foreground-muted;
     border: none;
     text-style: none;
 }
 
 .copy-button:hover {
-    background: #30363d;
-    color: #c9d1d9;
+    background: $line-strong;
+    color: $foreground;
 }
 
 .copy-button:focus {
-    background: #21262d;
-    color: #8b949e;
+    background: $panel;
+    color: $foreground-muted;
     border: none;
 }
 
 /* -- shared focus language ------------------------------------------------ */
 
 Button:focus {
-    border: tall #30363d;
+    border: tall $line-strong;
 }
 
 Button {
     margin: 1 2;
+}
+
+.primary-action,
+.secondary-action {
+    width: auto;
+    min-width: 22;
+    height: 1;
+    padding: 0 2;
+    margin: 0 1 0 0;
+    border: none;
+    text-style: bold;
+}
+
+.primary-action {
+    background: $primary;
+    color: $background;
+}
+
+.primary-action:hover,
+.primary-action:focus {
+    background: $primary;
+    color: $background;
+    border: none;
+    text-style: bold underline;
+}
+
+.secondary-action {
+    background: $surface-raised;
+    color: $foreground;
+}
+
+.secondary-action:hover,
+.secondary-action:focus {
+    background: $primary;
+    color: $background;
+    border: none;
+}
+
+.primary-action:disabled,
+.secondary-action:disabled {
+    background: $panel;
+    color: $text-faint;
+    text-style: none;
 }
 
 .copy-button {
@@ -595,49 +692,93 @@ Button {
 #local-start-actions {
     width: 1fr;
     height: auto;
-    align: center middle;
+    align: left middle;
     margin: 1 0 0 0;
 }
 
 #start-method {
     width: 1fr;
     height: auto;
-    margin: 2 0 0 0;
+    margin: 1 0 0 0;
     padding: 1 2;
-    background: #111820;
-    border: round #2c3a47;
-    color: #c9d1d9;
+    background: $surface;
+    border: round $line;
+    color: $foreground;
 }
 
-#start-session-button,
+#local-mode-row {
+    width: 1fr;
+    height: 1;
+    margin: 0 0 1 0;
+    color: $evidence;
+    text-style: bold;
+}
+
+#local-project-actions {
+    width: 1fr;
+    height: 1;
+    align: left middle;
+    padding: 0 0 0 2;
+}
+
+#local-project-button,
 #local-start-button {
     width: auto;
-    min-width: 22;
+    min-width: 24;
     height: 1;
     padding: 0 2;
-    background: #238636;
-    color: #ffffff;
+    background: $primary;
+    color: $background;
     border: none;
     text-style: bold;
+    margin: 0 1 0 0;
+}
+
+#local-project-button:hover,
+#local-start-button:hover {
+    background: $primary;
+    color: $background;
+    text-style: bold underline;
+}
+
+#local-project-button:focus,
+#local-start-button:focus {
+    background: $primary;
+    color: $background;
+    border: none;
+    text-style: bold underline;
+}
+
+#local-start-button:disabled {
+    background: $panel;
+    color: $text-faint;
+    text-style: none;
+}
+
+#start-session-button {
+    width: auto;
+    min-width: 20;
+    height: 1;
+    padding: 0 2;
     margin: 0;
+    background: $surface-raised;
+    color: $foreground;
+    border: none;
+    text-style: bold;
 }
 
 #start-session-button:hover,
-#local-start-button:hover {
-    background: #2ea043;
-}
-
-#start-session-button:focus,
-#local-start-button:focus {
-    background: #2ea043;
-    border: tall #3fb950;
+#start-session-button:focus {
+    background: $primary;
+    color: $background;
+    border: none;
 }
 
 #local-project-resolved,
 #local-start-status,
 #local-start-trust {
     height: auto;
-    color: #8b949e;
+    color: $foreground-muted;
     margin: 0 0 0 0;
     padding: 0 0 0 2;
 }

@@ -391,6 +391,13 @@ class TestLevel32NewSession:
             empty = app.screen.query_one("#home-empty")
             assert empty.display is True
             assert "No sessions yet" in str(empty.render())
+            assert app.screen.query_one("#history-table").display is False
+
+            # Opening an empty table used to raise CellDoesNotExist and take
+            # down the entire TUI.  The empty archive is now a safe state.
+            await pilot.press("o")
+            assert isinstance(app.screen, HomeScreen)
+            assert app.is_running is True
 
         run_headless(make_app(tmp_path), scenario)
 
@@ -404,6 +411,7 @@ class TestLevel32NewSession:
             table = pilot.app.screen.query_one("#history-table")
             row_count = table.row_count
             assert row_count == 1
+            assert pilot.app.focused is table
             empty = pilot.app.screen.query_one("#home-empty")
             assert empty.display is False
             # session id and honest classification are visible
@@ -448,8 +456,8 @@ class TestLevel32NewSession:
             assert "RESOLVED" in rendered
             columns = [col.label.plain for col in table.columns.values()]
             assert columns == [
-                "Journal", "Session", "Task", "Source", "Started", "Duration",
-                "Outcome", "Verification",
+                "State", "Session", "Verification", "Outcome", "Task", "Source",
+                "Started", "Duration",
             ]
 
         run_headless(app, scenario, size=(120, 35))

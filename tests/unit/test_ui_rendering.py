@@ -40,6 +40,14 @@ from agentic_debugger.ui.widgets import (
     _highlight_source_lines,
     _entry_style,
 )
+from agentic_debugger.ui.theme import (
+    CODE_FUNCTION,
+    ERROR,
+    MUTED,
+    PRIMARY,
+    TOOL,
+    WARNING,
+)
 
 from application_support import (
     VALID_RUN_ID,
@@ -348,10 +356,10 @@ class TestPaneRendering:
             "    return value + 7",
         ]
         styles = {str(span.style) for line in lines for span in line.spans}
-        assert any("#ff7b72" in style for style in styles)  # keyword/operator
-        assert any("#d2a8ff" in style for style in styles)  # function name
-        assert any("#8b949e" in style for style in styles)  # comment
-        assert any("#79c0ff" in style for style in styles)  # number
+        assert any(ERROR.lower() in style.lower() for style in styles)  # keyword/operator
+        assert any(CODE_FUNCTION.lower() in style.lower() for style in styles)  # function name
+        assert any(MUTED.lower() in style.lower() for style in styles)  # comment
+        assert any(PRIMARY.lower() in style.lower() for style in styles)  # number
 
     def test_source_unknown_extension_falls_back_to_plain_text(self):
         lines = _highlight_source_lines("plain [text]\n", "notes.unknownext")
@@ -588,14 +596,14 @@ class TestActivityFilterVocabularyAndStyling:
 
     def test_tool_event_styling(self):
         ok_entry = TimelineEntry(sequence=1, event_kind=SessionEventKind.TOOL_COMPLETED, summary="tool get_stack_summary completed (ok)")
-        assert _entry_style(ok_entry) == "dark_cyan"
+        assert _entry_style(ok_entry) == TOOL
 
         err_entry = TimelineEntry(sequence=2, event_kind=SessionEventKind.TOOL_COMPLETED, summary="tool step completed (error: timeout)")
-        assert _entry_style(err_entry) == "bold red"
+        assert _entry_style(err_entry) == f"bold {ERROR}"
 
     def test_negative_event_styling(self):
-        assert _KIND_STYLE[SessionEventKind.SESSION_FAILED.value] == "bold red"
-        assert _KIND_STYLE[SessionEventKind.PATCH_APPLY_FAILED.value] == "bold red"
-        assert _KIND_STYLE[SessionEventKind.MODEL_DIRECTIVE_REJECTED.value] == "yellow"
-        assert _KIND_STYLE[SessionEventKind.PATCH_REJECTED.value] == "yellow"
-        assert _KIND_STYLE[SessionEventKind.SESSION_CANCELLED.value] == "bold yellow"
+        assert _KIND_STYLE[SessionEventKind.SESSION_FAILED.value] == f"bold {ERROR}"
+        assert _KIND_STYLE[SessionEventKind.PATCH_APPLY_FAILED.value] == f"bold {ERROR}"
+        assert _KIND_STYLE[SessionEventKind.MODEL_DIRECTIVE_REJECTED.value] == WARNING
+        assert _KIND_STYLE[SessionEventKind.PATCH_REJECTED.value] == WARNING
+        assert _KIND_STYLE[SessionEventKind.SESSION_CANCELLED.value] == f"bold {WARNING}"
