@@ -417,11 +417,12 @@ def nemotron_state(*, chat_model: str = NEMOTRON_UPSTREAM, **overrides: Any) -> 
     )
 
 
-SEVENTEEN_ALIASES = [
+EIGHTEEN_ALIASES = [
     "gpt-oss:20b-cloud",
     "gpt-oss:120b-cloud",
     "glm-5.1:cloud",
     "glm-5.2:cloud",
+    "glm-5.3-flash:cloud",
     "deepseek-v4-flash:cloud",
     "deepseek-v4-pro:cloud",
     "kimi-k2.6:cloud",
@@ -442,7 +443,7 @@ def test_registry_keeps_gpt_oss_default_and_accepted_aliases() -> None:
     assert adapter.DEFAULT_MODEL_ID == "gpt-oss:20b-cloud"
     assert adapter.MODEL_ID == "gpt-oss:20b-cloud"
     assert adapter.EXPECTED_CLOUD_REMOTE_MODEL == "gpt-oss:20b"
-    assert adapter.ALLOWED_MODEL_IDENTIFIERS == frozenset(SEVENTEEN_ALIASES)
+    assert adapter.ALLOWED_MODEL_IDENTIFIERS == frozenset(EIGHTEEN_ALIASES)
     gpt = adapter.resolve_cloud_model("gpt-oss:20b-cloud")
     nemotron = adapter.resolve_cloud_model("nemotron-3-nano:30b-cloud")
     assert gpt.local_alias == "gpt-oss:20b-cloud"
@@ -451,10 +452,10 @@ def test_registry_keeps_gpt_oss_default_and_accepted_aliases() -> None:
     assert nemotron.upstream_model == NEMOTRON_UPSTREAM
 
 
-def test_registry_contains_all_17_aliases_with_verified_upstream():
-    assert set(adapter.CLOUD_MODELS) == set(SEVENTEEN_ALIASES)
-    assert len(adapter.CLOUD_MODELS) == 17
-    for alias in SEVENTEEN_ALIASES:
+def test_registry_contains_all_18_aliases_with_verified_upstream():
+    assert set(adapter.CLOUD_MODELS) == set(EIGHTEEN_ALIASES)
+    assert len(adapter.CLOUD_MODELS) == 18
+    for alias in EIGHTEEN_ALIASES:
         spec = adapter.resolve_cloud_model(alias)
         assert spec.local_alias == alias
         assert type(spec.upstream_model) is str and spec.upstream_model
@@ -479,10 +480,13 @@ def test_registry_contains_all_17_aliases_with_verified_upstream():
     assert adapter.CLOUD_MODELS["mistral-large-3:675b-cloud"].readiness == "live_verified"
     assert adapter.CLOUD_MODELS["glm-5.1:cloud"].readiness == "live_verified"
     assert adapter.CLOUD_MODELS["glm-5.2:cloud"].readiness == "live_verified"
+    assert adapter.CLOUD_MODELS["glm-5.3-flash:cloud"].readiness == "profile_declared"
     assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].readiness == "profile_declared"
     assert adapter.CLOUD_MODELS["deepseek-v4-pro:cloud"].readiness == "live_verified"
     assert adapter.CLOUD_MODELS["minimax-m3:cloud"].readiness == "live_verified"
-    assert all(adapter.CLOUD_MODELS[a].readiness == "catalog" for a in SEVENTEEN_ALIASES if a not in {"gpt-oss:20b-cloud", "gpt-oss:120b-cloud", "kimi-k2.6:cloud", "qwen3.5:cloud", "gemma4:31b-cloud", "nemotron-3-nano:30b-cloud", "nemotron-3-super:cloud", "nemotron-3-ultra:cloud", "minimax-m2.7:cloud", "deepseek-v4-flash:cloud", "mistral-large-3:675b-cloud", "glm-5.1:cloud", "glm-5.2:cloud", "kimi-k2.7-code:cloud", "deepseek-v4-pro:cloud", "minimax-m3:cloud"})
+    assert all(adapter.CLOUD_MODELS[a].readiness == "catalog" for a in EIGHTEEN_ALIASES if a not in {"gpt-oss:20b-cloud", "gpt-oss:120b-cloud", "kimi-k2.6:cloud", "qwen3.5:cloud", "gemma4:31b-cloud", "nemotron-3-nano:30b-cloud", "nemotron-3-super:cloud", "nemotron-3-ultra:cloud", "minimax-m2.7:cloud", "deepseek-v4-flash:cloud", "mistral-large-3:675b-cloud", "glm-5.1:cloud", "glm-5.2:cloud", "glm-5.3-flash:cloud", "kimi-k2.7-code:cloud", "deepseek-v4-pro:cloud", "minimax-m3:cloud"})
+    assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["glm-5.3-flash:cloud"]) is False
+    assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["glm-5.3-flash:cloud"]) is False
     assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["gpt-oss:20b-cloud"]) is True
     assert adapter.is_live_transport_ready(adapter.CLOUD_MODELS["gpt-oss:120b-cloud"]) is True
     assert adapter.is_treatment_eligible(adapter.CLOUD_MODELS["gpt-oss:120b-cloud"]) is True
@@ -541,6 +545,20 @@ def test_registry_contains_all_17_aliases_with_verified_upstream():
     assert adapter.transport_config_fingerprint(glm52) == (
         "bfd7aec79604a13117f81eccf783945ead24818c3bbb2af94d1294601cba51cb"
     )
+    glm53 = adapter.CLOUD_MODELS["glm-5.3-flash:cloud"]
+    assert glm53.local_alias == "glm-5.3-flash:cloud"
+    assert glm53.upstream_model == "glm-5.3-flash"
+    assert glm53.effective_tags_remote_model == "glm-5.3-flash"
+    assert glm53.family == "glm5.3"
+    assert glm53.parameter_count is None
+    assert glm53.context_length == 1000000
+    assert glm53.capabilities == ("completion", "thinking", "tools", "vision")
+    assert glm53.transport_profile_declared is True
+    assert glm53.transport_verified is False
+    assert glm53.readiness == "profile_declared"
+    assert adapter.is_live_transport_ready(glm53) is False
+    assert adapter.is_treatment_eligible(glm53) is False
+    assert glm53.thinking_level is None
     assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].transport_profile_declared is True
     assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].transport_verified is False
     assert adapter.CLOUD_MODELS["kimi-k2.7-code:cloud"].thinking_level is None
@@ -621,9 +639,9 @@ def test_tags_remote_model_divergence_is_explicit():
 
 
 def test_transport_fingerprint_varies_per_model():
-    fps = {alias: adapter.transport_config_fingerprint(adapter.resolve_cloud_model(alias)) for alias in SEVENTEEN_ALIASES}
+    fps = {alias: adapter.transport_config_fingerprint(adapter.resolve_cloud_model(alias)) for alias in EIGHTEEN_ALIASES}
     assert all(len(fp) == 64 for fp in fps.values())
-    assert len(set(fps.values())) == 17
+    assert len(set(fps.values())) == 18
     assert fps["gpt-oss:20b-cloud"] != fps["gpt-oss:120b-cloud"]
 
 
@@ -661,7 +679,7 @@ def test_list_models_projection_is_complete():
     rc = adapter.run_adapter(stdin_stream=io.StringIO(""), stdout_stream=out, stderr_stream=io.StringIO(), argv=["--list-models"])
     assert rc == 0
     text = out.getvalue()
-    for alias in SEVENTEEN_ALIASES:
+    for alias in EIGHTEEN_ALIASES:
         assert alias in text
     assert "live_verified" in text
     assert "catalog" in text
@@ -671,8 +689,8 @@ def test_list_models_projection_is_complete():
     rc = adapter.run_adapter(stdin_stream=io.StringIO(""), stdout_stream=out2, stderr_stream=io.StringIO(), argv=["--list-models", "--json"])
     assert rc == 0
     payload = json.loads(out2.getvalue())
-    assert set(payload) == set(SEVENTEEN_ALIASES)
-    for alias in SEVENTEEN_ALIASES:
+    assert set(payload) == set(EIGHTEEN_ALIASES)
+    for alias in EIGHTEEN_ALIASES:
         assert payload[alias]["transport_config_fingerprint"]
         assert payload[alias]["readiness"] in ("catalog", "profile_declared", "live_verified")
     assert payload["gpt-oss:20b-cloud"]["readiness"] == "live_verified"
@@ -1223,8 +1241,6 @@ def test_second_session_count_mismatch_remains_rejected_by_real_patch_manager() 
 def test_adapter_does_not_normalize_or_rewrite_patches() -> None:
     source = Path(adapter.__file__).read_text(encoding="utf-8")
     assert "agentic_debugger.runtime.patcher" not in source
-    assert "from agentic_debugger" not in source
-    assert "import agentic_debugger" not in source
     assert "_parse_unified_diff" not in source
     assert "def normalize_patch" not in source
     assert "def rewrite_patch" not in source

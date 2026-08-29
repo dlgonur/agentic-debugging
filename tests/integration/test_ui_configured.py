@@ -41,7 +41,14 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import ChoicePickerScreen, HomeScreen, StartSessionScreen, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import (
+    ChoicePickerScreen,
+    HomeScreen,
+    LocalProjectStartScreen,
+    StartSessionScreen,
+    WorkspaceMode,
+    WorkspaceScreen,
+)
 from agentic_debugger.ui.widgets import LiveBar, StatusHeader
 
 from textual.widgets import Static as _Static
@@ -122,7 +129,7 @@ class TestConfiguredStartScreen:
             await pilot.pause()
             assert start.start_available is False
             assert start.query_one("#model-row").display is True
-            assert "no configured model profiles" in str(start.query_one("#start-status").render())
+            assert "no custom command profiles configured" in str(start.query_one("#start-status").render())
             start._choice_selected("mode", start.MODE_DETERMINISTIC)
             assert start.start_available is True
 
@@ -173,7 +180,7 @@ class TestConfiguredStartScreen:
             start._open_choice_picker("model")
             await pilot.pause()
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            assert pilot.app.screen.title == "Select model profile"
+            assert pilot.app.screen.title == "Select custom command profile"
             assert pilot.app.screen.query_one("#choice-picker-list").highlighted == 0
             await pilot.press("enter")
             assert start.profile_id == "dummy"
@@ -198,6 +205,23 @@ class TestConfiguredStartScreen:
             assert "network-isolated" not in trust
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
+
+    def test_local_project_presents_custom_command_profile_provider_label(self, tmp_path):
+        write_profile(tmp_path, "dummy", "valid")
+
+        async def scenario(pilot):
+            app = pilot.app
+            screen = LocalProjectStartScreen(initial_project=str(tmp_path))
+            app.push_screen(screen)
+            await pilot.pause()
+            # Select the custom command profile
+            screen._model_selected("dummy")
+            await pilot.pause()
+            context = screen.query_one("#local-context-summary").render().plain
+            assert "Provider\nCustom command profile" in context
+            assert "Model\ndummy" in context
+
+        run_headless(make_app(tmp_path), scenario, size=(100, 30))
 
 
 class TestConfiguredLiveSession:

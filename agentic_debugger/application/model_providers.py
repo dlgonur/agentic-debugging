@@ -66,7 +66,7 @@ _PROVIDER_LABELS = {
     PROVIDER_KIND_OLLAMA: "Ollama Cloud",
     PROVIDER_KIND_OPENCODE: "OpenCode Go",
     PROVIDER_KIND_COMMANDCODE: "CommandCode GOAT",
-    PROVIDER_KIND_CONFIGURED: "Configured profiles",
+    PROVIDER_KIND_CONFIGURED: "Custom command profile",
 }
 
 #: Curated presentation defaults captured from the live GOAT catalog
@@ -185,22 +185,29 @@ def list_provider_models(
     """Grouped, availability-annotated model summaries for pickers.
 
     Offline and read-only: curated defaults for the subscription plans,
-    the qualified roster for Ollama Cloud.  Call :func:`list_live_models`
+    the general catalog for Ollama Cloud.  Call :func:`list_live_models`
     for the operator's full current plan catalog.
     """
 
     models: List[ProviderModel] = []
     if include_ollama:
-        from agentic_debugger.application.level32 import level32_model_profiles
+        from scripts.ollama_cloud_command_adapter import CLOUD_MODELS
 
-        for profile in level32_model_profiles()[:ollama_limit]:
+        for spec in sorted(CLOUD_MODELS.values(), key=lambda item: item.local_alias)[:ollama_limit]:
+            is_runnable = bool(spec.transport_profile_declared or spec.transport_verified)
+            unavailable_reason = (
+                None
+                if is_runnable
+                else "Catalog entry only: no transport profile declared for local execution"
+            )
             models.append(
                 ProviderModel(
                     kind=PROVIDER_KIND_OLLAMA,
-                    model_id=profile.alias,
-                    display_name=profile.display_name,
+                    model_id=spec.local_alias,
+                    display_name=spec.upstream_model,
                     provider_label=_PROVIDER_LABELS[PROVIDER_KIND_OLLAMA],
-                    available=True,
+                    available=is_runnable,
+                    unavailable_reason=unavailable_reason,
                 )
             )
     opencode_ok, opencode_reason = _opencode_availability()

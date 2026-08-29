@@ -192,6 +192,13 @@ TimeLimitRow:focus {
     text-style: bold;
 }
 
+#choice-picker-subtitle {
+    height: auto;
+    padding: 0;
+    margin: 0 0 1 0;
+    color: $foreground-muted;
+}
+
 #choice-picker-list {
     width: 1fr;
     height: auto;

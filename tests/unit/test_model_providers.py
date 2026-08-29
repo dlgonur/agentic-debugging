@@ -95,6 +95,37 @@ class TestModelListing:
         models = mp.list_provider_models(include_ollama=True)
         assert any(m.kind == mp.PROVIDER_KIND_OLLAMA for m in models)
 
+    def test_catalog_only_ollama_model_is_not_available_in_local_project(self) -> None:
+        models = mp.list_provider_models(include_ollama=True)
+        kimi3 = next((m for m in models if m.model_id == "kimi-k3:cloud"), None)
+        assert kimi3 is not None
+        assert kimi3.available is False
+        assert kimi3.unavailable_reason is not None
+        assert "Catalog entry only" in kimi3.unavailable_reason
+
+        # In contrast, GLM-5.3-Flash declares a transport profile and is runnable locally
+        glm = next((m for m in models if m.model_id == "glm-5.3-flash:cloud"), None)
+        assert glm is not None
+        assert glm.available is True
+        assert glm.unavailable_reason is None
+
+    def test_glm_5_3_flash_in_general_ollama_roster(self) -> None:
+        models = mp.list_provider_models(include_ollama=True)
+        glm = next((m for m in models if m.model_id == "glm-5.3-flash:cloud"), None)
+        assert glm is not None
+        assert glm.kind == mp.PROVIDER_KIND_OLLAMA
+        assert glm.display_name == "glm-5.3-flash"
+        assert glm.available is True
+
+    def test_glm_5_3_flash_not_in_level32_qualified_roster(self) -> None:
+        from agentic_debugger.application.level32 import level32_model_profiles
+
+        profiles = level32_model_profiles()
+        assert not any(p.alias == "glm-5.3-flash:cloud" for p in profiles)
+
+    def test_custom_command_profile_provider_label_is_consistent(self) -> None:
+        assert mp._PROVIDER_LABELS[mp.PROVIDER_KIND_CONFIGURED] == "Custom command profile"
+
 
 class TestResolution:
     def test_unknown_provider_fails_closed(self) -> None:
@@ -129,6 +160,33 @@ class TestResolution:
     def test_configured_profiles_do_not_resolve_here(self) -> None:
         with pytest.raises(mp.ProviderRegistryError):
             mp.resolve_provider_live_config(mp.PROVIDER_KIND_CONFIGURED, "anything")
+
+    def test_catalog_only_ollama_model_fails_resolution(self) -> None:
+        with pytest.raises(mp.ProviderRegistryError) as excinfo:
+            mp.resolve_provider_live_config(mp.PROVIDER_KIND_OLLAMA, "kimi-k3:cloud")
+        assert "not supported" in str(excinfo.value).casefold() or "not eligible" in str(excinfo.value).casefold()
+
+    def test_glm_5_3_flash_resolves_live_config_and_provenance(self) -> None:
+        config, provenance = mp.resolve_provider_live_config(
+            mp.PROVIDER_KIND_OLLAMA, "glm-5.3-flash:cloud"
+        )
+        assert provenance["provider"] == mp.PROVIDER_KIND_OLLAMA
+        assert provenance["profile_id"] == "glm-5.3-flash:cloud"
+        assert config.model_name == "glm-5.3-flash:cloud"
+
+    def test_level32_fails_closed_on_unqualified_model(self) -> None:
+        import scripts.run_cookiecutter_967_pdb_proof as proof_mod
+        from agentic_debugger.application.ollama_cloud_source import ScenarioInputError, _config
+
+        # Level-32 proof operator gate rejects non-live-verified models
+        with pytest.raises(proof_mod.ProofError) as excinfo:
+            proof_mod._require_treatment_eligible("glm-5.3-flash:cloud")
+        assert "not yet live-transport eligible for Level-32" in str(excinfo.value)
+
+        # Level-32 session config builder also rejects non-treatment-eligible models
+        with pytest.raises(ScenarioInputError) as excinfo2:
+            _config("glm-5.3-flash:cloud", logical_call_ceiling=32)
+        assert "not eligible" in str(excinfo2.value)
 
 
 class TestLiveModelListing:

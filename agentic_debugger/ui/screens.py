@@ -778,14 +778,20 @@ class ChoicePickerScreen(Screen):
         choices: list[ChoiceOption],
         current: Optional[str],
         on_select: Callable[[str], None],
+        subtitle: Optional[str] = None,
+        empty_text: Optional[str] = None,
     ) -> None:
         super().__init__()
         self.title, self.choices, self.current = title, list(choices), current
+        self.subtitle = subtitle
+        self.empty_text = empty_text
         self._on_select = on_select
 
     def compose(self) -> ComposeResult:
         with Vertical(id="choice-picker-dialog"):
             yield Static(self.title, id="choice-picker-title")
+            if self.subtitle:
+                yield Static(self.subtitle, id="choice-picker-subtitle")
             yield OptionList(id="choice-picker-list")
             yield Static("up/down navigate   enter select   esc cancel", id="choice-picker-hint")
 
@@ -807,7 +813,8 @@ class ChoicePickerScreen(Screen):
             self._refresh_option_markers()
         else:
             option_list.display = False
-            self.mount(Static("No eligible model profiles.", id="choice-picker-empty"),
+            msg = self.empty_text or "No eligible choices available."
+            self.mount(Static(msg, id="choice-picker-empty"),
                        before=self.query_one("#choice-picker-hint"))
 
     def _option_renderable(self, index: int) -> Text:
@@ -987,9 +994,13 @@ class StartSessionScreen(Screen):
         if row_key == "mode":
             choices = [
                 self._choice(self.MODE_DETERMINISTIC, "Offline demo", "Deterministic and provider-free."),
-                self._choice(self.MODE_CONFIGURED, "Configured model", "Uses a command-model profile you control."),
+                self._choice(self.MODE_CONFIGURED, "Custom command profile", "Uses a command-model profile you control."),
             ]
             title, current = "Select execution mode", self._mode
+            self.app.push_screen(ChoicePickerScreen(
+                title=title, choices=choices, current=current,
+                on_select=lambda value: self._choice_selected(row_key, value),
+            ))
         elif row_key == "task":
             choices = []
             for label, task_id in self._task_options:
@@ -997,12 +1008,20 @@ class StartSessionScreen(Screen):
                 secondary = label.split("·", 1)[1].strip() if "·" in label else task_id
                 choices.append(self._choice(task_id, title, secondary=secondary))
             title, current = "Select task", self._task_id
+            self.app.push_screen(ChoicePickerScreen(
+                title=title, choices=choices, current=current,
+                on_select=lambda value: self._choice_selected(row_key, value),
+            ))
         elif row_key == "debugger":
             choices = [
                 self._choice("pdb-on-uncertainty", "On uncertainty", "Use debugger when runtime evidence is useful."),
                 self._choice("static-baseline", "Disabled", "Use static reasoning only."),
             ]
             title, current = "Select debugger policy", self._policy
+            self.app.push_screen(ChoicePickerScreen(
+                title=title, choices=choices, current=current,
+                on_select=lambda value: self._choice_selected(row_key, value),
+            ))
         elif row_key == "model":
             if is_ladder_task(self._task_id):
                 choices = [
@@ -1014,16 +1033,26 @@ class StartSessionScreen(Screen):
                     )
                     for p in self.app.level32_model_profiles()
                 ]
-                title, current = "Select model", self._profile_id
+                title, current = "Select qualified Ollama model", self._profile_id
+                subtitle = "Scientific Level-32 roster. Other providers are available in Local Project."
+                empty_text = "No qualified Ollama models available."
+                self.app.push_screen(ChoicePickerScreen(
+                    title=title, choices=choices, current=current,
+                    subtitle=subtitle,
+                    empty_text=empty_text,
+                    on_select=lambda value: self._choice_selected(row_key, value),
+                ))
             else:
                 choices = [self._choice(p.profile_id, p.display_name, f"command: {p.executable}", p.profile_id) for p in self._profiles]
-                title, current = "Select model profile", self._profile_id
+                title, current = "Select custom command profile", self._profile_id
+                empty_text = "No custom command profiles configured."
+                self.app.push_screen(ChoicePickerScreen(
+                    title=title, choices=choices, current=current,
+                    empty_text=empty_text,
+                    on_select=lambda value: self._choice_selected(row_key, value),
+                ))
         else:
             return
-        self.app.push_screen(ChoicePickerScreen(
-            title=title, choices=choices, current=current,
-            on_select=lambda value: self._choice_selected(row_key, value),
-        ))
 
     def _choice_selected(self, row_key: str, value: str) -> None:
         if row_key == "mode":
@@ -1082,7 +1111,7 @@ class StartSessionScreen(Screen):
             if self._profile_id is None:
                 return "Not selected" if profiles else "Not available"
             return next((p.display_name for p in profiles if p.alias == self._profile_id), "Not available")
-        return next((p.display_name for p in self._profiles if p.profile_id == self._profile_id), "Not configured")
+        return next((p.display_name for p in self._profiles if p.profile_id == self._profile_id), "No profile configured")
 
     def _task_display_name(self) -> str:
         title = next(
@@ -1096,7 +1125,7 @@ class StartSessionScreen(Screen):
         return title
 
     def _render_rows(self) -> None:
-        self.query_one("#mode-row", SessionSettingRow).set_value("Offline demo" if self._mode == self.MODE_DETERMINISTIC else "Configured model")
+        self.query_one("#mode-row", SessionSettingRow).set_value("Offline demo" if self._mode == self.MODE_DETERMINISTIC else "Custom command profile")
         self.query_one("#model-row", SessionSettingRow).set_value(self._profile_display_name())
         self.query_one("#task-row", SessionSettingRow).set_value(self._task_display_name())
         self.query_one("#debugger-row", SessionSettingRow).set_value("On uncertainty" if self._policy == "pdb-on-uncertainty" else "Disabled")
@@ -1131,7 +1160,7 @@ class StartSessionScreen(Screen):
         elif self._config_error is not None and configured:
             status.update(f"[{ERROR}]Configuration error: {_markup_escape(self._config_error)}[/]")
         elif configured and not self._profiles:
-            status.update(f"[{WARNING}]Start unavailable — no configured model profiles.[/]")
+            status.update(f"[{WARNING}]Start unavailable — no custom command profiles configured.[/]")
         else:
             status.update("")
         trust = self.query_one("#start-trust", Static)
@@ -1172,15 +1201,15 @@ class StartSessionScreen(Screen):
             return
         ready = "Yes" if self.start_available and self._task_id else "No"
         lines = [
-            f"[{MUTED}]Mode[/]\n{_markup_escape('Offline demo' if self._mode == self.MODE_DETERMINISTIC else 'Configured model')}",
+            f"[{MUTED}]Mode[/]\n{_markup_escape('Offline demo' if self._mode == self.MODE_DETERMINISTIC else 'Custom command profile')}",
             f"\n[{MUTED}]Debugger[/]\n{_markup_escape('On uncertainty' if self._policy == 'pdb-on-uncertainty' else 'Disabled')}",
             f"\n[{MUTED}]Task[/]\n{_markup_escape(self._task_display_name())}",
             f"\n[{MUTED}]Task ID[/]\n{_markup_escape(self._task_id or 'Not selected')}",
-            f"\n[{MUTED}]Execution[/]\n{_markup_escape('Local, provider-free' if self._mode == self.MODE_DETERMINISTIC else 'Configured command')}",
+            f"\n[{MUTED}]Execution[/]\n{_markup_escape('Local, provider-free' if self._mode == self.MODE_DETERMINISTIC else 'Custom command profile')}",
         ]
         if self._mode == self.MODE_CONFIGURED:
             lines += [
-                f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_id or 'Not configured')}",
+                f"\n[{MUTED}]Profile[/]\n{_markup_escape(self._profile_id or 'No profile configured')}",
                 f"\n[{MUTED}]Trust[/]\nconfigured user command",
             ]
         lines.append(f"\n[{MUTED}]Ready[/]\n{ready}")
@@ -1262,7 +1291,7 @@ class StartSessionScreen(Screen):
             status.update(f"[{ERROR}]Selected task is not available.[/]")
             return
         if selected_mode == self.MODE_CONFIGURED and not self.start_available:
-            status.update(f"[{WARNING}]Start unavailable — choose a configured model profile.[/]")
+            status.update(f"[{WARNING}]Start unavailable — choose a custom command profile.[/]")
             return
         try:
             if is_ladder_task(selected_task):
@@ -1424,7 +1453,7 @@ class _ConfiguredProfileModel(ProviderModel):
     """A configured command profile presented through the provider registry."""
 
     executable: str = ""
-    provider_label: str = "Configured profiles"
+    provider_label: str = "Custom command profile"
     available: bool = True
     unavailable_reason: Optional[str] = None
 
@@ -1568,7 +1597,7 @@ class LocalProjectStartScreen(Screen):
                         id="start-title",
                     )
                     yield Static("REPAIR INPUTS", id="start-section-label")
-                    yield Static("Mode: isolated local repository", id="local-mode-row")
+                    yield Static("Mode: isolated local repository · Unified provider platform", id="local-mode-row")
                     yield SessionSettingRow("Project", row_key="project", id="project-row")
                     with Horizontal(id="local-project-actions"):
                         yield CopyAllButton("Use current directory", id="use-cwd-button", classes="copy-button")
@@ -1797,6 +1826,8 @@ class LocalProjectStartScreen(Screen):
                 bug_ctx = _bl
             else:
                 bug_ctx = "Not described"
+            match = next((p for p in self._profiles if p.model_id == self._profile_id), None) if self._profiles and self._profile_id else None
+            provider_str = match.provider_label if match else "—"
             lines = [
                 f"[{MUTED}]Project[/]\n{_markup_escape(self._project_path or '—')}",
                 f"\n[{MUTED}]Repo[/]\n{_markup_escape(repo)}",
@@ -1805,6 +1836,7 @@ class LocalProjectStartScreen(Screen):
                 f"\n[{MUTED}]Bug[/]\n{_markup_escape(bug_ctx)}",
                 f"\n[{MUTED}]Repro[/]\n{_markup_escape(self._repro_command or 'Not set')}",
                 f"\n[{MUTED}]Verify[/]\n{_markup_escape(self._verify_command or 'Not set')}",
+                f"\n[{MUTED}]Provider[/]\n{_markup_escape(provider_str)}",
                 f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_id or 'offline')}",
             ]
             self.query_one("#local-context-summary", Static).update("\n".join(lines))
@@ -1916,16 +1948,19 @@ class LocalProjectStartScreen(Screen):
                 else:
                     detail = f"{p.provider_label} · {p.model_id}"
                 choices.append(ChoiceOption(p.model_id, p.display_name, detail))
+        subtitle = "Unified platform: Ollama Cloud · OpenCode Go · CommandCode GOAT"
         if not choices:
             # No eligible models
             choices.append(ChoiceOption("", "No eligible models available", "No provider models qualified"))
             self.app.push_screen(ChoicePickerScreen(
                 title="Select model", choices=choices, current="",
+                subtitle=subtitle,
                 on_select=lambda v: None,
             ))
             return
         self.app.push_screen(ChoicePickerScreen(
             title="Select model", choices=choices, current=self._profile_id or choices[0].value,
+            subtitle=subtitle,
             on_select=self._model_selected,
         ))
 

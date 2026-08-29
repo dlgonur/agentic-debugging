@@ -157,7 +157,7 @@ class TestBootAndHome:
             # The configured model row uses the same picker API.
             await pilot.press("down", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            assert pilot.app.screen.title == "Select model profile"
+            assert pilot.app.screen.title == "Select custom command profile"
             await pilot.press("escape")
             assert isinstance(pilot.app.screen, StartSessionScreen)
 
@@ -294,7 +294,8 @@ class TestLevel32NewSession:
             await pilot.press("down", "enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             model_picker = pilot.app.screen
-            assert model_picker.title == "Select model"
+            assert model_picker.title == "Select qualified Ollama model"
+            assert "Scientific Level-32 roster" in (model_picker.subtitle or "")
             assert len(model_picker.choices) == 15
             assert all(":" in choice.value for choice in model_picker.choices)
             await pilot.press("enter")

@@ -408,3 +408,74 @@ def test_live_context_panel_is_wide_only(tmp_path: Path) -> None:
         assert pilot.app.screen.query_one("#live-run-context").display is False
 
     run_headless(narrow_app, narrow_scenario, size=(80, 32))
+
+
+def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Deterministic, provider-free proof that selecting model X in Level-32 picker
+    passes model X strictly to start_live_session."""
+    app = make_app(tmp_path)
+    start_calls = []
+
+    def record_start(**kwargs):
+        start_calls.append(kwargs)
+
+    monkeypatch.setattr(app, "start_live_session", record_start)
+
+    async def scenario(pilot):
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+        # Select Level-32 task
+        start._choice_selected("task", "audreyr__cookiecutter-967")
+        profiles = level32_model_profiles()
+        assert len(profiles) >= 2
+        # Target model X (e.g. deepseek-v4-flash:cloud or second profile)
+        target = next((p for p in profiles if "deepseek" in p.alias), profiles[1])
+        start._open_choice_picker("model")
+        await pilot.pause()
+        picker = pilot.app.screen
+        assert isinstance(picker, ChoicePickerScreen)
+        assert picker.title == "Select qualified Ollama model"
+        assert "Scientific Level-32 roster" in (picker.subtitle or "")
+
+        # Select the target model in picker
+        picker._on_select(target.alias)
+        pilot.app.pop_screen()
+        await pilot.pause()
+
+        assert start.profile_id == target.alias
+        assert target.display_name in start.query_one("#model-row").render().plain
+
+        # Start session
+        start.action_start()
+        assert len(start_calls) == 1
+        assert start_calls[0]["task_id"] == "audreyr__cookiecutter-967"
+        assert start_calls[0]["profile_id"] == target.alias
+        assert start_calls[0]["source_kind"] is SourceKind.LEVEL32_OPERATOR
+
+    run_headless(app, scenario, size=(120, 32))
+
+
+def test_ladder_model_picker_empty_state_is_truthful_and_domain_specific(tmp_path: Path, monkeypatch) -> None:
+    app = make_app(tmp_path)
+    monkeypatch.setattr(app, "level32_model_profiles", lambda: ())
+
+    async def scenario(pilot):
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+        # Select Level-32 task
+        start._choice_selected("task", "audreyr__cookiecutter-967")
+        start._open_choice_picker("model")
+        await pilot.pause()
+
+        picker = pilot.app.screen
+        assert isinstance(picker, ChoicePickerScreen)
+        assert picker.title == "Select qualified Ollama model"
+        assert "Scientific Level-32 roster" in (picker.subtitle or "")
+
+        empty_widget = picker.query_one("#choice-picker-empty")
+        empty_text = str(empty_widget.render())
+        assert "No qualified Ollama models available." in empty_text
+        assert "custom command profile" not in empty_text.casefold()
+        assert "custom command profiles" not in empty_text.casefold()
+
+    run_headless(app, scenario, size=(120, 32))

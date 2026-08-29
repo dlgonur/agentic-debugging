@@ -140,6 +140,21 @@ CLOUD_MODELS: dict[str, CloudModelSpec] = {
         idle_timeout_seconds=20.0,
         request_timeout_seconds=60.0,
     ),
+    "glm-5.3-flash:cloud": CloudModelSpec(
+        local_alias="glm-5.3-flash:cloud",
+        upstream_model="glm-5.3-flash",
+        family="glm5.3",
+        parameter_count=None,
+        context_length=1000000,
+        capabilities=("completion", "thinking", "tools", "vision"),
+        # General Ollama Cloud catalog entry for Local Project debugging.
+        # Not scientifically qualified for the Level-32 ladder.
+        transport_profile_declared=True,
+        transport_verified=False,
+        thinking_level=None,
+        idle_timeout_seconds=20.0,
+        request_timeout_seconds=60.0,
+    ),
     "deepseek-v4-flash:cloud": CloudModelSpec(
         local_alias="deepseek-v4-flash:cloud",
         upstream_model="deepseek-v4-flash",
@@ -1831,20 +1846,23 @@ def build_ollama_live_config(
 
     Validates the alias against the repository-owned Cloud roster, derives
     timeouts from the model's transport profile when not supplied, and builds
-    the exact JSONL command the worker will execute.  No network or daemon
-    contact is performed; transport qualification remains a separate
-    Start-time gate.  Fail-closed on unknown or non-eligible aliases.
+    the exact JSONL command the worker will execute. No network or daemon
+    contact is performed.
+
+    Requires a declared transport profile (either transport_profile_declared
+    or transport_verified). Pure catalog-only aliases without declared profiles
+    fail closed. Scientific Level-32 execution maintains a separate, stricter
+    treatment qualification gate (is_treatment_eligible).
     """
 
     import sys as _sys
     from pathlib import Path as _Path
 
-    # Import here to avoid circular import when evaluated live imports this module
     from agentic_debugger.evaluation.live import LiveModelConfig as _LiveModelConfig
 
     spec = resolve_cloud_model(alias)
-    if spec.readiness != "live_verified" or not is_treatment_eligible(spec):
-        raise OllamaAdapterError("selected Ollama Cloud alias is not eligible", kind="configuration")
+    if not spec.transport_profile_declared and not spec.transport_verified:
+        raise OllamaAdapterError("selected Ollama Cloud alias is not supported", kind="configuration")
     if type(logical_call_ceiling) is not int or isinstance(logical_call_ceiling, bool) or not 1 <= logical_call_ceiling <= 512:
         raise OllamaAdapterError("logical call ceiling is invalid", kind="configuration")
     idle = spec.idle_timeout_seconds if idle_timeout_seconds is None else idle_timeout_seconds
