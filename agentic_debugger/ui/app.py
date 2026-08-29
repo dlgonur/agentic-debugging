@@ -478,18 +478,23 @@ class LocalApplicationV1(App):
         max_elapsed_seconds: Optional[int],
         source_kind: SourceKind = SourceKind.OFFLINE_DEMO,
         profile_id: Optional[str] = None,
+        model_provider: Optional[str] = None,
         retry_of_session_id: Optional[str] = None,
     ) -> None:
         """Start one real live session in the worker.
 
-        Two supported modes share the same accepted application pipeline:
+        Supported modes share the same accepted application pipeline:
 
         - deterministic offline (default): the production deterministic
           source (real controller, tool registry, PDB, PatchManager, and
           independent verifier);
         - configured command model: the same pipeline driven by a validated
           app-owned command-model profile through the accepted JSON-lines
-          command transport and ``LiveModelAdapter``.
+          command transport and ``LiveModelAdapter``;
+        - provider model: the same configured-command pipeline with the
+          model resolved through the unified provider registry
+          (Ollama Cloud / OpenCode Go / CommandCode GOAT) — the same
+          canonical builder Local Project uses.
 
         The workspace is pushed first so the presentation model is ready
         for the first events.
@@ -508,6 +513,18 @@ class LocalApplicationV1(App):
             raise ValueError("Ollama Cloud ladder source requires a ladder task")
         if source_kind is SourceKind.OFFLINE_DEMO and task_id == LEVEL32_TASK_ID:
             raise ValueError("offline demo source cannot start the Level-32 task")
+        # Provider models run through the configured command source's
+        # registry parameter contract; any other pairing fails closed.
+        _REGISTRY_PROVIDERS = ("ollama_cloud", "opencode_go", "commandcode_goat")
+        if model_provider is not None:
+            if model_provider not in _REGISTRY_PROVIDERS:
+                raise ValueError(f"unknown model provider: {model_provider!r}")
+            if source_kind is not SourceKind.CONFIGURED_MODEL:
+                raise ValueError(
+                    "provider models require the configured model source"
+                )
+            if profile_id is None or not str(profile_id).strip():
+                raise ValueError("provider model sessions require a model id")
         session_id = make_session_id()
         generation = self._live_generation + 1
         run_id = f"run-{session_id}"
@@ -539,27 +556,40 @@ class LocalApplicationV1(App):
         elif source_kind is SourceKind.CONFIGURED_MODEL:
             if profile_id is None:
                 raise ValueError("configured command-model sessions require a profile id")
-            # Re-validate at start time: the configuration may have changed
-            # between discovery and start; a missing/invalid profile is a
-            # clear start error, never a silent fallback.  The selected
-            # profile's safe fingerprint is pinned into the worker launch
-            # params so the worker can detect a configuration that changed
-            # between this selection and its own load (TOCTOU) and fail
-            # closed before launching any executable.
-            try:
-                profile = self._config_store.get(profile_id)
-            except CommandConfigError as exc:
-                raise RuntimeError(
-                    f"configured command model unavailable: {exc}"
-                ) from exc
+            if model_provider is not None:
+                # Unified provider platform: the model resolves through the
+                # registry inside the worker (fail-closed before any
+                # executable launch); there is no file-backed profile to
+                # fingerprint, and the model id is the configuration
+                # reference.
+                scenario_params = {
+                    "provider": model_provider,
+                    "model_id": profile_id,
+                    "policy": policy,
+                }
+                model_config_ref = f"{model_provider}:{profile_id}"
+            else:
+                # Re-validate at start time: the configuration may have changed
+                # between discovery and start; a missing/invalid profile is a
+                # clear start error, never a silent fallback.  The selected
+                # profile's safe fingerprint is pinned into the worker launch
+                # params so the worker can detect a configuration that changed
+                # between this selection and its own load (TOCTOU) and fail
+                # closed before launching any executable.
+                try:
+                    profile = self._config_store.get(profile_id)
+                except CommandConfigError as exc:
+                    raise RuntimeError(
+                        f"configured command model unavailable: {exc}"
+                    ) from exc
+                scenario_params = {
+                    "config_root": str(self._config_store.root),
+                    "profile_id": profile_id,
+                    "policy": policy,
+                    "expected_fingerprint": profile.configuration_fingerprint,
+                }
+                model_config_ref = profile_id
             scenario = configured_source_name()
-            scenario_params = {
-                "config_root": str(self._config_store.root),
-                "profile_id": profile_id,
-                "policy": policy,
-                "expected_fingerprint": profile.configuration_fingerprint,
-            }
-            model_config_ref = profile_id
         elif task_id in LADDER_TASK_IDS:
             if profile_id is None:
                 raise ValueError("capability-ladder sessions require a canonical Ollama Cloud alias")
@@ -610,6 +640,7 @@ class LocalApplicationV1(App):
                     max_elapsed_seconds=max_elapsed_seconds,
                     source_kind=source_kind,
                     profile_id=profile_id,
+                    model_provider=model_provider,
                     retry_of_session_id=retry_of,
                 ),
             }
