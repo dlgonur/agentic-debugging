@@ -231,6 +231,25 @@ class TestLadderTarget:
         assert readiness.ready is False
         assert any(item.field == ROW_MODEL for item in readiness.issues)
 
+    def test_provider_identity_collision_cannot_satisfy_qualification(self):
+        collision = ModelChoice(
+            PROVIDER_COMMANDCODE,
+            "qwen3.5:cloud",
+            "CommandCode alias collision",
+        )
+        catalog = _catalog()
+        assert catalog.ladder_model(collision) is None
+        readiness = derive_readiness(
+            self._ladder(model=collision),
+            catalog,
+            _CLEAN,
+        )
+        assert readiness.ready is False
+        assert any(
+            item.field == ROW_MODEL and "qualified Ollama Cloud" in item.message
+            for item in readiness.issues
+        )
+
     def test_frozen_rows_are_disabled_with_reasons(self):
         readiness = derive_readiness(self._ladder(), _catalog(), _CLEAN)
         for row in (ROW_DEBUGGER, ROW_TIME_LIMIT, ROW_AUTO_RETRY):

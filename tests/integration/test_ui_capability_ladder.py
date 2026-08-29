@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -20,6 +21,7 @@ from agentic_debugger.application.events import (
     SourceKind,
 )
 from agentic_debugger.application.level32 import LADDER_TASKS, level32_model_profiles
+from agentic_debugger.application.model_providers import ProviderModel
 from agentic_debugger.application.presentation import (
     ModelProvenanceView,
     PresentationIdentity,
@@ -475,6 +477,127 @@ def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.M
         assert start_calls[0]["policy"] == "exact-pdb-level32-frozen"
 
     run_headless(app, scenario, size=(120, 32))
+
+
+def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Changing Target changes compatibility, never provider discoverability."""
+    app = make_app(tmp_path)
+    qualified = level32_model_profiles()[0]
+    collision_id = qualified.alias
+    models = (
+        ProviderModel(
+            "ollama_cloud",
+            collision_id,
+            qualified.display_name,
+            "Ollama Cloud",
+            True,
+        ),
+        ProviderModel(
+            "ollama_cloud",
+            "glm-5.3-flash:cloud",
+            "glm-5.3-flash",
+            "Ollama Cloud",
+            True,
+        ),
+        ProviderModel(
+            "opencode_go",
+            "opencode-go/glm-5.3",
+            "glm-5.3",
+            "OpenCode Go",
+            True,
+        ),
+        ProviderModel(
+            "commandcode_goat",
+            collision_id,
+            "CommandCode collision",
+            "CommandCode GOAT",
+            True,
+        ),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.ui.screens.list_provider_models",
+        lambda **_kwargs: models,
+    )
+    monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: (qualified,))
+    monkeypatch.setattr(
+        app,
+        "configured_profiles",
+        lambda: (
+            (
+                SimpleNamespace(
+                    profile_id="custom-model",
+                    display_name="Custom model",
+                    executable="custom-adapter",
+                ),
+            ),
+            None,
+        ),
+    )
+    start_calls: list[dict] = []
+    monkeypatch.setattr(app, "start_live_session", lambda **kw: start_calls.append(kw))
+
+    expected_groups = [
+        "OFFLINE",
+        "OLLAMA CLOUD",
+        "OPENCODE GO",
+        "COMMANDCODE GOAT",
+        "CUSTOM COMMAND PROFILES",
+    ]
+
+    async def scenario(pilot):
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+
+        start._open_model_picker()
+        await pilot.pause()
+        curated_picker = pilot.app.screen
+        assert isinstance(curated_picker, ChoicePickerScreen)
+        curated_groups = [choice.group for choice in curated_picker.choices if choice.group]
+        assert curated_groups == expected_groups
+        pilot.app.pop_screen()
+        await pilot.pause()
+
+        start._choice_selected("target", "ladder")
+        start._choice_selected("task", "audreyr__cookiecutter-967")
+        start._open_model_picker()
+        await pilot.pause()
+        ladder_picker = pilot.app.screen
+        assert isinstance(ladder_picker, ChoicePickerScreen)
+        ladder_groups = [choice.group for choice in ladder_picker.choices if choice.group]
+        assert ladder_groups == expected_groups
+
+        by_value = {choice.value: choice for choice in ladder_picker.choices}
+        qualified_key = f"ollama_cloud:{collision_id}"
+        assert by_value[qualified_key].disabled is False
+        assert sum(choice.value == qualified_key for choice in ladder_picker.choices) == 1
+        assert by_value["ollama_cloud:glm-5.3-flash:cloud"].disabled is True
+        assert "Scientific ladder contract" in by_value[
+            "ollama_cloud:glm-5.3-flash:cloud"
+        ].disabled_reason
+        for key in (
+            "opencode_go:opencode-go/glm-5.3",
+            f"commandcode_goat:{collision_id}",
+            "configured:custom-model",
+        ):
+            assert by_value[key].disabled is True
+            assert "Scientific ladder contract" in by_value[key].disabled_reason
+        offline = by_value["offline:"]
+        assert offline.disabled is True
+        assert "qualified Ollama Cloud" in offline.disabled_reason
+
+        # A colliding CommandCode model id remains CommandCode and blocked;
+        # Start cannot reinterpret it as the qualified Ollama alias.
+        pilot.app.pop_screen()
+        await pilot.pause()
+        start._choice_selected("model", f"commandcode_goat:{collision_id}")
+        assert start._config.model.provider == "commandcode_goat"
+        assert start.start_available is False
+        start.action_start()
+        assert start_calls == []
+
+    run_headless(app, scenario, size=(120, 36))
 
 
 def test_ladder_empty_roster_blocks_start_with_domain_reason(tmp_path: Path, monkeypatch) -> None:

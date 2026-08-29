@@ -190,8 +190,22 @@ class SessionCatalog:
         )
 
     def ladder_model(self, choice: ModelChoice) -> Optional[ModelOption]:
+        """Return the qualified ladder entry for an Ollama Cloud choice.
+
+        Model ids are not globally unique across providers.  Qualification
+        therefore binds the frozen roster alias to its provider identity;
+        a configured or subscription model with the same text must never be
+        reinterpreted as the qualified Ollama model.
+        """
+        if choice.provider != PROVIDER_OLLAMA:
+            return None
         return next(
-            (m for m in self.ladder_models if m.model_id == choice.model_id), None
+            (
+                m
+                for m in self.ladder_models
+                if m.provider == PROVIDER_OLLAMA and m.model_id == choice.model_id
+            ),
+            None,
         )
 
 
@@ -249,7 +263,12 @@ class SessionReadiness:
 # -- compatibility -------------------------------------------------------------
 
 
-def model_compatibility(target: str, option: ModelOption) -> Tuple[bool, str]:
+def model_compatibility(
+    target: str,
+    option: ModelOption,
+    *,
+    ladder_qualified: bool = False,
+) -> Tuple[bool, str]:
     """Whether one model option may be selected for one target.
 
     Pure policy: availability of the provider itself is a separate
@@ -263,6 +282,13 @@ def model_compatibility(target: str, option: ModelOption) -> Tuple[bool, str]:
         if target == TARGET_LADDER:
             return False, "Ladder runs use qualified Ollama Cloud models"
         return True, ""
+    if target == TARGET_LADDER and provider == PROVIDER_OLLAMA:
+        if ladder_qualified:
+            return True, ""
+        return (
+            False,
+            "Scientific ladder contract: Ollama model is not qualified",
+        )
     if target == TARGET_LADDER:
         return (
             False,

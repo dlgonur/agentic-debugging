@@ -729,9 +729,9 @@ class LocalApplicationV1(App):
         # Support both Ollama Cloud roster (primary) and configured command-model profiles (additional)
         if profile_id is None or not str(profile_id).strip():
             raise RuntimeError("Local Project Debug requires a selected model profile")
-        subscription_provider = None
-        if model_provider in ("opencode_go", "commandcode_goat"):
-            # Subscription providers resolve through the unified registry,
+        registry_provider = None
+        if model_provider in ("ollama_cloud", "opencode_go", "commandcode_goat"):
+            # Registry providers resolve through the unified registry,
             # fail-closed before any worktree or worker resource exists.
             from agentic_debugger.application.model_providers import (
                 ProviderRegistryError,
@@ -742,29 +742,30 @@ class LocalApplicationV1(App):
                 resolve_provider_live_config(model_provider, profile_id)
             except ProviderRegistryError as exc:
                 raise RuntimeError(f"Selected provider model unavailable: {exc}") from exc
-            subscription_provider = model_provider
+            registry_provider = model_provider
         ollama_profile = None
         expected_fp = None
         model_config_ref = None
-        try:
-            from agentic_debugger.application.level32 import level32_model_profiles
-            for m in level32_model_profiles():
-                if m.alias == profile_id:
-                    ollama_profile = m
-                    expected_fp = m.transport_config_fingerprint
-                    model_config_ref = m.alias
-                    break
-        except Exception:
-            pass
-        if ollama_profile is None and subscription_provider is None:
+        if registry_provider is None:
+            try:
+                from agentic_debugger.application.level32 import level32_model_profiles
+                for m in level32_model_profiles():
+                    if m.alias == profile_id:
+                        ollama_profile = m
+                        expected_fp = m.transport_config_fingerprint
+                        model_config_ref = m.alias
+                        break
+            except Exception:
+                pass
+        if ollama_profile is None and registry_provider is None:
             try:
                 prof = self._config_store.get(profile_id)
                 expected_fp = prof.configuration_fingerprint
                 model_config_ref = prof.profile_id
             except Exception as exc:
                 raise RuntimeError(f"Selected model profile unavailable: {exc}") from exc
-        if subscription_provider is not None:
-            model_config_ref = profile_id
+        if registry_provider is not None:
+            model_config_ref = f"{registry_provider}:{profile_id}"
         validated = validate_local_project(project_path, launch_cwd=launch_cwd)
         if validated.dirty:
             raise RuntimeError(
@@ -830,12 +831,13 @@ class LocalApplicationV1(App):
                 "parent_tmpdir": str(parent_tmpdir),
                 "policy": "pdb-on-uncertainty",
             }
-            # Mark the selected provider for the worker (explicit provider
-            # wins; the Ollama roster keeps its legacy markers for replay
-            # compatibility).
+            # Mark the selected provider for the worker.  New registry-backed
+            # Ollama selections use the same provider/model contract as the
+            # subscription providers.  Calls without an explicit provider
+            # retain the qualified-Ollama legacy markers for replay.
             try:
-                if subscription_provider is not None:
-                    scenario_params["provider"] = subscription_provider
+                if registry_provider is not None:
+                    scenario_params["provider"] = registry_provider
                     scenario_params["model_id"] = profile_id
                 else:
                     from agentic_debugger.application.level32 import level32_model_profiles

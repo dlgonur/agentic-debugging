@@ -109,7 +109,7 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if type(model_id) is not str or not model_id: raise ScenarioInputError("model_id must be a non-empty string or null")
         if len(model_id.encode("utf-8"))>128: raise ScenarioInputError("model_id exceeds bound")
         if contains_credential_shape(model_id): raise ScenarioInputError("model_id contains credential shape")
-    if provider in ("opencode_go","commandcode_goat") and model_id is None:
+    if provider in ("ollama_cloud","opencode_go","commandcode_goat") and model_id is None:
         raise ScenarioInputError(f"provider {provider} requires model_id")
     return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id}
 
@@ -821,14 +821,14 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     provider = validated["provider"]
     model_id = validated["model_id"]
     ollama_alias = validated["ollama_alias"] or (
-        (model_id or profile_id) if (provider == "ollama_cloud" or is_ollama) else None
+        profile_id if provider is None and is_ollama else None
     )
     profile = None
     ollama_profile = None
     provider_live_config = None
     provider_provenance = None
-    if provider in ("opencode_go", "commandcode_goat"):
-        # Subscription providers resolve through the unified registry: one
+    if provider in ("ollama_cloud", "opencode_go", "commandcode_goat"):
+        # Registry providers resolve through the unified registry: one
         # validated construction path, fail-closed availability, and no
         # credential material anywhere near the journal.
         from agentic_debugger.application.model_providers import (
@@ -843,7 +843,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             )
         except ProviderRegistryError as exc:
             raise ScenarioInputError(f"provider model unavailable: {exc}") from exc
-    elif ((provider == "ollama_cloud") or (provider is None and is_ollama)) and ollama_alias:
+    elif provider is None and is_ollama and ollama_alias:
         try:
             from agentic_debugger.application.level32 import level32_model_profiles
             for m in level32_model_profiles():

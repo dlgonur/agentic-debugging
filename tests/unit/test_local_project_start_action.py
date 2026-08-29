@@ -157,6 +157,162 @@ def test_6_successful_start_via_s(tmp_path):
     _run_async(_inner())
 
 
+def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
+    tmp_path, monkeypatch
+):
+    """Real unified UI -> production start -> worker provider params.
+
+    Provider execution, worktree creation, and the worker are replaced at
+    their boundaries.  The production start method itself remains real.
+    """
+
+    async def _inner():
+        from types import SimpleNamespace
+
+        from agentic_debugger.application import level32, local_project, model_providers
+        from agentic_debugger.application.events import SourceKind
+        from agentic_debugger.application.local_project import (
+            reset_launch_cwd,
+            set_launch_cwd_for_tests,
+        )
+        from agentic_debugger.application.model_providers import ProviderModel
+        from agentic_debugger.evaluation.live import LiveModelConfig
+        from agentic_debugger.ui import app as app_module
+        from agentic_debugger.ui import screens as screens_module
+        from agentic_debugger.ui.app import LocalApplicationV1
+        from agentic_debugger.ui.screens import ChoicePickerScreen
+
+        reset_launch_cwd()
+        repo = _make_repo(tmp_path, "general-ollama-project")
+        set_launch_cwd_for_tests(tmp_path)
+        app = LocalApplicationV1(history_root=tmp_path / "general-ollama-history")
+
+        general_model = ProviderModel(
+            "ollama_cloud",
+            "glm-5.3-flash:cloud",
+            "glm-5.3-flash",
+            "Ollama Cloud",
+            True,
+        )
+        monkeypatch.setattr(
+            screens_module,
+            "list_provider_models",
+            lambda **_kwargs: [general_model],
+        )
+        monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: ())
+
+        registry_calls: list[tuple[str, str]] = []
+        live_config = LiveModelConfig(
+            model_name="glm-5.3-flash:cloud",
+            command=(sys.executable, "-c", "raise SystemExit(0)"),
+            request_timeout_seconds=60.0,
+            tool_version="1.3",
+        )
+
+        def resolve_registry(provider, model_id, **_kwargs):
+            registry_calls.append((provider, model_id))
+            return live_config, {
+                "provider": provider,
+                "profile_id": model_id,
+                "display_name": "glm-5.3-flash",
+                "protocol_version": "1.3",
+                "tool_version": "1.3",
+            }
+
+        monkeypatch.setattr(
+            model_providers, "resolve_provider_live_config", resolve_registry
+        )
+
+        def forbidden_level32():
+            raise AssertionError("general Ollama must not query Level-32 qualification")
+
+        def forbidden_store(_profile_id):
+            raise AssertionError("registry Ollama must not query custom profiles")
+
+        monkeypatch.setattr(level32, "level32_model_profiles", forbidden_level32)
+        monkeypatch.setattr(app._config_store, "get", forbidden_store)
+
+        isolated = tmp_path / "mock-isolated"
+        parent = tmp_path / "mock-parent"
+        isolated.mkdir()
+        parent.mkdir()
+        monkeypatch.setattr(
+            local_project,
+            "create_isolated_worktree",
+            lambda *_args, **_kwargs: SimpleNamespace(
+                isolated_path=isolated,
+                parent_tmpdir=parent,
+            ),
+        )
+
+        captured: dict = {}
+
+        class FakeWorker:
+            def __init__(self, **kwargs):
+                captured["worker"] = kwargs
+                self.session_dir = kwargs["session_dir"]
+
+        class FakeRunner:
+            def __init__(self, worker, **_kwargs):
+                self.worker = worker
+
+            def start(self):
+                captured["started"] = True
+
+            def close(self):
+                pass
+
+        monkeypatch.setattr(app_module, "SessionWorkerProcess", FakeWorker)
+        monkeypatch.setattr(app_module, "LiveSessionRunner", FakeRunner)
+
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            start = _start_screen(app, repo)
+            app.push_screen(start)
+            await pilot.pause()
+            start._config.bug_description = "general Ollama routing regression"
+            start.render_state()
+
+            start._open_model_picker()
+            await pilot.pause()
+            picker = app.screen
+            assert isinstance(picker, ChoicePickerScreen)
+            selected = next(
+                choice
+                for choice in picker.choices
+                if choice.value == "ollama_cloud:glm-5.3-flash:cloud"
+            )
+            assert selected.disabled is False
+            picker._on_select(selected.value)
+            app.pop_screen()
+            await pilot.pause()
+            assert start._config.model.provider == "ollama_cloud"
+            assert start._config.model.model_id == "glm-5.3-flash:cloud"
+
+            await pilot.press("s")
+            await pilot.pause()
+
+            params = captured["worker"]["scenario_params"]
+            spec = captured["worker"]["spec"]
+            assert registry_calls == [
+                ("ollama_cloud", "glm-5.3-flash:cloud")
+            ]
+            assert params["provider"] == "ollama_cloud"
+            assert params["model_id"] == "glm-5.3-flash:cloud"
+            assert "is_ollama" not in params
+            assert "ollama_alias" not in params
+            assert spec.source.kind is SourceKind.LOCAL_PROJECT
+            assert (
+                spec.source.model_config_ref
+                == "ollama_cloud:glm-5.3-flash:cloud"
+            )
+            assert captured["started"] is True
+
+        reset_launch_cwd()
+
+    _run_async(_inner())
+
+
 # ---------------------------------------------------------------------------
 # 7. FOCUS-MATRIX TEST — parameterized over all rows
 # ---------------------------------------------------------------------------

@@ -1494,62 +1494,89 @@ class StartSessionScreen(Screen):
                 disabled_reason=offline_reason,
             )
         )
-        if target == TARGET_LADDER:
-            for option in self._catalog.ladder_models:
+        groups = (
+            (PROVIDER_OLLAMA, "OLLAMA CLOUD"),
+            (PROVIDER_OPENCODE, "OPENCODE GO"),
+            (PROVIDER_COMMANDCODE, "COMMANDCODE GOAT"),
+            (PROVIDER_CONFIGURED, "CUSTOM COMMAND PROFILES"),
+        )
+
+        # One stable provider world for every target.  The qualified roster
+        # annotates Ollama entries; it never replaces the general catalog or
+        # hides the other provider groups.  Missing qualified aliases are
+        # merged into the one Ollama group, not duplicated in a second island.
+        options_by_provider: dict[str, list[ModelOption]] = {
+            provider: [] for provider, _ in groups
+        }
+        seen_keys: set[tuple[str, str]] = set()
+        for option in self._catalog.models:
+            if option.provider == PROVIDER_OFFLINE:
+                continue
+            key = (option.provider, option.model_id)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            options_by_provider.setdefault(option.provider, []).append(option)
+        for option in self._catalog.ladder_models:
+            key = (option.provider, option.model_id)
+            if key not in seen_keys:
+                seen_keys.add(key)
+                options_by_provider[PROVIDER_OLLAMA].append(option)
+
+        for provider, group in groups:
+            provider_options = options_by_provider.get(provider, [])
+            if not provider_options:
+                reason = (
+                    _short_unavailable_reason(self._catalog.configured_error)
+                    if provider == PROVIDER_CONFIGURED and self._catalog.configured_error
+                    else f"No {PROVIDER_LABELS[provider]} models configured"
+                )
+                title = (
+                    "Configuration error"
+                    if provider == PROVIDER_CONFIGURED and self._catalog.configured_error
+                    else reason
+                )
                 choices.append(
                     ChoiceOption(
-                        self._model_choice_key(option.choice),
-                        option.display,
-                        option.detail,
-                        secondary=PROVIDER_LABELS[PROVIDER_OLLAMA],
-                        group="OLLAMA CLOUD — QUALIFIED ROSTER",
+                        f"unavailable:{provider}",
+                        title,
+                        reason,
+                        group=group,
+                        disabled=True,
+                        disabled_reason=reason,
                     )
                 )
-        else:
-            groups = {
-                PROVIDER_OLLAMA: "OLLAMA CLOUD",
-                PROVIDER_OPENCODE: "OPENCODE GO",
-                PROVIDER_COMMANDCODE: "COMMANDCODE GOAT",
-                PROVIDER_CONFIGURED: "CUSTOM COMMAND PROFILES",
-            }
-            seen: set[str] = set()
-            for option in self._catalog.models:
-                if option.provider == PROVIDER_OFFLINE:
-                    continue
-                group = groups.get(option.provider, option.provider.upper())
-                first_of_provider = option.provider not in seen
-                seen.add(option.provider)
-                compatible, compat_reason = model_compatibility(target, option)
-                disabled = not option.available or not compatible
-                reason = ""
-                if not option.available:
-                    reason = _short_unavailable_reason(option.unavailable_reason)
-                elif not compatible:
+                continue
+
+            for index, option in enumerate(provider_options):
+                qualified = self._catalog.ladder_model(option.choice)
+                effective = qualified or option
+                compatible, compat_reason = model_compatibility(
+                    target,
+                    effective,
+                    ladder_qualified=qualified is not None,
+                )
+                disabled = not effective.available or not compatible
+                if not compatible:
                     reason = compat_reason
+                elif not effective.available:
+                    reason = _short_unavailable_reason(effective.unavailable_reason)
+                else:
+                    reason = ""
+                detail = reason or effective.detail
+                if target == TARGET_LADDER and qualified is not None:
+                    detail = qualified.detail or "qualified scientific roster"
                 choices.append(
                     ChoiceOption(
-                        self._model_choice_key(option.choice),
-                        option.display,
-                        reason,
-                        secondary=option.model_id,
-                        group=group if first_of_provider else "",
+                        self._model_choice_key(effective.choice),
+                        effective.display,
+                        detail,
+                        secondary=effective.model_id,
+                        group=group if index == 0 else "",
                         disabled=disabled,
                         disabled_reason=reason,
                     )
                 )
-        if self._catalog.configured_error:
-            choices.append(
-                ChoiceOption(
-                    "",
-                    "Configuration error",
-                    _short_unavailable_reason(self._catalog.configured_error),
-                    group="CUSTOM COMMAND PROFILES",
-                    disabled=True,
-                    disabled_reason=_short_unavailable_reason(
-                        self._catalog.configured_error
-                    ),
-                )
-            )
         self.app.push_screen(
             ChoicePickerScreen(
                 title="Select model",
@@ -1745,7 +1772,7 @@ class StartSessionScreen(Screen):
                 option = next(
                     (
                         m
-                        for m in self._catalog.models
+                        for m in self._catalog.models + self._catalog.ladder_models
                         if m.provider == provider and m.model_id == model_id
                     ),
                     None,
@@ -2062,9 +2089,9 @@ class StartSessionScreen(Screen):
                 return
             if config.target == TARGET_LOCAL_PROJECT:
                 provider = (
-                    config.model.provider
-                    if config.model.provider in (PROVIDER_OPENCODE, PROVIDER_COMMANDCODE)
-                    else None
+                    None
+                    if config.model.provider == PROVIDER_CONFIGURED
+                    else config.model.provider
                 )
                 self.app.start_local_project_session(
                     project_path=config.project_path,

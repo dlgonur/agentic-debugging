@@ -6,8 +6,8 @@ transport configuration.
 
 Supported providers:
 
-- ``ollama_cloud``  — the repository-owned Ollama Cloud roster (existing
-  accepted product route, qualified aliases only).
+- ``ollama_cloud``  — the repository-owned general Ollama Cloud catalog;
+  scientific qualification is a separate capability-ladder contract.
 - ``opencode_go``   — the operator's OpenCode Go subscription through the
   verified local OpenCode CLI (adapter: ``scripts/opencode_provider_adapter.py``).
 - ``commandcode_goat`` — the operator's Command Code GOAT plan through the
