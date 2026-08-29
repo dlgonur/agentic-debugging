@@ -41,6 +41,37 @@ class TestAvailability:
         results = {kind: ok for kind, ok, _ in mp.provider_availability()}
         assert all(results.values())
 
+    def test_system_cmd_exe_does_not_satisfy_commandcode(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        """Windows-style: auth store present but only system cmd.exe on
+        PATH => CommandCode provider is unavailable and its discovery
+        must not resolve cmd.exe."""
+        (tmp_path / "cc-auth.json").write_text("{}", encoding="utf-8")
+        (tmp_path / "oc-auth.json").write_text("{}", encoding="utf-8")
+        monkeypatch.setattr(mp, "_commandcode_auth_store_path", lambda: tmp_path / "cc-auth.json")
+        monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
+
+        system_cmd = r"C:\Windows\System32\cmd.exe"
+
+        def fake_which(name: str):
+            if name == "cmd":
+                return system_cmd
+            return None
+
+        monkeypatch.setattr(mp.shutil, "which", fake_which)
+        results = {kind: (ok, reason) for kind, ok, reason in mp.provider_availability()}
+        ok, reason = results[mp.PROVIDER_KIND_COMMANDCODE]
+        assert ok is False
+        assert "CLI not found" in reason
+        assert "cmd.exe" not in (reason or "")
+        # The resolver candidate set itself never contains the system
+        # shell name, so the fail-closed path is structural.
+        import scripts.commandcode_goat_adapter as cca
+
+        assert "cmd" not in cca._CANDIDATE_EXECUTABLES
+        assert "cmd" not in mp._COMMANDCODE_CLI_CANDIDATES
+
 
 class TestModelListing:
     def test_grouped_listing_annotates_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:

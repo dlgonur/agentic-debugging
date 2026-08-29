@@ -115,7 +115,11 @@ class TestManifestValidator:
         parsed = validate_manifest_mapping(manifest.to_mapping())
         assert parsed.retry_of_session_id == "sess-20260827-120000-bbbb2222"
 
-    def test_missing_linkage_field_fails_closed(self) -> None:
+    def test_pre_feature_manifest_without_linkage_is_valid(
+        self, tmp_path: Path
+    ) -> None:
+        """A manifest written before the retry feature stays valid and
+        reads back with retry linkage None (backward compatibility)."""
         manifest = SessionManifest(
             schema_version="app-session-manifest-v1",
             session_id=VALID_SESSION_ID,
@@ -125,6 +129,64 @@ class TestManifestValidator:
         )
         mapping = manifest.to_mapping()
         del mapping["retry_of_session_id"]
+        parsed = validate_manifest_mapping(mapping)
+        assert parsed.retry_of_session_id is None
+        # The HistoryStore must be able to consume such a manifest.
+        import json
+
+        from agentic_debugger.application.history import HistoryStore
+
+        root = tmp_path
+        store = HistoryStore(root)
+        directory = store.session_dir(VALID_SESSION_ID)
+        directory.mkdir(parents=True)
+        (directory / "manifest.json").write_text(
+            json.dumps(mapping), encoding="utf-8"
+        )
+        # A complete journal (no linkage) is required for a COMPLETE entry.
+        journal = SessionEventJournal(
+            directory / "session.events.jsonl",
+            session_id=VALID_SESSION_ID,
+            task_id=VALID_TASK_ID,
+            source_kind=SourceKind.OFFLINE_DEMO,
+        )
+        journal.append(make_event(
+            SessionEventKind.SESSION_CREATED,
+            {"spec_fingerprint": VALID_SPEC_FINGERPRINT},
+            sequence=0,
+            session_id=VALID_SESSION_ID,
+        ))
+        journal.append(make_event(
+            SessionEventKind.SESSION_COMPLETED,
+            {"status": "succeeded", "termination_reason": "done"},
+            sequence=1,
+            run_id=VALID_RUN_ID,
+            session_id=VALID_SESSION_ID,
+        ))
+        journal.close()
+        entry = store.register(directory)
+        assert entry.retry_of_session_id is None
+
+    def test_unknown_fields_still_fail_closed(self) -> None:
+        mapping = {
+            "schema_version": "app-session-manifest-v1",
+            "session_id": VALID_SESSION_ID,
+            "task_id": VALID_TASK_ID,
+            "source_kind": "offline_demo",
+            "run_id": None,
+            "started_at_utc": None,
+            "ended_at_utc": None,
+            "status": None,
+            "termination_reason": None,
+            "config_fingerprint": None,
+            "cleanup_verified": False,
+            "journal_path": "session.events.jsonl",
+            "journal_sha256": "a" * 64,
+            "artifacts": [],
+            "verifier_status": None,
+            "verifier_outcome": None,
+            "mystery_field": True,
+        }
         with pytest.raises(Exception):
             validate_manifest_mapping(mapping)
 

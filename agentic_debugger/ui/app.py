@@ -234,8 +234,10 @@ class LocalApplicationV1(App):
         # retryable live session (never Level-32; its frozen treatment
         # boundary must not be re-allocated by a retry).
         self._live_retry_request: Optional[dict] = None
+        # Remaining automatic-retry budget of the current chain.  A retry
+        # start NEVER resets this to the original maximum: every invoke
+        # names the remaining budget explicitly.
         self._live_auto_retry_budget: int = 0
-        self._live_auto_retry_max: int = 0
         self._live_identity: Optional[PresentationIdentity] = None
         self._live_view: Optional[SessionViewState] = None
         self._live_events: Tuple[SessionEvent, ...] = ()
@@ -568,9 +570,12 @@ class LocalApplicationV1(App):
                 retry_of_session_id=retry_of_session_id,
             )
         if source_kind is not SourceKind.LEVEL32_OPERATOR:
+            # Uniform retry contract: invoke(retry_of, remaining).  Live
+            # sessions carry no automatic chain (the budget is pinned to
+            # zero below), so the remaining budget is accepted and unused.
             self._live_retry_request = {
                 "session_id": session_id,
-                "invoke": lambda retry_of: self.start_live_session(
+                "invoke": lambda retry_of, remaining: self.start_live_session(
                     task_id=task_id,
                     policy=policy,
                     max_elapsed_seconds=max_elapsed_seconds,
@@ -792,9 +797,17 @@ class LocalApplicationV1(App):
                 max_elapsed_seconds=max_elapsed_seconds,
                 retry_of_session_id=retry_of_session_id,
             )
+            # Retry-budget contract: every invoke names the REMAINING chain
+            # budget explicitly as a required argument — never a lambda
+            # default, which would hand each retry the ORIGINAL maximum and
+            # make the chain unbounded.  Automatic retries pass the
+            # decremented budget; a manual retry passes zero, so pressing r
+            # can never mint a fresh auto-retry chain.  A caller that omits
+            # the budget fails closed with a TypeError.
+            chain_budget = max(0, min(int(auto_retries), 3))
             self._live_retry_request = {
                 "session_id": session_id,
-                "invoke": lambda retry_of: self.start_local_project_session(
+                "invoke": lambda retry_of, remaining: self.start_local_project_session(
                     project_path=project_path,
                     bug_description=bug_description,
                     reproduction_command=reproduction_command,
@@ -803,11 +816,10 @@ class LocalApplicationV1(App):
                     model_provider=model_provider,
                     max_elapsed_seconds=max_elapsed_seconds,
                     retry_of_session_id=retry_of,
-                    auto_retries=self._live_auto_retry_max,
+                    auto_retries=remaining,
                 ),
             }
-            self._live_auto_retry_budget = max(0, min(int(auto_retries), 3))
-            self._live_auto_retry_max = self._live_auto_retry_budget
+            self._live_auto_retry_budget = chain_budget
             # Pre-write the contract artifact so history can replay without workspace
             try:
                 worker.session_dir.mkdir(parents=True, exist_ok=True)
@@ -938,10 +950,12 @@ class LocalApplicationV1(App):
         """Restart the most recent retryable live session with identical
         parameters, linked to the original session in the journal.
 
-        Returns False when a session is active or no retryable start
-        request is captured.  The re-start re-validates everything (model
-        availability, project cleanliness); a changed environment fails
-        closed instead of silently degrading.
+        A manual retry is a single explicit attempt: it starts with a
+        zero auto-retry budget, so it can never mint a fresh auto-retry
+        chain.  Returns False when a session is active or no retryable
+        start request is captured.  The re-start re-validates everything
+        (model availability, project cleanliness); a changed environment
+        fails closed instead of silently degrading.
         """
         if self._live_runner is not None:
             return False
@@ -951,7 +965,9 @@ class LocalApplicationV1(App):
         original = request["session_id"]
         self._live_retry_request = None
         try:
-            request["invoke"](original)
+            # remaining=0: a manual retry is one explicit attempt and can
+            # never start another automatic chain.
+            request["invoke"](original, remaining=0)
             return True
         except Exception as exc:
             self.notify(f"Retry failed: {exc}", severity="error", title="Retry")
@@ -985,13 +1001,13 @@ class LocalApplicationV1(App):
         if not request:
             return
         original = request["session_id"]
-        attempt = self._live_auto_retry_max - self._live_auto_retry_budget
+        remaining = self._live_auto_retry_budget
         self._live_retry_request = None
         try:
-            request["invoke"](original)
+            request["invoke"](original, remaining=remaining)
             self.notify(
                 f"Session failed ({result.termination_reason.value}); "
-                f"auto-retry attempt {attempt}.",
+                f"auto-retrying ({remaining} attempt(s) remaining).",
                 severity="warning",
                 title="Auto-retry",
             )

@@ -94,7 +94,11 @@ _SECRET_PATTERN = re.compile(
 
 _MODEL_ID_PATTERN = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}(?:/[a-z0-9][a-z0-9._-]{0,63})?$")
 
-_CANDIDATE_EXECUTABLES = ("cmdc", "cmd", "command-code", "commandcode")
+# Actual CommandCode executable names only.  The system shell "cmd.exe"
+# is deliberately NOT a candidate: on Windows ``shutil.which("cmd")``
+# resolves the operating-system shell, which must never be executed as
+# the CommandCode provider.
+_CANDIDATE_EXECUTABLES = ("cmdc", "command-code", "commandcode")
 
 
 class CommandCodeAdapterError(RuntimeError):

@@ -25,7 +25,9 @@
 - [x] Effort projection ("what the agent tried") in workspace modal,
   terminal footer, and exported reports.
 - [x] Journal-linked retry (`retry_of_session_id`) with manual `r` and
-  bounded auto-retry (0-3, default 1) on retryable failures.
+  bounded auto-retry (0-3, default 1) on retryable failures; the
+  remaining chain budget is carried forward so auto-retries=N yields at
+  most N automatic retries total, and manual retry starts with zero budget.
 - [x] Real product proof: Local Project session on CommandCode GOAT
   `deepseek/deepseek-v4-flash` — RESOLVED, F2P 1/1, P2P 1/1, 13/13 model
   requests ok, model-authored correct one-line patch, 107 s.

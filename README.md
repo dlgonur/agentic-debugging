@@ -62,8 +62,11 @@ directives, tool calls, PDB observations, patches, states, verifier outcome);
 the same section appears in exported session reports. Press `r` to retry a
 session with identical parameters — retries are journal-linked
 (`retry_of_session_id`) so attempt chains stay auditable. Local Project
-sessions support bounded automatic retries (picker, default 1) for transient
-failures such as transport errors and timeouts.
+sessions support bounded automatic retries (picker 0-3, default 1) for
+transient failures such as transport errors and timeouts. The budget is
+carried forward through the retry chain: for auto-retries=N the chain makes
+at most N automatic retries in total (N+1 attempts), and a manual retry
+starts a fresh attempt with a zero auto-retry budget.
 
 Configured-model and local-project sessions require an operator profile; live execution is explicit. Headless history:
 `agentic-debugger --list-sessions`; safe report: `agentic-debugger --export-session SESSION_ID --output session-report.md`.

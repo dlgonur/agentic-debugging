@@ -312,17 +312,20 @@ def validate_manifest_mapping(m: Any) -> SessionManifest:
     """Strictly validate one manifest mapping; fails closed on any violation."""
     if not isinstance(m, Mapping):
         raise HistoryInputError("manifest must be a mapping")
+    # ``retry_of_session_id`` is an additive field: manifests written
+    # before the feature do not carry it and must stay valid (linkage
+    # reads back as None).  Unknown fields still fail closed.
     known = {
         "schema_version", "session_id", "task_id", "source_kind", "run_id",
         "started_at_utc", "ended_at_utc", "status", "termination_reason",
         "config_fingerprint", "cleanup_verified", "journal_path",
         "journal_sha256", "artifacts", "verifier_status", "verifier_outcome",
-        "retry_of_session_id",
     }
+    optional = {"retry_of_session_id"}
     missing = known - set(m.keys())
     if missing:
         raise HistoryInputError(f"manifest is missing fields: {sorted(missing)}")
-    extra = set(m.keys()) - known
+    extra = set(m.keys()) - known - optional
     if extra:
         raise HistoryInputError(f"manifest has unknown fields: {sorted(extra)}")
     artifacts = m["artifacts"]
@@ -358,7 +361,7 @@ def validate_manifest_mapping(m: Any) -> SessionManifest:
         artifacts=tuple(parsed_artifacts),
         verifier_status=m["verifier_status"],
         verifier_outcome=m["verifier_outcome"],
-        retry_of_session_id=m["retry_of_session_id"],
+        retry_of_session_id=m.get("retry_of_session_id"),
     )
 
 

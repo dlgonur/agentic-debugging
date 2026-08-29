@@ -134,6 +134,54 @@ class TestCliResolution:
             adapter.resolve_cmdc_command()
         assert excinfo.value.kind == "configuration"
 
+    def test_system_cmd_exe_is_never_used(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Windows-style: only the real CommandCode names resolve; a bare
+        system ``cmd.exe`` (or its shim) must NOT satisfy discovery."""
+        shim = tmp_path / "cmdc.CMD"
+        shim.write_text("@echo off", encoding="utf-8")
+        entry = tmp_path / "node_modules" / "command-code" / "dist" / "index.mjs"
+        entry.parent.mkdir(parents=True)
+        entry.write_text("// fake", encoding="utf-8")
+
+        node_exe = r"C:\node\node.exe"
+        system_cmd = r"C:\Windows\System32\cmd.exe"
+
+        def fake_which(name: str):
+            if name == "node":
+                return node_exe
+            if name == "cmd":
+                # The operating-system shell is present on PATH.
+                return system_cmd
+            if name == "cmdc":
+                return str(shim)
+            return None
+
+        monkeypatch.setattr("shutil.which", fake_which)
+        prefix = adapter.resolve_cmdc_command()
+        assert prefix == (node_exe, str(entry))
+        # The resolved prefix never contains the system shell.
+        assert "cmd.exe" not in prefix[0].lower()
+
+    def test_only_system_cmd_present_is_unavailable(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """cmd.exe present but no real CommandCode CLI => fail closed."""
+        node_exe = r"C:\node\node.exe"
+        system_cmd = r"C:\Windows\System32\cmd.exe"
+
+        def fake_which(name: str):
+            if name == "node":
+                return node_exe
+            if name == "cmd":
+                return system_cmd
+            return None
+
+        monkeypatch.setattr("shutil.which", fake_which)
+        with pytest.raises(adapter.CommandCodeAdapterError) as excinfo:
+            adapter.resolve_cmdc_command()
+        assert excinfo.value.kind == "configuration"
+        assert "cmd.exe" not in str(excinfo.value)
+
 
 class TestResultParsing:
     def test_success_result_line(self) -> None:

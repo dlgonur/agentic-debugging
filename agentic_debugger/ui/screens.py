@@ -2310,6 +2310,9 @@ class WorkspaceScreen(Screen):
                 self.query_one("#live-run-context", LiveRunContextPanel).update_execution(execution)
         self._render_bar()
 
+    def _retry_footer_hint(self) -> str:
+        return "   r retry" if self._retry_available() else ""
+
     def _terminal_effort_phrase(self) -> Optional[str]:
         """One-line counted effort shown once the session is terminal.
 
@@ -2420,6 +2423,11 @@ class WorkspaceScreen(Screen):
                 effort_phrase = self._terminal_effort_phrase()
                 if effort_phrase:
                     footer = f"{effort_phrase}   {footer}"
+                footer = footer.replace(
+                    "   r retry",
+                    self._retry_footer_hint(),
+                    1,
+                ) if self._retry_footer_hint() else footer.replace("   r retry", "", 1)
                 bar.update(f"[dim]{footer}   ? help[/]")
 
     # -- workspace view navigation ------------------------------------------
@@ -2479,8 +2487,39 @@ class WorkspaceScreen(Screen):
         body = render_effort_summary(summary, title=title)
         self.app.push_screen(EffortModalScreen(body))
 
+    def _retry_available(self) -> bool:
+        """Whether the retry action targets the session this screen shows.
+
+        The app-global retry request belongs to the most recent captured
+        LIVE session.  Replay workspaces display a different (recorded)
+        session and must never invoke it: retry is only offered while the
+        terminal LIVE workspace for the very session the request captured
+        is the one visible here.  The capture stores the session id, so
+        the comparison is exact and identity-based.
+        """
+        if self.mode is not WorkspaceMode.LIVE:
+            return False
+        if self._live_terminal is None:
+            return False
+        request = getattr(self.app, "_live_retry_request", None)
+        if not request:
+            return False
+        captured = request.get("session_id")
+        if not captured:
+            return False
+        identity = self._identity
+        return identity is not None and identity.session_id == captured
+
     def action_retry_session(self) -> None:
-        """Restart the same session setup, linked to the original session."""
+        """Restart the session this screen shows, linked to the original."""
+        if not self._retry_available():
+            self.notify(
+                "Retry is only available for the terminal live session "
+                "currently displayed.",
+                severity="warning",
+                title="Retry",
+            )
+            return
         retried = self.app.retry_live_session()
         if not retried:
             self.notify(

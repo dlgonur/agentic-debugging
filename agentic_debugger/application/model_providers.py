@@ -98,7 +98,9 @@ _OPENCODE_DEFAULT_MODELS: Tuple[str, ...] = (
     "opencode-go/minimax-m3",
 )
 
-_COMMANDCODE_CLI_CANDIDATES = ("cmdc", "cmd", "command-code", "commandcode")
+# Actual CommandCode executable names only; the Windows system shell
+# (cmd.exe) must never be treated as the CommandCode CLI.
+_COMMANDCODE_CLI_CANDIDATES = ("cmdc", "command-code", "commandcode")
 _MAX_MODELS_LISTED = 128
 
 
@@ -148,7 +150,7 @@ def _commandcode_availability() -> Tuple[bool, Optional[str]]:
     ):
         return False, "Command Code auth store not found (~/.commandcode/auth.json or CMD_API_KEY)"
     if _first_on_path(_COMMANDCODE_CLI_CANDIDATES) is None:
-        return False, "CommandCode CLI not found (expected cmdc/cmd/command-code on PATH)"
+        return False, "CommandCode CLI not found (expected cmdc/command-code/commandcode on PATH)"
     return True, None
 
 
