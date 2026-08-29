@@ -345,14 +345,13 @@ def render_view_header(
     return head
 
 
-BANNER_3LINE = """ █▀█ █▀▀ █▀▀ █▄ █ ▀█▀ █ █▀▀   █▀▄ █▀▀ █▀▄ █ █ █▀▀ █▀▀ █▀▀ █▀█
- █▀█ █ █ ██▄ █ ▀█  █  █ █     █ █ ██▄ █▀▄ █ █ █ █ █ █ ██▄ █▀▄
- ▀ ▀ ▀▀█ ▀▀▀ ▀  ▀  ▀  ▀ ▀▀▀   ▀▀  ▀▀▀ ▀▀  ▀▀▀ ▀▀█ ▀▀█ ▀▀▀ ▀ ▀"""
+BANNER_3LINE = """ ▄▀▀█ ▄▀▀▀ █▀▀ █▄  █ ▀█▀ █ ▄▀▀   █▀▀▄ █▀▀ █▀▀▄ █  █ ▄▀▀▀ ▄▀▀▀ █▀▀ █▀▀▄
+ █▄▄█ █ ▀█ █▀  █ ▀▄█  █  █ █     █  █ █▀  █▀▀▄ █  █ █ ▀█ █ ▀█ █▀  █▄▄▀
+ █  █ ▀▄▄▀ ▀▀▀ ▀   ▀  ▀  ▀ ▀▄▄   ▀▀▀  ▀▀▀ ▀▀▀   ▀▀▀ ▀▄▄▀ ▀▄▄▀ ▀▀▀ ▀  ▀"""
 
-BANNER_WIDE_SLANT = r"""    ___   ____ _____ _   _ _____ ___ ____    ____  _____ ____  _   _  ____  ____ _____ ____  
-   / _ \ / ___| ____| \ | |_   _|_ _/ ___|  |  _ \| ____| __ )| | | |/ ___|/ ___| ____|  _ \ 
-  / /_\ \ |  _|  _| |  \| | | |  | | |      | | | |  _| |  _ \| | | | |  _| |  _|  _| | |_) |
- /_/   \_\____|_____|_| \_| |_| |___\____|  |____/|_____|____/ \___/ \____|\____|_____|_| \_\ """
+BANNER_WIDE_SLANT = """ ▄▀▀▀▄ ▄▀▀▀▄ █▀▀▀▀ █▄  █ ▀█▀ █ ▄▀▀▀▄   █▀▀▀▄ █▀▀▀▀ █▀▀▀▄ █   █ ▄▀▀▀▄ ▄▀▀▀▄ █▀▀▀▀ █▀▀▀▄
+ █▄▄▄█ █  ▄▄ █▀▀▀  █ ▀▄█  █  █ █       █   █ █▀▀▀  █▀▀▀▄ █   █ █  ▄▄ █  ▄▄ █▀▀▀  █▄▄▄▀
+ █   █ ▀▄▄▄▀ ▀▀▀▀▀ ▀   ▀  ▀  ▀ ▀▄▄▄▀   ▀▀▀▀  ▀▀▀▀▀ ▀▀▀▀  ▀▀▀▀▀ ▀▄▄▄▀ ▀▄▄▄▀ ▀▀▀▀▀ ▀   ▀"""
 
 
 class HomeActionRow(Static):
@@ -379,7 +378,7 @@ class HomeActionRow(Static):
         self.refresh()
 
     def render(self) -> Text:
-        t = Text()
+        t = Text(no_wrap=True)
         if self.has_focus:
             t.append(" › ", style=f"bold {PRIMARY}")
             t.append(f" {self.key_label} ", style=f"bold {CANVAS} on {PRIMARY}")
@@ -400,7 +399,7 @@ class HomeActionRow(Static):
 
 
 class HomeScreen(Screen):
-    """The forensic welcome screen: calm, spacious, and action-driven."""
+    """The forensic welcome screen: calm, spacious, centered, and action-driven."""
 
     BINDINGS = [
         Binding("s", "start_session", "Start debugging", priority=True),
@@ -419,54 +418,55 @@ class HomeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="home-screen-wrap"):
-            with Vertical(id="home-hero-panel"):
-                yield Static(id="home-brand-banner")
-                yield Static(id="home-brand-tagline")
-                yield Static(id="home-brand-telemetry")
+            with Vertical(id="home-container"):
+                with Vertical(id="home-hero-panel"):
+                    yield Static(id="home-brand-banner")
+                    yield Static(id="home-brand-tagline")
+                    yield Static(id="home-brand-telemetry")
 
-            with Vertical(id="home-actions-panel"):
-                yield HomeActionRow(
-                    "S",
-                    "Start Debugging",
-                    "Configure curated tasks, live models & capability ladder",
-                    "action-start",
-                    id="action-start",
-                )
-                yield HomeActionRow(
-                    "P",
-                    "Debug Local Project",
-                    "Fast-track into local git repository with preselected target",
-                    "action-local",
-                    id="action-local",
-                )
-                yield HomeActionRow(
-                    "H",
-                    "Session History",
-                    "Browse recorded runs, inspect evidence trajectories & replay",
-                    "action-history",
-                    id="action-history",
-                )
-                yield HomeActionRow(
-                    "?",
-                    "Help & Architecture",
-                    "Forensic console legend, proof-chain invariants & keys",
-                    "action-help",
-                    id="action-help",
-                )
+                with Vertical(id="home-actions-panel"):
+                    yield HomeActionRow(
+                        "S",
+                        "Start Debugging",
+                        "Configure curated tasks, live models & capability ladder",
+                        "action-start",
+                        id="action-start",
+                    )
+                    yield HomeActionRow(
+                        "P",
+                        "Debug Local Project",
+                        "Fast-track into local git repository with preselected target",
+                        "action-local",
+                        id="action-local",
+                    )
+                    yield HomeActionRow(
+                        "H",
+                        "Session History",
+                        "Browse recorded runs, inspect evidence trajectories & replay",
+                        "action-history",
+                        id="action-history",
+                    )
+                    yield HomeActionRow(
+                        "?",
+                        "Help & Architecture",
+                        "Forensic console legend, proof-chain invariants & keys",
+                        "action-help",
+                        id="action-help",
+                    )
 
-            with Vertical(id="home-recent-panel"):
-                yield Static(id="home-recent-status")
+                with Vertical(id="home-recent-panel"):
+                    yield Static(id="home-recent-status")
 
-            yield Static(
-                "[bold #49D8FF]↑/↓[/] Select   "
-                "[bold #49D8FF]Enter[/] Open   "
-                "[bold #49D8FF]S[/] Start debugging   "
-                "[bold #49D8FF]P[/] Local project   "
-                "[bold #49D8FF]H[/] History   "
-                "[bold #49D8FF]?[/] Help   "
-                "[bold #49D8FF]Ctrl+C[/] Quit",
-                id="home-footer-bar",
-            )
+        yield Static(
+            "[bold #49D8FF]↑/↓[/] Select   "
+            "[bold #49D8FF]Enter[/] Open   "
+            "[bold #49D8FF]S[/] Start debugging   "
+            "[bold #49D8FF]P[/] Local project   "
+            "[bold #49D8FF]H[/] History   "
+            "[bold #49D8FF]?[/] Help   "
+            "[bold #49D8FF]Ctrl+C[/] Quit",
+            id="home-footer-bar",
+        )
 
     def on_mount(self) -> None:
         self.update_content()
@@ -484,21 +484,24 @@ class HomeScreen(Screen):
 
     def update_content(self) -> None:
         is_wide = self.size.width >= 102
-        banner_elem = self.query_one("#home-brand-banner", Static)
-        t = Text()
+        container = self.query_one("#home-container", Vertical)
         if is_wide:
-            t.append(BANNER_WIDE_SLANT, style=f"bold {PRIMARY}")
+            container.styles.width = 96
+            banner_text = BANNER_WIDE_SLANT
         else:
-            t.append(BANNER_3LINE, style=f"bold {PRIMARY}")
-        banner_elem.update(t)
+            container.styles.width = 76
+            banner_text = BANNER_3LINE
+
+        banner_elem = self.query_one("#home-brand-banner", Static)
+        banner_elem.update(Text(banner_text, style=f"bold {PRIMARY}", no_wrap=True))
 
         tagline_elem = self.query_one("#home-brand-tagline", Static)
-        tag = Text()
+        tag = Text(no_wrap=True)
         tag.append("Debug.  Inspect.  Repair.  Verify.", style=f"bold {FOREGROUND}")
         tagline_elem.update(tag)
 
         telemetry_elem = self.query_one("#home-brand-telemetry", Static)
-        telem = Text()
+        telem = Text(no_wrap=True)
         telem.append("● READY", style=f"bold {SUCCESS}")
         if is_wide:
             telem.append(
@@ -535,20 +538,16 @@ class HomeScreen(Screen):
         entries = self.app.history_store.list_sessions()
         action_history = self.query_one("#action-history", HomeActionRow)
         recent_elem = self.query_one("#home-recent-status", Static)
-        is_wide = self.size.width >= 100
-        divider_len = min(self.size.width - 8, 74)
+        is_wide = self.size.width >= 102
 
         if not entries:
             action_history.set_description(
                 "Browse 0 recorded runs · Review verdicts & replay logs"
             )
-            rec = Text()
+            rec = Text(no_wrap=True)
+            rec.append("● ", style=f"{FAINT}")
             rec.append(
-                "─── RECENT EVIDENCE " + "─" * max(0, divider_len - 20) + "\n",
-                style=f"{LINE}",
-            )
-            rec.append(
-                "  No recorded sessions in workspace. Select [S] Start Debugging to open a case.",
+                "No recorded sessions in workspace. Select [S] Start Debugging to open a case.",
                 style=f"{MUTED}",
             )
             recent_elem.update(rec)
@@ -568,26 +567,21 @@ class HomeScreen(Screen):
         outcome_style = f"bold {SUCCESS}" if outcome == "RESOLVED" else f"bold {WARNING}"
         duration = _format_duration(latest.started_at_utc, latest.ended_at_utc)
 
-        rec = Text()
-        rec.append(
-            "─── RECENT EVIDENCE " + "─" * max(0, divider_len - 20) + "\n",
-            style=f"{LINE}",
-        )
+        rec = Text(no_wrap=True)
         status_marker = "●" if outcome == "RESOLVED" else "◆"
-        rec.append(f"  {status_marker} ", style=outcome_style)
-        sess_label = _compact_session_id(latest.session_id, 20 if not is_wide else 24)
-        rec.append(f"{sess_label}", style=f"bold {FOREGROUND}")
+        rec.append(f"{status_marker} ", style=outcome_style)
+        sess_label = _compact_session_id(latest.session_id, 14 if not is_wide else 18)
+        rec.append(f"{sess_label} ", style=f"bold {FOREGROUND}")
         if latest.task_id:
-            task_str = latest.task_id if is_wide else (latest.task_id[:18] + "…" if len(latest.task_id) > 18 else latest.task_id)
-            rec.append(f"  {task_str}", style=f"{PRIMARY}")
-        rec.append("  ·  VERIFIER: ", style=f"{FAINT}")
+            task_str = latest.task_id if is_wide else (latest.task_id[:14] + "…" if len(latest.task_id) > 14 else latest.task_id)
+            rec.append(f"{task_str}  ·  ", style=f"{PRIMARY}")
         rec.append(f"{outcome}", style=outcome_style)
         if duration != "—":
             rec.append(f" ({duration})", style=f"{FAINT}")
         if is_wide:
-            rec.append(f"   [H] Open archive ({len(entries)} runs)\n", style=f"{MUTED}")
+            rec.append(f"   [H] Archive ({len(entries)})", style=f"{MUTED}")
         else:
-            rec.append(f"\n  [H] Open full archive ({len(entries)} runs)", style=f"{MUTED}")
+            rec.append(f"  [H] Archive", style=f"{MUTED}")
         recent_elem.update(rec)
 
     def action_focus_next(self) -> None:

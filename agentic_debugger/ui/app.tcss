@@ -17,50 +17,72 @@ Screen {
 
 /* -- home / welcome screen -------------------------------------------- */
 
+HomeScreen {
+    align: center middle;
+    background: $background;
+}
+
 #home-screen-wrap {
-    width: 1fr;
-    height: 1fr;
-    padding: 1 3 0 3;
+    width: 100%;
+    height: 100%;
+    align: center middle;
+}
+
+#home-container {
+    width: 92;
+    height: auto;
+    align-horizontal: center;
 }
 
 #home-hero-panel {
-    width: 1fr;
+    width: 100%;
     height: auto;
+    align-horizontal: center;
     margin: 0 0 1 0;
 }
 
 #home-brand-banner {
-    width: 1fr;
+    width: 100%;
     height: auto;
+    content-align: center middle;
+    text-wrap: nowrap;
     margin: 0 0 1 0;
 }
 
 #home-brand-tagline {
-    width: 1fr;
+    width: 100%;
     height: 1;
+    content-align: center middle;
+    text-wrap: nowrap;
     margin: 0;
 }
 
 #home-brand-telemetry {
-    width: 1fr;
+    width: 100%;
     height: 1;
+    content-align: center middle;
+    text-wrap: nowrap;
     margin: 0;
 }
 
 #home-actions-panel {
-    width: 1fr;
+    width: 100%;
     height: auto;
-    margin: 0 0 1 0;
     border: round $line;
     background: $surface;
-    padding: 1 1;
+    padding: 1 2;
+    margin: 0 0 1 0;
 }
 
 HomeActionRow {
-    width: 1fr;
+    width: 100%;
     height: 1;
     margin: 0 0 1 0;
     padding: 0;
+}
+
+HomeActionRow:last-of-type {
+    margin: 0;
 }
 
 HomeActionRow:focus {
@@ -72,19 +94,22 @@ HomeActionRow:focus {
 }
 
 #home-recent-panel {
-    width: 1fr;
+    width: 100%;
     height: auto;
+    content-align: center middle;
     margin: 0;
 }
 
 #home-recent-status {
-    width: 1fr;
-    height: auto;
+    width: 100%;
+    height: 1;
+    content-align: center middle;
+    text-wrap: nowrap;
 }
 
 #home-footer-bar {
     dock: bottom;
-    width: 1fr;
+    width: 100%;
     height: 1;
     padding: 0 2;
     background: $surface;
