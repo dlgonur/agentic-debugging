@@ -15,35 +15,111 @@ Screen {
     scrollbar-color-active: $primary;
 }
 
-/* -- history screen ----------------------------------------------------- */
+/* -- home / welcome screen -------------------------------------------- */
 
-#home-header {
+#home-screen-wrap {
+    width: 1fr;
+    height: 1fr;
+    padding: 1 3 0 3;
+}
+
+#home-hero-panel {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+#home-brand-banner {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 0;
+}
+
+#home-brand-tagline {
+    width: 1fr;
+    height: 1;
+    margin: 0;
+}
+
+#home-brand-telemetry {
+    width: 1fr;
+    height: 1;
+    margin: 0;
+}
+
+#home-actions-panel {
+    width: 1fr;
+    height: auto;
+    margin: 0 0 1 0;
+    border: round $line;
+    background: $surface;
+    padding: 1 1;
+}
+
+HomeActionRow {
+    width: 1fr;
+    height: 1;
+    margin: 0 0 1 0;
+    padding: 0;
+}
+
+HomeActionRow:focus {
+    background: $selection;
+}
+
+#action-help {
+    margin: 0;
+}
+
+#home-recent-panel {
+    width: 1fr;
+    height: auto;
+    margin: 0;
+}
+
+#home-recent-status {
+    width: 1fr;
+    height: auto;
+}
+
+#home-footer-bar {
+    dock: bottom;
+    width: 1fr;
+    height: 1;
+    padding: 0 2;
+    background: $surface;
+    color: $text-faint;
+}
+
+/* -- history archive screen ------------------------------------------- */
+
+#history-header {
     width: 1fr;
     height: auto;
     padding: 1 3 1 3;
     background: $background;
 }
 
-#home-title {
+#history-title {
     height: 4;
     padding: 0;
     text-style: bold;
 }
 
-#home-summary {
+#history-summary {
     width: 1fr;
     height: 1;
     color: $text-faint;
 }
 
-#home-actions {
+#history-actions {
     width: 1fr;
     height: 1;
     margin: 1 0 0 0;
     align: left middle;
 }
 
-#home-empty {
+#history-empty {
     width: 1fr;
     height: 1fr;
     padding: 2 4;
@@ -71,7 +147,9 @@ Screen {
     text-style: bold;
 }
 
-#home-hint {
+#history-footer, #home-hint {
+    dock: bottom;
+    width: 1fr;
     height: 1;
     padding: 0 3;
     color: $text-faint;

@@ -12,6 +12,7 @@ from agentic_debugger.application.history import HistoryStore
 from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     ChoicePickerScreen,
+    HistoryScreen,
     HomeScreen,
     StartSessionScreen,
     TimeLimitEditorScreen,
@@ -28,7 +29,7 @@ def _app(tmp_path: Path) -> LocalApplicationV1:
 
 
 async def _open_workspace(pilot) -> WorkspaceScreen:
-    await pilot.press("escape")
+    await pilot.press("h")
     await pilot.press("enter")
     assert isinstance(pilot.app.screen, WorkspaceScreen)
     return pilot.app.screen
@@ -36,6 +37,8 @@ async def _open_workspace(pilot) -> WorkspaceScreen:
 
 def test_ctrl_c_exits_from_new_session(tmp_path: Path) -> None:
     async def scenario(pilot) -> None:
+        assert isinstance(pilot.app.screen, HomeScreen)
+        await pilot.press("s")
         assert isinstance(pilot.app.screen, StartSessionScreen)
         await pilot.press("ctrl+c")
         assert pilot.app.is_running is False
@@ -45,17 +48,14 @@ def test_ctrl_c_exits_from_new_session(tmp_path: Path) -> None:
 
 def test_welcome_screen_reaches_local_project_by_key_and_button(tmp_path: Path) -> None:
     async def scenario(pilot) -> None:
+        assert isinstance(pilot.app.screen, HomeScreen)
+
+        # P from HomeScreen opens StartSessionScreen with Local Project preselected
+        await pilot.press("p")
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
-        assert start.query_one("#start-session-button").label.plain == "Run evidence demo"
-
-        # P switches the unified screen onto the Local Project controls
-        # (one screen, one stack — no second world to jump to).
-        await pilot.press("p")
-        assert isinstance(pilot.app.screen, StartSessionScreen)
         assert start._config.target == TARGET_LOCAL_PROJECT
         assert start.query_one("#project-row").has_focus
-        # the Run button reflects the (not yet ready) local configuration
         assert start.query_one("#start-session-button").disabled is True
 
         await pilot.press("escape")
@@ -111,7 +111,7 @@ def test_global_history_and_new_session_reach_timeline_focus(tmp_path: Path) -> 
         workspace = pilot.app.screen
         workspace.query_one("#timeline-pane").focus()
         await pilot.press("h")
-        assert isinstance(pilot.app.screen, HomeScreen)
+        assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
 
     run_headless(app, scenario)
 
@@ -212,6 +212,7 @@ def test_text_entry_keeps_letter_keys_for_the_focused_editor(tmp_path: Path) -> 
     app = _app(tmp_path)
 
     async def scenario(pilot) -> None:
+        await pilot.press("s")
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
         start._focus_row("time_limit")

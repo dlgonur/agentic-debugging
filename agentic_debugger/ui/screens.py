@@ -345,38 +345,345 @@ def render_view_header(
     return head
 
 
+BANNER_3LINE = """ █▀█ █▀▀ █▀▀ █▄ █ ▀█▀ █ █▀▀   █▀▄ █▀▀ █▀▄ █ █ █▀▀ █▀▀ █▀▀ █▀█
+ █▀█ █ █ ██▄ █ ▀█  █  █ █     █ █ ██▄ █▀▄ █ █ █ █ █ █ ██▄ █▀▄
+ ▀ ▀ ▀▀█ ▀▀▀ ▀  ▀  ▀  ▀ ▀▀▀   ▀▀  ▀▀▀ ▀▀  ▀▀▀ ▀▀█ ▀▀█ ▀▀▀ ▀ ▀"""
+
+BANNER_WIDE_SLANT = r"""    ___   ____ _____ _   _ _____ ___ ____    ____  _____ ____  _   _  ____  ____ _____ ____  
+   / _ \ / ___| ____| \ | |_   _|_ _/ ___|  |  _ \| ____| __ )| | | |/ ___|/ ___| ____|  _ \ 
+  / /_\ \ |  _|  _| |  \| | | |  | | |      | | | |  _| |  _ \| | | | |  _| |  _|  _| | |_) |
+ /_/   \_\____|_____|_| \_| |_| |___\____|  |____/|_____|____/ \___/ \____|\____|_____|_| \_\ """
+
+
+class HomeActionRow(Static):
+    """An interactive, keyboard-focusable action card on the welcome screen."""
+
+    can_focus = True
+
+    def __init__(
+        self,
+        key_label: str,
+        title: str,
+        description: str,
+        action_id: str,
+        **kwargs: Any,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.key_label = key_label
+        self.action_title = title
+        self.action_desc = description
+        self.action_id = action_id
+
+    def set_description(self, desc: str) -> None:
+        self.action_desc = desc
+        self.refresh()
+
+    def render(self) -> Text:
+        t = Text()
+        if self.has_focus:
+            t.append(" › ", style=f"bold {PRIMARY}")
+            t.append(f" {self.key_label} ", style=f"bold {CANVAS} on {PRIMARY}")
+            t.append(f"  {self.action_title:<22}", style=f"bold {FOREGROUND}")
+            t.append(f" {self.action_desc}", style=f"{MUTED}")
+        else:
+            t.append("   ", style=f"{FAINT}")
+            t.append(f" {self.key_label} ", style=f"bold {PRIMARY} on #102430")
+            t.append(f"  {self.action_title:<22}", style=f"bold {FOREGROUND}")
+            t.append(f" {self.action_desc}", style=f"{FAINT}")
+        return t
+
+    def on_click(self) -> None:
+        self.focus()
+        screen = self.screen
+        if isinstance(screen, HomeScreen):
+            screen.trigger_action(self.action_id)
+
+
 class HomeScreen(Screen):
-    """App-owned run history: the archive and replay navigation surface."""
+    """The forensic welcome screen: calm, spacious, and action-driven."""
 
     BINDINGS = [
-        Binding("n", "start_session", "New session"),
-        Binding("p", "start_local_project", "Local Project"),
-        Binding("o", "open_selected", "Open"),
-        Binding("r", "refresh", "Refresh"),
-        Binding("?", "show_help", "Help"),
+        Binding("s", "start_session", "Start debugging", priority=True),
+        Binding("n", "start_session", "New session", show=False),
+        Binding("p", "start_local_project", "Local Project", priority=True),
+        Binding("h", "open_history", "Session History", priority=True),
+        Binding("?", "show_help", "Help", priority=True),
+        Binding("q", "quit_app", "Quit", priority=True),
+        Binding("enter", "select_action", "Select", priority=True),
+        Binding("down", "focus_next", "Next action", show=False),
+        Binding("up", "focus_previous", "Previous action", show=False),
+        Binding("j", "focus_next", "Next action", show=False),
+        Binding("k", "focus_previous", "Previous action", show=False),
+        Binding("r", "refresh", "Refresh", show=False),
     ]
 
     def compose(self) -> ComposeResult:
-        with Vertical(id="home-header"):
-            yield Static("", id="home-title")
-            yield Static("", id="home-summary")
-            with Horizontal(id="home-actions"):
+        with Vertical(id="home-screen-wrap"):
+            with Vertical(id="home-hero-panel"):
+                yield Static(id="home-brand-banner")
+                yield Static(id="home-brand-tagline")
+                yield Static(id="home-brand-telemetry")
+
+            with Vertical(id="home-actions-panel"):
+                yield HomeActionRow(
+                    "S",
+                    "Start Debugging",
+                    "Configure curated tasks, live models & capability ladder",
+                    "action-start",
+                    id="action-start",
+                )
+                yield HomeActionRow(
+                    "P",
+                    "Debug Local Project",
+                    "Fast-track into local git repository with preselected target",
+                    "action-local",
+                    id="action-local",
+                )
+                yield HomeActionRow(
+                    "H",
+                    "Session History",
+                    "Browse recorded runs, inspect evidence trajectories & replay",
+                    "action-history",
+                    id="action-history",
+                )
+                yield HomeActionRow(
+                    "?",
+                    "Help & Architecture",
+                    "Forensic console legend, proof-chain invariants & keys",
+                    "action-help",
+                    id="action-help",
+                )
+
+            with Vertical(id="home-recent-panel"):
+                yield Static(id="home-recent-status")
+
+            yield Static(
+                "[bold #49D8FF]↑/↓[/] Select   "
+                "[bold #49D8FF]Enter[/] Open   "
+                "[bold #49D8FF]S[/] Start debugging   "
+                "[bold #49D8FF]P[/] Local project   "
+                "[bold #49D8FF]H[/] History   "
+                "[bold #49D8FF]?[/] Help   "
+                "[bold #49D8FF]Ctrl+C[/] Quit",
+                id="home-footer-bar",
+            )
+
+    def on_mount(self) -> None:
+        self.update_content()
+        self.refresh_history()
+        self.query_one("#action-start", HomeActionRow).focus()
+
+    def on_screen_resume(self) -> None:
+        self.refresh_history()
+        if self.focused is None or not isinstance(self.focused, HomeActionRow):
+            self.query_one("#action-start", HomeActionRow).focus()
+
+    def on_resize(self, event: Any) -> None:
+        self.update_content()
+        self.refresh_history()
+
+    def update_content(self) -> None:
+        is_wide = self.size.width >= 102
+        banner_elem = self.query_one("#home-brand-banner", Static)
+        t = Text()
+        if is_wide:
+            t.append(BANNER_WIDE_SLANT, style=f"bold {PRIMARY}")
+        else:
+            t.append(BANNER_3LINE, style=f"bold {PRIMARY}")
+        banner_elem.update(t)
+
+        tagline_elem = self.query_one("#home-brand-tagline", Static)
+        tag = Text()
+        tag.append("Debug.  Inspect.  Repair.  Verify.", style=f"bold {FOREGROUND}")
+        tagline_elem.update(tag)
+
+        telemetry_elem = self.query_one("#home-brand-telemetry", Static)
+        telem = Text()
+        telem.append("● READY", style=f"bold {SUCCESS}")
+        if is_wide:
+            telem.append(
+                "   v0.1.0   ·   Forensic Console   ·   Deterministic Controller & Independent Verifier",
+                style=f"{FAINT}",
+            )
+        else:
+            telem.append("   v0.1.0   ·   Forensic Console", style=f"{FAINT}")
+        telemetry_elem.update(telem)
+
+        footer_elem = self.query_one("#home-footer-bar", Static)
+        if self.size.width < 95:
+            footer_elem.update(
+                "[bold #49D8FF]↑/↓[/] Select   "
+                "[bold #49D8FF]Enter[/] Open   "
+                "[bold #49D8FF]S[/] Start   "
+                "[bold #49D8FF]P[/] Local   "
+                "[bold #49D8FF]H[/] History   "
+                "[bold #49D8FF]?[/] Help   "
+                "[bold #49D8FF]Ctrl+C[/] Quit"
+            )
+        else:
+            footer_elem.update(
+                "[bold #49D8FF]↑/↓[/] Select   "
+                "[bold #49D8FF]Enter[/] Open   "
+                "[bold #49D8FF]S[/] Start debugging   "
+                "[bold #49D8FF]P[/] Local project   "
+                "[bold #49D8FF]H[/] History   "
+                "[bold #49D8FF]?[/] Help   "
+                "[bold #49D8FF]Ctrl+C[/] Quit"
+            )
+
+    def refresh_history(self) -> None:
+        entries = self.app.history_store.list_sessions()
+        action_history = self.query_one("#action-history", HomeActionRow)
+        recent_elem = self.query_one("#home-recent-status", Static)
+        is_wide = self.size.width >= 100
+        divider_len = min(self.size.width - 8, 74)
+
+        if not entries:
+            action_history.set_description(
+                "Browse 0 recorded runs · Review verdicts & replay logs"
+            )
+            rec = Text()
+            rec.append(
+                "─── RECENT EVIDENCE " + "─" * max(0, divider_len - 20) + "\n",
+                style=f"{LINE}",
+            )
+            rec.append(
+                "  No recorded sessions in workspace. Select [S] Start Debugging to open a case.",
+                style=f"{MUTED}",
+            )
+            recent_elem.update(rec)
+            return
+
+        resolved = sum(
+            1
+            for entry in entries
+            if (entry.verifier_outcome or "").upper() == "RESOLVED"
+        )
+        action_history.set_description(
+            f"Browse {len(entries)} recorded run(s) · {resolved} resolved · Inspect replay logs"
+        )
+
+        latest = entries[0]
+        outcome = (latest.verifier_outcome or latest.verifier_status or (latest.status.value if latest.status else "—")).upper()
+        outcome_style = f"bold {SUCCESS}" if outcome == "RESOLVED" else f"bold {WARNING}"
+        duration = _format_duration(latest.started_at_utc, latest.ended_at_utc)
+
+        rec = Text()
+        rec.append(
+            "─── RECENT EVIDENCE " + "─" * max(0, divider_len - 20) + "\n",
+            style=f"{LINE}",
+        )
+        status_marker = "●" if outcome == "RESOLVED" else "◆"
+        rec.append(f"  {status_marker} ", style=outcome_style)
+        sess_label = _compact_session_id(latest.session_id, 20 if not is_wide else 24)
+        rec.append(f"{sess_label}", style=f"bold {FOREGROUND}")
+        if latest.task_id:
+            task_str = latest.task_id if is_wide else (latest.task_id[:18] + "…" if len(latest.task_id) > 18 else latest.task_id)
+            rec.append(f"  {task_str}", style=f"{PRIMARY}")
+        rec.append("  ·  VERIFIER: ", style=f"{FAINT}")
+        rec.append(f"{outcome}", style=outcome_style)
+        if duration != "—":
+            rec.append(f" ({duration})", style=f"{FAINT}")
+        if is_wide:
+            rec.append(f"   [H] Open archive ({len(entries)} runs)\n", style=f"{MUTED}")
+        else:
+            rec.append(f"\n  [H] Open full archive ({len(entries)} runs)", style=f"{MUTED}")
+        recent_elem.update(rec)
+
+    def action_focus_next(self) -> None:
+        self.focus_next()
+
+    def action_focus_previous(self) -> None:
+        self.focus_previous()
+
+    def trigger_action(self, action_id: str) -> None:
+        if action_id == "action-start":
+            self.action_start_session()
+        elif action_id == "action-local":
+            self.action_start_local_project()
+        elif action_id == "action-history":
+            self.action_open_history()
+        elif action_id == "action-help":
+            self.action_show_help()
+
+    def action_select_action(self) -> None:
+        focused = self.focused
+        if isinstance(focused, HomeActionRow):
+            self.trigger_action(focused.action_id)
+        else:
+            self.action_start_session()
+
+    def action_start_session(self) -> None:
+        self.app.push_screen(
+            StartSessionScreen(
+                task_options=list(self.app.curated_task_options())
+            )
+        )
+
+    def action_start_local_project(self) -> None:
+        self.app.push_screen(
+            StartSessionScreen(
+                task_options=list(self.app.curated_task_options()),
+                initial_target=TARGET_LOCAL_PROJECT,
+            )
+        )
+
+    def action_open_history(self) -> None:
+        self.app.push_screen(HistoryScreen())
+
+    def action_show_help(self) -> None:
+        self.app.push_screen(HelpModalScreen())
+
+    def action_refresh(self) -> None:
+        self.refresh_history()
+        self.notify("Workspace status refreshed.")
+
+    def action_quit_app(self) -> None:
+        self.app.action_quit()
+
+
+class HistoryScreen(Screen):
+    """App-owned run history: the archive and replay navigation surface."""
+
+    BINDINGS = [
+        Binding("s", "start_session", "New session", priority=True),
+        Binding("n", "start_session", "New session", show=False),
+        Binding("p", "start_local_project", "Local Project", priority=True),
+        Binding("o", "open_selected", "Open", priority=True),
+        Binding("enter", "open_selected", "Open", show=False),
+        Binding("r", "refresh", "Refresh", priority=True),
+        Binding("escape", "go_back", "Back", priority=True),
+        Binding("h", "go_back", "Back", show=False),
+        Binding("?", "show_help", "Help", priority=True),
+        Binding("q", "go_back", "Back", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="history-header"):
+            yield Static("", id="history-title")
+            yield Static("", id="history-summary")
+            with Horizontal(id="history-actions"):
                 yield Button(
                     "New session",
-                    id="home-new-button",
+                    id="history-new-button",
                     classes="primary-action",
                 )
                 yield Button(
                     "Debug local project",
-                    id="home-local-button",
+                    id="history-local-button",
                     classes="secondary-action",
                 )
-        yield Static("", id="home-empty", classes="empty-state")
+                yield Button(
+                    "Back to Home",
+                    id="history-back-button",
+                    classes="secondary-action",
+                )
+        yield Static("", id="history-empty", classes="empty-state")
         yield DataTable(id="history-table")
         yield Static(
-            "[dim]N new session · P local project · O/Enter open · "
-            "R refresh · Ctrl+C quit · ? help[/]",
-            id="home-hint",
+            "[dim]↑/↓ Move · Enter/O Open replay · S New session · "
+            "P Local project · R Refresh · Esc Home · ? Help[/]",
+            id="history-footer",
         )
 
     def on_mount(self) -> None:
@@ -391,7 +698,7 @@ class HomeScreen(Screen):
             "Reopen the evidence, inspect the verdict, or open a new case.",
             style=MUTED,
         )
-        self.query_one("#home-title", Static).update(title)
+        self.query_one("#history-title", Static).update(title)
         table = self.query_one("#history-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(
@@ -404,12 +711,12 @@ class HomeScreen(Screen):
         table = self.query_one("#history-table", DataTable)
         table.clear()
         entries = self.app.history_store.list_sessions()
-        empty = self.query_one("#home-empty", Static)
-        summary = self.query_one("#home-summary", Static)
+        empty = self.query_one("#history-empty", Static)
+        summary = self.query_one("#history-summary", Static)
         if not entries:
             empty.update(
                 f"[bold {FOREGROUND}]No sessions yet.[/]\n\n"
-                f"[{MUTED}]Press N to configure a new session — a curated task, "
+                f"[{MUTED}]Press S to configure a new session — a curated task, "
                 "your local project, or a capability-ladder run. "
                 "Verifier evidence will appear here.[/]"
             )
@@ -468,7 +775,6 @@ class HomeScreen(Screen):
         return None
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Enter selects a row (the DataTable owns the enter binding)."""
         self.action_open_selected()
 
     def action_start_session(self) -> None:
@@ -479,7 +785,6 @@ class HomeScreen(Screen):
         )
 
     def action_start_local_project(self) -> None:
-        """Open the unified setup screen on the Local Project controls."""
         self.app.push_screen(
             StartSessionScreen(
                 task_options=list(self.app.curated_task_options()),
@@ -511,56 +816,21 @@ class HomeScreen(Screen):
         self.refresh_history()
         self.notify("History refreshed.")
 
-    def action_quit_app(self) -> None:
-        self.app.action_quit()
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
 
     def action_show_help(self) -> None:
         self.app.push_screen(HelpModalScreen())
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "home-local-button":
+        if event.button.id == "history-local-button":
             self.action_start_local_project()
             event.stop()
-        elif event.button.id == "home-new-button":
+        elif event.button.id == "history-new-button":
             self.action_start_session()
             event.stop()
-
-    def action_open_selected(self) -> None:
-        entry = self._selected_entry()
-        if entry is None:
-            self.notify("Select a session row first.", severity="warning")
-            return
-        if entry.classification is HistoryClassification.MALFORMED:
-            self.notify(
-                f"Session {entry.session_id} has a malformed journal and "
-                "cannot be replayed.", severity="error"
-            )
-            return
-        if entry.classification is HistoryClassification.INVALID_MANIFEST:
-            self.notify(
-                f"Session {entry.session_id} has an invalid manifest; "
-                "it cannot be opened as a valid session.",
-                severity="error",
-            )
-            return
-        self.app.open_session(entry.session_id or "")
-
-    def action_refresh(self) -> None:
-        self.refresh_history()
-        self.notify("History refreshed.")
-
-    def action_quit_app(self) -> None:
-        self.app.action_quit()
-
-    def action_show_help(self) -> None:
-        self.app.push_screen(HelpModalScreen())
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "home-local-button":
-            self.action_start_local_project()
-            event.stop()
-        elif event.button.id == "home-new-button":
-            self.action_start_session()
+        elif event.button.id == "history-back-button":
+            self.action_go_back()
             event.stop()
 
 
@@ -3424,10 +3694,11 @@ class HelpModalScreen(Screen):
                 "[dim]Only the independent verifier can mark a candidate RESOLVED.[/]\n"
                 "\n"
                 f"[bold {PRIMARY}]Navigation[/]\n"
+                "  • Home — S start debugging · P local project · H session history · ? help\n"
                 "  • Setup — ↑/↓ move · Enter edit · S run · P local project ·\n"
                 "            H history · Esc back\n"
-                "  • Home — N new session · P local project · O/Enter open replay · R refresh\n"
-                "           Ctrl+C quit · ? help\n"
+                "  • History — ↑/↓ move · Enter/O open replay · S new session ·\n"
+                "              P local project · R refresh · Esc home\n"
                 "  • Workspace — \\[ / ] previous/next event · { / } previous/next phase\n"
                 "                G/Shift+G begin/end · J jump · 1–8 activity filter\n"
                 "                C cancel live · H history · N new session\n"
@@ -3447,6 +3718,8 @@ class HelpModalScreen(Screen):
 
 __all__ = [
     "HelpModalScreen",
+    "HistoryScreen",
+    "HomeActionRow",
     "HomeScreen",
     "JumpToSequenceScreen",
     "StartSessionScreen",

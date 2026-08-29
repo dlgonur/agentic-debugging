@@ -43,6 +43,7 @@ from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     ChoicePickerScreen,
+    HistoryScreen,
     HomeScreen,
     StartSessionScreen,
     WorkspaceMode,
@@ -138,6 +139,7 @@ def _non_ladder_task_options(monkeypatch):
 class TestConfiguredStartScreen:
     def test_no_profiles_leaves_offline_ready_and_picker_honest(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             # With no configured profiles the unified picker simply offers
             # no custom-profile entries; the offline default stays ready.
@@ -160,6 +162,7 @@ class TestConfiguredStartScreen:
         (config_dir / "command-models.json").write_text("{not-json", encoding="utf-8")
 
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             start._open_model_picker()
             await pilot.pause()
@@ -193,6 +196,7 @@ class TestConfiguredStartScreen:
         )
 
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             start._open_model_picker()
             await pilot.pause()
@@ -217,6 +221,7 @@ class TestConfiguredStartScreen:
         write_profile(tmp_path, "dummy", "valid")
 
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             start._open_model_picker()
             await pilot.pause()
@@ -238,6 +243,7 @@ class TestConfiguredStartScreen:
         write_profile(tmp_path, "dummy", "valid")
 
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             assert "network isolation" not in str(start.query_one("#start-notes").render())
             start._choice_selected("model", "configured:dummy")
@@ -342,6 +348,12 @@ class TestConfiguredLiveSession:
                 lambda: isinstance(pilot.app.screen, HomeScreen),
                 timeout_seconds=30.0,
             )
+            await pilot.press("h")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HistoryScreen),
+                timeout_seconds=30.0,
+            )
             table = pilot.app.screen.query_one("#history-table")
             assert table.row_count == 1
             await pilot.press("enter")
@@ -424,8 +436,7 @@ class TestConfiguredLiveSession:
                 lambda: isinstance(pilot.app.screen, HomeScreen),
                 timeout_seconds=30.0,
             )
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 1
+            assert len(app.history_store.list_sessions()) == 1
             # a second session can start after the failure
             await pilot.press("n")
             await wait_until(
@@ -456,8 +467,7 @@ class TestConfiguredLiveSession:
                 timeout_seconds=30.0,
             )
             # both sessions registered with distinct identities
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 2
+            assert len(app.history_store.list_sessions()) == 2
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
             assert len(set(ids)) == 2
 
@@ -585,7 +595,7 @@ class TestMixedSequentialSessions:
                 lambda: isinstance(pilot.app.screen, HomeScreen),
                 timeout_seconds=30.0,
             )
-            assert pilot.app.screen.query_one("#history-table").row_count == 1
+            assert len(app.history_store.list_sessions()) == 1
 
             # -- session 2: deterministic, cancelled ------------------------
             await pilot.press("n")
@@ -627,8 +637,7 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             # both sessions registered with distinct identities
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 2
+            assert len(app.history_store.list_sessions()) == 2
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
             assert session1_id in ids and session2_id in ids
             assert len(set(ids)) == 2
@@ -725,8 +734,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             # both sessions registered with distinct identities
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 2
+            assert len(app.history_store.list_sessions()) == 2
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
             assert session1_id in ids and session2_id in ids
             assert len(set(ids)) == 2
@@ -816,8 +824,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             # both the cancelled session and the retry registered
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 2
+            assert len(app.history_store.list_sessions()) == 2
 
         run_headless(app, scenario, size=(100, 30))
 
@@ -938,6 +945,12 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             # replay the recorded failure at the compact size
+            await pilot.press("h")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HistoryScreen),
+                timeout_seconds=30.0,
+            )
             await pilot.press("enter")
             await wait_until(
                 pilot,

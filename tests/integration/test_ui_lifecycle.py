@@ -43,6 +43,7 @@ from agentic_debugger.application.session import (
 )
 from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
+    HistoryScreen,
     HomeScreen,
     StartSessionScreen,
     WorkspaceMode,
@@ -308,9 +309,8 @@ class TestOwnershipRelease:
             )
             # The finished session registered into app-owned history.
             await pilot.press("h")
-            assert isinstance(pilot.app.screen, HomeScreen)
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 1
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
+            assert len(app.history_store.list_sessions()) == 1
 
         run_headless(app, scenario)
 
@@ -498,7 +498,7 @@ class TestOwnershipRelease:
             )
             await wait_until(
                 pilot,
-                lambda: pilot.app.screen.query_one("#history-table").row_count == 1,
+                lambda: len(app.history_store.list_sessions()) == 1,
                 label="history-registered",
             )
             # And a new session can start from that Home.
@@ -519,8 +519,6 @@ class TestOwnershipRelease:
 
         run_headless(app, scenario)
 
-
-class TestSequentialSessions:
     def test_start_screen_replaced_and_second_session_starts(
         self, tmp_path, monkeypatch
     ):
@@ -561,8 +559,8 @@ class TestSequentialSessions:
             assert session1_id is not None
             # q returns to Home, not to the StartSessionScreen.
             await pilot.press("h")
-            assert isinstance(pilot.app.screen, HomeScreen)
-            assert pilot.app.screen.query_one("#history-table").row_count == 1
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
+            assert len(app.history_store.list_sessions()) == 1
             # A second session starts from the same Home screen.
             await pilot.press("n")
             await wait_until(
@@ -589,8 +587,8 @@ class TestSequentialSessions:
                 label="runner-released-2",
             )
             await pilot.press("h")
-            assert isinstance(pilot.app.screen, HomeScreen)
-            assert pilot.app.screen.query_one("#history-table").row_count == 2
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
+            assert len(app.history_store.list_sessions()) == 2
 
         run_headless(app, scenario)
 
@@ -634,10 +632,10 @@ class TestSequentialSessions:
             )
             # Both sequential sessions are in history with distinct ids.
             await pilot.press("h")
-            assert isinstance(pilot.app.screen, HomeScreen)
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
             await wait_until(
                 pilot,
-                lambda: pilot.app.screen.query_one("#history-table").row_count == 2,
+                lambda: len(app.history_store.list_sessions()) == 2,
                 label="history-both",
             )
             ids = [

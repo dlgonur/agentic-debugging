@@ -82,6 +82,7 @@ from agentic_debugger.application.worker_process import SessionWorkerProcess
 from agentic_debugger.application.worker_protocol import WorkerLiveness
 from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
 from agentic_debugger.ui.screens import (
+    HistoryScreen,
     HomeScreen,
     StartSessionScreen,
     WorkspaceMode,
@@ -328,8 +329,7 @@ class LocalApplicationV1(App):
     def on_mount(self) -> None:
         self.register_theme(AGENTIC_DEBUGGER_THEME)
         self.theme = THEME_NAME
-        # History remains the base navigation surface, but a new debugging
-        # session is the product's primary first-run action.
+        # The welcome / home screen is the application's clean opening surface.
         self.push_screen(HomeScreen())
         # If --project was supplied, open the unified setup screen directly
         # on the Local Project controls with the path prefilled.
@@ -341,10 +341,6 @@ class LocalApplicationV1(App):
                     initial_project=str(self._initial_project),
                 )
             )
-            return
-        self.push_screen(
-            StartSessionScreen(task_options=list(self.curated_task_options()))
-        )
 
     def on_unmount(self) -> None:
         # App teardown must never orphan a live worker: bounded cooperative
@@ -364,6 +360,10 @@ class LocalApplicationV1(App):
         runner.close()
 
     # -- navigation ---------------------------------------------------------
+
+    def open_history(self) -> None:
+        """Open the dedicated session archive screen."""
+        self.push_screen(HistoryScreen())
 
     def open_session(self, session_id: str) -> None:
         """Open one app-owned session read-only and push the workspace."""
@@ -397,7 +397,7 @@ class LocalApplicationV1(App):
         )
 
     def go_home(self) -> None:
-        """Return to the history screen; a live session keeps running."""
+        """Return to the home screen; a live session keeps running."""
         self.pop_screen()
         self.refresh_home_history()
 
@@ -405,13 +405,13 @@ class LocalApplicationV1(App):
         """Refresh the history table after the current screen settles.
 
         Called when a workspace is popped so a just-registered live session
-        is immediately visible in the app-owned history list.
+        is immediately visible in the app-owned history list or home summary.
         """
         self.call_later(self._refresh_home_history)
 
     def _refresh_home_history(self) -> None:
         screen = self.screen
-        if isinstance(screen, HomeScreen):
+        if isinstance(screen, (HomeScreen, HistoryScreen)):
             screen.refresh_history()
 
     # -- live sessions ------------------------------------------------------

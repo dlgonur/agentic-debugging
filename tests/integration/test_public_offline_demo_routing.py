@@ -115,8 +115,9 @@ def test_offline_demo_cta_starts_selected_curated_task_provider_free(tmp_path: P
     level32_created = {"called": False}
 
     async def scenario(pilot):
+        await pilot.press("s")
         screen = pilot.app.screen
-        assert isinstance(screen, StartSessionScreen), "startup must be StartSessionScreen"
+        assert isinstance(screen, StartSessionScreen), "session setup must be StartSessionScreen"
 
         # 1. startup state is the provider-free curated default
         assert screen._config.target == "curated", "startup target must be Curated task"
@@ -250,6 +251,7 @@ def test_explicit_level32_path_is_not_redirected_to_offline(tmp_path: Path) -> N
     captured: dict[str, object] = {}
 
     async def scenario(pilot):
+        await pilot.press("s")
         screen = pilot.app.screen
         assert isinstance(screen, StartSessionScreen)
 

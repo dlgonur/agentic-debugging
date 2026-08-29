@@ -30,7 +30,13 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.process_tree import pid_is_alive
 from agentic_debugger.application.session import SessionStatus
 from agentic_debugger.ui.app import LocalApplicationV1
-from agentic_debugger.ui.screens import HomeScreen, WorkspaceMode, WorkspaceScreen
+from agentic_debugger.ui.screens import (
+    HistoryScreen,
+    HomeScreen,
+    StartSessionScreen,
+    WorkspaceMode,
+    WorkspaceScreen,
+)
 from agentic_debugger.ui.widgets import LiveBar, SourcePanel, StatusHeader
 
 from textual.widgets import Static as _Static
@@ -139,20 +145,32 @@ class TestLiveStartAndProgression:
             assert live_view.cleanup_verified is True
 
             # completed run appears in app-owned history
-            await pilot.press("h")
-            assert isinstance(pilot.app.screen, HomeScreen)
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 1
+            await pilot.press("escape")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HomeScreen),
+                timeout_seconds=30.0,
+            )
+            assert len(app.history_store.list_sessions()) == 1
 
             # reopen + replay the same session from history
             session_id = live_view.session_id
             assert session_id is not None
-            await pilot.press("enter")
-            workspace = pilot.app.screen
-            assert workspace.mode is WorkspaceMode.REPLAY
-            assert "REPLAY" in str(
-                workspace.query_one("#status-header", StatusHeader).render()
+            await pilot.press("h")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, HistoryScreen),
+                timeout_seconds=30.0,
             )
+            await pilot.press("enter")
+            await wait_until(
+                pilot,
+                lambda: isinstance(pilot.app.screen, WorkspaceScreen)
+                and pilot.app.screen.mode is WorkspaceMode.REPLAY,
+                timeout_seconds=30.0,
+            )
+            workspace = pilot.app.screen
+            assert "REPLAY" in header_text(workspace)
             await pilot.press("G")
 
             # final live/replay parity (domain presentation state)
@@ -397,8 +415,7 @@ class TestStartSessionScreen:
             )
             assert pilot.app.screen.__class__.__name__ == "HomeScreen"
             # the completed run is registered in app-owned history
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 1
+            assert len(app.history_store.list_sessions()) == 1
 
             # -- session 2: start again from the same Home, then cancel ----
             await pilot.press("n")
@@ -439,8 +456,7 @@ class TestStartSessionScreen:
                 label="stage6-home",
             )
             # both sequential sessions are in history with distinct ids
-            table = pilot.app.screen.query_one("#history-table")
-            assert table.row_count == 2
+            assert len(app.history_store.list_sessions()) == 2
             ids = [entry.session_id for entry in app.history_store.list_sessions()]
             assert session1_id in ids and session2_id in ids
             assert len(set(ids)) == 2

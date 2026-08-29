@@ -78,6 +78,7 @@ def test_ladder_setup_and_start_use_one_unified_surface(tmp_path: Path, monkeypa
     monkeypatch.setattr(app, "start_live_session", record_start)
 
     async def scenario(pilot):
+        await pilot.press("s")
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
         # One screen, one stack: target -> task -> model, explicitly.
@@ -440,6 +441,7 @@ def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.M
     monkeypatch.setattr(app, "start_live_session", record_start)
 
     async def scenario(pilot):
+        await pilot.press("s")
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
         start._choice_selected("target", "ladder")
@@ -547,6 +549,7 @@ def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
     ]
 
     async def scenario(pilot):
+        await pilot.press("s")
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
 
@@ -605,6 +608,7 @@ def test_ladder_empty_roster_blocks_start_with_domain_reason(tmp_path: Path, mon
     monkeypatch.setattr(app, "level32_model_profiles", lambda: ())
 
     async def scenario(pilot):
+        await pilot.press("s")
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
         start._choice_selected("target", "ladder")

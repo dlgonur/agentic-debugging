@@ -27,8 +27,9 @@ from agentic_debugger.application.presentation import (
 )
 from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
-    HomeScreen,
     ChoicePickerScreen,
+    HistoryScreen,
+    HomeScreen,
     StartSessionScreen,
     TimeLimitEditorScreen,
     WorkspaceMode,
@@ -90,7 +91,7 @@ def make_standard_app(tmp_path: Path) -> LocalApplicationV1:
 
 
 async def open_first_row(pilot) -> None:
-    await pilot.press("escape")
+    await pilot.press("h")
     await pilot.press("enter")
 
 
@@ -98,13 +99,19 @@ class TestBootAndHome:
     def test_app_boots_to_new_session_screen(self, tmp_path):
         async def scenario(pilot):
             app = pilot.app
+            assert isinstance(app.screen, HomeScreen)
+            assert "Debug.  Inspect.  Repair.  Verify." in str(app.screen.query_one("#home-brand-tagline").render())
+            assert app.screen.query_one("#home-footer-bar")
+            await pilot.press("s")
             assert isinstance(app.screen, StartSessionScreen)
             assert "Evidence-driven software repair" in str(app.screen.query_one("#start-hero").render())
             assert app.screen.query_one("#start-footer")
-            await pilot.press("h")
+            await pilot.press("escape")
             assert isinstance(app.screen, HomeScreen)
-            await pilot.press("n")
-            assert isinstance(app.screen, StartSessionScreen)
+            await pilot.press("h")
+            assert isinstance(app.screen, HistoryScreen)
+            await pilot.press("escape")
+            assert isinstance(app.screen, HomeScreen)
 
         run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
 
@@ -114,6 +121,7 @@ class TestBootAndHome:
         app.start_live_session = lambda **kwargs: calls.append(dict(kwargs))  # type: ignore[method-assign]
 
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             assert isinstance(start, StartSessionScreen)
             button = start.query_one("#start-session-button")
@@ -128,6 +136,7 @@ class TestBootAndHome:
 
     def test_new_session_is_flat_and_uses_one_shared_picker(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             assert isinstance(start, StartSessionScreen)
             assert start._config.target == "curated"
@@ -186,6 +195,7 @@ class TestBootAndHome:
 
     def test_new_session_focus_marker_transfers_without_alignment_shift(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
 
             def row_text(selector: str) -> str:
@@ -219,6 +229,7 @@ class TestBootAndHome:
 
     def test_time_limit_modal_validates_cancel_and_empty_values(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             start._focus_row("time_limit")
             await pilot.press("enter")
@@ -260,6 +271,7 @@ class TestBootAndHome:
 class TestLevel32NewSession:
     def test_level32_selection_disables_incompatible_rows_and_keeps_them_visible(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             # Switch to the ladder target, then select the Level-32 rung and
             # a qualified model — all explicit, nothing silently mutated.
@@ -297,6 +309,7 @@ class TestLevel32NewSession:
         monkeypatch.setattr(LocalApplicationV1, "level32_model_profiles", lambda self: ())
 
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             start._choice_selected("target", "ladder")
             start._choice_selected("task", "audreyr__cookiecutter-967")
@@ -309,6 +322,7 @@ class TestLevel32NewSession:
 
     def test_new_session_wide_context_and_picker_geometry(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             assert start.query_one("#start-context").display is True
             await pilot.press("enter")
@@ -328,6 +342,7 @@ class TestLevel32NewSession:
 
     def test_very_small_terminal_keeps_settings_and_actions_reachable(self, tmp_path):
         async def scenario(pilot):
+            await pilot.press("s")
             start = pilot.app.screen
             assert start.query_one("#start-context").display is False
             for selector in ("#target-row", "#task-row", "#model-row", "#debugger-row", "#time-limit-row", "#start-footer"):
@@ -345,10 +360,10 @@ class TestLevel32NewSession:
 
     def test_empty_history_shows_empty_state(self, tmp_path):
         async def scenario(pilot):
-            await pilot.press("escape")
+            await pilot.press("h")
             app = pilot.app
-            assert isinstance(app.screen, HomeScreen)
-            empty = app.screen.query_one("#home-empty")
+            assert isinstance(app.screen, HistoryScreen)
+            empty = app.screen.query_one("#history-empty")
             assert empty.display is True
             assert "No sessions yet" in str(empty.render())
             assert app.screen.query_one("#history-table").display is False
@@ -356,7 +371,7 @@ class TestLevel32NewSession:
             # Opening an empty table used to raise CellDoesNotExist and take
             # down the entire TUI.  The empty archive is now a safe state.
             await pilot.press("o")
-            assert isinstance(app.screen, HomeScreen)
+            assert isinstance(app.screen, HistoryScreen)
             assert app.is_running is True
 
         run_headless(make_app(tmp_path), scenario)
@@ -367,12 +382,12 @@ class TestLevel32NewSession:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("escape")
+            await pilot.press("h")
             table = pilot.app.screen.query_one("#history-table")
             row_count = table.row_count
             assert row_count == 1
             assert pilot.app.focused is table
-            empty = pilot.app.screen.query_one("#home-empty")
+            empty = pilot.app.screen.query_one("#history-empty")
             assert empty.display is False
             # session id and honest classification are visible
             rendered = table_text(table)
@@ -388,7 +403,7 @@ class TestLevel32NewSession:
         populate_history(store, "sess.good")
 
         async def scenario(pilot):
-            await pilot.press("escape")
+            await pilot.press("h")
             table = pilot.app.screen.query_one("#history-table")
             rendered = table_text(table)
             assert "malformed" in rendered
@@ -407,7 +422,7 @@ class TestLevel32NewSession:
         app = LocalApplicationV1(history_store=store)
 
         async def scenario(pilot):
-            await pilot.press("escape")
+            await pilot.press("h")
             table = pilot.app.screen.query_one("#history-table")
             rendered = table_text(table)
             assert "complete" in rendered
@@ -641,8 +656,7 @@ class TestOpenReplay:
 
         async def scenario(pilot):
             await open_first_row(pilot)
-            assert isinstance(pilot.app.screen, HomeScreen)
-            assert isinstance(pilot.app.screen, HomeScreen)
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
 
         run_headless(app, scenario)
 
@@ -673,10 +687,12 @@ class TestOpenReplay:
             await open_first_row(pilot)
             assert isinstance(pilot.app.screen, WorkspaceScreen)
             await pilot.press("escape")
-            assert isinstance(pilot.app.screen, HomeScreen)
+            assert isinstance(pilot.app.screen, HistoryScreen)
             # history still listed after returning home
             table = pilot.app.screen.query_one("#history-table")
             assert table.row_count == 1
+            await pilot.press("escape")
+            assert isinstance(pilot.app.screen, HomeScreen)
 
         run_headless(app, scenario)
 
@@ -714,7 +730,7 @@ class TestTerminalSizes:
                 # switch to the debugger tab and back
                 await pilot.press("tab", "tab")
                 await pilot.press("escape")
-                assert isinstance(pilot.app.screen, HomeScreen)
+                assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
 
             run_headless(app, scenario, size=size)
 
@@ -735,7 +751,7 @@ class TestTerminalSizes:
             await pilot.resize_terminal(100, 30)
             await pilot.pause()
             await pilot.press("escape")
-            assert isinstance(pilot.app.screen, HomeScreen)
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
 
         run_headless(app, scenario)
 
@@ -775,7 +791,7 @@ class TestReplayExecutesNothing:
                 await pilot.press("]")
             await pilot.press("[")
             await pilot.press("escape")
-            assert isinstance(pilot.app.screen, HomeScreen)
+            assert isinstance(pilot.app.screen, (HomeScreen, HistoryScreen))
 
         run_headless(app, scenario)
 
