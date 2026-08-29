@@ -44,6 +44,7 @@ __all__ = [
     "PROVIDER_KINDS",
     "ProviderModel",
     "ProviderRegistryError",
+    "format_model_display_name",
     "list_live_models",
     "list_provider_models",
     "provider_availability",
@@ -68,6 +69,104 @@ _PROVIDER_LABELS = {
     PROVIDER_KIND_COMMANDCODE: "CommandCode GOAT",
     PROVIDER_KIND_CONFIGURED: "Custom command profile",
 }
+
+_KNOWN_MODEL_MAP: Mapping[str, str] = {
+    # DeepSeek
+    "deepseekv4flash": "DeepSeek V4 Flash",
+    "deepseekv4pro": "DeepSeek V4 Pro",
+    # GLM
+    "glm5.1": "GLM 5.1",
+    "glm5.2": "GLM 5.2",
+    "glm5.2fast": "GLM 5.2 Fast",
+    "glm5.3": "GLM 5.3",
+    "glm5.3flash": "GLM 5.3 Flash",
+    # GPT-OSS / GPT
+    "gptoss20b": "GPT-OSS 20B",
+    "gptoss120b": "GPT-OSS 120B",
+    "gpt5.6sol": "GPT-5.6 Sol",
+    "gpt5.6terra": "GPT-5.6 Terra",
+    # Kimi
+    "kimik2.6": "Kimi K2.6",
+    "kimik2.7code": "Kimi K2.7 Code",
+    "kimik3": "Kimi K3",
+    # MiniMax
+    "minimaxm2.7": "MiniMax M2.7",
+    "minimaxm3": "MiniMax M3",
+    # Nemotron
+    "nemotron3nano30b": "Nemotron 3 Nano 30B",
+    "nemotron3super": "Nemotron 3 Super",
+    "nemotron3ultra": "Nemotron 3 Ultra",
+    # Qwen
+    "qwen3.5": "Qwen 3.5",
+    "qwen3.8max": "Qwen 3.8 Max",
+    # Gemma
+    "gemma431b": "Gemma 4 31B",
+    # Mistral
+    "mistrallarge3675b": "Mistral Large 3 675B",
+    # MiMo
+    "mimov2.5pro": "MiMo V2.5 Pro",
+    # Grok
+    "grok4.6": "Grok 4.6",
+}
+
+
+def _normalize_key(s: str) -> str:
+    return s.strip().lower().replace("-", "").replace("_", "").replace(" ", "").replace(":", "")
+
+
+def format_model_display_name(raw: str) -> str:
+    """Format any model identifier or alias into a clean human-readable name.
+
+    Examples:
+        deepseek-v4-flash:cloud -> DeepSeek V4 Flash
+        opencode-go/deepseek-v4-pro -> DeepSeek V4 Pro
+        zai-org/glm-5.2 -> GLM 5.2
+        gpt-oss:120b-cloud -> GPT-OSS 120B
+        nemotron-3-super:cloud -> Nemotron 3 Super
+    """
+    if not raw or raw.strip().lower() in ("offline", ""):
+        return "Offline"
+    text = raw.strip()
+    if "/" in text:
+        text = text.rsplit("/", 1)[-1]
+    if text.endswith(":cloud"):
+        text = text[:-6]
+    elif text.endswith("-cloud"):
+        text = text[:-6]
+
+    norm = _normalize_key(text)
+    if norm in _KNOWN_MODEL_MAP:
+        return _KNOWN_MODEL_MAP[norm]
+
+    acronyms = {
+        "gpt": "GPT",
+        "oss": "OSS",
+        "glm": "GLM",
+        "llm": "LLM",
+        "v1": "V1",
+        "v2": "V2",
+        "v3": "V3",
+        "v4": "V4",
+        "v5": "V5",
+        "v6": "V6",
+        "moe": "MoE",
+        "ai": "AI",
+        "pdb": "PDB",
+        "cli": "CLI",
+        "deepseek": "DeepSeek",
+        "minimax": "MiniMax",
+        "mimo": "MiMo",
+    }
+    parts = []
+    for chunk in text.replace("_", " ").replace("-", " ").replace(":", " ").split():
+        lower = chunk.lower()
+        if lower in acronyms:
+            parts.append(acronyms[lower])
+        elif lower.endswith("b") and lower[:-1].isdigit():
+            parts.append(f"{lower[:-1]}B")
+        else:
+            parts.append(chunk.capitalize())
+    return " ".join(parts) or text
 
 #: Curated presentation defaults captured from the live GOAT catalog
 #: (2026-08-28).  Any plan model id remains accepted at the adapter.
@@ -174,7 +273,7 @@ def provider_availability() -> List[Tuple[str, bool, Optional[str]]]:
 
 
 def _display_name(model_id: str) -> str:
-    return model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
+    return format_model_display_name(model_id)
 
 
 def list_provider_models(
@@ -204,7 +303,7 @@ def list_provider_models(
                 ProviderModel(
                     kind=PROVIDER_KIND_OLLAMA,
                     model_id=spec.local_alias,
-                    display_name=spec.upstream_model,
+                    display_name=format_model_display_name(spec.local_alias),
                     provider_label=_PROVIDER_LABELS[PROVIDER_KIND_OLLAMA],
                     available=is_runnable,
                     unavailable_reason=unavailable_reason,
@@ -216,7 +315,7 @@ def list_provider_models(
             ProviderModel(
                 kind=PROVIDER_KIND_OPENCODE,
                 model_id=model_id,
-                display_name=_display_name(model_id),
+                display_name=format_model_display_name(model_id),
                 provider_label=_PROVIDER_LABELS[PROVIDER_KIND_OPENCODE],
                 available=opencode_ok,
                 unavailable_reason=opencode_reason,
@@ -228,7 +327,7 @@ def list_provider_models(
             ProviderModel(
                 kind=PROVIDER_KIND_COMMANDCODE,
                 model_id=model_id,
-                display_name=_display_name(model_id),
+                display_name=format_model_display_name(model_id),
                 provider_label=_PROVIDER_LABELS[PROVIDER_KIND_COMMANDCODE],
                 available=commandcode_ok,
                 unavailable_reason=commandcode_reason,
@@ -356,7 +455,7 @@ def resolve_provider_live_config(
         return config, {
             "provider": kind,
             "profile_id": model_id,
-            "display_name": _display_name(model_id),
+            "display_name": model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id,
             "protocol_version": "1.3",
             "tool_version": config.tool_version,
         }
@@ -380,7 +479,7 @@ def resolve_provider_live_config(
         return config, {
             "provider": kind,
             "profile_id": model_id,
-            "display_name": _display_name(model_id),
+            "display_name": model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id,
             "protocol_version": "1.3",
             "tool_version": config.tool_version,
         }

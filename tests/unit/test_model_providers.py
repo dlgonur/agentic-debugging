@@ -114,7 +114,7 @@ class TestModelListing:
         glm = next((m for m in models if m.model_id == "glm-5.3-flash:cloud"), None)
         assert glm is not None
         assert glm.kind == mp.PROVIDER_KIND_OLLAMA
-        assert glm.display_name == "glm-5.3-flash"
+        assert glm.display_name == "GLM 5.3 Flash"
         assert glm.available is True
 
     def test_glm_5_3_flash_not_in_level32_qualified_roster(self) -> None:
@@ -218,3 +218,37 @@ class TestLiveModelListing:
     def test_unsupported_listing_fails_closed(self) -> None:
         with pytest.raises(mp.ProviderRegistryError):
             mp.list_live_models(mp.PROVIDER_KIND_OLLAMA)
+
+class TestFormatModelDisplayName:
+    def test_known_ollama_models(self) -> None:
+        assert mp.format_model_display_name("deepseek-v4-flash:cloud") == "DeepSeek V4 Flash"
+        assert mp.format_model_display_name("deepseek-v4-pro:cloud") == "DeepSeek V4 Pro"
+        assert mp.format_model_display_name("glm-5.1:cloud") == "GLM 5.1"
+        assert mp.format_model_display_name("glm-5.2:cloud") == "GLM 5.2"
+        assert mp.format_model_display_name("glm-5.3-flash:cloud") == "GLM 5.3 Flash"
+        assert mp.format_model_display_name("gpt-oss:20b-cloud") == "GPT-OSS 20B"
+        assert mp.format_model_display_name("gpt-oss:120b-cloud") == "GPT-OSS 120B"
+        assert mp.format_model_display_name("nemotron-3-super:cloud") == "Nemotron 3 Super"
+        assert mp.format_model_display_name("nemotron-3-nano:30b-cloud") == "Nemotron 3 Nano 30B"
+        assert mp.format_model_display_name("gemma4:31b-cloud") == "Gemma 4 31B"
+        assert mp.format_model_display_name("mistral-large-3:675b-cloud") == "Mistral Large 3 675B"
+
+    def test_known_opencode_models(self) -> None:
+        assert mp.format_model_display_name("opencode-go/deepseek-v4-flash") == "DeepSeek V4 Flash"
+        assert mp.format_model_display_name("opencode-go/glm-5.3") == "GLM 5.3"
+        assert mp.format_model_display_name("opencode-go/kimi-k2.7-code") == "Kimi K2.7 Code"
+        assert mp.format_model_display_name("opencode-go/grok-4.6") == "Grok 4.6"
+        assert mp.format_model_display_name("opencode-go/minimax-m3") == "MiniMax M3"
+
+    def test_known_commandcode_models(self) -> None:
+        assert mp.format_model_display_name("deepseek/deepseek-v4-flash") == "DeepSeek V4 Flash"
+        assert mp.format_model_display_name("zai-org/glm-5.2-fast") == "GLM 5.2 Fast"
+        assert mp.format_model_display_name("moonshotai/kimi-k3") == "Kimi K3"
+        assert mp.format_model_display_name("xiaomi/mimo-v2.5-pro") == "MiMo V2.5 Pro"
+        assert mp.format_model_display_name("gpt-5.6-sol") == "GPT-5.6 Sol"
+
+    def test_offline_and_blank(self) -> None:
+        assert mp.format_model_display_name("") == "Offline"
+        assert mp.format_model_display_name("offline") == "Offline"
+        assert mp.format_model_display_name("  Offline  ") == "Offline"
+

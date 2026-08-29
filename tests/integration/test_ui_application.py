@@ -294,7 +294,9 @@ class TestLevel32NewSession:
             assert start.start_available is True
             context = start.query_one("#context-summary").render().plain
             assert "READY  Yes" in context
-            assert profiles[0].display_name in context
+            from agentic_debugger.application.model_providers import format_model_display_name
+
+            assert format_model_display_name(profiles[0].alias) in context
             assert "Start session" == start.query_one("#start-session-button").label.plain
 
             # Selecting a lower ladder task keeps the frozen ladder shell.

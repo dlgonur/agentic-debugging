@@ -19,6 +19,7 @@ from typing import Any, Callable, Optional, Tuple
 from agentic_debugger.application.model_providers import (
     PROVIDER_KIND_CONFIGURED,
     PROVIDER_KIND_OLLAMA,
+    format_model_display_name,
     list_provider_models,
 )
 
@@ -842,7 +843,8 @@ class ChoiceOption:
 
     ``disabled`` options stay visible with their ``disabled_reason`` —
     incompatibilities are explained, never hidden.  A ``group`` label is
-    rendered once as a section header when the group changes.
+    rendered once as a section header when the group changes.  ``group_note``
+    communicates provider-level status once at the group header.
     """
 
     value: str
@@ -850,6 +852,7 @@ class ChoiceOption:
     description: str = ""
     secondary: str = ""
     group: str = ""
+    group_note: str = ""
     disabled: bool = False
     disabled_reason: str = ""
 
@@ -1136,6 +1139,8 @@ class ChoicePickerScreen(Screen):
                 last_group = choice.group
                 header = Text()
                 header.append(f"{choice.group.upper()}", style=f"bold {PRIMARY}")
+                if choice.group_note:
+                    header.append(f"   {choice.group_note}", style=f"dim italic {MUTED}")
                 option_list.add_option(
                     Option(header, disabled=True)
                 )
@@ -1195,8 +1200,6 @@ class ChoicePickerScreen(Screen):
             text.append(choice.title, style=FAINT)
             if choice.secondary:
                 text.append(f"  {choice.secondary}", style=FAINT)
-            if choice.disabled_reason:
-                text.append(f"\n      ! {choice.disabled_reason}", style=f"{FAINT} italic")
             return text
         text = Text()
         text.append("› " if active else "  ", style=f"bold {PRIMARY}" if active else MUTED)
@@ -1204,7 +1207,7 @@ class ChoicePickerScreen(Screen):
         if choice.secondary:
             text.append(f"  {choice.secondary}", style=MUTED)
         if choice.description:
-            text.append(f"\n      {choice.description}", style=MUTED)
+            text.append(f"  {choice.description}", style=MUTED)
         return text
 
     @property
@@ -1454,7 +1457,7 @@ class StartSessionScreen(Screen):
                 PROVIDER_OFFLINE,
                 "",
                 "Offline",
-                detail="deterministic, provider-free run",
+                detail="",
             )
         ]
         provider_reasons: dict[str, Optional[str]] = {}
@@ -1469,7 +1472,7 @@ class StartSessionScreen(Screen):
                         item.kind,
                         item.model_id,
                         item.display_name,
-                        detail=f"{item.provider_label} · {item.model_id}",
+                        detail="",
                         available=item.available,
                         unavailable_reason=item.unavailable_reason,
                     )
@@ -1488,7 +1491,7 @@ class StartSessionScreen(Screen):
                     PROVIDER_CONFIGURED,
                     profile.profile_id,
                     profile.display_name,
-                    detail=f"command: {profile.executable}",
+                    detail="",
                 )
             )
 
@@ -1500,7 +1503,7 @@ class StartSessionScreen(Screen):
                         PROVIDER_OLLAMA,
                         item.alias,
                         item.display_name,
-                        detail=f"{item.readiness} · qualified roster",
+                        detail="",
                     )
                 )
         except Exception:
@@ -1741,12 +1744,14 @@ class StartSessionScreen(Screen):
         offline_ok, offline_reason = model_compatibility(
             target, ModelOption(PROVIDER_OFFLINE, "", "Offline")
         )
+        offline_group_note = "unavailable for Capability Ladder" if target == TARGET_LADDER else ""
         choices.append(
             ChoiceOption(
                 self._model_choice_key(OFFLINE_CHOICE),
-                "Offline — no model",
-                "deterministic, provider-free controller run",
+                "Offline",
+                "",
                 group="OFFLINE",
+                group_note=offline_group_note,
                 disabled=not offline_ok,
                 disabled_reason=offline_reason,
             )
@@ -1782,6 +1787,20 @@ class StartSessionScreen(Screen):
 
         for provider, group in groups:
             provider_options = options_by_provider.get(provider, [])
+            group_note = ""
+            if target == TARGET_LADDER and provider != PROVIDER_OLLAMA:
+                group_note = "unavailable for Capability Ladder"
+            elif provider == PROVIDER_CONFIGURED and self._catalog.configured_error:
+                group_note = "configuration error"
+            elif provider == PROVIDER_CONFIGURED and not provider_options:
+                group_note = "none configured"
+            elif provider_options and not any(opt.available for opt in provider_options):
+                first_reason = provider_options[0].unavailable_reason or ""
+                if "auth store not found" in first_reason.lower() or "cli not found" in first_reason.lower():
+                    group_note = "not configured"
+                else:
+                    group_note = _short_unavailable_reason(first_reason)
+
             if not provider_options:
                 reason = (
                     _short_unavailable_reason(self._catalog.configured_error)
@@ -1791,14 +1810,15 @@ class StartSessionScreen(Screen):
                 title = (
                     "Configuration error"
                     if provider == PROVIDER_CONFIGURED and self._catalog.configured_error
-                    else reason
+                    else "None configured"
                 )
                 choices.append(
                     ChoiceOption(
                         f"unavailable:{provider}",
                         title,
-                        reason,
+                        "",
                         group=group,
+                        group_note=group_note,
                         disabled=True,
                         disabled_reason=reason,
                     )
@@ -1820,16 +1840,18 @@ class StartSessionScreen(Screen):
                     reason = _short_unavailable_reason(effective.unavailable_reason)
                 else:
                     reason = ""
-                detail = reason or effective.detail
-                if target == TARGET_LADDER and qualified is not None:
-                    detail = qualified.detail or "qualified scientific roster"
+                if provider == PROVIDER_CONFIGURED:
+                    display_name = effective.display or effective.model_id
+                else:
+                    display_name = format_model_display_name(effective.display or effective.model_id)
                 choices.append(
                     ChoiceOption(
                         self._model_choice_key(effective.choice),
-                        effective.display,
-                        detail,
-                        secondary=effective.model_id,
+                        display_name,
+                        "",
+                        secondary="",
                         group=group if index == 0 else "",
+                        group_note=group_note if index == 0 or group_note else "",
                         disabled=disabled,
                         disabled_reason=reason,
                     )
@@ -2033,7 +2055,10 @@ class StartSessionScreen(Screen):
                     ),
                     None,
                 )
-                display = option.display if option else model_id
+                if provider == PROVIDER_CONFIGURED:
+                    display = option.display if option else model_id
+                else:
+                    display = format_model_display_name(option.display if option else model_id)
                 self._config = replace(
                     self._config,
                     model=ModelChoice(provider, model_id, display),
@@ -2076,9 +2101,13 @@ class StartSessionScreen(Screen):
     def _model_display(self) -> tuple[str, str]:
         choice = self._config.model
         if choice.is_offline:
-            return "Offline", "no provider"
+            return "Offline", "Offline"
         label = PROVIDER_LABELS.get(choice.provider, choice.provider)
-        return choice.display, label
+        if choice.provider == PROVIDER_CONFIGURED:
+            display = choice.display or choice.model_id
+        else:
+            display = format_model_display_name(choice.display or choice.model_id)
+        return display, label
 
     def _debugger_display(self) -> str:
         if self._config.target == TARGET_LADDER:

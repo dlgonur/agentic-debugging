@@ -468,7 +468,9 @@ def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.M
         await pilot.pause()
 
         assert start.profile_id == target.alias
-        assert target.display_name in start.query_one("#model-row").render().plain
+        from agentic_debugger.application.model_providers import format_model_display_name
+
+        assert format_model_display_name(target.alias) in start.query_one("#model-row").render().plain
 
         # Start session
         start.action_start()
