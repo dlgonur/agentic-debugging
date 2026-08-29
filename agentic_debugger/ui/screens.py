@@ -1383,7 +1383,6 @@ class StartSessionScreen(Screen):
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static("", id="start-hero")
                     yield Static("SESSION SETUP", id="start-section-label")
                     yield SessionSettingRow("Target", row_key=ROW_TARGET, id="target-row")
                     yield SessionSettingRow("Task", row_key=ROW_TASK, id="task-row")
@@ -1401,12 +1400,6 @@ class StartSessionScreen(Screen):
                         yield Button(
                             "Run", id="start-session-button", classes="primary-action"
                         )
-                    yield Static(
-                        "[bold $evidence]INDEPENDENT PROOF CHAIN[/]\n"
-                        "[$foreground]FAILURE  →  PDB EVIDENCE  →  PATCH  →  VERIFIER VERDICT[/]\n"
-                        "[$foreground-muted]The run may finish; only the verifier can close the case.[/]",
-                        id="start-method",
-                    )
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
                 yield Static("[bold $primary]PRE-FLIGHT[/]", id="context-title")
@@ -1846,7 +1839,6 @@ class StartSessionScreen(Screen):
                 title="Select model",
                 choices=choices,
                 current=self._model_choice_key(self._config.model),
-                subtitle="One platform: Offline · Ollama Cloud · OpenCode Go · CommandCode GOAT · custom profiles",
                 on_select=lambda value: self._choice_selected(ROW_MODEL, value),
             )
         )
@@ -2107,10 +2099,12 @@ class StartSessionScreen(Screen):
             first = f"{first} [+]" if first else "Described [+]"
         return first or "Described"
 
-    def _hero_content_width(self) -> int:
-        """Usable width of the hero column (rail steals 36 cells at 100+)."""
+    def _config_content_width(self) -> int:
+        """Usable width of the configuration column (rail steals 36 cells at 100+)."""
         rail = 36 if self.size.width >= 100 else 0
         return max(30, self.size.width - rail - 6)
+
+    _hero_content_width = _config_content_width
 
     def render_state(self) -> None:
         """Derive readiness once and render every surface from it."""
@@ -2121,43 +2115,9 @@ class StartSessionScreen(Screen):
         config = self._config
         local = config.target == TARGET_LOCAL_PROJECT
 
-        # -- hero ---------------------------------------------------------
-        width = self._hero_content_width()
-        hero = Text()
-        hero.append("A G E N T I C     D E B U G G E R", style=f"bold {PRIMARY}")
-        hero.append("\n")
-        hero.append("─" * 33, style=f"{LINE_STRONG}")
-        hero.append("\n")
-        tagline = (
-            "Evidence-driven software repair — trace the failure, prove the fix."
-            if width >= 66
-            else "Trace the failure. Prove the fix."
-        )
-        hero.append(tagline, style=FOREGROUND)
-        hero.append("\n")
-        ready_style = f"bold {SUCCESS}" if readiness.ready else f"bold {WARNING}"
-        ready_word = "READY" if readiness.ready else "BLOCKED"
-        model_display, provider_label = self._model_display()
-        target_chip = f"   ▸ {TARGET_LABELS[config.target].upper()}"
-        model_chip = f"   ● {model_display.upper()}"
-        verifier_chip = "   ▸ INDEPENDENT VERIFIER"
-        # Chips must never wrap or clip: the verifier chip drops first.
-        with_verifier = (
-            f"● {ready_word}{target_chip}{model_chip}{verifier_chip}"
-        )
-        include_verifier = width >= len(with_verifier)
-        hero_line = Text()
-        hero_line.append("● ", style=ready_style)
-        hero_line.append(ready_word, style=ready_style)
-        hero_line.append(target_chip, style=f"bold {PRIMARY}")
-        hero_line.append(model_chip, style=f"bold {SECONDARY}")
-        if include_verifier:
-            hero_line.append(verifier_chip, style=f"bold {EVIDENCE}")
-        hero.append(hero_line)
-        self.query_one("#start-hero", Static).update(hero)
-
         # -- rows (width-aware: the whole line fits or ellipsizes) ---------
         # Row chrome is 2 prefix + 14 label; one cell of scrollbar slack.
+        width = self._config_content_width()
         row_budget = max(12, width - 17)
 
         def fitted(row_key: str, value: str, secondary: str = "") -> None:
@@ -2200,19 +2160,19 @@ class StartSessionScreen(Screen):
         )
         fitted(ROW_AUTO_RETRY, f"{config.auto_retries} on retryable failure")
 
-        # -- status line (the single visible verdict) -----------------------
+        # -- blockers / status (concise actionable blocker when necessary) --
         status = self.query_one("#start-status", Static)
         if self._start_error is not None:
-            status.update(f"[{ERROR}]Start failed — {_markup_escape(self._start_error)}[/]")
-        elif readiness.ready:
-            status.update(f"[bold {SUCCESS}]● {readiness.status_line}[/]")
+            status.update(f"[{ERROR}]! Start failed — {_markup_escape(self._start_error)}[/]")
+        elif not readiness.ready:
+            errors = [item for item in readiness.issues if item.severity == SEVERITY_ERROR]
+            status.update("\n".join(f"[{ERROR}]! {_markup_escape(item.message)}[/]" for item in errors))
         else:
-            status.update(
-                f"[bold {ERROR}]● {readiness.status_line}[/]"
-            )
-        # Trust notices stay visible at every width (not only in the rail).
+            status.update("")
+
+        # Trust notices stay visible at every width (not only in the rail)
         notes = self.query_one("#start-notes", Static)
-        if readiness.notes:
+        if readiness.notes and config.model.provider == PROVIDER_CONFIGURED:
             notes.update(
                 f"[{FAINT}]{'   '.join(_markup_escape(note) for note in readiness.notes)}[/]"
             )
@@ -3670,6 +3630,10 @@ class HelpModalScreen(Screen):
                 "  • Model — one picker: Offline · Ollama Cloud · OpenCode Go ·\n"
                 "             CommandCode GOAT · custom command profiles\n"
                 "  • Incompatible rows stay visible, dimmed with their reason\n"
+                "\n"
+                f"[bold {PRIMARY}]Independent proof chain[/]\n"
+                "  FAILURE  →  PDB EVIDENCE  →  PATCH  →  VERIFIER VERDICT\n"
+                "  The run may finish; only the verifier can close the case.\n"
                 "\n"
                 f"[bold {PRIMARY}]Session modes[/]\n"
                 "  • LIVE — Executing session (offline, provider model, or command model)\n"

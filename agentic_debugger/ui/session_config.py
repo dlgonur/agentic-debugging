@@ -436,8 +436,7 @@ def _local_readiness(config: SessionConfig, catalog: SessionCatalog, project: Pr
             ReadinessIssue(
                 ROW_MODEL,
                 SEVERITY_ERROR,
-                "Select a live model — Local Project debugging runs a real "
-                "model session.",
+                "Select a live model.",
             )
         )
     else:

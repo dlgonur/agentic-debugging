@@ -413,7 +413,6 @@ def test_9_blank_whitespace_invalid_for_start(tmp_path):
             from textual.widgets import Static
             status = lp.query_one("#start-status", Static)
             txt = _plain(status)
-            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
             assert "describe the bug" in txt.lower(), f"expected bug required error, got {txt!r}"
             # We check that bug still blank blocks: bug description strip empty
             assert not lp._config.bug_description.strip()

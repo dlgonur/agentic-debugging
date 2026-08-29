@@ -104,7 +104,7 @@ class TestBootAndHome:
             assert app.screen.query_one("#home-footer-bar")
             await pilot.press("s")
             assert isinstance(app.screen, StartSessionScreen)
-            assert "Evidence-driven software repair" in str(app.screen.query_one("#start-hero").render())
+            assert app.screen.query_one("#start-section-label").render().plain == "SESSION SETUP"
             assert app.screen.query_one("#start-footer")
             await pilot.press("escape")
             assert isinstance(app.screen, HomeScreen)

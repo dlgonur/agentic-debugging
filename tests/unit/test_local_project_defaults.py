@@ -546,7 +546,6 @@ def test_13_bug_empty_required(tmp_path):
             assert "kwargs" not in called
             status = lp.query_one("#start-status", Static)
             txt = _plain(status)
-            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
             assert "describe the bug" in txt.lower(), f"expected bug required error, got {txt!r}"
             assert not lp._config.bug_description.strip()
             # Now set bug and start should succeed via fake

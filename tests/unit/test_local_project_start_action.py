@@ -463,7 +463,6 @@ def test_9_invalid_blank_bug_shows_error_and_no_start(tmp_path):
             assert len(calls) == 0, "blank bug must not call start"
             status = lp.query_one("#start-status", Static)
             txt = _plain(status)
-            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
             assert "describe the bug" in txt.lower(), f"expected bug required error, got {txt!r}"
 
         reset_launch_cwd()
@@ -507,7 +506,6 @@ def test_9_invalid_dirty_repo_shows_warning(tmp_path):
             assert len(calls) == 0, "dirty repo must not call start"
             status = lp.query_one("#start-status", Static)
             txt = _plain(status)
-            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
             assert "uncommitted changes" in txt.lower(), f"expected dirty warning, got {txt!r}"
             assert lp.query_one("#start-session-button").disabled is True
             # cleanup
@@ -554,7 +552,6 @@ def test_9_invalid_no_model_shows_error(tmp_path):
             assert len(calls) == 0, "no model must not call start"
             status = lp.query_one("#start-status", Static)
             txt = _plain(status)
-            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
             assert "select a live model" in txt.lower(), f"expected no live model error, got {txt!r}"
 
         reset_launch_cwd()

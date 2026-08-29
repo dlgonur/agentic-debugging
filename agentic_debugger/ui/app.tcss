@@ -201,25 +201,11 @@ HomeActionRow:focus {
     scrollbar-size: 1 1;
 }
 
-#start-hero {
-    height: auto;
-    min-height: 4;
-    padding: 0 0 0 0;
-    margin: 0 0 1 0;
-    color: $foreground;
-}
-
-#start-title {
-    height: 4;
-    padding: 0;
-    color: $foreground;
-}
-
 #start-section-label {
     width: 1fr;
     height: 1;
-    margin: 1 0 0 0;
-    color: $foreground-muted;
+    margin: 0 0 1 0;
+    color: $primary;
     text-style: bold;
 }
 
@@ -248,16 +234,6 @@ HomeActionRow:focus {
     text-style: none;
 }
 
-#start-method {
-    width: 1fr;
-    height: auto;
-    margin: 1 0 0 0;
-    padding: 1 2;
-    background: $surface;
-    border: round $line;
-    color: $foreground;
-}
-
 SessionSettingRow {
     width: 1fr;
     height: 1;
@@ -277,7 +253,7 @@ SessionSettingRow:focus {
     height: auto;
     padding: 0;
     margin: 1 0 0 0;
-    color: $foreground-muted;
+    color: $error;
 }
 
 #start-notes {

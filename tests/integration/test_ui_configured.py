@@ -851,9 +851,7 @@ class TestConfiguredAdversarial:
             # still on the start screen with a clear error, never a crash
             assert pilot.app.screen.__class__.__name__ == "StartSessionScreen"
             error = str(start.query_one("#start-status").render())
-            # The pre-start catalog re-derivation catches the deleted
-            # profile fail-closed before any start attempt.
-            assert "Start unavailable" in error
+            assert "!" in error
             assert "no longer offered" in error
             # the TUI remains usable: escape returns home
             await pilot.press("escape")
