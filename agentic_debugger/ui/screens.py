@@ -637,15 +637,16 @@ class SessionSettingRow(Static):
         text = Text()
         if self._disabled:
             text.append("  ", style=FAINT)
-            text.append(f"{self.label:<12}", style=FAINT)
-            text.append(self._value or "—", style=FAINT)
+            text.append(f"{self.label:<14}", style=FAINT)
+            if self._value:
+                text.append(self._value, style=FAINT)
             if self._disabled_reason:
                 text.append(f"  ({self._disabled_reason})", style=f"dim {FAINT}")
             self.update(text)
             return
         focused = self._focused
         text.append("› " if focused else "  ", style=f"bold {PRIMARY}" if focused else FAINT)
-        text.append(f"{self.label:<12}", style=MUTED)
+        text.append(f"{self.label:<14}", style=MUTED)
         text.append(self._value, style=f"bold {FOREGROUND}" if focused else FOREGROUND)
         if self._secondary:
             text.append(f"  {self._secondary}", style=MUTED)
@@ -931,7 +932,7 @@ class ChoicePickerScreen(Screen):
             if choice.secondary:
                 text.append(f"  {choice.secondary}", style=FAINT)
             if choice.disabled_reason:
-                text.append(f"\n      ✕ {choice.disabled_reason}", style=f"{FAINT} italic")
+                text.append(f"\n      ! {choice.disabled_reason}", style=f"{FAINT} italic")
             return text
         text = Text()
         text.append("› " if active else "  ", style=f"bold {PRIMARY}" if active else MUTED)
@@ -977,13 +978,57 @@ class ChoicePickerScreen(Screen):
         self.app.pop_screen()
 
 
+def _clip_cells(value: str, room: int) -> str:
+    """Ellipsize to a cell budget so content never hard-clips at a border."""
+    if room <= 1:
+        return "…"
+    if len(value) <= room:
+        return value
+    return value[: room - 1].rstrip() + "…"
+
+
+def _fit_row_cells(
+    value: str,
+    secondary: str,
+    reason: str,
+    budget: int,
+) -> tuple[str, str, str]:
+    """Fit one setting row's value, secondary, and reason into ``budget``
+    cells (everything after the 16-cell prefix+label chrome).
+
+    Priority keeps the value intact longest: the reason clips first,
+    then the secondary, then the value itself.
+    """
+    def used(v: str, s: str, r: str) -> int:
+        total = len(v)
+        if s:
+            total += 2 + len(s)
+        if r:
+            total += 4 + len(r)  # gap + parentheses
+        return total
+
+    if used(value, secondary, reason) <= budget:
+        return value, secondary, reason
+    room = budget - len(value) - (4 if reason else 0)
+    if reason and room >= 4:
+        reason = _clip_cells(reason, budget - len(value) - 4)
+        if used(value, secondary, reason) <= budget:
+            return value, secondary, reason
+    if secondary:
+        secondary = _clip_cells(secondary, max(1, budget - len(value) - (4 + len(reason) if reason else 0)))
+        if used(value, secondary, reason) <= budget:
+            return value, secondary, reason
+    keep = budget - (4 + len(reason) if reason else 0)
+    return _clip_cells(value, max(1, keep)), "", reason
+
+
 def _short_unavailable_reason(reason: Optional[str]) -> str:
     """One bounded picker line for a provider unavailability reason."""
     if not reason:
         return "unavailable"
     text = reason.split("(", 1)[0].strip().rstrip(".")
     if len(text) > 60:
-        text = text[:60].rsplit(" ", 1)[0]
+        text = text[:60].rsplit(" ", 1)[0].rstrip(",;:") + "…"
     return text or "unavailable"
 
 
@@ -1756,8 +1801,7 @@ class StartSessionScreen(Screen):
         if self._config.target == TARGET_LADDER:
             task = self._catalog.find_task(self._config.task_id)
             if task is not None and task.ladder:
-                meta = ladder_task_metadata(task.task_id)
-                return f"{meta.debugger} (frozen)"
+                return ladder_task_metadata(task.task_id).debugger
             return "Frozen contract"
         if self._config.target == TARGET_LOCAL_PROJECT:
             return POLICY_LABELS[POLICY_ON_UNCERTAINTY]
@@ -1772,6 +1816,11 @@ class StartSessionScreen(Screen):
             first = f"{first} [+]" if first else "Described [+]"
         return first or "Described"
 
+    def _hero_content_width(self) -> int:
+        """Usable width of the hero column (rail steals 36 cells at 100+)."""
+        rail = 36 if self.size.width >= 100 else 0
+        return max(30, self.size.width - rail - 6)
+
     def render_state(self) -> None:
         """Derive readiness once and render every surface from it."""
         self._readiness = derive_readiness(
@@ -1782,59 +1831,83 @@ class StartSessionScreen(Screen):
         local = config.target == TARGET_LOCAL_PROJECT
 
         # -- hero ---------------------------------------------------------
+        width = self._hero_content_width()
         hero = Text()
         hero.append("A G E N T I C     D E B U G G E R", style=f"bold {PRIMARY}")
         hero.append("\n")
         hero.append("─" * 33, style=f"{LINE_STRONG}")
         hero.append("\n")
-        hero.append(
-            "Evidence-driven software repair — trace the failure, prove the fix.",
-            style=FOREGROUND,
+        tagline = (
+            "Evidence-driven software repair — trace the failure, prove the fix."
+            if width >= 66
+            else "Trace the failure. Prove the fix."
         )
+        hero.append(tagline, style=FOREGROUND)
         hero.append("\n")
         ready_style = f"bold {SUCCESS}" if readiness.ready else f"bold {WARNING}"
         ready_word = "READY" if readiness.ready else "BLOCKED"
-        hero.append("● ", style=ready_style)
-        hero.append(ready_word, style=ready_style)
-        hero.append(f"   ▸ {TARGET_LABELS[config.target].upper()}", style=f"bold {PRIMARY}")
         model_display, provider_label = self._model_display()
-        hero.append(f"   ◆ {model_display.upper()}", style=f"bold {SECONDARY}")
-        if self.size.width >= 100:
-            hero.append("   ◆ INDEPENDENT VERIFIER", style=f"bold {EVIDENCE}")
+        target_chip = f"   ▸ {TARGET_LABELS[config.target].upper()}"
+        model_chip = f"   ● {model_display.upper()}"
+        verifier_chip = "   ▸ INDEPENDENT VERIFIER"
+        # Chips must never wrap or clip: the verifier chip drops first.
+        with_verifier = (
+            f"● {ready_word}{target_chip}{model_chip}{verifier_chip}"
+        )
+        include_verifier = width >= len(with_verifier)
+        hero_line = Text()
+        hero_line.append("● ", style=ready_style)
+        hero_line.append(ready_word, style=ready_style)
+        hero_line.append(target_chip, style=f"bold {PRIMARY}")
+        hero_line.append(model_chip, style=f"bold {SECONDARY}")
+        if include_verifier:
+            hero_line.append(verifier_chip, style=f"bold {EVIDENCE}")
+        hero.append(hero_line)
         self.query_one("#start-hero", Static).update(hero)
 
-        # -- rows ---------------------------------------------------------
-        self._row(ROW_TARGET).set_value(TARGET_LABELS[config.target])
-        self._row(ROW_TASK).set_value(
-            "—" if local else self._task_display_name(),
-            secondary="" if local else (config.task_id or ""),
+        # -- rows (width-aware: the whole line fits or ellipsizes) ---------
+        # Row chrome is 2 prefix + 14 label; one cell of scrollbar slack.
+        row_budget = max(12, width - 17)
+
+        def fitted(row_key: str, value: str, secondary: str = "") -> None:
+            state = readiness.rows.get(row_key)
+            reason = state.reason if state is not None and not state.enabled else ""
+            value, secondary, reason = _fit_row_cells(
+                value, secondary, reason, row_budget
+            )
+            row = self._row(row_key)
+            row.set_value(value, secondary=secondary)
+            if state is not None and not state.enabled:
+                row.set_disabled(reason)
+            else:
+                row.set_enabled()
+
+        fitted(ROW_TARGET, TARGET_LABELS[config.target])
+        fitted(
+            ROW_TASK,
+            "" if local else self._task_display_name(),
+            "" if local else (config.task_id or ""),
         )
-        project_value = "—" if not local else (config.project_path or "—")
-        if local and len(project_value) > 58 and self.size.width and self.size.width < 110:
-            project_value = project_value[:55] + "…"
-        self._row(ROW_PROJECT).set_value(project_value)
-        self._row(ROW_BUG).set_value(self._bug_preview() if local else "—")
-        self._row(ROW_REPRO).set_value(
-            (config.reproduction_command or "Not set (optional)") if local else "—"
+        fitted(ROW_PROJECT, (config.project_path or "") if local else "")
+        fitted(ROW_BUG, self._bug_preview() if local else "")
+        fitted(
+            ROW_REPRO,
+            (config.reproduction_command or "Not set (optional)") if local else "",
         )
-        self._row(ROW_VERIFY).set_value(
-            (config.verification_command or "Not set (optional)") if local else "—"
+        fitted(
+            ROW_VERIFY,
+            (config.verification_command or "Not set (optional)") if local else "",
         )
         model_value, model_secondary = self._model_display()
-        self._row(ROW_MODEL).set_value(model_value, secondary=model_secondary)
-        self._row(ROW_DEBUGGER).set_value(self._debugger_display())
-        self._row(ROW_TIME_LIMIT).set_value(
-            "No limit" if config.time_limit_seconds is None else str(config.time_limit_seconds)
+        fitted(ROW_MODEL, model_value, model_secondary)
+        fitted(ROW_DEBUGGER, self._debugger_display())
+        fitted(
+            ROW_TIME_LIMIT,
+            "No limit"
+            if config.time_limit_seconds is None
+            else str(config.time_limit_seconds),
         )
-        self._row(ROW_AUTO_RETRY).set_value(
-            f"{config.auto_retries} on retryable failure"
-        )
-        for key, state in readiness.rows.items():
-            row = self._row(key)
-            if state.enabled:
-                row.set_enabled()
-            else:
-                row.set_disabled(state.reason)
+        fitted(ROW_AUTO_RETRY, f"{config.auto_retries} on retryable failure")
 
         # -- status line (the single visible verdict) -----------------------
         status = self.query_one("#start-status", Static)
@@ -1898,7 +1971,7 @@ class StartSessionScreen(Screen):
             lines.append("")
             lines.append(f"[bold {ERROR}]CHECKS[/]")
             for issue in readiness.issues:
-                marker = "✕" if issue.severity == SEVERITY_ERROR else "!"
+                marker = "!" if issue.severity == SEVERITY_ERROR else "?"
                 style = ERROR if issue.severity == SEVERITY_ERROR else WARNING
                 lines.append(f"[{style}]{marker} {_markup_escape(issue.message)}[/]")
         if readiness.notes:

@@ -99,7 +99,8 @@ Screen {
 }
 
 #start-hero {
-    height: 4;
+    height: auto;
+    min-height: 4;
     padding: 0 0 0 0;
     margin: 0 0 1 0;
     color: $foreground;
@@ -140,7 +141,7 @@ Screen {
 
 #start-session-button:disabled {
     background: $panel;
-    color: $text-faint;
+    color: $foreground-muted;
     text-style: none;
 }
 
