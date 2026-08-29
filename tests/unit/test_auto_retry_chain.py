@@ -20,7 +20,11 @@ Observable contract:
   and the start budgets are exactly ``N, N-1, ..., 0``;
 - a manual retry starts exactly one new attempt with ``auto_retries=0``
   and can never mint a fresh automatic chain;
-- non-retryable terminal outcomes produce zero automatic retries.
+- non-retryable terminal outcomes produce zero automatic retries;
+- eligibility is the exact terminal status/reason pair: the worker's real
+  timeout terminal is ``TIMED_OUT`` + ``TIMEOUT`` and auto-retries, while
+  inconsistent pairs (``FAILED`` + ``TIMEOUT``, ``TIMED_OUT`` +
+  ``MODEL_ERROR``) fail closed even when forged past schema validation.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
+from agentic_debugger.application import ApplicationInputError  # noqa: E402
 from agentic_debugger.application.events import (  # noqa: E402
     SessionStatus,
     SessionTerminationReason,
@@ -52,13 +57,15 @@ from application_support import VALID_RUN_ID, make_spec  # noqa: E402
 
 # Terminal status follows the real worker mapping (_terminal_for):
 # FAILED-status terminals carry MODEL_ERROR / CONTROLLER_FAILED /
-# DIRECTIVE_EXHAUSTED; cancellations, interruptions, unresolved outcomes
-# and cleanup failures carry their own non-FAILED statuses.
-_NON_FAILED_STATUS = {
+# DIRECTIVE_EXHAUSTED; a session deadline carries TIMED_OUT + TIMEOUT;
+# cancellations, interruptions, unresolved outcomes and cleanup failures
+# carry their own non-FAILED statuses.
+_TERMINAL_STATUS = {
     SessionTerminationReason.CANCELLED: SessionStatus.CANCELLED,
     SessionTerminationReason.INTERRUPTED: SessionStatus.INTERRUPTED,
     SessionTerminationReason.CLEANUP_FAILED: SessionStatus.CLEANUP_FAILED,
     SessionTerminationReason.UNRESOLVED: SessionStatus.UNRESOLVED,
+    SessionTerminationReason.TIMEOUT: SessionStatus.TIMED_OUT,
 }
 
 
@@ -66,13 +73,34 @@ def _terminal_result(session_id: str, reason: SessionTerminationReason) -> Sessi
     return SessionResult(
         session_id=SessionId(session_id),
         spec=make_spec(),
-        status=_NON_FAILED_STATUS.get(reason, SessionStatus.FAILED),
+        status=_TERMINAL_STATUS.get(reason, SessionStatus.FAILED),
         termination_reason=reason,
         run_id=VALID_RUN_ID,
         sequence=9,
         # cleanup_failed results cannot claim verified cleanup.
         cleanup_verified=reason is not SessionTerminationReason.CLEANUP_FAILED,
     )
+
+
+def _forged_terminal(
+    session_id: str,
+    *,
+    status: SessionStatus,
+    reason: SessionTerminationReason,
+) -> SessionResult:
+    """A SessionResult carrying a schema-impossible status/reason pair.
+
+    ``SessionResult.__post_init__`` rejects inconsistent pairs, so the only
+    way such a combination can reach ``_maybe_auto_retry`` is a validated
+    result mutated afterwards.  Build the valid terminal for ``reason``
+    first, then forge the status field via ``object.__setattr__``
+    (bypassing the frozen dataclass and its validation deliberately): this
+    proves the retry decision itself fails closed on the exact pair even
+    when the schema layer is bypassed.
+    """
+    result = _terminal_result(session_id, reason)
+    object.__setattr__(result, "status", status)
+    return result
 
 
 @dataclass
@@ -291,12 +319,97 @@ class TestAutomaticChainBounded:
         )
         assert len(harness.attempts) == 1
 
+    def test_directive_exhausted_n1_budgets_exactly_1_0_and_two_attempts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness = _RealChainHarness(monkeypatch, tmp_path)
+        budgets = harness.run_retryable_chain(
+            auto_retries=1, reason=SessionTerminationReason.DIRECTIVE_EXHAUSTED
+        )
+        assert budgets == [1, 0]
+        assert len(harness.attempts) == 2
+        session_id = harness.workers[-1].session_id
+        assert (
+            harness.deliver_terminal(
+                _terminal_result(
+                    session_id, SessionTerminationReason.DIRECTIVE_EXHAUSTED
+                )
+            )
+            is False
+        )
+        assert len(harness.attempts) == 2
+
     def test_each_retry_links_to_the_previous_session(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
     ) -> None:
         harness = _RealChainHarness(monkeypatch, tmp_path)
         harness.run_retryable_chain(
             auto_retries=2, reason=SessionTerminationReason.MODEL_ERROR
+        )
+        assert len(harness.attempts) == 3
+        assert harness.attempts[0].retry_of_session_id is None
+        assert (
+            harness.attempts[1].retry_of_session_id == harness.attempts[0].session_id
+        )
+        assert (
+            harness.attempts[2].retry_of_session_id == harness.attempts[1].session_id
+        )
+
+
+class TestTimeoutAutomaticChain:
+    """The real timeout terminal is ``TIMED_OUT`` + ``TIMEOUT``.
+
+    ``_terminal_for`` never maps a timeout to ``FAILED``, so the
+    pre-repair FAILED-only status gate rejected every real timeout before
+    the retryable-reason check could see ``TIMEOUT`` — zero automatic
+    retries, contradicting the documented contract.
+    """
+
+    def test_n1_timeout_budgets_exactly_1_0_and_two_attempts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness = _RealChainHarness(monkeypatch, tmp_path)
+        budgets = harness.run_retryable_chain(
+            auto_retries=1, reason=SessionTerminationReason.TIMEOUT
+        )
+        assert budgets == [1, 0]
+        assert len(harness.attempts) == 2
+        assert len(harness.started) == 2
+        assert len(harness.mounted) == 2
+        # The chain is exhausted: a further real timeout starts nothing.
+        session_id = harness.workers[-1].session_id
+        assert (
+            harness.deliver_terminal(
+                _terminal_result(session_id, SessionTerminationReason.TIMEOUT)
+            )
+            is False
+        )
+        assert len(harness.attempts) == 2
+
+    def test_n3_timeout_budgets_exactly_3_2_1_0_and_four_attempts(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness = _RealChainHarness(monkeypatch, tmp_path)
+        budgets = harness.run_retryable_chain(
+            auto_retries=3, reason=SessionTerminationReason.TIMEOUT
+        )
+        assert budgets == [3, 2, 1, 0]
+        assert len(harness.attempts) == 4
+        session_id = harness.workers[-1].session_id
+        assert (
+            harness.deliver_terminal(
+                _terminal_result(session_id, SessionTerminationReason.TIMEOUT)
+            )
+            is False
+        )
+        assert len(harness.attempts) == 4
+
+    def test_timeout_retries_link_to_the_previous_session(
+        self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+    ) -> None:
+        harness = _RealChainHarness(monkeypatch, tmp_path)
+        harness.run_retryable_chain(
+            auto_retries=2, reason=SessionTerminationReason.TIMEOUT
         )
         assert len(harness.attempts) == 3
         assert harness.attempts[0].retry_of_session_id is None
@@ -367,5 +480,63 @@ class TestNonRetryableTerminals:
         assert len(harness.attempts) == 1
         # The untouched budget and preserved request keep the terminal
         # session manually retryable (footer contract).
+        assert harness.app._live_auto_retry_budget == 3
+        assert harness.app._live_retry_request["session_id"] == session_id
+
+
+class TestInconsistentPairsFailClosed:
+    """Eligibility is the exact status/reason pair, never the reason alone.
+
+    Repository authority (``SessionResult`` validation through
+    ``compatible_reasons``) already makes ``FAILED`` + ``TIMEOUT`` and
+    ``TIMED_OUT`` + ``MODEL_ERROR`` impossible terminals: the constructor
+    rejects them.  The retry decision must still fail closed on the pair if
+    that schema layer is ever bypassed — under the pre-repair logic a
+    forged ``FAILED`` + ``TIMEOUT`` result auto-retried because ``TIMEOUT``
+    appeared in the reason-only set.
+    """
+
+    @pytest.mark.parametrize(
+        ("status", "reason"),
+        [
+            (SessionStatus.FAILED, SessionTerminationReason.TIMEOUT),
+            (SessionStatus.TIMED_OUT, SessionTerminationReason.MODEL_ERROR),
+        ],
+    )
+    def test_schema_rejects_the_inconsistent_pair(
+        self, status: SessionStatus, reason: SessionTerminationReason
+    ) -> None:
+        with pytest.raises(ApplicationInputError):
+            SessionResult(
+                session_id=SessionId("sess-20260829-000000-forged001"),
+                spec=make_spec(),
+                status=status,
+                termination_reason=reason,
+                run_id=VALID_RUN_ID,
+                sequence=9,
+            )
+
+    @pytest.mark.parametrize(
+        ("status", "reason"),
+        [
+            (SessionStatus.FAILED, SessionTerminationReason.TIMEOUT),
+            (SessionStatus.TIMED_OUT, SessionTerminationReason.MODEL_ERROR),
+        ],
+    )
+    def test_forged_pair_drives_no_auto_retry(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        tmp_path: Path,
+        status: SessionStatus,
+        reason: SessionTerminationReason,
+    ) -> None:
+        harness = _RealChainHarness(monkeypatch, tmp_path)
+        harness.start(auto_retries=3)
+        session_id = harness.workers[-1].session_id
+        forged = _forged_terminal(session_id, status=status, reason=reason)
+        assert (forged.status, forged.termination_reason) == (status, reason)
+        assert harness.deliver_terminal(forged) is False
+        assert len(harness.attempts) == 1
+        # Fail-closed leaves the manual-retry contract fully intact.
         assert harness.app._live_auto_retry_budget == 3
         assert harness.app._live_retry_request["session_id"] == session_id

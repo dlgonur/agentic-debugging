@@ -100,6 +100,24 @@ _CURATED_TASK_TITLES: dict[str, str] = {
     "curated-caller-callee-005": "Convert the caller representation at the boundary",
 }
 
+# The single auto-retry authority: exactly these terminal status/reason
+# pairs start an automatic retry.  It follows the worker's real terminal
+# mapping (``_terminal_for``): model/controller/directive failures end
+# ``FAILED``, and a session deadline ends ``TIMED_OUT`` + ``TIMEOUT``.
+# Eligibility is the exact pair, never the reason alone, so a malformed or
+# inconsistent combination (e.g. ``FAILED`` + ``TIMEOUT``) fails closed even
+# though its reason appears in this table.
+_AUTO_RETRY_TERMINALS: frozenset[
+    tuple[SessionStatus, SessionTerminationReason]
+] = frozenset(
+    {
+        (SessionStatus.FAILED, SessionTerminationReason.MODEL_ERROR),
+        (SessionStatus.FAILED, SessionTerminationReason.CONTROLLER_FAILED),
+        (SessionStatus.FAILED, SessionTerminationReason.DIRECTIVE_EXHAUSTED),
+        (SessionStatus.TIMED_OUT, SessionTerminationReason.TIMEOUT),
+    }
+)
+
 
 def task_display_title(task_id: str, repo_root: Optional[Path] = None) -> str:
     """Return a human-readable title for a task id.
@@ -978,23 +996,17 @@ class LocalApplicationV1(App):
 
         Retryable failures are transient or model-capability failures where
         a fresh attempt can genuinely succeed: transport/provider errors,
-        timeouts, controller crashes, and directive exhaustion.  User
-        cancellations, interrupts, cleanup failures, and honest unresolved
-        verifier outcomes are never auto-retried.
+        timeouts, controller crashes, and directive exhaustion.  The
+        worker's real timeout terminal is ``TIMED_OUT`` + ``TIMEOUT``, so
+        eligibility is the exact status/reason pair
+        (``_AUTO_RETRY_TERMINALS``), never the reason alone.  User
+        cancellations, interrupts, cleanup failures, honest unresolved
+        verifier outcomes, and any inconsistent status/reason combination
+        fail closed.
         """
-        from agentic_debugger.application.events import SessionStatus, SessionTerminationReason
-
         if self._live_auto_retry_budget <= 0 or not isinstance(result, SessionResult):
             return
-        if result.status is not SessionStatus.FAILED:
-            return
-        retryable = {
-            SessionTerminationReason.MODEL_ERROR,
-            SessionTerminationReason.TIMEOUT,
-            SessionTerminationReason.CONTROLLER_FAILED,
-            SessionTerminationReason.DIRECTIVE_EXHAUSTED,
-        }
-        if result.termination_reason not in retryable:
+        if (result.status, result.termination_reason) not in _AUTO_RETRY_TERMINALS:
             return
         self._live_auto_retry_budget -= 1
         request = self._live_retry_request
@@ -1050,6 +1062,12 @@ class LocalApplicationV1(App):
         # A startup/supervision failure is terminal for the runner: release
         # ownership so a retry can start another session.  The runner's own
         # supervision path performs the final worker handle close.
+        #
+        # This path intentionally has no SessionResult and therefore no
+        # terminal status/reason pair, so it never reaches
+        # ``_maybe_auto_retry`` (which only speaks the terminal contract);
+        # the captured retry request stays armed and the failure is
+        # manual-retry-only (``r``).  No synthetic terminal is invented.
         self._release_live_runner()
 
     def _release_live_runner(self) -> None:
