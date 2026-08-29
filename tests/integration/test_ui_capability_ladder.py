@@ -66,7 +66,7 @@ def test_new_session_catalog_keeps_provider_free_tasks_first_and_exposes_ladder(
     ]
 
 
-def test_ladder_start_has_provider_free_default_and_no_configured_warning(tmp_path: Path, monkeypatch) -> None:
+def test_ladder_setup_and_start_use_one_unified_surface(tmp_path: Path, monkeypatch) -> None:
     app = make_app(tmp_path)
     start_calls = []
 
@@ -75,46 +75,62 @@ def test_ladder_start_has_provider_free_default_and_no_configured_warning(tmp_pa
 
     monkeypatch.setattr(app, "start_live_session", record_start)
 
-    def fail_configured_lookup():
-        raise AssertionError("ladder setup must not inspect configured profiles")
-
-    monkeypatch.setattr(app, "configured_profiles", fail_configured_lookup)
-
     async def scenario(pilot):
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
+        # One screen, one stack: target -> task -> model, explicitly.
+        start._choice_selected("target", "ladder")
         start._choice_selected("task", "pdb-required-boundary-006")
         profiles = level32_model_profiles()
+        assert profiles, "qualified roster expected on this machine"
+        # Before a model is chosen the run is honestly blocked; no silent
+        # default mutates the user's (offline) selection.
+        assert start.start_available is False
+        assert "qualified Ollama" in start.query_one("#start-status").render().plain
+        start._choice_selected("model", f"ollama_cloud:{profiles[0].alias}")
         assert start.profile_id == profiles[0].alias
         assert start.start_available is True
         context = start.query_one("#context-summary").render().plain
         assert "Task\nLevel 6/100" in context
-        assert f"Alias\n{profiles[0].alias}" in context
-        assert "Ready\nYes" in context
-        assert "configured model profiles" not in start.query_one("#start-status").render().plain
-        assert "Accepted Level-6 contract" in context
-        assert "Independent verifier" in context
+        assert "Treatment\nAccepted Level-6 contract" in context
+        assert "Evaluation\nIndependent verifier" in context
+        assert "READY  Yes" in context
+        assert "operator contract" in context  # canonical-operator notice
         assert "Frozen Level-32" not in context
         assert "Official SWE-rebench" not in context
+
+        # Frozen controls stay visible but disabled, with their reasons.
+        assert start.query_one("#debugger-row").is_disabled
+        assert start.query_one("#time-limit-row").is_disabled
+        assert start.query_one("#auto-retry-row").is_disabled
 
         start.action_start()
         assert start_calls[0]["task_id"] == "pdb-required-boundary-006"
         assert start_calls[0]["profile_id"] == profiles[0].alias
         assert start_calls[0]["source_kind"] is SourceKind.OLLAMA_CLOUD_LADDER
 
-        await pilot.press("enter")
-        assert isinstance(pilot.app.screen, ChoicePickerScreen)
-        assert pilot.app.screen.title == "Select task"
-        assert [choice.value for choice in pilot.app.screen.choices] == [
+        # The task picker keeps every task visible; under the ladder
+        # target the curated entries are disabled with a reason, and the
+        # rungs stay selectable.
+        start._open_task_picker()
+        await pilot.pause()
+        picker = pilot.app.screen
+        assert isinstance(picker, ChoicePickerScreen)
+        assert picker.title == "Select task"
+        assert [choice.value for choice in picker.choices] == [
             task_id for _, task_id in app.curated_task_options()
         ]
-        assert [choice.value for choice in pilot.app.screen.choices[-4:]] == [
-            item.task_id for item in LADDER_TASKS
-        ]
-        assert any(choice.value.startswith("curated-") for choice in pilot.app.screen.choices[:-4])
+        ladder_ids = {item.task_id for item in LADDER_TASKS}
+        for choice in picker.choices:
+            if choice.value in ladder_ids:
+                assert choice.disabled is False
+            else:
+                assert choice.disabled is True
+                assert choice.disabled_reason
         await pilot.press("escape")
 
         start._choice_selected("task", "audreyr__cookiecutter-967")
+        start._choice_selected("model", f"ollama_cloud:{profiles[0].alias}")
         level32_context = start.query_one("#context-summary").render().plain
         assert "Level 32/100 — Cookiecutter #967" in level32_context
         assert "Frozen Level-32" in level32_context
@@ -411,8 +427,8 @@ def test_live_context_panel_is_wide_only(tmp_path: Path) -> None:
 
 
 def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deterministic, provider-free proof that selecting model X in Level-32 picker
-    passes model X strictly to start_live_session."""
+    """Deterministic, provider-free proof that selecting model X in the unified
+    picker passes model X strictly to start_live_session."""
     app = make_app(tmp_path)
     start_calls = []
 
@@ -424,21 +440,26 @@ def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.M
     async def scenario(pilot):
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
-        # Select Level-32 task
+        start._choice_selected("target", "ladder")
         start._choice_selected("task", "audreyr__cookiecutter-967")
         profiles = level32_model_profiles()
         assert len(profiles) >= 2
         # Target model X (e.g. deepseek-v4-flash:cloud or second profile)
         target = next((p for p in profiles if "deepseek" in p.alias), profiles[1])
-        start._open_choice_picker("model")
+        start._open_model_picker()
         await pilot.pause()
         picker = pilot.app.screen
         assert isinstance(picker, ChoicePickerScreen)
-        assert picker.title == "Select qualified Ollama model"
-        assert "Scientific Level-32 roster" in (picker.subtitle or "")
+        assert picker.title == "Select model"
+        # The scientific roster is a group inside the ONE model picker;
+        # non-Ollama entries stay visible but disabled under the ladder.
+        values = [choice.value for choice in picker.choices]
+        assert f"ollama_cloud:{target.alias}" in values
+        offline = next(c for c in picker.choices if c.value.startswith("offline:"))
+        assert offline.disabled is True
 
         # Select the target model in picker
-        picker._on_select(target.alias)
+        picker._on_select(f"ollama_cloud:{target.alias}")
         pilot.app.pop_screen()
         await pilot.pause()
 
@@ -451,31 +472,23 @@ def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.M
         assert start_calls[0]["task_id"] == "audreyr__cookiecutter-967"
         assert start_calls[0]["profile_id"] == target.alias
         assert start_calls[0]["source_kind"] is SourceKind.LEVEL32_OPERATOR
+        assert start_calls[0]["policy"] == "exact-pdb-level32-frozen"
 
     run_headless(app, scenario, size=(120, 32))
 
 
-def test_ladder_model_picker_empty_state_is_truthful_and_domain_specific(tmp_path: Path, monkeypatch) -> None:
+def test_ladder_empty_roster_blocks_start_with_domain_reason(tmp_path: Path, monkeypatch) -> None:
     app = make_app(tmp_path)
     monkeypatch.setattr(app, "level32_model_profiles", lambda: ())
 
     async def scenario(pilot):
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
-        # Select Level-32 task
+        start._choice_selected("target", "ladder")
         start._choice_selected("task", "audreyr__cookiecutter-967")
-        start._open_choice_picker("model")
-        await pilot.pause()
-
-        picker = pilot.app.screen
-        assert isinstance(picker, ChoicePickerScreen)
-        assert picker.title == "Select qualified Ollama model"
-        assert "Scientific Level-32 roster" in (picker.subtitle or "")
-
-        empty_widget = picker.query_one("#choice-picker-empty")
-        empty_text = str(empty_widget.render())
-        assert "No qualified Ollama models available." in empty_text
-        assert "custom command profile" not in empty_text.casefold()
-        assert "custom command profiles" not in empty_text.casefold()
+        assert start.start_available is False
+        status = start.query_one("#start-status").render().plain
+        assert "No qualified Ollama models available" in status
+        assert "custom command profile" not in status.casefold()
 
     run_headless(app, scenario, size=(120, 32))

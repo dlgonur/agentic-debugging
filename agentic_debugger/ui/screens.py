@@ -10,7 +10,7 @@ model work.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
@@ -19,7 +19,6 @@ from typing import Any, Callable, Optional, Tuple
 from agentic_debugger.application.model_providers import (
     PROVIDER_KIND_CONFIGURED,
     PROVIDER_KIND_OLLAMA,
-    ProviderModel,
     list_provider_models,
 )
 
@@ -72,6 +71,44 @@ from agentic_debugger.application.live_execution import ExecutionMode, LiveExecu
 from agentic_debugger.application.replay import phase_boundaries
 from agentic_debugger.application.session import SessionResult
 from agentic_debugger.ui.models import LiveSessionRunner, ReplayController
+from agentic_debugger.ui.session_config import (
+    AUTO_RETRY_MAX,
+    OFFLINE_CHOICE,
+    POLICY_LABELS,
+    POLICY_ON_UNCERTAINTY,
+    POLICY_STATIC_BASELINE,
+    PROVIDER_COMMANDCODE,
+    PROVIDER_CONFIGURED,
+    PROVIDER_LABELS,
+    PROVIDER_OFFLINE,
+    PROVIDER_OLLAMA,
+    PROVIDER_OPENCODE,
+    ROW_AUTO_RETRY,
+    ROW_BUG,
+    ROW_DEBUGGER,
+    ROW_MODEL,
+    ROW_ORDER,
+    ROW_PROJECT,
+    ROW_REPRO,
+    ROW_TARGET,
+    ROW_TASK,
+    ROW_TIME_LIMIT,
+    ROW_VERIFY,
+    SEVERITY_ERROR,
+    ModelChoice,
+    ModelOption,
+    ProjectStatus,
+    SessionCatalog,
+    SessionConfig,
+    SessionReadiness,
+    TARGET_CURATED,
+    TARGET_LABELS,
+    TARGET_LADDER,
+    TARGET_LOCAL_PROJECT,
+    TaskOption,
+    derive_readiness,
+    model_compatibility,
+)
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
     DebuggerPanel,
@@ -94,6 +131,7 @@ from agentic_debugger.ui.theme import (
     FAINT,
     FOREGROUND,
     LINE,
+    LINE_STRONG,
     MUTED,
     PRIMARY,
     SECONDARY,
@@ -118,8 +156,8 @@ _CLASSIFICATION_STYLE = {
 }
 
 # Canonical user-facing keyboard vocabulary shared by footers and help.
-START_FOOTER = "P local project   S start session   H history   ↑/↓ move   Enter edit   Esc back   Ctrl+C quit"
-START_FOOTER_COMPACT = "P local   S start   H history   ↑/↓ move   Enter edit   Esc back"
+START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   H history   Esc back   Ctrl+C quit"
+START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   H history   Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-8 activity filters   c cancel   h history   n new session   ctrl+c quit"
 WORKSPACE_FOOTER_IDLE = "left/right views   1-8 activity filters   h history   n new session   w effort   r retry   ctrl+c quit"
 REPLAY_FOOTER = "left/right views   1-8 activity filters   events   phases   h history   n new session   ctrl+c quit"
@@ -308,7 +346,7 @@ def render_view_header(
 
 
 class HomeScreen(Screen):
-    """App-owned run history: the secondary/replay navigation surface."""
+    """App-owned run history: the archive and replay navigation surface."""
 
     BINDINGS = [
         Binding("n", "start_session", "New session"),
@@ -320,23 +358,17 @@ class HomeScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Vertical(id="home-header"):
-            yield Static(
-                "[bold $primary]AGENTIC DEBUGGER[/]  "
-                "[$text-faint]// SESSION ARCHIVE[/]\n"
-                "[bold $foreground]Every repair leaves a trail.[/]\n"
-                "[$foreground-muted]Reopen the evidence, inspect the verdict, or begin a new case.[/]",
-                id="home-title",
-            )
+            yield Static("", id="home-title")
             yield Static("", id="home-summary")
             with Horizontal(id="home-actions"):
                 yield Button(
-                    "Debug local project",
-                    id="home-local-button",
+                    "New session",
+                    id="home-new-button",
                     classes="primary-action",
                 )
                 yield Button(
-                    "New evidence session",
-                    id="home-new-button",
+                    "Debug local project",
+                    id="home-local-button",
                     classes="secondary-action",
                 )
         yield Static("", id="home-empty", classes="empty-state")
@@ -348,6 +380,18 @@ class HomeScreen(Screen):
         )
 
     def on_mount(self) -> None:
+        title = Text()
+        title.append("A G E N T I C   D E B U G G E R", style=f"bold {PRIMARY}")
+        title.append("   // SESSION ARCHIVE", style=f"bold {FAINT}")
+        title.append("\n")
+        title.append("─" * 31, style=f"{LINE_STRONG}")
+        title.append("\n")
+        title.append("Every repair leaves a trail. ", style=f"bold {FOREGROUND}")
+        title.append(
+            "Reopen the evidence, inspect the verdict, or open a new case.",
+            style=MUTED,
+        )
+        self.query_one("#home-title", Static).update(title)
         table = self.query_one("#history-table", DataTable)
         table.cursor_type = "row"
         table.add_columns(
@@ -364,13 +408,14 @@ class HomeScreen(Screen):
         summary = self.query_one("#home-summary", Static)
         if not entries:
             empty.update(
-                "[bold $foreground]No sessions yet.[/]\n\n"
-                "[$foreground-muted]Press P to debug a local repository, or N to run "
-                "a bounded evidence session.[/]"
+                f"[bold {FOREGROUND}]No sessions yet.[/]\n\n"
+                f"[{MUTED}]Press N to configure a new session — a curated task, "
+                "your local project, or a capability-ladder run. "
+                "Verifier evidence will appear here.[/]"
             )
             empty.display = True
             table.display = False
-            summary.update("[$text-faint]0 recorded runs  ·  verifier evidence will appear here[/]")
+            summary.update(f"[{FAINT}]0 recorded runs[/]")
         else:
             empty.display = False
             table.display = True
@@ -382,10 +427,13 @@ class HomeScreen(Screen):
                 1 for entry in entries
                 if entry.classification is not HistoryClassification.COMPLETE
             )
-            summary.update(
-                f"[$text-faint]{len(entries)} recorded runs  ·  "
-                f"{resolved} independently resolved  ·  {attention} need review[/]"
-            )
+            parts = [
+                f"[bold {SUCCESS}]● {resolved} independently resolved[/]",
+                f"[{FAINT}]{len(entries)} recorded runs[/]",
+            ]
+            if attention:
+                parts.append(f"[bold {WARNING}]◆ {attention} need review[/]")
+            summary.update(f"[{FAINT}]  ·  [/]".join(parts))
         for entry in entries:
             result_style = (
                 _RESULT_STYLE.get(entry.status, "default")
@@ -431,14 +479,51 @@ class HomeScreen(Screen):
         )
 
     def action_start_local_project(self) -> None:
-        # Direct Local Project entry (bounded v1): separate form, not mixed into ladder
-        initial = None
-        try:
-            from agentic_debugger.application.local_project import get_launch_cwd
-            initial = str(get_launch_cwd())
-        except Exception:
-            pass
-        self.app.push_screen(LocalProjectStartScreen(initial_project=initial))
+        """Open the unified setup screen on the Local Project controls."""
+        self.app.push_screen(
+            StartSessionScreen(
+                task_options=list(self.app.curated_task_options()),
+                initial_target=TARGET_LOCAL_PROJECT,
+            )
+        )
+
+    def action_open_selected(self) -> None:
+        entry = self._selected_entry()
+        if entry is None:
+            self.notify("Select a session row first.", severity="warning")
+            return
+        if entry.classification is HistoryClassification.MALFORMED:
+            self.notify(
+                f"Session {entry.session_id} has a malformed journal and "
+                "cannot be replayed.", severity="error"
+            )
+            return
+        if entry.classification is HistoryClassification.INVALID_MANIFEST:
+            self.notify(
+                f"Session {entry.session_id} has an invalid manifest; "
+                "it cannot be opened as a valid session.",
+                severity="error",
+            )
+            return
+        self.app.open_session(entry.session_id or "")
+
+    def action_refresh(self) -> None:
+        self.refresh_history()
+        self.notify("History refreshed.")
+
+    def action_quit_app(self) -> None:
+        self.app.action_quit()
+
+    def action_show_help(self) -> None:
+        self.app.push_screen(HelpModalScreen())
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "home-local-button":
+            self.action_start_local_project()
+            event.stop()
+        elif event.button.id == "home-new-button":
+            self.action_start_session()
+            event.stop()
 
     def action_open_selected(self) -> None:
         entry = self._selected_entry()
@@ -489,16 +574,30 @@ def verifier_cell(entry: SessionHistoryEntry) -> str:
 
 @dataclass(frozen=True)
 class ChoiceOption:
-    """One option shown by ChoicePickerScreen."""
+    """One option shown by ChoicePickerScreen.
+
+    ``disabled`` options stay visible with their ``disabled_reason`` —
+    incompatibilities are explained, never hidden.  A ``group`` label is
+    rendered once as a section header when the group changes.
+    """
 
     value: str
     title: str
     description: str = ""
     secondary: str = ""
+    group: str = ""
+    disabled: bool = False
+    disabled_reason: str = ""
 
 
 class SessionSettingRow(Static):
-    """A compact, keyboard-focusable terminal setting row."""
+    """A compact, keyboard-focusable terminal setting row.
+
+    A row always occupies its place in the stack.  When the current
+    target makes it inapplicable it renders dimmed with its reason
+    (``set_disabled``) instead of disappearing, and activation explains
+    why instead of silently changing anything.
+    """
 
     can_focus = True
 
@@ -509,15 +608,43 @@ class SessionSettingRow(Static):
         self._value = ""
         self._secondary = ""
         self._focused = False
+        self._disabled = False
+        self._disabled_reason = ""
 
     def set_value(self, value: str, *, secondary: str = "") -> None:
         self._value, self._secondary = value, secondary
         self._render_row()
 
+    def set_disabled(self, reason: str) -> None:
+        self._disabled = True
+        self._disabled_reason = reason
+        self._render_row()
+
+    def set_enabled(self) -> None:
+        self._disabled = False
+        self._disabled_reason = ""
+        self._render_row()
+
+    @property
+    def is_disabled(self) -> bool:
+        return self._disabled
+
+    @property
+    def disabled_reason(self) -> str:
+        return self._disabled_reason
+
     def _render_row(self) -> None:
         text = Text()
+        if self._disabled:
+            text.append("  ", style=FAINT)
+            text.append(f"{self.label:<12}", style=FAINT)
+            text.append(self._value or "—", style=FAINT)
+            if self._disabled_reason:
+                text.append(f"  ({self._disabled_reason})", style=f"dim {FAINT}")
+            self.update(text)
+            return
         focused = self._focused
-        text.append("> " if focused else "  ", style=f"bold {PRIMARY}" if focused else FAINT)
+        text.append("› " if focused else "  ", style=f"bold {PRIMARY}" if focused else FAINT)
         text.append(f"{self.label:<12}", style=MUTED)
         text.append(self._value, style=f"bold {FOREGROUND}" if focused else FOREGROUND)
         if self._secondary:
@@ -543,67 +670,6 @@ class SessionSettingRow(Static):
             event.prevent_default()
             event.stop()
 
-
-class ReadonlySettingRow(Static):
-    """Flat task-specific metadata row with no editable affordance."""
-
-    def __init__(self, label: str, **kwargs: Any) -> None:
-        super().__init__("", **kwargs)
-        self.label = label
-        self._value = ""
-
-    def set_value(self, value: str) -> None:
-        self._value = value
-        text = Text()
-        text.append("  ", style=FAINT)
-        text.append(f"{self.label:<12}", style=MUTED)
-        text.append(self._value, style=FOREGROUND)
-        self.update(text)
-
-class TimeLimitRow(Static):
-    """A compact, keyboard-focusable time-limit setting row."""
-
-    can_focus = True
-
-    def __init__(self, *, row_key: str = "time_limit", **kwargs: Any) -> None:
-        super().__init__("", **kwargs)
-        self.row_key = row_key
-        self._value = "No limit"
-        self._focused = False
-
-    def on_mount(self) -> None:
-        self._render_row()
-
-    def _render_row(self) -> None:
-        text = Text()
-        focused = self._focused
-        text.append("> " if focused else "  ", style=f"bold {PRIMARY}" if focused else FAINT)
-        text.append("Time limit  ", style=MUTED)
-        text.append(self._value, style=f"bold {FOREGROUND}" if focused else FOREGROUND)
-        self.update(text)
-
-    def set_value(self, value: Optional[int]) -> None:
-        self._value = "No limit" if value is None else str(value)
-        self._render_row()
-
-    def on_focus(self) -> None:
-        self._focused = True
-        self._render_row()
-
-    def on_blur(self) -> None:
-        self._focused = False
-        self._render_row()
-
-    def on_click(self, event: Any) -> None:
-        self.focus()
-        self.screen._activate_row(self.row_key)  # type: ignore[attr-defined]
-        event.stop()
-
-    def on_key(self, event: Any) -> None:
-        if getattr(event, "key", None) in ("enter", "space"):
-            self.screen._activate_row(self.row_key)  # type: ignore[attr-defined]
-            event.prevent_default()
-            event.stop()
 
 class TimeLimitEditorInput(Input):
     """Modal time editor input with reliable Enter submission."""
@@ -797,41 +863,97 @@ class ChoicePickerScreen(Screen):
 
     def on_mount(self) -> None:
         option_list = self.query_one("#choice-picker-list", OptionList)
+        from textual.widgets.option_list import Option
+
+        last_group = None
         for choice in self.choices:
-            text = Text("> " if choice.value == self.current else "  ", style=PRIMARY if choice.value == self.current else MUTED)
-            text.append(choice.title, style=f"bold {FOREGROUND}" if choice.value == self.current else FOREGROUND)
-            if choice.secondary:
-                text.append(f"\n    {choice.secondary}", style=MUTED)
-            if choice.description:
-                text.append(f"\n    {choice.description}", style=MUTED)
-            option_list.add_option(text)
-        if self.choices:
-            option_list.highlighted = next(
-                (i for i, choice in enumerate(self.choices) if choice.value == self.current), 0
+            if choice.group and choice.group != last_group:
+                last_group = choice.group
+                header = Text()
+                header.append(f"{choice.group.upper()}", style=f"bold {PRIMARY}")
+                option_list.add_option(
+                    Option(header, disabled=True)
+                )
+            option_list.add_option(
+                Option(
+                    self._option_prompt(choice, None),
+                    disabled=choice.disabled,
+                    id=self._option_id(choice),
+                )
             )
+        selectable = [index for index, choice in enumerate(self.choices) if not choice.disabled]
+        if self.choices:
+            current = next(
+                (i for i, choice in enumerate(self.choices) if choice.value == self.current and not choice.disabled),
+                None,
+            )
+            if current is None and selectable:
+                current = min(selectable)
+            if current is not None:
+                # Map the choice index onto its OptionList slot (group
+                # headers occupy option slots of their own).
+                option_list.highlighted = self._option_slots[current]
             option_list.focus()
-            self._refresh_option_markers()
         else:
             option_list.display = False
             msg = self.empty_text or "No eligible choices available."
             self.mount(Static(msg, id="choice-picker-empty"),
                        before=self.query_one("#choice-picker-hint"))
 
-    def _option_renderable(self, index: int) -> Text:
-        choice = self.choices[index]
-        selected = index == self.query_one("#choice-picker-list", OptionList).highlighted
-        text = Text("> " if selected else "  ", style=PRIMARY if selected else MUTED)
-        text.append(choice.title, style=f"bold {FOREGROUND}" if selected else FOREGROUND)
+    def _option_id(self, choice: ChoiceOption) -> str:
+        return f"choice::{choice.value}"
+
+    @property
+    def _option_slots(self) -> dict[int, int]:
+        """choice index -> OptionList option index (headers add slots)."""
+        slots: dict[int, int] = {}
+        slot = 0
+        last_group = None
+        for index, choice in enumerate(self.choices):
+            if choice.group and choice.group != last_group:
+                last_group = choice.group
+                slot += 1
+            slots[index] = slot
+            slot += 1
+        return slots
+
+    def _option_prompt(self, choice: ChoiceOption, highlighted_index: Optional[int]) -> Text:
+        selected = choice.value == self.current
+        focused = (
+            highlighted_index is not None
+            and highlighted_index == self.query_one("#choice-picker-list", OptionList).highlighted
+        )
+        active = selected or focused
+        if choice.disabled:
+            text = Text()
+            text.append("  ", style=FAINT)
+            text.append(choice.title, style=FAINT)
+            if choice.secondary:
+                text.append(f"  {choice.secondary}", style=FAINT)
+            if choice.disabled_reason:
+                text.append(f"\n      ✕ {choice.disabled_reason}", style=f"{FAINT} italic")
+            return text
+        text = Text()
+        text.append("› " if active else "  ", style=f"bold {PRIMARY}" if active else MUTED)
+        text.append(choice.title, style=f"bold {FOREGROUND}" if active else FOREGROUND)
         if choice.secondary:
-            text.append(f"\n    {choice.secondary}", style=MUTED)
+            text.append(f"  {choice.secondary}", style=MUTED)
         if choice.description:
-            text.append(f"\n    {choice.description}", style=MUTED)
+            text.append(f"\n      {choice.description}", style=MUTED)
         return text
+
+    @property
+    def _slot_choices(self) -> dict[int, int]:
+        """OptionList option index -> choice index (header slots excluded)."""
+        return {slot: index for index, slot in self._option_slots.items()}
 
     def _refresh_option_markers(self) -> None:
         option_list = self.query_one("#choice-picker-list", OptionList)
-        for index in range(len(self.choices)):
-            option_list.replace_option_prompt_at_index(index, self._option_renderable(index))
+        highlighted = option_list.highlighted
+        for slot, index in self._slot_choices.items():
+            option_list.replace_option_prompt_at_index(
+                slot, self._option_prompt(self.choices[index], highlighted)
+            )
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         self._refresh_option_markers()
@@ -840,80 +962,135 @@ class ChoicePickerScreen(Screen):
         index = getattr(event, "option_index", None)
         if index is None:
             index = self.query_one("#choice-picker-list", OptionList).highlighted
-        if index is None or not 0 <= index < len(self.choices):
+        if index is None:
+            return
+        choice_index = self._slot_choices.get(index)
+        if choice_index is None or not 0 <= choice_index < len(self.choices):
+            return
+        choice = self.choices[choice_index]
+        if choice.disabled:
             return
         self.app.pop_screen()
-        self._on_select(self.choices[index].value)
+        self._on_select(choice.value)
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
 
 
+def _short_unavailable_reason(reason: Optional[str]) -> str:
+    """One bounded picker line for a provider unavailability reason."""
+    if not reason:
+        return "unavailable"
+    text = reason.split("(", 1)[0].strip().rstrip(".")
+    if len(text) > 60:
+        text = text[:60].rsplit(" ", 1)[0]
+    return text or "unavailable"
+
+
 class StartSessionScreen(Screen):
-    """Keyboard-first workspace shell for starting one live session."""
+    """The ONE session-setup surface for every target and provider.
+
+    One fixed stack of controls — Target, Task, Project, Bug, Repro,
+    Verify, Model, Debugger, Time limit, Auto-retry — serves curated
+    tasks, Local Project debugging, and the scientific capability ladder
+    alike.  Rows never disappear: an inapplicable row is disabled with
+    its reason.  One selection change never silently rewrites another.
+    Every readiness presentation (Run button, status line, hero chips,
+    pre-flight rail) renders from the single ``SessionReadiness``
+    object derived by :func:`derive_readiness`.
+    """
 
     BINDINGS = [
         Binding("up", "move_up", "Previous setting", show=False, priority=True),
         Binding("down", "move_down", "Next setting", show=False, priority=True),
-        Binding("s", "start", "Start"),
-        Binding("p", "start_local_project", "Local project"),
+        Binding("s", "start", "Run"),
+        Binding("p", "focus_local_project", "Local project"),
         Binding("h", "history", "History"),
         Binding("enter", "confirm", "Confirm", show=False),
         Binding("escape", "cancel", "Back"),
     ]
-    MODE_DETERMINISTIC = "deterministic"
-    MODE_CONFIGURED = "configured"
 
-    def __init__(self, task_options: Optional[list[tuple[str, str]]] = None) -> None:
+    def __init__(
+        self,
+        task_options: Optional[list[tuple[str, str]]] = None,
+        *,
+        initial_target: Optional[str] = None,
+        initial_project: Optional[str] = None,
+    ) -> None:
         super().__init__()
         from agentic_debugger.ui.app import task_display_option
+
         self._task_options: list[tuple[str, str]] = []
         for item in list(task_options or []):
             if isinstance(item, tuple) and len(item) == 2:
                 label, value = item
-                self._task_options.append(task_display_option(value) if label == value else (label, value))
+                self._task_options.append(
+                    task_display_option(value) if label == value else (label, value)
+                )
             elif isinstance(item, str):
                 self._task_options.append(task_display_option(item))
-        self._profiles: Tuple[Any, ...] = ()
-        self._config_error: Optional[str] = None
-        self._mode = self.MODE_DETERMINISTIC
-        self._policy = "pdb-on-uncertainty"
-        self._task_id = self._task_options[0][1] if self._task_options else None
-        self._profile_id: Optional[str] = None
-        self._max_elapsed_seconds: Optional[int] = None
+        self._config = SessionConfig()
+        if initial_target in TARGET_LABELS:
+            self._config = self._config.with_target(initial_target)
+        self._catalog = SessionCatalog()
+        self._project_status = ProjectStatus.unchecked("")
+        self._readiness: Optional[SessionReadiness] = None
+        self._start_error: Optional[str] = None
+        # Manual-edit guards: automatic, project-derived defaults never
+        # overwrite a value the user chose.
+        self._repro_user_edited = False
+        self._verify_user_edited = False
+        self._repro_is_auto = False
+        self._verify_is_auto = False
+        # Launch-cwd capture for project resolution (never a cwd change).
+        try:
+            from agentic_debugger.application.local_project import (
+                get_launch_cwd,
+                resolve_project_path,
+            )
+
+            self._launch_cwd = get_launch_cwd()
+        except Exception:
+            self._launch_cwd = Path.cwd().resolve()
+        initial_path = initial_project or str(self._launch_cwd)
+        try:
+            from agentic_debugger.application.local_project import (
+                resolve_project_path,
+            )
+
+            self._config = replace(
+                self._config, project_path=str(resolve_project_path(initial_path, self._launch_cwd))
+            )
+        except Exception:
+            self._config = replace(self._config, project_path=initial_path)
+        try:
+            self._apply_tracked_repro_defaults()
+        except Exception:
+            pass
+
+    # -- composition --------------------------------------------------------
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="start-workspace"):
             with Vertical(id="start-main"):
                 with VerticalScroll(id="start-config"):
-                    yield Static(
-                        "[bold $primary]AGENTIC DEBUGGER[/]  "
-                        "[$text-faint]// REPAIR CONSOLE[/]\n"
-                        "[bold $foreground]Trace the failure. Prove the repair.[/]\n"
-                        "[$foreground-muted]Evidence-led repair session: reproducible bug to "
-                        "independent verdict.[/]",
-                        id="start-title",
-                    )
-                    yield Static("SESSION PARAMETERS", id="start-section-label")
-                    yield SessionSettingRow("Mode", row_key="mode", id="mode-row")
-                    yield SessionSettingRow("Model", row_key="model", id="model-row")
-                    yield SessionSettingRow("Task", row_key="task", id="task-row")
-                    yield SessionSettingRow("Debugger", row_key="debugger", id="debugger-row")
-                    yield ReadonlySettingRow("Debugger", id="level32-debugger-row")
-                    yield TimeLimitRow(id="time-limit-row")
-                    yield ReadonlySettingRow("Treatment", id="level32-treatment-row")
+                    yield Static("", id="start-hero")
+                    yield Static("SESSION SETUP", id="start-section-label")
+                    yield SessionSettingRow("Target", row_key=ROW_TARGET, id="target-row")
+                    yield SessionSettingRow("Task", row_key=ROW_TASK, id="task-row")
+                    yield SessionSettingRow("Project", row_key=ROW_PROJECT, id="project-row")
+                    yield SessionSettingRow("Bug", row_key=ROW_BUG, id="bug-row")
+                    yield SessionSettingRow("Repro", row_key=ROW_REPRO, id="repro-row")
+                    yield SessionSettingRow("Verify (P2P)", row_key=ROW_VERIFY, id="verify-row")
+                    yield SessionSettingRow("Model", row_key=ROW_MODEL, id="model-row")
+                    yield SessionSettingRow("Debugger", row_key=ROW_DEBUGGER, id="debugger-row")
+                    yield SessionSettingRow("Time limit", row_key=ROW_TIME_LIMIT, id="time-limit-row")
+                    yield SessionSettingRow("Auto-retry", row_key=ROW_AUTO_RETRY, id="auto-retry-row")
                     yield Static("", id="start-status")
-                    yield Static("", id="start-trust")
+                    yield Static("", id="start-notes")
                     with Horizontal(id="start-actions"):
                         yield Button(
-                            "Debug local project",
-                            id="local-project-button",
-                            classes="primary-action",
-                        )
-                        yield Button(
-                            "Start session",
-                            id="start-session-button",
-                            classes="secondary-action",
+                            "Run", id="start-session-button", classes="primary-action"
                         )
                     yield Static(
                         "[bold $evidence]INDEPENDENT PROOF CHAIN[/]\n"
@@ -923,20 +1100,22 @@ class StartSessionScreen(Screen):
                     )
                 yield Static(START_FOOTER, id="start-footer")
             with VerticalScroll(id="start-context"):
-                yield Static("[bold $primary]SESSION / PRE-FLIGHT[/]", id="context-title")
+                yield Static("[bold $primary]PRE-FLIGHT[/]", id="context-title")
                 yield Static("", id="context-summary")
 
     def on_mount(self) -> None:
         if not self._task_options:
             self._task_options = list(self.app.curated_task_options())
-            self._task_id = self._task_options[0][1] if self._task_options else None
-        if not is_ladder_task(self._task_id) and self._mode == self.MODE_CONFIGURED:
-            self._refresh_profiles()
-        if is_ladder_task(self._task_id):
-            profiles = self.app.ollama_cloud_model_profiles()
-            self._profile_id = profiles[0].alias if profiles else None
-        self._refresh_mode()
-        self._focus_row("task" if is_ladder_task(self._task_id) else "mode")
+        self._gather_catalog()
+        first_curated = next(
+            (task_id for _, task_id in self._task_options if not is_ladder_task(task_id)),
+            None,
+        )
+        self._config = replace(self._config, task_id=first_curated)
+        if self._config.target == TARGET_LOCAL_PROJECT:
+            self._validate_project()
+        self.render_state()
+        self._focus_row(ROW_PROJECT if self._config.target == TARGET_LOCAL_PROJECT else ROW_TARGET)
         self._update_context_visibility(self.size.width)
         self._update_footer(self.size.width)
 
@@ -944,311 +1123,811 @@ class StartSessionScreen(Screen):
         self._update_context_visibility(event.size.width)
         self._update_footer(event.size.width)
         if self.is_mounted:
-            self._refresh_mode()
+            self.render_state()
 
     def _update_context_visibility(self, width: int) -> None:
         self.query_one("#start-context", VerticalScroll).display = width >= 100
 
     def _update_footer(self, width: int) -> None:
         footer = self.query_one("#start-footer", Static)
-        footer.update(
-            START_FOOTER_COMPACT
-            if width < 100
-            else START_FOOTER
+        footer.update(START_FOOTER_COMPACT if width < 100 else START_FOOTER)
+
+    # -- catalog -------------------------------------------------------------
+
+    def _gather_catalog(self) -> None:
+        """Rebuild the read-only environment catalog (offline, no provider
+        contact, no mutation)."""
+        tasks: list[TaskOption] = []
+        for label, task_id in self._task_options:
+            title = label.split("·", 1)[0].strip() or task_id
+            ladder = is_ladder_task(task_id)
+            detail = ""
+            if ladder:
+                meta = ladder_task_metadata(task_id)
+                detail = f"{meta.treatment} · {meta.evaluation}"
+            tasks.append(TaskOption(task_id, title, ladder=ladder, detail=detail))
+
+        models: list[ModelOption] = [
+            ModelOption(
+                PROVIDER_OFFLINE,
+                "",
+                "Offline",
+                detail="deterministic, provider-free run",
+            )
+        ]
+        provider_reasons: dict[str, Optional[str]] = {}
+        try:
+            for item in list_provider_models(include_ollama=True):
+                if not item.available and item.provider_label not in provider_reasons:
+                    provider_reasons.setdefault(
+                        item.kind, item.unavailable_reason or "provider unavailable"
+                    )
+                models.append(
+                    ModelOption(
+                        item.kind,
+                        item.model_id,
+                        item.display_name,
+                        detail=f"{item.provider_label} · {item.model_id}",
+                        available=item.available,
+                        unavailable_reason=item.unavailable_reason,
+                    )
+                )
+        except Exception:
+            pass
+
+        configured_error: Optional[str] = None
+        try:
+            summaries, configured_error = self.app.configured_profiles()
+        except Exception as exc:  # pragma: no cover - bounded diagnostics
+            summaries, configured_error = (), str(exc)
+        for profile in summaries:
+            models.append(
+                ModelOption(
+                    PROVIDER_CONFIGURED,
+                    profile.profile_id,
+                    profile.display_name,
+                    detail=f"command: {profile.executable}",
+                )
+            )
+
+        ladder_models: list[ModelOption] = []
+        try:
+            for item in self.app.ollama_cloud_model_profiles():
+                ladder_models.append(
+                    ModelOption(
+                        PROVIDER_OLLAMA,
+                        item.alias,
+                        item.display_name,
+                        detail=f"{item.readiness} · qualified roster",
+                    )
+                )
+        except Exception:
+            pass
+
+        self._catalog = SessionCatalog(
+            tasks=tuple(tasks),
+            models=tuple(models),
+            ladder_models=tuple(ladder_models),
+            configured_error=configured_error,
         )
 
+    # -- project validation ---------------------------------------------------
+
+    def _validate_project(self) -> None:
+        try:
+            from agentic_debugger.application.local_project import (
+                validate_local_project,
+            )
+
+            validated = validate_local_project(
+                self._config.project_path, launch_cwd=self._launch_cwd
+            )
+            if validated.dirty:
+                self._project_status = ProjectStatus(
+                    path=str(validated.repo_root),
+                    ok=False,
+                    state="dirty",
+                    message=(
+                        "Project has uncommitted changes — commit or stash "
+                        "them first."
+                    ),
+                )
+            else:
+                self._project_status = ProjectStatus(
+                    path=str(validated.repo_root),
+                    ok=True,
+                    state="clean",
+                    message=f"Git: {validated.repo_root.name} @ {validated.head_commit[:7]}",
+                )
+        except Exception as exc:
+            message = self._project_error_message(exc)
+            self._project_status = ProjectStatus(
+                path=self._config.project_path, ok=False, state="invalid", message=message
+            )
+
+    @staticmethod
+    def _project_error_message(exc: Exception) -> str:
+        msg = str(exc)
+        if "not a Git repository" in msg:
+            return "Not a Git repository."
+        if "not found" in msg:
+            return "Project path not found."
+        if "not a directory" in msg:
+            return "Project path is not a directory."
+        bounded = msg[:96]
+        return bounded
+
+    def _apply_tracked_repro_defaults(self) -> None:
+        """Prefill Repro/Verify from a tracked ``repro.py`` (safe checks only).
+
+        Never overwrites a manual value; never invents commands beyond the
+        documented convention.
+        """
+        if self._repro_user_edited and self._verify_user_edited:
+            return
+        has_repro = False
+        try:
+            from agentic_debugger.application.local_project import (
+                has_tracked_root_repro,
+                validate_local_project,
+            )
+
+            validated = validate_local_project(
+                self._config.project_path, launch_cwd=self._launch_cwd
+            )
+            has_repro = has_tracked_root_repro(validated.repo_root)
+        except Exception:
+            has_repro = False
+        if not self._repro_user_edited:
+            if has_repro:
+                if (
+                    self._config.reproduction_command is None
+                    or self._repro_is_auto
+                ):
+                    self._config = replace(
+                        self._config, reproduction_command="python repro.py"
+                    )
+                    self._repro_is_auto = True
+            elif self._repro_is_auto and self._config.reproduction_command == "python repro.py":
+                self._config = replace(self._config, reproduction_command=None)
+                self._repro_is_auto = False
+        if not self._verify_user_edited:
+            if has_repro:
+                if self._config.verification_command is None or self._verify_is_auto:
+                    self._config = replace(
+                        self._config, verification_command="python repro.py"
+                    )
+                    self._verify_is_auto = True
+            elif self._verify_is_auto and self._config.verification_command == "python repro.py":
+                self._config = replace(self._config, verification_command=None)
+                self._verify_is_auto = False
+
+    # -- navigation ------------------------------------------------------------
+
     def _focusable_row_ids(self) -> list[str]:
-        if is_ladder_task(self._task_id):
-            return ["task", "model"]
-        rows = ["mode"]
-        if self._mode == self.MODE_CONFIGURED:
-            rows.append("model")
-        rows.extend(("task", "debugger", "time_limit"))
-        return rows
+        # The stack is fixed: every row stays reachable for every target.
+        return list(ROW_ORDER)
 
     def _focus_row(self, row_key: str) -> None:
-        row_type = TimeLimitRow if row_key == "time_limit" else SessionSettingRow
-        row_id = "time-limit-row" if row_key == "time_limit" else f"{row_key}-row"
-        self.query_one(f"#{row_id}", row_type).focus()
+        try:
+            self.query_one(f"#{row_key.replace('_', '-')}-row", SessionSettingRow).focus()
+        except Exception:
+            pass
 
     def _focused_row_key(self) -> str:
-        return getattr(self.app.focused, "row_key", "mode")
+        return getattr(self.app.focused, "row_key", ROW_TARGET)
 
     def action_move_down(self) -> None:
         rows, current = self._focusable_row_ids(), self._focused_row_key()
-        self._focus_row(rows[(rows.index(current) + 1) % len(rows)] if current in rows else rows[0])
+        self._focus_row(
+            rows[(rows.index(current) + 1) % len(rows)] if current in rows else rows[0]
+        )
 
     def action_move_up(self) -> None:
         rows, current = self._focusable_row_ids(), self._focused_row_key()
-        self._focus_row(rows[(rows.index(current) - 1) % len(rows)] if current in rows else rows[0])
+        self._focus_row(
+            rows[(rows.index(current) - 1) % len(rows)] if current in rows else rows[0]
+        )
 
     def _activate_row(self, row_key: str) -> None:
-        if is_ladder_task(self._task_id) and row_key not in {"task", "model"}:
-            return
-        self._open_time_limit_editor() if row_key == "time_limit" else self._open_choice_picker(row_key)
+        readiness = self._readiness
+        if readiness is not None:
+            state = readiness.rows.get(row_key)
+            if state is not None and not state.enabled:
+                self.notify(
+                    f"Not used for {TARGET_LABELS[self._config.target]} sessions — "
+                    f"{state.reason}",
+                    severity="information",
+                    timeout=4.0,
+                )
+                return
+        if row_key == ROW_TARGET:
+            self._open_target_picker()
+        elif row_key == ROW_TASK:
+            self._open_task_picker()
+        elif row_key == ROW_PROJECT:
+            self._open_project_picker()
+        elif row_key == ROW_BUG:
+            self._open_bug_editor()
+        elif row_key == ROW_REPRO:
+            self._open_text_editor(
+                "Reproduction command (optional)",
+                self._config.reproduction_command or "",
+                self._on_repro_saved,
+            )
+        elif row_key == ROW_VERIFY:
+            self._open_text_editor(
+                "Regression check command (optional; must pass BEFORE and after the fix)",
+                self._config.verification_command or "",
+                self._on_verify_saved,
+            )
+        elif row_key == ROW_MODEL:
+            self._open_model_picker()
+        elif row_key == ROW_DEBUGGER:
+            self._open_debugger_picker()
+        elif row_key == ROW_TIME_LIMIT:
+            self._open_time_limit_editor()
+        elif row_key == ROW_AUTO_RETRY:
+            self._open_auto_retry_picker()
 
-    def _choice(self, value: str, title: str, description: str = "", secondary: str = "") -> ChoiceOption:
-        return ChoiceOption(value, title, description, secondary)
+    # -- pickers ----------------------------------------------------------------
 
-    def _open_choice_picker(self, row_key: str) -> None:
-        if row_key == "mode":
-            choices = [
-                self._choice(self.MODE_DETERMINISTIC, "Offline demo", "Deterministic and provider-free."),
-                self._choice(self.MODE_CONFIGURED, "Custom command profile", "Uses a command-model profile you control."),
-            ]
-            title, current = "Select execution mode", self._mode
-            self.app.push_screen(ChoicePickerScreen(
-                title=title, choices=choices, current=current,
-                on_select=lambda value: self._choice_selected(row_key, value),
-            ))
-        elif row_key == "task":
-            choices = []
-            for label, task_id in self._task_options:
-                title = label.split("·", 1)[0].strip()
-                secondary = label.split("·", 1)[1].strip() if "·" in label else task_id
-                choices.append(self._choice(task_id, title, secondary=secondary))
-            title, current = "Select task", self._task_id
-            self.app.push_screen(ChoicePickerScreen(
-                title=title, choices=choices, current=current,
-                on_select=lambda value: self._choice_selected(row_key, value),
-            ))
-        elif row_key == "debugger":
-            choices = [
-                self._choice("pdb-on-uncertainty", "On uncertainty", "Use debugger when runtime evidence is useful."),
-                self._choice("static-baseline", "Disabled", "Use static reasoning only."),
-            ]
-            title, current = "Select debugger policy", self._policy
-            self.app.push_screen(ChoicePickerScreen(
-                title=title, choices=choices, current=current,
-                on_select=lambda value: self._choice_selected(row_key, value),
-            ))
-        elif row_key == "model":
-            if is_ladder_task(self._task_id):
-                choices = [
-                    self._choice(
-                        p.alias,
-                        p.display_name,
-                        f"{p.readiness} · Ollama Cloud",
-                        p.alias,
-                    )
-                    for p in self.app.level32_model_profiles()
-                ]
-                title, current = "Select qualified Ollama model", self._profile_id
-                subtitle = "Scientific Level-32 roster. Other providers are available in Local Project."
-                empty_text = "No qualified Ollama models available."
-                self.app.push_screen(ChoicePickerScreen(
-                    title=title, choices=choices, current=current,
-                    subtitle=subtitle,
-                    empty_text=empty_text,
-                    on_select=lambda value: self._choice_selected(row_key, value),
-                ))
-            else:
-                choices = [self._choice(p.profile_id, p.display_name, f"command: {p.executable}", p.profile_id) for p in self._profiles]
-                title, current = "Select custom command profile", self._profile_id
-                empty_text = "No custom command profiles configured."
-                self.app.push_screen(ChoicePickerScreen(
-                    title=title, choices=choices, current=current,
-                    empty_text=empty_text,
-                    on_select=lambda value: self._choice_selected(row_key, value),
-                ))
-        else:
-            return
-
-    def _choice_selected(self, row_key: str, value: str) -> None:
-        if row_key == "mode":
-            self._mode = value
-            if value == self.MODE_CONFIGURED and not is_ladder_task(self._task_id):
-                self._refresh_profiles()
-            self._refresh_mode()
-        elif row_key == "task":
-            self._task_id = value
-            if is_ladder_task(self._task_id) and self._profile_id is None:
-                profiles = self.app.ollama_cloud_model_profiles()
-                self._profile_id = profiles[0].alias if profiles else None
-            elif not is_ladder_task(self._task_id) and self._mode == self.MODE_CONFIGURED:
-                self._refresh_profiles()
-            self._refresh_mode()
-        elif row_key == "debugger":
-            self._policy = value
-            self._render_rows()
-        elif row_key == "model":
-            self._profile_id = value
-            if is_ladder_task(self._task_id):
-                # Model selection changes the Level-32 readiness/status state,
-                # not only the displayed row value.
-                self._refresh_mode()
-            else:
-                self._render_rows()
-        self._focus_row(row_key)
-        self._update_context()
-
-    def _refresh_profiles(self) -> None:
-        self._profiles, self._config_error = self.app.configured_profiles()
-
-    def _selected_mode(self) -> str:
-        return self._mode
-
-    def _selected_policy(self) -> str:
-        return self._policy
-
-    @property
-    def task_id(self) -> Optional[str]:
-        return self._task_id
-
-    @property
-    def profile_id(self) -> Optional[str]:
-        return self._profile_id
-
-    @property
-    def start_available(self) -> bool:
-        if is_ladder_task(self._task_id):
-            return any(p.alias == self._profile_id for p in self.app.level32_model_profiles())
-        return self._mode != self.MODE_CONFIGURED or bool(self._profiles and self._profile_id)
-
-    def _profile_display_name(self) -> str:
-        if is_ladder_task(self._task_id):
-            profiles = self.app.level32_model_profiles()
-            if self._profile_id is None:
-                return "Not selected" if profiles else "Not available"
-            return next((p.display_name for p in profiles if p.alias == self._profile_id), "Not available")
-        return next((p.display_name for p in self._profiles if p.profile_id == self._profile_id), "No profile configured")
-
-    def _task_display_name(self) -> str:
-        title = next(
-            (label.split("·", 1)[0].strip() for label, task_id in self._task_options if task_id == self._task_id),
-            self._task_id or "Not selected",
-        )
-        if self.size.width and self.size.width < 70:
-            available = max(18, self.size.width - 20)
-            if len(title) > available:
-                return f"{title[:available - 1]}…"
-        return title
-
-    def _render_rows(self) -> None:
-        self.query_one("#mode-row", SessionSettingRow).set_value("Offline demo" if self._mode == self.MODE_DETERMINISTIC else "Custom command profile")
-        self.query_one("#model-row", SessionSettingRow).set_value(self._profile_display_name())
-        self.query_one("#task-row", SessionSettingRow).set_value(self._task_display_name())
-        self.query_one("#debugger-row", SessionSettingRow).set_value("On uncertainty" if self._policy == "pdb-on-uncertainty" else "Disabled")
-        self.query_one("#time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
-        self.query_one("#start-session-button", Button).label = (
-            "Run evidence demo"
-            if self._mode == self.MODE_DETERMINISTIC and not is_ladder_task(self._task_id)
-            else "Start session"
-        )
-        if is_ladder_task(self._task_id):
-            metadata = ladder_task_metadata(self._task_id)
-            self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value(metadata.debugger)
-            self.query_one("#level32-treatment-row", ReadonlySettingRow).set_value(metadata.treatment)
-        else:
-            self.query_one("#level32-debugger-row", ReadonlySettingRow).set_value("Exact PDB required")
-            self.query_one("#level32-treatment-row", ReadonlySettingRow).set_value("Frozen Level-32")
-
-    def _refresh_mode(self) -> None:
-        ladder = is_ladder_task(self._task_id)
-        configured = self._mode == self.MODE_CONFIGURED
-        self.query_one("#mode-row", SessionSettingRow).display = not ladder
-        self.query_one("#model-row", SessionSettingRow).display = configured or ladder
-        self.query_one("#debugger-row", SessionSettingRow).display = not ladder
-        self.query_one("#level32-debugger-row", ReadonlySettingRow).display = ladder
-        self.query_one("#time-limit-row", TimeLimitRow).display = not ladder
-        self.query_one("#level32-treatment-row", ReadonlySettingRow).display = ladder
-        status = self.query_one("#start-status", Static)
-        if ladder and not self.app.ollama_cloud_model_profiles():
-            status.update(f"[{WARNING}]Start unavailable — the research operator is not installed.[/]")
-        elif ladder and self._profile_id is None:
-            status.update(f"[{WARNING}]Choose an eligible Ollama model.[/]")
-        elif self._config_error is not None and configured:
-            status.update(f"[{ERROR}]Configuration error: {_markup_escape(self._config_error)}[/]")
-        elif configured and not self._profiles:
-            status.update(f"[{WARNING}]Start unavailable — no custom command profiles configured.[/]")
-        else:
-            status.update("")
-        trust = self.query_one("#start-trust", Static)
-        trust.update(
-            f"[{WARNING}]Research tasks use the canonical Ollama Cloud operator contract.[/]"
-            if ladder
-            else (
-                f"[{WARNING}]Configured commands are trusted user configuration; "
-                "network isolation is not enforced.[/]"
-                if configured
-                else ""
+    def _open_target_picker(self) -> None:
+        descriptions = {
+            TARGET_CURATED: "Reproducible in-repo fixture; offline or any provider.",
+            TARGET_LOCAL_PROJECT: "Your clean Git repository; describe the bug.",
+            TARGET_LADDER: "Scientific capability rungs; qualified Ollama models.",
+        }
+        choices = [
+            ChoiceOption(
+                target,
+                TARGET_LABELS[target],
+                descriptions[target],
+            )
+            for target in (TARGET_CURATED, TARGET_LOCAL_PROJECT, TARGET_LADDER)
+        ]
+        self.app.push_screen(
+            ChoicePickerScreen(
+                title="Debug what?",
+                choices=choices,
+                current=self._config.target,
+                on_select=lambda value: self._choice_selected(ROW_TARGET, value),
             )
         )
-        trust.display = (configured or ladder) and self.size.width < 100
-        self._render_rows()
-        self._update_context()
 
-    def _update_context(self) -> None:
-        if is_ladder_task(self._task_id):
-            ready = "Yes" if self.start_available else "No"
-            profiles = self.app.ollama_cloud_model_profiles()
-            if self._profile_id is not None:
-                alias = self._profile_id
-            elif profiles:
-                alias = "—"
+    def _open_task_picker(self) -> None:
+        target = self._config.target
+        choices: list[ChoiceOption] = []
+        for task in self._catalog.tasks:
+            if task.ladder:
+                disabled = target != TARGET_LADDER
+                reason = (
+                    "" if not disabled else "runs under the Capability ladder target"
+                )
+                group = "CAPABILITY LADDER"
             else:
-                alias = "Not available"
-            lines = [
-                f"[{MUTED}]Task[/]\n{_markup_escape(ladder_task_metadata(self._task_id).title)}",
-                f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_display_name())}",
-                f"\n[{MUTED}]Alias[/]\n{_markup_escape(alias)}",
-                f"\n[{MUTED}]Debugger[/]\n{_markup_escape(ladder_task_metadata(self._task_id).debugger)}",
-                f"\n[{MUTED}]Treatment[/]\n{_markup_escape(ladder_task_metadata(self._task_id).treatment)}",
-                f"\n[{MUTED}]Evaluation[/]\n{_markup_escape(ladder_task_metadata(self._task_id).evaluation)}",
-                f"\n[{MUTED}]Ready[/]\n{ready}",
-            ]
-            self.query_one("#context-summary", Static).update("\n".join(lines))
-            return
-        ready = "Yes" if self.start_available and self._task_id else "No"
-        lines = [
-            f"[{MUTED}]Mode[/]\n{_markup_escape('Offline demo' if self._mode == self.MODE_DETERMINISTIC else 'Custom command profile')}",
-            f"\n[{MUTED}]Debugger[/]\n{_markup_escape('On uncertainty' if self._policy == 'pdb-on-uncertainty' else 'Disabled')}",
-            f"\n[{MUTED}]Task[/]\n{_markup_escape(self._task_display_name())}",
-            f"\n[{MUTED}]Task ID[/]\n{_markup_escape(self._task_id or 'Not selected')}",
-            f"\n[{MUTED}]Execution[/]\n{_markup_escape('Local, provider-free' if self._mode == self.MODE_DETERMINISTIC else 'Custom command profile')}",
+                disabled = target == TARGET_LADDER
+                reason = "" if not disabled else "ladder runs use Level rungs"
+                group = "CURATED TASKS"
+            choices.append(
+                ChoiceOption(
+                    task.task_id,
+                    task.title,
+                    task.detail,
+                    secondary=task.task_id,
+                    group=group,
+                    disabled=disabled,
+                    disabled_reason=reason,
+                )
+            )
+        self.app.push_screen(
+            ChoicePickerScreen(
+                title="Select task",
+                choices=choices,
+                current=self._config.task_id,
+                on_select=lambda value: self._choice_selected(ROW_TASK, value),
+            )
+        )
+
+    def _model_choice_key(self, choice: ModelChoice) -> str:
+        return f"{choice.provider}:{choice.model_id}"
+
+    def _open_model_picker(self) -> None:
+        self._gather_catalog()
+        target = self._config.target
+        choices: list[ChoiceOption] = []
+        offline_ok, offline_reason = model_compatibility(
+            target, ModelOption(PROVIDER_OFFLINE, "", "Offline")
+        )
+        choices.append(
+            ChoiceOption(
+                self._model_choice_key(OFFLINE_CHOICE),
+                "Offline — no model",
+                "deterministic, provider-free controller run",
+                group="OFFLINE",
+                disabled=not offline_ok,
+                disabled_reason=offline_reason,
+            )
+        )
+        if target == TARGET_LADDER:
+            for option in self._catalog.ladder_models:
+                choices.append(
+                    ChoiceOption(
+                        self._model_choice_key(option.choice),
+                        option.display,
+                        option.detail,
+                        secondary=PROVIDER_LABELS[PROVIDER_OLLAMA],
+                        group="OLLAMA CLOUD — QUALIFIED ROSTER",
+                    )
+                )
+        else:
+            groups = {
+                PROVIDER_OLLAMA: "OLLAMA CLOUD",
+                PROVIDER_OPENCODE: "OPENCODE GO",
+                PROVIDER_COMMANDCODE: "COMMANDCODE GOAT",
+                PROVIDER_CONFIGURED: "CUSTOM COMMAND PROFILES",
+            }
+            seen: set[str] = set()
+            for option in self._catalog.models:
+                if option.provider == PROVIDER_OFFLINE:
+                    continue
+                group = groups.get(option.provider, option.provider.upper())
+                first_of_provider = option.provider not in seen
+                seen.add(option.provider)
+                compatible, compat_reason = model_compatibility(target, option)
+                disabled = not option.available or not compatible
+                reason = ""
+                if not option.available:
+                    reason = _short_unavailable_reason(option.unavailable_reason)
+                elif not compatible:
+                    reason = compat_reason
+                choices.append(
+                    ChoiceOption(
+                        self._model_choice_key(option.choice),
+                        option.display,
+                        reason,
+                        secondary=option.model_id,
+                        group=group if first_of_provider else "",
+                        disabled=disabled,
+                        disabled_reason=reason,
+                    )
+                )
+        if self._catalog.configured_error:
+            choices.append(
+                ChoiceOption(
+                    "",
+                    "Configuration error",
+                    _short_unavailable_reason(self._catalog.configured_error),
+                    group="CUSTOM COMMAND PROFILES",
+                    disabled=True,
+                    disabled_reason=_short_unavailable_reason(
+                        self._catalog.configured_error
+                    ),
+                )
+            )
+        self.app.push_screen(
+            ChoicePickerScreen(
+                title="Select model",
+                choices=choices,
+                current=self._model_choice_key(self._config.model),
+                subtitle="One platform: Offline · Ollama Cloud · OpenCode Go · CommandCode GOAT · custom profiles",
+                on_select=lambda value: self._choice_selected(ROW_MODEL, value),
+            )
+        )
+
+    def _open_debugger_picker(self) -> None:
+        choices = [
+            ChoiceOption(
+                POLICY_ON_UNCERTAINTY,
+                POLICY_LABELS[POLICY_ON_UNCERTAINTY],
+                "Attach PDB when runtime evidence is useful.",
+            ),
+            ChoiceOption(
+                POLICY_STATIC_BASELINE,
+                POLICY_LABELS[POLICY_STATIC_BASELINE],
+                "Static reasoning only; no debugger session.",
+            ),
         ]
-        if self._mode == self.MODE_CONFIGURED:
-            lines += [
-                f"\n[{MUTED}]Profile[/]\n{_markup_escape(self._profile_id or 'No profile configured')}",
-                f"\n[{MUTED}]Trust[/]\nconfigured user command",
-            ]
-        lines.append(f"\n[{MUTED}]Ready[/]\n{ready}")
-        self.query_one("#context-summary", Static).update("\n".join(lines))
+        self.app.push_screen(
+            ChoicePickerScreen(
+                title="Select debugger policy",
+                choices=choices,
+                current=self._config.debugger_policy,
+                on_select=lambda value: self._choice_selected(ROW_DEBUGGER, value),
+            )
+        )
 
     def _open_auto_retry_picker(self) -> None:
         choices = [
             ChoiceOption("0", "No auto-retry", "fail fast; retry manually with r"),
-            ChoiceOption("1", "1 auto-retry", "default: one fresh attempt on retryable failure"),
+            ChoiceOption("1", "1 auto-retry", "one fresh attempt on retryable failure"),
             ChoiceOption("2", "2 auto-retries", "two fresh attempts"),
             ChoiceOption("3", "3 auto-retries", "maximum"),
         ]
-        self.app.push_screen(ChoicePickerScreen(
-            title="Auto-retry on failure",
-            choices=choices,
-            current=str(self._auto_retries),
-            on_select=self._auto_retry_selected,
-        ))
+        self.app.push_screen(
+            ChoicePickerScreen(
+                title="Auto-retry on failure",
+                choices=choices,
+                current=str(self._config.auto_retries),
+                on_select=lambda value: self._choice_selected(ROW_AUTO_RETRY, value),
+            )
+        )
 
-    def _auto_retry_selected(self, value: str) -> None:
+    def _open_project_picker(self) -> None:
+        self.app.push_screen(
+            ChoicePickerScreen(
+                title="Project input",
+                choices=[
+                    ChoiceOption("use_cwd", "Use current directory", f"{self._launch_cwd}"),
+                    ChoiceOption("browse", "Browse…", "Pick via directory list"),
+                    ChoiceOption("type", "Type/paste path…", "Enter absolute or relative path"),
+                ],
+                current=None,
+                on_select=self._project_choice_selected,
+            )
+        )
+
+    def _project_choice_selected(self, value: str) -> None:
+        if value == "use_cwd":
+            self._set_project(str(self._launch_cwd))
+        elif value == "browse":
+            self.app.push_screen(
+                BrowseScreen(
+                    start_path=self._config.project_path, on_select=self._on_browse_selected
+                )
+            )
+        elif value == "type":
+            self._open_text_editor(
+                "Project path", self._config.project_path, self._on_project_saved
+            )
+
+    def _set_project(self, path: str) -> None:
         try:
-            self._auto_retries = max(0, min(int(value), 3))
-        except ValueError:
+            from agentic_debugger.application.local_project import (
+                resolve_project_path,
+            )
+
+            resolved = str(resolve_project_path(path, self._launch_cwd))
+        except Exception:
+            resolved = path
+        self._config = replace(self._config, project_path=resolved)
+        try:
+            self._apply_tracked_repro_defaults()
+        except Exception:
+            pass
+        if self._config.target == TARGET_LOCAL_PROJECT:
+            self._validate_project()
+        self.render_state()
+        self._focus_row(ROW_PROJECT)
+
+    def _on_browse_selected(self, path: str) -> None:
+        self._set_project(path)
+
+    def _on_project_saved(self, value: Optional[str]) -> None:
+        if value is not None:
+            self._set_project(value)
+        else:
+            self.render_state()
+            self._focus_row(ROW_PROJECT)
+
+    def _open_bug_editor(self) -> None:
+        self.app.push_screen(
+            BugDescriptionEditorScreen(
+                current=self._config.bug_description or "",
+                on_save=self._on_bug_saved,
+            )
+        )
+
+    def _on_bug_saved(self, value: Optional[str]) -> None:
+        if value is not None:
+            self._config = replace(self._config, bug_description=value)
+        self.render_state()
+        self._focus_row(ROW_BUG)
+
+    def _on_repro_saved(self, value: Optional[str]) -> None:
+        if value is None:
+            self.render_state()
+            self._focus_row(ROW_REPRO)
             return
-        self._render_rows()
-        self._focus_row("auto_retry")
+        self._repro_user_edited = True
+        self._repro_is_auto = False
+        self._config = replace(
+            self._config,
+            reproduction_command=value.strip() if value.strip() else None,
+        )
+        self.render_state()
+        self._focus_row(ROW_REPRO)
+
+    def _on_verify_saved(self, value: Optional[str]) -> None:
+        if value is None:
+            self.render_state()
+            self._focus_row(ROW_VERIFY)
+            return
+        self._verify_user_edited = True
+        self._verify_is_auto = False
+        self._config = replace(
+            self._config,
+            verification_command=value.strip() if value.strip() else None,
+        )
+        self.render_state()
+        self._focus_row(ROW_VERIFY)
+
+    def _open_text_editor(
+        self, title: str, current: str, on_save: Any, multiline: bool = False
+    ) -> None:
+        self.app.push_screen(
+            SingleLineFieldEditorScreen(
+                title=title,
+                current=current or "",
+                on_save=on_save,
+                placeholder=title,
+            )
+        )
 
     def _open_time_limit_editor(self) -> None:
-        self.app.push_screen(TimeLimitEditorScreen(
-            current=self._max_elapsed_seconds,
-            on_save=self._time_limit_saved,
-            on_cancel=lambda: self._focus_row("time_limit"),
-        ))
+        self.app.push_screen(
+            TimeLimitEditorScreen(
+                current=self._config.time_limit_seconds,
+                on_save=self._time_limit_saved,
+                on_cancel=lambda: self._focus_row(ROW_TIME_LIMIT),
+            )
+        )
 
     def _time_limit_saved(self, value: Optional[int]) -> None:
-        self._max_elapsed_seconds = value
-        self._render_rows()
-        self._update_context()
-        self._focus_row("time_limit")
+        self._config = replace(self._config, time_limit_seconds=value)
+        self.render_state()
+        self._focus_row(ROW_TIME_LIMIT)
+
+    # -- selection change (the single mutation entry point) ---------------------
+
+    def _choice_selected(self, row_key: str, value: str) -> None:
+        self._start_error = None
+        if row_key == ROW_TARGET:
+            self._config = self._config.with_target(value)
+            if value == TARGET_LOCAL_PROJECT:
+                self._validate_project()
+                try:
+                    self._apply_tracked_repro_defaults()
+                except Exception:
+                    pass
+        elif row_key == ROW_TASK:
+            self._config = replace(self._config, task_id=value)
+        elif row_key == ROW_MODEL:
+            provider, _, model_id = value.partition(":")
+            if provider == PROVIDER_OFFLINE:
+                self._config = replace(self._config, model=OFFLINE_CHOICE)
+            else:
+                option = next(
+                    (
+                        m
+                        for m in self._catalog.models
+                        if m.provider == provider and m.model_id == model_id
+                    ),
+                    None,
+                )
+                display = option.display if option else model_id
+                self._config = replace(
+                    self._config,
+                    model=ModelChoice(provider, model_id, display),
+                )
+        elif row_key == ROW_DEBUGGER:
+            self._config = replace(self._config, debugger_policy=value)
+        elif row_key == ROW_AUTO_RETRY:
+            try:
+                self._config = replace(
+                    self._config, auto_retries=max(0, min(int(value), AUTO_RETRY_MAX))
+                )
+            except ValueError:
+                return
+        self.render_state()
+        self._focus_row(row_key)
+
+    # -- rendering (single derivation, many surfaces) -----------------------------
+
+    def _task_display_name(self) -> str:
+        task = self._catalog.find_task(self._config.task_id)
+        if task is not None:
+            title = task.title
+        elif self._config.task_id:
+            title = next(
+                (
+                    label.split("·", 1)[0].strip()
+                    for label, task_id in self._task_options
+                    if task_id == self._config.task_id
+                ),
+                self._config.task_id,
+            )
+        else:
+            title = "Not selected"
+        if self.size.width and self.size.width < 70:
+            available = max(18, self.size.width - 20)
+            if len(title) > available:
+                return f"{title[: available - 1]}…"
+        return title
+
+    def _model_display(self) -> tuple[str, str]:
+        choice = self._config.model
+        if choice.is_offline:
+            return "Offline", "no provider"
+        label = PROVIDER_LABELS.get(choice.provider, choice.provider)
+        return choice.display, label
+
+    def _debugger_display(self) -> str:
+        if self._config.target == TARGET_LADDER:
+            task = self._catalog.find_task(self._config.task_id)
+            if task is not None and task.ladder:
+                meta = ladder_task_metadata(task.task_id)
+                return f"{meta.debugger} (frozen)"
+            return "Frozen contract"
+        if self._config.target == TARGET_LOCAL_PROJECT:
+            return POLICY_LABELS[POLICY_ON_UNCERTAINTY]
+        return POLICY_LABELS.get(self._config.debugger_policy, self._config.debugger_policy)
+
+    def _bug_preview(self) -> str:
+        text = self._config.bug_description.strip()
+        if not text:
+            return "—"
+        first = text.splitlines()[0][:48] + ("…" if len(text.splitlines()[0]) > 48 else "")
+        if "\n" in text:
+            first = f"{first} [+]" if first else "Described [+]"
+        return first or "Described"
+
+    def render_state(self) -> None:
+        """Derive readiness once and render every surface from it."""
+        self._readiness = derive_readiness(
+            self._config, self._catalog, self._project_status
+        )
+        readiness = self._readiness
+        config = self._config
+        local = config.target == TARGET_LOCAL_PROJECT
+
+        # -- hero ---------------------------------------------------------
+        hero = Text()
+        hero.append("A G E N T I C     D E B U G G E R", style=f"bold {PRIMARY}")
+        hero.append("\n")
+        hero.append("─" * 33, style=f"{LINE_STRONG}")
+        hero.append("\n")
+        hero.append(
+            "Evidence-driven software repair — trace the failure, prove the fix.",
+            style=FOREGROUND,
+        )
+        hero.append("\n")
+        ready_style = f"bold {SUCCESS}" if readiness.ready else f"bold {WARNING}"
+        ready_word = "READY" if readiness.ready else "BLOCKED"
+        hero.append("● ", style=ready_style)
+        hero.append(ready_word, style=ready_style)
+        hero.append(f"   ▸ {TARGET_LABELS[config.target].upper()}", style=f"bold {PRIMARY}")
+        model_display, provider_label = self._model_display()
+        hero.append(f"   ◆ {model_display.upper()}", style=f"bold {SECONDARY}")
+        if self.size.width >= 100:
+            hero.append("   ◆ INDEPENDENT VERIFIER", style=f"bold {EVIDENCE}")
+        self.query_one("#start-hero", Static).update(hero)
+
+        # -- rows ---------------------------------------------------------
+        self._row(ROW_TARGET).set_value(TARGET_LABELS[config.target])
+        self._row(ROW_TASK).set_value(
+            "—" if local else self._task_display_name(),
+            secondary="" if local else (config.task_id or ""),
+        )
+        project_value = "—" if not local else (config.project_path or "—")
+        if local and len(project_value) > 58 and self.size.width and self.size.width < 110:
+            project_value = project_value[:55] + "…"
+        self._row(ROW_PROJECT).set_value(project_value)
+        self._row(ROW_BUG).set_value(self._bug_preview() if local else "—")
+        self._row(ROW_REPRO).set_value(
+            (config.reproduction_command or "Not set (optional)") if local else "—"
+        )
+        self._row(ROW_VERIFY).set_value(
+            (config.verification_command or "Not set (optional)") if local else "—"
+        )
+        model_value, model_secondary = self._model_display()
+        self._row(ROW_MODEL).set_value(model_value, secondary=model_secondary)
+        self._row(ROW_DEBUGGER).set_value(self._debugger_display())
+        self._row(ROW_TIME_LIMIT).set_value(
+            "No limit" if config.time_limit_seconds is None else str(config.time_limit_seconds)
+        )
+        self._row(ROW_AUTO_RETRY).set_value(
+            f"{config.auto_retries} on retryable failure"
+        )
+        for key, state in readiness.rows.items():
+            row = self._row(key)
+            if state.enabled:
+                row.set_enabled()
+            else:
+                row.set_disabled(state.reason)
+
+        # -- status line (the single visible verdict) -----------------------
+        status = self.query_one("#start-status", Static)
+        if self._start_error is not None:
+            status.update(f"[{ERROR}]Start failed — {_markup_escape(self._start_error)}[/]")
+        elif readiness.ready:
+            status.update(f"[bold {SUCCESS}]● {readiness.status_line}[/]")
+        else:
+            status.update(
+                f"[bold {ERROR}]● {readiness.status_line}[/]"
+            )
+        # Trust notices stay visible at every width (not only in the rail).
+        notes = self.query_one("#start-notes", Static)
+        if readiness.notes:
+            notes.update(
+                f"[{FAINT}]{'   '.join(_markup_escape(note) for note in readiness.notes)}[/]"
+            )
+        else:
+            notes.update("")
+
+        # -- run button -----------------------------------------------------
+        button = self.query_one("#start-session-button", Button)
+        button.label = readiness.run_label
+        button.disabled = not readiness.ready
+
+        self._update_context(readiness)
+
+    def _row(self, row_key: str) -> SessionSettingRow:
+        return self.query_one(f"#{row_key.replace('_', '-')}-row", SessionSettingRow)
+
+    def _update_context(self, readiness: SessionReadiness) -> None:
+        config = self._config
+        lines: list[str] = []
+
+        def kv(label: str, value: str) -> None:
+            lines.append(f"[{MUTED}]{label}[/]\n[{FOREGROUND}]{_markup_escape(value)}[/]")
+
+        kv("Target", TARGET_LABELS[config.target])
+        if config.target != TARGET_LOCAL_PROJECT:
+            kv("Task", self._task_display_name())
+            kv("Task ID", config.task_id or "Not selected")
+        else:
+            kv("Project", config.project_path or "—")
+            kv("Repo", self._project_status.message if self._project_status.state != "unchecked" else "—")
+            kv("Bug", self._bug_preview())
+            kv("Repro", config.reproduction_command or "Not set")
+            kv("Verify", config.verification_command or "Not set")
+        model_value, model_secondary = self._model_display()
+        kv("Model", model_value)
+        kv("Provider", model_secondary)
+        kv("Debugger", self._debugger_display())
+        kv("Time limit", "No limit" if config.time_limit_seconds is None else str(config.time_limit_seconds))
+        if config.target == TARGET_LADDER:
+            task = self._catalog.find_task(config.task_id)
+            if task is not None and task.ladder:
+                meta = ladder_task_metadata(task.task_id)
+                kv("Treatment", meta.treatment)
+                kv("Evaluation", meta.evaluation)
+
+        if readiness.issues:
+            lines.append("")
+            lines.append(f"[bold {ERROR}]CHECKS[/]")
+            for issue in readiness.issues:
+                marker = "✕" if issue.severity == SEVERITY_ERROR else "!"
+                style = ERROR if issue.severity == SEVERITY_ERROR else WARNING
+                lines.append(f"[{style}]{marker} {_markup_escape(issue.message)}[/]")
+        if readiness.notes:
+            lines.append("")
+            lines.append(f"[bold {EVIDENCE}]NOTICES[/]")
+            for note in readiness.notes:
+                lines.append(f"[{MUTED}]· {_markup_escape(note)}[/]")
+
+        lines.append("")
+        if readiness.ready:
+            lines.append(f"[bold {SUCCESS}]READY  Yes[/]  [{MUTED}]→ {readiness.run_label}[/]")
+        else:
+            errors = sum(1 for i in readiness.issues if i.severity == SEVERITY_ERROR)
+            lines.append(f"[bold {ERROR}]READY  No[/]  [{MUTED}]· {errors} blocking issue(s)[/]")
+        self.query_one("#context-summary", Static).update("\n".join(lines))
+
+    # -- run ----------------------------------------------------------------------
+
+    @property
+    def start_available(self) -> bool:
+        return self._readiness.ready if self._readiness is not None else False
+
+    @property
+    def task_id(self) -> Optional[str]:
+        return self._config.task_id
+
+    @property
+    def profile_id(self) -> Optional[str]:
+        return None if self._config.model.is_offline else self._config.model.model_id
 
     def action_edit(self) -> None:
         self._activate_row(self._focused_row_key())
@@ -1262,72 +1941,107 @@ class StartSessionScreen(Screen):
     def action_history(self) -> None:
         self.app.pop_screen()
 
-    def action_start_local_project(self) -> None:
-        """Open the primary product route directly from the welcome screen."""
-        initial = None
-        try:
-            from agentic_debugger.application.local_project import get_launch_cwd
-
-            initial = str(get_launch_cwd())
-        except Exception:
-            pass
-        self.app.push_screen(LocalProjectStartScreen(initial_project=initial))
+    def action_focus_local_project(self) -> None:
+        """P: jump straight to the Local Project controls (same screen)."""
+        if self._config.target != TARGET_LOCAL_PROJECT:
+            self._choice_selected(ROW_TARGET, TARGET_LOCAL_PROJECT)
+        self._focus_row(ROW_PROJECT)
 
     def action_quit_app(self) -> None:
         self.app.action_quit()
 
+    def _refresh_for_start(self) -> None:
+        """Re-gather truth immediately before starting (fail closed on a
+        changed environment rather than launching a stale selection)."""
+        self._gather_catalog()
+        if self._config.target == TARGET_LOCAL_PROJECT:
+            self._validate_project()
+        self.render_state()
+
     def _start(self) -> None:
         from agentic_debugger.application.events import SourceKind
-        status = self.query_one("#start-status", Static)
-        # The displayed task/mode are the single authoritative source for the CTA.
-        # No stale default, history, or scientific task may be substituted.
-        selected_task = str(self._task_id) if self._task_id else None
-        selected_mode = self._mode
-        if not selected_task:
-            status.update(f"[{ERROR}]Choose a task.[/]")
-            return
-        # Validate that the selected task is actually offered in the picker.
-        if not any(task_id == selected_task for _, task_id in self._task_options):
-            status.update(f"[{ERROR}]Selected task is not available.[/]")
-            return
-        if selected_mode == self.MODE_CONFIGURED and not self.start_available:
-            status.update(f"[{WARNING}]Start unavailable — choose a custom command profile.[/]")
-            return
+
+        self._start_error = None
+        self._refresh_for_start()
+        readiness = self._readiness
+        if readiness is None or not readiness.ready:
+            return  # the status line already states the first blocker
+        config = self._config
         try:
-            if is_ladder_task(selected_task):
-                if not self.start_available:
-                    status.update(f"[{WARNING}]Start unavailable — choose an eligible Ollama model.[/]")
-                    return
+            if config.target == TARGET_LADDER:
+                task_id = str(config.task_id)
+                source_kind = (
+                    SourceKind.LEVEL32_OPERATOR
+                    if task_id == LEVEL32_TASK_ID
+                    else SourceKind.OLLAMA_CLOUD_LADDER
+                )
                 self.app.start_live_session(
-                    task_id=selected_task,
-                    policy=("exact-pdb-level32-frozen" if selected_task == LEVEL32_TASK_ID else "pdb-on-uncertainty"),
+                    task_id=task_id,
+                    policy=(
+                        "exact-pdb-level32-frozen"
+                        if task_id == LEVEL32_TASK_ID
+                        else "pdb-on-uncertainty"
+                    ),
                     max_elapsed_seconds=None,
-                    source_kind=(SourceKind.LEVEL32_OPERATOR if selected_task == LEVEL32_TASK_ID else SourceKind.OLLAMA_CLOUD_LADDER),
-                    profile_id=self._profile_id,
+                    source_kind=source_kind,
+                    profile_id=config.model.model_id,
                 )
                 return
-            # Non-ladder (curated) tasks: the mode-selected source is authoritative.
-            # An Offline demo task must never be routed to a Level-32/Ollama worker.
-            self.app.start_live_session(
-                task_id=selected_task,
-                policy=self._policy,
-                max_elapsed_seconds=self._max_elapsed_seconds,
-                source_kind=SourceKind.CONFIGURED_MODEL if selected_mode == self.MODE_CONFIGURED else SourceKind.OFFLINE_DEMO,
-                profile_id=self._profile_id if selected_mode == self.MODE_CONFIGURED else None,
-            )
+            if config.target == TARGET_LOCAL_PROJECT:
+                provider = (
+                    config.model.provider
+                    if config.model.provider in (PROVIDER_OPENCODE, PROVIDER_COMMANDCODE)
+                    else None
+                )
+                self.app.start_local_project_session(
+                    project_path=config.project_path,
+                    bug_description=config.bug_description.strip(),
+                    reproduction_command=config.reproduction_command,
+                    verification_command=config.verification_command,
+                    profile_id=config.model.model_id,
+                    model_provider=provider,
+                    max_elapsed_seconds=config.time_limit_seconds,
+                    auto_retries=config.auto_retries,
+                )
+                return
+            # Curated target: the model selection routes the source.
+            if config.model.is_offline:
+                self.app.start_live_session(
+                    task_id=str(config.task_id),
+                    policy=config.debugger_policy,
+                    max_elapsed_seconds=config.time_limit_seconds,
+                    source_kind=SourceKind.OFFLINE_DEMO,
+                    profile_id=None,
+                )
+            elif config.model.provider == PROVIDER_CONFIGURED:
+                self.app.start_live_session(
+                    task_id=str(config.task_id),
+                    policy=config.debugger_policy,
+                    max_elapsed_seconds=config.time_limit_seconds,
+                    source_kind=SourceKind.CONFIGURED_MODEL,
+                    profile_id=config.model.model_id,
+                )
+            else:
+                self.app.start_live_session(
+                    task_id=str(config.task_id),
+                    policy=config.debugger_policy,
+                    max_elapsed_seconds=config.time_limit_seconds,
+                    source_kind=SourceKind.CONFIGURED_MODEL,
+                    profile_id=config.model.model_id,
+                    model_provider=config.model.provider,
+                )
         except Exception as exc:
-            status.update(f"[{ERROR}]{_markup_escape(exc)}[/]")
+            self._start_error = str(exc)
+            self.render_state()
 
     def action_start(self) -> None:
         self._start()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "local-project-button":
-            self.action_start_local_project()
-            event.stop()
-        elif event.button.id == "start-session-button":
+        if event.button.id == "start-session-button":
             self._start()
             event.stop()
+
 
 class BrowseScreen(Screen):
     """Minimal terminal-native directory picker (no OS dialog).
@@ -1446,609 +2160,6 @@ class BrowseScreen(Screen):
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
-
-
-@dataclass(frozen=True)
-class _ConfiguredProfileModel(ProviderModel):
-    """A configured command profile presented through the provider registry."""
-
-    executable: str = ""
-    provider_label: str = "Custom command profile"
-    available: bool = True
-    unavailable_reason: Optional[str] = None
-
-    def __post_init__(self) -> None:
-        pass
-
-
-class LocalProjectStartScreen(Screen):
-    """Professional terminal form for Local Project Debug new session.
-
-    Hierarchy:
-
-        Mode  Local Project Debug
-        Project  [ resolved/path  ]  [Use current] [Browse]
-        Bug      [multi-line bug description]
-        Reproduction  [optional command]
-        Verification  [optional command]
-        Model    [existing selector]
-        START DEBUGGING
-    """
-
-    BINDINGS = [
-        Binding("up", "move_up", "Previous", show=False),
-        Binding("down", "move_down", "Next", show=False),
-        Binding("escape", "cancel", "Back"),
-        Binding("s", "start", "Start debugging", priority=True),
-        Binding("h", "history", "History", priority=True),
-        Binding("enter", "confirm", "Confirm", show=False),
-    ]
-
-    def __init__(
-        self,
-        *,
-        initial_project: Optional[str] = None,
-    ) -> None:
-        super().__init__()
-        from agentic_debugger.application.local_project import get_launch_cwd, resolve_project_path
-
-        launch = get_launch_cwd()
-        self._launch_cwd = launch
-        if initial_project:
-            try:
-                resolved = resolve_project_path(initial_project, launch)
-                self._project_path = str(resolved)
-            except Exception:
-                self._project_path = initial_project
-        else:
-            self._project_path = str(launch)
-        self._bug_description = ""
-        self._repro_command: Optional[str] = None
-        self._verify_command: Optional[str] = None
-        self._profile_id: Optional[str] = None
-        self._model_provider: Optional[str] = None
-        self._profiles: Tuple[Any, ...] = ()
-        self._config_error: Optional[str] = None
-        self._max_elapsed_seconds: Optional[int] = None
-        # Bounded automatic retries of failed sessions (0-3).  Default 1:
-        # a transient model/transport failure should not end the effort,
-        # while the counter keeps total cost bounded and visible.
-        self._auto_retries: int = 1
-        # Tracks whether the user has manually edited a field; automatic
-        # project-derived defaults must not overwrite manual values.
-        self._repro_user_edited: bool = False
-        self._verify_user_edited: bool = False
-        self._model_user_edited: bool = False
-        self._time_limit_user_edited: bool = False
-        # Whether the current value was produced by the automatic ``repro.py``
-        # convention (not a user edit). Used to decide when a project change
-        # should clear the auto value without clobbering a manual assignment
-        # that happens to equal ``python repro.py``.
-        self._repro_is_auto: bool = False
-        self._verify_is_auto: bool = False
-        # Apply safe project-derived defaults for the initial project. Safe
-        # checks only; does not execute anything and does not fabricate bug.
-        try:
-            self._apply_tracked_repro_defaults()
-        except Exception:
-            pass
-
-    def _apply_tracked_repro_defaults(self) -> None:
-        """Populate Repro/Verify from tracked ``repro.py`` iff unset/manual.
-
-        - Inspects only Git-tracked project metadata (``git ls-files``).
-        - Prefills ``python repro.py`` when a tracked root-level ``repro.py``
-          exists and the field is still in automatic state.
-        - Clears the automatic value when the new project no longer tracks
-          ``repro.py`` (still automatic).
-        - Never overwrites a value the user has manually entered (including an
-          explicit blank that became ``None``).
-        - Never infers arbitrary pytest/full-suite commands.
-        """
-        if getattr(self, "_repro_user_edited", False) and getattr(self, "_verify_user_edited", False):
-            return
-        has_repro = False
-        try:
-            from agentic_debugger.application.local_project import has_tracked_root_repro, validate_local_project
-
-            validated = validate_local_project(self._project_path, launch_cwd=self._launch_cwd)
-            has_repro = has_tracked_root_repro(validated.repo_root)
-        except Exception:
-            has_repro = False
-        if not getattr(self, "_repro_user_edited", False):
-            if has_repro:
-                # Only auto-fill when still unset or already auto; never
-                # overwrite a manual direct assignment that happens to have the
-                # same text but was not produced by this helper.
-                if self._repro_command is None or getattr(self, "_repro_is_auto", False):
-                    self._repro_command = "python repro.py"
-                    self._repro_is_auto = True
-                elif self._repro_command == "python repro.py" and not getattr(self, "_repro_is_auto", False):
-                    # Manual assignment that equals the auto text — treat as
-                    # manual and do not mark as auto so future clears don't
-                    # clobber it. Leave as-is.
-                    pass
-            else:
-                if getattr(self, "_repro_is_auto", False) and self._repro_command == "python repro.py":
-                    self._repro_command = None
-                    self._repro_is_auto = False
-        if not getattr(self, "_verify_user_edited", False):
-            if has_repro:
-                if self._verify_command is None or getattr(self, "_verify_is_auto", False):
-                    self._verify_command = "python repro.py"
-                    self._verify_is_auto = True
-                elif self._verify_command == "python repro.py" and not getattr(self, "_verify_is_auto", False):
-                    pass
-            else:
-                if getattr(self, "_verify_is_auto", False) and self._verify_command == "python repro.py":
-                    self._verify_command = None
-                    self._verify_is_auto = False
-
-    def compose(self) -> ComposeResult:
-        with Horizontal(id="start-workspace"):
-            with Vertical(id="start-main"):
-                with VerticalScroll(id="start-config"):
-                    yield Static(
-                        "[bold $primary]AGENTIC DEBUGGER[/]  "
-                        "[$text-faint]// LOCAL REPAIR[/]\n"
-                        "[bold $foreground]Bring a real failure into focus.[/]\n"
-                        "[$foreground-muted]Choose a clean repository, describe the bug, "
-                        "and define the proof.[/]",
-                        id="start-title",
-                    )
-                    yield Static("REPAIR INPUTS", id="start-section-label")
-                    yield Static("Mode: isolated local repository · Unified provider platform", id="local-mode-row")
-                    yield SessionSettingRow("Project", row_key="project", id="project-row")
-                    with Horizontal(id="local-project-actions"):
-                        yield CopyAllButton("Use current directory", id="use-cwd-button", classes="copy-button")
-                        yield CopyAllButton("Browse…", id="browse-button", classes="copy-button")
-                    yield Static("", id="local-project-resolved")
-                    yield SessionSettingRow("Bug", row_key="bug", id="bug-row")
-                    yield SessionSettingRow("Repro", row_key="repro", id="repro-row")
-                    yield SessionSettingRow("Verify (P2P)", row_key="verify", id="verify-row")
-                    yield SessionSettingRow("Model", row_key="model", id="local-model-row")
-                    yield SessionSettingRow("Auto-retry", row_key="auto_retry", id="local-auto-retry-row")
-                    yield TimeLimitRow(id="local-time-limit-row")
-                    yield Static("", id="local-start-status")
-                    yield Static("", id="local-start-trust")
-                    with Horizontal(id="local-start-actions"):
-                        yield Button(
-                            "Start debugging",
-                            id="local-start-button",
-                            classes="primary-action",
-                        )
-                yield Static(START_FOOTER, id="start-footer")
-            with VerticalScroll(id="start-context"):
-                yield Static("[bold $primary]PROJECT / PRE-FLIGHT[/]", id="context-title")
-                yield Static("", id="local-context-summary")
-
-    def on_mount(self) -> None:
-        self._refresh_profiles()
-        try:
-            self._apply_tracked_repro_defaults()
-        except Exception:
-            pass
-        self._render_rows()
-        self._focus_row("project")
-        self._update_context_visibility(self.size.width)
-        self._update_footer(self.size.width)
-
-    def on_resize(self, event: Any) -> None:
-        self._update_context_visibility(event.size.width)
-        self._update_footer(event.size.width)
-        if self.is_mounted:
-            self._render_rows()
-
-    def _update_context_visibility(self, width: int) -> None:
-        self.query_one("#start-context", VerticalScroll).display = width >= 100
-
-    def _update_footer(self, width: int) -> None:
-        footer = self.query_one("#start-footer", Static)
-        footer.update(START_FOOTER_COMPACT if width < 100 else START_FOOTER)
-
-    def _refresh_profiles(self) -> None:
-        """Unified provider registry listing (offline, read-only).
-
-        Ollama Cloud roster, OpenCode Go models, CommandCode GOAT models,
-        and configured command profiles appear as one availability-annotated
-        list.  Local Project default: qwen3.5:cloud when canonical eligible,
-        else the first available model deterministically.
-        """
-        models: list = []
-        try:
-            models = list_provider_models(include_ollama=True)
-        except Exception:
-            models = []
-        try:
-            configured, config_error = self.app.configured_profiles()
-        except Exception as exc:
-            configured, config_error = (), str(exc)
-        self._config_error = config_error
-        for profile in configured:
-            models.append(
-                _ConfiguredProfileModel(
-                    kind=PROVIDER_KIND_CONFIGURED,
-                    model_id=profile.profile_id,
-                    display_name=profile.display_name,
-                    executable=profile.executable,
-                )
-            )
-        available = [m for m in models if m.available]
-        self._profiles = tuple(models)
-        if available and not getattr(self, "_model_user_edited", False):
-            preferred = next(
-                (m for m in available if m.kind == PROVIDER_KIND_OLLAMA and m.model_id == "qwen3.5:cloud"),
-                None,
-            )
-            chosen = preferred if preferred is not None else available[0]
-            self._profile_id = chosen.model_id
-            self._model_provider = chosen.kind
-
-    def _focusable_row_ids(self) -> list[str]:
-        return ["project", "bug", "repro", "verify", "model", "auto_retry", "time_limit"]
-
-    def _focus_row(self, row_key: str) -> None:
-        row_type = TimeLimitRow if row_key == "time_limit" else SessionSettingRow
-        row_id = "local-time-limit-row" if row_key == "time_limit" else ("local-model-row" if row_key == "model" else ("local-auto-retry-row" if row_key == "auto_retry" else f"{row_key}-row"))
-        try:
-            self.query_one(f"#{row_id}", row_type).focus()
-        except Exception:
-            pass
-
-    def _focused_row_key(self) -> str:
-        return getattr(self.app.focused, "row_key", "project")
-
-    def action_move_down(self) -> None:
-        rows, current = self._focusable_row_ids(), self._focused_row_key()
-        nxt = rows[(rows.index(current) + 1) % len(rows)] if current in rows else rows[0]
-        self._focus_row(nxt)
-
-    def action_move_up(self) -> None:
-        rows, current = self._focusable_row_ids(), self._focused_row_key()
-        nxt = rows[(rows.index(current) - 1) % len(rows)] if current in rows else rows[0]
-        self._focus_row(nxt)
-
-    def _activate_row(self, row_key: str) -> None:
-        if row_key == "project":
-            self._open_project_picker()
-        elif row_key == "bug":
-            self._open_text_editor("Bug description", self._bug_description, self._on_bug_saved, multiline=True)
-        elif row_key == "repro":
-            self._open_text_editor("Reproduction command (optional)", self._repro_command or "", self._on_repro_saved)
-        elif row_key == "verify":
-            self._open_text_editor("Regression check command (optional; must pass BEFORE and after the fix)", self._verify_command or "", self._on_verify_saved)
-        elif row_key == "model":
-            self._open_model_picker()
-        elif row_key == "auto_retry":
-            self._open_auto_retry_picker()
-        elif row_key == "time_limit":
-            self._open_time_limit_editor()
-        else:
-            self._open_project_picker()
-
-    def _render_rows(self) -> None:
-        # Project row shows basename or truncated path
-        proj = self._project_path or "Not selected"
-        project_ready = False
-        if len(proj) > 60 and self.size.width and self.size.width < 100:
-            proj = proj[:57] + "…"
-        self.query_one("#project-row", SessionSettingRow).set_value(proj)
-        try:
-            from agentic_debugger.application.local_project import validate_local_project
-            validated = None
-            status_text = ""
-            try:
-                validated = validate_local_project(self._project_path, launch_cwd=self._launch_cwd)
-                if validated.dirty:
-                    status_text = (
-                        f"[{WARNING}]Project has uncommitted changes. Commit/stash them "
-                        "first or choose a clean repository.[/]"
-                    )
-                else:
-                    project_ready = True
-                    status_text = (
-                        f"[{SUCCESS}]Git: {validated.repo_root.name} @ "
-                        f"{validated.head_commit[:7]}[/]"
-                    )
-            except Exception as exc:
-                msg = str(exc)
-                if "not a Git repository" in msg:
-                    status_text = f"[{ERROR}]Not a Git repository.[/]"
-                elif "project path not found" in msg or "not found" in msg:
-                    status_text = f"[{ERROR}]Project path not found.[/]"
-                elif "not a directory" in msg:
-                    status_text = f"[{ERROR}]Project path is not a directory.[/]"
-                elif "Git worktree" in msg:
-                    status_text = f"[{ERROR}]{_markup_escape(msg)[:80]}[/]"
-                else:
-                    status_text = f"[{ERROR}]{_markup_escape(msg)[:80]}[/]"
-            self.query_one("#local-project-resolved", Static).update(status_text)
-        except Exception:
-            self.query_one("#local-project-resolved", Static).update("")
-        if self._bug_description.strip():
-            first_line = self._bug_description.strip().splitlines()[0]
-            bounded = first_line[:48] + ("…" if len(first_line) > 48 else "")
-            if "\n" in self._bug_description.strip():
-                bounded = bounded + " [+]" if bounded else "Described [+]"
-            bug_preview = bounded if bounded else "Described"
-        else:
-            bug_preview = "Not described"
-        self.query_one("#bug-row", SessionSettingRow).set_value(bug_preview)
-        self.query_one("#repro-row", SessionSettingRow).set_value(self._repro_command or "Not set (optional)")
-        self.query_one("#verify-row", SessionSettingRow).set_value(self._verify_command or "Not set (optional)")
-        # Model row
-        model_name = "No eligible models available"
-        if self._profiles and self._profile_id:
-            match = next((p for p in self._profiles if p.model_id == self._profile_id), None)
-            if match:
-                model_name = f"{match.display_name} · {match.provider_label}"
-            else:
-                model_name = self._profile_id
-        elif self._config_error:
-            model_name = "Config error"
-        elif not self._profiles:
-            model_name = "No eligible models available"
-        self.query_one("#local-model-row", SessionSettingRow).set_value(model_name)
-        self.query_one("#local-auto-retry-row", SessionSettingRow).set_value(
-            f"{self._auto_retries} on retryable failure"
-        )
-        self.query_one("#local-time-limit-row", TimeLimitRow).set_value(self._max_elapsed_seconds)
-        model_ready = any(
-            profile.available and profile.model_id == self._profile_id
-            for profile in self._profiles
-        )
-        self.query_one("#local-start-button", Button).disabled = not (
-            project_ready and bool(self._bug_description.strip()) and model_ready
-        )
-        self._update_context()
-
-    def _update_context(self) -> None:
-        try:
-            from agentic_debugger.application.local_project import validate_local_project
-            repo = "—"
-            head = "—"
-            dirty = "unknown"
-            try:
-                v = validate_local_project(self._project_path, launch_cwd=self._launch_cwd)
-                repo = str(v.repo_root)
-                head = v.head_commit[:12]
-                dirty = "dirty" if v.dirty else "clean"
-            except Exception as exc:
-                repo = str(exc)[:60]
-            # Bug shown as bounded first-line preview in the compact side panel; the
-            # complete multiline text remains the source of truth for Start.
-            if self._bug_description.strip():
-                _bl = self._bug_description.strip().splitlines()[0][:60]
-                if len(self._bug_description.strip().splitlines()[0]) > 60:
-                    _bl += "…"
-                if "\n" in self._bug_description.strip():
-                    _bl += " [+]"
-                bug_ctx = _bl
-            else:
-                bug_ctx = "Not described"
-            match = next((p for p in self._profiles if p.model_id == self._profile_id), None) if self._profiles and self._profile_id else None
-            provider_str = match.provider_label if match else "—"
-            lines = [
-                f"[{MUTED}]Project[/]\n{_markup_escape(self._project_path or '—')}",
-                f"\n[{MUTED}]Repo[/]\n{_markup_escape(repo)}",
-                f"\n[{MUTED}]HEAD[/]\n{head}",
-                f"\n[{MUTED}]State[/]\n{dirty}",
-                f"\n[{MUTED}]Bug[/]\n{_markup_escape(bug_ctx)}",
-                f"\n[{MUTED}]Repro[/]\n{_markup_escape(self._repro_command or 'Not set')}",
-                f"\n[{MUTED}]Verify[/]\n{_markup_escape(self._verify_command or 'Not set')}",
-                f"\n[{MUTED}]Provider[/]\n{_markup_escape(provider_str)}",
-                f"\n[{MUTED}]Model[/]\n{_markup_escape(self._profile_id or 'offline')}",
-            ]
-            self.query_one("#local-context-summary", Static).update("\n".join(lines))
-        except Exception:
-            pass
-
-    def _open_project_picker(self) -> None:
-        self.app.push_screen(ChoicePickerScreen(
-            title="Project input",
-            choices=[
-                ChoiceOption("use_cwd", "Use current directory", f"{self._launch_cwd}"),
-                ChoiceOption("browse", "Browse…", "Pick via directory list"),
-                ChoiceOption("type", "Type/paste path…", "Enter absolute or relative path"),
-            ],
-            current=None,
-            on_select=self._project_choice_selected,
-        ))
-
-    def _project_choice_selected(self, value: str) -> None:
-        if value == "use_cwd":
-            self._project_path = str(self._launch_cwd)
-            try:
-                self._apply_tracked_repro_defaults()
-            except Exception:
-                pass
-            self._render_rows()
-            self._focus_row("project")
-        elif value == "browse":
-            self.app.push_screen(BrowseScreen(start_path=self._project_path, on_select=self._on_browse_selected))
-        elif value == "type":
-            self._open_text_editor("Project path", self._project_path, self._on_project_saved)
-
-    def _on_browse_selected(self, path: str) -> None:
-        self._project_path = path
-        try:
-            self._apply_tracked_repro_defaults()
-        except Exception:
-            pass
-        self._render_rows()
-        self._focus_row("project")
-
-    def _on_project_saved(self, value: Optional[str]) -> None:
-        if value is not None:
-            # Resolve relative against launch cwd for display
-            try:
-                from agentic_debugger.application.local_project import resolve_project_path
-                resolved = resolve_project_path(value, self._launch_cwd)
-                self._project_path = str(resolved)
-            except Exception:
-                self._project_path = value
-            try:
-                self._apply_tracked_repro_defaults()
-            except Exception:
-                pass
-        self._render_rows()
-        self._focus_row("project")
-
-    def _on_bug_saved(self, value: Optional[str]) -> None:
-        if value is not None:
-            self._bug_description = value
-        self._render_rows()
-        self._focus_row("bug")
-
-    def _on_repro_saved(self, value: Optional[str]) -> None:
-        if value is None:
-            # Esc cancel — preserve previously saved value, do not clear to Not set
-            self._render_rows()
-            self._focus_row("repro")
-            return
-        self._repro_user_edited = True
-        self._repro_is_auto = False
-        self._repro_command = value.strip() if value.strip() else None
-        self._render_rows()
-        self._focus_row("repro")
-
-    def _on_verify_saved(self, value: Optional[str]) -> None:
-        if value is None:
-            self._render_rows()
-            self._focus_row("verify")
-            return
-        self._verify_user_edited = True
-        self._verify_is_auto = False
-        self._verify_command = value.strip() if value.strip() else None
-        self._render_rows()
-        self._focus_row("verify")
-
-    def _open_text_editor(self, title: str, current: str, on_save: Any, multiline: bool = False) -> None:
-        if multiline:
-            # Bug description gets the dedicated multiline surface (Enter => newline, Ctrl+Enter => save).
-            self.app.push_screen(BugDescriptionEditorScreen(current=current or "", on_save=on_save))
-            return
-        self.app.push_screen(
-            SingleLineFieldEditorScreen(
-                title=title,
-                current=current or "",
-                on_save=on_save,
-                placeholder=title,
-            )
-        )
-
-    def _open_model_picker(self) -> None:
-        choices: list[ChoiceOption] = []
-        if self._profiles:
-            for p in self._profiles:
-                if not p.available:
-                    continue
-                if p.kind == PROVIDER_KIND_CONFIGURED:
-                    detail = f"command: {p.executable}"
-                else:
-                    detail = f"{p.provider_label} · {p.model_id}"
-                choices.append(ChoiceOption(p.model_id, p.display_name, detail))
-        subtitle = "Unified platform: Ollama Cloud · OpenCode Go · CommandCode GOAT"
-        if not choices:
-            # No eligible models
-            choices.append(ChoiceOption("", "No eligible models available", "No provider models qualified"))
-            self.app.push_screen(ChoicePickerScreen(
-                title="Select model", choices=choices, current="",
-                subtitle=subtitle,
-                on_select=lambda v: None,
-            ))
-            return
-        self.app.push_screen(ChoicePickerScreen(
-            title="Select model", choices=choices, current=self._profile_id or choices[0].value,
-            subtitle=subtitle,
-            on_select=self._model_selected,
-        ))
-
-    def _model_selected(self, value: str) -> None:
-        self._model_user_edited = True
-        match = next((p for p in self._profiles if p.available and p.model_id == value), None)
-        self._profile_id = value if match is not None else None
-        self._model_provider = match.kind if match is not None else None
-        self._render_rows()
-        self._focus_row("model")
-
-    def _open_time_limit_editor(self) -> None:
-        self.app.push_screen(TimeLimitEditorScreen(
-            current=self._max_elapsed_seconds,
-            on_save=self._time_limit_saved,
-            on_cancel=lambda: self._focus_row("time_limit"),
-        ))
-
-    def _time_limit_saved(self, value: Optional[int]) -> None:
-        self._time_limit_user_edited = True
-        self._max_elapsed_seconds = value
-        self._render_rows()
-        self._focus_row("time_limit")
-
-    def action_confirm(self) -> None:
-        self._activate_row(self._focused_row_key())
-
-    def action_cancel(self) -> None:
-        self.app.pop_screen()
-
-    def action_history(self) -> None:
-        self.app.pop_screen()
-
-    def _start(self) -> None:
-        status = self.query_one("#local-start-status", Static)
-        # Validation gates
-        if not self._profiles or not self._profile_id:
-            status.update(
-                f"[{ERROR}]No eligible model is available. Configure a model profile first.[/]"
-            )
-            return
-        if not self._bug_description.strip():
-            status.update(f"[{ERROR}]Bug description is required.[/]")
-            return
-        try:
-            from agentic_debugger.application.local_project import validate_local_project
-            validated = validate_local_project(self._project_path, launch_cwd=self._launch_cwd)
-            if validated.dirty:
-                status.update(
-                    f"[{WARNING}]Project has uncommitted changes. Commit/stash them first "
-                    "or choose a clean repository.[/]"
-                )
-                return
-        except Exception as exc:
-            status.update(f"[{ERROR}]{_markup_escape(exc)[:120]}[/]")
-            return
-        try:
-            self.app.start_local_project_session(
-                project_path=self._project_path,
-                bug_description=self._bug_description.strip(),
-                reproduction_command=self._repro_command,
-                verification_command=self._verify_command,
-                profile_id=self._profile_id,
-                model_provider=self._model_provider,
-                max_elapsed_seconds=self._max_elapsed_seconds,
-                auto_retries=self._auto_retries,
-            )
-        except Exception as exc:
-            status.update(f"[{ERROR}]{_markup_escape(exc)[:200]}[/]")
-
-    def action_start(self) -> None:
-        self._start()
-
-    def on_button_pressed(self, event: Any) -> None:
-        if getattr(event.button, "id", None) == "use-cwd-button":
-            self._project_path = str(self._launch_cwd)
-            try:
-                self._apply_tracked_repro_defaults()
-            except Exception:
-                pass
-            self._render_rows()
-            event.stop()
-        elif getattr(event.button, "id", None) == "browse-button":
-            self.app.push_screen(BrowseScreen(start_path=self._project_path, on_select=self._on_browse_selected))
-            event.stop()
-        elif getattr(event.button, "id", None) == "local-start-button":
-            self._start()
-            event.stop()
 
 
 class BugDescriptionEditorScreen(Screen):
@@ -2852,29 +2963,13 @@ class WorkspaceScreen(Screen):
         if session_dir is None:
             return None, None, "session artifact directory is unavailable"
         try:
-            import json as _json
             from agentic_debugger.application.local_project import (
-                LOCAL_PROJECT_VERIFICATION_FILE_NAME,
-                LocalProjectTaskSpec,
-                LocalProjectVerificationCertificate,
                 check_verification_certificate,
+                load_apply_verification_materials,
                 local_project_task_spec_sha256,
             )
 
-            task = LocalProjectTaskSpec.from_mapping(
-                _json.loads(
-                    (session_dir / "local_project_task.json").read_text(
-                        encoding="utf-8"
-                    )
-                )
-            )
-            certificate = LocalProjectVerificationCertificate.from_mapping(
-                _json.loads(
-                    (session_dir / LOCAL_PROJECT_VERIFICATION_FILE_NAME).read_text(
-                        encoding="utf-8"
-                    )
-                )
-            )
+            task, certificate = load_apply_verification_materials(session_dir)
         except FileNotFoundError:
             return None, None, "independent verification certificate is missing"
         except Exception as exc:
@@ -3205,8 +3300,15 @@ class HelpModalScreen(Screen):
                 id="help-title",
             )
             yield Static(
+                f"[bold {PRIMARY}]Session setup[/]\n"
+                "  • Target — Curated task (offline/any provider) · Local project\n"
+                "             (your repo) · Capability ladder (scientific rungs)\n"
+                "  • Model — one picker: Offline · Ollama Cloud · OpenCode Go ·\n"
+                "             CommandCode GOAT · custom command profiles\n"
+                "  • Incompatible rows stay visible, dimmed with their reason\n"
+                "\n"
                 f"[bold {PRIMARY}]Session modes[/]\n"
-                "  • LIVE — Executing session (deterministic offline or configured command)\n"
+                "  • LIVE — Executing session (offline, provider model, or command model)\n"
                 "  • REPLAY — Read-only recorded session from authoritative journal\n"
                 "\n"
                 f"[bold {PRIMARY}]Workspace views[/]\n"
@@ -3222,6 +3324,8 @@ class HelpModalScreen(Screen):
                 "[dim]Only the independent verifier can mark a candidate RESOLVED.[/]\n"
                 "\n"
                 f"[bold {PRIMARY}]Navigation[/]\n"
+                "  • Setup — ↑/↓ move · Enter edit · S run · P local project ·\n"
+                "            H history · Esc back\n"
                 "  • Home — N new session · P local project · O/Enter open replay · R refresh\n"
                 "           Ctrl+C quit · ? help\n"
                 "  • Workspace — \\[ / ] previous/next event · { / } previous/next phase\n"

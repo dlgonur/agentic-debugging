@@ -99,7 +99,7 @@ class TestBootAndHome:
         async def scenario(pilot):
             app = pilot.app
             assert isinstance(app.screen, StartSessionScreen)
-            assert "Evidence-led repair session" in str(app.screen.query_one("#start-title").render())
+            assert "Evidence-driven software repair" in str(app.screen.query_one("#start-hero").render())
             assert app.screen.query_one("#start-footer")
             await pilot.press("h")
             assert isinstance(app.screen, HomeScreen)
@@ -130,55 +130,55 @@ class TestBootAndHome:
         async def scenario(pilot):
             start = pilot.app.screen
             assert isinstance(start, StartSessionScreen)
-            assert start._selected_mode() == "deterministic"
-            assert start._selected_policy() == "pdb-on-uncertainty"
+            assert start._config.target == "curated"
+            assert start._config.debugger_policy == "pdb-on-uncertainty"
             assert start.task_id is not None
             assert len(start.query("RadioSet")) == 0
             assert len(start.query("Select")) == 0
             assert start.query_one("#start-context").display is False
-            assert "S start" in str(start.query_one("#start-footer").render())
+            assert "S run" in str(start.query_one("#start-footer").render())
 
-            # Up/down move through rows, and Enter opens the shared picker.
-            assert pilot.app.focused.row_key == "mode"
+            # The stack is fixed: target first, Enter opens the shared picker.
+            assert pilot.app.focused.row_key == "target"
             await pilot.press("enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             picker = pilot.app.screen
-            assert picker.title == "Select execution mode"
-            assert picker.query_one("#choice-picker-list").highlighted == 0
+            assert picker.title == "Debug what?"
             hint = picker.query_one("#choice-picker-hint")
             assert "up/down navigate   enter select   esc cancel" in str(hint.render())
             assert hint.region.height >= 2
             assert hint.content_region.height >= 1
-            assert "↑" not in str(hint.render()) and "↓" not in str(hint.render())
-            await pilot.press("down", "enter")
-            assert start._selected_mode() == "configured"
-            assert start.query_one("#model-row").display is True
-
-            # The configured model row uses the same picker API.
-            await pilot.press("down", "enter")
-            assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            assert pilot.app.screen.title == "Select custom command profile"
             await pilot.press("escape")
             assert isinstance(pilot.app.screen, StartSessionScreen)
 
-            # Task and debugger are also shared pickers and preserve domain values.
-            await pilot.press("down", "enter")
+            # Task, model, debugger, and time limit are all shared pickers
+            # over the same fixed stack.
+            start._focus_row("task")
+            await pilot.press("enter")
             assert pilot.app.screen.title == "Select task"
             old_task = start.task_id
             await pilot.press("down", "enter")
             assert start.task_id != old_task
-            await pilot.press("down", "enter")
+
+            start._focus_row("model")
+            await pilot.press("enter")
+            assert pilot.app.screen.title == "Select model"
+            await pilot.press("escape")
+
+            start._focus_row("debugger")
+            await pilot.press("enter")
             assert pilot.app.screen.title == "Select debugger policy"
             await pilot.press("down", "enter")
-            assert start._selected_policy() == "static-baseline"
+            assert start._config.debugger_policy == "static-baseline"
 
             # Time limit uses the same modal language as the shared pickers.
-            await pilot.press("down", "enter")
+            start._focus_row("time_limit")
+            await pilot.press("enter")
             assert isinstance(pilot.app.screen, TimeLimitEditorScreen)
             assert pilot.app.screen.query_one("#time-limit-dialog").region.height <= pilot.app.size.height
             pilot.app.screen.query_one("#time-limit-editor").value = "12"
             await pilot.press("enter")
-            assert start._max_elapsed_seconds == 12
+            assert start._config.time_limit_seconds == 12
             assert isinstance(pilot.app.screen, StartSessionScreen)
             assert pilot.app.focused.row_key == "time_limit"
 
@@ -192,27 +192,27 @@ class TestBootAndHome:
                 row = start.query_one(selector)
                 return str(row.render())
 
-            selectors = ("#mode-row", "#task-row", "#debugger-row", "#time-limit-row")
-            labels = ("Mode", "Task", "Debugger", "Time limit")
+            selectors = ("#target-row", "#task-row", "#model-row", "#debugger-row")
+            labels = ("Target", "Task", "Model", "Debugger")
 
             await pilot.pause()
             for selector, label in zip(selectors, labels):
                 rendered = row_text(selector)
                 assert rendered.index(label) == 2
-                assert rendered.startswith("> " if selector == "#mode-row" else "  ")
-            assert sum(row_text(selector).startswith("> ") for selector in selectors) == 1
+                assert rendered.startswith("› " if selector == "#target-row" else "  ")
+            assert sum(row_text(selector).startswith("› ") for selector in selectors) == 1
 
             await pilot.press("down")
             await pilot.pause()
             for selector, label in zip(selectors, labels):
                 rendered = row_text(selector)
                 assert rendered.index(label) == 2
-                assert rendered.startswith("> " if selector == "#task-row" else "  ")
-            assert sum(row_text(selector).startswith("> ") for selector in selectors) == 1
+                assert rendered.startswith("› " if selector == "#task-row" else "  ")
+            assert sum(row_text(selector).startswith("› ") for selector in selectors) == 1
 
             await pilot.press("down")
             await pilot.pause()
-            assert row_text("#debugger-row").startswith("> ")
+            assert row_text("#project-row").startswith("  ")
             assert row_text("#task-row").startswith("  ")
 
         run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
@@ -220,7 +220,8 @@ class TestBootAndHome:
     def test_time_limit_modal_validates_cancel_and_empty_values(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
-            await pilot.press("down", "down", "down", "enter")
+            start._focus_row("time_limit")
+            await pilot.press("enter")
             assert isinstance(pilot.app.screen, TimeLimitEditorScreen)
             editor = pilot.app.screen
             assert editor.query_one("#time-limit-dialog").region.height <= pilot.app.size.height
@@ -230,122 +231,79 @@ class TestBootAndHome:
             assert isinstance(pilot.app.screen, TimeLimitEditorScreen)
             assert "at least 1 second" in str(editor.query_one("#time-limit-error").render())
             await pilot.press("escape")
-            assert start._max_elapsed_seconds is None
+            assert start._config.time_limit_seconds is None
             assert pilot.app.focused.row_key == "time_limit"
 
             await pilot.press("enter")
             editor = pilot.app.screen
             editor.query_one("#time-limit-editor").value = "15"
             await pilot.press("enter")
-            assert start._max_elapsed_seconds == 15
+            assert start._config.time_limit_seconds == 15
             assert pilot.app.focused.row_key == "time_limit"
 
             await pilot.press("enter")
             editor = pilot.app.screen
             editor.query_one("#time-limit-editor").value = ""
             await pilot.press("escape")
-            assert start._max_elapsed_seconds == 15
+            assert start._config.time_limit_seconds == 15
             assert pilot.app.focused.row_key == "time_limit"
 
             await pilot.press("enter")
             editor = pilot.app.screen
             editor.query_one("#time-limit-editor").value = ""
             await pilot.press("enter")
-            assert start._max_elapsed_seconds is None
+            assert start._config.time_limit_seconds is None
 
         run_headless(make_standard_app(tmp_path), scenario, size=(60, 20))
 
 
 class TestLevel32NewSession:
-    def test_level32_task_switches_to_frozen_model_configuration_and_back(self, tmp_path):
+    def test_level32_selection_disables_incompatible_rows_and_keeps_them_visible(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
-            # Open the shared task picker and select the Level-32 entry. The
-            # provider-free curated tasks are listed before the research
-            # ladder, so locate the rung by identity instead of position.
-            await pilot.press("down", "enter")
-            assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            picker = pilot.app.screen
-            assert any("Level 32/100" in choice.title for choice in picker.choices)
-            level32_index = next(
-                index
-                for index, choice in enumerate(picker.choices)
-                if choice.value == "audreyr__cookiecutter-967"
-            )
-            for _ in range(level32_index):
-                await pilot.press("down")
-            await pilot.press("enter")
+            # Switch to the ladder target, then select the Level-32 rung and
+            # a qualified model — all explicit, nothing silently mutated.
+            start._choice_selected("target", "ladder")
+            start._choice_selected("task", "audreyr__cookiecutter-967")
 
-            assert start.task_id == "audreyr__cookiecutter-967"
-            assert start.query_one("#mode-row").display is False
-            assert start.query_one("#time-limit-row").display is False
-            assert start.query_one("#debugger-row").display is False
-            assert start.query_one("#level32-debugger-row").display is True
-            assert start.query_one("#level32-treatment-row").display is True
-            assert start.start_available is True
-            assert "Not selected" not in start.query_one("#model-row").render().plain
-            context = start.query_one("#context-summary").render().plain
-            assert "Model\n" in context
-            assert "Alias\n—" not in context
-            assert "Ready\nYes" in context
-            assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
+            # The frozen rows keep their place but are disabled with reasons.
+            assert start.query_one("#debugger-row").is_disabled is True
+            assert start.query_one("#time-limit-row").is_disabled is True
+            assert start.query_one("#auto-retry-row").is_disabled is True
+            debugger_text = start.query_one("#debugger-row").render().plain
+            assert "Exact PDB" in debugger_text
 
-            # Model choices are canonical aliases from the live profile registry.
-            await pilot.press("down", "enter")
-            assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            model_picker = pilot.app.screen
-            assert model_picker.title == "Select qualified Ollama model"
-            assert "Scientific Level-32 roster" in (model_picker.subtitle or "")
-            assert len(model_picker.choices) == 15
-            assert all(":" in choice.value for choice in model_picker.choices)
-            await pilot.press("enter")
-            assert start.profile_id == model_picker.choices[0].value
+            from agentic_debugger.application.level32 import level32_model_profiles
+
+            profiles = level32_model_profiles()
+            assert profiles, "qualified roster expected on this machine"
+            assert start.start_available is False  # no model chosen yet
+            start._choice_selected("model", f"ollama_cloud:{profiles[0].alias}")
             assert start.start_available is True
-            assert model_picker.choices[0].title in start.query_one("#model-row").render().plain
             context = start.query_one("#context-summary").render().plain
-            assert model_picker.choices[0].value in context
-            assert "Ready\nYes" in context
-            assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
-            assert start.query_one("#level32-debugger-row").render().plain.find("Exact PDB") >= 0
+            assert "READY  Yes" in context
+            assert profiles[0].display_name in context
+            assert "Start session" == start.query_one("#start-session-button").label.plain
 
             # Selecting a lower ladder task keeps the frozen ladder shell.
-            await pilot.press("up", "enter")
-            assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            lower_ladder_index = next(
-                index
-                for index, choice in enumerate(pilot.app.screen.choices)
-                if choice.value == "pdb-required-boundary-006"
-            )
-            await pilot.press("home")
-            for _ in range(lower_ladder_index):
-                await pilot.press("down")
-            await pilot.press("enter")
-            assert start.task_id != "audreyr__cookiecutter-967"
-            assert start.query_one("#mode-row").display is False
-            assert start.query_one("#time-limit-row").display is False
-            assert start.query_one("#debugger-row").display is False
-            assert start.query_one("#level32-debugger-row").display is True
-            assert start.query_one("#level32-treatment-row").display is True
+            start._choice_selected("task", "pdb-required-boundary-006")
+            assert start.query_one("#debugger-row").is_disabled is True
+            assert start.query_one("#time-limit-row").is_disabled is True
+            assert start.start_available is True
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
-    def test_level32_empty_eligible_roster_is_distinguished_from_unselected(self, tmp_path, monkeypatch):
+    def test_level32_empty_eligible_roster_blocks_start_with_reason(self, tmp_path, monkeypatch):
         monkeypatch.setattr(LocalApplicationV1, "level32_model_profiles", lambda self: ())
 
         async def scenario(pilot):
             start = pilot.app.screen
-            await pilot.press("down", "enter")
-            for _ in range(len(pilot.app.screen.choices) - 1):
-                await pilot.press("down")
-            await pilot.press("enter")
-
+            start._choice_selected("target", "ladder")
+            start._choice_selected("task", "audreyr__cookiecutter-967")
             assert start.start_available is False
-            assert "Not available" in start.query_one("#model-row").render().plain
-            context = start.query_one("#context-summary").render().plain
-            assert "Model\nNot available" in context
-            assert "Ready\nNo" in context
-            assert "Start unavailable — the research operator is not installed." in start.query_one("#start-status").render().plain
-            assert "choose an eligible Ollama model" not in start.query_one("#start-status").render().plain
+            status = start.query_one("#start-status").render().plain
+            assert "No qualified Ollama models available" in status
+            assert start.query_one("#start-session-button").disabled is True
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
@@ -372,13 +330,14 @@ class TestLevel32NewSession:
         async def scenario(pilot):
             start = pilot.app.screen
             assert start.query_one("#start-context").display is False
-            for selector in ("#mode-row", "#task-row", "#debugger-row", "#time-limit-row", "#start-footer"):
+            for selector in ("#target-row", "#task-row", "#model-row", "#debugger-row", "#time-limit-row", "#start-footer"):
                 widget = start.query_one(selector)
                 assert widget.region.y >= 0
                 assert widget.region.y + widget.region.height <= pilot.app.size.height
             footer = str(start.query_one("#start-footer").render())
-            assert "S start" in footer and "↑/↓ move" in footer and "Esc back" in footer
-            await pilot.press("down", "down", "enter")
+            assert "S run" in footer and "↑/↓ move" in footer and "Esc back" in footer
+            start._focus_row("task")
+            await pilot.press("enter")
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
             await pilot.press("escape")
 

@@ -2,12 +2,21 @@
 
 Covers required targeted tests A-H plus I (Time Limit) validation.
 No provider, no Docker, no full suite.
+
+Adapted to the unified StartSessionScreen (initial_target="local_project"):
+the removed LocalProjectStartScreen attributes became SessionConfig fields
+(screen._config.*), form state renders via render_state(), the start button
+is #start-session-button, and a selectable live model is provided by writing
+a configured command-model profile into the app-owned config store instead
+of the removed screen._profiles seam.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -32,22 +41,50 @@ def _make_repo(tmp: Path, name: str = "proj") -> Path:
     return repo
 
 
-def _dummy_profile(pid: str = "dummy-1", display: str = "Dummy Model"):
-    return type(
-        "P",
-        (),
-        {
-            "profile_id": pid,
-            "model_id": pid,
-            "display_name": display,
-            "provider_label": "Configured",
-            "kind": "configured",
-            "available": True,
-            "executable": "python",
-            "is_ollama": False,
-            "alias": pid,
-        },
-    )()
+def _write_configured_profiles(root: Path, profiles: list[tuple[str, str]]) -> None:
+    """Install accepted-shaped configured command-model profiles for one app.
+
+    The unified start screen builds its selectable model roster from the
+    app-owned store ``<history root>/config/command-models.json`` (same JSON
+    shape as tests/integration/test_configured_source.py::write_profile).
+    The profile command is never executed by these tests.
+    """
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "command-models.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "command-models-v1",
+                "profiles": [
+                    {
+                        "profile_id": profile_id,
+                        "display_name": display,
+                        "executable": sys.executable,
+                        "argv": ["-c", "print('configured profile stub')"],
+                        "request_timeout_seconds": 60.0,
+                    }
+                    for profile_id, display in profiles
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _start_screen(app, project) -> "object":
+    """The unified start screen pinned to the Local Project target."""
+    from agentic_debugger.ui.screens import StartSessionScreen
+
+    return StartSessionScreen(
+        task_options=list(app.curated_task_options()),
+        initial_target="local_project",
+        initial_project=str(project),
+    )
+
+
+def _plain(widget) -> str:
+    rendered = widget.render()
+    return rendered.plain if hasattr(rendered, "plain") else str(rendered)
 
 
 def _run_async(coro):
@@ -61,7 +98,7 @@ def test_A_project_editor_opens_prefilled_enter_saves_esc_cancels(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, SingleLineFieldEditorScreen, ChoicePickerScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, SingleLineFieldEditorScreen, ChoicePickerScreen
         from textual.widgets import Input, Static
 
         reset_launch_cwd()
@@ -70,11 +107,11 @@ def test_A_project_editor_opens_prefilled_enter_saves_esc_cancels(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histA")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
-            original = lp._project_path
+            original = lp._config.project_path
             # Verify project picker exists (choice)
             lp._activate_row("project")
             await pilot.pause()
@@ -96,7 +133,7 @@ def test_A_project_editor_opens_prefilled_enter_saves_esc_cancels(tmp_path):
             assert inp.cursor_position == len(inp.value)
             # Footer matches contract
             hint = app.screen.query_one("#single-line-hint", Static)
-            ht = hint.render().plain if hasattr(hint.render(), "plain") else str(hint.render())
+            ht = _plain(hint)
             assert "Enter save" in ht
             assert "Esc cancel" in ht
             # Verify visual family: dialog width 70 via CSS (check CSS file has entry)
@@ -110,11 +147,11 @@ def test_A_project_editor_opens_prefilled_enter_saves_esc_cancels(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, LocalProjectStartScreen)
+            assert isinstance(app.screen, StartSessionScreen)
             # Project path unchanged
-            assert lp._project_path == original
+            assert lp._config.project_path == original
             # Reopen via direct editor (bypass picker for determinism) and test Enter saves
-            lp._open_text_editor("Project path", lp._project_path, lp._on_project_saved)
+            lp._open_text_editor("Project path", lp._config.project_path, lp._on_project_saved)
             await pilot.pause()
             await asyncio.sleep(0.15)
             inp2 = app.screen.query_one("#single-line-editor", Input)
@@ -125,10 +162,10 @@ def test_A_project_editor_opens_prefilled_enter_saves_esc_cancels(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, LocalProjectStartScreen)
-            assert lp._project_path == str(repo2.resolve())
+            assert isinstance(app.screen, StartSessionScreen)
+            assert lp._config.project_path == str(repo2.resolve())
             # Also test Save button click saves (direct editor again)
-            lp._open_text_editor("Project path", lp._project_path, lp._on_project_saved)
+            lp._open_text_editor("Project path", lp._config.project_path, lp._on_project_saved)
             await pilot.pause()
             await asyncio.sleep(0.15)
             inp3 = app.screen.query_one("#single-line-editor", Input)
@@ -137,8 +174,8 @@ def test_A_project_editor_opens_prefilled_enter_saves_esc_cancels(tmp_path):
             await pilot.click("#single-line-save-button")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, LocalProjectStartScreen)
-            assert lp._project_path == str(repo.resolve())
+            assert isinstance(app.screen, StartSessionScreen)
+            assert lp._config.project_path == str(repo.resolve())
         reset_launch_cwd()
     _run_async(_inner())
 
@@ -150,7 +187,7 @@ def test_B_repro_editor_opens_prefilled_enter_saves_esc_cancels_blank(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, SingleLineFieldEditorScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, SingleLineFieldEditorScreen
         from textual.widgets import Input, Static
 
         reset_launch_cwd()
@@ -158,8 +195,8 @@ def test_B_repro_editor_opens_prefilled_enter_saves_esc_cancels_blank(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histB")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(tmp_path))
-            lp._repro_command = "python repro.py"
+            lp = _start_screen(app, tmp_path)
+            lp._config.reproduction_command = "python repro.py"
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -175,7 +212,7 @@ def test_B_repro_editor_opens_prefilled_enter_saves_esc_cancels_blank(tmp_path):
             assert inp.has_focus
             assert inp.cursor_position == len("python repro.py")
             hint = app.screen.query_one("#single-line-hint", Static)
-            ht = hint.render().plain if hasattr(hint.render(), "plain") else str(hint.render())
+            ht = _plain(hint)
             assert "Enter save" in ht and "Esc cancel" in ht
             # Enter saves reliably
             inp.value = "python repro2.py"
@@ -183,8 +220,8 @@ def test_B_repro_editor_opens_prefilled_enter_saves_esc_cancels_blank(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, LocalProjectStartScreen)
-            assert lp._repro_command == "python repro2.py"
+            assert isinstance(app.screen, StartSessionScreen)
+            assert lp._config.reproduction_command == "python repro2.py"
             # Reopen, modify, Esc cancels
             lp._activate_row("repro")
             await pilot.pause()
@@ -196,7 +233,7 @@ def test_B_repro_editor_opens_prefilled_enter_saves_esc_cancels_blank(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._repro_command == "python repro2.py"
+            assert lp._config.reproduction_command == "python repro2.py"
             # Blank saves as Not set (None) per existing contract
             lp._activate_row("repro")
             await pilot.pause()
@@ -207,13 +244,11 @@ def test_B_repro_editor_opens_prefilled_enter_saves_esc_cancels_blank(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._repro_command is None
-            # Verify form shows Not set placeholder
-            from textual.widgets import Static as _Static
-            # The row value should be Not set (optional) when None
-            # We check via _render_rows side effect: the row's displayed value contains Not set
-            # Directly inspect stored value
-            assert lp._repro_command is None
+            assert lp._config.reproduction_command is None
+            # The row value shows the Not set (optional) placeholder for None
+            lp.render_state()
+            await pilot.pause()
+            assert "Not set" in _plain(lp._row("repro"))
         reset_launch_cwd()
     _run_async(_inner())
 
@@ -225,7 +260,7 @@ def test_C_verify_editor_same_behavior(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, SingleLineFieldEditorScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, SingleLineFieldEditorScreen
         from textual.widgets import Input, Static
 
         reset_launch_cwd()
@@ -233,8 +268,8 @@ def test_C_verify_editor_same_behavior(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histC")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(tmp_path))
-            lp._verify_command = "pytest -q"
+            lp = _start_screen(app, tmp_path)
+            lp._config.verification_command = "pytest -q"
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -252,7 +287,7 @@ def test_C_verify_editor_same_behavior(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._verify_command == "python -m pytest"
+            assert lp._config.verification_command == "python -m pytest"
             # Esc cancels
             lp._activate_row("verify")
             await pilot.pause()
@@ -263,7 +298,7 @@ def test_C_verify_editor_same_behavior(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._verify_command == "python -m pytest"
+            assert lp._config.verification_command == "python -m pytest"
             # Blank => None
             lp._activate_row("verify")
             await pilot.pause()
@@ -274,9 +309,9 @@ def test_C_verify_editor_same_behavior(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._verify_command is None
+            assert lp._config.verification_command is None
             # Save via button click
-            lp._verify_command = "old"
+            lp._config.verification_command = "old"
             lp._activate_row("verify")
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -286,7 +321,7 @@ def test_C_verify_editor_same_behavior(tmp_path):
             await pilot.click("#single-line-save-button")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._verify_command == "new via button"
+            assert lp._config.verification_command == "new via button"
         reset_launch_cwd()
     _run_async(_inner())
 
@@ -298,7 +333,7 @@ def test_D_bug_editor_retains_multiline_contract(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, BugDescriptionEditorScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, BugDescriptionEditorScreen
         from textual.widgets import TextArea
 
         reset_launch_cwd()
@@ -306,8 +341,8 @@ def test_D_bug_editor_retains_multiline_contract(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histD")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(tmp_path))
-            lp._bug_description = "hello"
+            lp = _start_screen(app, tmp_path)
+            lp._config.bug_description = "hello"
             app.push_screen(lp)
             await pilot.pause()
             lp._activate_row("bug")
@@ -330,8 +365,8 @@ def test_D_bug_editor_retains_multiline_contract(tmp_path):
             await pilot.press("ctrl+enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, LocalProjectStartScreen)
-            assert lp._bug_description == "line1\nline2"
+            assert isinstance(app.screen, StartSessionScreen)
+            assert lp._config.bug_description == "line1\nline2"
             # Esc cancels
             lp._activate_row("bug")
             await pilot.pause()
@@ -342,7 +377,7 @@ def test_D_bug_editor_retains_multiline_contract(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._bug_description == "line1\nline2"
+            assert lp._config.bug_description == "line1\nline2"
             # Check bindings contract
             assert any(b.key == "ctrl+enter" for b in BugDescriptionEditorScreen.BINDINGS)
             assert not any(b.key == "enter" for b in BugDescriptionEditorScreen.BINDINGS if getattr(b, "key", None) == "enter")
@@ -357,22 +392,26 @@ def test_E_model_picker_still_works(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, ChoicePickerScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, ChoicePickerScreen
         reset_launch_cwd()
         set_launch_cwd_for_tests(tmp_path)
+        # The model roster now comes from the app-owned configured-profile
+        # store (plus the offline provider registry); the unified screen
+        # never auto-selects a model, so select one explicitly.
+        _write_configured_profiles(
+            tmp_path / "histE",
+            [("qwen3.5-cloud", "qwen3.5 cloud"), ("glm-5-cloud", "glm-5 cloud")],
+        )
         app = LocalApplicationV1(history_root=tmp_path / "histE")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(tmp_path))
+            lp = _start_screen(app, tmp_path)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
-            p1 = _dummy_profile(pid="qwen3.5:cloud", display="qwen3.5:cloud")
-            p2 = _dummy_profile(pid="glm-5:cloud", display="glm-5:cloud")
-            lp._profiles = (p1, p2)
-            lp._profile_id = p1.profile_id
-            lp._render_rows()
+            lp._choice_selected("model", "configured:qwen3.5-cloud")
             await pilot.pause()
+            assert lp.profile_id == "qwen3.5-cloud"
             lp._activate_row("model")
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -381,8 +420,8 @@ def test_E_model_picker_still_works(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.1)
-            assert isinstance(app.screen, LocalProjectStartScreen)
-            assert lp._profile_id == p1.profile_id
+            assert isinstance(app.screen, StartSessionScreen)
+            assert lp.profile_id == "qwen3.5-cloud"
             # Select second via down+enter
             lp._activate_row("model")
             await pilot.pause()
@@ -392,8 +431,8 @@ def test_E_model_picker_still_works(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert isinstance(app.screen, LocalProjectStartScreen)
-            assert lp._profile_id in (p1.profile_id, p2.profile_id)
+            assert isinstance(app.screen, StartSessionScreen)
+            assert lp.profile_id in ("qwen3.5-cloud", "glm-5-cloud")
         reset_launch_cwd()
     _run_async(_inner())
 
@@ -405,7 +444,7 @@ def test_F_focus_each_editor_and_return_navigable(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, SingleLineFieldEditorScreen, BugDescriptionEditorScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, SingleLineFieldEditorScreen, BugDescriptionEditorScreen
         from textual.widgets import Input, TextArea
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "repoF")
@@ -413,7 +452,7 @@ def test_F_focus_each_editor_and_return_navigable(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histF")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -495,23 +534,24 @@ def test_G_start_uses_exact_saved_values(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
-        from textual.widgets import TextArea, Input
+        from agentic_debugger.ui.screens import StartSessionScreen
+        from textual.widgets import TextArea, Input, Static
 
         reset_launch_cwd()
         set_launch_cwd_for_tests(tmp_path)
         repo = _make_repo(tmp_path, "repoG")
+        _write_configured_profiles(tmp_path / "histG", [("qwen3.5", "qwen3.5")])
         app = LocalApplicationV1(history_root=tmp_path / "histG")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
-            # Set profiles
-            lp._profiles = (_dummy_profile(pid="qwen3.5", display="qwen3.5"),)
-            lp._profile_id = "qwen3.5"
-            lp._max_elapsed_seconds = 120
+            # Select the live model explicitly (no auto-default anymore)
+            lp._choice_selected("model", "configured:qwen3.5")
+            await pilot.pause()
+            lp._config.time_limit_seconds = 120
             # Edit bug via editor to multiline
             lp._activate_row("bug")
             await pilot.pause()
@@ -543,18 +583,18 @@ def test_G_start_uses_exact_saved_values(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._verify_command is None
+            assert lp._config.verification_command is None
             # Edit project via type to repo (already but simulate change)
-            lp._project_path = str(repo)
+            lp._set_project(str(repo))
+            await pilot.pause()
             # Intercept start
             captured = {}
             def fake_start(**kwargs):
                 captured.update(kwargs)
             app.start_local_project_session = fake_start  # type: ignore
-            lp._bug_description = multiline
-            lp._render_rows()
+            lp.render_state()
             await pilot.pause()
-            assert lp.query_one("#local-start-button").disabled is False
+            assert lp.query_one("#start-session-button").disabled is False
             lp._start()
             await pilot.pause()
             await asyncio.sleep(0.1)
@@ -564,7 +604,9 @@ def test_G_start_uses_exact_saved_values(tmp_path):
             assert captured.get("reproduction_command") == "python repro.py"
             assert captured.get("verification_command") is None
             assert captured.get("profile_id") == "qwen3.5"
+            assert captured.get("model_provider") is None
             assert captured.get("max_elapsed_seconds") == 120
+            assert captured.get("auto_retries") == 1
             # Cancel must not overwrite: modify repro editor but cancel, then start again should keep old
             lp._activate_row("repro")
             await pilot.pause()
@@ -575,7 +617,7 @@ def test_G_start_uses_exact_saved_values(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._repro_command == "python repro.py"
+            assert lp._config.reproduction_command == "python repro.py"
             captured2 = {}
             app.start_local_project_session = lambda **kw: captured2.update(kw)  # type: ignore
             lp._start()
@@ -584,28 +626,39 @@ def test_G_start_uses_exact_saved_values(tmp_path):
 
             # A newly dirty repository is a visible pre-flight gate, not an
             # apparently clickable primary action that fails only afterward.
+            # The unified screen re-validates the project on the start path
+            # (_refresh_for_start), so exercising start is the honest gate.
             (repo / "uncommitted.txt").write_text("dirty\n", encoding="utf-8")
-            lp._render_rows()
+            calls3: list[dict] = []
+            app.start_local_project_session = lambda **kw: calls3.append(kw)  # type: ignore
+            lp._start()
             await pilot.pause()
-            assert lp.query_one("#local-start-button").disabled is True
+            await asyncio.sleep(0.1)
+            assert calls3 == [], "dirty repo must not call start"
+            assert lp.query_one("#start-session-button").disabled is True
+            status = lp.query_one("#start-status", Static)
+            assert "uncommitted changes" in _plain(status).lower()
         reset_launch_cwd()
     _run_async(_inner())
 
 
 # ---------------------------------------------------------------------------
-# H. Legacy — no Local Project field still instantiates old tiny editor
+# H. Legacy — the unified start screen uses the shared editor family
 # ---------------------------------------------------------------------------
 def test_H_legacy_no_tiny_editor(tmp_path):
-    # Inspect source: no Local Project field should push _SingleLineEditorScreen with tiny presentation
+    # Inspect source: the unified session-setup surface must use the shared
+    # editor family, not any tiny single-purpose editor screen.
     src = Path("agentic_debugger/ui/screens.py").read_text(encoding="utf-8")
-    # After repair, _SingleLineEditorScreen should be alias to SingleLineFieldEditorScreen, not a tiny Screen
+    # _SingleLineEditorScreen must remain the alias to SingleLineFieldEditorScreen, not a tiny Screen
     assert "_SingleLineEditorScreen = SingleLineFieldEditorScreen" in src
-    # LocalProjectStartScreen._open_text_editor must use SingleLineFieldEditorScreen
+    # The unified start screen's _open_text_editor must use SingleLineFieldEditorScreen
     assert "SingleLineFieldEditorScreen" in src
-    # Ensure the old tiny compose (Vertical id time-limit-dialog with Input id time-limit-editor for single-line) is gone
-    # The only remaining time-limit-dialog usage should be for TimeLimitEditorScreen (which is okay, centered)
-    # Check that LocalProjectStartScreen does not push the tiny screen directly
-    assert "LocalProjectStartScreen" in src
+    # The unified start screen is the single session-setup surface (the old
+    # LocalProjectStartScreen literal pin is removed by design — the class
+    # no longer exists).
+    assert "class StartSessionScreen" in src
+    assert "SessionConfig" in src
+    assert "render_state" in src
     # Verify CSS has centered SingleLine dialog, not tiny upper-left
     css = Path("agentic_debugger/ui/app.tcss").read_text(encoding="utf-8")
     assert "SingleLineFieldEditorScreen" in css
@@ -616,11 +669,11 @@ def test_H_legacy_no_tiny_editor(tmp_path):
     # Verify SingleLine and Bug share same background and align family
     assert "background: $surface;" in css
     assert "align: center middle;" in css
-    # Runtime check: each LocalProject field opens proper screen family
+    # Runtime check: each Local Project field opens proper screen family
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, SingleLineFieldEditorScreen, BugDescriptionEditorScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, SingleLineFieldEditorScreen, BugDescriptionEditorScreen
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "repoH")
@@ -628,7 +681,7 @@ def test_H_legacy_no_tiny_editor(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histH")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -664,8 +717,8 @@ def test_H_legacy_no_tiny_editor(tmp_path):
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            # Now back on Local Project form, verify Bug still opens correctly
-            assert isinstance(app.screen, LocalProjectStartScreen)
+            # Now back on the unified start form, verify Bug still opens correctly
+            assert isinstance(app.screen, StartSessionScreen)
             lp._activate_row("bug")
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -683,7 +736,7 @@ def test_I_time_limit_preserved_and_not_tiny(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, TimeLimitEditorScreen
+        from agentic_debugger.ui.screens import StartSessionScreen, TimeLimitEditorScreen
         from textual.widgets import Input, Static
 
         reset_launch_cwd()
@@ -691,7 +744,7 @@ def test_I_time_limit_preserved_and_not_tiny(tmp_path):
         app = LocalApplicationV1(history_root=tmp_path / "histI")
         async with app.run_test() as pilot:
             await pilot.pause()
-            lp = LocalProjectStartScreen(initial_project=str(tmp_path))
+            lp = _start_screen(app, tmp_path)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.15)
@@ -713,12 +766,12 @@ def test_I_time_limit_preserved_and_not_tiny(tmp_path):
             # Should stay on editor with error
             assert isinstance(app.screen, TimeLimitEditorScreen)
             err = app.screen.query_one("#time-limit-error", Static)
-            err_text = err.render().plain if hasattr(err.render(), "plain") else str(err.render())
+            err_text = _plain(err)
             assert "at least 1 second" in err_text
             await pilot.press("escape")
             await pilot.pause()
             await asyncio.sleep(0.1)
-            assert isinstance(app.screen, LocalProjectStartScreen)
+            assert isinstance(app.screen, StartSessionScreen)
             # Empty => No limit, valid
             lp._activate_row("time_limit")
             await pilot.pause()
@@ -729,7 +782,7 @@ def test_I_time_limit_preserved_and_not_tiny(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._max_elapsed_seconds is None
+            assert lp._config.time_limit_seconds is None
             # Valid integer
             lp._activate_row("time_limit")
             await pilot.pause()
@@ -740,6 +793,6 @@ def test_I_time_limit_preserved_and_not_tiny(tmp_path):
             await pilot.press("enter")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert lp._max_elapsed_seconds == 60
+            assert lp._config.time_limit_seconds == 60
         reset_launch_cwd()
     _run_async(_inner())

@@ -4,16 +4,27 @@ Covers the real smoke release blocker: valid clean form pressing s did nothing.
 Tests per task sections 6-10. No provider, no Docker, no Level.
 
 Uses Textual run_test deterministic fixtures; no real provider launch.
+
+Adapted to the unified StartSessionScreen (initial_target="local_project"):
+a live model is provided by installing a configured command-model profile in
+the app-owned config store and selecting it explicitly (the screen never
+auto-selects a model anymore); start kwargs therefore carry the explicitly
+selected profile id, model_provider=None for configured profiles, and
+auto_retries from the session config.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
 
 pytest.importorskip("textual")
+
+PROFILE_ID = "qwen3.5-cloud"
 
 
 def _run_git(cwd: Path, args: list[str]) -> None:
@@ -34,8 +45,51 @@ def _make_repo(tmp: Path, name: str = "proj") -> Path:
     return repo
 
 
-def _dummy_profile(pid: str = "qwen3.5:cloud", display: str = "qwen3.5:cloud"):
-    return type("P", (), {"profile_id": pid, "display_name": display, "executable": "python", "is_ollama": False, "alias": pid})()
+def _write_configured_profile(root: Path, profile_id: str = PROFILE_ID) -> None:
+    """Install one accepted-shaped configured command-model profile.
+
+    Same JSON shape as tests/integration/test_configured_source.py
+    ::write_profile; the command is never executed by these tests.
+    """
+    config_dir = root / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    (config_dir / "command-models.json").write_text(
+        json.dumps(
+            {
+                "schema_version": "command-models-v1",
+                "profiles": [
+                    {
+                        "profile_id": profile_id,
+                        "display_name": profile_id,
+                        "executable": sys.executable,
+                        "argv": ["-c", "print('configured profile stub')"],
+                        "request_timeout_seconds": 60.0,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+
+def _start_screen(app, project):
+    """The unified start screen pinned to the Local Project target."""
+    from agentic_debugger.ui.screens import StartSessionScreen
+
+    return StartSessionScreen(
+        task_options=list(app.curated_task_options()),
+        initial_target="local_project",
+        initial_project=str(project),
+    )
+
+
+def _select_configured_model(screen) -> None:
+    screen._choice_selected("model", f"configured:{PROFILE_ID}")
+
+
+def _plain(widget) -> str:
+    rendered = widget.render()
+    return rendered.plain if hasattr(rendered, "plain") else str(rendered)
 
 
 def _run_async(coro):
@@ -49,60 +103,55 @@ def test_6_successful_start_via_s(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj6")
         set_launch_cwd_for_tests(tmp_path)
+        # Eligible model via the app-owned configured-profile store
+        _write_configured_profile(tmp_path / "hist6")
         app = LocalApplicationV1(history_root=tmp_path / "hist6")
-        # Ensure eligible model selected
-        from agentic_debugger.application.level32 import Level32ModelProfile
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
             # Valid form state per owner smoke
             bug = "discounted_price bug\nmultiline second line"
-            lp._bug_description = bug
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
+            lp._config.bug_description = bug
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._profile_id = "qwen3.5:cloud"
-            lp._max_elapsed_seconds = None
-            lp._render_rows()
+            lp._config.time_limit_seconds = None
+            _select_configured_model(lp)
             await pilot.pause()
             # Focus Bug row as in owner's screenshot
             lp._focus_row("bug")
             await pilot.pause()
             await asyncio.sleep(0.05)
-            captured: dict = {}
+            calls: list[dict] = []
 
             def fake(**kwargs):
-                captured.update(kwargs)
+                calls.append(kwargs)
 
             app.start_local_project_session = fake  # type: ignore
             # press s
             await pilot.press("s")
             await pilot.pause()
             await asyncio.sleep(0.15)
-            assert captured, "start_local_project_session not called via s"
+            assert calls, "start_local_project_session not called via s"
+            assert len(calls) == 1, f"expected exactly one start call, got {len(calls)}"
+            captured = calls[0]
             assert captured.get("project_path") == str(repo.resolve())
             assert captured.get("bug_description") == bug.strip()
             assert captured.get("reproduction_command") == "python repro.py"
             assert captured.get("verification_command") == "python repro.py"
-            assert captured.get("profile_id") == "qwen3.5:cloud"
+            assert captured.get("profile_id") == PROFILE_ID
+            assert captured.get("model_provider") is None
             assert captured.get("max_elapsed_seconds") is None
-            # Also assert screen transitions / handoff occurs according to contract:
-            #Fake does not push workspace; verify that _start would have tried to call app.start... which we captured.
-            # Ensure exactly once
-            assert len([captured]) == 1
         reset_launch_cwd()
 
     _run_async(_inner())
@@ -116,30 +165,26 @@ def test_7_focus_matrix_s_starts_from_every_row(tmp_path, focus):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
-        from agentic_debugger.application.level32 import Level32ModelProfile
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, f"proj7_{focus}")
         set_launch_cwd_for_tests(tmp_path)
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
+        _write_configured_profile(tmp_path / f"hist7_{focus}")
         app = LocalApplicationV1(history_root=tmp_path / f"hist7_{focus}")
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
-            lp._bug_description = "bug"
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
-            lp._profile_id = "qwen3.5:cloud"
+            lp._config.bug_description = "bug"
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._render_rows()
+            _select_configured_model(lp)
             await pilot.pause()
             lp._focus_row(focus)
             await pilot.pause()
@@ -173,40 +218,37 @@ def test_8_button_click_same_as_s(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
-        from agentic_debugger.application.level32 import Level32ModelProfile
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj8")
         set_launch_cwd_for_tests(tmp_path)
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
+        _write_configured_profile(tmp_path / "hist8")
         app = LocalApplicationV1(history_root=tmp_path / "hist8")
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
             bug = "multiline\nbug here"
-            lp._bug_description = bug
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
-            lp._profile_id = "qwen3.5:cloud"
+            lp._config.bug_description = bug
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._max_elapsed_seconds = None
-            lp._render_rows()
+            lp._config.time_limit_seconds = None
+            _select_configured_model(lp)
             await pilot.pause()
             # Ensure button exists
-            btn = lp.query_one("#local-start-button")
+            btn = lp.query_one("#start-session-button")
             assert btn is not None
             # The primary action uses concise sentence case.
             label = getattr(btn, "label", None)
             plain = label.plain if hasattr(label, "plain") else str(label)
             assert plain == "Start debugging"
+            assert btn.disabled is False
             # Capture via s first
             s_calls: list[dict] = []
             app.start_local_project_session = lambda **kw: s_calls.append(dict(kw))  # type: ignore
@@ -217,7 +259,7 @@ def test_8_button_click_same_as_s(tmp_path):
             # Now click button
             b_calls: list[dict] = []
             app.start_local_project_session = lambda **kw: b_calls.append(dict(kw))  # type: ignore
-            await pilot.click("#local-start-button")
+            await pilot.click("#start-session-button")
             await pilot.pause()
             await asyncio.sleep(0.15)
             assert len(b_calls) == 1, f"button click should call exactly once, got {b_calls}"
@@ -235,31 +277,27 @@ def test_9_invalid_blank_bug_shows_error_and_no_start(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
-        from agentic_debugger.application.level32 import Level32ModelProfile
         from textual.widgets import Static
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj9a")
         set_launch_cwd_for_tests(tmp_path)
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
+        _write_configured_profile(tmp_path / "hist9a")
         app = LocalApplicationV1(history_root=tmp_path / "hist9a")
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
-            lp._bug_description = "   \n  "  # blank
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
-            lp._profile_id = "qwen3.5:cloud"
+            lp._config.bug_description = "   \n  "  # blank
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._render_rows()
+            _select_configured_model(lp)
             await pilot.pause()
             calls: list = []
             app.start_local_project_session = lambda **kw: calls.append(kw)  # type: ignore
@@ -267,17 +305,10 @@ def test_9_invalid_blank_bug_shows_error_and_no_start(tmp_path):
             await pilot.pause()
             await asyncio.sleep(0.15)
             assert len(calls) == 0, "blank bug must not call start"
-            status = lp.query_one("#local-start-status", Static)
-            txt = status.render().plain if hasattr(status.render(), "plain") else str(status.render())
-            # fallback to internal renderable
-            if "bug description is required" not in txt.lower():
-                # try alternative: check widget's _renderable
-                try:
-                    raw = str(status._renderable)
-                    txt = raw
-                except Exception:
-                    pass
-            assert "bug description is required" in txt.lower(), f"expected bug required error, got {txt!r}"
+            status = lp.query_one("#start-status", Static)
+            txt = _plain(status)
+            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
+            assert "describe the bug" in txt.lower(), f"expected bug required error, got {txt!r}"
 
         reset_launch_cwd()
 
@@ -288,33 +319,29 @@ def test_9_invalid_dirty_repo_shows_warning(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
-        from agentic_debugger.application.level32 import Level32ModelProfile
         from textual.widgets import Static
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj9b")
         set_launch_cwd_for_tests(tmp_path)
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
+        _write_configured_profile(tmp_path / "hist9b")
         app = LocalApplicationV1(history_root=tmp_path / "hist9b")
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
             # make dirty
             (repo / "file.py").write_text("dirty change\n", encoding="utf-8")
-            lp._bug_description = "bug"
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
-            lp._profile_id = "qwen3.5:cloud"
+            lp._config.bug_description = "bug"
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._render_rows()
+            _select_configured_model(lp)
             await pilot.pause()
             calls: list = []
             app.start_local_project_session = lambda **kw: calls.append(kw)  # type: ignore
@@ -322,14 +349,11 @@ def test_9_invalid_dirty_repo_shows_warning(tmp_path):
             await pilot.pause()
             await asyncio.sleep(0.15)
             assert len(calls) == 0, "dirty repo must not call start"
-            status = lp.query_one("#local-start-status", Static)
-            txt = status.render().plain if hasattr(status.render(), "plain") else str(status.render())
-            if "uncommitted changes" not in txt.lower():
-                try:
-                    txt = str(status._renderable)
-                except Exception:
-                    pass
+            status = lp.query_one("#start-status", Static)
+            txt = _plain(status)
+            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
             assert "uncommitted changes" in txt.lower(), f"expected dirty warning, got {txt!r}"
+            assert lp.query_one("#start-session-button").disabled is True
             # cleanup
             _run_git(repo, ["checkout", "--", "file.py"])
 
@@ -342,46 +366,40 @@ def test_9_invalid_no_model_shows_error(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen
         from textual.widgets import Static
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj9c")
         set_launch_cwd_for_tests(tmp_path)
+        # No configured profile installed and no model selected: the unified
+        # screen stays on the Offline default, which Local Project rejects.
         app = LocalApplicationV1(history_root=tmp_path / "hist9c")
-        app.ollama_cloud_model_profiles = lambda: ()  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
-            # force no profiles
-            lp._profiles = ()
-            lp._profile_id = None
-            lp._bug_description = "bug"
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
+            lp._config.bug_description = "bug"
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._render_rows()
+            lp.render_state()
             await pilot.pause()
+            assert lp.profile_id is None  # Offline default: no live model selected
             calls: list = []
             app.start_local_project_session = lambda **kw: calls.append(kw)  # type: ignore
             await pilot.press("s")
             await pilot.pause()
             await asyncio.sleep(0.15)
             assert len(calls) == 0, "no model must not call start"
-            status = lp.query_one("#local-start-status", Static)
-            txt = status.render().plain if hasattr(status.render(), "plain") else str(status.render())
-            if "no eligible model" not in txt.lower():
-                try:
-                    txt = str(status._renderable)
-                except Exception:
-                    pass
-            assert "no eligible model" in txt.lower(), f"expected no eligible model, got {txt!r}"
+            status = lp.query_one("#start-status", Static)
+            txt = _plain(status)
+            assert "start unavailable" in txt.lower(), f"expected visible blocker, got {txt!r}"
+            assert "select a live model" in txt.lower(), f"expected no live model error, got {txt!r}"
 
         reset_launch_cwd()
 
@@ -395,31 +413,28 @@ def test_10_modal_s_types_not_starts_bug_editor(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, BugDescriptionEditorScreen
-        from agentic_debugger.application.level32 import Level32ModelProfile
+        from agentic_debugger.ui.screens import BugDescriptionEditorScreen
         from textual.widgets import TextArea
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj10a")
         set_launch_cwd_for_tests(tmp_path)
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
+        _write_configured_profile(tmp_path / "hist10a")
         app = LocalApplicationV1(history_root=tmp_path / "hist10a")
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
-            lp._bug_description = "bug"
-            lp._repro_command = "python repro.py"
-            lp._verify_command = "python repro.py"
-            lp._profile_id = "qwen3.5:cloud"
+            lp._config.bug_description = "bug"
+            lp._config.reproduction_command = "python repro.py"
+            lp._config.verification_command = "python repro.py"
             lp._repro_user_edited = True
             lp._verify_user_edited = True
-            lp._render_rows()
+            _select_configured_model(lp)
             await pilot.pause()
             lp._activate_row("bug")
             await pilot.pause()
@@ -450,27 +465,24 @@ def test_10_modal_s_types_not_starts_single_line(tmp_path):
     async def _inner():
         from agentic_debugger.application.local_project import reset_launch_cwd, set_launch_cwd_for_tests
         from agentic_debugger.ui.app import LocalApplicationV1
-        from agentic_debugger.ui.screens import LocalProjectStartScreen, SingleLineFieldEditorScreen
-        from agentic_debugger.application.level32 import Level32ModelProfile
+        from agentic_debugger.ui.screens import SingleLineFieldEditorScreen
         from textual.widgets import Input
 
         reset_launch_cwd()
         repo = _make_repo(tmp_path, "proj10b")
         set_launch_cwd_for_tests(tmp_path)
-        mock = Level32ModelProfile(alias="qwen3.5:cloud", display_name="qwen3.5:cloud", readiness="live_verified", transport_config_fingerprint="a" * 64)
+        _write_configured_profile(tmp_path / "hist10b")
         app = LocalApplicationV1(history_root=tmp_path / "hist10b")
-        app.ollama_cloud_model_profiles = lambda: (mock,)  # type: ignore
 
         async with app.run_test() as pilot:
             await pilot.pause()
             await asyncio.sleep(0.15)
-            lp = LocalProjectStartScreen(initial_project=str(repo))
+            lp = _start_screen(app, repo)
             app.push_screen(lp)
             await pilot.pause()
             await asyncio.sleep(0.2)
-            lp._bug_description = "bug"
-            lp._profile_id = "qwen3.5:cloud"
-            lp._render_rows()
+            lp._config.bug_description = "bug"
+            _select_configured_model(lp)
             await pilot.pause()
             lp._activate_row("repro")
             await pilot.pause()

@@ -13,12 +13,12 @@ from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     ChoicePickerScreen,
     HomeScreen,
-    LocalProjectStartScreen,
     StartSessionScreen,
     TimeLimitEditorScreen,
     WorkspaceScreen,
 )
 from agentic_debugger.ui.screens import REPLAY_FOOTER, WORKSPACE_FOOTER_ACTIVE
+from agentic_debugger.ui.session_config import TARGET_LOCAL_PROJECT
 
 from ui_support import make_rich_stream, populate_history, run_headless
 
@@ -43,19 +43,23 @@ def test_ctrl_c_exits_from_new_session(tmp_path: Path) -> None:
     run_headless(_app(tmp_path), scenario)
 
 
-def test_welcome_screen_exposes_local_project_by_key_and_button(tmp_path: Path) -> None:
+def test_welcome_screen_reaches_local_project_by_key_and_button(tmp_path: Path) -> None:
     async def scenario(pilot) -> None:
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
-        assert start.query_one("#local-project-button").label.plain == "Debug local project"
+        assert start.query_one("#start-session-button").label.plain == "Run evidence demo"
 
+        # P switches the unified screen onto the Local Project controls
+        # (one screen, one stack — no second world to jump to).
         await pilot.press("p")
-        assert isinstance(pilot.app.screen, LocalProjectStartScreen)
-        await pilot.press("escape")
         assert isinstance(pilot.app.screen, StartSessionScreen)
+        assert start._config.target == TARGET_LOCAL_PROJECT
+        assert start.query_one("#project-row").has_focus
+        # the Run button reflects the (not yet ready) local configuration
+        assert start.query_one("#start-session-button").disabled is True
 
-        await pilot.click("#local-project-button")
-        assert isinstance(pilot.app.screen, LocalProjectStartScreen)
+        await pilot.press("escape")
+        assert isinstance(pilot.app.screen, HomeScreen)
 
     run_headless(_app(tmp_path), scenario)
 
@@ -210,8 +214,6 @@ def test_text_entry_keeps_letter_keys_for_the_focused_editor(tmp_path: Path) -> 
     async def scenario(pilot) -> None:
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
-        start._task_id = "curated-off-by-one-002"
-        start._refresh_mode()
         start._focus_row("time_limit")
         await pilot.press("enter")
         assert isinstance(pilot.app.screen, TimeLimitEditorScreen)

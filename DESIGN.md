@@ -213,6 +213,10 @@ The form language is rectangular and cell-aligned. Buttons and selected rows are
 
 The components below are Textual terminal primitives. The extension sidecar carries HTML/CSS analogues only so design tooling can preview their visual character; the application has no HTML runtime.
 
+### Session Setup
+
+The unified setup surface is the product's opening statement. One fixed stack of setting rows — Target, Task, Project, Bug, Repro, Verify, Model, Debugger, Time limit, Auto-retry — serves curated tasks, Local Project debugging, and the capability ladder alike. A letter-spaced display title, a thin rule, one tagline, and a semantic chip row (readiness, target, model, verifier) communicate what the application is, what is selected, and whether the session can run before any other element is read. Incompatible rows are never hidden: they dim with a parenthesized reason, and activation explains instead of acting. All readiness presentations — chip row, status line, Run button, pre-flight rail — render from one derived `SessionReadiness` object, so they cannot disagree.
+
 ### Buttons
 
 - **Shape:** Flat one-row blocks with no border or radius; primary actions use two cells of horizontal padding and a bounded minimum width.

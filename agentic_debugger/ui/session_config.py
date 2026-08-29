@@ -55,7 +55,7 @@ PROVIDER_LABELS = {
     PROVIDER_OLLAMA: "Ollama Cloud",
     PROVIDER_OPENCODE: "OpenCode Go",
     PROVIDER_COMMANDCODE: "CommandCode GOAT",
-    PROVIDER_CONFIGURED: "Custom profile",
+    PROVIDER_CONFIGURED: "Custom command profile",
 }
 
 # -- debugger policies ---------------------------------------------------------
@@ -297,7 +297,7 @@ def _row_states(target: str) -> dict:
             not (ladder or target == TARGET_CURATED),
             "Frozen by the ladder contract"
             if ladder
-            else "Single attempt — retry manually with r",
+            else "single attempt; retry with r",
         ),
     }
     return rows

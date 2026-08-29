@@ -331,14 +331,17 @@ class LocalApplicationV1(App):
         # History remains the base navigation surface, but a new debugging
         # session is the product's primary first-run action.
         self.push_screen(HomeScreen())
-        # If --project was supplied, prefill Local Project Debug directly
+        # If --project was supplied, open the unified setup screen directly
+        # on the Local Project controls with the path prefilled.
         if self._initial_project is not None:
-            try:
-                from agentic_debugger.ui.screens import LocalProjectStartScreen
-                self.push_screen(LocalProjectStartScreen(initial_project=str(self._initial_project)))
-                return
-            except Exception:
-                pass
+            self.push_screen(
+                StartSessionScreen(
+                    task_options=list(self.curated_task_options()),
+                    initial_target="local_project",
+                    initial_project=str(self._initial_project),
+                )
+            )
+            return
         self.push_screen(
             StartSessionScreen(task_options=list(self.curated_task_options()))
         )

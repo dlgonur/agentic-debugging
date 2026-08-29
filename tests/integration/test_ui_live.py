@@ -298,9 +298,8 @@ class TestStartSessionScreen:
             assert len(start_screen._task_options) == len(pilot.app.curated_task_options())
             assert len(start_screen._task_options) == 9  # four ladder + five curated tasks
             # choose a task + policy through the screen state API
-            start_screen._task_id = TASK_ID
-            start_screen._policy = "pdb-on-uncertainty"
-            start_screen._render_rows()
+            start_screen._choice_selected("task", TASK_ID)
+            start_screen._choice_selected("debugger", "pdb-on-uncertainty")
             await pilot.press("s")
             await wait_until(
                 pilot,
@@ -359,9 +358,8 @@ class TestStartSessionScreen:
         async def scenario(pilot):
             def open_start_form():
                 start_screen = pilot.app.screen
-                start_screen._task_id = TASK_ID
-                start_screen._policy = "pdb-on-uncertainty"
-                start_screen._render_rows()
+                start_screen._choice_selected("task", TASK_ID)
+                start_screen._choice_selected("debugger", "pdb-on-uncertainty")
 
             # -- session 1: complete through the real start UX -------------
             await pilot.press("n")

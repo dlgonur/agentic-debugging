@@ -375,6 +375,11 @@ class TestWorkstreamRendering:
             await pilot.pause()
             panel = workspace.query_one("#source-workstream", WorkstreamPanel)
             assert panel.can_focus is False
+            # Focus the visible pane explicitly; the workstream panel must
+            # never be the focus target and must not swallow arrow keys.
+            workspace.query_one("#source-pane").focus()
+            await pilot.pause()
+            assert pilot.app.focused is not panel
             await pilot.press("right")
             await pilot.pause()
             tabs = workspace.query_one("#pane-tabs", TabbedContent)

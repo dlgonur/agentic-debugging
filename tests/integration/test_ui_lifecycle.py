@@ -176,6 +176,7 @@ class _ScriptedWorker:
         cooperative_grace_seconds,
         ready_timeout_seconds,
         max_elapsed_seconds,
+        retry_of_session_id=None,
         outcome: str = "completed",
         startup_error: Optional[str] = None,
     ) -> None:
@@ -267,9 +268,8 @@ def start_via_start_screen(pilot) -> WorkspaceScreen:
 
     start_screen = pilot.app.screen
     assert isinstance(start_screen, _Start)
-    start_screen._task_id = TASK_ID
-    start_screen._policy = "pdb-on-uncertainty"
-    start_screen._render_rows()
+    start_screen._choice_selected("task", TASK_ID)
+    start_screen._choice_selected("debugger", "pdb-on-uncertainty")
     return start_screen
 
 

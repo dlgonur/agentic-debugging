@@ -44,7 +44,6 @@ from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     ChoicePickerScreen,
     HomeScreen,
-    LocalProjectStartScreen,
     StartSessionScreen,
     WorkspaceMode,
     WorkspaceScreen,
@@ -102,6 +101,21 @@ def make_app(tmp_path: Path) -> LocalApplicationV1:
     return LocalApplicationV1(history_store=HistoryStore(tmp_path))
 
 
+def _select_configured(start, task_id: str = TASK_ID, profile: str = "dummy") -> None:
+    """Configure a configured-command-model session through the real seams."""
+    start._choice_selected("model", f"configured:{profile}")
+    start._choice_selected("task", task_id)
+    start._choice_selected("debugger", PDB_POLICY)
+
+
+def _select_offline(start, task_id: str = TASK_ID) -> None:
+    """Configure the provider-free offline session through the real seams."""
+    start._choice_selected("model", "offline:")
+    start._choice_selected("task", task_id)
+    start._choice_selected("debugger", PDB_POLICY)
+
+
+
 @pytest.fixture(autouse=True)
 def _non_ladder_task_options(monkeypatch):
     """Restore the non-ladder task option these configured-mode tests need.
@@ -122,16 +136,21 @@ def _non_ladder_task_options(monkeypatch):
 
 
 class TestConfiguredStartScreen:
-    def test_no_profiles_keeps_start_unavailable(self, tmp_path):
+    def test_no_profiles_leaves_offline_ready_and_picker_honest(self, tmp_path):
         async def scenario(pilot):
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            await pilot.pause()
-            assert start.start_available is False
-            assert start.query_one("#model-row").display is True
-            assert "no custom command profiles configured" in str(start.query_one("#start-status").render())
-            start._choice_selected("mode", start.MODE_DETERMINISTIC)
+            # With no configured profiles the unified picker simply offers
+            # no custom-profile entries; the offline default stays ready.
             assert start.start_available is True
+            start._open_model_picker()
+            await pilot.pause()
+            picker = pilot.app.screen
+            assert isinstance(picker, ChoicePickerScreen)
+            assert not [
+                choice for choice in picker.choices
+                if choice.value.startswith("configured:") and not choice.disabled
+            ]
+            await pilot.press("escape")
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
@@ -142,11 +161,24 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
+            start._open_model_picker()
             await pilot.pause()
-            assert "configuration error" in str(
-                start.query_one("#start-status").render()
-            ).casefold()
+            picker = pilot.app.screen
+            assert isinstance(picker, ChoicePickerScreen)
+            error_entry = next(
+                (
+                    choice
+                    for choice in picker.choices
+                    if choice.title == "Configuration error"
+                ),
+                None,
+            )
+            assert error_entry is not None
+            assert error_entry.disabled is True
+            assert "configuration" in str(error_entry.disabled_reason).casefold()
+            await pilot.press("escape")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, StartSessionScreen)
             await pilot.press("escape")
             assert isinstance(pilot.app.screen, HomeScreen)
 
@@ -162,12 +194,22 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
+            start._open_model_picker()
             await pilot.pause()
-            info = str(start.query_one("#start-status").render())
-            assert "unsupported command-model configuration version" in info
-            assert secret not in info
-            assert len(info.encode("utf-8")) < 1000
+            picker = pilot.app.screen
+            error_entry = next(
+                (
+                    choice
+                    for choice in picker.choices
+                    if choice.title == "Configuration error"
+                ),
+                None,
+            )
+            assert error_entry is not None
+            reason = error_entry.disabled_reason
+            assert "unsupported command-model configuration version" in reason
+            assert secret not in reason
+            assert len(reason.encode("utf-8")) < 200
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
@@ -176,33 +218,34 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._open_choice_picker("model")
+            start._open_model_picker()
             await pilot.pause()
             assert isinstance(pilot.app.screen, ChoicePickerScreen)
-            assert pilot.app.screen.title == "Select custom command profile"
-            assert pilot.app.screen.query_one("#choice-picker-list").highlighted == 0
-            await pilot.press("enter")
+            picker = pilot.app.screen
+            assert picker.title == "Select model"
+            assert "configured:dummy" in [choice.value for choice in picker.choices]
+            picker._on_select("configured:dummy")
+            pilot.app.pop_screen()
+            await pilot.pause()
             assert start.profile_id == "dummy"
             assert start.start_available is True
             model_row = str(start.query_one("#model-row").render())
             assert "Dummy command model" in model_row
-            assert "dummy" not in model_row
 
         run_headless(make_app(tmp_path), scenario, size=(100, 30))
 
-    def test_trust_boundary_wording_is_truthful_per_mode(self, tmp_path):
+    def test_trust_boundary_wording_is_truthful_per_selection(self, tmp_path):
         write_profile(tmp_path, "dummy", "valid")
 
         async def scenario(pilot):
             start = pilot.app.screen
-            assert "network isolation" not in str(start.query_one("#start-trust").render())
-            start._choice_selected("mode", start.MODE_CONFIGURED)
+            assert "network isolation" not in str(start.query_one("#start-notes").render())
+            start._choice_selected("model", "configured:dummy")
             await pilot.pause()
-            trust = str(start.query_one("#start-trust").render())
-            assert "trusted user configuration" in trust
-            assert "network isolation" in trust
-            assert "network-isolated" not in trust
+            notes = str(start.query_one("#start-notes").render())
+            assert "trusted user configuration" in notes
+            assert "network isolation" in notes
+            assert "network-isolated" not in notes
 
         run_headless(make_app(tmp_path), scenario, size=(80, 24))
 
@@ -211,15 +254,19 @@ class TestConfiguredStartScreen:
 
         async def scenario(pilot):
             app = pilot.app
-            screen = LocalProjectStartScreen(initial_project=str(tmp_path))
+            screen = StartSessionScreen(
+                task_options=list(app.curated_task_options()),
+                initial_target="local_project",
+                initial_project=str(tmp_path),
+            )
             app.push_screen(screen)
             await pilot.pause()
-            # Select the custom command profile
-            screen._model_selected("dummy")
+            # Select the custom command profile on the same unified surface
+            screen._choice_selected("model", "configured:dummy")
             await pilot.pause()
-            context = screen.query_one("#local-context-summary").render().plain
+            context = screen.query_one("#context-summary").render().plain
             assert "Provider\nCustom command profile" in context
-            assert "Model\ndummy" in context
+            assert "Model\nDummy command model" in context
 
         run_headless(make_app(tmp_path), scenario, size=(100, 30))
 
@@ -241,13 +288,7 @@ class TestConfiguredLiveSession:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -344,13 +385,7 @@ class TestConfiguredLiveSession:
         async def scenario(pilot):
             def open_configured_start():
                 start_screen = pilot.app.screen
-                start_screen._choice_selected("mode", start_screen.MODE_CONFIGURED)
-                start_screen._profile_id = "dummy"
-                start_screen._render_rows()
-                start_screen._task_id = TASK_ID
-                start_screen._render_rows()
-                start_screen._policy = "pdb-on-uncertainty"
-                start_screen._render_rows()
+                _select_configured(start_screen)
 
             async def settle_and_click():
                 await pilot.pause()
@@ -447,13 +482,7 @@ class TestConfiguredCancellation:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -525,13 +554,7 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -572,10 +595,7 @@ class TestMixedSequentialSessions:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2._task_id = TASK_ID
-            start2._render_rows()
-            start2._policy = "pdb-on-uncertainty"
-            start2._render_rows()
+            _select_offline(start2)
             await pilot.press("s")
             await wait_until(
                 pilot,
@@ -637,10 +657,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_offline(start)
             await pilot.press("s")
             await wait_until(
                 pilot,
@@ -680,13 +697,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2._choice_selected("mode", start2.MODE_CONFIGURED)
-            start2._profile_id = "dummy"
-            start2._render_rows()
-            start2._task_id = TASK_ID
-            start2._render_rows()
-            start2._policy = "pdb-on-uncertainty"
-            start2._render_rows()
+            _select_configured(start2)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -737,13 +748,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -781,13 +786,7 @@ class TestMixedSequentialSessionsExtra:
                 timeout_seconds=30.0,
             )
             start2 = pilot.app.screen
-            start2._choice_selected("mode", start2.MODE_CONFIGURED)
-            start2._profile_id = "dummy"
-            start2._render_rows()
-            start2._task_id = TASK_ID
-            start2._render_rows()
-            start2._policy = "pdb-on-uncertainty"
-            start2._render_rows()
+            _select_configured(start2)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -836,13 +835,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             # the configuration changes between discovery and start
             (tmp_path / "config" / "command-models.json").unlink()
             await pilot.pause()
@@ -851,8 +844,10 @@ class TestConfiguredAdversarial:
             # still on the start screen with a clear error, never a crash
             assert pilot.app.screen.__class__.__name__ == "StartSessionScreen"
             error = str(start.query_one("#start-status").render())
-            assert "configured command model unavailable" in error
-            assert "profile not found" in error
+            # The pre-start catalog re-derivation catches the deleted
+            # profile fail-closed before any start attempt.
+            assert "Start unavailable" in error
+            assert "no longer offered" in error
             # the TUI remains usable: escape returns home
             await pilot.press("escape")
             await wait_until(
@@ -878,13 +873,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -926,13 +915,7 @@ class TestConfiguredAdversarial:
                 timeout_seconds=30.0,
             )
             start = pilot.app.screen
-            start._choice_selected("mode", start.MODE_CONFIGURED)
-            start._profile_id = "dummy"
-            start._render_rows()
-            start._task_id = TASK_ID
-            start._render_rows()
-            start._policy = "pdb-on-uncertainty"
-            start._render_rows()
+            _select_configured(start)
             await pilot.pause()
             await pilot.press("s")
             await wait_until(
@@ -992,13 +975,7 @@ class TestAppExitDuringConfiguredRequest:
                     timeout_seconds=30.0,
                 )
                 start = pilot.app.screen
-                start._choice_selected("mode", start.MODE_CONFIGURED)
-                start._profile_id = "dummy"
-                start._render_rows()
-                start._task_id = TASK_ID
-                start._render_rows()
-                start._policy = "pdb-on-uncertainty"
-                start._render_rows()
+                _select_configured(start)
                 await pilot.pause()
                 await pilot.press("s")
                 await wait_until(

@@ -1353,10 +1353,12 @@ def test_ollama_model_picker_shows_qualified():
     from agentic_debugger.application.level32 import level32_model_profiles
     profiles = level32_model_profiles()
     assert len(profiles) > 0
-    # Check that the UI code now loads Ollama (via _refresh_profiles)
+    # The unified model picker loads the qualified Ollama roster as one
+    # group of the single provider platform surface.
     text = Path("agentic_debugger/ui/screens.py").read_text(encoding="utf-8")
     assert "ollama_cloud_model_profiles" in text
-    assert "No eligible models available" in text
+    assert "OLLAMA CLOUD" in text
+    assert "list_provider_models" in text
 
 def test_cleanup_verifies_git_registration(tmp_path):
     """Cleanup verified means Git worktree registration pruned."""

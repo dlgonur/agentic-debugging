@@ -118,23 +118,22 @@ def test_offline_demo_cta_starts_selected_curated_task_provider_free(tmp_path: P
         screen = pilot.app.screen
         assert isinstance(screen, StartSessionScreen), "startup must be StartSessionScreen"
 
-        # 1. startup state is Offline demo
-        mode_text = screen.query_one("#mode-row").render().plain if screen.query_one("#mode-row").display else ""
-        # Use the screen's authoritative state rather than just rendered text
-        assert screen._mode == screen.MODE_DETERMINISTIC, "startup mode must be Offline demo (deterministic)"
+        # 1. startup state is the provider-free curated default
+        assert screen._config.target == "curated", "startup target must be Curated task"
+        assert screen._config.model.is_offline, "startup model must be Offline"
         assert screen.query_one("#start-session-button").label.plain == "Run evidence demo"
 
         # 2. a known curated task is selected/displayed
-        assert screen._task_id == CURATED_TASK, f"expected default curated task {CURATED_TASK}, got {screen._task_id}"
+        assert screen.task_id == CURATED_TASK, f"expected default curated task {CURATED_TASK}, got {screen.task_id}"
         task_display = screen._task_display_name()
         assert CURATED_TITLE in task_display
-        # Context panel must show Offline demo truth
+        # Context panel must show the offline truth
         context = screen.query_one("#context-summary").render().plain
-        assert "Mode\nOffline demo" in context
+        assert "Target\nCurated task" in context
         assert f"Task\n{CURATED_TITLE}" in context
         assert f"Task ID\n{CURATED_TASK}" in context
-        assert "Execution\nLocal, provider-free" in context
-        assert "Ready\nYes" in context
+        assert "Model\nOffline" in context
+        assert "READY  Yes" in context
         # No Ollama/Level32 chrome should be visible for Offline demo
         assert "Ollama Cloud" not in context
         assert "Cookiecutter" not in context
@@ -163,7 +162,7 @@ def test_offline_demo_cta_starts_selected_curated_task_provider_free(tmp_path: P
             assert isinstance(params, dict)
             assert params.get("task_id") == CURATED_TASK
             # policy should be the screen's selected policy
-            assert params.get("policy") == screen._policy
+            assert params.get("policy") == screen._config.debugger_policy
             # model_config_ref must be None for offline
             spec = captured.get("spec")
             assert spec is not None
@@ -254,12 +253,13 @@ def test_explicit_level32_path_is_not_redirected_to_offline(tmp_path: Path) -> N
         screen = pilot.app.screen
         assert isinstance(screen, StartSessionScreen)
 
-        # Explicitly select Level-32 task
+        # Explicitly select the ladder target, the Level-32 rung, and a
+        # qualified model through the unified surface
+        screen._choice_selected("target", "ladder")
         screen._choice_selected("task", LEVEL32_TASK_ID)
         await pilot.pause()
-        assert screen._task_id == LEVEL32_TASK_ID
-        # Select a model
-        screen._choice_selected("model", chosen)
+        assert screen.task_id == LEVEL32_TASK_ID
+        screen._choice_selected("model", f"ollama_cloud:{chosen}")
         await pilot.pause()
         assert screen.start_available is True
         # Button should now be "Start session" (ladder, not evidence demo)

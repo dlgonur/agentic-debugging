@@ -1027,6 +1027,33 @@ def check_apply_gates(
     return True, "ok"
 
 
+def load_apply_verification_materials(
+    session_dir: Path,
+) -> tuple[LocalProjectTaskSpec, "LocalProjectVerificationCertificate"]:
+    """Read one session's task contract and verification certificate.
+
+    Read-only parsing for the UI's Apply To Project gate: keeps JSON
+    loading and schema mapping on the application side of the boundary.
+    Raises ``FileNotFoundError``/``ValueError`` for missing or invalid
+    artifacts; callers translate those into their fail-closed messages.
+    """
+    import json as _json
+
+    task = LocalProjectTaskSpec.from_mapping(
+        _json.loads(
+            (session_dir / "local_project_task.json").read_text(encoding="utf-8")
+        )
+    )
+    certificate = LocalProjectVerificationCertificate.from_mapping(
+        _json.loads(
+            (session_dir / LOCAL_PROJECT_VERIFICATION_FILE_NAME).read_text(
+                encoding="utf-8"
+            )
+        )
+    )
+    return task, certificate
+
+
 def has_tracked_root_repro(repo_root: Path) -> bool:
     """Whether the repository tracks a root-level ``repro.py`` exactly.
 

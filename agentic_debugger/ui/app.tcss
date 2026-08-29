@@ -98,6 +98,13 @@ Screen {
     scrollbar-size: 1 1;
 }
 
+#start-hero {
+    height: 4;
+    padding: 0 0 0 0;
+    margin: 0 0 1 0;
+    color: $foreground;
+}
+
 #start-title {
     height: 4;
     padding: 0;
@@ -112,8 +119,42 @@ Screen {
     text-style: bold;
 }
 
-SessionSettingRow,
-TimeLimitRow {
+#start-session-button {
+    width: auto;
+    min-width: 22;
+    height: 1;
+    padding: 0 2;
+    margin: 0;
+    background: $primary;
+    color: $background;
+    border: none;
+    text-style: bold;
+}
+
+#start-session-button:hover,
+#start-session-button:focus {
+    background: $primary;
+    color: $background;
+    text-style: bold underline;
+}
+
+#start-session-button:disabled {
+    background: $panel;
+    color: $text-faint;
+    text-style: none;
+}
+
+#start-method {
+    width: 1fr;
+    height: auto;
+    margin: 1 0 0 0;
+    padding: 1 2;
+    background: $surface;
+    border: round $line;
+    color: $foreground;
+}
+
+SessionSettingRow {
     width: 1fr;
     height: 1;
     padding: 0;
@@ -121,29 +162,26 @@ TimeLimitRow {
     color: $foreground;
 }
 
-SessionSettingRow:focus,
-TimeLimitRow:focus {
+SessionSettingRow:focus {
     background: $selection;
     color: $foreground;
     text-style: bold;
 }
 
-#model-row {
-    display: none;
-}
-
-#level32-debugger-row,
-#level32-treatment-row {
-    display: none;
-}
-
-#start-status,
-#start-trust {
+#start-status {
     width: 1fr;
     height: auto;
     padding: 0;
     margin: 1 0 0 0;
     color: $foreground-muted;
+}
+
+#start-notes {
+    width: 1fr;
+    height: auto;
+    padding: 0;
+    margin: 0;
+    color: $text-faint;
 }
 
 #start-footer {
@@ -695,97 +733,9 @@ Button {
     margin: 0;
 }
 
-#start-actions,
-#local-start-actions {
+#start-actions {
     width: 1fr;
     height: auto;
     align: left middle;
     margin: 1 0 0 0;
-}
-
-#start-method {
-    width: 1fr;
-    height: auto;
-    margin: 1 0 0 0;
-    padding: 1 2;
-    background: $surface;
-    border: round $line;
-    color: $foreground;
-}
-
-#local-mode-row {
-    width: 1fr;
-    height: 1;
-    margin: 0 0 1 0;
-    color: $evidence;
-    text-style: bold;
-}
-
-#local-project-actions {
-    width: 1fr;
-    height: 1;
-    align: left middle;
-    padding: 0 0 0 2;
-}
-
-#local-project-button,
-#local-start-button {
-    width: auto;
-    min-width: 24;
-    height: 1;
-    padding: 0 2;
-    background: $primary;
-    color: $background;
-    border: none;
-    text-style: bold;
-    margin: 0 1 0 0;
-}
-
-#local-project-button:hover,
-#local-start-button:hover {
-    background: $primary;
-    color: $background;
-    text-style: bold underline;
-}
-
-#local-project-button:focus,
-#local-start-button:focus {
-    background: $primary;
-    color: $background;
-    border: none;
-    text-style: bold underline;
-}
-
-#local-start-button:disabled {
-    background: $panel;
-    color: $text-faint;
-    text-style: none;
-}
-
-#start-session-button {
-    width: auto;
-    min-width: 20;
-    height: 1;
-    padding: 0 2;
-    margin: 0;
-    background: $surface-raised;
-    color: $foreground;
-    border: none;
-    text-style: bold;
-}
-
-#start-session-button:hover,
-#start-session-button:focus {
-    background: $primary;
-    color: $background;
-    border: none;
-}
-
-#local-project-resolved,
-#local-start-status,
-#local-start-trust {
-    height: auto;
-    color: $foreground-muted;
-    margin: 0 0 0 0;
-    padding: 0 0 0 2;
 }
