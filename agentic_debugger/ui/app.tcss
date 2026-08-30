@@ -46,22 +46,6 @@ HomeScreen {
     height: auto;
     content-align: center middle;
     text-wrap: nowrap;
-    margin: 0 0 1 0;
-}
-
-#home-brand-tagline {
-    width: 100%;
-    height: 1;
-    content-align: center middle;
-    text-wrap: nowrap;
-    margin: 0;
-}
-
-#home-brand-telemetry {
-    width: 100%;
-    height: 1;
-    content-align: center middle;
-    text-wrap: nowrap;
     margin: 0;
 }
 
@@ -71,7 +55,7 @@ HomeScreen {
     border: round $line;
     background: $surface;
     padding: 1 2;
-    margin: 0 0 1 0;
+    margin: 0;
 }
 
 HomeActionRow {
@@ -91,20 +75,6 @@ HomeActionRow:focus {
 
 #action-help {
     margin: 0;
-}
-
-#home-recent-panel {
-    width: 100%;
-    height: auto;
-    content-align: center middle;
-    margin: 0;
-}
-
-#home-recent-status {
-    width: 100%;
-    height: 1;
-    content-align: center middle;
-    text-wrap: nowrap;
 }
 
 #home-footer-bar {
@@ -172,7 +142,7 @@ HomeActionRow:focus {
     text-style: bold;
 }
 
-#history-footer, #home-hint {
+#history-footer {
     dock: bottom;
     width: 1fr;
     height: 1;

@@ -28,7 +28,9 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.ui.app import LocalApplicationV1
 from agentic_debugger.ui.screens import (
     ChoicePickerScreen,
+    HelpModalScreen,
     HistoryScreen,
+    HomeActionRow,
     HomeScreen,
     StartSessionScreen,
     TimeLimitEditorScreen,
@@ -96,19 +98,125 @@ async def open_first_row(pilot) -> None:
 
 
 class TestBootAndHome:
-    def test_app_boots_to_new_session_screen(self, tmp_path):
+    def test_app_boots_to_simplified_home_screen(self, tmp_path):
         async def scenario(pilot):
             app = pilot.app
             assert isinstance(app.screen, HomeScreen)
-            assert "Debug.  Inspect.  Repair.  Verify." in str(app.screen.query_one("#home-brand-tagline").render())
-            assert app.screen.query_one("#home-footer-bar")
+            # Brand banner is present
+            assert app.screen.query_one("#home-brand-banner")
+
+            # Tagline, telemetry, and recent-session rows are completely removed
+            assert len(app.screen.query("#home-brand-tagline")) == 0
+            assert len(app.screen.query("#home-brand-telemetry")) == 0
+            assert len(app.screen.query("#home-recent-panel")) == 0
+            assert len(app.screen.query("#home-recent-status")) == 0
+
+            # 4 primary action rows exist with concise product descriptions
+            start_row = app.screen.query_one("#action-start", HomeActionRow)
+            assert start_row.action_title == "Start Debugging"
+            assert start_row.action_desc == "Curated task or Capability Ladder"
+
+            local_row = app.screen.query_one("#action-local", HomeActionRow)
+            assert local_row.action_title == "Debug Local Project"
+            assert local_row.action_desc == "Debug a local Git repository"
+
+            history_row = app.screen.query_one("#action-history", HomeActionRow)
+            assert history_row.action_title == "Session History"
+            assert history_row.action_desc == "No recorded sessions"
+
+            help_row = app.screen.query_one("#action-help", HomeActionRow)
+            assert help_row.action_title == "Help & Architecture"
+            assert help_row.action_desc == "System reference"
+
+            # Footer contains only global navigation guidance, no duplicated action shortcuts
+            footer = app.screen.query_one("#home-footer-bar")
+            footer_text = footer.render().plain
+            assert "↑/↓" in footer_text and "Select" in footer_text
+            assert "Enter" in footer_text and "Open" in footer_text
+            assert "Ctrl+C" in footer_text and "Quit" in footer_text
+            for duplicate in ("Start debugging", "Local project", "History", "Help"):
+                assert duplicate not in footer_text
+
+            # Navigation bindings work cleanly
             await pilot.press("s")
             assert isinstance(app.screen, StartSessionScreen)
             assert app.screen.query_one("#start-section-label").render().plain == "SESSION SETUP"
             assert app.screen.query_one("#start-footer")
             await pilot.press("escape")
             assert isinstance(app.screen, HomeScreen)
+
+            await pilot.press("p")
+            assert isinstance(app.screen, StartSessionScreen)
+            await pilot.press("escape")
+            assert isinstance(app.screen, HomeScreen)
+
             await pilot.press("h")
+            assert isinstance(app.screen, HistoryScreen)
+            await pilot.press("escape")
+            assert isinstance(app.screen, HomeScreen)
+
+            await pilot.press("?")
+            assert isinstance(app.screen, HelpModalScreen)
+            await pilot.press("escape")
+            assert isinstance(app.screen, HomeScreen)
+
+        run_headless(make_standard_app(tmp_path), scenario, size=(80, 24))
+
+    def test_home_screen_session_history_count_states(self, tmp_path):
+        store = HistoryStore(tmp_path)
+        # 1 session state
+        populate_history(store, "sess.home.test1")
+        app = LocalApplicationV1(history_store=store)
+
+        async def scenario_one(pilot):
+            assert isinstance(pilot.app.screen, HomeScreen)
+            history_row = pilot.app.screen.query_one("#action-history", HomeActionRow)
+            assert history_row.action_desc == "1 recorded session"
+
+        run_headless(app, scenario_one, size=(80, 24))
+
+        # Multiple sessions state
+        populate_history(store, "sess.home.test2")
+        populate_history(store, "sess.home.test3")
+        app_multi = LocalApplicationV1(history_store=store)
+
+        async def scenario_multi(pilot):
+            assert isinstance(pilot.app.screen, HomeScreen)
+            history_row = pilot.app.screen.query_one("#action-history", HomeActionRow)
+            assert history_row.action_desc == "3 recorded sessions"
+            # Confirm no resolved KPI or latest-session telemetry leaked in
+            rendered_row = str(history_row.render())
+            assert "resolved" not in rendered_row
+            assert "sess." not in rendered_row
+
+        run_headless(app_multi, scenario_multi, size=(120, 36))
+
+    def test_home_screen_arrow_and_enter_selection(self, tmp_path):
+        async def scenario(pilot):
+            app = pilot.app
+            assert isinstance(app.screen, HomeScreen)
+            assert app.focused.id == "action-start"
+
+            # Down arrow advances focus
+            await pilot.press("down")
+            assert app.focused.id == "action-local"
+
+            await pilot.press("j")
+            assert app.focused.id == "action-history"
+
+            await pilot.press("down")
+            assert app.focused.id == "action-help"
+
+            # Enter on focused Help row opens Help
+            await pilot.press("enter")
+            assert isinstance(app.screen, HelpModalScreen)
+            await pilot.press("escape")
+            assert isinstance(app.screen, HomeScreen)
+
+            # Up arrow moves focus back
+            await pilot.press("k")
+            assert app.focused.id == "action-history"
+            await pilot.press("enter")
             assert isinstance(app.screen, HistoryScreen)
             await pilot.press("escape")
             assert isinstance(app.screen, HomeScreen)

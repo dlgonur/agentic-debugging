@@ -432,50 +432,41 @@ class HomeScreen(Screen):
             with Vertical(id="home-container"):
                 with Vertical(id="home-hero-panel"):
                     yield Static(id="home-brand-banner")
-                    yield Static(id="home-brand-tagline")
-                    yield Static(id="home-brand-telemetry")
 
                 with Vertical(id="home-actions-panel"):
                     yield HomeActionRow(
                         "S",
                         "Start Debugging",
-                        "Configure curated tasks, live models & capability ladder",
+                        "Curated task or Capability Ladder",
                         "action-start",
                         id="action-start",
                     )
                     yield HomeActionRow(
                         "P",
                         "Debug Local Project",
-                        "Fast-track into local git repository with preselected target",
+                        "Debug a local Git repository",
                         "action-local",
                         id="action-local",
                     )
                     yield HomeActionRow(
                         "H",
                         "Session History",
-                        "Browse recorded runs, inspect evidence trajectories & replay",
+                        "No recorded sessions",
                         "action-history",
                         id="action-history",
                     )
                     yield HomeActionRow(
                         "?",
                         "Help & Architecture",
-                        "Forensic console legend, proof-chain invariants & keys",
+                        "System reference",
                         "action-help",
                         id="action-help",
                     )
 
-                with Vertical(id="home-recent-panel"):
-                    yield Static(id="home-recent-status")
-
         yield Static(
-            "[bold #49D8FF]↑/↓[/] Select   "
-            "[bold #49D8FF]Enter[/] Open   "
-            "[bold #49D8FF]S[/] Start debugging   "
-            "[bold #49D8FF]P[/] Local project   "
-            "[bold #49D8FF]H[/] History   "
-            "[bold #49D8FF]?[/] Help   "
-            "[bold #49D8FF]Ctrl+C[/] Quit",
+            f"[bold {PRIMARY}]↑/↓[/] Select   "
+            f"[bold {PRIMARY}]Enter[/] Open   "
+            f"[bold {PRIMARY}]Ctrl+C[/] Quit",
             id="home-footer-bar",
         )
 
@@ -506,94 +497,30 @@ class HomeScreen(Screen):
         banner_elem = self.query_one("#home-brand-banner", Static)
         banner_elem.update(Text(banner_text, style=f"bold {PRIMARY}", no_wrap=True))
 
-        tagline_elem = self.query_one("#home-brand-tagline", Static)
-        tag = Text(no_wrap=True)
-        tag.append("Debug.  Inspect.  Repair.  Verify.", style=f"bold {FOREGROUND}")
-        tagline_elem.update(tag)
-
-        telemetry_elem = self.query_one("#home-brand-telemetry", Static)
-        telem = Text(no_wrap=True)
-        telem.append("● READY", style=f"bold {SUCCESS}")
-        if is_wide:
-            telem.append(
-                "   v0.1.0   ·   Forensic Console   ·   Deterministic Controller & Independent Verifier",
-                style=f"{FAINT}",
-            )
-        else:
-            telem.append("   v0.1.0   ·   Forensic Console", style=f"{FAINT}")
-        telemetry_elem.update(telem)
-
         footer_elem = self.query_one("#home-footer-bar", Static)
-        if self.size.width < 95:
-            footer_elem.update(
-                "[bold #49D8FF]↑/↓[/] Select   "
-                "[bold #49D8FF]Enter[/] Open   "
-                "[bold #49D8FF]S[/] Start   "
-                "[bold #49D8FF]P[/] Local   "
-                "[bold #49D8FF]H[/] History   "
-                "[bold #49D8FF]?[/] Help   "
-                "[bold #49D8FF]Ctrl+C[/] Quit"
-            )
-        else:
-            footer_elem.update(
-                "[bold #49D8FF]↑/↓[/] Select   "
-                "[bold #49D8FF]Enter[/] Open   "
-                "[bold #49D8FF]S[/] Start debugging   "
-                "[bold #49D8FF]P[/] Local project   "
-                "[bold #49D8FF]H[/] History   "
-                "[bold #49D8FF]?[/] Help   "
-                "[bold #49D8FF]Ctrl+C[/] Quit"
-            )
+        footer_elem.update(
+            f"[bold {PRIMARY}]↑/↓[/] Select   "
+            f"[bold {PRIMARY}]Enter[/] Open   "
+            f"[bold {PRIMARY}]Ctrl+C[/] Quit"
+        )
 
     def refresh_history(self) -> None:
-        entries = self.app.history_store.list_sessions()
-        action_history = self.query_one("#action-history", HomeActionRow)
-        recent_elem = self.query_one("#home-recent-status", Static)
-        is_wide = self.size.width >= 102
-
-        if not entries:
-            action_history.set_description(
-                "Browse 0 recorded runs · Review verdicts & replay logs"
-            )
-            rec = Text(no_wrap=True)
-            rec.append("● ", style=f"{FAINT}")
-            rec.append(
-                "No recorded sessions in workspace. Select [S] Start Debugging to open a case.",
-                style=f"{MUTED}",
-            )
-            recent_elem.update(rec)
+        try:
+            action_history = self.query_one("#action-history", HomeActionRow)
+        except Exception:
             return
-
-        resolved = sum(
-            1
-            for entry in entries
-            if (entry.verifier_outcome or "").upper() == "RESOLVED"
+        entries = (
+            self.app.history_store.list_sessions()
+            if hasattr(self.app, "history_store") and self.app.history_store is not None
+            else []
         )
-        action_history.set_description(
-            f"Browse {len(entries)} recorded run(s) · {resolved} resolved · Inspect replay logs"
-        )
-
-        latest = entries[0]
-        outcome = (latest.verifier_outcome or latest.verifier_status or (latest.status.value if latest.status else "—")).upper()
-        outcome_style = f"bold {SUCCESS}" if outcome == "RESOLVED" else f"bold {WARNING}"
-        duration = _format_duration(latest.started_at_utc, latest.ended_at_utc)
-
-        rec = Text(no_wrap=True)
-        status_marker = "●" if outcome == "RESOLVED" else "◆"
-        rec.append(f"{status_marker} ", style=outcome_style)
-        sess_label = _compact_session_id(latest.session_id, 14 if not is_wide else 18)
-        rec.append(f"{sess_label} ", style=f"bold {FOREGROUND}")
-        if latest.task_id:
-            task_str = latest.task_id if is_wide else (latest.task_id[:14] + "…" if len(latest.task_id) > 14 else latest.task_id)
-            rec.append(f"{task_str}  ·  ", style=f"{PRIMARY}")
-        rec.append(f"{outcome}", style=outcome_style)
-        if duration != "—":
-            rec.append(f" ({duration})", style=f"{FAINT}")
-        if is_wide:
-            rec.append(f"   [H] Archive ({len(entries)})", style=f"{MUTED}")
+        count = len(entries)
+        if count == 0:
+            action_history.set_description("No recorded sessions")
+        elif count == 1:
+            action_history.set_description("1 recorded session")
         else:
-            rec.append(f"  [H] Archive", style=f"{MUTED}")
-        recent_elem.update(rec)
+            action_history.set_description(f"{count} recorded sessions")
 
     def action_focus_next(self) -> None:
         self.focus_next()
