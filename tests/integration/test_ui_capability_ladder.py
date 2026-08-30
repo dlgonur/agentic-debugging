@@ -162,68 +162,19 @@ def test_wide_ladder_header_is_concise_and_context_panel_is_truthful() -> None:
     assert "Level-32 authoritative operator" not in header.plain
 
     panel = LiveRunContextPanel()
-    panel.update_view(view, elapsed="01:42")
+    panel.update_view(view)
     context = panel._text.render().plain
+    assert "RUN CONTEXT" in context
     assert "DeepSeek V4 Flash" in context
-    assert "deepseek-v4-flash:cloud" in context
-    assert "Model running" in context
-    assert "01:42" in context
-    assert "PDB\nPending" in context
-    assert "Verifier\nPending" in context
-    assert "Official SWE-rebench" in context
-    assert "Official tests\nNot started" in context
-
-    # Official milestone truth: preparing/launched/completed stay distinct
-    # preparatory states; only the typed execution-proven fact renders
-    # "Executed".
-    def _official_for(stage: OperatorStage, proven=None) -> str:
-        milestone_view = SessionViewState(
-            task_id="audreyr__cookiecutter-967",
-            source_kind=SourceKind.LEVEL32_OPERATOR,
-            status=SessionStatus.RUNNING,
-            operator_stage=stage,
-            official_execution_proven=proven,
-        )
-        milestone_panel = LiveRunContextPanel()
-        milestone_panel.update_view(milestone_view, elapsed="00:00")
-        return milestone_panel._text.render().plain
-
-    assert "Official tests\nPreparing" in _official_for(
-        OperatorStage.OFFICIAL_VERIFICATION_PREPARING
-    )
-    assert "Official tests\nEvaluator launched" in _official_for(
-        OperatorStage.OFFICIAL_EVALUATOR_STARTED
-    )
-    unproven_completed = _official_for(OperatorStage.OFFICIAL_EVALUATOR_COMPLETED)
-    assert "Official tests\nCompleted (unproven)" in unproven_completed
-    assert "Executed" not in unproven_completed.split("Official tests", 1)[1].splitlines()[1]
-    assert "Official tests\nExecuted" in _official_for(
-        OperatorStage.OFFICIAL_EVALUATOR_COMPLETED, proven=True
-    )
-
-    lower_view = SessionViewState(
-        task_id="pdb-required-multistage-units-008",
-        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
-        status=SessionStatus.RUNNING,
-        operator_stage=OperatorStage.VERIFICATION,
-        model_provenance=ModelProvenanceView(
-            profile_id="deepseek-v4-flash:cloud",
-            display_name="DeepSeek V4 Flash",
-        ),
-    )
-    lower_panel = LiveRunContextPanel()
-    lower_panel.update_view(lower_view, elapsed="00:18")
-    lower_context = lower_panel._text.render().plain
-    assert "Level 18/100" in lower_context
-    assert "Independent verifier" in lower_context
-    assert "Stage\nVerification" in lower_context
-    assert "Official verification" not in lower_context
-    assert "Official tests" not in lower_context
-
-    official_panel = LiveRunContextPanel()
-    official_panel.update_view(replace(view, operator_stage=OperatorStage.OFFICIAL_VERIFICATION))
-    official_context = official_panel._text.render().plain
-    assert "Stage\nOfficial verification" in official_context
+    # Header owns task identity, stage, and elapsed; rail does not duplicate them
+    assert "Level 32/100" not in context
+    assert "Cookiecutter" not in context
+    assert "Model running" not in context
+    assert "01:42" not in context
+    assert "PDB" in context
+    assert "Pending" in context
+    assert "VERIFIER" in context
+    assert "Pending" in context
 
 
 def test_terminal_model_error_header_and_sidebar_are_truthful() -> None:
@@ -246,14 +197,14 @@ def test_terminal_model_error_header_and_sidebar_are_truthful() -> None:
     assert "verifier: —" not in header.plain
 
     panel = LiveRunContextPanel()
-    panel.update_view(view, elapsed="00:02")
+    panel.update_view(view)
     context = panel._text.render().plain
-    assert "Stage\nModel error" in context
-    assert "PDB\nNot reached" in context
-    assert "Verifier\nNot run" in context
-    assert "Stage\nCompleted" not in context
-    assert "PDB\nPending" not in context
-    assert "Verifier\nPending" not in context
+    assert "PDB" in context
+    assert "Not reached" in context
+    assert "VERIFIER" in context
+    assert "Not started" in context
+    assert "Failed" not in context
+    assert "Model error" not in context
 
     cancelled = replace(
         view,
@@ -262,9 +213,11 @@ def test_terminal_model_error_header_and_sidebar_are_truthful() -> None:
     )
     panel.update_view(cancelled)
     cancelled_context = panel._text.render().plain
-    assert "Stage\nCancelled" in cancelled_context
-    assert "PDB\nNot reached" in cancelled_context
-    assert "Verifier\nNot run" in cancelled_context
+    assert "PDB" in cancelled_context
+    assert "Not reached" in cancelled_context
+    assert "VERIFIER" in cancelled_context
+    assert "Not started" in cancelled_context
+    assert "Cancelled" not in cancelled_context
 
 
 def test_terminal_level32_operator_error_header_is_specific() -> None:
@@ -297,9 +250,12 @@ def test_level6_controller_budget_failure_is_specific_and_verifier_is_not_claime
     panel = LiveRunContextPanel()
     panel.update_view(view)
     context = panel._text.render().plain
-    assert "Stage\nController budget exhausted" in context
-    assert "PDB\nNot reached" in context
-    assert "Verifier\nNot run" in context
+    assert "PDB" in context
+    assert "Not reached" in context
+    assert "VERIFIER" in context
+    assert "Not started" in context
+    assert "Budget exhausted" not in context
+    assert "Controller budget exhausted" not in context
 
 
 def test_level32_completed_progress_while_running_is_presented_as_finalizing() -> None:
@@ -313,7 +269,8 @@ def test_level32_completed_progress_while_running_is_presented_as_finalizing() -
     assert "Running  ·  Finalizing" in header.plain
     panel = LiveRunContextPanel()
     panel.update_view(view)
-    assert "Stage\nFinalizing" in panel._text.render().plain
+    # Stage/finalizing is owned exclusively by the header
+    assert "Finalizing" not in panel._text.render().plain
 
 
 def test_live_footer_refreshes_when_running_session_fails(tmp_path: Path) -> None:

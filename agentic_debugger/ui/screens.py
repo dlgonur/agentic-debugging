@@ -243,8 +243,10 @@ def render_view_header(
     *,
     mode: str,
     mode_style: str,
+    elapsed: Optional[str] = None,
     replay_position: Optional[str] = None,
     extra: Optional[str] = None,
+    include_verifier: bool = True,
 ) -> Text:
     """One compact two-line header derived from the presentation view.
 
@@ -303,42 +305,50 @@ def render_view_header(
                 else _operator_stage_label(view.operator_stage)
             )
         elif view.controller_phase is not None:
-            phase = view.controller_phase.value
+            phase = view.controller_phase.value.replace("_", " ").title()
         elif view.phase is not None:
             phase = view.phase.value.replace("_", " ").title()
         if phase is not None:
             status_text += f"  ·  {phase}"
     head.append(status_text, style=status_style)
-    verifier = ""
-    if view.verifier_summary is not None:
-        summary = view.verifier_summary
-        outcome_str = summary.outcome.value if summary.outcome else (summary.status or "?")
-        verifier = f"verifier: {outcome_str}"
-        if summary.workspace_cleaned:
+    if elapsed and elapsed != "—":
+        head.append(f"  ·  {elapsed}", style=f"bold {EVIDENCE}")
+    if mode == "LIVE" and view.status is SessionStatus.RUNNING:
+        if view.latest_model_request_index is not None:
+            head.append(f"  ·  Request {view.latest_model_request_index + 1}")
+    if include_verifier is None:
+        include_verifier = (mode != "LIVE")
+    if include_verifier:
+        verifier = ""
+        if view.verifier_summary is not None:
+            summary = view.verifier_summary
+            outcome_str = summary.outcome.value if summary.outcome else (summary.status or "?")
+            verifier = f"verifier: {outcome_str}"
+            if summary.workspace_cleaned:
+                verifier += " · cleanup verified"
+            elif summary.workspace_cleaned is False:
+                verifier += " · cleanup failed"
+        elif view.verifier_stages:
+            verifier = "verifier incomplete" if view.status.terminal else "verifier running"
+        elif view.termination_reason is SessionTerminationReason.MODEL_ERROR:
+            verifier = "model error"
+        elif view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
+            verifier = "controller budget exhausted"
+        elif view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:
+            verifier = "controller failed"
+        elif view.termination_reason is SessionTerminationReason.SUBPROCESS_ERROR:
+            verifier = "operator error"
+        elif view.status is SessionStatus.CANCELLED:
+            verifier = "cancelled"
+        else:
+            verifier = "verifier pending" if view.status is SessionStatus.RUNNING else "verifier: —"
+        if getattr(view, "cleanup_not_required", False) and "cleanup" not in verifier and "Not required" not in verifier and "No resources" not in verifier:
+            verifier += " · No resources created"
+        elif view.cleanup_verified is True and "cleanup verified" not in verifier:
             verifier += " · cleanup verified"
-        elif summary.workspace_cleaned is False:
+        elif view.cleanup_verified is False and "cleanup failed" not in verifier:
             verifier += " · cleanup failed"
-    elif view.verifier_stages:
-        verifier = "verifier incomplete" if view.status.terminal else "verifier running"
-    elif view.termination_reason is SessionTerminationReason.MODEL_ERROR:
-        verifier = "model error"
-    elif view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
-        verifier = "controller budget exhausted"
-    elif view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:
-        verifier = "controller failed"
-    elif view.termination_reason is SessionTerminationReason.SUBPROCESS_ERROR:
-        verifier = "operator error"
-    elif view.status is SessionStatus.CANCELLED:
-        verifier = "cancelled"
-    else:
-        verifier = "verifier pending" if view.status is SessionStatus.RUNNING else "verifier: —"
-    if getattr(view, "cleanup_not_required", False) and "cleanup" not in verifier and "Not required" not in verifier and "No resources" not in verifier:
-        verifier += " · No resources created"
-    elif view.cleanup_verified is True and "cleanup verified" not in verifier:
-        verifier += " · cleanup verified"
-    elif view.cleanup_verified is False and "cleanup failed" not in verifier:
-        verifier += " · cleanup failed"
-    head.append(f"  ·  {verifier}")
+        head.append(f"  ·  {verifier}")
     if replay_position is not None:
         head.append(f"  ·  {replay_position}", style="dim")
     if extra is not None:
@@ -2672,16 +2682,12 @@ class WorkspaceScreen(Screen):
                         yield EvidenceReviewPanel(id="evidence-pane")
                     with TabPane("Source", id="tab-source"):
                         yield SourcePanel(id="source-pane")
-                        yield WorkstreamPanel(id="source-workstream")
                     with TabPane("Debugger", id="tab-debugger"):
                         yield DebuggerPanel(id="debugger-pane")
-                        yield WorkstreamPanel(id="debugger-workstream")
                     with TabPane("Patch", id="tab-patch"):
                         yield PatchPanel(id="patch-pane")
-                        yield WorkstreamPanel(id="patch-workstream")
                     with TabPane("Verifier", id="tab-verifier"):
                         yield VerifierPanel(id="verifier-pane")
-                        yield WorkstreamPanel(id="verifier-workstream")
                     with TabPane("Activity", id="tab-activity"):
                         with Vertical(id="activity-container"):
                             with Horizontal(id="activity-copy-bar"):
@@ -2814,6 +2820,7 @@ class WorkspaceScreen(Screen):
                     f"event {self.controller.index}/{self.controller.total_events}"
                     "  ·  read-only replay"
                 )
+        rail_visible = (self.size.width >= 100) if (self.is_mounted and self.size.width > 0) else False
         if self.mode is WorkspaceMode.LIVE:
             if self._live_failure is not None and self._live_terminal is None:
                 extra = "startup failed"
@@ -2821,18 +2828,20 @@ class WorkspaceScreen(Screen):
                 extra = "cancel requested — waiting for worker cleanup"
             elif self._cancel_active and self._live_terminal is None:
                 extra = "cancelling…"
-            else:
-                extra = None
             if (
-                view.source_kind not in (SourceKind.OLLAMA_CLOUD_LADDER, SourceKind.LEVEL32_OPERATOR)
+                not rail_visible
                 and view.model_provenance is not None
                 and view.model_provenance.display_name
             ):
                 model_extra = f"model: {view.model_provenance.display_name}"
                 extra = f"{model_extra}  ·  {extra}" if extra else model_extra
+        elapsed = self._live_elapsed()
+        include_verifier = (not rail_visible) if mode == "LIVE" else True
         header = render_view_header(
             view, mode=mode, mode_style=mode_style,
+            elapsed=elapsed,
             replay_position=position, extra=extra,
+            include_verifier=include_verifier,
         )
         self.query_one("#status-header", StatusHeader).update(header)
 
@@ -2914,40 +2923,49 @@ class WorkspaceScreen(Screen):
         self.query_one("#activity-pane", ActivityPanel).update_view(view)
         boundaries = self._current_boundaries()
         self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
+        self._update_tab_labels(view)
+
         execution: Optional[LiveExecutionState]
         if self.mode is WorkspaceMode.LIVE:
             execution = self.app.live_execution_state()
         else:
             execution = project_live_execution(view, mode=ExecutionMode.REPLAY)
         if execution is not None:
-            # Empty evidence panes lend their space to the workstream; a
-            # pane with real content keeps it and gets a compact stream.
-            # No tab stealing happens here: only the *selected* pane's
-            # layout adapts, and every pane re-render is evidence-driven.
-            narrow = self.size.width < 100
-            for pane_id, workstream_id, available in (
-                ("#source-pane", "#source-workstream", source_state is EvidenceState.AVAILABLE),
-                ("#debugger-pane", "#debugger-workstream", debugger_state is EvidenceState.AVAILABLE),
-                ("#patch-pane", "#patch-workstream", patch_state is EvidenceState.AVAILABLE),
-                ("#verifier-pane", "#verifier-workstream", verifier_state is EvidenceState.AVAILABLE),
-            ):
-                pane = self.query_one(pane_id)
-                workstream = self.query_one(workstream_id, WorkstreamPanel)
-                expanded = not available and bool(view.workstream)
-                pane.styles.height = "1fr" if available or not view.workstream else "auto"
-                workstream.styles.height = "1fr" if expanded else "auto"
-                workstream.update_workstream(
-                    execution,
-                    expanded=expanded,
-                    narrow=narrow,
-                    height=self.size.height,
-                    # The Patch pane owns the detailed diff; its stream stays
-                    # compact without a duplicate diff block.
-                    suppress_change_body=pane_id == "#patch-pane",
-                )
             if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
                 self.query_one("#live-run-context", LiveRunContextPanel).update_execution(execution)
         self._render_bar()
+
+    def _update_tab_labels(self, view: SessionViewState) -> None:
+        try:
+            tabs = self.query_one("#pane-tabs", TabbedContent)
+            ev_tab = tabs.get_tab("tab-evidence")
+            if ev_tab:
+                ev_tab.label = "Evidence"
+            src_tab = tabs.get_tab("tab-source")
+            if src_tab:
+                src_tab.label = "Source"
+            dbg_tab = tabs.get_tab("tab-debugger")
+            if dbg_tab:
+                dbg_tab.label = "Debugger •" if (view.pdb_observed or view.debugger.session_started) else "Debugger"
+            patch_tab = tabs.get_tab("tab-patch")
+            if patch_tab:
+                patch_tab.label = f"Patch ({len(view.patch_attempts)})" if view.patch_attempts else "Patch"
+            ver_tab = tabs.get_tab("tab-verifier")
+            if ver_tab:
+                if view.verifier_summary is not None:
+                    ver_tab.label = "Verifier ✓" if (view.verifier_summary.outcome is not None and getattr(view.verifier_summary.outcome, "value", str(view.verifier_summary.outcome)) == "RESOLVED") else "Verifier"
+                elif view.verifier_stages:
+                    ver_tab.label = "Verifier •"
+                else:
+                    ver_tab.label = "Verifier"
+            act_tab = tabs.get_tab("tab-activity")
+            if act_tab:
+                act_tab.label = "Activity"
+            time_tab = tabs.get_tab("tab-timeline")
+            if time_tab:
+                time_tab.label = "Timeline"
+        except Exception:
+            pass
 
     def _retry_footer_hint(self) -> str:
         return "   r retry" if self._retry_available() else ""
@@ -2976,22 +2994,30 @@ class WorkspaceScreen(Screen):
         return f"[bold {EVIDENCE}]" + ", ".join(parts) + "[/]"
 
     def _live_elapsed(self) -> str:
-        if len(self._live_events) < 2:
+        events = self._live_events or (self.app.live_events() if hasattr(self.app, "live_events") else ())
+        if not events:
             return "—"
         try:
-            started = datetime.fromisoformat(
-                self._live_events[1].timestamp_utc.replace("Z", "+00:00")
-            )
-            ended = (
-                datetime.fromisoformat(
-                    self._live_events[-1].timestamp_utc.replace("Z", "+00:00")
-                )
-                if self._live_terminal is not None
-                else datetime.now(timezone.utc)
-            )
+            started = None
+            for e in events:
+                if e.timestamp_utc:
+                    started = datetime.fromisoformat(e.timestamp_utc.replace("Z", "+00:00"))
+                    break
+            if started is None:
+                return "—"
+            if self._live_terminal is not None:
+                ended = None
+                for e in reversed(events):
+                    if e.timestamp_utc:
+                        ended = datetime.fromisoformat(e.timestamp_utc.replace("Z", "+00:00"))
+                        break
+                if ended is None:
+                    ended = datetime.now(timezone.utc)
+            else:
+                ended = datetime.now(timezone.utc)
             seconds = max(0, int((ended - started).total_seconds()))
             return f"{seconds // 60:02d}:{seconds % 60:02d}"
-        except (TypeError, ValueError):
+        except Exception:
             return "—"
 
     def _current_boundaries(self) -> frozenset[int]:
@@ -3031,22 +3057,7 @@ class WorkspaceScreen(Screen):
                 and self._live_terminal is None
                 and self._live_failure is None
             ):
-                state = self.app.live_execution_state()
-                if state is not None and self.size.width < 100:
-                    ordinal = state.request_ordinal
-                    req = (
-                        f"req {ordinal}/{state.ceilings.model_requests}"
-                        if ordinal is not None and state.ceilings.model_requests is not None
-                        else f"req {ordinal}" if ordinal is not None else "req —"
-                    )
-                    detail = f"LIVE · {state.operation_label} · {req}"
-                    if state.request_elapsed_seconds is not None:
-                        detail += f" · {state.request_elapsed_seconds:.0f}s"
-                    if state.last_activity_age_seconds is not None:
-                        detail += f" · last {state.last_activity_age_seconds:.0f}s"
-                    bar.update(f"[dim]{_markup_escape(detail)}   {WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
-                else:
-                    bar.update(f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
+                bar.update(f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
             else:
                 footer = WORKSPACE_FOOTER_IDLE
                 if self._view.source_kind is SourceKind.LOCAL_PROJECT:

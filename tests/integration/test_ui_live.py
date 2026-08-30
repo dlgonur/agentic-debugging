@@ -137,7 +137,9 @@ class TestLiveStartAndProgression:
             header = header_text(workspace)
             assert "Completed" in header
             assert "Succeeded" not in header
-            assert "cleanup verified" in header
+            rail = pane_text(workspace, "#live-run-context-pane")
+            assert "RUN CONTEXT" in rail
+            assert "VERIFIER" in rail
             assert "c cancel" not in live_bar_text(workspace)
             live_view = app.live_view
             assert live_view is not None
@@ -250,7 +252,9 @@ class TestLiveCancellation:
             await wait_live_terminal(pilot, workspace)
             header = header_text(workspace)
             assert "Cancelled" in header
-            assert "cleanup verified" in header
+            rail = pane_text(workspace, "#live-run-context-pane")
+            assert "RUN CONTEXT" in rail
+            assert "VERIFIER" in rail
             assert "c cancel" not in live_bar_text(workspace)
             live_view = app.live_view
             assert live_view is not None

@@ -879,3 +879,230 @@ class TestStructuredOperationFacts:
             ),
         )
         assert state.official_execution_proven is False
+
+
+class TestTimelineDurationTruth:
+    def test_paired_model_request_computes_exact_duration(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.MODEL_REQUEST_STARTED,
+                {"request_index": 0},
+                sequence=2,
+                timestamp="2026-08-30T10:00:00.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds is None
+
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.MODEL_REQUEST_COMPLETED,
+                {"request_index": 0, "status": "ok"},
+                sequence=3,
+                timestamp="2026-08-30T10:00:04.250Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(4.25)
+
+    def test_paired_tool_execution_computes_exact_duration(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_STARTED,
+                {"tool_name": "read_source", "target": "main.py"},
+                sequence=2,
+                timestamp="2026-08-30T10:00:05.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds is None
+
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_COMPLETED,
+                {"tool_name": "read_source", "target": "main.py", "status": "ok"},
+                sequence=3,
+                timestamp="2026-08-30T10:00:05.350Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(0.35)
+
+    def test_paired_verifier_stage_and_cleanup_durations(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.VERIFIER_STAGE_STARTED,
+                {"stage": "f2p_p2p_checks"},
+                sequence=2,
+                timestamp="2026-08-30T10:00:10.000Z",
+            ),
+        )
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.VERIFIER_STAGE_COMPLETED,
+                {"stage": "f2p_p2p_checks", "status": "completed"},
+                sequence=3,
+                timestamp="2026-08-30T10:00:12.800Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(2.8)
+
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.CLEANUP_STARTED,
+                {},
+                sequence=4,
+                timestamp="2026-08-30T10:00:13.000Z",
+            ),
+        )
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.CLEANUP_COMPLETED,
+                {"verified": True},
+                sequence=5,
+                timestamp="2026-08-30T10:00:13.150Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(0.15)
+
+    def test_instantaneous_event_has_no_duration(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.CONTROLLER_STEP,
+                {"step_index": 0, "directive_kind": "action", "stop_reason": None},
+                sequence=2,
+                timestamp="2026-08-30T10:00:01.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds is None
+
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.PATCH_PROPOSED,
+                {"attempt_index": 0, "patch_sha256": "0" * 64},
+                sequence=3,
+                timestamp="2026-08-30T10:00:02.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds is None
+
+    def test_identity_aware_model_request_duration_pairing(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.MODEL_REQUEST_STARTED,
+                {"request_index": 0},
+                sequence=2,
+                timestamp="2026-08-30T10:00:00.000Z",
+            ),
+        )
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.MODEL_REQUEST_STARTED,
+                {"request_index": 1},
+                sequence=3,
+                timestamp="2026-08-30T10:00:10.000Z",
+            ),
+        )
+        # Request 0 completion pairs with Request 0 start (4s delta), not Request 1
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.MODEL_REQUEST_COMPLETED,
+                {"request_index": 0, "status": "ok"},
+                sequence=4,
+                timestamp="2026-08-30T10:00:04.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(4.0)
+
+        # Request 1 completion pairs with Request 1 start (2s delta)
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.MODEL_REQUEST_COMPLETED,
+                {"request_index": 1, "status": "ok"},
+                sequence=5,
+                timestamp="2026-08-30T10:00:12.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(2.0)
+
+    def test_identity_aware_tool_duration_pairing(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_STARTED,
+                {"tool_name": "read_source", "target": "main.py"},
+                sequence=2,
+                timestamp="2026-08-30T10:00:00.000Z",
+            ),
+        )
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_STARTED,
+                {"tool_name": "read_source", "target": "util.py"},
+                sequence=3,
+                timestamp="2026-08-30T10:00:05.000Z",
+            ),
+        )
+        # util.py completion pairs with util.py start (1s delta)
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_COMPLETED,
+                {"tool_name": "read_source", "target": "util.py", "status": "ok"},
+                sequence=4,
+                timestamp="2026-08-30T10:00:06.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(1.0)
+
+        # main.py completion pairs with main.py start (8s delta)
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_COMPLETED,
+                {"tool_name": "read_source", "target": "main.py", "status": "ok"},
+                sequence=5,
+                timestamp="2026-08-30T10:00:08.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds == pytest.approx(8.0)
+
+    def test_unmatched_operation_has_no_duration(self):
+        state = state_started()
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_STARTED,
+                {"tool_name": "read_source", "target": "main.py"},
+                sequence=2,
+                timestamp="2026-08-30T10:00:00.000Z",
+            ),
+        )
+        # A completed event for a different tool/target has no matching start -> duration None
+        state = reduce_event(
+            state,
+            make_event(
+                SessionEventKind.TOOL_COMPLETED,
+                {"tool_name": "apply_patch", "status": "ok"},
+                sequence=3,
+                timestamp="2026-08-30T10:00:05.000Z",
+            ),
+        )
+        assert state.timeline[-1].duration_seconds is None

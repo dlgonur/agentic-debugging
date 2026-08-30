@@ -19,10 +19,15 @@ from dataclasses import replace
 
 import pytest
 
-from agentic_debugger.application.events import SessionEventKind, SourceKind
+from agentic_debugger.application.events import SessionEventKind, SessionStatus, SourceKind
+from agentic_debugger.evaluation.outcome_taxonomy import SemanticOutcome
 from agentic_debugger.application.presentation import (
+    DiagnosisView,
+    ModelProvenanceView,
     PresentationIdentity,
+    SessionViewState,
     TimelineEntry,
+    VerifierSummaryView,
     initial_session_view,
     reduce_event,
 )
@@ -30,7 +35,9 @@ from agentic_debugger.ui.screens import render_view_header
 from agentic_debugger.ui.widgets import (
     ActivityPanel,
     DebuggerPanel,
+    EvidenceReviewPanel,
     EvidenceState,
+    LiveRunContextPanel,
     PatchPanel,
     SourcePanel,
     TimelinePanel,
@@ -39,6 +46,7 @@ from agentic_debugger.ui.widgets import (
     _KIND_STYLE,
     _highlight_source_lines,
     _entry_style,
+    timeline_export_text,
 )
 from agentic_debugger.ui.theme import (
     CODE_FUNCTION,
@@ -415,8 +423,7 @@ class TestPaneRendering:
     def test_verifier_pane_authority_note_is_plain(self):
         view = fold(bracket_stream())
         plain = VerifierPanel._render_view(view).plain
-        assert "The verifier result is the correctness authority." in plain
-        assert "Application completion is operational only." in plain
+        assert "The verifier result is the correctness authority." not in plain
         assert "COMPLETED" in plain
         assert "RESOLVED" in plain
         assert_no_style_tags(plain)
@@ -607,3 +614,322 @@ class TestActivityFilterVocabularyAndStyling:
         assert _KIND_STYLE[SessionEventKind.MODEL_DIRECTIVE_REJECTED.value] == WARNING
         assert _KIND_STYLE[SessionEventKind.PATCH_REJECTED.value] == WARNING
         assert _KIND_STYLE[SessionEventKind.SESSION_CANCELLED.value] == f"bold {WARNING}"
+
+
+class TestTimelineDurationRendering:
+    def test_completed_operation_renders_truthful_duration(self):
+        panel = TimelinePanel()
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            timeline=(
+                TimelineEntry(
+                    sequence=0,
+                    event_kind=SessionEventKind.SESSION_STARTED,
+                    summary="session started",
+                    timestamp_utc="2026-08-30T10:00:00Z",
+                    duration_seconds=None,
+                ),
+                TimelineEntry(
+                    sequence=1,
+                    event_kind=SessionEventKind.MODEL_REQUEST_COMPLETED,
+                    summary="Model request 1 completed",
+                    timestamp_utc="2026-08-30T10:00:03Z",
+                    duration_seconds=3.2,
+                ),
+            ),
+        )
+        rendered = panel._render_view(view).plain
+        assert "#1    Model request 1 completed  (3.2s)" in rendered
+
+    def test_instantaneous_event_has_no_next_event_gap_displayed(self):
+        panel = TimelinePanel()
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            timeline=(
+                TimelineEntry(
+                    sequence=0,
+                    event_kind=SessionEventKind.CONTROLLER_STEP,
+                    summary="hypothesis added",
+                    timestamp_utc="2026-08-30T10:00:00Z",
+                    duration_seconds=None,
+                ),
+                TimelineEntry(
+                    sequence=1,
+                    event_kind=SessionEventKind.PATCH_PROPOSED,
+                    summary="patch attempt 1 proposed",
+                    timestamp_utc="2026-08-30T10:00:05Z",
+                    duration_seconds=None,
+                ),
+            ),
+        )
+        rendered = panel._render_view(view).plain
+        assert "(5s)" not in rendered
+        assert "(5.0s)" not in rendered
+
+    def test_inflight_operation_renders_running_indicator(self):
+        panel = TimelinePanel()
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            timeline=(
+                TimelineEntry(
+                    sequence=0,
+                    event_kind=SessionEventKind.MODEL_REQUEST_STARTED,
+                    summary="Model request 1 started",
+                    timestamp_utc="2026-08-30T10:00:00Z",
+                    duration_seconds=None,
+                    operation_key="model_request:0",
+                ),
+            ),
+        )
+        rendered = panel._render_view(view).plain
+        assert "Model request 1 started  (running…)" in rendered
+
+    def test_inflight_operation_tracks_across_intervening_events(self):
+        panel = TimelinePanel()
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            timeline=(
+                TimelineEntry(
+                    sequence=0,
+                    event_kind=SessionEventKind.MODEL_REQUEST_STARTED,
+                    summary="Model request 1 started",
+                    timestamp_utc="2026-08-30T10:00:00Z",
+                    duration_seconds=None,
+                    operation_key="model_request:0",
+                ),
+                TimelineEntry(
+                    sequence=1,
+                    event_kind=SessionEventKind.CONTROLLER_STEP,
+                    summary="hypothesis added",
+                    timestamp_utc="2026-08-30T10:00:01Z",
+                    duration_seconds=None,
+                ),
+                TimelineEntry(
+                    sequence=2,
+                    event_kind=SessionEventKind.TOOL_STARTED,
+                    summary="tool read_source started",
+                    timestamp_utc="2026-08-30T10:00:02Z",
+                    duration_seconds=None,
+                    operation_key="tool:read_source:main.py",
+                ),
+            ),
+        )
+        rendered = panel._render_view(view).plain
+        # Both start events are in flight across intervening events
+        assert "Model request 1 started  (running…)" in rendered
+        assert "hypothesis added" in rendered
+        assert "hypothesis added  (running…)" not in rendered
+        assert "tool read_source started  (running…)" in rendered
+
+    def test_completed_operation_clears_inflight_tag(self):
+        panel = TimelinePanel()
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            timeline=(
+                TimelineEntry(
+                    sequence=0,
+                    event_kind=SessionEventKind.MODEL_REQUEST_STARTED,
+                    summary="Model request 1 started",
+                    timestamp_utc="2026-08-30T10:00:00Z",
+                    duration_seconds=None,
+                    operation_key="model_request:0",
+                ),
+                TimelineEntry(
+                    sequence=1,
+                    event_kind=SessionEventKind.MODEL_REQUEST_COMPLETED,
+                    summary="Model request 1 completed",
+                    timestamp_utc="2026-08-30T10:00:03Z",
+                    duration_seconds=3.0,
+                    operation_key="model_request:0",
+                ),
+            ),
+        )
+        rendered = panel._render_view(view).plain
+        assert "Model request 1 started  (running…)" not in rendered
+        assert "Model request 1 completed  (3.0s)" in rendered
+
+    def test_timeline_export_includes_duration_truthfully(self):
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            timeline=(
+                TimelineEntry(
+                    sequence=0,
+                    event_kind=SessionEventKind.MODEL_REQUEST_COMPLETED,
+                    summary="Model request 1 completed",
+                    timestamp_utc="2026-08-30T10:00:03Z",
+                    duration_seconds=3.2,
+                ),
+            ),
+        )
+        exported = timeline_export_text(view)
+        assert "#0 Model request 1 completed  (3.2s)" in exported
+
+
+class TestNoDuplicationContract:
+    def test_wide_layout_no_facts_duplicated_between_header_and_rail(self):
+        from agentic_debugger.application.live_execution import project_live_execution, ExecutionMode
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            latest_model_request_index=0,
+            model_provenance=ModelProvenanceView(
+                profile_id="deepseek-v4-flash:cloud",
+                display_name="DeepSeek V4 Flash",
+            ),
+        )
+        state = project_live_execution(view, mode=ExecutionMode.LIVE)
+        header = render_view_header(view, mode="LIVE", mode_style="bold", elapsed="00:15", extra=None, include_verifier=False)
+        panel = LiveRunContextPanel()
+        panel.update_execution(state)
+        rail_text = panel._text.render().plain
+
+        from agentic_debugger.ui.app import task_display_title
+        title = task_display_title(view.task_id)
+
+        # Header owns:
+        assert "LIVE" in header.plain
+        assert title in header.plain
+        assert "00:15" in header.plain
+        assert "Request 1" in header.plain
+        # Header does NOT own model on wide screens:
+        assert "DeepSeek V4 Flash" not in header.plain
+        assert "deepseek-v4-flash:cloud" not in header.plain
+        # Header does NOT own verifier on wide screens:
+        assert "verifier" not in header.plain.lower()
+
+        # Rail owns:
+        assert "RUN CONTEXT" in rail_text
+        assert "MODEL" in rail_text
+        assert "DeepSeek V4 Flash" in rail_text
+        assert "TARGET" in rail_text
+        assert "STEP" in rail_text
+        assert "PDB" in rail_text
+        assert "PATCH" in rail_text
+        assert "VERIFIER" in rail_text
+
+        # Rail does NOT duplicate header facts:
+        assert title not in rail_text
+        assert "00:15" not in rail_text
+        assert "NOW" not in rail_text
+        assert "REQUEST" not in rail_text
+
+    def test_wide_running_header_omits_verifier_state(self):
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            latest_model_request_index=0,
+        )
+        header = render_view_header(view, mode="LIVE", mode_style="bold", elapsed="00:15", include_verifier=False)
+        assert "verifier pending" not in header.plain
+        assert "verifier running" not in header.plain
+        assert "verifier" not in header.plain.lower()
+
+    def test_wide_terminal_header_omits_verifier_state(self):
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.SUCCEEDED,
+            verifier_summary=VerifierSummaryView(
+                status="completed",
+                outcome=SemanticOutcome.RESOLVED,
+                f2p_passed=1,
+                f2p_total=1,
+                p2p_passed=2,
+                p2p_total=2,
+                workspace_cleaned=True,
+            ),
+        )
+        header = render_view_header(view, mode="LIVE", mode_style="bold", elapsed="00:45", include_verifier=False)
+        assert "Completed" in header.plain
+        assert "00:45" in header.plain
+        assert "verifier: RESOLVED" not in header.plain
+        assert "cleanup verified" not in header.plain
+
+    def test_narrow_session_with_hidden_rail_surfaces_verifier_and_model(self):
+        view = SessionViewState(
+            task_id="curated-off-by-one-002",
+            source_kind=SourceKind.OFFLINE_DEMO,
+            status=SessionStatus.RUNNING,
+            latest_model_request_index=0,
+            model_provenance=ModelProvenanceView(
+                profile_id="deepseek-v4-flash:cloud",
+                display_name="DeepSeek V4 Flash",
+            ),
+        )
+        header = render_view_header(
+            view,
+            mode="LIVE",
+            mode_style="bold",
+            elapsed="00:15",
+            extra="model: DeepSeek V4 Flash",
+            include_verifier=True,
+        )
+        assert "model: DeepSeek V4 Flash" in header.plain
+        assert "verifier pending" in header.plain
+
+    def test_local_project_no_facts_duplicated_between_header_and_rail(self):
+        from agentic_debugger.application.live_execution import project_live_execution, ExecutionMode
+        view = SessionViewState(
+            task_id="local_project_debug",
+            source_kind=SourceKind.LOCAL_PROJECT,
+            status=SessionStatus.RUNNING,
+            latest_model_request_index=0,
+            diagnosis=DiagnosisView(observed_values={"repo_basename": "my-tool", "source_head": "abc1234"}),
+            model_provenance=ModelProvenanceView(
+                profile_id="qwen2.5-coder:7b",
+                display_name="Qwen2.5 Coder 7B",
+            ),
+        )
+        state = project_live_execution(view, mode=ExecutionMode.LIVE)
+        header = render_view_header(view, mode="LIVE", mode_style="bold", elapsed="00:08", extra=None, include_verifier=False)
+        panel = LiveRunContextPanel()
+        panel.update_execution(state)
+        rail_text = panel._text.render().plain
+
+        # Header owns:
+        assert "Local Project Debug" in header.plain
+        assert "00:08" in header.plain
+        assert "Request 1" in header.plain
+        assert "Qwen2.5 Coder 7B" not in header.plain
+        assert "verifier" not in header.plain.lower()
+
+        # Rail owns:
+        assert "RUN CONTEXT" in rail_text
+        assert "MODEL" in rail_text
+        assert "Qwen2.5 Coder 7B" in rail_text
+        assert "PROJECT" in rail_text
+        assert "my-tool" in rail_text
+        assert "HEAD" in rail_text
+        assert "abc1234" in rail_text
+
+        # Rail does NOT duplicate header facts:
+        assert "Local Project Debug" not in rail_text
+        assert "00:08" not in rail_text
+        assert "NOW" not in rail_text
+        assert "REQUEST" not in rail_text
+
+    def test_evidence_review_and_verifier_panels_have_no_methodology_prose(self):
+        view = initial_session_view(PresentationIdentity(task_id="curated-off-by-one-002", source_kind=SourceKind.OFFLINE_DEMO))
+        evidence_text = EvidenceReviewPanel._render_view(view).plain
+
+        assert "The independent verifier is the correctness authority." not in evidence_text
+        assert "correctness authority" not in evidence_text
+
+        vpanel = VerifierPanel()
+        verifier_text = vpanel._render_view(view).plain
+        assert "The verifier result is the correctness authority." not in verifier_text
+        assert "correctness authority" not in verifier_text

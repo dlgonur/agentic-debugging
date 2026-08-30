@@ -138,7 +138,7 @@ def _reproduction_stage(view: SessionViewState) -> EvidenceStage:
         EvidenceStageKind.REPRODUCE,
         _waiting_state(view),
         "Original failure",
-        "No accepted baseline reproduction is present in this evidence prefix.",
+        "Pending" if not view.status.terminal else "Not recorded",
     )
 
 
@@ -175,14 +175,14 @@ def _inspection_stage(view: SessionViewState) -> EvidenceStage:
             EvidenceStageKind.INSPECT,
             EvidenceStageState.RECORDED,
             "Debugger session recorded",
-            "A debugger session started, but no typed PDB observation milestone is present.",
+            "Debugger active, awaiting observation.",
             ("debugger.started",),
         )
     return EvidenceStage(
         EvidenceStageKind.INSPECT,
         _waiting_state(view),
         "Runtime inspection",
-        "No debugger observation is present in this evidence prefix.",
+        "Pending" if not view.status.terminal else "Not recorded",
     )
 
 
@@ -193,7 +193,7 @@ def _diagnosis_stage(view: SessionViewState) -> EvidenceStage:
             EvidenceStageKind.DIAGNOSE,
             _waiting_state(view),
             "Controller diagnosis",
-            "No diagnosis claim is recorded in this evidence prefix.",
+            "Pending" if not view.status.terminal else "Not recorded",
         )
     target = diagnosis.symbol or diagnosis.file_path
     detail = _bounded(diagnosis.text)
@@ -216,7 +216,7 @@ def _change_stage(view: SessionViewState) -> EvidenceStage:
             EvidenceStageKind.CHANGE,
             _waiting_state(view),
             "Candidate change",
-            "No candidate patch is recorded in this evidence prefix.",
+            "Pending" if not view.status.terminal else "Not recorded",
         )
     attempt = view.patch_attempts[-1]
     changed = ", ".join(attempt.changed_files) or "changed files not recorded"
@@ -246,7 +246,7 @@ def _verification_stage(view: SessionViewState) -> EvidenceStage:
             EvidenceStageKind.VERIFY,
             state,
             "Independent verification",
-            "No authoritative verifier result is present in this evidence prefix.",
+            "Pending" if not view.status.terminal else "Not recorded",
         )
     outcome = summary.outcome.value if summary.outcome is not None else "no outcome"
     f2p = (
@@ -306,7 +306,7 @@ def _cleanup_stage(view: SessionViewState) -> EvidenceStage:
         EvidenceStageKind.CLEANUP,
         _waiting_state(view),
         "Cleanup integrity",
-        "No cleanup result is present in this evidence prefix.",
+        "Pending" if not view.status.terminal else "Not recorded",
     )
 
 
@@ -317,7 +317,7 @@ def project_case_brief(view: SessionViewState) -> CaseBrief:
     summary = view.verifier_summary
     authoritative = summary is not None
     if summary is None:
-        verdict = "Awaiting independent verification"
+        verdict = "Awaiting verification"
     elif summary.outcome is not None:
         verdict = summary.outcome.value
     else:

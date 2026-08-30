@@ -27,6 +27,7 @@ RECORDED`` display rule for recorded material.
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime
 from enum import Enum
 from typing import Any, Mapping, Optional, Tuple
 
@@ -284,6 +285,9 @@ class TimelineEntry:
     sequence: int
     event_kind: SessionEventKind
     summary: str
+    timestamp_utc: Optional[str] = None
+    duration_seconds: Optional[float] = None
+    operation_key: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -369,104 +373,161 @@ def summarize_event(event: SessionEvent) -> str:
     if kind is SessionEventKind.SESSION_STARTED:
         return "session started"
     if kind is SessionEventKind.SESSION_STATUS_CHANGED:
-        return f"session running ({payload['phase']})"
+        phase = str(payload.get("phase", "")).replace("_", " ")
+        return f"Session running ({phase})"
     if kind is SessionEventKind.SESSION_CANCEL_REQUESTED:
-        return "cancel requested"
+        return "Cancel requested"
     if kind in (
         SessionEventKind.SESSION_COMPLETED,
         SessionEventKind.SESSION_FAILED,
         SessionEventKind.SESSION_CANCELLED,
     ):
-        return (
-            f"session {payload['status']} "
-            f"({payload['termination_reason']})"
-        )
+        reason = str(payload.get("termination_reason", "")).replace("_", " ")
+        return f"session {payload['status']} ({reason})"
     if kind is SessionEventKind.CONTROLLER_STEP:
-        detail = payload.get("directive_kind") or payload.get("stop_reason") or "step"
-        # User-visible summaries are one-based; durable step_index stays
-        # zero-based inside the event payload.
-        return f"controller step {payload['step_index'] + 1} ({detail})"
+        step_num = payload["step_index"] + 1
+        directive = payload.get("directive_kind") or payload.get("stop_reason") or "step"
+        directive_map = {
+            "add_hypothesis": "hypothesis added",
+            "read_source": "source read",
+            "run_debugger": "PDB inspection",
+            "apply_patch": "patch candidate",
+            "verify": "verification requested",
+            "stop": "controller stopped",
+        }
+        detail = directive_map.get(directive, str(directive).replace("_", " "))
+        return f"Controller step {step_num} ({detail})"
     if kind is SessionEventKind.CONTROLLER_TRANSITION:
-        return (
-            f"controller transition "
-            f"({payload['source_state']} -> {payload['target_state']})"
-        )
+        src = str(payload.get("source_state", "")).replace("_", " ")
+        tgt = str(payload.get("target_state", "")).replace("_", " ")
+        return f"controller transition: {src} -> {tgt}"
     if kind is SessionEventKind.MODEL_REQUEST_STARTED:
-        return f"model request {payload['request_index'] + 1} started"
+        return f"Model request {payload['request_index'] + 1} started"
     if kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
         if payload["status"] != "ok" and payload.get("error_kind"):
             return (
                 f"model request {payload['request_index'] + 1} failed — "
                 f"{payload['error_kind']}: {payload['error_message']}"
             )
-        return (
-            f"model request {payload['request_index'] + 1} completed "
-            f"({payload['status']})"
-        )
+        return f"Model request {payload['request_index'] + 1} completed"
     if kind is SessionEventKind.MODEL_DIRECTIVE_ACCEPTED:
         detail = payload.get("action_name") or payload.get("target_state") or "directive"
-        return f"directive accepted ({detail})"
+        return f"Directive accepted ({str(detail).replace('_', ' ')})"
     if kind is SessionEventKind.MODEL_DIRECTIVE_REJECTED:
-        return f"directive rejected ({payload['rejection_category']})"
+        return f"Directive rejected ({payload['rejection_category']})"
     if kind is SessionEventKind.MODEL_CONFIGURED:
-        return f"model configured ({payload['profile_id']})"
+        return f"Model configured ({payload['profile_id']})"
     if kind is SessionEventKind.OPERATOR_PROGRESS:
+        stage = payload.get("stage", "")
+        stage_labels = {
+            "starting": "Session starting",
+            "preflight": "Preflight complete",
+            "preparing_workspace": "Workspace prepared",
+            "model_running": "Model request in progress",
+            "debugger": "Debugger inspection",
+            "candidate": "Candidate patch received",
+            "verification": "Running verifier",
+            "official_verification": "Running official verifier",
+            "official_verification_preparing": "Preparing verification",
+            "official_evaluator_started": "Official evaluator started",
+            "official_evaluator_completed": "Official evaluator completed",
+            "finalizing": "Finalizing results",
+            "cleanup": "Cleaning workspace",
+            "completed": "Session complete",
+        }
+        label = stage_labels.get(stage, f"Stage: {str(stage).replace('_', ' ')}")
         detail = payload.get("detail")
-        suffix = f": {detail}" if detail else ""
-        return f"operator stage {payload['stage']}{suffix}"
+        return f"{label}: {detail}" if detail else label
     if kind is SessionEventKind.TOOL_STARTED:
-        summary = f"tool {payload['tool_name']} started"
+        tool_map = {
+            "read_source": "Source read",
+            "set_breakpoint": "Set breakpoint",
+            "run_to_breakpoint": "Run to breakpoint",
+            "step_over": "Step over",
+            "step_into": "Step into",
+            "step": "Step",
+            "get_stack_summary": "Inspect stack",
+            "get_locals": "Inspect locals",
+            "apply_patch": "Apply patch",
+            "revert_patch": "Revert patch",
+            "run_repro": "Run reproduction",
+            "run_tests": "Run tests",
+        }
+        tool_name = payload["tool_name"]
+        action = tool_map.get(tool_name, f"Tool {tool_name}")
         target = payload.get("target")
-        return f"{summary} ({target})" if target else summary
+        return f"{action} started ({target})" if target else f"{action} started"
     if kind is SessionEventKind.TOOL_COMPLETED:
-        summary = f"tool {payload['tool_name']} completed ({payload['status']})"
+        tool_map = {
+            "read_source": "Source read",
+            "set_breakpoint": "Breakpoint set",
+            "run_to_breakpoint": "Run to breakpoint",
+            "step_over": "Step complete",
+            "step_into": "Step into complete",
+            "step": "Step complete",
+            "get_stack_summary": "Stack inspected",
+            "get_locals": "Locals inspected",
+            "apply_patch": "Patch applied",
+            "revert_patch": "Patch reverted",
+            "run_repro": "Reproduction complete",
+            "run_tests": "Tests complete",
+        }
+        tool_name = payload["tool_name"]
+        action = tool_map.get(tool_name, f"Tool {tool_name}")
         target = payload.get("target")
-        return f"{summary} ({target})" if target else summary
+        status = payload.get("status", "ok")
+        if target:
+            return f"{action} ({target}) ({status})" if status != "ok" else f"{action} ({target})"
+        return f"{action} ({status})" if status != "ok" else f"{action}"
     if kind is SessionEventKind.DEBUGGER_STARTED:
-        return "debugger started"
+        return "Debugger started"
     if kind is SessionEventKind.DEBUGGER_LOCATION_CHANGED:
-        location = payload.get("function") or payload.get("script") or "?"
-        return f"debugger location ({location} line {payload.get('line')})"
+        fn = payload.get("function")
+        script = payload.get("script")
+        line = payload.get("line")
+        loc = f"{script}:{line}" if script and line is not None else script or f"line {line}"
+        if fn:
+            return f"Paused at {fn} ({loc})"
+        return f"Paused at {loc}"
     if kind is SessionEventKind.DEBUGGER_STACK_OBSERVED:
-        return f"stack observed ({len(payload['frames'])} frames)"
+        return f"Stack observed ({len(payload['frames'])} frames)"
     if kind is SessionEventKind.DEBUGGER_LOCALS_OBSERVED:
-        return f"locals observed ({len(payload['locals'])} values)"
+        return f"Locals observed ({len(payload['locals'])} values)"
     if kind is SessionEventKind.PATCH_PROPOSED:
         return f"patch attempt {payload['attempt_index'] + 1} proposed"
     if kind is SessionEventKind.PATCH_REJECTED:
-        return f"patch attempt {payload['attempt_index'] + 1} rejected"
+        return f"Patch attempt {payload['attempt_index'] + 1} rejected"
     if kind is SessionEventKind.PATCH_APPLY_FAILED:
-        return f"patch attempt {payload['attempt_index'] + 1} apply failed"
+        return f"Patch attempt {payload['attempt_index'] + 1} apply failed"
     if kind is SessionEventKind.PATCH_APPLIED:
-        return f"patch attempt {payload['attempt_index'] + 1} applied"
+        return f"Patch attempt {payload['attempt_index'] + 1} applied"
     if kind is SessionEventKind.PATCH_REVERTED:
-        return f"patch attempt {payload['attempt_index'] + 1} reverted"
+        return f"Patch attempt {payload['attempt_index'] + 1} reverted"
     if kind is SessionEventKind.SOURCE_SNAPSHOT:
-        return (
-            f"source snapshot ({payload['path']}, {payload['stage']}, "
-            f"{payload['line_count']} lines)"
-        )
+        return f"Source snapshot: {payload['path']} ({payload['line_count']} lines)"
     if kind is SessionEventKind.DIAGNOSIS_RECORDED:
         detail = payload.get("text")
-        return f"diagnosis recorded: {_trim_summary(detail)}" if detail else "diagnosis recorded"
+        return f"Diagnosis: {_trim_summary(detail)}" if detail else "Diagnosis recorded"
     if kind is SessionEventKind.VERIFIER_STARTED:
-        return "verifier started"
+        return "Verifier started"
     if kind is SessionEventKind.VERIFIER_STAGE_STARTED:
-        return f"verifier stage started: {payload['stage']}"
+        stage = str(payload.get("stage", "")).replace("_", " ")
+        return f"Verifier stage started: {stage}"
     if kind is SessionEventKind.VERIFIER_STAGE_COMPLETED:
-        return f"verifier stage completed: {payload['stage']} ({payload['status']})"
+        stage = str(payload.get("stage", "")).replace("_", " ")
+        return f"Verifier stage: {stage} ({payload['status']})"
     if kind is SessionEventKind.VERIFIER_COMPLETED:
         outcome = payload.get("outcome") or "no outcome"
         return f"verifier completed ({outcome})"
     if kind is SessionEventKind.CLEANUP_STARTED:
-        return "cleanup started"
+        return "Cleanup started"
     if kind is SessionEventKind.CLEANUP_COMPLETED:
         verified = "verified" if payload["verified"] else "unverified"
-        return f"cleanup completed ({verified})"
+        return f"Cleanup completed ({verified})"
     if kind is SessionEventKind.CLEANUP_NOT_REQUIRED:
-        return "cleanup not required"
+        return "Cleanup not required"
     if kind is SessionEventKind.ARTIFACT_WRITTEN:
-        return f"artifact written: {payload['path']}"
+        return f"Artifact written: {payload['path']}"
     raise ApplicationContractError(f"unsupported event kind: {kind.value!r}")
 
 
@@ -753,6 +814,90 @@ def active_candidate_attempt(state: SessionViewState) -> Optional["PatchAttemptV
     return active
 
 
+def _operation_key(kind: SessionEventKind, payload: Mapping[str, Any]) -> Optional[str]:
+    """Derive a safe identity key for correlating paired start/completion events."""
+    if kind in (SessionEventKind.MODEL_REQUEST_STARTED, SessionEventKind.MODEL_REQUEST_COMPLETED):
+        req_idx = payload.get("request_index")
+        return f"model_request:{req_idx}" if req_idx is not None else "model_request"
+    if kind in (SessionEventKind.TOOL_STARTED, SessionEventKind.TOOL_COMPLETED):
+        tool_name = payload.get("tool_name", "")
+        call_id = payload.get("tool_call_id")
+        target = payload.get("target")
+        if call_id:
+            return f"tool:{tool_name}:{call_id}"
+        if target:
+            return f"tool:{tool_name}:{target}"
+        return f"tool:{tool_name}" if tool_name else "tool"
+    if kind in (SessionEventKind.VERIFIER_STAGE_STARTED, SessionEventKind.VERIFIER_STAGE_COMPLETED):
+        stage = payload.get("stage")
+        return f"verifier_stage:{stage}" if stage else "verifier_stage"
+    if kind in (SessionEventKind.VERIFIER_STARTED, SessionEventKind.VERIFIER_COMPLETED):
+        return "verifier"
+    if kind in (SessionEventKind.CLEANUP_STARTED, SessionEventKind.CLEANUP_COMPLETED):
+        return "cleanup"
+    if kind in (
+        SessionEventKind.SESSION_STARTED,
+        SessionEventKind.SESSION_COMPLETED,
+        SessionEventKind.SESSION_FAILED,
+        SessionEventKind.SESSION_CANCELLED,
+    ):
+        return "session"
+    return None
+
+
+def _compute_timeline_duration(
+    state: SessionViewState,
+    event: SessionEvent,
+    op_key: Optional[str] = None,
+) -> Optional[float]:
+    """Derive actual duration for paired operation start+completion events."""
+    if not event.timestamp_utc:
+        return None
+    try:
+        event_dt = datetime.fromisoformat(event.timestamp_utc.replace("Z", "+00:00"))
+    except Exception:
+        return None
+
+    target_start_kind: Optional[SessionEventKind] = None
+    kind = event.event_kind
+    if kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
+        target_start_kind = SessionEventKind.MODEL_REQUEST_STARTED
+    elif kind is SessionEventKind.TOOL_COMPLETED:
+        target_start_kind = SessionEventKind.TOOL_STARTED
+    elif kind is SessionEventKind.VERIFIER_STAGE_COMPLETED:
+        target_start_kind = SessionEventKind.VERIFIER_STAGE_STARTED
+    elif kind is SessionEventKind.VERIFIER_COMPLETED:
+        target_start_kind = SessionEventKind.VERIFIER_STARTED
+    elif kind is SessionEventKind.CLEANUP_COMPLETED:
+        target_start_kind = SessionEventKind.CLEANUP_STARTED
+    elif kind in (
+        SessionEventKind.SESSION_COMPLETED,
+        SessionEventKind.SESSION_FAILED,
+        SessionEventKind.SESSION_CANCELLED,
+    ):
+        target_start_kind = SessionEventKind.SESSION_STARTED
+
+    if target_start_kind is None:
+        return None
+
+    for prev in reversed(state.timeline):
+        if prev.event_kind is target_start_kind:
+            # Identity-aware correlation: if keys are present, they must match
+            if op_key is not None and prev.operation_key is not None:
+                if prev.operation_key != op_key:
+                    continue
+            elif op_key is not None or prev.operation_key is not None:
+                continue
+            if prev.timestamp_utc:
+                try:
+                    start_dt = datetime.fromisoformat(prev.timestamp_utc.replace("Z", "+00:00"))
+                    secs = (event_dt - start_dt).total_seconds()
+                    return max(0.0, secs)
+                except Exception:
+                    return None
+    return None
+
+
 def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionViewState:
     """Reduce one validated event into a new immutable view state.
 
@@ -785,8 +930,15 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
 
     kind = event.event_kind
     payload = event.payload
+    op_key = _operation_key(kind, payload)
+    duration_seconds = _compute_timeline_duration(state, event, op_key)
     entry = TimelineEntry(
-        sequence=event.sequence, event_kind=kind, summary=_trim_summary(summarize_event(event))
+        sequence=event.sequence,
+        event_kind=kind,
+        summary=_trim_summary(summarize_event(event)),
+        timestamp_utc=event.timestamp_utc,
+        duration_seconds=duration_seconds,
+        operation_key=op_key,
     )
     timeline = _append_timeline(state.timeline, entry)
     controller_phase = event.controller_phase

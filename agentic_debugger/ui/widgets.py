@@ -13,6 +13,7 @@ come from the view.
 
 from __future__ import annotations
 
+from datetime import datetime
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -333,7 +334,8 @@ class EvidenceReviewPanel(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield self._text
 
-    def update_view(self, view: SessionViewState) -> None:
+    @classmethod
+    def _render_view(cls, view: SessionViewState) -> Text:
         brief = project_case_brief(view)
         text = Text()
         text.append("Evidence Review", style=f"bold {PRIMARY}")
@@ -347,24 +349,21 @@ class EvidenceReviewPanel(VerticalScroll):
             else f"bold {WARNING}"
         )
         text.append(brief.verdict, style=verdict_style)
-        text.append(
-            "  AUTHORITATIVE\n" if brief.verdict_authoritative else "  NOT YET AUTHORITATIVE\n",
-            style=f"bold {EVIDENCE}" if brief.verdict_authoritative else MUTED,
-        )
-        text.append(
-            "Controller diagnosis is a claim. The independent verifier is the correctness authority.\n",
-            style=MUTED,
-        )
+        if brief.verdict_authoritative:
+            text.append("  AUTHORITATIVE\n", style=f"bold {EVIDENCE}")
+        else:
+            text.append("  (Awaiting independent verification)\n", style=MUTED)
         text.append("─" * 72 + "\n", style=LINE)
         for index, stage in enumerate(brief.stages):
-            label = self._STATE_LABELS[stage.state]
-            text.append(f"{label:<13}", style=self._STATE_STYLES[stage.state])
+            label = cls._STATE_LABELS[stage.state]
+            text.append(f"{label:<13}", style=cls._STATE_STYLES[stage.state])
             text.append(f"{stage.kind.value.upper():<11}", style=f"bold {FOREGROUND}")
             text.append(stage.title, style=FOREGROUND)
             text.append("\n")
-            text.append(" " * 13)
-            text.append(stage.detail, style=MUTED)
-            text.append("\n")
+            if stage.detail and stage.detail not in ("Pending", "Not recorded"):
+                text.append(" " * 13)
+                text.append(stage.detail, style=MUTED)
+                text.append("\n")
             if stage.references:
                 references = ", ".join(stage.references[:4])
                 if len(stage.references) > 4:
@@ -373,7 +372,10 @@ class EvidenceReviewPanel(VerticalScroll):
                 text.append(f"evidence: {references}\n", style=f"dim {PRIMARY}")
             if index < len(brief.stages) - 1:
                 text.append("\n")
-        self._text.update(text)
+        return text
+
+    def update_view(self, view: SessionViewState) -> None:
+        self._text.update(self._render_view(view))
 
 
 class SourcePanel(VerticalScroll):
@@ -790,11 +792,6 @@ class VerifierPanel(VerticalScroll):
             _append_kv(text, "workspace cleaned", str(summary.workspace_cleaned))
         if summary.classification:
             _append_kv(text, "Level-32 classification", summary.classification)
-        text.append(
-            "\nThe verifier result is the correctness authority. "
-            "Application completion is operational only.\n",
-            style="dim",
-        )
         return text
 
 
@@ -863,6 +860,41 @@ class ActivityPanel(VerticalScroll):
         return activity_export_text(target, filter_name=self.filter)
 
 
+_START_TO_COMPLETION_KINDS: dict[SessionEventKind, SessionEventKind] = {
+    SessionEventKind.MODEL_REQUEST_STARTED: SessionEventKind.MODEL_REQUEST_COMPLETED,
+    SessionEventKind.TOOL_STARTED: SessionEventKind.TOOL_COMPLETED,
+    SessionEventKind.VERIFIER_STAGE_STARTED: SessionEventKind.VERIFIER_STAGE_COMPLETED,
+    SessionEventKind.VERIFIER_STARTED: SessionEventKind.VERIFIER_COMPLETED,
+    SessionEventKind.CLEANUP_STARTED: SessionEventKind.CLEANUP_COMPLETED,
+}
+
+
+def _find_in_flight_sequences(view: SessionViewState) -> set[int]:
+    """Find sequence numbers of operations that have started but not yet completed."""
+    if view.status is not SessionStatus.RUNNING:
+        return set()
+    active_starts: dict[tuple[SessionEventKind, Optional[str]], list[int]] = {}
+    for entry in view.timeline:
+        if entry.event_kind in _START_TO_COMPLETION_KINDS:
+            comp_kind = _START_TO_COMPLETION_KINDS[entry.event_kind]
+            key = (comp_kind, entry.operation_key)
+            active_starts.setdefault(key, []).append(entry.sequence)
+        elif entry.event_kind in (
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            SessionEventKind.TOOL_COMPLETED,
+            SessionEventKind.VERIFIER_STAGE_COMPLETED,
+            SessionEventKind.VERIFIER_COMPLETED,
+            SessionEventKind.CLEANUP_COMPLETED,
+        ):
+            key = (entry.event_kind, entry.operation_key)
+            if key in active_starts and active_starts[key]:
+                active_starts[key].pop(0)
+    in_flight: set[int] = set()
+    for seqs in active_starts.values():
+        in_flight.update(seqs)
+    return in_flight
+
+
 class TimelinePanel(VerticalScroll):
     """Concise event timeline with effective phase-boundary markers.
 
@@ -895,11 +927,40 @@ class TimelinePanel(VerticalScroll):
         if not view.timeline:
             text.append("No events recorded.", style="dim")
             return text
+        start_dt = None
         for entry in view.timeline:
+            if entry.timestamp_utc:
+                try:
+                    start_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                    break
+                except Exception:
+                    pass
+        in_flight_seqs = _find_in_flight_sequences(view)
+        for i, entry in enumerate(view.timeline):
             marker = "» " if entry.sequence in self._boundaries else "  "
             style = _entry_style(entry)
-            text.append(f"{marker}#{entry.sequence:<5} ", style="dim")
+            time_str = ""
+            if entry.timestamp_utc and start_dt:
+                try:
+                    entry_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                    secs = max(0, int((entry_dt - start_dt).total_seconds()))
+                    time_str = f"{secs // 60:02d}:{secs % 60:02d} "
+                except Exception:
+                    pass
+            text.append(marker, style=f"bold {PRIMARY}" if marker == "» " else "dim")
+            if time_str:
+                text.append(time_str, style=f"bold {EVIDENCE}")
+            text.append(f"#{entry.sequence:<4} ", style="dim")
             text.append(entry.summary, style=style)
+            if entry.duration_seconds is not None:
+                if entry.duration_seconds < 60:
+                    text.append(f"  ({entry.duration_seconds:.1f}s)", style="dim")
+                else:
+                    mins = int(entry.duration_seconds // 60)
+                    secs = int(entry.duration_seconds % 60)
+                    text.append(f"  ({mins}m {secs}s)", style="dim")
+            elif entry.sequence in in_flight_seqs:
+                text.append("  (running…)", style="dim")
             text.append("\n")
         return text
 
@@ -968,262 +1029,142 @@ class LiveRunContextPanel(VerticalScroll):
         yield self._text
 
     def update_view(self, view: SessionViewState, *, elapsed: str = "—") -> None:
-        from agentic_debugger.ui.app import task_display_title
-        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
-
-        model = view.model_provenance
         terminal = view.status.terminal
-        if view.status is SessionStatus.SUCCEEDED:
-            stage = "Completed"
-        elif view.status is SessionStatus.CANCELLED:
-            stage = "Cancelled"
-        elif terminal and view.termination_reason is SessionTerminationReason.MODEL_ERROR:
-            stage = "Model error"
-        elif terminal and view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
-            stage = "Controller budget exhausted"
-        elif terminal and view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:
-            stage = "Controller failed"
-        elif terminal:
-            stage = view.status.value.replace("_", " ").title()
-        else:
-            stage = (
-                "Finalizing"
-                if view.operator_stage is OperatorStage.COMPLETED
-                else _operator_stage_label(view.operator_stage)
-                if view.operator_stage
-                else "Not recorded"
-            )
-        if view.debugger.session_started:
-            pdb = "Observed"
-        elif terminal:
-            pdb = "Not reached"
-        elif view.operator_stage is OperatorStage.DEBUGGER:
-            pdb = "Active"
-        else:
-            pdb = "Pending"
-        # Durable verifier truth for the compact context panel.
-        # Presence of verifier_summary (VERIFIER_COMPLETED) is the authority;
-        # outcome (RESOLVED vs UNRESOLVED) never changes whether it completed.
-        if view.verifier_summary is not None:
-            verifier = "Completed"
-        elif view.verifier_stages:
-            verifier = "Not completed" if terminal else "Active"
-        elif view.operator_stage in (
-            OperatorStage.VERIFICATION,
-            OperatorStage.OFFICIAL_VERIFICATION,
-            OperatorStage.OFFICIAL_VERIFICATION_PREPARING,
-            OperatorStage.OFFICIAL_EVALUATOR_STARTED,
-            OperatorStage.OFFICIAL_EVALUATOR_COMPLETED,
-        ):
-            verifier = "Not completed" if terminal else "Active"
-        elif terminal:
-            verifier = "Not run"
-        else:
-            verifier = "Pending"
-        # Local Project Debug has distinct sidebar facts; hide ladder treatment
-        if view.source_kind is SourceKind.LOCAL_PROJECT:
-            repo_basename, head_short = _local_project_identity(view)
-            lines = [
-                f"[bold {PRIMARY}]RUN[/]",
-                f"[{FOREGROUND}]Local Project Debug[/]",
-                f"[{MUTED}]Stage[/]", f"[{FOREGROUND}]" + _markup_escape(stage) + "[/]",
-                f"[{MUTED}]Elapsed[/]", f"[{FOREGROUND}]" + _markup_escape(elapsed) + "[/]",
-                f"[{MUTED}]PDB[/]", f"[{FOREGROUND}]" + pdb + "[/]",
-                f"[{MUTED}]Verifier[/]", f"[{FOREGROUND}]" + _markup_escape(verifier) + "[/]",
-                f"[{MUTED}]Project[/]", f"[{FOREGROUND}]" + _markup_escape(repo_basename) + "[/]",
-                f"[{MUTED}]Source HEAD[/]", f"[{FOREGROUND}]" + _markup_escape(head_short) + "[/]",
-            ]
-            self._text.update("\n".join(lines))
-            return
-        ladder = is_ladder_task(view.task_id)
-        metadata = ladder_task_metadata(view.task_id) if ladder else None
-        if view.source_kind is SourceKind.LEVEL32_OPERATOR:
-            treatment = (
-                f"V{model.treatment_revision}"
-                if model is not None and model.treatment_revision is not None
-                else metadata.treatment if metadata is not None else "Not recorded"
-            )
-        elif metadata is not None:
-            treatment = metadata.treatment
-        else:
-            treatment = "Not recorded"
-        evaluation = metadata.evaluation if metadata is not None else None
-        runtime = {
-            SourceKind.OFFLINE_DEMO: "Local deterministic",
-            SourceKind.CONFIGURED_MODEL: "Configured command",
-            SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud",
-            SourceKind.LEVEL32_OPERATOR: "Ollama Cloud",
-        }.get(view.source_kind, "Recorded source")
-        official = _official_tests_label(view)
-        lines = [
-            f"[bold {PRIMARY}]RUN[/]",
-            f"[{MUTED}]Task[/]", f"[{FOREGROUND}]" + _markup_escape(task_display_title(view.task_id)) + "[/]",
-            f"[{MUTED}]ID[/]", f"[{FOREGROUND}]" + _markup_escape(view.task_id) + "[/]",
-            f"[{MUTED}]Model[/]", f"[{FOREGROUND}]" + _markup_escape(model.display_name if model and model.display_name else "Not recorded") + "[/]",
-            f"[{MUTED}]Alias[/]", f"[{FOREGROUND}]" + _markup_escape(model.profile_id if model and model.profile_id else "Not recorded") + "[/]",
-            f"[{MUTED}]Runtime[/]", f"[{FOREGROUND}]" + runtime + "[/]",
-            *([f"[{MUTED}]Evaluation[/]", f"[{FOREGROUND}]" + evaluation + "[/]"] if evaluation else []),
-            f"[{MUTED}]Treatment[/]", f"[{FOREGROUND}]" + treatment + "[/]",
-            f"[{MUTED}]Stage[/]", f"[{FOREGROUND}]" + _markup_escape(stage) + "[/]",
-            f"[{MUTED}]Elapsed[/]", f"[{FOREGROUND}]" + _markup_escape(elapsed) + "[/]",
-            f"[{MUTED}]PDB[/]", f"[{FOREGROUND}]" + pdb + "[/]",
-            f"[{MUTED}]Verifier[/]", f"[{FOREGROUND}]" + _markup_escape(verifier) + "[/]",
-        ]
-        if official is not None:
-            lines.extend((
-                f"[{MUTED}]Official tests[/]",
-                f"[{FOREGROUND}]" + official + "[/]",
-            ))
-        self._text.update("\n".join(lines))
-
-    def update_execution(self, state: LiveExecutionState) -> None:
-        """Render operational facts before static provenance on wide screens.
-
-        Every field is one physical row (label + value) so the complete
-        runtime context -- including provenance and the official-verifier
-        milestone -- stays above the fold at practical workspace sizes.
-        """
-        from agentic_debugger.ui.app import task_display_title
-        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
-        view = state.view
-        # Local Project Debug: hide ladder treatment/evaluation
-        if view.source_kind is SourceKind.LOCAL_PROJECT:
-            # Early return for Local Project execution context (distinct facts)
-            def counter(value, maximum):
-                if value is None:
-                    return "Not recorded"
-                return f"{value} / {maximum}" if maximum is not None else str(value)
-            if view.pdb_observed:
-                pdb = "Observed"
-            elif view.debugger.session_started:
-                pdb = "Active / awaiting evidence"
-            elif view.status.terminal:
-                pdb = "Not reached"
-            else:
-                pdb = "Not recorded"
-            if view.verifier_summary is not None:
-                verifier = "Completed"
-            elif view.verifier_stages:
-                verifier = "Active"
-            else:
-                verifier = "Not started"
-            def row(label: str, value: str) -> str:
-                return f"[{MUTED}]{label:<10}[/] [{FOREGROUND}]{_markup_escape(value)}[/]"
-            repo_basename, head_short = _local_project_identity(view)
-            model_alias = (
-                view.model_provenance.profile_id
-                if view.model_provenance and view.model_provenance.profile_id
-                else "Not recorded"
-            )
-            lines = [
-                f"[bold {PRIMARY}]RUN[/]",
-                f"[{FOREGROUND}]Local Project Debug[/]",
-                row("NOW", state.operation_label),
-                row("TARGET", state.current_target or "Not observed"),
-                row("MODEL", f"Request {counter(state.request_ordinal, state.ceilings.model_requests)}"),
-                row("STEP", counter(state.controller_step_ordinal, state.ceilings.controller_steps)),
-                row("ATTEMPT", counter(state.candidate_attempt_ordinal, state.ceilings.candidate_attempts)),
-                row("PDB", pdb),
-                row("VERIFIER", verifier),
-                row("ALIAS", model_alias),
-                row("Project", repo_basename),
-                row("Source HEAD", head_short),
-            ]
-            self._text.update("\n".join(lines))
-            return
-        metadata = ladder_task_metadata(view.task_id) if is_ladder_task(view.task_id) else None
-        runtime = {
-            SourceKind.OFFLINE_DEMO: "Local deterministic",
-            SourceKind.CONFIGURED_MODEL: "Configured command",
-            SourceKind.OLLAMA_CLOUD_LADDER: "Ollama Cloud",
-            SourceKind.LEVEL32_OPERATOR: "Ollama Cloud",
-        }.get(view.source_kind, "Recorded source")
-        treatment = (
-            f"V{view.model_provenance.treatment_revision}"
-            if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None
-            else metadata.treatment if metadata is not None else "Not recorded"
-        )
-        def counter(value, maximum):
-            if value is None:
-                return "Not recorded"
-            return f"{value} / {maximum}" if maximum is not None else str(value)
-        def duration(value):
-            return "—" if value is None else f"{value:.1f}s"
         if view.pdb_observed:
             pdb = "Observed"
         elif view.debugger.session_started:
-            pdb = "Active / awaiting evidence"
+            pdb = "Active"
+        elif terminal:
+            pdb = "Not reached"
+        else:
+            pdb = "Pending"
+        if view.verifier_summary is not None:
+            outcome = view.verifier_summary.outcome.value if view.verifier_summary.outcome else (view.verifier_summary.status or "Completed")
+            verifier = f"Completed ({outcome})"
+        elif view.verifier_stages:
+            verifier = "Not completed" if terminal else "Active"
+        elif terminal:
+            verifier = "Not started"
+        else:
+            verifier = "Pending"
+        if view.patch_attempts:
+            patch_status = f"Attempt {len(view.patch_attempts)} ({view.patch_attempts[-1].stage.value})"
+        else:
+            patch_status = "No candidate yet"
+
+        target = view.current_tool_target or (
+            f"{view.debugger.script}:{view.debugger.line}"
+            if view.debugger.script and view.debugger.line is not None
+            else view.debugger.script
+        ) or "—"
+        step = (
+            str(view.latest_controller_step_index + 1)
+            if view.latest_controller_step_index is not None
+            else "—"
+        )
+
+        model = view.model_provenance
+        model_name = model.display_name if model and model.display_name else (model.profile_id if model and model.profile_id else "—")
+
+        def row(label: str, value: str) -> str:
+            return f"[{MUTED}]{label:<10}[/] [{FOREGROUND}]{_markup_escape(value)}[/]"
+
+        if view.source_kind is SourceKind.LOCAL_PROJECT:
+            repo_basename, head_short = _local_project_identity(view)
+            lines = [
+                f"[bold {PRIMARY}]RUN CONTEXT[/]",
+                row("MODEL", model_name),
+                row("TARGET", target),
+                row("STEP", step),
+                row("PDB", pdb),
+                row("PATCH", patch_status),
+                row("VERIFIER", verifier),
+                row("PROJECT", repo_basename),
+                row("HEAD", head_short),
+            ]
+            self._text.update("\n".join(lines))
+            return
+
+        lines = [
+            f"[bold {PRIMARY}]RUN CONTEXT[/]",
+            row("MODEL", model_name),
+            row("TARGET", target),
+            row("STEP", step),
+            row("PDB", pdb),
+            row("PATCH", patch_status),
+            row("VERIFIER", verifier),
+        ]
+        self._text.update("\n".join(lines))
+
+    def update_execution(self, state: LiveExecutionState) -> None:
+        """Render operational facts before static provenance on wide screens."""
+        view = state.view
+
+        def counter(value, maximum):
+            if value is None:
+                return "—"
+            return f"{value} / {maximum}" if maximum is not None else str(value)
+
+        if view.pdb_observed:
+            pdb = "Observed"
+        elif view.debugger.session_started:
+            pdb = "Active"
         elif view.status.terminal:
             pdb = "Not reached"
         else:
-            pdb = "Not recorded"
-        # Durable verifier truth: VERIFIER_COMPLETED is the authority.
-        # Do NOT infer from outcome (resolved vs unresolved) and do NOT
-        # rely on ephemeral liveness after terminal completion.
+            pdb = "Waiting"
+
         if view.verifier_summary is not None:
-            verifier = "Completed"
+            outcome = view.verifier_summary.outcome.value if view.verifier_summary.outcome else (view.verifier_summary.status or "Completed")
+            verifier = f"Completed ({outcome})"
         elif view.verifier_stages:
             verifier = "Active"
-        elif view.operator_stage in (
-            OperatorStage.VERIFICATION,
-            OperatorStage.OFFICIAL_VERIFICATION,
-            OperatorStage.OFFICIAL_VERIFICATION_PREPARING,
-            OperatorStage.OFFICIAL_EVALUATOR_STARTED,
-            OperatorStage.OFFICIAL_EVALUATOR_COMPLETED,
-        ):
-            # Level-32 official verification in progress: treat as active
-            # unless already settled via verifier_summary.
-            verifier = "Active" if not view.status.terminal else "Not completed"
-        else:
+        elif view.status.terminal:
             verifier = "Not started"
-        official = _official_tests_label(view)
+        else:
+            verifier = "Pending"
+
+        if view.patch_attempts:
+            patch_status = f"Attempt {len(view.patch_attempts)} ({view.patch_attempts[-1].stage.value})"
+        elif state.candidate_attempt_ordinal:
+            patch_status = f"Attempt {state.candidate_attempt_ordinal}"
+        else:
+            patch_status = "No candidate yet"
+
+        model = view.model_provenance
+        model_name = model.display_name if model and model.display_name else (model.profile_id if model and model.profile_id else "—")
 
         def row(label: str, value: str) -> str:
-            return (
-                f"[{MUTED}]{label:<10}[/] "
-                f"[{FOREGROUND}]{_markup_escape(value)}[/]"
-            )
+            return f"[{MUTED}]{label:<10}[/] [{FOREGROUND}]{_markup_escape(value)}[/]"
+
+        target = state.current_target or view.current_tool_target or "—"
+        step = counter(state.controller_step_ordinal, state.ceilings.controller_steps)
+
+        if view.source_kind is SourceKind.LOCAL_PROJECT:
+            repo_basename, head_short = _local_project_identity(view)
+            lines = [
+                f"[bold {PRIMARY}]RUN CONTEXT[/]",
+                row("MODEL", model_name),
+                row("TARGET", target),
+                row("STEP", step),
+                row("PDB", pdb),
+                row("PATCH", patch_status),
+                row("VERIFIER", verifier),
+                row("PROJECT", repo_basename),
+                row("HEAD", head_short),
+            ]
+            self._text.update("\n".join(lines))
+            return
 
         lines = [
-            f"[bold {PRIMARY}]RUN[/]",
-            f"[{FOREGROUND}]{_markup_escape(task_display_title(view.task_id))}[/]",
-            row("NOW", state.operation_label),
-            row("TARGET", state.current_target or "Not observed"),
-            row("MODEL", f"Request {counter(state.request_ordinal, state.ceilings.model_requests)}"),
-            row("STEP", counter(state.controller_step_ordinal, state.ceilings.controller_steps)),
-            row("ATTEMPT", counter(state.candidate_attempt_ordinal, state.ceilings.candidate_attempts)),
+            f"[bold {PRIMARY}]RUN CONTEXT[/]",
+            row("MODEL", model_name),
+            row("TARGET", target),
+            row("STEP", step),
             row("PDB", pdb),
+            row("PATCH", patch_status),
             row("VERIFIER", verifier),
         ]
-        if state.live and state.snapshot is not None:
-            lines.extend((
-                row("ELAPSED", duration(state.request_elapsed_seconds)),
-                row("ACTIVITY", f"{duration(state.last_activity_age_seconds)} ago"),
-                row("TRANSPORT", "Alive" if state.snapshot.transport_alive else "Idle"),
-                row("WATCHDOG", duration(state.snapshot.watchdog_idle_seconds)),
-            ))
-        lines.extend((
-            row(
-                "Model",
-                view.model_provenance.display_name
-                if view.model_provenance and view.model_provenance.display_name
-                else "Not recorded",
-            ),
-            row(
-                "Alias",
-                view.model_provenance.profile_id
-                if view.model_provenance and view.model_provenance.profile_id
-                else "Not recorded",
-            ),
-        ))
-        if metadata is not None:
-            lines.extend((
-                row("Runtime", runtime),
-                row("Evaluation", metadata.evaluation),
-                row("Treatment", treatment),
-            ))
-        if official is not None:
-            lines.append(row("Official", official))
         self._text.update("\n".join(lines))
 
 
@@ -1525,9 +1466,20 @@ def timeline_export_text(
         lines.append("No events recorded.")
         return "\n".join(lines)
     boundaries = phase_boundary_sequences or frozenset()
+    in_flight_seqs = _find_in_flight_sequences(view)
     for entry in view.timeline:
         marker = "» " if entry.sequence in boundaries else ""
-        lines.append(f"{marker}#{entry.sequence} {entry.summary}")
+        dur = ""
+        if entry.duration_seconds is not None:
+            if entry.duration_seconds < 60:
+                dur = f"  ({entry.duration_seconds:.1f}s)"
+            else:
+                mins = int(entry.duration_seconds // 60)
+                secs = int(entry.duration_seconds % 60)
+                dur = f"  ({mins}m {secs}s)"
+        elif entry.sequence in in_flight_seqs:
+            dur = "  (running…)"
+        lines.append(f"{marker}#{entry.sequence} {entry.summary}{dur}")
     return "\n".join(lines)
 
 
