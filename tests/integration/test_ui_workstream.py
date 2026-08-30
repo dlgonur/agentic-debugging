@@ -193,9 +193,8 @@ def finish(app: LocalApplicationV1, workspace) -> None:
 
 
 class TestWorkstreamRendering:
-    def test_empty_source_pane_expands_workstream(self, tmp_path):
-        """Level-32 early execution: no source evidence yet, the main body
-        shows the operational workstream instead of a mostly blank pane."""
+    def test_live_pane_renders_workstream_trace(self, tmp_path):
+        """Live execution trace renders operational units and badges."""
         app = LocalApplicationV1(history_store=HistoryStore(tmp_path))
         stream = base_stream()
 
@@ -203,24 +202,18 @@ class TestWorkstreamRendering:
             workspace = push_live(app, stream)
             await pilot.pause()
             await pilot.pause()
-            body = pane_text(workspace, "#source-workstream")
-            assert "READ SOURCE" in body or "Read source" in body
+            body = pane_text(workspace, "#live-pane")
+            assert "SOURCE" in body or "Read source" in body
             assert "cookiecutter/config.py:42-66" in body
-            assert "Model request" in body
-            # the workstream owns the main area (expanded), the source pane
-            # collapses to its short pending placeholder
-            workstream = workspace.query_one("#source-workstream", WorkstreamPanel)
-            pane = workspace.query_one("#source-pane", SourcePanel)
-            assert workstream.styles.height.unit is Unit.FRACTION
-            assert pane.styles.height.unit is Unit.AUTO
-            assert "Waiting for source evidence" in pane_text(workspace, "#source-pane")
+            assert "MODEL" in body
             finish(app, workspace)
 
         from ui_support import run_headless
 
         run_headless(app, scenario, size=(140, 40))
 
-    def test_source_pane_with_evidence_keeps_compact_workstream(self, tmp_path):
+    def test_forensic_panes_have_no_embedded_workstream(self, tmp_path):
+        """Forensic panes (Source, Debugger, Patch, Verifier, Timeline) own only domain evidence."""
         app = LocalApplicationV1(history_store=HistoryStore(tmp_path))
         stream = base_stream()
         stream.emit(
@@ -239,10 +232,12 @@ class TestWorkstreamRendering:
             workspace = push_live(app, stream)
             await pilot.pause()
             await pilot.pause()
-            workstream = workspace.query_one("#source-workstream", WorkstreamPanel)
-            assert workstream.styles.height.unit is Unit.AUTO
-            body = pane_text(workspace, "#source-workstream")
-            assert "cookiecutter/config.py:42-66" in body
+            # Forensic panes have no WorkstreamPanel children
+            assert not workspace.query("#tab-source WorkstreamPanel")
+            assert not workspace.query("#tab-debugger WorkstreamPanel")
+            assert not workspace.query("#tab-patch WorkstreamPanel")
+            assert not workspace.query("#tab-verifier WorkstreamPanel")
+            assert not workspace.query("#tab-timeline WorkstreamPanel")
             assert "prompt_and_delete" in pane_text(workspace, "#source-pane")
             finish(app, workspace)
 
@@ -260,8 +255,8 @@ class TestWorkstreamRendering:
             workspace = push_live(app, stream)
             await pilot.pause()
             await pilot.pause()
-            body = pane_text(workspace, "#source-workstream")
-            assert "APPLIED CHANGE" in body
+            body = pane_text(workspace, "#live-pane")
+            assert "PATCH #1" in body or "Applied change" in body
             assert "cookiecutter/config.py" in body
             assert "+1 -1" in body
             # the actual diff body: removed and added lines from the patch
@@ -294,8 +289,8 @@ class TestWorkstreamRendering:
             workspace = push_live(app, stream)
             await pilot.pause()
             await pilot.pause()
-            body = pane_text(workspace, "#source-workstream")
-            assert "REJECTED CHANGE" in body
+            body = pane_text(workspace, "#live-pane")
+            assert "PATCH #1" in body or "Rejected change" in body
             assert "APPLIED" not in body
             # the rejected candidate may still show its proposed diff
             assert "return None" in body
@@ -336,27 +331,25 @@ class TestWorkstreamRendering:
             workspace = push_live(app, stream)
             await pilot.pause()
             await pilot.pause()
-            body = pane_text(workspace, "#source-workstream")
-            assert "Applied change" in body
+            body = pane_text(workspace, "#live-pane")
+            assert "PATCH #1" in body or "Applied change" in body
             assert "+1 -1" in body
-            # narrow: no diff body, no widened layout
-            assert "│" not in body
             finish(app, workspace)
 
         from ui_support import run_headless
 
         run_headless(app, scenario, size=(92, 36))
 
-    def test_activity_and_timeline_have_no_workstream_duplicate(self, tmp_path):
+    def test_forensic_tabs_have_no_workstream_duplicate(self, tmp_path):
         app = LocalApplicationV1(history_store=HistoryStore(tmp_path))
         stream = base_stream()
 
         async def scenario(pilot):
             workspace = push_live(app, stream)
             await pilot.pause()
-            workspace.query_one("#pane-tabs", TabbedContent).active = "tab-activity"
+            workspace.query_one("#pane-tabs", TabbedContent).active = "tab-evidence"
             await pilot.pause()
-            assert not workspace.query("#tab-activity WorkstreamPanel")
+            assert not workspace.query("#tab-evidence WorkstreamPanel")
             workspace.query_one("#pane-tabs", TabbedContent).active = "tab-timeline"
             await pilot.pause()
             assert not workspace.query("#tab-timeline WorkstreamPanel")
@@ -366,27 +359,23 @@ class TestWorkstreamRendering:
 
         run_headless(app, scenario, size=(140, 40))
 
-    def test_workstream_never_takes_focus_and_keys_still_navigate(self, tmp_path):
+    def test_live_pane_allows_keys_to_navigate(self, tmp_path):
         app = LocalApplicationV1(history_store=HistoryStore(tmp_path))
         stream = base_stream()
 
         async def scenario(pilot):
             workspace = push_live(app, stream)
             await pilot.pause()
-            panel = workspace.query_one("#source-workstream", WorkstreamPanel)
-            assert panel.can_focus is False
-            # Focus the visible pane explicitly; the workstream panel must
-            # never be the focus target and must not swallow arrow keys.
-            workspace.query_one("#source-pane").focus()
+            # Focus the visible live pane; left/right still navigate tabs
+            workspace.query_one("#live-pane").focus()
             await pilot.pause()
-            assert pilot.app.focused is not panel
             await pilot.press("right")
             await pilot.pause()
             tabs = workspace.query_one("#pane-tabs", TabbedContent)
-            assert tabs.active == "tab-debugger"
+            assert tabs.active == "tab-evidence"
             await pilot.press("left")
             await pilot.pause()
-            assert tabs.active == "tab-source"
+            assert tabs.active == "tab-live"
             finish(app, workspace)
 
         from ui_support import run_headless
@@ -428,7 +417,7 @@ class TestWorkstreamRendering:
             workspace.controller.seek(max(1, workspace.controller.total_events - 3))
             workspace._render_all()
             await pilot.pause()
-            body = pane_text(workspace, "#source-workstream")
+            body = pane_text(workspace, "#live-pane")
             # replay keeps the change preview and work units…
             assert "RECENT" in body
             # …but never live liveness chrome

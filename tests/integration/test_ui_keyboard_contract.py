@@ -125,11 +125,12 @@ def test_global_workspace_routing_and_text_entry_contract(tmp_path: Path) -> Non
         workspace = await _open_workspace(pilot)
         tabs = workspace.query_one("#pane-tabs")
         panes = (
+            ("tab-live", "#live-pane"),
+            ("tab-evidence", "#evidence-pane"),
             ("tab-source", "#source-pane"),
             ("tab-debugger", "#debugger-pane"),
             ("tab-patch", "#patch-pane"),
             ("tab-verifier", "#verifier-pane"),
-            ("tab-activity", "#activity-pane"),
             ("tab-timeline", "#timeline-pane"),
         )
         for tab_id, pane_id in panes:
@@ -163,11 +164,12 @@ def test_global_workspace_routing_and_text_entry_contract(tmp_path: Path) -> Non
 @pytest.mark.parametrize(
     ("tab_id", "pane_id"),
     [
+        ("tab-live", "#live-pane"),
+        ("tab-evidence", "#evidence-pane"),
         ("tab-source", "#source-pane"),
         ("tab-debugger", "#debugger-pane"),
         ("tab-patch", "#patch-pane"),
         ("tab-verifier", "#verifier-pane"),
-        ("tab-activity", "#activity-pane"),
         ("tab-timeline", "#timeline-pane"),
     ],
 )

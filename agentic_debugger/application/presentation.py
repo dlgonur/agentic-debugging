@@ -73,6 +73,8 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
     """
     in_flight_ordinal = _in_flight_attempt_ordinal(state)
     debugger_target = _debugger_location_target(state)
+    op_key = _operation_key(event.event_kind, event.payload)
+    duration_seconds = _compute_timeline_duration(state, event, op_key)
     next_state = _reduce_event_core(state, event)
     workstream = apply_workstream_event(
         next_state.workstream,
@@ -81,6 +83,8 @@ def reduce_event(state: SessionViewState, event: SessionEvent) -> SessionViewSta
         sequence=event.sequence,
         in_flight_attempt_ordinal=in_flight_ordinal,
         debugger_target=debugger_target,
+        timestamp_utc=event.timestamp_utc,
+        duration_seconds=duration_seconds,
     )
     # Terminal truth: a terminal session must not retain a stale
     # "applying" workstream entry.  Candidate proposal != application,

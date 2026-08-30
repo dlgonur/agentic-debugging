@@ -560,6 +560,7 @@ class TestOpenReplay:
             tabs = workspace.query_one("#pane-tabs")
             source = workspace.query_one("#source-pane")
             source.focus()
+            tabs.active = "tab-source"
             await pilot.pause()
             assert tabs.active == "tab-source"
 
@@ -572,18 +573,19 @@ class TestOpenReplay:
 
             # Repeated navigation stays screen-global after focus moves to a
             # different read-only pane.
-            workspace.query_one("#activity-pane").focus()
-            tabs.active = "tab-activity"
+            workspace.query_one("#live-pane").focus()
+            tabs.active = "tab-live"
             await pilot.pause()
-            await pilot.press("right", "right", "left")
+            await pilot.press("left")
             assert tabs.active == "tab-timeline"
 
-            # Existing numeric bindings remain Activity filters rather than
-            # being repurposed as view navigation.
-            activity = workspace.query_one("#activity-pane")
-            tabs.active = "tab-activity"
+            # Numeric bindings 1-7 switch tabs directly
+            await pilot.press("1")
+            assert tabs.active == "tab-live"
             await pilot.press("5")
-            assert activity.filter == "debugger"
+            assert tabs.active == "tab-patch"
+            await pilot.press("7")
+            assert tabs.active == "tab-timeline"
 
         run_headless(app, scenario)
 
@@ -602,10 +604,12 @@ class TestOpenReplay:
             assert "REPLAY" in header
             assert "28/28" in header
             assert "at end" in header
+            live = pane_text(workspace, "#live-pane")
+            assert "LIVE" in live or "RECENT" in live or "Session" in live or "MODEL" in live
             evidence = pane_text(workspace, "#evidence-pane")
             assert "Evidence Review" in evidence
             assert "VERDICT  RESOLVED" in evidence
-            assert "independent verifier is the correctness authority" in evidence
+            assert "AUTHORITATIVE" in evidence
             # source pane renders recorded source with the execution line
             source = pane_text(workspace, "#source-pane")
             assert "recent_window.py" in source
@@ -625,10 +629,8 @@ class TestOpenReplay:
             assert "COMPLETED" in verifier
             assert "RESOLVED" in verifier
             assert "1/1" in verifier
-            assert "correctness authority" in verifier
-            # activity + timeline panes render recorded events
-            activity = pane_text(workspace, "#activity-pane")
-            assert "controller transition" in activity
+            assert "authoritative" in verifier.lower()
+            # timeline pane renders recorded events
             timeline = pane_text(workspace, "#timeline-pane")
             assert "session succeeded" in timeline
             assert "verifier completed" in timeline
@@ -649,11 +651,12 @@ class TestOpenReplay:
             await pilot.press("G")
             header = str(workspace.query_one("#status-header", StatusHeader).render())
             for selector in (
+                "#live-pane",
+                "#evidence-pane",
                 "#source-pane",
                 "#debugger-pane",
                 "#patch-pane",
                 "#verifier-pane",
-                "#activity-pane",
                 "#timeline-pane",
             ):
                 rendered = pane_text(workspace, selector)

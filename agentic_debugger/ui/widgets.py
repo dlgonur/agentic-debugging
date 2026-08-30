@@ -14,6 +14,7 @@ come from the view.
 from __future__ import annotations
 
 from datetime import datetime
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any, Optional
@@ -52,6 +53,7 @@ from agentic_debugger.application.workstream import (
     ChangePreviewLimits,
     DiffLineKind,
     WorkstreamEntry,
+    WorkstreamKind,
     WorkstreamStatus,
     build_change_preview,
 )
@@ -895,13 +897,336 @@ def _find_in_flight_sequences(view: SessionViewState) -> set[int]:
     return in_flight
 
 
-class TimelinePanel(VerticalScroll):
-    """Concise event timeline with effective phase-boundary markers.
+@dataclass(frozen=True)
+class TimingCategorySummary:
+    name: str
+    total_seconds: float
+    count: int
+    percentage: float
+    detail: str
 
-    ``phase_boundary_sequences`` is derived by the screen from the recorded
-    event stream (the same ``phase_boundaries`` derivation the replay cursor
-    uses); the pane itself only renders it.
+
+@dataclass(frozen=True)
+class TimedOperation:
+    sequence: int
+    start_time_offset: Optional[float]
+    duration_seconds: float
+    category: str
+    label: str
+    in_flight: bool = False
+
+
+@dataclass(frozen=True)
+class SessionTiming:
+    has_timestamps: bool
+    total_elapsed_seconds: Optional[float]
+    accounted_seconds: float
+    categories: tuple[TimingCategorySummary, ...]
+    timed_operations: tuple[TimedOperation, ...]
+
+
+def compute_session_timing(view: SessionViewState) -> SessionTiming:
+    """Aggregate session time consumption by category and timed operations.
+
+    Categorizes non-overlapping operations (Model, Debugger/PDB, Tools,
+    Verification, Patch, Cleanup) and calculates total elapsed time and
+    proportions.  Fails closed when timestamps are missing.
     """
+    if not view.timeline and not view.workstream:
+        return SessionTiming(
+            has_timestamps=False,
+            total_elapsed_seconds=None,
+            accounted_seconds=0.0,
+            categories=(),
+            timed_operations=(),
+        )
+
+    start_dt = None
+    last_dt = None
+    for entry in view.timeline:
+        if entry.timestamp_utc:
+            try:
+                dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                if start_dt is None:
+                    start_dt = dt
+                last_dt = dt
+            except Exception:
+                pass
+
+    has_timestamps = start_dt is not None
+
+    model_durations: list[float] = []
+    tool_durations: list[float] = []
+    debugger_durations: list[float] = []
+    verifier_durations: list[float] = []
+    patch_durations: list[float] = []
+    cleanup_durations: list[float] = []
+    timed_ops: list[TimedOperation] = []
+
+    seq_dt: dict[int, datetime] = {}
+    for entry in view.timeline:
+        if entry.timestamp_utc:
+            try:
+                seq_dt[entry.sequence] = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+            except Exception:
+                pass
+
+    for entry in view.timeline:
+        dur = entry.duration_seconds
+        kind = entry.event_kind
+        offset = None
+        if start_dt and entry.sequence in seq_dt:
+            offset = max(0.0, (seq_dt[entry.sequence] - start_dt).total_seconds())
+
+        cat_name = None
+        if kind == SessionEventKind.MODEL_REQUEST_COMPLETED:
+            cat_name = "Model requests"
+            if dur is not None:
+                model_durations.append(dur)
+        elif kind == SessionEventKind.TOOL_COMPLETED:
+            cat_name = "Tools"
+            if dur is not None:
+                tool_durations.append(dur)
+        elif kind in (
+            SessionEventKind.DEBUGGER_STARTED,
+            SessionEventKind.DEBUGGER_LOCATION_CHANGED,
+            SessionEventKind.DEBUGGER_STACK_OBSERVED,
+            SessionEventKind.DEBUGGER_LOCALS_OBSERVED,
+        ):
+            cat_name = "Debugger / PDB"
+            if dur is not None:
+                debugger_durations.append(dur)
+        elif kind in (
+            SessionEventKind.VERIFIER_STAGE_COMPLETED,
+            SessionEventKind.VERIFIER_COMPLETED,
+        ):
+            cat_name = "Verification"
+            if kind == SessionEventKind.VERIFIER_COMPLETED and verifier_durations:
+                pass
+            elif dur is not None:
+                verifier_durations.append(dur)
+        elif kind in (
+            SessionEventKind.PATCH_APPLIED,
+            SessionEventKind.PATCH_REJECTED,
+            SessionEventKind.PATCH_APPLY_FAILED,
+            SessionEventKind.PATCH_REVERTED,
+        ):
+            cat_name = "Patch lifecycle"
+            if dur is not None:
+                patch_durations.append(dur)
+        elif kind == SessionEventKind.CLEANUP_COMPLETED:
+            cat_name = "Cleanup"
+            if dur is not None:
+                cleanup_durations.append(dur)
+
+        if dur is not None and cat_name is not None:
+            timed_ops.append(
+                TimedOperation(
+                    sequence=entry.sequence,
+                    start_time_offset=offset,
+                    duration_seconds=dur,
+                    category=cat_name,
+                    label=entry.summary,
+                )
+            )
+
+    model_tot = sum(model_durations)
+    tool_tot = sum(tool_durations)
+    dbg_tot = sum(debugger_durations)
+    ver_tot = sum(verifier_durations)
+    patch_tot = sum(patch_durations)
+    clean_tot = sum(cleanup_durations)
+
+    accounted = model_tot + tool_tot + dbg_tot + ver_tot + patch_tot + clean_tot
+    total_elapsed = None
+    if start_dt and last_dt:
+        total_elapsed = max(accounted, (last_dt - start_dt).total_seconds())
+    elif accounted > 0:
+        total_elapsed = accounted
+
+    denom = total_elapsed if (total_elapsed is not None and total_elapsed > 0) else (accounted if accounted > 0 else 1.0)
+
+    cats: list[TimingCategorySummary] = []
+    if model_durations or view.model_provenance:
+        avg_str = f"avg {model_tot / len(model_durations):.1f}s" if model_durations else "—"
+        count_str = f"{len(model_durations)} request{'s' if len(model_durations) != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Model requests",
+                total_seconds=model_tot,
+                count=len(model_durations),
+                percentage=(model_tot / denom) * 100.0 if total_elapsed else 0.0,
+                detail=f"{count_str} ({avg_str})",
+            )
+        )
+    if debugger_durations or view.debugger.session_started:
+        count_str = f"{len(debugger_durations)} observation{'s' if len(debugger_durations) != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Debugger / PDB",
+                total_seconds=dbg_tot,
+                count=len(debugger_durations),
+                percentage=(dbg_tot / denom) * 100.0 if total_elapsed else 0.0,
+                detail=count_str,
+            )
+        )
+    if tool_durations:
+        count_str = f"{len(tool_durations)} execution{'s' if len(tool_durations) != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Tools",
+                total_seconds=tool_tot,
+                count=len(tool_durations),
+                percentage=(tool_tot / denom) * 100.0 if total_elapsed else 0.0,
+                detail=count_str,
+            )
+        )
+    if verifier_durations or view.verifier_summary or view.verifier_stages:
+        count_str = f"{len(verifier_durations)} stage{'s' if len(verifier_durations) != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Verification",
+                total_seconds=ver_tot,
+                count=len(verifier_durations),
+                percentage=(ver_tot / denom) * 100.0 if total_elapsed else 0.0,
+                detail=count_str,
+            )
+        )
+    if patch_durations or view.patch_attempts:
+        count_str = f"{len(view.patch_attempts)} attempt{'s' if len(view.patch_attempts) != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Patch lifecycle",
+                total_seconds=patch_tot,
+                count=len(view.patch_attempts),
+                percentage=(patch_tot / denom) * 100.0 if total_elapsed else 0.0,
+                detail=count_str,
+            )
+        )
+    if cleanup_durations or view.cleanup_verified is not None:
+        count_str = f"{len(cleanup_durations)} step{'s' if len(cleanup_durations) != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Cleanup",
+                total_seconds=clean_tot,
+                count=len(cleanup_durations),
+                percentage=(clean_tot / denom) * 100.0 if total_elapsed else 0.0,
+                detail=count_str,
+            )
+        )
+
+    return SessionTiming(
+        has_timestamps=has_timestamps or len(timed_ops) > 0,
+        total_elapsed_seconds=total_elapsed,
+        accounted_seconds=accounted,
+        categories=tuple(cats),
+        timed_operations=tuple(timed_ops),
+    )
+
+
+def render_timeline_report(
+    view: SessionViewState,
+    timing: SessionTiming,
+    boundaries: Optional[frozenset[int]] = None,
+) -> Text:
+    """Render the structured time-consumption summary report and timeline."""
+    text = Text()
+    if not view.timeline:
+        text.append("No events recorded.\n", style="dim")
+        return text
+
+    if not timing.has_timestamps and not timing.timed_operations:
+        text.append("Session timing data not recorded for this session.\n\n", style="dim")
+        text.append("NOT RECORDED\n\n", style="dim italic")
+    else:
+        text.append("SESSION TIME BREAKDOWN", style=f"bold {PRIMARY}")
+        text.append("\n")
+        if timing.total_elapsed_seconds is not None:
+            secs = timing.total_elapsed_seconds
+            mins = int(secs // 60)
+            rem = secs % 60
+            if mins > 0:
+                text.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)\n", style=f"bold {FOREGROUND}")
+            else:
+                text.append(f"Total Elapsed: {secs:.1f}s\n", style=f"bold {FOREGROUND}")
+        text.append("─" * 72 + "\n", style=LINE)
+
+        text.append(f"{'CATEGORY':<24} {'TIME':<12} {'% TOTAL':<12} {'OPERATIONS'}\n", style=f"bold {MUTED}")
+        text.append("─" * 72 + "\n", style=LINE)
+
+        for cat in timing.categories:
+            dur_str = f"{cat.total_seconds:.1f}s"
+            pct_str = f"{cat.percentage:.1f}%"
+            cat_style = FOREGROUND
+            if "Model" in cat.name:
+                cat_style = SECONDARY
+            elif "Debugger" in cat.name:
+                cat_style = DEBUGGER
+            elif "Tool" in cat.name:
+                cat_style = TOOL
+            elif "Verification" in cat.name:
+                cat_style = SUCCESS
+            elif "Patch" in cat.name:
+                cat_style = EVIDENCE
+
+            text.append(f"{cat.name:<24}", style=f"bold {cat_style}")
+            text.append(f"{dur_str:<12}", style=FOREGROUND)
+            text.append(f"{pct_str:<12}", style=MUTED)
+            text.append(f"{cat.detail}\n", style=FAINT)
+
+        if timing.accounted_seconds > 0 and timing.categories:
+            text.append("\n[", style=MUTED)
+            bar_width = 48
+            for cat in timing.categories:
+                cat_chars = max(1, int(round((cat.total_seconds / timing.accounted_seconds) * bar_width))) if cat.total_seconds > 0 else 0
+                if cat_chars > 0:
+                    char_style = SECONDARY if "Model" in cat.name else (DEBUGGER if "Debugger" in cat.name else (TOOL if "Tool" in cat.name else (SUCCESS if "Verification" in cat.name else EVIDENCE)))
+                    text.append("█" * cat_chars, style=char_style)
+            text.append("]\n\n", style=MUTED)
+
+    bounds = boundaries or frozenset()
+    in_flight_seqs = _find_in_flight_sequences(view)
+    start_dt = None
+    for entry in view.timeline:
+        if entry.timestamp_utc:
+            try:
+                start_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                break
+            except Exception:
+                pass
+
+    for entry in view.timeline:
+        marker = "» " if entry.sequence in bounds else "  "
+        style = _entry_style(entry)
+        time_str = ""
+        if entry.timestamp_utc and start_dt:
+            try:
+                entry_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                secs = max(0, int((entry_dt - start_dt).total_seconds()))
+                time_str = f"{secs // 60:02d}:{secs % 60:02d} "
+            except Exception:
+                pass
+        text.append(marker, style=f"bold {PRIMARY}" if marker == "» " else "dim")
+        if time_str:
+            text.append(time_str, style=f"bold {EVIDENCE}")
+        text.append(f"#{entry.sequence:<4} ", style="dim")
+        text.append(entry.summary, style=style)
+        if entry.duration_seconds is not None:
+            if entry.duration_seconds < 60:
+                text.append(f"  ({entry.duration_seconds:.1f}s)", style="dim")
+            else:
+                mins = int(entry.duration_seconds // 60)
+                secs = int(entry.duration_seconds % 60)
+                text.append(f"  ({mins}m {secs}s)", style="dim")
+        elif entry.sequence in in_flight_seqs:
+            text.append("  (running…)", style="dim")
+        text.append("\n")
+
+    return text
+
+
+class TimelinePanel(VerticalScroll):
+    """Session time consumption breakdown and chronological timed operations."""
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -912,6 +1237,10 @@ class TimelinePanel(VerticalScroll):
     def compose(self) -> ComposeResult:
         yield self._text
 
+    def _render_view(self, view: SessionViewState) -> Text:
+        timing = compute_session_timing(view)
+        return render_timeline_report(view, timing, boundaries=self._boundaries)
+
     def update_view(
         self,
         view: SessionViewState,
@@ -921,48 +1250,6 @@ class TimelinePanel(VerticalScroll):
         if phase_boundary_sequences is not None:
             self._boundaries = phase_boundary_sequences
         self._text.update(self._render_view(view))
-
-    def _render_view(self, view: SessionViewState) -> Text:
-        text = Text()
-        if not view.timeline:
-            text.append("No events recorded.", style="dim")
-            return text
-        start_dt = None
-        for entry in view.timeline:
-            if entry.timestamp_utc:
-                try:
-                    start_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
-                    break
-                except Exception:
-                    pass
-        in_flight_seqs = _find_in_flight_sequences(view)
-        for i, entry in enumerate(view.timeline):
-            marker = "» " if entry.sequence in self._boundaries else "  "
-            style = _entry_style(entry)
-            time_str = ""
-            if entry.timestamp_utc and start_dt:
-                try:
-                    entry_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
-                    secs = max(0, int((entry_dt - start_dt).total_seconds()))
-                    time_str = f"{secs // 60:02d}:{secs % 60:02d} "
-                except Exception:
-                    pass
-            text.append(marker, style=f"bold {PRIMARY}" if marker == "» " else "dim")
-            if time_str:
-                text.append(time_str, style=f"bold {EVIDENCE}")
-            text.append(f"#{entry.sequence:<4} ", style="dim")
-            text.append(entry.summary, style=style)
-            if entry.duration_seconds is not None:
-                if entry.duration_seconds < 60:
-                    text.append(f"  ({entry.duration_seconds:.1f}s)", style="dim")
-                else:
-                    mins = int(entry.duration_seconds // 60)
-                    secs = int(entry.duration_seconds % 60)
-                    text.append(f"  ({mins}m {secs}s)", style="dim")
-            elif entry.sequence in in_flight_seqs:
-                text.append("  (running…)", style="dim")
-            text.append("\n")
-        return text
 
     def export_text(self, view: Optional[SessionViewState] = None) -> str:
         """Full logical Timeline export for clipboard."""
@@ -1176,15 +1463,55 @@ _STATUS_MARKER: dict[WorkstreamStatus, tuple[str, str]] = {
 }
 
 _KIND_LABEL_STYLE = {
+    "session": f"bold {PRIMARY}",
+    "workspace": f"bold {PRIMARY}",
+    "model_request": f"bold {SECONDARY}",
+    "source_read": f"bold {TOOL}",
+    "tool": f"bold {TOOL}",
+    "debugger": f"bold {DEBUGGER}",
+    "pdb": f"bold {DEBUGGER}",
+    "diagnosis": f"bold {PRIMARY}",
     "change": f"bold {EVIDENCE}",
+    "verification": f"bold {SECONDARY}",
     "official_verification": f"bold {SECONDARY}",
-    "verification": SECONDARY,
+    "cleanup": f"bold {SUCCESS}",
     "error": f"bold {ERROR}",
 }
 
 
 def _kind_style(entry: WorkstreamEntry) -> str:
     return _KIND_LABEL_STYLE.get(entry.kind.value, FOREGROUND)
+
+
+def _kind_badge(entry: WorkstreamEntry) -> str:
+    kind = entry.kind
+    if kind is WorkstreamKind.SESSION:
+        return "SESSION"
+    if kind is WorkstreamKind.WORKSPACE:
+        return "WORKSPACE"
+    if kind is WorkstreamKind.MODEL_REQUEST:
+        return f"MODEL #{entry.ordinal}" if entry.ordinal is not None else "MODEL"
+    if kind is WorkstreamKind.SOURCE_READ:
+        return "SOURCE"
+    if kind is WorkstreamKind.TOOL:
+        return "TOOL"
+    if kind is WorkstreamKind.DEBUGGER:
+        return "DEBUGGER"
+    if kind is WorkstreamKind.PDB:
+        return "RUNTIME"
+    if kind is WorkstreamKind.DIAGNOSIS:
+        return "DIAGNOSIS"
+    if kind is WorkstreamKind.CHANGE:
+        return f"PATCH #{entry.ordinal}" if entry.ordinal is not None else "PATCH"
+    if kind is WorkstreamKind.VERIFICATION:
+        return "VERIFY"
+    if kind is WorkstreamKind.OFFICIAL_VERIFICATION:
+        return "OFFICIAL VER"
+    if kind is WorkstreamKind.CLEANUP:
+        return "CLEANUP"
+    if kind is WorkstreamKind.ERROR:
+        return "ERROR"
+    return kind.value.upper()
 
 
 def _change_stats_text(change: ChangePreview) -> str:
@@ -1328,6 +1655,147 @@ def render_workstream(
     return text
 
 
+def render_live_trace(
+    view: SessionViewState,
+    execution_state: Optional[LiveExecutionState] = None,
+    *,
+    narrow: bool = False,
+) -> Text:
+    """Render the chronological operational trace for the authoritative Live pane."""
+    text = Text()
+    entries = view.workstream
+    if not entries:
+        text.append("Waiting for operational activity…\n", style="dim")
+        return text
+
+    start_dt = None
+    for entry in view.timeline:
+        if entry.timestamp_utc:
+            try:
+                start_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                break
+            except Exception:
+                pass
+
+    if execution_state is not None:
+        is_live = (execution_state.mode.value == "live")
+    else:
+        is_live = (view.status == SessionStatus.RUNNING)
+    status_label = "LIVE" if is_live else "RECENT"
+    header_title = execution_state.operation_label if execution_state else (view.status.value.replace("_", " ").capitalize())
+    text.append(f"{status_label} · ", style=f"bold {MUTED}")
+    text.append(f"{header_title}\n", style=f"bold {FOREGROUND}")
+    text.append("─" * 72 + "\n\n", style=LINE)
+
+    last_change_index = -1
+    for index in range(len(entries) - 1, -1, -1):
+        if entries[index].change is not None:
+            last_change_index = index
+            break
+
+    for index, entry in enumerate(entries):
+        time_str = "       "
+        if entry.timestamp_utc and start_dt:
+            try:
+                entry_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                secs = max(0, int((entry_dt - start_dt).total_seconds()))
+                time_str = f"{secs // 60:02d}:{secs % 60:02d}  "
+            except Exception:
+                pass
+        text.append(time_str, style=FAINT)
+
+        marker, marker_style = _STATUS_MARKER[entry.status]
+        text.append(f"{marker} ", style=marker_style)
+
+        badge = _kind_badge(entry)
+        text.append(f"{badge:<14} ", style=_kind_style(entry))
+
+        label_text = entry.label
+        text.append(label_text, style=FOREGROUND)
+        if entry.target:
+            text.append(f"  {entry.target}", style=f"bold {FOREGROUND}")
+
+        if entry.change is not None:
+            text.append(f"  {_change_stats_text(entry.change)}", style=f"bold {SUCCESS}")
+
+        detail = entry.detail
+        if entry.change is not None and detail and detail.startswith("+") and detail.endswith("more"):
+            detail = None
+        if detail:
+            detail_style = WARNING if "rejection" in detail or "mismatch" in detail or "failed" in detail else MUTED
+            text.append(f"  · {detail}", style=detail_style)
+
+        if entry.duration_seconds is not None:
+            if entry.duration_seconds < 60:
+                text.append(f"  ({entry.duration_seconds:.1f}s)", style="dim")
+            else:
+                mins = int(entry.duration_seconds // 60)
+                secs = int(entry.duration_seconds % 60)
+                text.append(f"  ({mins}m {secs}s)", style="dim")
+        elif entry.status is WorkstreamStatus.ACTIVE:
+            text.append("  (running…)", style="dim italic")
+
+        text.append("\n")
+
+        if entry.change is not None and not narrow and index == last_change_index:
+            change = entry.change
+            if change.multi_file:
+                for file_summary in change.files:
+                    text.append(
+                        f"                {file_summary.operation.value} {file_summary.path}"
+                        f"  +{file_summary.additions} -{file_summary.deletions}\n",
+                        style=MUTED,
+                    )
+                if change.omitted_files:
+                    text.append(f"                … +{change.omitted_files} more\n", style="dim")
+            if change.primary_path and change.multi_file:
+                text.append(f"                {change.primary_path}\n", style=FOREGROUND)
+            _append_diff_lines(text, change, indent="                ")
+            text.append("\n")
+
+    return text
+
+
+class LivePanel(VerticalScroll):
+    """Authoritative Live execution trace console."""
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._text: Static = Static("")
+        self._view: Optional[SessionViewState] = None
+        self._follow_tail: bool = True
+
+    def compose(self) -> ComposeResult:
+        yield self._text
+
+    def update_view(
+        self,
+        view: SessionViewState,
+        execution_state: Optional[LiveExecutionState] = None,
+        *,
+        narrow: bool = False,
+    ) -> None:
+        self._view = view
+        self._text.update(
+            render_live_trace(view, execution_state=execution_state, narrow=narrow)
+        )
+        if self._follow_tail:
+            self.scroll_end(animate=False)
+
+    def on_scroll(self) -> None:
+        if self.scroll_y < max(0, self.max_scroll_y - 2):
+            self._follow_tail = False
+        else:
+            self._follow_tail = True
+
+    def export_text(self, view: Optional[SessionViewState] = None) -> str:
+        """Full logical Live execution trace export for clipboard."""
+        target = view if view is not None else self._view
+        if target is None:
+            return "No operational activity recorded."
+        return live_export_text(target)
+
+
 class WorkstreamPanel(Vertical):
     """Non-focusable curated operational workstream below an evidence pane.
 
@@ -1370,6 +1838,90 @@ class ReplayBar(Static):
 
 class LiveBar(Static):
     """Live-session footer (operational status + cancel hint)."""
+
+
+def live_export_text(
+    view: SessionViewState,
+    *,
+    task_title: Optional[str] = None,
+) -> str:
+    """Deterministic text export for the Live execution trace.
+
+    Full logical operational trace in chronological order including
+    timestamps, semantic unit badges, targets, details, durations, and
+    diff preview lines.  Pure.
+    """
+    from agentic_debugger.ui.app import task_display_title
+
+    title = task_title if task_title is not None else task_display_title(view.task_id)
+    status_label = (
+        "Completed"
+        if view.status is SessionStatus.SUCCEEDED
+        else view.status.value.replace("_", " ").capitalize()
+    )
+    try:
+        from agentic_debugger.application.level32 import is_ladder_task, ladder_task_metadata
+        if view.source_kind is SourceKind.LEVEL32_OPERATOR and view.model_provenance and view.model_provenance.treatment_revision is not None:
+            treatment = f"V{view.model_provenance.treatment_revision}"
+        elif is_ladder_task(view.task_id):
+            treatment = ladder_task_metadata(view.task_id).treatment
+        else:
+            treatment = "—"
+    except Exception:
+        treatment = "—"
+
+    lines = [
+        title,
+        f"Status: {status_label}",
+        f"Treatment: {treatment}",
+        f"View: Live",
+        "",
+    ]
+    if not view.workstream:
+        lines.append("No operational activity recorded.")
+        return "\n".join(lines)
+
+    start_dt = None
+    for entry in view.timeline:
+        if entry.timestamp_utc:
+            try:
+                start_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                break
+            except Exception:
+                pass
+
+    for entry in view.workstream:
+        time_str = "       "
+        if entry.timestamp_utc and start_dt:
+            try:
+                entry_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
+                secs = max(0, int((entry_dt - start_dt).total_seconds()))
+                time_str = f"{secs // 60:02d}:{secs % 60:02d}  "
+            except Exception:
+                pass
+
+        badge = _kind_badge(entry)
+        target_str = f"  {entry.target}" if entry.target else ""
+        stats_str = f"  {_change_stats_text(entry.change)}" if entry.change is not None else ""
+        detail_str = f"  · {entry.detail}" if entry.detail else ""
+        dur_str = ""
+        if entry.duration_seconds is not None:
+            dur_str = f"  ({entry.duration_seconds:.1f}s)"
+        elif entry.status is WorkstreamStatus.ACTIVE:
+            dur_str = "  (running…)"
+
+        lines.append(f"{time_str}{badge:<14} {entry.label}{target_str}{stats_str}{detail_str}{dur_str}")
+        if entry.change is not None:
+            change = entry.change
+            if change.multi_file:
+                for f_sum in change.files:
+                    lines.append(f"                {f_sum.operation.value} {f_sum.path} +{f_sum.additions} -{f_sum.deletions}")
+            for d_line in change.lines:
+                prefix = "+" if d_line.kind is DiffLineKind.ADDED else ("-" if d_line.kind is DiffLineKind.REMOVED else " ")
+                lineno = str(d_line.old_lineno or d_line.new_lineno or "")
+                lines.append(f"                {lineno:>4} {prefix}{d_line.text}")
+
+    return "\n".join(lines)
 
 
 def activity_export_text(
@@ -1434,8 +1986,8 @@ def timeline_export_text(
 ) -> str:
     """Deterministic text export for the full Timeline.
 
-    Full logical timeline in its displayed (chronological) ordering with
-    effective phase-boundary markers preserved as "»".  Pure.
+    Exports structured timing breakdown and chronological timed operations.
+    Pure.
     """
     from agentic_debugger.ui.app import task_display_title
 
@@ -1455,6 +2007,7 @@ def timeline_export_text(
             treatment = "—"
     except Exception:
         treatment = "—"
+
     lines = [
         title,
         f"Status: {status_label}",
@@ -1462,9 +2015,30 @@ def timeline_export_text(
         f"View: Timeline",
         "",
     ]
+
+    timing = compute_session_timing(view)
+    if timing.has_timestamps or timing.accounted_seconds > 0:
+        lines.append("SESSION TIME BREAKDOWN")
+        if timing.total_elapsed_seconds is not None:
+            secs = timing.total_elapsed_seconds
+            mins = int(secs // 60)
+            rem = secs % 60
+            if mins > 0:
+                lines.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)")
+            else:
+                lines.append(f"Total Elapsed: {secs:.1f}s")
+        lines.append("")
+        lines.append(f"{'CATEGORY':<24} {'TIME':<12} {'% OF TOTAL':<12} {'OPERATIONS'}")
+        for cat in timing.categories:
+            dur_str = f"{cat.total_seconds:.1f}s"
+            pct_str = f"{cat.percentage:.1f}%"
+            lines.append(f"{cat.name:<24} {dur_str:<12} {pct_str:<12} {cat.detail}")
+        lines.append("")
+
     if not view.timeline:
         lines.append("No events recorded.")
         return "\n".join(lines)
+
     boundaries = phase_boundary_sequences or frozenset()
     in_flight_seqs = _find_in_flight_sequences(view)
     for entry in view.timeline:
@@ -1480,6 +2054,7 @@ def timeline_export_text(
         elif entry.sequence in in_flight_seqs:
             dur = "  (running…)"
         lines.append(f"{marker}#{entry.sequence} {entry.summary}{dur}")
+
     return "\n".join(lines)
 
 
@@ -1488,16 +2063,24 @@ __all__ = [
     "DebuggerPanel",
     "EvidenceState",
     "LiveBar",
+    "LivePanel",
     "LiveRunContextPanel",
     "PATCH_PANE_PREVIEW_LIMITS",
     "PatchPanel",
     "ReplayBar",
+    "SessionTiming",
     "SourcePanel",
     "StatusHeader",
+    "TimedOperation",
     "TimelinePanel",
+    "TimingCategorySummary",
     "VerifierPanel",
     "WorkstreamPanel",
     "activity_export_text",
+    "compute_session_timing",
+    "live_export_text",
+    "render_live_trace",
+    "render_timeline_report",
     "render_workstream",
     "timeline_export_text",
 ]

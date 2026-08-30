@@ -137,7 +137,7 @@ class TestLiveStartAndProgression:
             header = header_text(workspace)
             assert "Completed" in header
             assert "Succeeded" not in header
-            rail = pane_text(workspace, "#live-run-context-pane")
+            rail = pane_text(workspace, "#live-run-context")
             assert "RUN CONTEXT" in rail
             assert "VERIFIER" in rail
             assert "c cancel" not in live_bar_text(workspace)
@@ -252,7 +252,7 @@ class TestLiveCancellation:
             await wait_live_terminal(pilot, workspace)
             header = header_text(workspace)
             assert "Cancelled" in header
-            rail = pane_text(workspace, "#live-run-context-pane")
+            rail = pane_text(workspace, "#live-run-context")
             assert "RUN CONTEXT" in rail
             assert "VERIFIER" in rail
             assert "c cancel" not in live_bar_text(workspace)

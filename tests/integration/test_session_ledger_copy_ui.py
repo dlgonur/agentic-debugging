@@ -43,19 +43,19 @@ def test_copy_buttons_exist_and_not_focusable(tmp_path):
         app.push_screen(workspace)
         await pilot.pause()
         await pilot.pause()
-        assert workspace.query_one("#copy-activity")
+        assert workspace.query_one("#copy-live")
         assert workspace.query_one("#copy-timeline")
-        assert workspace.query_one("#copy-activity").can_focus is False
+        assert workspace.query_one("#copy-live").can_focus is False
         assert workspace.query_one("#copy-timeline").can_focus is False
     run_headless(app, scenario, size=(140,40))
 
-def test_copy_all_activity_copies_full_log(tmp_path):
+def test_copy_all_live_copies_full_log(tmp_path):
     identity, view = _make_view()
     app = LocalApplicationV1(history_store=HistoryStore(tmp_path))
     copied = {}
     original_copy = app.copy_to_clipboard
     def fake_copy(text):
-        copied["activity"] = text
+        copied["live"] = text
     app.copy_to_clipboard = fake_copy
     async def scenario(pilot):
         workspace = WorkspaceScreen(mode=WorkspaceMode.LIVE, identity=identity, view=view)
@@ -70,17 +70,15 @@ def test_copy_all_activity_copies_full_log(tmp_path):
         await pilot.pause()
         await pilot.pause()
         from textual.widgets import TabbedContent
-        workspace.query_one("#pane-tabs", TabbedContent).active = "tab-activity"
+        workspace.query_one("#pane-tabs", TabbedContent).active = "tab-live"
         await pilot.pause()
         await pilot.pause()
-        # Press copy activity
-        await pilot.click("#copy-activity")
+        # Press copy live
+        await pilot.click("#copy-live")
         await pilot.pause()
-        assert "activity" in copied
-        assert "#0" in copied["activity"]
-        assert "#2" in copied["activity"]
-        # Should contain all timeline entries
-        assert str(len(view.timeline)) in copied["activity"] or "#0" in copied["activity"]
+        assert "live" in copied
+        assert "View: Live" in copied["live"]
+        assert "tool" in copied["live"].lower()
     run_headless(app, scenario, size=(140,40))
 
 def test_copy_all_timeline_copies_full(tmp_path):
@@ -131,7 +129,7 @@ def test_clipboard_failure_non_fatal(tmp_path):
         await pilot.pause()
         await pilot.pause()
         # Should not raise
-        await pilot.click("#copy-activity")
+        await pilot.click("#copy-live")
         await pilot.pause()
         # Still alive
         assert workspace.is_mounted

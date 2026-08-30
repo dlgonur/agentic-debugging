@@ -116,6 +116,7 @@ from agentic_debugger.ui.widgets import (
     EvidenceReviewPanel,
     EvidenceState,
     LiveBar,
+    LivePanel,
     LiveRunContextPanel,
     PatchPanel,
     ReplayBar,
@@ -124,6 +125,8 @@ from agentic_debugger.ui.widgets import (
     TimelinePanel,
     VerifierPanel,
     WorkstreamPanel,
+    live_export_text,
+    timeline_export_text,
 )
 from agentic_debugger.ui.theme import (
     CANVAS,
@@ -2549,14 +2552,13 @@ class WorkspaceScreen(Screen):
         Binding("g", "replay_begin", "Beginning"),
         Binding("G", "replay_end", "End"),
         Binding("j", "replay_jump", "Jump to sequence"),
-        Binding("1", "filter_all", "Filter: all", show=False),
-        Binding("2", "filter_lifecycle", "Filter: lifecycle", show=False),
-        Binding("3", "filter_controller", "Filter: controller", show=False),
-        Binding("4", "filter_model", "Filter: model", show=False),
-        Binding("5", "filter_debugger", "Filter: debugger", show=False),
-        Binding("6", "filter_patch", "Filter: patch", show=False),
-        Binding("7", "filter_verifier", "Filter: verifier", show=False),
-        Binding("8", "filter_tools", "Filter: tools", show=False),
+        Binding("1", "select_tab_1", "Live", show=False),
+        Binding("2", "select_tab_2", "Evidence", show=False),
+        Binding("3", "select_tab_3", "Source", show=False),
+        Binding("4", "select_tab_4", "Debugger", show=False),
+        Binding("5", "select_tab_5", "Patch", show=False),
+        Binding("6", "select_tab_6", "Verifier", show=False),
+        Binding("7", "select_tab_7", "Timeline", show=False),
         Binding("c", "cancel_live", "Cancel session"),
         Binding("h", "history", "History", priority=True),
         Binding("n", "new_session", "New session", priority=True),
@@ -2605,6 +2607,11 @@ class WorkspaceScreen(Screen):
         with Horizontal(id="workspace-body"):
             with Vertical(id="workspace-main"):
                 with TabbedContent(id="pane-tabs"):
+                    with TabPane("Live", id="tab-live"):
+                        with Vertical(id="live-container"):
+                            with Horizontal(id="live-copy-bar"):
+                                yield CopyAllButton("Copy all", id="copy-live", classes="copy-button")
+                            yield LivePanel(id="live-pane")
                     with TabPane("Evidence", id="tab-evidence"):
                         yield EvidenceReviewPanel(id="evidence-pane")
                     with TabPane("Source", id="tab-source"):
@@ -2615,11 +2622,6 @@ class WorkspaceScreen(Screen):
                         yield PatchPanel(id="patch-pane")
                     with TabPane("Verifier", id="tab-verifier"):
                         yield VerifierPanel(id="verifier-pane")
-                    with TabPane("Activity", id="tab-activity"):
-                        with Vertical(id="activity-container"):
-                            with Horizontal(id="activity-copy-bar"):
-                                yield CopyAllButton("Copy all", id="copy-activity", classes="copy-button")
-                            yield ActivityPanel(id="activity-pane")
                     with TabPane("Timeline", id="tab-timeline"):
                         with Vertical(id="timeline-container"):
                             with Horizontal(id="timeline-copy-bar"):
@@ -2634,6 +2636,12 @@ class WorkspaceScreen(Screen):
 
     def on_mount(self) -> None:
         if self.mode is WorkspaceMode.LIVE:
+            # Live default view is tab-live
+            try:
+                tabs = self.query_one("#pane-tabs", TabbedContent)
+                tabs.active = "tab-live"
+            except Exception:
+                pass
             # A live worker can surface its first events (or even its
             # terminal/failure) before this screen finishes mounting.  The
             # app-owned live state is authoritative, so catch up now; the
@@ -2835,28 +2843,39 @@ class WorkspaceScreen(Screen):
             patch_state = EvidenceState.SESSION_ABSENT
             verifier_state = EvidenceState.SESSION_ABSENT
 
-        self.query_one("#source-pane", SourcePanel).update_view(
-            view, evidence_state=source_state
-        )
-        self.query_one("#debugger-pane", DebuggerPanel).update_view(
-            view, evidence_state=debugger_state
-        )
-        self.query_one("#patch-pane", PatchPanel).update_view(
-            view, evidence_state=patch_state
-        )
-        self.query_one("#verifier-pane", VerifierPanel).update_view(
-            view, evidence_state=verifier_state
-        )
-        self.query_one("#activity-pane", ActivityPanel).update_view(view)
-        boundaries = self._current_boundaries()
-        self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
-        self._update_tab_labels(view)
-
         execution: Optional[LiveExecutionState]
         if self.mode is WorkspaceMode.LIVE:
             execution = self.app.live_execution_state()
         else:
             execution = project_live_execution(view, mode=ExecutionMode.REPLAY)
+
+        if self.query("#live-pane"):
+            self.query_one("#live-pane", LivePanel).update_view(view, execution_state=execution)
+        if self.query("#evidence-pane"):
+            self.query_one("#evidence-pane", EvidenceReviewPanel).update_view(view)
+        if self.query("#source-pane"):
+            self.query_one("#source-pane", SourcePanel).update_view(
+                view, evidence_state=source_state
+            )
+        if self.query("#debugger-pane"):
+            self.query_one("#debugger-pane", DebuggerPanel).update_view(
+                view, evidence_state=debugger_state
+            )
+        if self.query("#patch-pane"):
+            self.query_one("#patch-pane", PatchPanel).update_view(
+                view, evidence_state=patch_state
+            )
+        if self.query("#verifier-pane"):
+            self.query_one("#verifier-pane", VerifierPanel).update_view(
+                view, evidence_state=verifier_state
+            )
+        if self.query("#activity-pane"):
+            self.query_one("#activity-pane", ActivityPanel).update_view(view)
+        if self.query("#timeline-pane"):
+            boundaries = self._current_boundaries()
+            self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
+        self._update_tab_labels(view)
+
         if execution is not None:
             if self.mode is WorkspaceMode.LIVE and self.query("#live-run-context"):
                 self.query_one("#live-run-context", LiveRunContextPanel).update_execution(execution)
@@ -2865,6 +2884,9 @@ class WorkspaceScreen(Screen):
     def _update_tab_labels(self, view: SessionViewState) -> None:
         try:
             tabs = self.query_one("#pane-tabs", TabbedContent)
+            live_tab = tabs.get_tab("tab-live")
+            if live_tab:
+                live_tab.label = "Live •" if view.status is SessionStatus.RUNNING else "Live"
             ev_tab = tabs.get_tab("tab-evidence")
             if ev_tab:
                 ev_tab.label = "Evidence"
@@ -3010,12 +3032,12 @@ class WorkspaceScreen(Screen):
     # -- workspace view navigation ------------------------------------------
 
     _VIEW_IDS = (
+        "tab-live",
         "tab-evidence",
         "tab-source",
         "tab-debugger",
         "tab-patch",
         "tab-verifier",
-        "tab-activity",
         "tab-timeline",
     )
 
@@ -3405,32 +3427,69 @@ class WorkspaceScreen(Screen):
     def action_filter_all(self) -> None:
         self._set_filter("all")
 
+    def _select_tab_index(self, index: int) -> None:
+        if 0 <= index < len(self._VIEW_IDS):
+            tabs = self.query_one("#pane-tabs", TabbedContent)
+            tab_id = self._VIEW_IDS[index]
+            tabs.active = tab_id
+            try:
+                tabs.get_pane(tab_id).focus()
+            except Exception:
+                pass
+
+    def action_select_tab_1(self) -> None:
+        self._select_tab_index(0)
+
+    def action_select_tab_2(self) -> None:
+        self._select_tab_index(1)
+
+    def action_select_tab_3(self) -> None:
+        self._select_tab_index(2)
+
+    def action_select_tab_4(self) -> None:
+        self._select_tab_index(3)
+
+    def action_select_tab_5(self) -> None:
+        self._select_tab_index(4)
+
+    def action_select_tab_6(self) -> None:
+        self._select_tab_index(5)
+
+    def action_select_tab_7(self) -> None:
+        self._select_tab_index(6)
+
+    def action_filter_all(self) -> None:
+        self.action_select_tab_1()
+
     def action_filter_lifecycle(self) -> None:
-        self._set_filter("lifecycle")
+        self.action_select_tab_2()
 
     def action_filter_controller(self) -> None:
-        self._set_filter("controller")
+        self.action_select_tab_3()
 
     def action_filter_model(self) -> None:
-        self._set_filter("model")
+        self.action_select_tab_4()
 
     def action_filter_debugger(self) -> None:
-        self._set_filter("debugger")
+        self.action_select_tab_5()
 
     def action_filter_patch(self) -> None:
-        self._set_filter("patch")
+        self.action_select_tab_6()
 
     def action_filter_verifier(self) -> None:
-        self._set_filter("verifier")
+        self.action_select_tab_7()
 
     def action_filter_tools(self) -> None:
-        self._set_filter("tools")
+        pass
 
     def _set_filter(self, name: str) -> None:
-        panel = self._activity_panel()
-        panel.filter = name
-        if self._view is not None:
-            panel.update_view(self._view)
+        try:
+            panel = self._activity_panel()
+            panel.filter = name
+            if self._view is not None:
+                panel.update_view(self._view)
+        except Exception:
+            pass
 
     # -- copy all -----------------------------------------------------------
 
@@ -3450,16 +3509,25 @@ class WorkspaceScreen(Screen):
             # Clipboard failure must be non-fatal and must not mutate history.
             self.notify("Copy failed — clipboard unavailable", severity="warning", timeout=3.0)
 
+    def _live_copy_text(self) -> str:
+        view = self._current_view_for_copy()
+        if view is None:
+            return "No operational activity recorded."
+        from agentic_debugger.ui.widgets import live_export_text
+
+        return live_export_text(view)
+
     def _activity_copy_text(self) -> str:
         view = self._current_view_for_copy()
         if view is None:
             return "No activity recorded."
-        panel = self._activity_panel()
-        # Use the panel's current filter and the view's durable timeline.
-        # Do NOT use rendered Textual lines or scroll window.
-        from agentic_debugger.ui.widgets import activity_export_text
+        try:
+            panel = self._activity_panel()
+            from agentic_debugger.ui.widgets import activity_export_text
 
-        return activity_export_text(view, filter_name=panel.filter)
+            return activity_export_text(view, filter_name=panel.filter)
+        except Exception:
+            return "No activity recorded."
 
     def _timeline_copy_text(self) -> str:
         view = self._current_view_for_copy()
@@ -3474,19 +3542,28 @@ class WorkspaceScreen(Screen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         # Mouse-clickable COPY ALL without keyboard focus trap; no global shortcut.
         # Do NOT journal the copy action; do NOT mutate session history.
-        if event.button.id == "copy-activity":
+        if event.button.id == "copy-live":
+            text = self._live_copy_text()
+            view = self._current_view_for_copy()
+            count = len(view.workstream) if view is not None else 0
+            success = f"Copied {count} live events" if count != 1 else "Copied 1 live event"
+            self._copy_to_clipboard(text, success)
+            event.stop()
+        elif event.button.id == "copy-activity":
             text = self._activity_copy_text()
             # Count logical events matching current filter for acknowledgement.
             view = self._current_view_for_copy()
             if view is not None:
                 from agentic_debugger.ui.widgets import _ACTIVITY_FILTER_KINDS
 
-                allowed = _ACTIVITY_FILTER_KINDS.get(self._activity_panel().filter, frozenset())
-                count = sum(
-                    1 for e in view.timeline if not allowed or e.event_kind.value in allowed
-                )
-                # For "all", count is total timeline length.
-                success = f"Copied {count} activity events" if count != 1 else "Copied 1 activity event"
+                try:
+                    allowed = _ACTIVITY_FILTER_KINDS.get(self._activity_panel().filter, frozenset())
+                    count = sum(
+                        1 for e in view.timeline if not allowed or e.event_kind.value in allowed
+                    )
+                    success = f"Copied {count} activity events" if count != 1 else "Copied 1 activity event"
+                except Exception:
+                    success = "Copied activity"
             else:
                 success = "Copied activity"
             self._copy_to_clipboard(text, success)

@@ -51,7 +51,7 @@ __all__ = [
 
 #: Durable retained workstream entries (tail-bounded; rendering shows far
 #: fewer).  Small because entries are semantic units, not raw events.
-MAX_WORKSTREAM_ENTRIES = 120
+MAX_WORKSTREAM_ENTRIES = 500
 
 #: Settled model-request entries retained after compaction: the recent
 #: stream emphasizes the current work, not a wall of completed requests.
@@ -571,6 +571,8 @@ class WorkstreamEntry:
     detail: Optional[str] = None
     ordinal: Optional[int] = None
     change: Optional[ChangePreview] = None
+    timestamp_utc: Optional[str] = None
+    duration_seconds: Optional[float] = None
 
 
 def _append(
@@ -593,6 +595,8 @@ def _settle(
     target: Optional[str] = None,
     ordinal: Optional[int] = None,
     match_detail: Optional[str] = None,
+    timestamp_utc: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
 ) -> Tuple[WorkstreamEntry, ...]:
     """Settle the most recent ACTIVE entry of one kind (identity match).
 
@@ -613,6 +617,8 @@ def _settle(
             label=label or entry.label,
             detail=detail if detail is not None else entry.detail,
             target=target or entry.target,
+            timestamp_utc=entry.timestamp_utc or timestamp_utc,
+            duration_seconds=duration_seconds if duration_seconds is not None else entry.duration_seconds,
         )
         return entries[:index] + (settled,) + entries[index + 1 :]
     return entries
@@ -726,6 +732,8 @@ def apply_workstream_event(
     sequence: int,
     in_flight_attempt_ordinal: int,
     debugger_target: Optional[str] = None,
+    timestamp_utc: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
 ) -> Tuple[WorkstreamEntry, ...]:
     """Fold one durable session event into the curated workstream.
 
@@ -742,6 +750,8 @@ def apply_workstream_event(
         sequence=sequence,
         in_flight_attempt_ordinal=in_flight_attempt_ordinal,
         debugger_target=debugger_target,
+        timestamp_utc=timestamp_utc,
+        duration_seconds=duration_seconds,
     )
     if folded is entries:
         return entries
@@ -756,8 +766,36 @@ def _fold_workstream_event(
     sequence: int,
     in_flight_attempt_ordinal: int,
     debugger_target: Optional[str] = None,
+    timestamp_utc: Optional[str] = None,
+    duration_seconds: Optional[float] = None,
 ) -> Tuple[WorkstreamEntry, ...]:
     kind = event_kind
+
+    if kind == "session.started":
+        return _append(
+            entries,
+            WorkstreamEntry(
+                kind=WorkstreamKind.SESSION,
+                status=WorkstreamStatus.COMPLETED,
+                label="Session started",
+                sequence=sequence,
+                timestamp_utc=timestamp_utc,
+            ),
+        )
+
+    if kind == "model.configured":
+        display = payload.get("display_name") or payload.get("profile_id")
+        return _append(
+            entries,
+            WorkstreamEntry(
+                kind=WorkstreamKind.SESSION,
+                status=WorkstreamStatus.COMPLETED,
+                label="Model configured",
+                detail=display,
+                sequence=sequence,
+                timestamp_utc=timestamp_utc,
+            ),
+        )
 
     if kind == "model.request_started":
         entries = _settle(
@@ -765,7 +803,14 @@ def _fold_workstream_event(
             kind=WorkstreamKind.WORKSPACE,
             status=WorkstreamStatus.COMPLETED,
             sequence=sequence,
+            timestamp_utc=timestamp_utc,
         )
+        continuing_detail = None
+        for prev in reversed(entries):
+            if prev.kind is WorkstreamKind.CHANGE:
+                if prev.status is WorkstreamStatus.FAILED:
+                    continuing_detail = "Continuing from patch failure feedback"
+                break
         return _append(
             entries,
             WorkstreamEntry(
@@ -774,8 +819,44 @@ def _fold_workstream_event(
                 label="Model request",
                 sequence=sequence,
                 ordinal=payload["request_index"] + 1,
+                detail=continuing_detail,
+                timestamp_utc=timestamp_utc,
             ),
         )
+
+    if kind == "model.directive_accepted":
+        action_name = payload.get("action_name")
+        directive_kind = payload.get("directive_kind")
+        target_state = payload.get("target_state")
+        action_desc = None
+        if action_name:
+            _action_map = {
+                "get_source_window": "Inspect source",
+                "get_stack_summary": "Inspect stack",
+                "get_frame": "Inspect frame",
+                "get_frame_locals": "Inspect locals",
+                "step_over": "Step over",
+                "step_into": "Step into",
+                "continue_execution": "Continue execution",
+                "apply_patch": "Apply change",
+                "run_reproduction": "Run reproduction",
+                "run_tests": "Run tests",
+                "run_regression_tests": "Run regression tests",
+                "express_root_cause_hypothesis": "Formulate diagnosis",
+            }
+            action_desc = _action_map.get(action_name, action_name.replace("_", " ").capitalize())
+        elif directive_kind == "transition" and target_state:
+            action_desc = f"Transition to {target_state}"
+
+        if action_desc:
+            # Find the most recent active or recent MODEL_REQUEST entry and annotate detail
+            for index in range(len(entries) - 1, -1, -1):
+                entry = entries[index]
+                if entry.kind is WorkstreamKind.MODEL_REQUEST:
+                    updated_detail = f"{entry.detail} · {action_desc}" if entry.detail and "Continuing" in entry.detail else action_desc
+                    updated_entry = replace(entry, detail=updated_detail)
+                    return entries[:index] + (updated_entry,) + entries[index + 1 :]
+        return entries
 
     if kind == "model.request_completed":
         ordinal = payload["request_index"] + 1
@@ -787,6 +868,8 @@ def _fold_workstream_event(
             sequence=sequence,
             ordinal=ordinal,
             detail=payload.get("error_kind") if failed else None,
+            timestamp_utc=timestamp_utc,
+            duration_seconds=duration_seconds,
         )
 
     if kind == "tool.started":
@@ -813,6 +896,7 @@ def _fold_workstream_event(
                     sequence=sequence,
                     ordinal=in_flight_attempt_ordinal,
                     detail="applying",
+                    timestamp_utc=timestamp_utc,
                 ),
             )
         unit_kind, unit_label = _tool_unit(tool_name)
@@ -825,6 +909,7 @@ def _fold_workstream_event(
                 sequence=sequence,
                 target=target,
                 detail=_tool_detail(tool_name, unit_label),
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -845,6 +930,8 @@ def _fold_workstream_event(
             sequence=sequence,
             target=target,
             match_detail=detail,
+            timestamp_utc=timestamp_utc,
+            duration_seconds=duration_seconds,
         )
         if settled is not entries:
             return settled
@@ -860,6 +947,8 @@ def _fold_workstream_event(
                 sequence=sequence,
                 target=target,
                 detail=detail,
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -880,6 +969,7 @@ def _fold_workstream_event(
                 label="Start debugger",
                 sequence=sequence,
                 target=target or script,
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -894,6 +984,8 @@ def _fold_workstream_event(
             sequence=sequence,
             label="Debugger",
             target=target,
+            timestamp_utc=timestamp_utc,
+            duration_seconds=duration_seconds,
         )
 
     if kind == "debugger.stack_observed":
@@ -906,6 +998,8 @@ def _fold_workstream_event(
                 label="PDB observed",
                 sequence=sequence,
                 target=target,
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -917,11 +1011,13 @@ def _fold_workstream_event(
                 status=WorkstreamStatus.COMPLETED,
                 label="PDB locals",
                 sequence=sequence,
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
     if kind == "operator.progress":
-        return _apply_operator_progress(entries, payload, sequence)
+        return _apply_operator_progress(entries, payload, sequence, timestamp_utc=timestamp_utc)
 
     if kind == "verifier.started":
         existing = _settle(
@@ -931,6 +1027,7 @@ def _fold_workstream_event(
             sequence=sequence,
             label="Verifier",
             detail="running",
+            timestamp_utc=timestamp_utc,
         )
         if existing is not entries:
             return existing
@@ -942,6 +1039,7 @@ def _fold_workstream_event(
                 label="Verifier",
                 sequence=sequence,
                 detail="running",
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -954,6 +1052,8 @@ def _fold_workstream_event(
             sequence=sequence,
             label="Verifier",
             detail=stage.replace("_", " ") if isinstance(stage, str) else None,
+            timestamp_utc=timestamp_utc,
+            duration_seconds=duration_seconds,
         )
 
     if kind == "verifier.completed":
@@ -966,6 +1066,8 @@ def _fold_workstream_event(
             sequence=sequence,
             label="Verifier",
             detail=detail,
+            timestamp_utc=timestamp_utc,
+            duration_seconds=duration_seconds,
         )
         if settled is not entries:
             return settled
@@ -977,6 +1079,8 @@ def _fold_workstream_event(
                 label="Verifier",
                 sequence=sequence,
                 detail=detail,
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -996,6 +1100,8 @@ def _fold_workstream_event(
                 fields["detail"] = "proposed"
             if preview is not None:
                 fields["change"] = preview
+            if timestamp_utc is not None and entry.timestamp_utc is None:
+                fields["timestamp_utc"] = timestamp_utc
             updated = replace(entry, **fields)
             return entries[:index] + (updated,) + entries[index + 1 :]
         # No cross-ordinal deduplication: distinct patch attempts remain
@@ -1012,6 +1118,7 @@ def _fold_workstream_event(
                 ordinal=ordinal,
                 detail="proposed",
                 change=preview,
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -1027,6 +1134,8 @@ def _fold_workstream_event(
         }
         if changed:
             fields["target"] = changed[0]
+        if duration_seconds is not None:
+            fields["duration_seconds"] = duration_seconds
         updated = _update_change(entries, ordinal, **fields)
         if updated is not entries:
             return updated
@@ -1040,6 +1149,8 @@ def _fold_workstream_event(
                 ordinal=ordinal,
                 target=changed[0] if changed else None,
                 detail=detail,
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -1052,6 +1163,7 @@ def _fold_workstream_event(
             sequence=sequence,
             label="Rejected change",
             detail=payload.get("rejection_reason"),
+            duration_seconds=duration_seconds,
         )
         if updated is not entries:
             return updated
@@ -1064,6 +1176,8 @@ def _fold_workstream_event(
                 sequence=sequence,
                 ordinal=ordinal,
                 detail=payload.get("rejection_reason"),
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -1076,6 +1190,7 @@ def _fold_workstream_event(
             sequence=sequence,
             label="Apply failed",
             detail=payload.get("apply_failure_reason"),
+            duration_seconds=duration_seconds,
         )
         if updated is not entries:
             return updated
@@ -1088,6 +1203,8 @@ def _fold_workstream_event(
                 sequence=sequence,
                 ordinal=ordinal,
                 detail=payload.get("apply_failure_reason"),
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -1099,6 +1216,7 @@ def _fold_workstream_event(
             status=WorkstreamStatus.COMPLETED,
             sequence=sequence,
             label="Change reverted",
+            duration_seconds=duration_seconds,
         )
         if updated is not entries:
             return updated
@@ -1110,6 +1228,8 @@ def _fold_workstream_event(
                 label="Change reverted",
                 sequence=sequence,
                 ordinal=ordinal,
+                timestamp_utc=timestamp_utc,
+                duration_seconds=duration_seconds,
             ),
         )
 
@@ -1122,6 +1242,8 @@ def _fold_workstream_event(
                 label="Diagnosis recorded",
                 sequence=sequence,
                 target=payload.get("file_path"),
+                detail=payload.get("text"),
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -1133,6 +1255,7 @@ def _fold_workstream_event(
                 status=WorkstreamStatus.ACTIVE,
                 label="Cleanup",
                 sequence=sequence,
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -1144,6 +1267,9 @@ def _fold_workstream_event(
             status=WorkstreamStatus.COMPLETED if verified else WorkstreamStatus.FAILED,
             sequence=sequence,
             label="Cleanup",
+            detail="verified" if verified else "unverified",
+            timestamp_utc=timestamp_utc,
+            duration_seconds=duration_seconds,
         )
 
     if kind == "cleanup.not_required":
@@ -1155,6 +1281,7 @@ def _fold_workstream_event(
                 status=WorkstreamStatus.COMPLETED,
                 label="Cleanup not required",
                 sequence=sequence,
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -1168,6 +1295,7 @@ def _fold_workstream_event(
                 label="Session failed",
                 sequence=sequence,
                 detail=reason.replace("_", " ") if isinstance(reason, str) else None,
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -1182,6 +1310,7 @@ def _fold_workstream_event(
                 status=WorkstreamStatus.COMPLETED,
                 label=label,
                 sequence=sequence,
+                timestamp_utc=timestamp_utc,
             ),
         )
 
@@ -1192,6 +1321,7 @@ def _apply_operator_progress(
     entries: Tuple[WorkstreamEntry, ...],
     payload: dict,
     sequence: int,
+    timestamp_utc: Optional[str] = None,
 ) -> Tuple[WorkstreamEntry, ...]:
     stage = payload.get("stage")
     if stage == "preparing_workspace":
@@ -1202,6 +1332,7 @@ def _apply_operator_progress(
                 status=WorkstreamStatus.ACTIVE,
                 label="Preparing workspace",
                 sequence=sequence,
+                timestamp_utc=timestamp_utc,
             ),
         )
     if stage in ("starting", "preflight"):
@@ -1212,6 +1343,7 @@ def _apply_operator_progress(
                 status=WorkstreamStatus.COMPLETED,
                 label="Preflight",
                 sequence=sequence,
+                timestamp_utc=timestamp_utc,
             ),
         )
     if stage == "model_running":
@@ -1220,6 +1352,7 @@ def _apply_operator_progress(
             kind=WorkstreamKind.WORKSPACE,
             status=WorkstreamStatus.COMPLETED,
             sequence=sequence,
+            timestamp_utc=timestamp_utc,
         )
     if stage == "verification":
         existing = _settle(
@@ -1229,6 +1362,7 @@ def _apply_operator_progress(
             sequence=sequence,
             label="Verifier",
             detail="running",
+            timestamp_utc=timestamp_utc,
         )
         if existing is not entries:
             return existing
@@ -1240,6 +1374,7 @@ def _apply_operator_progress(
                 label="Verifier",
                 sequence=sequence,
                 detail="running",
+                timestamp_utc=timestamp_utc,
             ),
         )
     if stage == "official_verification_preparing":
@@ -1251,6 +1386,7 @@ def _apply_operator_progress(
                 label="Official verification",
                 sequence=sequence,
                 detail="preparing",
+                timestamp_utc=timestamp_utc,
             ),
         )
     if stage == "official_evaluator_started":
@@ -1261,6 +1397,7 @@ def _apply_operator_progress(
             sequence=sequence,
             label="Official verification",
             detail="evaluator running",
+            timestamp_utc=timestamp_utc,
         )
     if stage == "official_evaluator_completed":
         proven = payload.get("official_execution_proven") is True
@@ -1271,6 +1408,7 @@ def _apply_operator_progress(
             sequence=sequence,
             label="Official verification",
             detail="execution proven" if proven else "completed (unproven)",
+            timestamp_utc=timestamp_utc,
         )
     if stage in ("cleanup", "finalizing"):
         return _settle(
@@ -1278,6 +1416,7 @@ def _apply_operator_progress(
             kind=WorkstreamKind.VERIFICATION,
             status=WorkstreamStatus.COMPLETED,
             sequence=sequence,
+            timestamp_utc=timestamp_utc,
         )
     return entries
 
