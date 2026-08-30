@@ -534,7 +534,7 @@ def test_activity_timeline_copy_all():
     activity = activity_export_text(view, filter_name="all")
     timeline = timeline_export_text(view)
     assert "session created" in activity
-    assert "session started" in timeline
+    assert "SESSION TIME BREAKDOWN" in timeline
 
 # ---------------------------------------------------------------------------
 # 20. Apply To Project succeeds only after HEAD/clean/apply-check gates

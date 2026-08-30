@@ -803,65 +803,6 @@ def _counts(passed: Optional[int], total: Optional[int]) -> str:
     return f"{passed}/{total}"
 
 
-class ActivityPanel(VerticalScroll):
-    """Filterable activity timeline (controller/model/tool/debugger/…)."""
-
-    def __init__(self, **kwargs: Any) -> None:
-        super().__init__(**kwargs)
-        self._text: Static = Static("")
-        self._view: Optional[SessionViewState] = None
-        self.filter: str = "all"
-
-    def compose(self) -> ComposeResult:
-        yield self._text
-
-    def update_view(self, view: SessionViewState) -> None:
-        self._view = view
-        self._text.update(self._render_view(view))
-
-    def cycle_filter(self, step: int = 1) -> str:
-        names = [name for name, _ in _ACTIVITY_FILTERS]
-        current = names.index(self.filter) if self.filter in names else 0
-        self.filter = names[(current + step) % len(names)]
-        if self._view is not None:
-            self._text.update(self._render_view(self._view))
-        return self.filter
-
-    def _render_view(self, view: SessionViewState) -> Text:
-        text = Text()
-        text.append("Filter: ", style="dim")
-        text.append(self.filter, style="bold")
-        text.append(
-            f" ({dict(_ACTIVITY_FILTERS)[self.filter]})  —  keys: 1..7 "
-            "filter (1 = all)\n",
-            style="dim",
-        )
-        text.append("─" * 40, style="dim")
-        text.append("\n")
-        allowed = _ACTIVITY_FILTER_KINDS[self.filter]
-        entries = [
-            entry
-            for entry in view.timeline
-            if not allowed or entry.event_kind.value in allowed
-        ]
-        if not entries:
-            text.append("No activity recorded for this filter.", style="dim")
-            return text
-        for entry in reversed(entries):
-            style = _entry_style(entry)
-            text.append(f"#{entry.sequence:<5} ", style="dim")
-            text.append(entry.summary, style=style)
-            text.append("\n")
-        return text
-
-    def export_text(self, view: Optional[SessionViewState] = None) -> str:
-        """Full logical Activity export for clipboard (filter-aware)."""
-        target = view if view is not None else self._view
-        if target is None:
-            return "No activity recorded."
-        return activity_export_text(target, filter_name=self.filter)
-
-
 _START_TO_COMPLETION_KINDS: dict[SessionEventKind, SessionEventKind] = {
     SessionEventKind.MODEL_REQUEST_STARTED: SessionEventKind.MODEL_REQUEST_COMPLETED,
     SessionEventKind.TOOL_STARTED: SessionEventKind.TOOL_COMPLETED,
@@ -1270,12 +1211,29 @@ def render_timeline_report(
         secs = timing.total_elapsed_seconds
         mins = int(secs // 60)
         rem = secs % 60
-        if mins > 0:
-            text.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)\n", style=f"bold {FOREGROUND}")
-        else:
-            text.append(f"Total Elapsed: {secs:.1f}s\n", style=f"bold {FOREGROUND}")
+        time_str = f"{mins:02d}:{rem:04.1f} ({secs:.1f}s)" if mins > 0 else f"{secs:.1f}s"
+        text.append(f"Total Elapsed: {time_str}\n", style=f"bold {FOREGROUND}")
+        if timing.accounted_seconds > 0:
+            acc_secs = timing.accounted_seconds
+            acc_mins = int(acc_secs // 60)
+            acc_rem = acc_secs % 60
+            acc_str = f"{acc_mins:02d}:{acc_rem:04.1f} ({acc_secs:.1f}s)" if acc_mins > 0 else f"{acc_secs:.1f}s"
+            if secs > 0:
+                acc_pct = (acc_secs / secs) * 100.0
+                if acc_secs <= secs:
+                    text.append(f"Accounted:     {acc_str} / {time_str} ({acc_pct:.1f}%)\n", style=FOREGROUND)
+                else:
+                    text.append(f"Accounted:     {acc_str} / {time_str} ({acc_pct:.1f}%, overlapping measurements)\n", style=WARNING)
+            else:
+                text.append(f"Accounted:     {acc_str}\n", style=FOREGROUND)
     else:
         text.append("Total Elapsed: Not recorded\n", style="dim")
+        if timing.accounted_seconds > 0:
+            acc_secs = timing.accounted_seconds
+            acc_mins = int(acc_secs // 60)
+            acc_rem = acc_secs % 60
+            acc_str = f"{acc_mins:02d}:{acc_rem:04.1f} ({acc_secs:.1f}s)" if acc_mins > 0 else f"{acc_secs:.1f}s"
+            text.append(f"Accounted:     {acc_str} (total elapsed unmeasured)\n", style=FOREGROUND)
     text.append("─" * 72 + "\n", style=LINE)
 
     text.append(f"{'CATEGORY':<24} {'TIME':<14} {'% OF TOTAL':<12} {'OPERATIONS'}\n", style=f"bold {MUTED}")
@@ -1295,6 +1253,8 @@ def render_timeline_report(
             cat_style = SUCCESS
         elif "Patch" in cat.name:
             cat_style = EVIDENCE
+        elif "Cleanup" in cat.name:
+            cat_style = SUCCESS
 
         dur_style = FOREGROUND if cat.total_seconds is not None else "dim"
         text.append(f"{cat.name:<24}", style=f"bold {cat_style}")
@@ -1302,15 +1262,46 @@ def render_timeline_report(
         text.append(f"{pct_str:<12}", style=MUTED)
         text.append(f"{cat.detail}\n", style=FAINT)
 
-    if timing.accounted_seconds > 0 and timing.categories:
+    if timing.total_elapsed_seconds is not None and timing.total_elapsed_seconds > timing.accounted_seconds:
+        unattributed = timing.total_elapsed_seconds - timing.accounted_seconds
+        unatt_pct = (unattributed / timing.total_elapsed_seconds) * 100.0 if timing.total_elapsed_seconds > 0 else 0.0
+        text.append(f"{'Unattributed':<24}", style=f"bold {MUTED}")
+        text.append(f"{unattributed:.1f}s{'':<9}", style="dim")
+        text.append(f"{unatt_pct:.1f}%{'':<6}", style=MUTED)
+        text.append("Not measured\n", style=FAINT)
+
+    bar_width = 48
+    if timing.total_elapsed_seconds is not None and timing.total_elapsed_seconds > 0:
+        if timing.accounted_seconds <= timing.total_elapsed_seconds:
+            if timing.accounted_seconds > 0:
+                text.append("\n[", style=MUTED)
+                allocated_chars = 0
+                for cat in timing.categories:
+                    if cat.total_seconds and cat.total_seconds > 0:
+                        cat_chars = int(round((cat.total_seconds / timing.total_elapsed_seconds) * bar_width))
+                        if cat_chars < 1:
+                            cat_chars = 1
+                        allocated_chars += cat_chars
+                        char_style = SECONDARY if "Model" in cat.name else (DEBUGGER if "Debugger" in cat.name else (TOOL if "Tool" in cat.name else (SUCCESS if "Verification" in cat.name else (EVIDENCE if "Patch" in cat.name else SUCCESS))))
+                        text.append("█" * cat_chars, style=char_style)
+                unmeasured_chars = max(0, bar_width - allocated_chars)
+                if unmeasured_chars > 0:
+                    text.append("░" * unmeasured_chars, style=FAINT)
+                text.append("]\n\n", style=MUTED)
+            else:
+                text.append("\n")
+        else:
+            text.append("\n[", style=MUTED)
+            text.append("Overlapping measurements — categories exceed wall-clock time", style=WARNING)
+            text.append("]\n\n", style=MUTED)
+    elif timing.accounted_seconds > 0:
         text.append("\n[", style=MUTED)
-        bar_width = 48
         for cat in timing.categories:
             if cat.total_seconds and cat.total_seconds > 0:
                 cat_chars = max(1, int(round((cat.total_seconds / timing.accounted_seconds) * bar_width)))
                 char_style = SECONDARY if "Model" in cat.name else (DEBUGGER if "Debugger" in cat.name else (TOOL if "Tool" in cat.name else (SUCCESS if "Verification" in cat.name else EVIDENCE)))
                 text.append("█" * cat_chars, style=char_style)
-        text.append("]\n\n", style=MUTED)
+        text.append("]  (wall-clock total elapsed not recorded)\n\n", style=FAINT)
     else:
         text.append("\n")
 
@@ -2141,18 +2132,39 @@ def timeline_export_text(
             secs = timing.total_elapsed_seconds
             mins = int(secs // 60)
             rem = secs % 60
-            if mins > 0:
-                lines.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)")
-            else:
-                lines.append(f"Total Elapsed: {secs:.1f}s")
+            time_str = f"{mins:02d}:{rem:04.1f} ({secs:.1f}s)" if mins > 0 else f"{secs:.1f}s"
+            lines.append(f"Total Elapsed: {time_str}")
+            if timing.accounted_seconds > 0:
+                acc_secs = timing.accounted_seconds
+                acc_mins = int(acc_secs // 60)
+                acc_rem = acc_secs % 60
+                acc_str = f"{acc_mins:02d}:{acc_rem:04.1f} ({acc_secs:.1f}s)" if acc_mins > 0 else f"{acc_secs:.1f}s"
+                if secs > 0:
+                    acc_pct = (acc_secs / secs) * 100.0
+                    if acc_secs <= secs:
+                        lines.append(f"Accounted:     {acc_str} / {time_str} ({acc_pct:.1f}%)")
+                    else:
+                        lines.append(f"Accounted:     {acc_str} / {time_str} ({acc_pct:.1f}%, overlapping measurements)")
+                else:
+                    lines.append(f"Accounted:     {acc_str}")
         else:
             lines.append("Total Elapsed: Not recorded")
+            if timing.accounted_seconds > 0:
+                acc_secs = timing.accounted_seconds
+                acc_mins = int(acc_secs // 60)
+                acc_rem = acc_secs % 60
+                acc_str = f"{acc_mins:02d}:{acc_rem:04.1f} ({acc_secs:.1f}s)" if acc_mins > 0 else f"{acc_secs:.1f}s"
+                lines.append(f"Accounted:     {acc_str} (total elapsed unmeasured)")
         lines.append("")
         lines.append(f"{'CATEGORY':<24} {'TIME':<14} {'% OF TOTAL':<12} {'OPERATIONS'}")
         for cat in timing.categories:
             dur_str = f"{cat.total_seconds:.1f}s" if cat.total_seconds is not None else "Not recorded"
             pct_str = f"{cat.percentage:.1f}%" if cat.percentage is not None else "—"
             lines.append(f"{cat.name:<24} {dur_str:<14} {pct_str:<12} {cat.detail}")
+        if timing.total_elapsed_seconds is not None and timing.total_elapsed_seconds > timing.accounted_seconds:
+            unattributed = timing.total_elapsed_seconds - timing.accounted_seconds
+            unatt_pct = (unattributed / timing.total_elapsed_seconds) * 100.0 if timing.total_elapsed_seconds > 0 else 0.0
+            lines.append(f"{'Unattributed':<24} {unattributed:.1f}s{'':<9} {unatt_pct:.1f}%{'':<6} Not measured")
         lines.append("")
 
         lines.append("TIMED OPERATIONS")
@@ -2173,7 +2185,6 @@ def timeline_export_text(
 
 
 __all__ = [
-    "ActivityPanel",
     "DebuggerPanel",
     "EvidenceState",
     "LiveBar",

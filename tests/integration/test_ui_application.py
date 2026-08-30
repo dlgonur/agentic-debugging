@@ -38,8 +38,8 @@ from agentic_debugger.ui.screens import (
     WorkspaceScreen,
 )
 from agentic_debugger.ui.widgets import (
-    ActivityPanel,
     DebuggerPanel,
+    LivePanel,
     PatchPanel,
     ReplayBar,
     SourcePanel,
@@ -682,7 +682,8 @@ class TestOpenReplay:
             assert "28/28" in str(header.render())
             bar_text = str(bar.render())
             assert "left/right views" in bar_text
-            assert "1-8 activity filters" in bar_text
+            assert "1-7 tabs" in bar_text
+            assert "activity filters" not in bar_text
             # Reopened cases start at the complete recorded prefix; rewind to
             # exercise event-by-event navigation.
             await pilot.press("g")

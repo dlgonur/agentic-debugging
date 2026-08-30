@@ -428,7 +428,8 @@ class TestConfiguredLiveSession:
             assert workspace._live_terminal.termination_reason.value == "model_error"
             assert "Failed" in header_text(workspace)
             assert "c cancel" not in live_bar_text(workspace)
-            assert "1-8 activity filters" in live_bar_text(workspace)
+            assert "1-7 tabs" in live_bar_text(workspace)
+            assert "activity filters" not in live_bar_text(workspace)
             # return to history; the failure registered honestly
             await pilot.press("escape")
             await wait_until(

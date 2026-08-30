@@ -783,7 +783,7 @@ def _fold_workstream_event(
         for prev in reversed(entries):
             if prev.kind is WorkstreamKind.CHANGE:
                 if prev.status is WorkstreamStatus.FAILED:
-                    continuing_detail = "Continuing from patch failure feedback"
+                    continuing_detail = "Continuing after patch failure"
                 break
         return _append(
             entries,

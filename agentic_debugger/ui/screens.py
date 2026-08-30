@@ -111,7 +111,6 @@ from agentic_debugger.ui.session_config import (
     model_compatibility,
 )
 from agentic_debugger.ui.widgets import (
-    ActivityPanel,
     DebuggerPanel,
     EvidenceReviewPanel,
     EvidenceState,
@@ -162,9 +161,12 @@ _CLASSIFICATION_STYLE = {
 # Canonical user-facing keyboard vocabulary shared by footers and help.
 START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   H history   Esc back   Ctrl+C quit"
 START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   H history   Esc back"
-WORKSPACE_FOOTER_ACTIVE = "left/right views   1-8 activity filters   c cancel   h history   n new session   ctrl+c quit"
-WORKSPACE_FOOTER_IDLE = "left/right views   1-8 activity filters   h history   n new session   w effort   r retry   ctrl+c quit"
-REPLAY_FOOTER = "left/right views   1-8 activity filters   events   phases   h history   n new session   ctrl+c quit"
+WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 tabs   c cancel   h history   n new session   ctrl+c quit"
+WORKSPACE_FOOTER_ACTIVE_COMPACT = "left/right views   1-7 tabs   c cancel   h history   ctrl+c quit"
+WORKSPACE_FOOTER_IDLE = "left/right views   1-7 tabs   h history   n new session   w effort   r retry   ctrl+c quit"
+WORKSPACE_FOOTER_IDLE_COMPACT = "left/right views   1-7 tabs   h history   n new   r retry   ctrl+c quit"
+REPLAY_FOOTER = "left/right views   1-7 tabs   events   phases   h history   n new session   ctrl+c quit"
+REPLAY_FOOTER_COMPACT = "left/right views   1-7 tabs   events   h history   ctrl+c quit"
 
 
 def _markup_escape(value: Any) -> str:
@@ -2975,12 +2977,13 @@ class WorkspaceScreen(Screen):
         )
 
     def _render_bar(self) -> None:
+        compact = (self.size.width > 0 and self.size.width < 80) if self.is_mounted else False
         if self.mode is WorkspaceMode.REPLAY:
             bar = self.query_one("#replay-bar", ReplayBar)
             if self.controller is None:
                 bar.update("")
                 return
-            footer = REPLAY_FOOTER
+            footer = REPLAY_FOOTER_COMPACT if compact else REPLAY_FOOTER
             if self._view.source_kind is SourceKind.LOCAL_PROJECT and self.size.width >= 100:
                 try:
                     _, apply_patch = self._local_project_apply_candidate()
@@ -2988,7 +2991,7 @@ class WorkspaceScreen(Screen):
                     apply_patch = None
                 if apply_patch:
                     footer = (
-                        "left/right views   1-8 activity filters   events   phases   "
+                        "left/right views   1-7 tabs   events   phases   "
                         "a apply to project   h history   n new session   ctrl+c quit"
                     )
             bar.update(
@@ -3001,9 +3004,10 @@ class WorkspaceScreen(Screen):
                 and self._live_terminal is None
                 and self._live_failure is None
             ):
-                bar.update(f"[dim]{WORKSPACE_FOOTER_ACTIVE}   ? help[/]")
+                footer = WORKSPACE_FOOTER_ACTIVE_COMPACT if compact else WORKSPACE_FOOTER_ACTIVE
+                bar.update(f"[dim]{footer}   ? help[/]")
             else:
-                footer = WORKSPACE_FOOTER_IDLE
+                footer = WORKSPACE_FOOTER_IDLE_COMPACT if compact else WORKSPACE_FOOTER_IDLE
                 if self._view.source_kind is SourceKind.LOCAL_PROJECT:
                     try:
                         _, apply_patch = self._local_project_apply_candidate()
@@ -3011,17 +3015,18 @@ class WorkspaceScreen(Screen):
                         apply_patch = None
                     if apply_patch:
                         footer = (
-                            "left/right views   1-8 activity filters   "
+                            "left/right views   1-7 tabs   "
                             "a apply to project   h history   n new session   w effort   r retry   ctrl+c quit"
                         )
                 effort_phrase = self._terminal_effort_phrase()
-                if effort_phrase:
+                if effort_phrase and not compact:
                     footer = f"{effort_phrase}   {footer}"
-                footer = footer.replace(
-                    "   r retry",
-                    self._retry_footer_hint(),
-                    1,
-                ) if self._retry_footer_hint() else footer.replace("   r retry", "", 1)
+                if not compact:
+                    footer = footer.replace(
+                        "   r retry",
+                        self._retry_footer_hint(),
+                        1,
+                    ) if self._retry_footer_hint() else footer.replace("   r retry", "", 1)
                 bar.update(f"[dim]{footer}   ? help[/]")
 
     # -- workspace view navigation ------------------------------------------
@@ -3414,13 +3419,7 @@ class WorkspaceScreen(Screen):
     def action_show_help(self) -> None:
         self.app.push_screen(HelpModalScreen())
 
-    # -- activity filters ---------------------------------------------------
-
-    def _activity_panel(self) -> ActivityPanel:
-        return self.query_one("#activity-pane", ActivityPanel)
-
-    def action_filter_all(self) -> None:
-        self._set_filter("all")
+    # -- direct tab navigation ----------------------------------------------
 
     def _select_tab_index(self, index: int) -> None:
         if 0 <= index < len(self._VIEW_IDS):
@@ -3615,13 +3614,13 @@ class HelpModalScreen(Screen):
                 "  • REPLAY — Read-only recorded session from authoritative journal\n"
                 "\n"
                 f"[bold {PRIMARY}]Workspace views[/]\n"
-                "  • Evidence — Causal case brief and authoritative verdict\n"
-                "  • Source — Recorded workspace source with execution line markers\n"
-                "  • Debugger — PDB location, stack frames, locals, and breakpoints\n"
-                "  • Patch — Candidate lifecycle and unified diff\n"
-                "  • Verifier — Independent correctness authority (RESOLVED / UNRESOLVED)\n"
-                "  • Activity — Filtered operational events (keys 1–8)\n"
-                "  • Timeline — Full ordered SessionEvent stream with phase boundaries\n"
+                "  • Live — Operational execution story\n"
+                "  • Evidence — Causal proof state\n"
+                "  • Source — Source evidence\n"
+                "  • Debugger — Runtime/PDB evidence\n"
+                "  • Patch — Candidate lifecycle/diff\n"
+                "  • Verifier — Independent correctness authority\n"
+                "  • Timeline — Session time consumption\n"
                 "\n"
                 f"[bold {EVIDENCE}]Evidence rule:[/] [bold]An applied patch is not automatically a fix.[/]\n"
                 "[dim]Only the independent verifier can mark a candidate RESOLVED.[/]\n"
@@ -3632,10 +3631,10 @@ class HelpModalScreen(Screen):
                 "            H history · Esc back\n"
                 "  • History — ↑/↓ move · Enter/O open replay · S new session ·\n"
                 "              P local project · R refresh · Esc home\n"
-                "  • Workspace — \\[ / ] previous/next event · { / } previous/next phase\n"
-                "                G/Shift+G begin/end · J jump · 1–8 activity filter\n"
-                "                C cancel live · H history · N new session\n"
-                "                A apply candidate · Ctrl+C quit · ? help",
+                "  • Workspace — Left/Right switch views · 1–7 direct tabs\n"
+                "                \\[ / ] previous/next event · { / } previous/next phase\n"
+                "                G/Shift+G begin/end · J jump · C cancel live\n"
+                "                H history · N new session · A apply candidate · ? help",
                 id="help-content",
             )
             yield Static(

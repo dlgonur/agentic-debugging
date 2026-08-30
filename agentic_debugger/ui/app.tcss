@@ -596,7 +596,7 @@ _SingleLineEditorScreen {
     padding: 0 1;
 }
 
-LivePanel, EvidenceReviewPanel, SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, ActivityPanel, TimelinePanel {
+LivePanel, EvidenceReviewPanel, SourcePanel, DebuggerPanel, PatchPanel, VerifierPanel, TimelinePanel {
     height: 1fr;
     background: $background;
     color: $foreground;
@@ -615,7 +615,7 @@ WorkstreamPanel Static {
 }
 
 LivePanel Static, EvidenceReviewPanel Static, SourcePanel Static, DebuggerPanel Static, PatchPanel Static,
-VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
+VerifierPanel Static, TimelinePanel Static {
     width: 1fr;
 }
 
@@ -689,14 +689,14 @@ VerifierPanel Static, ActivityPanel Static, TimelinePanel Static {
     color: $foreground-muted;
 }
 
-/* -- live / activity / timeline copy bar --------------------------------- */
+/* -- live / timeline copy bar ------------------------------------------ */
 
-#live-container, #activity-container, #timeline-container {
+#live-container, #timeline-container {
     height: 1fr;
     width: 1fr;
 }
 
-#live-copy-bar, #activity-copy-bar, #timeline-copy-bar {
+#live-copy-bar, #timeline-copy-bar {
     height: 1;
     width: 1fr;
     align: right middle;

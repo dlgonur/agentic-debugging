@@ -33,10 +33,10 @@ from agentic_debugger.application.presentation import (
 )
 from agentic_debugger.ui.screens import render_view_header
 from agentic_debugger.ui.widgets import (
-    ActivityPanel,
     DebuggerPanel,
     EvidenceReviewPanel,
     EvidenceState,
+    LivePanel,
     LiveRunContextPanel,
     PatchPanel,
     SourcePanel,
@@ -46,6 +46,7 @@ from agentic_debugger.ui.widgets import (
     _KIND_STYLE,
     _highlight_source_lines,
     _entry_style,
+    render_live_trace,
     timeline_export_text,
 )
 from agentic_debugger.ui.theme import (
@@ -448,14 +449,12 @@ class TestPaneRendering:
         assert "<redacted: credential-shaped local name>" in plain
         assert "redacted" in plain
 
-    def test_activity_pane_filter_line_is_plain(self):
+    def test_live_pane_entries_are_plain(self):
         view = fold(bracket_stream())
-        panel = ActivityPanel()
-        panel.filter = "all"
-        plain = panel._render_view(view).plain
-        assert "Filter: all" in plain
-        assert "keys: 1..7 filter (1 = all)" in plain
-        assert_no_style_tags(plain)
+        plain = render_live_trace(view).plain
+        assert "LIVE" in plain or "RECENT" in plain
+        assert "[bold red]not markup[/]" in plain
+        assert "\\[bold red]" not in plain
 
     def test_timeline_pane_entries_are_plain(self):
         view = fold(bracket_stream())

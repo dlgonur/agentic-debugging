@@ -130,7 +130,8 @@ class TestLiveStartAndProgression:
                 timeout_seconds=240.0,
                 label="stage2-source-pane",
             )
-            assert "1-8 activity filters" in live_bar_text(workspace)
+            assert "1-7 tabs" in live_bar_text(workspace)
+            assert "activity filters" not in live_bar_text(workspace)
             assert "c cancel" in live_bar_text(workspace)
             # operational terminal arrives with real evidence
             await wait_live_terminal(pilot, workspace)

@@ -9,7 +9,7 @@ import pytest
 from agentic_debugger.application.events import SessionEventKind, SourceKind, SessionStatus
 from agentic_debugger.application.presentation import PresentationIdentity, initial_session_view, reduce_event
 from agentic_debugger.application.live_execution import ExecutionMode, KnownCeilings, project_live_execution
-from agentic_debugger.ui.widgets import LiveRunContextPanel, ActivityPanel, TimelinePanel, activity_export_text, timeline_export_text
+from agentic_debugger.ui.widgets import LiveRunContextPanel, TimelinePanel, activity_export_text, timeline_export_text
 
 from application_support import VALID_RUN_ID, VALID_SESSION_ID, VALID_SPEC_FINGERPRINT, VALID_TASK_ID, make_event
 

@@ -312,7 +312,8 @@ def test_live_footer_refreshes_when_running_session_fails(tmp_path: Path) -> Non
         assert workspace._view.status is SessionStatus.FAILED
         failed_footer = str(workspace.query_one("#live-bar", LiveBar).render())
         assert "c cancel" not in failed_footer
-        assert "1-8 activity filters" in failed_footer
+        assert "1-7 tabs" in failed_footer
+        assert "activity filters" not in failed_footer
 
     run_headless(app, scenario, size=(120, 32))
 
@@ -350,7 +351,8 @@ def test_terminal_footer_never_advertises_cancel(
         await pilot.pause()
         footer = str(workspace.query_one("#live-bar", LiveBar).render())
         assert "c cancel" not in footer
-        assert "1-8 activity filters" in footer
+        assert "1-7 tabs" in footer
+        assert "activity filters" not in footer
 
     run_headless(app, scenario, size=(120, 32))
 
