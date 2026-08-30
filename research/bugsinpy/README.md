@@ -13,4 +13,4 @@ Validator: `scripts/validate_bugsinpy_license_gate.py`.
 
 Do not acquire, redistribute, or execute BugsInPy tasks unless a tracked
 license/operation authority and the current task explicitly clear that
-action (`AGENTS.md` §12).
+action (see `AGENTS.md`, "External execution, security, and data").

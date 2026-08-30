@@ -2,8 +2,8 @@
 
 Tracked research inputs: literature notes, QuixBugs/BugsInPy manifests, and
 reviewed syntheses. Raw AI research reports under `reports/raw/` are
-non-authoritative until incorporated into reviewed artifacts
-(`AGENTS.md` §13).
+non-authoritative until incorporated into reviewed artifacts (see
+`AGENTS.md`, "Events and evidence").
 
 | Path | Role |
 | --- | --- |
