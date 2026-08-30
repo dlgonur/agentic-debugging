@@ -79,6 +79,7 @@ from agentic_debugger.events.schema import Action, ObservationStatus
 from agentic_debugger.runtime.exceptions import (
     PatchApplyError,
     PatchAuthorizationError,
+    PatchRevertError,
     PatchStateError,
     PatchValidationError,
     PdbSessionError,
@@ -87,7 +88,10 @@ from agentic_debugger.runtime.exceptions import (
     SourceParseError,
     WorkspaceError,
 )
-from agentic_debugger.runtime.patcher import PatchManager
+from agentic_debugger.runtime.patcher import (
+    PatchManager,
+    build_bounded_patch_failure_payload,
+)
 from agentic_debugger.runtime.execution import VerifiedExecutionContext
 from agentic_debugger.runtime.pdb_session import PdbSession
 from agentic_debugger.runtime.test_runner import TestRunKind, TestRunner
@@ -995,8 +999,27 @@ def build_registry(
         if context.patch_manager.has_active_patch:
             try:
                 context.patch_manager.revert_patch()
-            except (PatchStateError, PatchApplyError) as exc:
-                raise _safe_rejection(bounded_diagnostic(exc)) from exc
+            except (
+                PatchStateError,
+                PatchApplyError,
+                PatchRevertError,
+                Exception,
+            ) as exc:
+                bounded_diag = bounded_diagnostic(exc, context.workspace.root)
+                payload_data, recoverable, error_kind = build_bounded_patch_failure_payload(
+                    exc, error_kind="revert_failure", recoverable=False
+                )
+                context.observe(
+                    lambda: context.observability.patch_apply_failed(
+                        attempt_index, bounded_diag
+                    )
+                )
+                raise ToolExecutionError(
+                    bounded_diag,
+                    safe_diagnostic=bounded_diag,
+                    recoverable=False,
+                    payload_data=payload_data,
+                ) from exc
             reverted_previous = True
             context.observe(
                 lambda: context.observability.patch_reverted(attempt_index - 1)
@@ -1009,20 +1032,48 @@ def build_registry(
         )
         try:
             result = context.patch_manager.apply_patch(diff)
-        except (PatchValidationError, PatchAuthorizationError, PatchStateError) as exc:
-            context.observe(
-                lambda: context.observability.patch_rejected(
-                    attempt_index, bounded_diagnostic(exc, context.workspace.root)
+        except (
+            PatchValidationError,
+            PatchAuthorizationError,
+            PatchStateError,
+            PatchApplyError,
+            PatchRevertError,
+            Exception,
+        ) as exc:
+            bounded_diag = bounded_diagnostic(exc, context.workspace.root)
+            payload_data, recoverable, error_kind = build_bounded_patch_failure_payload(exc)
+
+            if isinstance(
+                exc,
+                (
+                    PatchValidationError,
+                    PatchAuthorizationError,
+                    PatchStateError,
+                ),
+            ):
+                context.observe(
+                    lambda: context.observability.patch_rejected(
+                        attempt_index, bounded_diag
+                    )
                 )
-            )
-            raise _safe_rejection(bounded_diagnostic(exc)) from exc
-        except PatchApplyError as exc:
-            context.observe(
-                lambda: context.observability.patch_apply_failed(
-                    attempt_index, bounded_diagnostic(exc, context.workspace.root)
+                raise ToolRejectedError(
+                    bounded_diag,
+                    safe_diagnostic=bounded_diag,
+                    recoverable=recoverable,
+                    payload_data=payload_data,
+                ) from exc
+            else:
+                context.observe(
+                    lambda: context.observability.patch_apply_failed(
+                        attempt_index, bounded_diag
+                    )
                 )
-            )
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+                raise ToolExecutionError(
+                    bounded_diag,
+                    safe_diagnostic=bounded_diag,
+                    recoverable=recoverable,
+                    payload_data=payload_data,
+                ) from exc
         # Only a patch that passed the real PatchManager lifecycle becomes
         # authoritative evidence for the evaluator.  Rejected or failed
         # attempts never overwrite the accepted candidate.
@@ -1066,8 +1117,29 @@ def build_registry(
     def handle_revert_patch(action: Action, arguments: dict[str, object]) -> ToolResult:
         try:
             result = context.patch_manager.revert_patch()
-        except (PatchStateError, PatchApplyError) as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        except (
+            PatchStateError,
+            PatchApplyError,
+            PatchRevertError,
+            Exception,
+        ) as exc:
+            bounded_diag = bounded_diagnostic(exc, context.workspace.root)
+            payload_data, recoverable, error_kind = build_bounded_patch_failure_payload(
+                exc, error_kind="revert_failure", recoverable=False
+            )
+            if isinstance(exc, PatchStateError):
+                raise ToolRejectedError(
+                    bounded_diag,
+                    safe_diagnostic=bounded_diag,
+                    recoverable=False,
+                    payload_data=payload_data,
+                ) from exc
+            raise ToolExecutionError(
+                bounded_diag,
+                safe_diagnostic=bounded_diag,
+                recoverable=False,
+                payload_data=payload_data,
+            ) from exc
         changed_files = tuple(sorted(item.path for item in result.changed_files))
         reverted_index = max(0, context.patch_attempt_index - 1)
         context.observe(
@@ -1101,8 +1173,22 @@ def build_registry(
     def handle_syntax_check(action: Action, arguments: dict[str, object]) -> ToolResult:
         try:
             result = context.patch_manager.syntax_check()
-        except (PatchStateError, PatchApplyError) as exc:
-            raise ToolExecutionError(bounded_diagnostic(exc)) from exc
+        except (
+            PatchStateError,
+            PatchApplyError,
+            PatchRevertError,
+            Exception,
+        ) as exc:
+            bounded_diag = bounded_diagnostic(exc, context.workspace.root)
+            payload_data, recoverable, error_kind = build_bounded_patch_failure_payload(
+                exc, error_kind="syntax_check_failure", recoverable=False
+            )
+            raise ToolExecutionError(
+                bounded_diag,
+                safe_diagnostic=bounded_diag,
+                recoverable=False,
+                payload_data=payload_data,
+            ) from exc
         context.syntax_passed = bool(result.all_passed)
         return _ok(
             {

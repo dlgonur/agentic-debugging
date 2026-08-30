@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import re
 import shutil
@@ -191,21 +192,25 @@ def _parse_diff_path(header: str) -> str:
     if not path:
         raise PatchValidationError("Empty path in diff header")
     if "\x00" in path:
-        raise PatchValidationError(
-            f"NUL character in diff path: {path!r}"
+        raise PatchAuthorizationError(
+            f"NUL character in diff path: {path!r}",
+            path=path,
         )
     if path.startswith("/") or path.startswith("\\"):
-        raise PatchValidationError(
-            f"Absolute path in diff: {path!r}"
+        raise PatchAuthorizationError(
+            f"Absolute path in diff: {path!r}",
+            path=path,
         )
     if len(path) >= 2 and path[1] == ":" and path[0].isalpha():
-        raise PatchValidationError(
-            f"Windows absolute path in diff: {path!r}"
+        raise PatchAuthorizationError(
+            f"Windows absolute path in diff: {path!r}",
+            path=path,
         )
     parts = path.replace("\\", "/").split("/")
     if ".." in parts:
-        raise PatchValidationError(
-            f"Path traversal in diff: {path!r}"
+        raise PatchAuthorizationError(
+            f"Path traversal in diff: {path!r}",
+            path=path,
         )
     return path
 
@@ -652,8 +657,28 @@ def _find_hunk_anchor(
     return None
 
 
+def _format_source_window(
+    lines: List[str],
+    target_line: int,
+    count: int = 1,
+    context_lines: int = 3,
+) -> str:
+    """Format a bounded window of source lines with 1-based line numbers."""
+    if not lines:
+        return "<empty file>"
+    lo = max(0, target_line - 1 - context_lines)
+    hi = min(len(lines), target_line - 1 + max(count, 1) + context_lines)
+    formatted = []
+    width = max(len(str(hi)), 2)
+    for idx in range(lo, hi):
+        line_num = idx + 1
+        line_text = lines[idx].rstrip("\r\n")
+        formatted.append(f"{line_num:>{width}} | {line_text}")
+    return "\n".join(formatted)
+
+
 def _apply_hunks(
-    original_text: str, hunks: List[_Hunk]
+    original_text: str, hunks: List[_Hunk], path: str = ""
 ) -> Tuple[str, Tuple[Tuple[int, int], ...]]:
     # Same LF-only splitting as the parser: a form feed inside a source line
     # is line content, not a boundary.
@@ -681,11 +706,33 @@ def _apply_hunks(
             lines, consumer, adjusted_idx, _CONTEXT_FUZZ
         )
         if anchor is None:
+            consumer_lines = [f"{prefix}{text}" for prefix, text in consumer]
+            expected_sample = (
+                "\n".join(consumer_lines)
+                if consumer_lines
+                else (f"-{hunk.lines[0].text}" if hunk.lines else "<insertion>")
+            )
+            target_line = max(1, min(hunk.old_start, len(lines))) if lines else 1
+            source_window = _format_source_window(lines, target_line, hunk.old_count)
+            target_desc = f"at {path} " if path else ""
+            msg = (
+                f"Patch application failed. Context mismatch {target_desc}around line {hunk.old_start} "
+                f"(hunk {hunk_idx + 1}): expected context matching\n"
+                f"{expected_sample}\n"
+                f"Current source around line {hunk.old_start}:\n"
+                f"{source_window}\n"
+                f"Revise the patch against the current source and try again."
+            )
             raise PatchApplyError(
-                f"Context mismatch in hunk {hunk_idx + 1} "
-                f"at original line {hunk.old_start}: "
-                f"expected {consumer[0][1] if consumer else '<insertion>'!r} "
-                f"(bounded fuzz window {_CONTEXT_FUZZ})"
+                msg,
+                path=path,
+                hunk_index=hunk_idx + 1,
+                line_number=hunk.old_start,
+                expected=expected_sample,
+                actual=None,
+                current_source_window=source_window,
+                error_kind="context_mismatch",
+                recoverable=True,
             )
         if anchor != adjusted_idx:
             adjustments.append((hunk_idx + 1, anchor - adjusted_idx))
@@ -695,10 +742,26 @@ def _apply_hunks(
             if hl.prefix in (" ", "-"):
                 actual = lines[anchor + check_idx].rstrip("\n\r")
                 if actual != hl.text:
+                    mismatch_line = anchor + check_idx + 1
+                    source_window = _format_source_window(lines, mismatch_line, 1)
+                    target_desc = f"at {path} " if path else ""
+                    msg = (
+                        f"Patch application failed. Context mismatch {target_desc}at line {mismatch_line} "
+                        f"(hunk {hunk_idx + 1}): expected {hl.text!r}, got {actual!r}.\n"
+                        f"Current source around line {mismatch_line}:\n"
+                        f"{source_window}\n"
+                        f"Revise the patch against the current source and try again."
+                    )
                     raise PatchApplyError(
-                        f"Context mismatch in hunk {hunk_idx + 1} "
-                        f"at original line {hunk.old_start + check_idx}: "
-                        f"expected {hl.text!r}, got {actual!r}"
+                        msg,
+                        path=path,
+                        hunk_index=hunk_idx + 1,
+                        line_number=mismatch_line,
+                        expected=hl.text,
+                        actual=actual,
+                        current_source_window=source_window,
+                        error_kind="context_mismatch",
+                        recoverable=True,
                     )
                 check_idx += 1
 
@@ -1002,12 +1065,18 @@ class PatchManager:
             if rule.kind is _PolicyKind.EXACT_FILE:
                 if npath == rule.path:
                     raise PatchAuthorizationError(
-                        f"Path is denied: {path!r}"
+                        f"Path is denied: {path!r}",
+                        path=path,
+                        error_kind="authorization_error",
+                        recoverable=False,
                     )
             else:
                 if npath == rule.path or npath.startswith(rule.path + "/"):
                     raise PatchAuthorizationError(
-                        f"Path is inside denied directory: {path!r}"
+                        f"Path is inside denied directory: {path!r}",
+                        path=path,
+                        error_kind="authorization_error",
+                        recoverable=False,
                     )
 
         allowed = False
@@ -1023,13 +1092,18 @@ class PatchManager:
 
         if not allowed:
             raise PatchAuthorizationError(
-                f"Path is not allowed: {path!r}"
+                f"Path is not allowed: {path!r}",
+                path=path,
+                error_kind="authorization_error",
+                recoverable=False,
             )
 
     def apply_patch(self, diff_text: str) -> PatchApplyResult:
         if self._snapshot is not None:
             raise PatchStateError(
-                "Active patch exists; must revert before applying a new one"
+                "Active patch exists; must revert before applying a new one",
+                error_kind="active_patch_conflict",
+                recoverable=False,
             )
 
         file_patches = _parse_unified_diff(diff_text)
@@ -1048,11 +1122,17 @@ class PatchManager:
             )
             if not os.path.isfile(resolved):
                 raise PatchApplyError(
-                    f"Path is not a regular file: {fp.path!r}"
+                    f"Path is not a regular file: {fp.path!r}",
+                    path=fp.path,
+                    error_kind="invalid_file_type",
+                    recoverable=False,
                 )
             if os.path.islink(resolved):
                 raise PatchApplyError(
-                    f"Path is a symlink: {fp.path!r}"
+                    f"Path is a symlink: {fp.path!r}",
+                    path=fp.path,
+                    error_kind="invalid_file_type",
+                    recoverable=False,
                 )
             if fp.path.endswith(".py"):
                 encoding_map[fp.path], _ = _detect_encoding(resolved)
@@ -1075,9 +1155,14 @@ class PatchManager:
                 original_text = original_bytes.decode(encoding)
             except (UnicodeDecodeError, LookupError) as e:
                 raise PatchApplyError(
-                    f"Cannot decode {fp.path!r} with encoding {encoding!r}: {e}"
+                    f"Cannot decode {fp.path!r} with encoding {encoding!r}: {e}",
+                    path=fp.path,
+                    error_kind="decode_error",
+                    recoverable=False,
                 ) from e
-            new_text, adjustments = _apply_hunks(original_text, fp.hunks)
+            new_text, adjustments = _apply_hunks(
+                original_text, fp.hunks, path=fp.path
+            )
             hunk_adjustments.extend(
                 (fp.path, hunk_idx, displacement)
                 for hunk_idx, displacement in adjustments
@@ -1086,7 +1171,10 @@ class PatchManager:
                 new_contents[fp.path] = new_text.encode(encoding)
             except (UnicodeEncodeError, LookupError) as e:
                 raise PatchApplyError(
-                    f"Cannot encode patched {fp.path!r} with {encoding!r}: {e}"
+                    f"Cannot encode patched {fp.path!r} with {encoding!r}: {e}",
+                    path=fp.path,
+                    error_kind="encode_error",
+                    recoverable=False,
                 ) from e
 
         before_hashes: Dict[str, str] = {}
@@ -1126,12 +1214,16 @@ class PatchManager:
                     pass
             if rollback_ok:
                 raise PatchApplyError(
-                    f"Patch write failed, all changes rolled back: {e}"
+                    f"Patch write failed, all changes rolled back: {e}",
+                    error_kind="write_failure",
+                    recoverable=False,
                 ) from e
             else:
                 raise PatchApplyError(
                     f"Patch write failed, partial rollback completed. "
-                    f"Rollback of some files also failed: {e}"
+                    f"Rollback of some files also failed: {e}",
+                    error_kind="rollback_failure",
+                    recoverable=False,
                 ) from e
 
         self._snapshot = PatchSnapshot(
@@ -1160,7 +1252,7 @@ class PatchManager:
 
     def revert_patch(self) -> PatchApplyResult:
         if self._snapshot is None:
-            raise PatchStateError("No active patch to revert")
+            raise PatchStateError("No active patch to revert", error_kind="state_error", recoverable=False)
 
         snapshot = self._snapshot
 
@@ -1203,11 +1295,17 @@ class PatchManager:
                         rollback_ok = False
             if rollback_ok:
                 raise PatchRevertError(
-                    f"Revert write failed, workspace restored to the pre-revert state: {e}"
+                    f"Revert write failed, workspace restored to the pre-revert state: {e}",
+                    path=path if written else None,
+                    error_kind="revert_failure",
+                    recoverable=False,
                 ) from e
             raise PatchRevertError(
                 f"Revert write failed, partial rollback completed "
-                f"(some files may remain reverted): {e}"
+                f"(some files may remain reverted): {e}",
+                path=path if written else None,
+                error_kind="revert_partial_rollback",
+                recoverable=False,
             ) from e
 
         restored_hashes: Dict[str, str] = {}
@@ -1222,7 +1320,10 @@ class PatchManager:
             if actual != expected:
                 raise PatchRevertError(
                     f"Hash mismatch after revert for {path!r}: "
-                    f"expected {expected}, got {actual}"
+                    f"expected {expected}, got {actual}",
+                    path=path,
+                    error_kind="revert_hash_mismatch",
+                    recoverable=False,
                 )
 
         self._snapshot = None
@@ -1546,3 +1647,150 @@ def materialize_and_canonicalize_patch(
             raw_apply=applied,
             semantic_equivalent=True,
         )
+
+
+MAX_PATCH_FAILURE_PATH_BYTES = 500
+MAX_PATCH_FAILURE_KIND_BYTES = 100
+MAX_PATCH_FAILURE_STRING_BYTES = 500
+MAX_PATCH_FAILURE_SOURCE_BYTES = 1800
+MAX_PATCH_FAILURE_TOTAL_BYTES = 4096
+
+
+def _bound_patch_failure_text(text: Any, max_bytes: int) -> Optional[str]:
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        text = str(text)
+    encoded = text.encode("utf-8", errors="replace")
+    if len(encoded) > max_bytes:
+        return encoded[: max(0, max_bytes - 3)].decode("utf-8", errors="ignore") + "..."
+    return text
+
+
+def _bound_patch_failure_source_window(
+    window: Any,
+    max_bytes: int = MAX_PATCH_FAILURE_SOURCE_BYTES,
+    max_line_chars: int = 400,
+) -> Optional[str]:
+    if window is None:
+        return None
+    if not isinstance(window, str):
+        window = str(window)
+    bounded_lines = []
+    for line in window.splitlines():
+        if len(line) > max_line_chars:
+            line = line[: max_line_chars - 3] + "..."
+        bounded_lines.append(line)
+    text = "\n".join(bounded_lines)
+    return _bound_patch_failure_text(text, max_bytes)
+
+
+def build_bounded_patch_failure_payload(
+    exc: BaseException,
+    *,
+    error_kind: Optional[str] = None,
+    recoverable: Optional[bool] = None,
+) -> Tuple[Dict[str, Any], bool, str]:
+    """Build a JSON-safe, bounded patch_failure payload from an exception.
+
+    Returns (payload_data, is_recoverable, kind).
+    """
+    if isinstance(exc, PatchAuthorizationError):
+        kind = error_kind or getattr(exc, "error_kind", "authorization_error")
+        rec = False if recoverable is None else recoverable
+    elif isinstance(exc, PatchStateError):
+        kind = error_kind or getattr(exc, "error_kind", "state_error")
+        rec = False if recoverable is None else recoverable
+    elif isinstance(exc, PatchRevertError):
+        kind = error_kind or getattr(exc, "error_kind", "revert_failure")
+        rec = False if recoverable is None else recoverable
+    elif isinstance(exc, PatchValidationError):
+        kind = error_kind or getattr(exc, "error_kind", "validation_error")
+        rec = getattr(exc, "recoverable", True) if recoverable is None else recoverable
+    elif isinstance(exc, PatchApplyError):
+        kind = error_kind or getattr(exc, "error_kind", "apply_error")
+        rec = getattr(exc, "recoverable", False) if recoverable is None else recoverable
+    else:
+        kind = error_kind or getattr(exc, "error_kind", "patch_infrastructure_error")
+        rec = False if recoverable is None else recoverable
+
+    bounded_kind = _bound_patch_failure_text(
+        kind, MAX_PATCH_FAILURE_KIND_BYTES
+    ) or "patch_error"
+    raw_path = getattr(exc, "path", None)
+    bounded_path = _bound_patch_failure_text(
+        raw_path, MAX_PATCH_FAILURE_PATH_BYTES
+    )
+    line_number = getattr(exc, "line_number", None)
+    hunk_index = getattr(exc, "hunk_index", None)
+    expected = _bound_patch_failure_text(
+        getattr(exc, "expected", None), MAX_PATCH_FAILURE_STRING_BYTES
+    )
+    actual = _bound_patch_failure_text(
+        getattr(exc, "actual", None), MAX_PATCH_FAILURE_STRING_BYTES
+    )
+    current_source = _bound_patch_failure_source_window(
+        getattr(exc, "current_source_window", None),
+        MAX_PATCH_FAILURE_SOURCE_BYTES,
+    )
+
+    patch_failure: Dict[str, Any] = {
+        "kind": bounded_kind,
+        "recoverable": bool(rec),
+    }
+    if bounded_path is not None:
+        patch_failure["path"] = bounded_path
+    if line_number is not None and isinstance(line_number, int) and not isinstance(line_number, bool):
+        patch_failure["line_number"] = line_number
+    if hunk_index is not None and isinstance(hunk_index, int) and not isinstance(hunk_index, bool):
+        patch_failure["hunk_index"] = hunk_index
+    if expected is not None:
+        patch_failure["expected"] = expected
+    if actual is not None:
+        patch_failure["actual"] = actual
+    if current_source is not None:
+        patch_failure["current_source_window"] = current_source
+
+    payload_data: Dict[str, Any] = {
+        "applied": False,
+        "error": bounded_kind,
+        "recoverable": bool(rec),
+        "patch_failure": patch_failure,
+    }
+
+    try:
+        encoded_len = len(
+            json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
+        )
+        if encoded_len > MAX_PATCH_FAILURE_TOTAL_BYTES:
+            # Degrade by shedding large source window first
+            if "current_source_window" in patch_failure:
+                del patch_failure["current_source_window"]
+            encoded_len = len(
+                json.dumps(payload_data, ensure_ascii=False).encode("utf-8")
+            )
+            if encoded_len > MAX_PATCH_FAILURE_TOTAL_BYTES:
+                if "expected" in patch_failure:
+                    del patch_failure["expected"]
+                if "actual" in patch_failure:
+                    del patch_failure["actual"]
+    except Exception:
+        # Fallback minimal payload
+        minimal_pf: Dict[str, Any] = {
+            "kind": bounded_kind,
+            "recoverable": bool(rec),
+        }
+        if bounded_path is not None:
+            minimal_pf["path"] = _bound_patch_failure_text(bounded_path, 200)
+        if line_number is not None and isinstance(line_number, int) and not isinstance(line_number, bool):
+            minimal_pf["line_number"] = line_number
+        if hunk_index is not None and isinstance(hunk_index, int) and not isinstance(hunk_index, bool):
+            minimal_pf["hunk_index"] = hunk_index
+        payload_data = {
+            "applied": False,
+            "error": bounded_kind,
+            "recoverable": bool(rec),
+            "patch_failure": minimal_pf,
+        }
+
+    return payload_data, bool(rec), bounded_kind

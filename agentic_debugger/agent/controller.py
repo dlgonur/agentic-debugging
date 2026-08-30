@@ -1227,10 +1227,27 @@ class DeterministicController:
                 if budget_kind is not None and reason not in _NO_HANDLER_REASONS:
                     budget_state = _consume_direct(snapshot.budget_limits, budget_state, budget_kind)
                 last_observation = observation
+
+                is_fatal_tool_failure = False
+                if observation.status in (
+                    ObservationStatus.ERROR,
+                    ObservationStatus.REJECTED,
+                ) and observation.payload and (
+                    observation.payload.get("recoverable") is False
+                    or (
+                        isinstance(observation.payload.get("patch_failure"), dict)
+                        and observation.payload["patch_failure"].get("recoverable") is False
+                    )
+                ):
+                    is_fatal_tool_failure = True
+
+                stop = ControllerStopReason.FAILED if is_fatal_tool_failure else None
+                state_after_step = ControllerState.FAILED if is_fatal_tool_failure else state
+
                 steps.append(ControllerStepResult(
                     model_call_index=model_call_index - 1,
                     state_before=state_before,
-                    state_after=state,
+                    state_after=state_after_step,
                     directive_kind=kind,
                     action=record_action,
                     observation=observation,
@@ -1239,12 +1256,24 @@ class DeterministicController:
                     budget_after=budget_state,
                     hypotheses_before=hypotheses_before,
                     hypotheses_after=hypotheses,
+                    stop_reason=stop,
                 ))
                 _emit(ControllerObservationKind.STEP_COMPLETED,
                       model_call_index=model_call_index - 1,
                       step_index=len(steps) - 1,
-                      state_before=state_before, state_after=state,
+                      state_before=state_before, state_after=state_after_step,
                       directive_kind=kind.value)
+
+                if is_fatal_tool_failure:
+                    state = ControllerState.FAILED
+                    _emit(
+                        ControllerObservationKind.STATE_TRANSITION,
+                        model_call_index=model_call_index - 1,
+                        state_before=state_before,
+                        state_after=state,
+                        transition_reason="fatal non-recoverable tool execution failure",
+                    )
+                    return result(ControllerStopReason.FAILED, state)
             elif kind is ModelDirectiveKind.TRANSITION:
                 transition = directive
                 if not is_transition_allowed(state, transition.target_state):

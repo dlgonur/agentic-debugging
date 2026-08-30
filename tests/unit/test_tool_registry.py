@@ -9,6 +9,7 @@ from agentic_debugger.agent.controller_policy import ActionName
 from agentic_debugger.agent.state_machine import ControllerState
 from agentic_debugger.agent.tool_registry import (
     MAX_TOOL_ARGUMENT_BYTES,
+    MAX_TOOL_DIAGNOSTIC_BYTES,
     MAX_TOOL_JSON_DEPTH,
     MAX_TOOL_JSON_NODES,
     MAX_TOOL_RESULT_PAYLOAD_BYTES,
@@ -390,14 +391,14 @@ def test_explicit_safe_rejection_diagnostic_is_bounded_redacted_and_actionable()
         handler=lambda *_: (_ for _ in ()).throw(
             ToolRejectedError(
                 "internal detail",
-                safe_diagnostic="phase must be baseline or post_patch; token=secret-value" + "x" * 1000,
+                safe_diagnostic="phase must be baseline or post_patch; token=secret-value" + "x" * 6000,
             )
         )
     ).dispatch(action(), observation_id="obs")
     assert observation.payload["dispatch_reason"] == ToolDispatchReason.TOOL_REJECTED.value
     assert observation.payload["diagnostic"].startswith("phase must be baseline or post_patch")
     assert "secret-value" not in observation.to_mapping().__str__()
-    assert len(observation.payload["diagnostic"].encode("utf-8")) <= 400
+    assert len(observation.payload["diagnostic"].encode("utf-8")) <= MAX_TOOL_DIAGNOSTIC_BYTES
 
 
 @pytest.mark.parametrize("result", [None, {}, object()])
@@ -616,3 +617,194 @@ def test_invalid_result_followed_by_valid_dispatch_succeeds():
     assert invalid.payload == {"dispatch_reason": "invalid_tool_result"}
     assert valid.status is ObservationStatus.OK
     assert valid.payload == {"value": 1, "dispatch_reason": "ok"}
+
+
+def test_tool_rejected_error_with_oversized_payload_data_is_strictly_bounded():
+    oversized_data = {
+        "huge_blob": "x" * 150_000,
+        "applied": False,
+        "error": "context_mismatch",
+        "recoverable": True,
+        "patch_failure": {
+            "kind": "context_mismatch",
+            "recoverable": True,
+            "path": "module.py",
+            "line_number": 42,
+            "hunk_index": 1,
+            "expected": "old line",
+            "actual": "actual line",
+            "current_source_window": " 42 | source line",
+        },
+    }
+
+    def handle(*_):
+        raise ToolRejectedError(
+            "context mismatch",
+            safe_diagnostic="context mismatch at module.py:42",
+            recoverable=True,
+            payload_data=oversized_data,
+        )
+
+    registry = registry_for(handler=handle)
+    obs = registry.dispatch(action(), observation_id="obs-oversized-rejected")
+
+    assert obs.status is ObservationStatus.REJECTED
+    serialized = json.dumps(obs.payload, ensure_ascii=False)
+    assert len(serialized.encode("utf-8")) <= MAX_TOOL_RESULT_PAYLOAD_BYTES
+    assert obs.payload["dispatch_reason"] == ToolDispatchReason.TOOL_REJECTED.value
+    assert obs.payload.get("recoverable") is True
+    assert obs.payload.get("applied") is False
+    assert obs.payload.get("error") == "context_mismatch"
+    pf = obs.payload.get("patch_failure", {})
+    assert pf.get("kind") == "context_mismatch"
+    assert pf.get("recoverable") is True
+    assert pf.get("path") == "module.py"
+    assert pf.get("line_number") == 42
+    assert pf.get("hunk_index") == 1
+
+
+def test_tool_execution_error_with_oversized_payload_data_is_strictly_bounded():
+    oversized_data = {
+        "huge_output": "y" * 150_000,
+        "applied": False,
+        "error": "apply_error",
+        "recoverable": False,
+        "patch_failure": {
+            "kind": "write_failure",
+            "recoverable": False,
+            "path": "target.py",
+        },
+    }
+
+    def handle(*_):
+        raise ToolExecutionError(
+            "write failure",
+            safe_diagnostic="write failure at target.py",
+            recoverable=False,
+            payload_data=oversized_data,
+        )
+
+    registry = registry_for(handler=handle)
+    obs = registry.dispatch(action(), observation_id="obs-oversized-exec")
+
+    assert obs.status is ObservationStatus.ERROR
+    serialized = json.dumps(obs.payload, ensure_ascii=False)
+    assert len(serialized.encode("utf-8")) <= MAX_TOOL_RESULT_PAYLOAD_BYTES
+    assert obs.payload["dispatch_reason"] == ToolDispatchReason.TOOL_ERROR.value
+    assert obs.payload.get("recoverable") is False
+    assert obs.payload.get("applied") is False
+    assert obs.payload.get("error") == "apply_error"
+    pf = obs.payload.get("patch_failure", {})
+    assert pf.get("kind") == "write_failure"
+    assert pf.get("recoverable") is False
+    assert pf.get("path") == "target.py"
+
+
+def test_oversized_path_error_kind_fields_cannot_escape_fallback_handling():
+    adversarial_data = {
+        "error": "E" * 100_000,
+        "applied": False,
+        "recoverable": False,
+        "patch_failure": {
+            "kind": "K" * 100_000,
+            "path": "P" * 100_000,
+            "line_number": 99,
+            "recoverable": False,
+            "expected": "EX" * 50_000,
+            "actual": "AC" * 50_000,
+            "current_source_window": "CW" * 50_000,
+        },
+    }
+
+    def handle(*_):
+        raise ToolRejectedError(
+            "adversarial rejection",
+            safe_diagnostic="adversarial error",
+            recoverable=False,
+            payload_data=adversarial_data,
+        )
+
+    registry = registry_for(handler=handle)
+    obs = registry.dispatch(action(), observation_id="obs-adversarial")
+
+    assert obs.status is ObservationStatus.REJECTED
+    serialized = json.dumps(obs.payload, ensure_ascii=False)
+    assert len(serialized.encode("utf-8")) <= MAX_TOOL_RESULT_PAYLOAD_BYTES
+    assert obs.payload["dispatch_reason"] == ToolDispatchReason.TOOL_REJECTED.value
+    assert obs.payload.get("recoverable") is False
+
+    err = obs.payload.get("error")
+    if err is not None:
+        assert len(str(err).encode("utf-8")) <= 200
+
+    pf = obs.payload.get("patch_failure", {})
+    assert pf.get("recoverable") is False
+    if "kind" in pf:
+        assert len(str(pf["kind"]).encode("utf-8")) <= 100
+    if "path" in pf:
+        assert len(str(pf["path"]).encode("utf-8")) <= 500
+
+
+def test_json_invalid_and_overdepth_payload_data_degrades_safely():
+    cyclic: dict[str, object] = {"a": 1}
+    cyclic["self"] = cyclic
+
+    def handle_cyclic(*_):
+        raise ToolRejectedError(
+            "cyclic failure",
+            safe_diagnostic="cyclic diag",
+            recoverable=True,
+            payload_data={
+                "bad_cycle": cyclic,
+                "nan_val": math.nan,
+                "inf_val": math.inf,
+                "error": "validation_error",
+                "patch_failure": {
+                    "kind": "validation_error",
+                    "path": "valid_path.py",
+                    "line_number": 5,
+                    "recoverable": True,
+                },
+            },
+        )
+
+    registry = registry_for(handler=handle_cyclic)
+    obs = registry.dispatch(action(), observation_id="obs-cyclic")
+
+    assert obs.status is ObservationStatus.REJECTED
+    # Must be valid json without exceptions
+    serialized = json.dumps(obs.payload, ensure_ascii=False)
+    assert len(serialized.encode("utf-8")) <= MAX_TOOL_RESULT_PAYLOAD_BYTES
+    assert obs.payload["dispatch_reason"] == ToolDispatchReason.TOOL_REJECTED.value
+    assert obs.payload.get("recoverable") is True
+    pf = obs.payload.get("patch_failure", {})
+    assert pf.get("kind") == "validation_error"
+    assert pf.get("path") == "valid_path.py"
+    assert pf.get("line_number") == 5
+
+
+def test_essential_fatal_and_recoverable_disposition_is_preserved():
+    for rec_state in (True, False):
+        def handle(*_, r=rec_state):
+            raise ToolExecutionError(
+                "test failure",
+                safe_diagnostic="diagnostic",
+                recoverable=r,
+                payload_data={
+                    "applied": False,
+                    "error": "test_error",
+                    "recoverable": r,
+                    "patch_failure": {
+                        "kind": "test_kind",
+                        "recoverable": r,
+                        "path": "target.py",
+                    },
+                },
+            )
+
+        registry = registry_for(handler=handle)
+        obs = registry.dispatch(action(), observation_id=f"obs-rec-{rec_state}")
+        assert obs.status is ObservationStatus.ERROR
+        assert obs.payload.get("recoverable") is rec_state
+        assert obs.payload.get("patch_failure", {}).get("recoverable") is rec_state
+        assert obs.payload.get("patch_failure", {}).get("kind") == "test_kind"

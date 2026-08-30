@@ -18,6 +18,9 @@ from agentic_debugger.runtime.exceptions import (
 )
 from agentic_debugger.runtime.patcher import (
     CanonicalPatchArtifact,
+    MAX_PATCH_FAILURE_KIND_BYTES,
+    MAX_PATCH_FAILURE_PATH_BYTES,
+    MAX_PATCH_FAILURE_TOTAL_BYTES,
     PatchManager,
     _check_python_syntax,
     _parse_unified_diff,
@@ -25,6 +28,7 @@ from agentic_debugger.runtime.patcher import (
     _MANDATORY_DENIED_RULES,
     _PolicyRule,
     _PolicyKind,
+    build_bounded_patch_failure_payload,
     materialize_and_canonicalize_patch,
 )
 from agentic_debugger.runtime.workspace import TaskWorkspace
@@ -1219,3 +1223,90 @@ class TestCheckPythonSyntax:
         )
         assert result.success is False
         assert result.line is not None
+
+
+class TestBuildBoundedPatchFailurePayload:
+    def test_normal_context_mismatch_payload(self):
+        exc = PatchValidationError(
+            "Context mismatch",
+            path="foo.py",
+            line_number=10,
+            hunk_index=1,
+            expected="    old_call()",
+            actual="    actual_call()",
+            current_source_window=" 10 |     actual_call()",
+            error_kind="context_mismatch",
+            recoverable=True,
+        )
+        payload, rec, kind = build_bounded_patch_failure_payload(exc)
+        assert rec is True
+        assert kind == "context_mismatch"
+        assert payload["applied"] is False
+        assert payload["error"] == "context_mismatch"
+        assert payload["recoverable"] is True
+        pf = payload["patch_failure"]
+        assert pf["kind"] == "context_mismatch"
+        assert pf["recoverable"] is True
+        assert pf["path"] == "foo.py"
+        assert pf["line_number"] == 10
+        assert pf["hunk_index"] == 1
+        assert pf["expected"] == "    old_call()"
+        assert pf["actual"] == "    actual_call()"
+        assert "actual_call" in pf["current_source_window"]
+
+    def test_oversized_path_and_kind_are_bounded(self):
+        huge_path = "dir/" * 500 + "file.py"
+        huge_kind = "K" * 5000
+        exc = PatchValidationError(
+            "Validation error",
+            path=huge_path,
+            error_kind=huge_kind,
+            recoverable=True,
+        )
+        payload, rec, kind = build_bounded_patch_failure_payload(exc)
+        assert len(kind.encode("utf-8")) <= MAX_PATCH_FAILURE_KIND_BYTES
+        pf = payload["patch_failure"]
+        assert len(pf["path"].encode("utf-8")) <= MAX_PATCH_FAILURE_PATH_BYTES
+        assert len(pf["kind"].encode("utf-8")) <= MAX_PATCH_FAILURE_KIND_BYTES
+
+    def test_huge_payload_sheds_source_window_to_stay_under_bound(self):
+        huge_source = "\n".join(f" {i:04d} | " + "X" * 300 for i in range(50))
+        exc = PatchValidationError(
+            "Context mismatch",
+            path="large.py",
+            line_number=1,
+            current_source_window=huge_source,
+            expected="E" * 400,
+            actual="A" * 400,
+            error_kind="context_mismatch",
+            recoverable=True,
+        )
+        payload, rec, kind = build_bounded_patch_failure_payload(exc)
+        import json
+        serialized = json.dumps(payload, ensure_ascii=False)
+        assert len(serialized.encode("utf-8")) <= MAX_PATCH_FAILURE_TOTAL_BYTES
+
+    def test_patch_revert_error_payload_is_fatal(self):
+        exc = PatchRevertError(
+            "Revert failed",
+            path="file.py",
+            error_kind="revert_failure",
+            recoverable=False,
+        )
+        payload, rec, kind = build_bounded_patch_failure_payload(exc)
+        assert rec is False
+        assert kind == "revert_failure"
+        assert payload["applied"] is False
+        assert payload["recoverable"] is False
+        assert payload["patch_failure"]["kind"] == "revert_failure"
+        assert payload["patch_failure"]["recoverable"] is False
+        assert payload["patch_failure"]["path"] == "file.py"
+
+    def test_unexpected_infrastructure_error_payload_is_fatal(self):
+        exc = OSError("Disk I/O error")
+        payload, rec, kind = build_bounded_patch_failure_payload(exc)
+        assert rec is False
+        assert kind == "patch_infrastructure_error"
+        assert payload["recoverable"] is False
+        assert payload["patch_failure"]["kind"] == "patch_infrastructure_error"
+        assert payload["patch_failure"]["recoverable"] is False

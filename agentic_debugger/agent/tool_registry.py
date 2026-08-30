@@ -49,9 +49,18 @@ class ToolArgumentError(ToolRegistryError):
 class ToolRejectedError(ToolRegistryError):
     """Raised by a handler when it rejects an otherwise valid invocation."""
 
-    def __init__(self, message: str, *, safe_diagnostic: str | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        safe_diagnostic: str | None = None,
+        recoverable: bool | None = None,
+        payload_data: dict[str, object] | None = None,
+    ) -> None:
         super().__init__(message)
         self.safe_diagnostic = safe_diagnostic
+        self.recoverable = recoverable
+        self.payload_data = payload_data or {}
 
 
 class ToolTimeoutError(ToolRegistryError):
@@ -73,9 +82,13 @@ class ToolExecutionError(ToolRegistryError):
         message: str,
         *,
         safe_diagnostic: str | None = None,
+        recoverable: bool | None = None,
+        payload_data: dict[str, object] | None = None,
     ) -> None:
         super().__init__(message)
         self.safe_diagnostic = safe_diagnostic
+        self.recoverable = recoverable
+        self.payload_data = payload_data or {}
 
 
 ToolArgumentValidator: TypeAlias = Callable[
@@ -120,14 +133,6 @@ def _bounded_safe_diagnostic(value: object) -> str | None:
     if len(encoded) > MAX_TOOL_DIAGNOSTIC_BYTES:
         value = encoded[: MAX_TOOL_DIAGNOSTIC_BYTES - 3].decode("utf-8", errors="ignore") + "..."
     return value
-
-
-def _rejection_payload(reason: ToolDispatchReason, *, diagnostic: object = None) -> dict[str, object]:
-    payload: dict[str, object] = {"dispatch_reason": reason.value}
-    bounded = _bounded_safe_diagnostic(diagnostic)
-    if bounded is not None:
-        payload["diagnostic"] = bounded
-    return payload
 
 
 class _JsonCopyError(Exception):
@@ -355,6 +360,177 @@ def _validate_observation_id(observation_id: object) -> str:
     return observation_id
 
 
+def _bound_payload_string(value: object, max_bytes: int) -> str | None:
+    if value is None:
+        return None
+    if type(value) is not str:
+        value = str(value)
+    encoded = value.encode("utf-8", errors="replace")
+    if len(encoded) > max_bytes:
+        value = encoded[: max(0, max_bytes - 3)].decode("utf-8", errors="ignore") + "..."
+    return value
+
+
+def _build_safe_patch_failure(
+    raw_pf: object,
+    *,
+    default_recoverable: bool | None = None,
+    include_context: bool = True,
+) -> dict[str, object] | None:
+    if not isinstance(raw_pf, dict):
+        return None
+    raw_kind = raw_pf.get("kind", "patch_error")
+    kind = _bound_payload_string(raw_kind, 100) or "patch_error"
+    raw_rec = raw_pf.get("recoverable")
+    if raw_rec is None:
+        raw_rec = True if default_recoverable is None else default_recoverable
+    rec = bool(raw_rec)
+    safe_pf: dict[str, object] = {
+        "kind": kind,
+        "recoverable": rec,
+    }
+    raw_path = raw_pf.get("path")
+    if raw_path is not None:
+        bounded_path = _bound_payload_string(raw_path, 500)
+        if bounded_path is not None:
+            safe_pf["path"] = bounded_path
+    line_number = raw_pf.get("line_number")
+    if isinstance(line_number, int) and not isinstance(line_number, bool):
+        safe_pf["line_number"] = line_number
+    hunk_index = raw_pf.get("hunk_index")
+    if isinstance(hunk_index, int) and not isinstance(hunk_index, bool):
+        safe_pf["hunk_index"] = hunk_index
+    if include_context:
+        expected = raw_pf.get("expected")
+        if expected is not None:
+            safe_pf["expected"] = _bound_payload_string(expected, 500) or ""
+        actual = raw_pf.get("actual")
+        if actual is not None:
+            safe_pf["actual"] = _bound_payload_string(actual, 500) or ""
+        source = raw_pf.get("current_source_window")
+        if source is not None:
+            safe_pf["current_source_window"] = _bound_payload_string(source, 1800) or ""
+    return safe_pf
+
+
+def _rejection_payload(
+    reason: ToolDispatchReason,
+    *,
+    diagnostic: object = None,
+    recoverable: bool | None = None,
+    extra_data: dict[str, object] | None = None,
+) -> dict[str, object]:
+    bounded_diag = _bounded_safe_diagnostic(diagnostic)
+    rec: bool | None = None
+    if recoverable is not None:
+        rec = bool(recoverable)
+    elif isinstance(extra_data, dict):
+        if "recoverable" in extra_data and isinstance(extra_data["recoverable"], bool):
+            rec = extra_data["recoverable"]
+        elif isinstance(extra_data.get("patch_failure"), dict):
+            pf_rec = extra_data["patch_failure"].get("recoverable")
+            if isinstance(pf_rec, bool):
+                rec = pf_rec
+
+    # Tier 1: Try full direct detachment if extra_data is clean JSON and fits within limits.
+    if isinstance(extra_data, dict):
+        try:
+            detached_extra = _detach_json_dict(
+                extra_data, max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES
+            )
+            candidate: dict[str, object] = dict(detached_extra)
+            candidate["dispatch_reason"] = reason.value
+            if rec is not None:
+                candidate["recoverable"] = rec
+            if bounded_diag is not None and "diagnostic" not in candidate:
+                candidate["diagnostic"] = bounded_diag
+            return _detach_json_dict(
+                candidate, max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES
+            )
+        except _JsonCopyError:
+            pass
+
+    # Tier 2: Build structured degraded payload with bounded context.
+    try:
+        candidate = {"dispatch_reason": reason.value}
+        if rec is not None:
+            candidate["recoverable"] = rec
+        if bounded_diag is not None:
+            candidate["diagnostic"] = bounded_diag
+        if isinstance(extra_data, dict):
+            if "applied" in extra_data:
+                candidate["applied"] = bool(extra_data["applied"])
+            if "error" in extra_data:
+                err_str = _bound_payload_string(extra_data["error"], 200)
+                if err_str is not None:
+                    candidate["error"] = err_str
+            pf = _build_safe_patch_failure(
+                extra_data.get("patch_failure"),
+                default_recoverable=rec,
+                include_context=True,
+            )
+            if pf is not None:
+                candidate["patch_failure"] = pf
+        return _detach_json_dict(
+            candidate, max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES
+        )
+    except _JsonCopyError:
+        pass
+
+    # Tier 3: Degrade further without large context windows (expected/actual/source_window).
+    try:
+        candidate = {"dispatch_reason": reason.value}
+        if rec is not None:
+            candidate["recoverable"] = rec
+        if bounded_diag is not None:
+            candidate["diagnostic"] = bounded_diag
+        if isinstance(extra_data, dict):
+            if "applied" in extra_data:
+                candidate["applied"] = bool(extra_data["applied"])
+            if "error" in extra_data:
+                err_str = _bound_payload_string(extra_data["error"], 100)
+                if err_str is not None:
+                    candidate["error"] = err_str
+            pf = _build_safe_patch_failure(
+                extra_data.get("patch_failure"),
+                default_recoverable=rec,
+                include_context=False,
+            )
+            if pf is not None:
+                candidate["patch_failure"] = pf
+        return _detach_json_dict(
+            candidate, max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES
+        )
+    except _JsonCopyError:
+        pass
+
+    # Tier 4: Minimal guaranteed fallback (always fits, always valid JSON dict).
+    fallback: dict[str, object] = {"dispatch_reason": reason.value}
+    if rec is not None:
+        fallback["recoverable"] = rec
+    if isinstance(extra_data, dict) and "applied" in extra_data:
+        fallback["applied"] = bool(extra_data["applied"])
+    if isinstance(extra_data, dict) and isinstance(extra_data.get("patch_failure"), dict):
+        raw_kind = extra_data["patch_failure"].get("kind", "patch_error")
+        fallback["patch_failure"] = {
+            "kind": _bound_payload_string(raw_kind, 50) or "patch_error",
+            "recoverable": bool(extra_data["patch_failure"].get("recoverable", True if rec is None else rec)),
+        }
+    return _detach_json_dict(fallback, max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES)
+
+
+def _safe_summary(value: object, default: str) -> str:
+    if type(value) is not str or not value:
+        return default
+    clean = "".join(char if 0x20 <= ord(char) != 0x7F else " " for char in value).strip()
+    if not clean:
+        return default
+    encoded = clean.encode("utf-8", errors="replace")
+    if len(encoded) > MAX_TOOL_SUMMARY_BYTES:
+        clean = encoded[: MAX_TOOL_SUMMARY_BYTES - 3].decode("utf-8", errors="ignore") + "..."
+    return clean
+
+
 def _make_observation(
     action: Action,
     observation_id: str,
@@ -365,10 +541,27 @@ def _make_observation(
     payload: dict[str, object] | None = None,
     truncated: bool = False,
 ) -> Observation:
+    safe_summary = _safe_summary(
+        summary,
+        _FIXED_SUMMARIES.get(reason, "Tool operation completed."),
+    )
     if payload is None:
         payload = {"dispatch_reason": reason.value}
-    if type(payload) is not dict:
-        raise _JsonCopyError
+    try:
+        validated_payload = _detach_json_dict(
+            payload, max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES
+        )
+    except _JsonCopyError:
+        if isinstance(payload, dict):
+            validated_payload = _rejection_payload(
+                reason,
+                extra_data=payload,
+            )
+        else:
+            validated_payload = _detach_json_dict(
+                {"dispatch_reason": reason.value},
+                max_bytes=MAX_TOOL_RESULT_PAYLOAD_BYTES,
+            )
     return Observation(
         observation_id=observation_id,
         action_id=action.action_id,
@@ -376,8 +569,8 @@ def _make_observation(
         task_id=action.task_id,
         name=action.name,
         status=status,
-        payload=payload,
-        summary=summary,
+        payload=validated_payload,
+        summary=safe_summary,
         truncated=truncated,
     )
 
@@ -523,6 +716,8 @@ class ToolRegistry:
                 payload=_rejection_payload(
                     ToolDispatchReason.INVALID_ARGUMENTS,
                     diagnostic=exc.safe_diagnostic,
+                    recoverable=exc.recoverable,
+                    extra_data=exc.payload_data,
                 ),
             )
         except Exception:
@@ -540,15 +735,21 @@ class ToolRegistry:
         except CancellationError:
             raise
         except ToolRejectedError as exc:
+            diagnostic = _bounded_safe_diagnostic(exc.safe_diagnostic)
+            summary = diagnostic or _FIXED_SUMMARIES[ToolDispatchReason.TOOL_REJECTED]
+            if len(summary) > MAX_TOOL_SUMMARY_BYTES:
+                summary = summary[: MAX_TOOL_SUMMARY_BYTES - 3] + "..."
             return _make_observation(
                 action,
                 observation_id,
                 ObservationStatus.REJECTED,
                 ToolDispatchReason.TOOL_REJECTED,
-                _FIXED_SUMMARIES[ToolDispatchReason.TOOL_REJECTED],
+                summary,
                 payload=_rejection_payload(
                     ToolDispatchReason.TOOL_REJECTED,
                     diagnostic=exc.safe_diagnostic,
+                    recoverable=exc.recoverable,
+                    extra_data=exc.payload_data,
                 ),
             )
         except ToolTimeoutError:
@@ -560,15 +761,21 @@ class ToolRegistry:
                 _FIXED_SUMMARIES[ToolDispatchReason.TOOL_TIMEOUT],
             )
         except ToolExecutionError as exc:
+            diagnostic = _bounded_safe_diagnostic(exc.safe_diagnostic)
+            summary = diagnostic or _FIXED_SUMMARIES[ToolDispatchReason.TOOL_ERROR]
+            if len(summary) > MAX_TOOL_SUMMARY_BYTES:
+                summary = summary[: MAX_TOOL_SUMMARY_BYTES - 3] + "..."
             return _make_observation(
                 action,
                 observation_id,
                 ObservationStatus.ERROR,
                 ToolDispatchReason.TOOL_ERROR,
-                _FIXED_SUMMARIES[ToolDispatchReason.TOOL_ERROR],
+                summary,
                 payload=_rejection_payload(
                     ToolDispatchReason.TOOL_ERROR,
                     diagnostic=exc.safe_diagnostic,
+                    recoverable=exc.recoverable,
+                    extra_data=exc.payload_data,
                 ),
             )
         except Exception:

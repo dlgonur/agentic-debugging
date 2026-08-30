@@ -871,6 +871,38 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
     lines.append(
         "If apply_patch remains legal and patch-attempt budget remains, correct the patch format or content and submit a new valid apply_patch."
     )
+    last_obs = controller.get("last_observation")
+    if isinstance(last_obs, Mapping) and last_obs.get("name") == "apply_patch":
+        obs_status = last_obs.get("status")
+        if obs_status in ("error", "rejected"):
+            obs_payload = last_obs.get("payload")
+            patch_failure = (
+                obs_payload.get("patch_failure")
+                if isinstance(obs_payload, Mapping) and isinstance(obs_payload.get("patch_failure"), Mapping)
+                else {}
+            )
+            summary_text = (
+                (obs_payload.get("diagnostic") if isinstance(obs_payload, Mapping) else None)
+                or last_obs.get("summary")
+            )
+            source_win = patch_failure.get("current_source_window")
+            if summary_text or source_win:
+                failure_lines = ["PREVIOUS APPLY_PATCH ATTEMPT FAILED:"]
+                if summary_text and isinstance(summary_text, str):
+                    failure_lines.append(f"Diagnostic: {summary_text.strip()}")
+                if patch_failure.get("path"):
+                    failure_lines.append(f"Target file: {patch_failure['path']}")
+                if patch_failure.get("line_number"):
+                    failure_lines.append(f"Target line: {patch_failure['line_number']}")
+                if source_win and isinstance(source_win, str):
+                    failure_lines.extend([
+                        "Current source around target:",
+                        f"{source_win.strip()}",
+                    ])
+                failure_lines.append(
+                    "Carefully examine the current source context and revise your proposed patch hunk to match the actual source."
+                )
+                lines.extend(failure_lines)
     lines.append(
         "After a patch is successfully applied, use the legal validation lifecycle exposed by the current controller and tools, including revert_patch only for an active successfully applied patch."
     )
