@@ -461,7 +461,8 @@ class TestPaneRendering:
         view = fold(bracket_stream())
         panel = TimelinePanel()
         plain = panel._render_view(view).plain
-        assert "#17" in plain
+        assert "SESSION TIME BREAKDOWN" in plain
+        assert "#14" in plain
         assert_no_style_tags(plain)
 
     def test_not_recorded_state_has_no_markup(self):
@@ -641,7 +642,7 @@ class TestTimelineDurationRendering:
             ),
         )
         rendered = panel._render_view(view).plain
-        assert "#1    Model request 1 completed  (3.2s)" in rendered
+        assert "#1    Model request 1 completed          3.2s" in rendered
 
     def test_instantaneous_event_has_no_next_event_gap_displayed(self):
         panel = TimelinePanel()
@@ -688,7 +689,7 @@ class TestTimelineDurationRendering:
             ),
         )
         rendered = panel._render_view(view).plain
-        assert "Model request 1 started  (running…)" in rendered
+        assert "#0    Model request 1 started            (running…)" in rendered
 
     def test_inflight_operation_tracks_across_intervening_events(self):
         panel = TimelinePanel()
@@ -724,10 +725,8 @@ class TestTimelineDurationRendering:
         )
         rendered = panel._render_view(view).plain
         # Both start events are in flight across intervening events
-        assert "Model request 1 started  (running…)" in rendered
-        assert "hypothesis added" in rendered
-        assert "hypothesis added  (running…)" not in rendered
-        assert "tool read_source started  (running…)" in rendered
+        assert "#0    Model request 1 started            (running…)" in rendered
+        assert "#2    tool read_source started           (running…)" in rendered
 
     def test_completed_operation_clears_inflight_tag(self):
         panel = TimelinePanel()
@@ -755,8 +754,8 @@ class TestTimelineDurationRendering:
             ),
         )
         rendered = panel._render_view(view).plain
-        assert "Model request 1 started  (running…)" not in rendered
-        assert "Model request 1 completed  (3.0s)" in rendered
+        assert "#0    Model request 1 started" not in rendered
+        assert "#1    Model request 1 completed          3.0s" in rendered
 
     def test_timeline_export_includes_duration_truthfully(self):
         view = SessionViewState(
@@ -774,7 +773,7 @@ class TestTimelineDurationRendering:
             ),
         )
         exported = timeline_export_text(view)
-        assert "#0 Model request 1 completed  (3.2s)" in exported
+        assert "#0    Model request 1 completed          3.2s" in exported
 
 
 class TestNoDuplicationContract:

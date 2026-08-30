@@ -630,9 +630,10 @@ class TestOpenReplay:
             assert "RESOLVED" in verifier
             assert "1/1" in verifier
             assert "authoritative" in verifier.lower()
-            # timeline pane renders recorded events
+            # timeline pane renders timing breakdown and timed operations
             timeline = pane_text(workspace, "#timeline-pane")
-            assert "session succeeded" in timeline
+            assert "SESSION TIME BREAKDOWN" in timeline
+            assert "TIMED OPERATIONS" in timeline
             assert "verifier completed" in timeline
 
         run_headless(app, scenario)

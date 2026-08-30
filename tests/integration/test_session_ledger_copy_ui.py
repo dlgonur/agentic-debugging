@@ -107,7 +107,8 @@ def test_copy_all_timeline_copies_full(tmp_path):
         await pilot.click("#copy-timeline")
         await pilot.pause()
         assert "timeline" in copied
-        assert "#0" in copied["timeline"]
+        assert "SESSION TIME BREAKDOWN" in copied["timeline"]
+        assert "tool" in copied["timeline"].lower()
     run_headless(app, scenario, size=(140,40))
 
 def test_clipboard_failure_non_fatal(tmp_path):

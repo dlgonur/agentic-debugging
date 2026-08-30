@@ -187,7 +187,7 @@ def test_activity_copy_respects_filter():
 
 
 # ---------------------------------------------------------------------------
-# 5. Timeline: full durable timeline copied
+# 5. Timeline: full structured timeline timing breakdown copied
 # ---------------------------------------------------------------------------
 
 def test_timeline_copy_full():
@@ -202,11 +202,9 @@ def test_timeline_copy_full():
     ]
     view = _reduce_all(view, events)
     text = timeline_export_text(view)
-    lines = [l for l in text.splitlines() if l.strip().startswith("#") or l.strip().startswith("» #")]
-    assert len(lines) == len(view.timeline)
-    # Timeline is chronological, first entry is #0
-    assert "#0" in text
-    assert "#4" in text
+    assert "SESSION TIME BREAKDOWN" in text
+    assert "Patch lifecycle" in text
+    assert "View: Timeline" in text
 
 
 # ---------------------------------------------------------------------------
@@ -233,7 +231,8 @@ def test_copy_all_replay_without_liveness():
     activity = activity_export_text(replay_state.view, filter_name="all")
     timeline = timeline_export_text(replay_state.view)
     assert "#0" in activity
-    assert "#6" in timeline
+    assert "SESSION TIME BREAKDOWN" in timeline
+    assert "Cleanup" in timeline
     # Sidebar via replay should still be Completed
     panel = LiveRunContextPanel()
     panel.update_execution(replay_state)

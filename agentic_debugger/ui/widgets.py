@@ -900,9 +900,9 @@ def _find_in_flight_sequences(view: SessionViewState) -> set[int]:
 @dataclass(frozen=True)
 class TimingCategorySummary:
     name: str
-    total_seconds: float
+    total_seconds: Optional[float]
     count: int
-    percentage: float
+    percentage: Optional[float]
     detail: str
 
 
@@ -929,8 +929,8 @@ def compute_session_timing(view: SessionViewState) -> SessionTiming:
     """Aggregate session time consumption by category and timed operations.
 
     Categorizes non-overlapping operations (Model, Debugger/PDB, Tools,
-    Verification, Patch, Cleanup) and calculates total elapsed time and
-    proportions.  Fails closed when timestamps are missing.
+    Verification, Patch, Cleanup) and derives wall-clock elapsed time and
+    honest category accounting.  Fails closed when timestamps are missing.
     """
     if not view.timeline and not view.workstream:
         return SessionTiming(
@@ -953,7 +953,8 @@ def compute_session_timing(view: SessionViewState) -> SessionTiming:
             except Exception:
                 pass
 
-    has_timestamps = start_dt is not None
+    has_timestamps = (start_dt is not None and last_dt is not None)
+    total_elapsed = max(0.0, (last_dt - start_dt).total_seconds()) if has_timestamps else None
 
     model_durations: list[float] = []
     tool_durations: list[float] = []
@@ -971,22 +972,57 @@ def compute_session_timing(view: SessionViewState) -> SessionTiming:
             except Exception:
                 pass
 
+    in_flight_seqs = _find_in_flight_sequences(view)
     for entry in view.timeline:
-        dur = entry.duration_seconds
         kind = entry.event_kind
+        dur = entry.duration_seconds
         offset = None
-        if start_dt and entry.sequence in seq_dt:
+        if entry.sequence in seq_dt and start_dt:
             offset = max(0.0, (seq_dt[entry.sequence] - start_dt).total_seconds())
 
         cat_name = None
-        if kind == SessionEventKind.MODEL_REQUEST_COMPLETED:
+        if entry.sequence in in_flight_seqs:
+            summary_lower = entry.summary.lower()
+            if kind == SessionEventKind.MODEL_REQUEST_STARTED:
+                cat_name = "Model requests"
+            elif kind == SessionEventKind.TOOL_STARTED:
+                if any(dbg in summary_lower for dbg in ("pdb", "stack", "frame", "safe_eval", "debugger")):
+                    cat_name = "Debugger / PDB"
+                else:
+                    cat_name = "Tools"
+            elif kind in (SessionEventKind.VERIFIER_STARTED, SessionEventKind.VERIFIER_STAGE_STARTED):
+                cat_name = "Verification"
+            elif kind == SessionEventKind.CLEANUP_STARTED:
+                cat_name = "Cleanup"
+            if cat_name is not None:
+                timed_ops.append(
+                    TimedOperation(
+                        sequence=entry.sequence,
+                        start_time_offset=offset,
+                        duration_seconds=0.0,
+                        category=cat_name,
+                        label=entry.summary,
+                        in_flight=True,
+                    )
+                )
+        elif kind == SessionEventKind.MODEL_REQUEST_COMPLETED:
             cat_name = "Model requests"
             if dur is not None:
                 model_durations.append(dur)
         elif kind == SessionEventKind.TOOL_COMPLETED:
-            cat_name = "Tools"
-            if dur is not None:
-                tool_durations.append(dur)
+            summary_lower = entry.summary.lower()
+            if any(dbg in summary_lower for dbg in ("pdb", "stack", "frame", "safe_eval", "debugger")):
+                cat_name = "Debugger / PDB"
+                if dur is not None:
+                    debugger_durations.append(dur)
+            elif "apply_patch" in summary_lower:
+                cat_name = "Patch lifecycle"
+                if dur is not None:
+                    patch_durations.append(dur)
+            else:
+                cat_name = "Tools"
+                if dur is not None:
+                    tool_durations.append(dur)
         elif kind in (
             SessionEventKind.DEBUGGER_STARTED,
             SessionEventKind.DEBUGGER_LOCATION_CHANGED,
@@ -1019,7 +1055,7 @@ def compute_session_timing(view: SessionViewState) -> SessionTiming:
             if dur is not None:
                 cleanup_durations.append(dur)
 
-        if dur is not None and cat_name is not None:
+        if dur is not None and cat_name is not None and entry.sequence not in in_flight_seqs:
             timed_ops.append(
                 TimedOperation(
                     sequence=entry.sequence,
@@ -1027,96 +1063,183 @@ def compute_session_timing(view: SessionViewState) -> SessionTiming:
                     duration_seconds=dur,
                     category=cat_name,
                     label=entry.summary,
+                    in_flight=False,
                 )
             )
 
-    model_tot = sum(model_durations)
-    tool_tot = sum(tool_durations)
-    dbg_tot = sum(debugger_durations)
-    ver_tot = sum(verifier_durations)
-    patch_tot = sum(patch_durations)
-    clean_tot = sum(cleanup_durations)
-
-    accounted = model_tot + tool_tot + dbg_tot + ver_tot + patch_tot + clean_tot
-    total_elapsed = None
-    if start_dt and last_dt:
-        total_elapsed = max(accounted, (last_dt - start_dt).total_seconds())
-    elif accounted > 0:
-        total_elapsed = accounted
-
-    denom = total_elapsed if (total_elapsed is not None and total_elapsed > 0) else (accounted if accounted > 0 else 1.0)
-
     cats: list[TimingCategorySummary] = []
-    if model_durations or view.model_provenance:
-        avg_str = f"avg {model_tot / len(model_durations):.1f}s" if model_durations else "—"
+
+    # 1. Model requests
+    model_ops = [e for e in view.timeline if e.event_kind in (SessionEventKind.MODEL_REQUEST_COMPLETED, SessionEventKind.MODEL_REQUEST_STARTED)]
+    model_count = len(model_durations) or (len(model_ops) // 2 or len(model_ops))
+    if model_durations:
+        tot = sum(model_durations)
+        pct = (tot / total_elapsed) * 100.0 if (total_elapsed and total_elapsed > 0) else None
+        avg_str = f"avg {tot / len(model_durations):.1f}s"
         count_str = f"{len(model_durations)} request{'s' if len(model_durations) != 1 else ''}"
         cats.append(
             TimingCategorySummary(
                 name="Model requests",
-                total_seconds=model_tot,
+                total_seconds=tot,
                 count=len(model_durations),
-                percentage=(model_tot / denom) * 100.0 if total_elapsed else 0.0,
+                percentage=pct,
                 detail=f"{count_str} ({avg_str})",
             )
         )
-    if debugger_durations or view.debugger.session_started:
-        count_str = f"{len(debugger_durations)} observation{'s' if len(debugger_durations) != 1 else ''}"
+    elif model_count > 0 or view.model_provenance is not None:
+        count_str = f"{model_count} request{'s' if model_count != 1 else ''}" if model_count > 0 else "—"
+        cats.append(
+            TimingCategorySummary(
+                name="Model requests",
+                total_seconds=None,
+                count=model_count,
+                percentage=None,
+                detail=f"{count_str} (unmeasured)" if count_str != "—" else "unmeasured",
+            )
+        )
+
+    # 2. Debugger / PDB
+    dbg_ops = [e for e in view.timeline if "debugger" in e.event_kind.value or "pdb" in e.summary.lower()]
+    dbg_count = len(debugger_durations) or len(dbg_ops)
+    if debugger_durations:
+        tot = sum(debugger_durations)
+        pct = (tot / total_elapsed) * 100.0 if (total_elapsed and total_elapsed > 0) else None
+        count_str = f"{len(debugger_durations)} operation{'s' if len(debugger_durations) != 1 else ''}"
         cats.append(
             TimingCategorySummary(
                 name="Debugger / PDB",
-                total_seconds=dbg_tot,
+                total_seconds=tot,
                 count=len(debugger_durations),
-                percentage=(dbg_tot / denom) * 100.0 if total_elapsed else 0.0,
+                percentage=pct,
                 detail=count_str,
             )
         )
+    elif dbg_count > 0 or view.debugger.session_started or view.pdb_observed:
+        count_str = f"{dbg_count} observation{'s' if dbg_count != 1 else ''}" if dbg_count > 0 else "1 session"
+        cats.append(
+            TimingCategorySummary(
+                name="Debugger / PDB",
+                total_seconds=None,
+                count=dbg_count or 1,
+                percentage=None,
+                detail=f"{count_str} (unmeasured)",
+            )
+        )
+
+    # 3. Tools
+    tool_ops = [e for e in view.timeline if e.event_kind == SessionEventKind.TOOL_COMPLETED]
+    tool_count = len(tool_durations) or len(tool_ops)
     if tool_durations:
+        tot = sum(tool_durations)
+        pct = (tot / total_elapsed) * 100.0 if (total_elapsed and total_elapsed > 0) else None
         count_str = f"{len(tool_durations)} execution{'s' if len(tool_durations) != 1 else ''}"
         cats.append(
             TimingCategorySummary(
                 name="Tools",
-                total_seconds=tool_tot,
+                total_seconds=tot,
                 count=len(tool_durations),
-                percentage=(tool_tot / denom) * 100.0 if total_elapsed else 0.0,
+                percentage=pct,
                 detail=count_str,
             )
         )
-    if verifier_durations or view.verifier_summary or view.verifier_stages:
+    elif tool_count > 0:
+        count_str = f"{tool_count} execution{'s' if tool_count != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Tools",
+                total_seconds=None,
+                count=tool_count,
+                percentage=None,
+                detail=f"{count_str} (unmeasured)",
+            )
+        )
+
+    # 4. Verification
+    ver_ops = [e for e in view.timeline if "verifier" in e.event_kind.value]
+    ver_count = len(verifier_durations) or len(ver_ops)
+    if verifier_durations:
+        tot = sum(verifier_durations)
+        pct = (tot / total_elapsed) * 100.0 if (total_elapsed and total_elapsed > 0) else None
         count_str = f"{len(verifier_durations)} stage{'s' if len(verifier_durations) != 1 else ''}"
         cats.append(
             TimingCategorySummary(
                 name="Verification",
-                total_seconds=ver_tot,
+                total_seconds=tot,
                 count=len(verifier_durations),
-                percentage=(ver_tot / denom) * 100.0 if total_elapsed else 0.0,
+                percentage=pct,
                 detail=count_str,
             )
         )
-    if patch_durations or view.patch_attempts:
-        count_str = f"{len(view.patch_attempts)} attempt{'s' if len(view.patch_attempts) != 1 else ''}"
+    elif ver_count > 0 or view.verifier_summary or view.verifier_stages:
+        count_str = f"{len(view.verifier_stages)} stage{'s' if len(view.verifier_stages) != 1 else ''}" if view.verifier_stages else "1 verification"
+        cats.append(
+            TimingCategorySummary(
+                name="Verification",
+                total_seconds=None,
+                count=ver_count or len(view.verifier_stages) or 1,
+                percentage=None,
+                detail=f"{count_str} (unmeasured)",
+            )
+        )
+
+    # 5. Patch lifecycle
+    patch_ops = [e for e in view.timeline if "patch" in e.event_kind.value]
+    patch_count = len(view.patch_attempts) or len(patch_durations) or len(patch_ops)
+    if patch_durations:
+        tot = sum(patch_durations)
+        pct = (tot / total_elapsed) * 100.0 if (total_elapsed and total_elapsed > 0) else None
+        count_str = f"{patch_count} attempt{'s' if patch_count != 1 else ''}"
         cats.append(
             TimingCategorySummary(
                 name="Patch lifecycle",
-                total_seconds=patch_tot,
-                count=len(view.patch_attempts),
-                percentage=(patch_tot / denom) * 100.0 if total_elapsed else 0.0,
+                total_seconds=tot,
+                count=patch_count,
+                percentage=pct,
                 detail=count_str,
             )
         )
-    if cleanup_durations or view.cleanup_verified is not None:
+    elif patch_count > 0:
+        count_str = f"{patch_count} attempt{'s' if patch_count != 1 else ''}"
+        cats.append(
+            TimingCategorySummary(
+                name="Patch lifecycle",
+                total_seconds=None,
+                count=patch_count,
+                percentage=None,
+                detail=f"{count_str} (unmeasured)",
+            )
+        )
+
+    # 6. Cleanup
+    clean_count = len(cleanup_durations)
+    if cleanup_durations:
+        tot = sum(cleanup_durations)
+        pct = (tot / total_elapsed) * 100.0 if (total_elapsed and total_elapsed > 0) else None
         count_str = f"{len(cleanup_durations)} step{'s' if len(cleanup_durations) != 1 else ''}"
         cats.append(
             TimingCategorySummary(
                 name="Cleanup",
-                total_seconds=clean_tot,
+                total_seconds=tot,
                 count=len(cleanup_durations),
-                percentage=(clean_tot / denom) * 100.0 if total_elapsed else 0.0,
+                percentage=pct,
                 detail=count_str,
             )
         )
+    elif view.cleanup_verified is not None:
+        cats.append(
+            TimingCategorySummary(
+                name="Cleanup",
+                total_seconds=None,
+                count=1,
+                percentage=None,
+                detail="1 step (unmeasured)",
+            )
+        )
+
+    accounted = sum(c.total_seconds for c in cats if c.total_seconds is not None)
 
     return SessionTiming(
-        has_timestamps=has_timestamps or len(timed_ops) > 0,
+        has_timestamps=has_timestamps,
         total_elapsed_seconds=total_elapsed,
         accounted_seconds=accounted,
         categories=tuple(cats),
@@ -1129,98 +1252,91 @@ def render_timeline_report(
     timing: SessionTiming,
     boundaries: Optional[frozenset[int]] = None,
 ) -> Text:
-    """Render the structured time-consumption summary report and timeline."""
+    """Render the structured time-consumption summary report and timed operations."""
     text = Text()
     if not view.timeline:
         text.append("No events recorded.\n", style="dim")
         return text
 
-    if not timing.has_timestamps and not timing.timed_operations:
-        text.append("Session timing data not recorded for this session.\n\n", style="dim")
-        text.append("NOT RECORDED\n\n", style="dim italic")
+    if not timing.has_timestamps and not timing.timed_operations and timing.accounted_seconds == 0.0:
+        text.append("SESSION TIME BREAKDOWN\n", style=f"bold {PRIMARY}")
+        text.append("Total Elapsed: Not recorded\n", style="dim")
+        text.append("─" * 72 + "\n", style=LINE)
+        text.append("Session timing data was not recorded for this session.\n\n", style="dim")
+        return text
+
+    text.append("SESSION TIME BREAKDOWN\n", style=f"bold {PRIMARY}")
+    if timing.total_elapsed_seconds is not None:
+        secs = timing.total_elapsed_seconds
+        mins = int(secs // 60)
+        rem = secs % 60
+        if mins > 0:
+            text.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)\n", style=f"bold {FOREGROUND}")
+        else:
+            text.append(f"Total Elapsed: {secs:.1f}s\n", style=f"bold {FOREGROUND}")
     else:
-        text.append("SESSION TIME BREAKDOWN", style=f"bold {PRIMARY}")
-        text.append("\n")
-        if timing.total_elapsed_seconds is not None:
-            secs = timing.total_elapsed_seconds
-            mins = int(secs // 60)
-            rem = secs % 60
-            if mins > 0:
-                text.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)\n", style=f"bold {FOREGROUND}")
-            else:
-                text.append(f"Total Elapsed: {secs:.1f}s\n", style=f"bold {FOREGROUND}")
-        text.append("─" * 72 + "\n", style=LINE)
+        text.append("Total Elapsed: Not recorded\n", style="dim")
+    text.append("─" * 72 + "\n", style=LINE)
 
-        text.append(f"{'CATEGORY':<24} {'TIME':<12} {'% TOTAL':<12} {'OPERATIONS'}\n", style=f"bold {MUTED}")
-        text.append("─" * 72 + "\n", style=LINE)
+    text.append(f"{'CATEGORY':<24} {'TIME':<14} {'% OF TOTAL':<12} {'OPERATIONS'}\n", style=f"bold {MUTED}")
+    text.append("─" * 72 + "\n", style=LINE)
 
+    for cat in timing.categories:
+        dur_str = f"{cat.total_seconds:.1f}s" if cat.total_seconds is not None else "Not recorded"
+        pct_str = f"{cat.percentage:.1f}%" if cat.percentage is not None else "—"
+        cat_style = FOREGROUND
+        if "Model" in cat.name:
+            cat_style = SECONDARY
+        elif "Debugger" in cat.name:
+            cat_style = DEBUGGER
+        elif "Tool" in cat.name:
+            cat_style = TOOL
+        elif "Verification" in cat.name:
+            cat_style = SUCCESS
+        elif "Patch" in cat.name:
+            cat_style = EVIDENCE
+
+        dur_style = FOREGROUND if cat.total_seconds is not None else "dim"
+        text.append(f"{cat.name:<24}", style=f"bold {cat_style}")
+        text.append(f"{dur_str:<14}", style=dur_style)
+        text.append(f"{pct_str:<12}", style=MUTED)
+        text.append(f"{cat.detail}\n", style=FAINT)
+
+    if timing.accounted_seconds > 0 and timing.categories:
+        text.append("\n[", style=MUTED)
+        bar_width = 48
         for cat in timing.categories:
-            dur_str = f"{cat.total_seconds:.1f}s"
-            pct_str = f"{cat.percentage:.1f}%"
-            cat_style = FOREGROUND
-            if "Model" in cat.name:
-                cat_style = SECONDARY
-            elif "Debugger" in cat.name:
-                cat_style = DEBUGGER
-            elif "Tool" in cat.name:
-                cat_style = TOOL
-            elif "Verification" in cat.name:
-                cat_style = SUCCESS
-            elif "Patch" in cat.name:
-                cat_style = EVIDENCE
-
-            text.append(f"{cat.name:<24}", style=f"bold {cat_style}")
-            text.append(f"{dur_str:<12}", style=FOREGROUND)
-            text.append(f"{pct_str:<12}", style=MUTED)
-            text.append(f"{cat.detail}\n", style=FAINT)
-
-        if timing.accounted_seconds > 0 and timing.categories:
-            text.append("\n[", style=MUTED)
-            bar_width = 48
-            for cat in timing.categories:
-                cat_chars = max(1, int(round((cat.total_seconds / timing.accounted_seconds) * bar_width))) if cat.total_seconds > 0 else 0
-                if cat_chars > 0:
-                    char_style = SECONDARY if "Model" in cat.name else (DEBUGGER if "Debugger" in cat.name else (TOOL if "Tool" in cat.name else (SUCCESS if "Verification" in cat.name else EVIDENCE)))
-                    text.append("█" * cat_chars, style=char_style)
-            text.append("]\n\n", style=MUTED)
-
-    bounds = boundaries or frozenset()
-    in_flight_seqs = _find_in_flight_sequences(view)
-    start_dt = None
-    for entry in view.timeline:
-        if entry.timestamp_utc:
-            try:
-                start_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
-                break
-            except Exception:
-                pass
-
-    for entry in view.timeline:
-        marker = "» " if entry.sequence in bounds else "  "
-        style = _entry_style(entry)
-        time_str = ""
-        if entry.timestamp_utc and start_dt:
-            try:
-                entry_dt = datetime.fromisoformat(entry.timestamp_utc.replace("Z", "+00:00"))
-                secs = max(0, int((entry_dt - start_dt).total_seconds()))
-                time_str = f"{secs // 60:02d}:{secs % 60:02d} "
-            except Exception:
-                pass
-        text.append(marker, style=f"bold {PRIMARY}" if marker == "» " else "dim")
-        if time_str:
-            text.append(time_str, style=f"bold {EVIDENCE}")
-        text.append(f"#{entry.sequence:<4} ", style="dim")
-        text.append(entry.summary, style=style)
-        if entry.duration_seconds is not None:
-            if entry.duration_seconds < 60:
-                text.append(f"  ({entry.duration_seconds:.1f}s)", style="dim")
-            else:
-                mins = int(entry.duration_seconds // 60)
-                secs = int(entry.duration_seconds % 60)
-                text.append(f"  ({mins}m {secs}s)", style="dim")
-        elif entry.sequence in in_flight_seqs:
-            text.append("  (running…)", style="dim")
+            if cat.total_seconds and cat.total_seconds > 0:
+                cat_chars = max(1, int(round((cat.total_seconds / timing.accounted_seconds) * bar_width)))
+                char_style = SECONDARY if "Model" in cat.name else (DEBUGGER if "Debugger" in cat.name else (TOOL if "Tool" in cat.name else (SUCCESS if "Verification" in cat.name else EVIDENCE)))
+                text.append("█" * cat_chars, style=char_style)
+        text.append("]\n\n", style=MUTED)
+    else:
         text.append("\n")
+
+    # TIMED OPERATIONS section
+    text.append("TIMED OPERATIONS\n", style=f"bold {PRIMARY}")
+    text.append("─" * 72 + "\n", style=LINE)
+    if not timing.timed_operations:
+        text.append("No individual timed operations recorded.\n", style="dim")
+    else:
+        for op in timing.timed_operations:
+            time_str = ""
+            if op.start_time_offset is not None:
+                secs = int(op.start_time_offset)
+                time_str = f"{secs // 60:02d}:{secs % 60:02d} "
+            if time_str:
+                text.append(time_str, style=f"bold {EVIDENCE}")
+            text.append(f"#{op.sequence:<4} ", style="dim")
+            text.append(f"{op.label:<34} ", style=FOREGROUND)
+            if op.in_flight:
+                text.append("(running…)", style=f"bold {WARNING}")
+            else:
+                text.append(f"{op.duration_seconds:.1f}s", style=f"bold {FOREGROUND}")
+                pct_str = f"({(op.duration_seconds / timing.total_elapsed_seconds) * 100.0:.1f}%)" if (timing.total_elapsed_seconds and timing.total_elapsed_seconds > 0) else ""
+                if pct_str:
+                    text.append(f"  {pct_str}", style="dim")
+            text.append("\n")
 
     return text
 
@@ -1782,6 +1898,12 @@ class LivePanel(VerticalScroll):
         if self._follow_tail:
             self.scroll_end(animate=False)
 
+    def watch_scroll_y(self, old_value: float, new_value: float) -> None:
+        if new_value < max(0, self.max_scroll_y - 2):
+            self._follow_tail = False
+        else:
+            self._follow_tail = True
+
     def on_scroll(self) -> None:
         if self.scroll_y < max(0, self.max_scroll_y - 2):
             self._follow_tail = False
@@ -1984,11 +2106,7 @@ def timeline_export_text(
     task_title: Optional[str] = None,
     phase_boundary_sequences: Optional[frozenset[int]] = None,
 ) -> str:
-    """Deterministic text export for the full Timeline.
-
-    Exports structured timing breakdown and chronological timed operations.
-    Pure.
-    """
+    """Deterministic text export for the Timeline timing breakdown."""
     from agentic_debugger.ui.app import task_display_title
 
     title = task_title if task_title is not None else task_display_title(view.task_id)
@@ -2027,33 +2145,29 @@ def timeline_export_text(
                 lines.append(f"Total Elapsed: {mins:02d}:{rem:04.1f} ({secs:.1f}s)")
             else:
                 lines.append(f"Total Elapsed: {secs:.1f}s")
+        else:
+            lines.append("Total Elapsed: Not recorded")
         lines.append("")
-        lines.append(f"{'CATEGORY':<24} {'TIME':<12} {'% OF TOTAL':<12} {'OPERATIONS'}")
+        lines.append(f"{'CATEGORY':<24} {'TIME':<14} {'% OF TOTAL':<12} {'OPERATIONS'}")
         for cat in timing.categories:
-            dur_str = f"{cat.total_seconds:.1f}s"
-            pct_str = f"{cat.percentage:.1f}%"
-            lines.append(f"{cat.name:<24} {dur_str:<12} {pct_str:<12} {cat.detail}")
+            dur_str = f"{cat.total_seconds:.1f}s" if cat.total_seconds is not None else "Not recorded"
+            pct_str = f"{cat.percentage:.1f}%" if cat.percentage is not None else "—"
+            lines.append(f"{cat.name:<24} {dur_str:<14} {pct_str:<12} {cat.detail}")
         lines.append("")
 
-    if not view.timeline:
-        lines.append("No events recorded.")
-        return "\n".join(lines)
-
-    boundaries = phase_boundary_sequences or frozenset()
-    in_flight_seqs = _find_in_flight_sequences(view)
-    for entry in view.timeline:
-        marker = "» " if entry.sequence in boundaries else ""
-        dur = ""
-        if entry.duration_seconds is not None:
-            if entry.duration_seconds < 60:
-                dur = f"  ({entry.duration_seconds:.1f}s)"
-            else:
-                mins = int(entry.duration_seconds // 60)
-                secs = int(entry.duration_seconds % 60)
-                dur = f"  ({mins}m {secs}s)"
-        elif entry.sequence in in_flight_seqs:
-            dur = "  (running…)"
-        lines.append(f"{marker}#{entry.sequence} {entry.summary}{dur}")
+        lines.append("TIMED OPERATIONS")
+        if not timing.timed_operations:
+            lines.append("No individual timed operations recorded.")
+        else:
+            for op in timing.timed_operations:
+                off_str = f"{int(op.start_time_offset // 60):02d}:{op.start_time_offset % 60:04.1f}" if op.start_time_offset is not None else ""
+                if op.in_flight:
+                    lines.append(f"{off_str:<7} #{op.sequence:<4} {op.label:<34} (running…)")
+                else:
+                    pct_str = f"({(op.duration_seconds / timing.total_elapsed_seconds) * 100.0:.1f}%)" if (timing.total_elapsed_seconds and timing.total_elapsed_seconds > 0) else ""
+                    lines.append(f"{off_str:<7} #{op.sequence:<4} {op.label:<34} {op.duration_seconds:.1f}s  {pct_str}")
+    else:
+        lines.append("Session timing data not recorded for this session.")
 
     return "\n".join(lines)
 

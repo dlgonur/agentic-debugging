@@ -2869,8 +2869,6 @@ class WorkspaceScreen(Screen):
             self.query_one("#verifier-pane", VerifierPanel).update_view(
                 view, evidence_state=verifier_state
             )
-        if self.query("#activity-pane"):
-            self.query_one("#activity-pane", ActivityPanel).update_view(view)
         if self.query("#timeline-pane"):
             boundaries = self._current_boundaries()
             self.query_one("#timeline-pane", TimelinePanel).update_view(view, boundaries)
@@ -2907,9 +2905,6 @@ class WorkspaceScreen(Screen):
                     ver_tab.label = "Verifier •"
                 else:
                     ver_tab.label = "Verifier"
-            act_tab = tabs.get_tab("tab-activity")
-            if act_tab:
-                act_tab.label = "Activity"
             time_tab = tabs.get_tab("tab-timeline")
             if time_tab:
                 time_tab.label = "Timeline"
@@ -3458,39 +3453,6 @@ class WorkspaceScreen(Screen):
     def action_select_tab_7(self) -> None:
         self._select_tab_index(6)
 
-    def action_filter_all(self) -> None:
-        self.action_select_tab_1()
-
-    def action_filter_lifecycle(self) -> None:
-        self.action_select_tab_2()
-
-    def action_filter_controller(self) -> None:
-        self.action_select_tab_3()
-
-    def action_filter_model(self) -> None:
-        self.action_select_tab_4()
-
-    def action_filter_debugger(self) -> None:
-        self.action_select_tab_5()
-
-    def action_filter_patch(self) -> None:
-        self.action_select_tab_6()
-
-    def action_filter_verifier(self) -> None:
-        self.action_select_tab_7()
-
-    def action_filter_tools(self) -> None:
-        pass
-
-    def _set_filter(self, name: str) -> None:
-        try:
-            panel = self._activity_panel()
-            panel.filter = name
-            if self._view is not None:
-                panel.update_view(self._view)
-        except Exception:
-            pass
-
     # -- copy all -----------------------------------------------------------
 
     def _current_view_for_copy(self) -> Optional[SessionViewState]:
@@ -3517,18 +3479,6 @@ class WorkspaceScreen(Screen):
 
         return live_export_text(view)
 
-    def _activity_copy_text(self) -> str:
-        view = self._current_view_for_copy()
-        if view is None:
-            return "No activity recorded."
-        try:
-            panel = self._activity_panel()
-            from agentic_debugger.ui.widgets import activity_export_text
-
-            return activity_export_text(view, filter_name=panel.filter)
-        except Exception:
-            return "No activity recorded."
-
     def _timeline_copy_text(self) -> str:
         view = self._current_view_for_copy()
         if view is None:
@@ -3547,25 +3497,6 @@ class WorkspaceScreen(Screen):
             view = self._current_view_for_copy()
             count = len(view.workstream) if view is not None else 0
             success = f"Copied {count} live events" if count != 1 else "Copied 1 live event"
-            self._copy_to_clipboard(text, success)
-            event.stop()
-        elif event.button.id == "copy-activity":
-            text = self._activity_copy_text()
-            # Count logical events matching current filter for acknowledgement.
-            view = self._current_view_for_copy()
-            if view is not None:
-                from agentic_debugger.ui.widgets import _ACTIVITY_FILTER_KINDS
-
-                try:
-                    allowed = _ACTIVITY_FILTER_KINDS.get(self._activity_panel().filter, frozenset())
-                    count = sum(
-                        1 for e in view.timeline if not allowed or e.event_kind.value in allowed
-                    )
-                    success = f"Copied {count} activity events" if count != 1 else "Copied 1 activity event"
-                except Exception:
-                    success = "Copied activity"
-            else:
-                success = "Copied activity"
             self._copy_to_clipboard(text, success)
             event.stop()
         elif event.button.id == "copy-timeline":

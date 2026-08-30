@@ -41,7 +41,6 @@ __all__ = [
     "DiffLineKind",
     "DiffPathKind",
     "MAX_WORKSTREAM_ENTRIES",
-    "MAX_SETTLED_MODEL_REQUESTS",
     "WorkstreamEntry",
     "WorkstreamKind",
     "WorkstreamStatus",
@@ -52,10 +51,6 @@ __all__ = [
 #: Durable retained workstream entries (tail-bounded; rendering shows far
 #: fewer).  Small because entries are semantic units, not raw events.
 MAX_WORKSTREAM_ENTRIES = 500
-
-#: Settled model-request entries retained after compaction: the recent
-#: stream emphasizes the current work, not a wall of completed requests.
-MAX_SETTLED_MODEL_REQUESTS = 2
 
 #: Tool names that read source (rendered as READ SOURCE units).
 _SOURCE_READ_TOOLS = frozenset(
@@ -581,7 +576,7 @@ def _append(
     updated = entries + (entry,)
     if len(updated) > MAX_WORKSTREAM_ENTRIES:
         updated = updated[len(updated) - MAX_WORKSTREAM_ENTRIES :]
-    return _compact_model_requests(updated)
+    return updated
 
 
 def _settle(
@@ -622,27 +617,6 @@ def _settle(
         )
         return entries[:index] + (settled,) + entries[index + 1 :]
     return entries
-
-
-def _compact_model_requests(
-    entries: Tuple[WorkstreamEntry, ...]
-) -> Tuple[WorkstreamEntry, ...]:
-    """Keep only the newest settled model-request units.
-
-    Active and failed requests are never dropped: only the monotonous wall
-    of already-completed requests is compacted, and distinct operations
-    remain represented by their newest settled member.
-    """
-    settled_indexes = [
-        index
-        for index, entry in enumerate(entries)
-        if entry.kind is WorkstreamKind.MODEL_REQUEST
-        and entry.status is WorkstreamStatus.COMPLETED
-    ]
-    if len(settled_indexes) <= MAX_SETTLED_MODEL_REQUESTS:
-        return entries
-    drop = set(settled_indexes[: len(settled_indexes) - MAX_SETTLED_MODEL_REQUESTS])
-    return tuple(entry for index, entry in enumerate(entries) if index not in drop)
 
 
 def _coalesce_completed(
@@ -755,7 +729,7 @@ def apply_workstream_event(
     )
     if folded is entries:
         return entries
-    return _compact_model_requests(folded)
+    return folded
 
 
 def _fold_workstream_event(

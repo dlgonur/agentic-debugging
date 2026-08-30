@@ -25,7 +25,6 @@ from agentic_debugger.application.presentation import (
 from agentic_debugger.application.workstream import (
     ChangePreviewLimits,
     DiffLineKind,
-    MAX_SETTLED_MODEL_REQUESTS,
     MAX_WORKSTREAM_ENTRIES,
     WorkstreamKind,
     WorkstreamStatus,
@@ -428,10 +427,14 @@ class TestWorkstreamProjection:
         assert entry.status is WorkstreamStatus.FAILED
         assert entry.detail == "transport"
 
-    def test_settled_model_requests_compact_to_last_two(self) -> None:
+    def test_settled_model_requests_retained_in_chronological_order(self) -> None:
         stream = Stream()
         for index in range(6):
             stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": index})
+            stream.emit(
+                SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+                {"action_name": "get_source_window", "directive_kind": "action", "target_state": None},
+            )
             stream.emit(
                 SessionEventKind.MODEL_REQUEST_COMPLETED,
                 {"request_index": index, "status": "ok"},
@@ -442,8 +445,10 @@ class TestWorkstreamProjection:
             if entry.kind is WorkstreamKind.MODEL_REQUEST
             and entry.status is WorkstreamStatus.COMPLETED
         ]
-        assert len(settled) == MAX_SETTLED_MODEL_REQUESTS
-        assert {entry.ordinal for entry in settled} == {5, 6}
+        assert len(settled) == 6
+        assert [entry.ordinal for entry in settled] == [1, 2, 3, 4, 5, 6]
+        for entry in settled:
+            assert entry.detail == "Inspect source"
 
     def test_change_applied_without_patch_text_lacks_preview(self) -> None:
         stream = Stream()
