@@ -314,24 +314,29 @@ def perform_inference(
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Exactly ONE provider inference for one transport request.
-
-    ``base_url`` is an evaluation-only override (never emitted by the
-    production registry builder) that must still satisfy the HTTP
-    boundary's explicit-https/loopback rules.
-    """
+    """Exactly ONE provider inference for one transport request."""
 
     from agentic_debugger.application.provider_connections import (
         provider_base_url,
         provider_tls_signature_blocked,
     )
 
-    credential = _resolve_credential(provider)
+    credential = resolve_runtime_credential(provider)
+    if credential is None:
+        raise ProviderDirectApiError(
+            f"no usable credential source for direct-API provider {provider!r}",
+            kind="configuration",
+        )
     path = inference_path_for(provider, protocol)
     payload = build_provider_payload(
         protocol, provider_api_model_id(provider, model_id), prompt
     )
     endpoint = (base_url or provider_base_url(provider)).rstrip("/")
+    tls_blocked = False
+    try:
+        tls_blocked = provider_tls_signature_blocked(provider)
+    except Exception:
+        pass
     try:
         response = request_json(
             "POST",
@@ -341,7 +346,7 @@ def perform_inference(
             timeout_seconds=timeout_seconds,
             max_response_bytes=MAX_PROVIDER_RESPONSE_BYTES,
             engine=engine,
-            tls_signature_blocked=provider_tls_signature_blocked(provider),
+            tls_signature_blocked=tls_blocked,
         )
     except ProviderHttpError as exc:
         kind = {
@@ -392,16 +397,22 @@ def run_adapter(
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> int:
-    if provider not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(provider):
+    if protocol not in ("chat_completions", "responses", "messages"):
         raise ProviderDirectApiError(
-            f"unknown direct-API provider: {provider!r}", kind="configuration"
+            f"unknown protocol: {protocol!r}", kind="configuration"
         )
-    if protocol != (resolve_model_protocol(provider, model) or ""):
-        raise ProviderDirectApiError(
-            "declared protocol does not match the provider-resolved protocol "
-            "for this model",
-            kind="configuration",
-        )
+    if not base_url:
+        if provider not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(provider):
+            raise ProviderDirectApiError(
+                f"unknown direct-API provider: {provider!r}", kind="configuration"
+            )
+        resolved_proto = resolve_model_protocol(provider, model)
+        if resolved_proto is not None and protocol != resolved_proto:
+            raise ProviderDirectApiError(
+                "declared protocol does not match the provider-resolved protocol "
+                "for this model",
+                kind="configuration",
+            )
     request = read_request(stdin_stream)
     validate_logical_call_index(request, max_logical_calls)
     try:

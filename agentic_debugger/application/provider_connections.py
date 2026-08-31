@@ -119,11 +119,12 @@ PROTOCOL_DISPLAY_LABELS = {
 }
 
 #: Providers historically built-in with direct API contracts
-DIRECT_API_PROVIDER_KINDS = ("opencode_go", "commandcode_goat")
+DIRECT_API_PROVIDER_KINDS = ("opencode_go", "commandcode_goat", "ollama_cloud")
 
 _BUILTIN_PROVIDER_LABELS = {
     "opencode_go": "OpenCode Go",
     "commandcode_goat": "CommandCode GOAT",
+    "ollama_cloud": "Ollama",
 }
 
 # -- credential sources ------------------------------------------------------
@@ -183,6 +184,19 @@ _BUILTIN_CONTRACTS: Mapping[str, _BuiltinProviderContract] = {
         catalog_model_id_pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$",
         env_var="COMMAND_CODE_API_KEY",
         session_env_var="AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+        auth_store_consumable=False,
+    ),
+    "ollama_cloud": _BuiltinProviderContract(
+        kind="ollama_cloud",
+        base_url="https://ollama.com",
+        catalog_path="/v1/models",
+        inference_paths={
+            PROTOCOL_CHAT_COMPLETIONS: "/v1/chat/completions",
+        },
+        tls_signature_blocked=False,
+        catalog_model_id_pattern=r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,127}$",
+        env_var="OLLAMA_API_KEY",
+        session_env_var="AGENTIC_DEBUGGER_OLLAMA_API_KEY",
         auth_store_consumable=False,
     ),
 }
@@ -560,21 +574,35 @@ def _default_builtin_configs() -> List[ProviderConfig]:
             builtin_kind="commandcode_goat",
             tls_signature_blocked=True,
         ),
+        ProviderConfig(
+            provider_id="ollama_cloud",
+            name="Ollama",
+            base_url="https://ollama.com",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            is_builtin=True,
+            builtin_kind="ollama_cloud",
+            tls_signature_blocked=False,
+        ),
     ]
 
 
 def provider_configurations_path() -> Path:
     """User-level persistent configuration path (NOT in Git repository)."""
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    base = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE") or os.environ.get("HOME")
+    if not base:
+        try:
+            base = str(Path.home())
+        except Exception:
+            base = tempfile.gettempdir()
     return Path(base) / "AgenticDebugger" / "provider-configurations.json"
 
 
 def load_provider_configurations() -> List[ProviderConfig]:
     """Load persistent non-secret provider configurations safely."""
-    path = provider_configurations_path()
     try:
+        path = provider_configurations_path()
         raw = path.read_bytes()
-    except OSError:
+    except Exception:
         return _default_builtin_configs()
     if len(raw) > _MAX_CONFIG_FILE_BYTES:
         return _default_builtin_configs()
@@ -753,6 +781,13 @@ def update_provider_config(
     updated = [updated_cfg if c.provider_id == provider_id else c for c in configs]
     save_provider_configurations(updated)
 
+    if provider_id in _BUILTIN_CONTRACTS:
+        from dataclasses import replace
+        _BUILTIN_CONTRACTS[provider_id] = replace(
+            _BUILTIN_CONTRACTS[provider_id],
+            base_url=new_url,
+        )
+
     if api_key and _credential_is_usable(api_key):
         save_secure_credential(provider_id, api_key.strip())
         set_session_key(provider_id, api_key.strip())
@@ -818,9 +853,6 @@ def _session_env_var_for(kind: str) -> str:
 
 def credential_source_for(kind: str) -> Optional[str]:
     """Which credential source the direct route can use right now."""
-    contract = _BUILTIN_CONTRACTS.get(kind)
-    if contract is None and not is_known_provider(kind):
-        return None
     if has_session_key(kind):
         return CREDENTIAL_SOURCE_SESSION_KEY
     session_var = _session_env_var_for(kind)
@@ -829,6 +861,7 @@ def credential_source_for(kind: str) -> Optional[str]:
     if has_secure_credential(kind):
         return CREDENTIAL_SOURCE_SAVED
 
+    contract = _BUILTIN_CONTRACTS.get(kind)
     if contract is not None:
         if contract.env_var and _credential_is_usable(os.environ.get(contract.env_var)):
             return CREDENTIAL_SOURCE_ENVIRONMENT
@@ -841,9 +874,6 @@ def credential_source_for(kind: str) -> Optional[str]:
 
 def resolve_runtime_credential(kind: str) -> Optional[str]:
     """The credential value for one direct-API request (runtime only)."""
-    contract = _BUILTIN_CONTRACTS.get(kind)
-    if contract is None and not is_known_provider(kind):
-        return None
     session_value = peek_session_key(kind)
     if session_value:
         return session_value
@@ -856,6 +886,7 @@ def resolve_runtime_credential(kind: str) -> Optional[str]:
     if saved_value and _credential_is_usable(saved_value):
         return saved_value.strip()
 
+    contract = _BUILTIN_CONTRACTS.get(kind)
     if contract is not None:
         if contract.env_var:
             env_value = os.environ.get(contract.env_var)
@@ -984,8 +1015,6 @@ def resolve_model_protocol(kind: str, model_id: str) -> Optional[str]:
 
 def provider_api_model_id(kind: str, model_id: str) -> str:
     """Exact model identity sent to a provider's direct API."""
-    if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
     if type(model_id) is not str or not model_id.strip():
         raise ProviderConnectionError("provider model id is missing")
     value = model_id.strip()
@@ -1003,16 +1032,13 @@ def inference_path_for(kind: str, protocol: str) -> str:
                 f"provider {contract.kind!r} does not expose the {protocol!r} protocol"
             )
         return path
-    cfg = get_provider_config(kind)
-    if cfg is not None:
-        if protocol == PROTOCOL_CHAT_COMPLETIONS:
-            return "/chat/completions"
-        if protocol == PROTOCOL_RESPONSES:
-            return "/responses"
-        if protocol == PROTOCOL_MESSAGES:
-            return "/messages"
-        raise ProviderConnectionError(f"unsupported protocol: {protocol!r}")
-    raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+    if protocol == PROTOCOL_CHAT_COMPLETIONS:
+        return "/chat/completions"
+    if protocol == PROTOCOL_RESPONSES:
+        return "/responses"
+    if protocol == PROTOCOL_MESSAGES:
+        return "/messages"
+    raise ProviderConnectionError(f"unsupported protocol: {protocol!r}")
 
 
 def provider_base_url(kind: str) -> str:
@@ -1020,7 +1046,7 @@ def provider_base_url(kind: str) -> str:
     if contract is not None:
         return contract.base_url
     cfg = get_provider_config(kind)
-    if cfg is not None:
+    if cfg is not None and cfg.base_url:
         return cfg.base_url
     raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
 
@@ -1030,7 +1056,9 @@ def provider_tls_signature_blocked(kind: str) -> bool:
     if contract is not None:
         return contract.tls_signature_blocked
     cfg = get_provider_config(kind)
-    return cfg.tls_signature_blocked if cfg is not None else False
+    if cfg is not None:
+        return cfg.tls_signature_blocked
+    return False
 
 
 # -- discovered models and snapshots -----------------------------------------
@@ -1330,18 +1358,23 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
     source = credential_source_for(kind)
     model_count, last_refresh, refresh_source, stale, cached = _cached_status_fields(kind)
 
-    if contract is not None:
-        label = _BUILTIN_PROVIDER_LABELS.get(kind, kind)
-        base_url_desc = describe_url(contract.base_url + contract.catalog_path)
-        api_format = PROTOCOL_CHAT_COMPLETIONS
-        enabled = True
-        is_builtin = True
-    else:
+    if cfg is not None:
         label = cfg.name
         base_url_desc = describe_url(cfg.base_url)
         api_format = cfg.api_format
         enabled = cfg.enabled
         is_builtin = cfg.is_builtin
+        if not cached and cfg.models:
+            cached = cfg.models
+            model_count = len(cfg.models)
+            last_refresh = cfg.last_refresh_utc
+            refresh_source = cfg.last_refresh_source
+    elif contract is not None:
+        label = _BUILTIN_PROVIDER_LABELS.get(kind, kind)
+        base_url_desc = describe_url(contract.base_url)
+        api_format = PROTOCOL_CHAT_COMPLETIONS
+        enabled = True
+        is_builtin = True
 
     message: Optional[str] = None
     if source is None:

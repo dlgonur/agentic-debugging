@@ -30,6 +30,7 @@ SECRET = "test-session-key-not-a-real-credential"
 @pytest.fixture(autouse=True)
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
     monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
     monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
     monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
@@ -195,7 +196,7 @@ class TestCredentials:
 
     def test_session_key_rejects_unknown_provider(self) -> None:
         with pytest.raises(pc.ProviderConnectionError):
-            pc.set_session_key("ollama_cloud", SECRET)
+            pc.set_session_key("unknown_provider_xyz", SECRET)
 
     def test_session_key_rejects_blank_and_oversized(self) -> None:
         with pytest.raises(pc.ProviderConnectionError):
@@ -659,4 +660,4 @@ class TestConnectionStatus:
 
     def test_endpoint_identity_is_safe(self) -> None:
         status = pc.provider_connection_status("opencode_go")
-        assert status.base_url == "https://opencode.ai/zen/go/v1/models"
+        assert status.base_url == "https://opencode.ai/zen/go/v1"

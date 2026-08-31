@@ -94,6 +94,7 @@ class TestModelListing:
         from agentic_debugger.application import provider_connections as pc
 
         monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent-cache.json")
+        monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "absent-config.json")
         monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
 
     def test_grouped_listing_annotates_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -61,6 +61,9 @@ class _FakeStdin:
 def _clean_session_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     pc.clear_all_session_keys()
     monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
+    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
+    monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
     for name in (
         "OPENCODE_API_KEY",
         "COMMAND_CODE_API_KEY",

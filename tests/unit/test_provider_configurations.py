@@ -1,8 +1,11 @@
-"""Unit tests for generic provider configurations, persistence, and credentials."""
+"""Unit tests for generic provider configurations, persistence, credentials, and cross-process execution."""
 
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -23,6 +26,8 @@ from agentic_debugger.application.provider_connections import (
     list_configured_providers,
     load_provider_configurations,
     provider_api_model_id,
+    provider_base_url,
+    provider_transport_credential_environment,
     refresh_provider_catalog,
     resolve_model_protocol,
     resolve_runtime_credential,
@@ -37,7 +42,14 @@ from agentic_debugger.application.provider_connections import (
 from agentic_debugger.application.model_providers import (
     list_provider_models,
     resolve_provider_live_config,
+    provider_transport_environment,
+    format_model_display_name,
 )
+from agentic_debugger.application.level32 import level32_model_profiles
+
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT / "tests" / "unit"))
+from fake_provider_server import FakeProviderServer, scripted_chat_completion
 
 
 @pytest.fixture(autouse=True)
@@ -72,21 +84,30 @@ def _isolate_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def test_builtin_providers_default_present():
-    """Default configuration contains built-in providers (OpenCode and CommandCode)."""
+    """Default configuration contains built-in providers (OpenCode, CommandCode, and Ollama)."""
     configs = list_configured_providers()
     provider_ids = [c.provider_id for c in configs]
     assert "opencode_go" in provider_ids
     assert "commandcode_goat" in provider_ids
+    assert "ollama_cloud" in provider_ids
 
     opencode = get_provider_config("opencode_go")
     assert opencode is not None
     assert opencode.is_builtin is True
     assert opencode.api_format == PROTOCOL_CHAT_COMPLETIONS
+    assert opencode.base_url == "https://opencode.ai/zen/go/v1"
 
     commandcode = get_provider_config("commandcode_goat")
     assert commandcode is not None
     assert commandcode.is_builtin is True
     assert commandcode.api_format == PROTOCOL_CHAT_COMPLETIONS
+    assert commandcode.base_url == "https://api.commandcode.ai/provider/v1"
+
+    ollama = get_provider_config("ollama_cloud")
+    assert ollama is not None
+    assert ollama.is_builtin is True
+    assert ollama.api_format == PROTOCOL_CHAT_COMPLETIONS
+    assert ollama.base_url == "https://ollama.com"
 
 
 def test_crud_custom_provider():
@@ -133,6 +154,20 @@ def test_builtin_cannot_be_deleted():
     """Built-in provider configs cannot be deleted."""
     assert delete_provider_config("opencode_go") is False
     assert get_provider_config("opencode_go") is not None
+    assert delete_provider_config("commandcode_goat") is False
+    assert get_provider_config("commandcode_goat") is not None
+    assert delete_provider_config("ollama_cloud") is False
+    assert get_provider_config("ollama_cloud") is not None
+
+
+def test_builtin_provider_edit_is_authoritative_for_general_runtime():
+    """Persisted edits to built-in provider base URL are respected by runtime helpers."""
+    updated = update_provider_config(
+        provider_id="opencode_go",
+        base_url="https://custom.opencode.gateway.test/v1",
+    )
+    assert updated.base_url == "https://custom.opencode.gateway.test/v1"
+    assert provider_base_url("opencode_go") == "https://custom.opencode.gateway.test/v1"
 
 
 def test_manual_model_addition():
@@ -145,7 +180,7 @@ def test_manual_model_addition():
     added = add_manual_model("custom_ai", "claude-3-7-sonnet", "Claude 3.7 Sonnet")
     assert added is not None
     assert added.model_id == "claude-3-7-sonnet"
-    
+
     updated = get_provider_config("custom_ai")
     assert updated is not None
     assert len(updated.models) == 1
@@ -160,9 +195,10 @@ def test_malformed_json_fallback(tmp_path: Path):
     config_file.write_text("{corrupt json content...", encoding="utf-8")
 
     configs = load_provider_configurations()
-    # Returns safe fallback with defaults
-    assert len(configs) >= 2
+    assert len(configs) >= 3
     assert any(c.provider_id == "opencode_go" for c in configs)
+    assert any(c.provider_id == "commandcode_goat" for c in configs)
+    assert any(c.provider_id == "ollama_cloud" for c in configs)
 
 
 def test_provider_identity_preservation_and_no_ollama_leakage():
@@ -182,30 +218,104 @@ def test_provider_identity_preservation_and_no_ollama_leakage():
     assert "ollama" not in prov["provider"].lower()
 
 
-def test_same_model_id_across_different_providers():
-    """Same model ID on different providers remains distinct and correctly routed."""
+def test_capability_ladder_isolation_with_ollama_and_custom_providers():
+    """Adding custom providers or general Ollama models never affects Capability Ladder qualification."""
     add_provider_config(
-        name="Provider A",
-        base_url="https://api.a.com/v1",
+        name="Custom Fast Provider",
+        base_url="https://api.fast.ai/v1",
         api_format=PROTOCOL_CHAT_COMPLETIONS,
     )
-    add_manual_model("provider_a", "llama-3-8b", "Llama 3 8B")
-    set_session_key("provider_a", "key-a")
+    add_manual_model("custom_fast_provider", "llama-3.3-70b", "Llama 3.3 70B")
 
-    add_provider_config(
-        name="Provider B",
-        base_url="https://api.b.com/v1",
-        api_format=PROTOCOL_CHAT_COMPLETIONS,
+    ladder_profiles = level32_model_profiles()
+    ladder_profile_ids = {p.profile_id for p in ladder_profiles}
+
+    # Custom model is NOT in ladder roster
+    assert "llama-3.3-70b" not in ladder_profile_ids
+    # General Ollama model not in scientific roster is absent
+    assert "glm-5.3-flash:cloud" not in ladder_profile_ids
+    # Qualified scientific models are present
+    assert "deepseek-v4-flash:cloud" in ladder_profile_ids
+
+
+def test_adapter_command_contract_reconciled_with_timeout_flag():
+    """Application builder constructs adapter command with --timeout, not --request-timeout-seconds."""
+    set_session_key("commandcode_goat", "secret-cc-key")
+    live_cfg, prov = resolve_provider_live_config(
+        "commandcode_goat", "deepseek/deepseek-v4-flash", request_timeout_seconds=45.0
     )
-    add_manual_model("provider_b", "llama-3-8b", "Llama 3 8B")
-    set_session_key("provider_b", "key-b")
+    cmd = list(live_cfg.command)
+    assert "--timeout" in cmd
+    assert "--request-timeout-seconds" not in cmd
+    idx = cmd.index("--timeout")
+    assert cmd[idx + 1] == "45"
+    assert "--base-url" in cmd
+    assert "secret-cc-key" not in cmd
 
-    live_a, prov_a = resolve_provider_live_config("provider_a", "llama-3-8b")
-    live_b, prov_b = resolve_provider_live_config("provider_b", "llama-3-8b")
 
-    assert prov_a["provider"] == "provider_a"
-    assert prov_b["provider"] == "provider_b"
-    assert live_a.configuration_fingerprint != live_b.configuration_fingerprint
+def test_custom_provider_cross_process_inference_survives_process_boundary():
+    """Deterministic cross-process regression for custom provider adapter execution."""
+    directive_json = '{"kind": "action", "name": "get_source_window", "arguments": {"path": "a.py", "start_line": 1, "end_line": 10}}'
+
+    with FakeProviderServer(
+        lambda req: (200, scripted_chat_completion(directive_json))
+    ) as server:
+        # 1. Persist custom provider
+        cfg = add_provider_config(
+            name="Custom Fake Provider",
+            base_url=server.base_url,
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="custom_fake_prov",
+        )
+        # 2. Add manual model
+        add_manual_model("custom_fake_prov", "my-test-model-1", "My Test Model 1")
+        # 3. Set session key
+        secret_key = "custom-secret-key-xyz-777"
+        set_session_key("custom_fake_prov", secret_key)
+
+        # 4. Resolve live config via real application resolver
+        live_cfg, prov = resolve_provider_live_config("custom_fake_prov", "my-test-model-1")
+        assert prov["provider"] == "custom_fake_prov"
+        assert prov["route"] == "direct_api"
+        assert prov["endpoint"] == server.base_url
+
+        # 5. Build transport environment and check credential absence from argv
+        child_env = dict(os.environ)
+        transport_env = provider_transport_environment("custom_fake_prov")
+        assert transport_env is not None
+        child_env.update(transport_env)
+        # Strip home/localappdata to prove isolation survival
+        child_env.pop("LOCALAPPDATA", None)
+        child_env.pop("USERPROFILE", None)
+        child_env.pop("HOME", None)
+        child_env["PYTHONIOENCODING"] = "utf-8"
+
+        assert secret_key not in live_cfg.command
+
+        # 6. Execute actual adapter subprocess
+        request_data = {
+            "protocol": {"version": "1.3", "logical_model_call_index": 0},
+            "context": {"task_id": "test-task", "state": "UNDERSTAND"},
+        }
+        result = subprocess.run(
+            list(live_cfg.command),
+            input=(json.dumps(request_data) + "\n").encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            env=child_env,
+        )
+        assert result.returncode == 0, f"Adapter failed: {result.stderr.decode('utf-8', errors='replace')}"
+        stdout_text = result.stdout.decode("utf-8", errors="replace")
+        stderr_text = result.stderr.decode("utf-8", errors="replace")
+
+        assert secret_key not in stdout_text
+        assert secret_key not in stderr_text
+
+        # 7. Check that fake server received the request with custom endpoint and bearer header
+        assert len(server.requests) == 1
+        assert server.requests[0]["authorization"] == f"Bearer {secret_key}"
+        assert server.requests[0]["path"] == "/chat/completions"
 
 
 def test_normalize_discovered_models():
