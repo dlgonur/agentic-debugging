@@ -1256,67 +1256,8 @@ def _short_unavailable_reason(reason: Optional[str]) -> str:
     return text or "unavailable"
 
 
-class MaskedKeyEditorScreen(Screen):
-    """Masked API-key entry: memory-only, never persisted or re-shown.
-
-    The repository has no durable secret store, so a pasted key is
-    kept process-local for this app session only.  The screen states
-    that plainly, masks the value while typing, and never renders the
-    submitted value again.
-    """
-
-    BINDINGS = [
-        Binding("escape", "cancel", "Cancel"),
-        Binding("enter", "save", "Save", show=False),
-    ]
-
-    def __init__(
-        self,
-        *,
-        title: str,
-        on_save: Callable[[Optional[str]], None],
-        note: str = "",
-    ) -> None:
-        super().__init__()
-        self.title_text = title
-        self.note_text = note
-        self._on_save = on_save
-
-    def compose(self) -> ComposeResult:
-        with Vertical(id="single-line-dialog"):
-            yield Static(self.title_text, id="single-line-title")
-            yield Input(
-                password=True, placeholder="paste API key", id="masked-key-editor"
-            )
-            if self.note_text:
-                yield Static(self.note_text, id="single-line-note")
-            with Horizontal(id="single-line-actions"):
-                yield Button("Connect", id="single-line-save-button", classes="primary-action")
-            yield Static("Enter connect    Esc cancel", id="single-line-hint")
-
-    def on_mount(self) -> None:
-        self.query_one("#masked-key-editor", Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.action_save()
-        event.stop()
-
-    def action_save(self) -> None:
-        raw = self.query_one("#masked-key-editor", Input).value
-        self.app.pop_screen()
-        self._on_save(raw.strip() or None)
-
-    def action_cancel(self) -> None:
-        self.app.pop_screen()
-        self._on_save(None)
-
-    def on_button_pressed(self, event: Any) -> None:
-        if getattr(event.button, "id", None) == "single-line-save-button":
-            self.action_save()
-            event.stop()
-
-
 _PROVIDER_CREDENTIAL_SOURCE_LABELS = {
+    "saved": "Saved credential",
     "session_key": "Session API key (memory-only)",
     "environment": "Environment variable",
     "cli_auth_store": "CLI auth (read in place)",
@@ -1335,10 +1276,10 @@ class ModelProvidersScreen(Screen):
     """
 
     PROVIDERS_HINT = (
-        "↑/↓ select   r refresh models   k connect key   a add provider   e edit provider   esc back"
+        "↑/↓ select   r refresh models   a add provider   e edit provider   esc back"
     )
     PROVIDERS_HINT_COMPACT = (
-        "↑/↓ select   r refresh   k key   a add   e edit   esc back"
+        "↑/↓ select   r refresh   a add   e edit   esc back"
     )
 
     BINDINGS = [
@@ -1346,7 +1287,6 @@ class ModelProvidersScreen(Screen):
         Binding("up", "select_previous", "Previous provider", show=False),
         Binding("down", "select_next", "Next provider", show=False),
         Binding("r", "refresh", "Refresh models"),
-        Binding("k", "connect_key", "Connect API key"),
         Binding("a", "add_provider", "Add provider"),
         Binding("e", "edit_provider", "Edit provider"),
         Binding("d", "delete_provider", "Delete provider"),
@@ -1396,11 +1336,6 @@ class ModelProvidersScreen(Screen):
                                     yield Button(
                                         "Refresh models",
                                         id=f"provider-refresh-button-{st.kind}",
-                                        classes="provider-action-button",
-                                    )
-                                    yield Button(
-                                        "Connect API key",
-                                        id=f"provider-key-button-{st.kind}",
                                         classes="provider-action-button",
                                     )
                                     yield Button(
@@ -1536,7 +1471,7 @@ class ModelProvidersScreen(Screen):
             elif status.connected:
                 models_list.update("[dim]No models discovered yet. Click 'Refresh models' or '+ Add model'.[/]")
             else:
-                models_list.update("[dim]Connect API key and refresh models to discover available models.[/]")
+                models_list.update("[dim]No usable credential — edit provider to add an API key and refresh models.[/]")
 
         status_widget = self.query_one("#providers-status", Static)
         status_widget.update(self._message)
@@ -1610,39 +1545,6 @@ class ModelProvidersScreen(Screen):
             self._set_message(f"Refresh failed — {detail}")
         self.render_state()
 
-    def action_connect_key(self) -> None:
-        kind = self._selected_kind()
-        label = self._selected_label()
-
-        def handle(value: Optional[str]) -> None:
-            if value:
-                from agentic_debugger.application.provider_connections import (
-                    save_secure_credential,
-                    set_session_key,
-                )
-
-                try:
-                    set_session_key(kind, value)
-                    saved = save_secure_credential(kind, value)
-                    if saved:
-                        self._set_message("API key: saved securely in OS credential manager")
-                    else:
-                        self._set_message("API key: connected for this app session (memory-only)")
-                except Exception as exc:
-                    self._set_message(f"API key rejected: {exc}")
-            self.render_state()
-
-        self.app.push_screen(
-            MaskedKeyEditorScreen(
-                title=f"Connect API key for {label}",
-                note=(
-                    "Saved securely in Windows Credential Manager.\n"
-                    "Falls back to session-only memory if unavailable."
-                ),
-                on_save=handle,
-            )
-        )
-
     def action_add_provider(self) -> None:
         def on_saved(new_cfg):
             if new_cfg:
@@ -1715,11 +1617,6 @@ class ModelProvidersScreen(Screen):
             self._selected_index = self._index_of(kind)
             self.action_refresh()
             event.stop()
-        elif button_id.startswith("provider-key-button-"):
-            kind = button_id.removeprefix("provider-key-button-")
-            self._selected_index = self._index_of(kind)
-            self.action_connect_key()
-            event.stop()
         elif button_id.startswith("provider-edit-button-"):
             kind = button_id.removeprefix("provider-edit-button-")
             self._selected_index = self._index_of(kind)
@@ -1777,6 +1674,10 @@ class AddProviderDialogScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._do_save()
+        event.stop()
 
     def action_cancel(self) -> None:
         self.app.pop_screen()
@@ -1854,6 +1755,24 @@ class EditProviderDialogScreen(Screen):
         self._format = config.api_format
 
     def compose(self) -> ComposeResult:
+        from agentic_debugger.application.provider_connections import (
+            credential_source_for,
+            CREDENTIAL_SOURCE_SAVED,
+            CREDENTIAL_SOURCE_SESSION_KEY,
+            CREDENTIAL_SOURCE_ENVIRONMENT,
+            CREDENTIAL_SOURCE_CLI_AUTH_STORE,
+        )
+
+        source = credential_source_for(self._config.provider_id)
+        if source in (CREDENTIAL_SOURCE_SAVED, CREDENTIAL_SOURCE_SESSION_KEY):
+            cred_status = "Credential: saved securely"
+        elif source == CREDENTIAL_SOURCE_ENVIRONMENT:
+            cred_status = "Credential: environment variable"
+        elif source == CREDENTIAL_SOURCE_CLI_AUTH_STORE:
+            cred_status = "Credential: CLI auth (read in place)"
+        else:
+            cred_status = "Credential: none configured"
+
         with Vertical(id="provider-dialog-card"):
             yield Static(f"EDIT PROVIDER: {self._config.name}", id="dialog-title")
             yield Static("Provider Name", classes="dialog-label")
@@ -1862,6 +1781,7 @@ class EditProviderDialogScreen(Screen):
             yield Input(value=self._config.base_url, id="input-url")
             yield Static("API Key (leave blank to keep current)", classes="dialog-label")
             yield Input(password=True, placeholder="new API key", id="input-key")
+            yield Static(cred_status, id="dialog-credential-status", classes="dialog-cred-status")
             yield Static("API Protocol Format", classes="dialog-label")
             with Horizontal(id="format-buttons-row"):
                 yield Button("Chat Completions", id="fmt-chat", classes=f"fmt-btn {'-selected' if self._format == 'chat_completions' else ''}")
@@ -1874,6 +1794,10 @@ class EditProviderDialogScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#input-name", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self._do_save()
+        event.stop()
 
     def action_cancel(self) -> None:
         self.app.pop_screen()

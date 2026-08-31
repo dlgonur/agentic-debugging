@@ -1385,13 +1385,13 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
         if kind == "commandcode_goat":
             message = (
                 f"Not connected — direct API needs {contract.env_var} or an API key "
-                "entered for this app session (the CLI auth store is not "
-                "readable by the direct route)"
+                "(the CLI auth store is not readable by the direct route; "
+                "edit provider to add an API key)"
             )
         elif kind == "opencode_go":
-            message = "Not connected — no usable credential source found"
+            message = "Not connected — no usable credential source found (edit provider to add an API key)"
         else:
-            message = "Not connected — no usable credential source found"
+            message = "Not connected — no usable credential source found (edit provider to add an API key)"
 
     return ProviderConnectionStatus(
         kind=kind,
@@ -1446,13 +1446,13 @@ def refresh_provider_catalog(
     provider_label = _BUILTIN_PROVIDER_LABELS.get(kind, cfg.name if cfg else kind)
     if not resolved:
         env_hint = (
-            f"set {contract.env_var}"
+            f"set {contract.env_var} or "
             if (contract and contract.env_var)
-            else "connect an API key"
+            else ""
         )
         raise ProviderConnectionError(
             f"{provider_label}: no usable credential source — "
-            f"{env_hint} or connect an API key for this app session"
+            f"{env_hint}edit provider to add an API key"
         )
 
     base = (cfg.base_url if cfg and cfg.base_url else (contract.base_url if contract else "")).rstrip("/")

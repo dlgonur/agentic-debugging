@@ -167,6 +167,51 @@ def test_builtin_provider_edit_is_authoritative_for_general_runtime():
     assert provider_base_url("opencode_go") == "https://custom.opencode.gateway.test/v1"
 
 
+def test_edit_provider_credential_update_and_preservation():
+    """Editing a provider with a new API key updates secure storage; blank API key preserves existing credential."""
+    # 1. Add custom provider with initial API key
+    cfg = add_provider_config(
+        name="Mistral Direct",
+        base_url="https://api.mistral.ai/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        api_key="initial-mistral-key-111",
+    )
+    assert has_session_key("mistral_direct") is True
+    assert resolve_runtime_credential("mistral_direct") == "initial-mistral-key-111"
+
+    # 2. Update with new API key -> replaces credential
+    update_provider_config(
+        provider_id="mistral_direct",
+        api_key="updated-mistral-key-222",
+    )
+    assert resolve_runtime_credential("mistral_direct") == "updated-mistral-key-222"
+
+    # 3. Update unrelated metadata with blank / None api_key -> PRESERVES existing credential
+    update_provider_config(
+        provider_id="mistral_direct",
+        base_url="https://api.mistral.ai/v2",
+        api_key=None,
+    )
+    assert resolve_runtime_credential("mistral_direct") == "updated-mistral-key-222"
+    assert get_provider_config("mistral_direct").base_url == "https://api.mistral.ai/v2"
+
+    # 4. Built-in provider (CommandCode GOAT) credential update and preservation
+    update_provider_config(
+        provider_id="commandcode_goat",
+        api_key="goat-fake-key-999",
+    )
+    assert resolve_runtime_credential("commandcode_goat") == "goat-fake-key-999"
+
+    # Update CommandCode GOAT base_url leaving api_key blank -> credential preserved
+    update_provider_config(
+        provider_id="commandcode_goat",
+        base_url="https://api.commandcode.ai/provider/v2",
+        api_key=None,
+    )
+    assert resolve_runtime_credential("commandcode_goat") == "goat-fake-key-999"
+    assert get_provider_config("commandcode_goat").base_url == "https://api.commandcode.ai/provider/v2"
+
+
 def test_manual_model_addition():
     """Can manually add model identifiers to a provider."""
     cfg = add_provider_config(

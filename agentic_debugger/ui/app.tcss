@@ -453,7 +453,7 @@ BugDescriptionEditorScreen {
     color: $error;
 }
 
-SingleLineFieldEditorScreen, _SingleLineEditorScreen, MaskedKeyEditorScreen {
+SingleLineFieldEditorScreen, _SingleLineEditorScreen {
     align: center middle;
     background: $background 90%;
 }
@@ -475,7 +475,7 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen, MaskedKeyEditorScreen {
     text-style: bold;
 }
 
-#single-line-editor, #masked-key-editor {
+#single-line-editor {
     width: 1fr;
     height: 1;
     min-height: 1;
@@ -485,7 +485,7 @@ SingleLineFieldEditorScreen, _SingleLineEditorScreen, MaskedKeyEditorScreen {
     padding: 0 1;
 }
 
-#single-line-editor:focus, #masked-key-editor:focus {
+#single-line-editor:focus {
     border: round $focus-ring;
 }
 
@@ -1033,6 +1033,12 @@ AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen {
     background: $background;
     border: round $line;
     color: $foreground;
+}
+
+.dialog-cred-status {
+    height: auto;
+    color: $foreground-muted;
+    margin: 0 0 1 0;
 }
 
 #format-buttons-row {

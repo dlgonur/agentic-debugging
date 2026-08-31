@@ -26,7 +26,9 @@ from agentic_debugger.application.model_providers import ProviderModel  # noqa: 
 from agentic_debugger.application import provider_connections as pc  # noqa: E402
 from agentic_debugger.ui.app import LocalApplicationV1  # noqa: E402
 from agentic_debugger.ui.screens import (  # noqa: E402
+    AddProviderDialogScreen,
     ChoicePickerScreen,
+    EditProviderDialogScreen,
     ProviderConnectionsScreen,
     StartSessionScreen,
 )
@@ -105,7 +107,7 @@ def test_provider_connections_screen_renders_both_providers(
     run_headless(app, actions, size=(100, 30))
 
 
-def test_provider_screen_keyboard_refresh_and_key_entry(
+def test_provider_screen_keyboard_refresh_and_removed_k_shortcut(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     app = make_app(tmp_path)
@@ -135,31 +137,10 @@ def test_provider_screen_keyboard_refresh_and_key_entry(
         status_line = str(screen.query_one("#providers-status").render().plain)
         assert "33" in status_line
 
-        # k opens the masked key editor; a submitted value is typed
-        # via real pilot keyboard events and never rendered back.
+        # Pressing 'k' must no longer open any key-editor modal; screen remains ProviderConnectionsScreen
         await pilot.press("k")
         await pilot.pause()
-        from agentic_debugger.ui.screens import MaskedKeyEditorScreen
-
-        editor = pilot.app.screen
-        assert isinstance(editor, MaskedKeyEditorScreen)
-        from textual.widgets import Input
-
-        inp = editor.query_one("#masked-key-editor", Input)
-        assert pilot.app.focused is inp
-        assert inp.password is True
-        await pilot.press(*list(SECRET))
-        await pilot.pause()
-        assert inp.value == SECRET
-        await pilot.press("enter")
-        await pilot.pause()
-        assert pc.has_session_key("opencode_go") is True
-        for node in screen.query("*"):
-            try:
-                plain = node.render().plain if hasattr(node, "render") else ""
-            except Exception:
-                plain = ""
-            assert SECRET not in str(plain)
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
 
     run_headless(app, actions, size=(100, 30))
 
@@ -322,7 +303,8 @@ def test_provider_action_labels_are_visible_in_rendered_terminal(
         await pilot.pause()
         rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
         assert "Refresh models" in rendered_svg
-        assert "Connect API key" in rendered_svg
+        assert "Edit provider" in rendered_svg
+        assert "Connect API key" not in rendered_svg
 
     run_headless(app, actions, size=size)
 
@@ -442,7 +424,7 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
 
 
 def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Action buttons render full labels and footer hint adapts to geometry."""
+    """Action buttons render full labels and footer hint adapts to geometry without obsolete key shortcut."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
@@ -462,24 +444,31 @@ def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch
 
         # Check hint on wide screen
         hint = screen.query_one("#providers-hint")
-        assert str(hint.render().plain).startswith("↑/↓ select   r refresh models")
+        assert str(hint.render().plain) == "↑/↓ select   r refresh models   a add provider   e edit provider   esc back"
 
         # Test compact resize
         screen._update_hint(80)
-        assert str(hint.render().plain).startswith("↑/↓ select   r refresh   k key")
+        assert str(hint.render().plain) == "↑/↓ select   r refresh   a add   e edit   esc back"
+        assert "k key" not in str(hint.render().plain)
+        assert "Connect API key" not in str(hint.render().plain)
 
     run_headless(app, actions, size=(100, 30))
 
 
 def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Add Provider dialog has Save & discover button and auto-refreshes on credentialed save."""
+    """Add Provider dialog supports real pilot typing into API Key field and auto-refreshes on credentialed save."""
     from textual.widgets import Input, Button
-    from agentic_debugger.ui.screens import AddProviderDialogScreen
 
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
+    )
+    fake_key = "test-fast-pilot-key-88"
+    received_keys: dict[str, str] = {}
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda kind, key: received_keys.__setitem__(kind, key) or True,
     )
     app = make_app(tmp_path)
 
@@ -492,6 +481,7 @@ def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest
         # Click + Add provider
         await pilot.click("#provider-add-button")
         await pilot.pause()
+        from agentic_debugger.ui.screens import AddProviderDialogScreen
         add_dlg = pilot.app.screen
         assert isinstance(add_dlg, AddProviderDialogScreen)
 
@@ -499,15 +489,31 @@ def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest
         save_btn = add_dlg.query_one("#btn-save-dialog", Button)
         assert str(save_btn.label) == "Save & discover"
 
-        # Fill valid details
-        add_dlg.query_one("#input-name", Input).value = "Fast Inference Corp"
-        add_dlg.query_one("#input-url", Input).value = "https://api.fastinference.corp/v1"
-        add_dlg.query_one("#input-key", Input).value = "test-fast-key"
+        # Fill details
+        name_inp = add_dlg.query_one("#input-name", Input)
+        name_inp.value = "Fast Inference Corp"
+        url_inp = add_dlg.query_one("#input-url", Input)
+        url_inp.value = "https://api.fastinference.corp/v1"
+
+        # Type fake key into password field via real Pilot typing
+        key_inp = add_dlg.query_one("#input-key", Input)
+        assert key_inp.password is True
+        key_inp.focus()
+        await pilot.pause()
+        await pilot.press(*list(fake_key + "123"))
+        await pilot.pause()
+        await pilot.press("backspace", "backspace", "backspace")
+        await pilot.pause()
+        assert key_inp.value == fake_key
+
+        # Plaintext fake key never rendered in UI/screenshot
+        rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
+        assert fake_key not in rendered_svg
 
         await pilot.click("#btn-save-dialog")
         await pilot.pause()
 
-        # Check that provider was added
+        # Check that provider was added and credential saved
         cfg = pc.get_provider_config("fast_inference_corp")
         assert cfg is not None
         assert cfg.name == "Fast Inference Corp"
@@ -516,90 +522,34 @@ def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest
     run_headless(app, actions, size=(100, 30))
 
 
-def test_connect_api_key_modal_displays_user_facing_display_name_and_concise_note(tmp_path: Path) -> None:
-    """Connect API key modal displays configured display name and concise security note."""
-    from agentic_debugger.ui.screens import MaskedKeyEditorScreen, Static
-
-    app = make_app(tmp_path)
-
-    async def actions(pilot):
-        await pilot.press("m")
-        await pilot.pause()
-        screen = pilot.app.screen
-        assert isinstance(screen, ProviderConnectionsScreen)
-
-        # Select CommandCode GOAT (index 1 in standard list)
-        screen._selected_index = 1
-        screen.render_state()
-        await pilot.press("k")
-        await pilot.pause()
-
-        modal = pilot.app.screen
-        assert isinstance(modal, MaskedKeyEditorScreen)
-        title_static = modal.query_one("#single-line-title", Static)
-        assert str(title_static.render().plain) == "Connect API key for CommandCode GOAT"
-
-        note_static = modal.query_one("#single-line-note", Static)
-        note_plain = str(note_static.render().plain)
-        assert "Saved securely in Windows Credential Manager." in note_plain
-        assert "Falls back to session-only memory if unavailable." in note_plain
-
-        await pilot.press("escape")
-        await pilot.pause()
-
-    run_headless(app, actions, size=(100, 30))
-
-
-@pytest.mark.parametrize("geometry", [(120, 32), (100, 30), (80, 24)])
-def test_connect_api_key_modal_is_centered_across_geometries(
-    tmp_path: Path, geometry: tuple[int, int]
-) -> None:
-    """Connect API key modal is horizontally and vertically centered at various window sizes."""
-    from agentic_debugger.ui.screens import MaskedKeyEditorScreen
-
-    app = make_app(tmp_path)
-
-    async def actions(pilot):
-        await pilot.press("m")
-        await pilot.pause()
-        await pilot.press("k")
-        await pilot.pause()
-
-        modal = pilot.app.screen
-        assert isinstance(modal, MaskedKeyEditorScreen)
-        assert modal.styles.align == ("center", "middle")
-
-        dialog = modal.query_one("#single-line-dialog")
-        w, h = geometry
-        # Dialog region must be bounded and strictly within the viewport
-        assert dialog.region.width <= min(70, w)
-        assert dialog.region.x >= 0
-        assert dialog.region.y >= 0
-        assert dialog.region.x + dialog.region.width <= w
-        assert dialog.region.y + dialog.region.height <= h
-
-        # Check horizontal centering (margins approximately equal within 1 col)
-        left_margin = dialog.region.x
-        right_margin = w - (dialog.region.x + dialog.region.width)
-        assert abs(left_margin - right_margin) <= 2
-
-        # Check vertical centering (margins approximately equal within 1 row)
-        top_margin = dialog.region.y
-        bottom_margin = h - (dialog.region.y + dialog.region.height)
-        assert abs(top_margin - bottom_margin) <= 2
-
-    run_headless(app, actions, size=geometry)
-
-
-def test_connect_api_key_commandcode_goat_pilot_typing_and_editing_regression(
+def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation_flow(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Production regression: real keyboard typing, backspace editing, and Enter connection for CommandCode GOAT."""
-    fake_key = "fake-sk-goat-connect-99"
-    received_keys: dict[str, str] = {}
+    """Acceptance regression: CommandCode GOAT -> Edit provider exposes API key input, real typing works,
+
+    saving reaches secure storage, secret is never rendered, reopening displays status without secret,
+    and editing unrelated fields with blank API key preserves the saved credential.
+    """
+    from textual.widgets import Input
+
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    fake_key = "fake-sk-goat-edit-key-42"
+    secure_store: dict[str, str] = {}
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.save_secure_credential",
-        lambda kind, key: received_keys.__setitem__(kind, key) or True,
+        lambda kind, key: secure_store.__setitem__(kind, key) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_secure_credential",
+        lambda kind: secure_store.get(kind),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.has_secure_credential",
+        lambda kind: kind in secure_store,
     )
 
     app = make_app(tmp_path)
@@ -616,57 +566,187 @@ def test_connect_api_key_commandcode_goat_pilot_typing_and_editing_regression(
         await pilot.pause()
         assert screen._selected_kind() == "commandcode_goat"
 
-        # 3. Open Connect API key
-        await pilot.press("k")
+        # 3. Open Edit provider via 'e' key
+        await pilot.press("e")
         await pilot.pause()
-        from agentic_debugger.ui.screens import MaskedKeyEditorScreen
-        from textual.widgets import Input
+        edit_dlg = pilot.app.screen
+        assert isinstance(edit_dlg, EditProviderDialogScreen)
 
-        modal = pilot.app.screen
-        assert isinstance(modal, MaskedKeyEditorScreen)
+        # 4. Confirm Edit provider exposes API Key input with password=True
+        inp_key = edit_dlg.query_one("#input-key", Input)
+        assert inp_key.password is True
+        assert inp_key.value == ""  # Never prepopulates existing secret
 
-        # 4. Confirm masked Input has focus
-        inp = modal.query_one("#masked-key-editor", Input)
-        assert pilot.app.focused is inp
-        assert inp.password is True
-
-        # 5. Enter fake API key through actual Textual Pilot keyboard events, NOT by assigning .value,
-        # with at least one editing operation (typing extra characters and backspacing them).
-        await pilot.press(*list(fake_key + "xyz"))
+        # 5. Type fake API key via real Textual Pilot keyboard events with editing (typing extra + backspacing)
+        inp_key.focus()
         await pilot.pause()
-        await pilot.press("backspace", "backspace", "backspace")
+        await pilot.press(*list(fake_key + "xyz99"))
         await pilot.pause()
+        await pilot.press("backspace", "backspace", "backspace", "backspace", "backspace")
+        await pilot.pause()
+        assert inp_key.value == fake_key
 
-        # 6. Prove the Input's internal value became the exact fake key
-        assert inp.value == fake_key
-
-        # 7. Prove the rendered UI never exposes the plaintext key
+        # 6. Prove plaintext fake key never appears in rendered UI or screenshot
         rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
         assert fake_key not in rendered_svg
-        for node in modal.query("*"):
+        for node in edit_dlg.query("*"):
             try:
                 plain = node.render().plain if hasattr(node, "render") else ""
             except Exception:
                 plain = ""
             assert fake_key not in str(plain)
 
-        # 8. Press Enter
+        # 7. Submit via Enter
         await pilot.press("enter")
         await pilot.pause()
 
-        # 9. Prove the credential callback/storage path receives it
+        # 8. Prove the newly entered fake API key reached secure credential storage & session
         assert pc.has_session_key("commandcode_goat") is True
         assert pc.peek_session_key("commandcode_goat") == fake_key
-        assert received_keys.get("commandcode_goat") == fake_key
-
-        # 10. Prove the modal closes normally
+        assert secure_store.get("commandcode_goat") == fake_key
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
-        for node in pilot.app.screen.query("*"):
-            try:
-                plain = node.render().plain if hasattr(node, "render") else ""
-            except Exception:
-                plain = ""
-            assert fake_key not in str(plain)
+
+        # 9. Reopen Edit provider
+        await pilot.press("e")
+        await pilot.pause()
+        edit_dlg_2 = pilot.app.screen
+        assert isinstance(edit_dlg_2, EditProviderDialogScreen)
+
+        # 10. Confirm credential status without exposing the secret
+        status_static = edit_dlg_2.query_one("#dialog-credential-status")
+        status_text = str(status_static.render().plain)
+        assert "Credential: saved securely" in status_text
+        assert fake_key not in status_text
+
+        inp_key_2 = edit_dlg_2.query_one("#input-key", Input)
+        assert inp_key_2.value == ""  # Never prepopulates existing secret
+
+        # 11. Edit unrelated field (Base URL) while leaving API key field blank
+        inp_url_2 = edit_dlg_2.query_one("#input-url", Input)
+        inp_url_2.value = "https://api.commandcode.ai/provider/v2"
+
+        # 12. Save changes
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        # 13. Prove existing credential was PRESERVED after editing with blank API Key
+        assert pc.has_session_key("commandcode_goat") is True
+        assert pc.peek_session_key("commandcode_goat") == fake_key
+        assert secure_store.get("commandcode_goat") == fake_key
+        cfg = pc.get_provider_config("commandcode_goat")
+        assert cfg is not None
+        assert cfg.base_url == "https://api.commandcode.ai/provider/v2"
+
+    run_headless(app, actions, size=(100, 30))
+
+
+@pytest.mark.parametrize("geometry", [(120, 32), (100, 30)])
+def test_edit_provider_dialog_is_centered_across_geometries(
+    tmp_path: Path, geometry: tuple[int, int]
+) -> None:
+    """Edit provider dialog is horizontally centered at standard window sizes."""
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+
+        modal = pilot.app.screen
+        assert isinstance(modal, EditProviderDialogScreen)
+        assert modal.styles.align == ("center", "middle")
+
+        dialog = modal.query_one("#provider-dialog-card")
+        w, h = geometry
+        assert dialog.region.width <= min(70, w)
+        assert dialog.region.x >= 0
+
+        # Check horizontal centering (margins approximately equal within 2 cols)
+        left_margin = dialog.region.x
+        right_margin = w - (dialog.region.x + dialog.region.width)
+        assert abs(left_margin - right_margin) <= 2
+
+    run_headless(app, actions, size=geometry)
+
+
+def test_no_standalone_credential_modal_reachable(tmp_path: Path) -> None:
+    """Acceptance regression: Provider Manager no longer renders Connect API key and no credential modal remains."""
+    import agentic_debugger.ui.screens as screens_module
+    assert not hasattr(screens_module, "MaskedKeyEditorScreen")
+
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # No button with 'Connect API key' exists
+        rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
+        assert "Connect API key" not in rendered_svg
+
+        # No provider-key-button-* id exists
+        for btn in screen.query("Button"):
+            assert not (btn.id or "").startswith("provider-key-button-")
+
+        # Pressing 'k' does not open any modal
+        await pilot.press("k")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_refresh_without_credential_error_copy(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acceptance regression: refresh failure guidance points to Edit provider, not obsolete Connect API key."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Select CommandCode GOAT
+        await pilot.press("down")
+        await pilot.pause()
+        assert screen._selected_kind() == "commandcode_goat"
+
+        # Refresh without credential
+        await pilot.press("r")
+        await pilot.pause()
+        for _ in range(30):
+            await pilot.pause()
+
+        status_text = str(screen.query_one("#providers-status").render().plain)
+        assert "edit provider to add an api key" in status_text.lower()
+        assert "connect api key" not in status_text.lower()
+        assert "connect an api key" not in status_text.lower()
+
+        # Add an unconnected provider without models to verify empty models list copy
+        await pilot.press("a")
+        await pilot.pause()
+        from textual.widgets import Input
+        add_dlg = pilot.app.screen
+        add_dlg.query_one("#input-name", Input).value = "Unconnected Provider"
+        add_dlg.query_one("#input-url", Input).value = "https://api.unconnected.test/v1"
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        new_screen = pilot.app.screen
+        models_text = str(new_screen.query_one("#provider-models-list-unconnected_provider").render().plain)
+        assert "edit provider to add an api key" in models_text.lower()
+        assert "connect api key" not in models_text.lower()
 
     run_headless(app, actions, size=(100, 30))
 
