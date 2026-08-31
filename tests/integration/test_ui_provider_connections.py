@@ -321,3 +321,116 @@ def test_provider_action_labels_are_visible_in_rendered_terminal(
 
     run_headless(app, actions, size=size)
 
+
+
+def test_home_screen_m_binding_and_row_opens_providers(tmp_path: Path) -> None:
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.pause()
+        from agentic_debugger.ui.screens import HomeScreen
+        assert isinstance(pilot.app.screen, HomeScreen)
+        await pilot.press("m")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, HomeScreen)
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_add_custom_provider_and_manual_model_dialogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    _store = {}
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda k, v: _store.__setitem__(k, v) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_secure_credential",
+        lambda k: _store.get(k),
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Open Add Provider Dialog
+        await pilot.press("a")
+        await pilot.pause()
+        from agentic_debugger.ui.screens import AddProviderDialogScreen, AddManualModelDialogScreen
+        from textual.widgets import Input
+
+        dlg = pilot.app.screen
+        assert isinstance(dlg, AddProviderDialogScreen)
+        dlg.query_one("#input-name", Input).value = "Local LLM"
+        dlg.query_one("#input-url", Input).value = "http://localhost:8000/v1"
+        dlg.query_one("#input-key", Input).value = "sk-test"
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        # Check that new provider is now listed in Model Provider Manager
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+        assert pc.get_provider_config("local_llm") is not None
+        assert pc.get_provider_config("local_llm").name == "Local LLM"
+
+        # Open manual model dialog
+        screen._action_add_manual_model("local_llm")
+        await pilot.pause()
+        model_dlg = pilot.app.screen
+        assert isinstance(model_dlg, AddManualModelDialogScreen)
+        model_dlg.query_one("#input-model-id", Input).value = "custom-llama-3"
+        model_dlg.query_one("#input-model-disp", Input).value = "Custom Llama 3"
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        cfg = pc.get_provider_config("local_llm")
+        assert len(cfg.models) == 1
+        assert cfg.models[0].model_id == "custom-llama-3"
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Custom provider models are never eligible for Capability Ladder targets."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    app = make_app(tmp_path)
+    pc.add_provider_config(
+        name="Custom AI",
+        base_url="https://api.custom.ai/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+    )
+    pc.add_manual_model("custom_ai", "custom-model-x", "Custom Model X")
+
+    async def actions(pilot):
+        await pilot.press("s")
+        await pilot.pause()
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+        # Select Ladder Target
+        start._choice_selected("target", "ladder")
+        await pilot.pause()
+        start._open_model_picker()
+        await pilot.pause()
+        picker = pilot.app.screen
+        assert isinstance(picker, ChoicePickerScreen)
+        custom_choices = [c for c in picker.choices if "custom_ai" in str(c.value)]
+        for c in custom_choices:
+            # Custom provider models must be disabled / ineligible for Ladder
+            assert c.disabled is True
+            assert "ladder" in str(c.disabled_reason).lower() or "unavailable" in str(c.disabled_reason).lower()
+
+    run_headless(app, actions, size=(120, 32))

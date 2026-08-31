@@ -165,14 +165,24 @@ def _validate_store_params(
     return config_root, profile_id, policy, expected_fingerprint
 
 
+def _is_registry_provider(provider: str) -> bool:
+    if provider == "ollama_cloud":
+        return True
+    try:
+        from agentic_debugger.application.provider_connections import is_known_provider
+        return is_known_provider(provider)
+    except Exception:
+        return False
+
+
 def _validate_registry_params(
     params: Mapping[str, Any]
 ) -> tuple[str, str, str]:
     """Validate the provider-registry parameter contract.
 
     Provider-resolved models are the unified provider platform's command
-    models (Ollama Cloud, OpenCode Go, CommandCode GOAT).  They resolve
-    through :func:`resolve_provider_live_config` — the same canonical
+    models (Ollama Cloud, OpenCode Go, CommandCode GOAT, and configured custom providers).
+    They resolve through :func:`resolve_provider_live_config` — the same canonical
     builder Local Project uses — so the profile-store parameters
     (``config_root``/``profile_id``/``expected_fingerprint``) are mutually
     exclusive with the provider parameters and fail closed when mixed.
@@ -181,10 +191,9 @@ def _validate_registry_params(
     if extra:
         raise ScenarioInputError(f"unknown configured source params: {sorted(extra)}")
     provider = params.get("provider")
-    if type(provider) is not str or provider not in _REGISTRY_PROVIDERS:
+    if type(provider) is not str or not _is_registry_provider(provider):
         raise ScenarioInputError(
-            "configured source param 'provider' must be one of "
-            f"{sorted(_REGISTRY_PROVIDERS)}"
+            f"configured source param 'provider' {provider!r} is not a known provider"
         )
     model_id = params.get("model_id")
     if type(model_id) is not str or not model_id:

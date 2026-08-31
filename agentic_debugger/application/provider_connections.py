@@ -1,40 +1,34 @@
-"""Application-owned provider connections and live catalog discovery.
+"""Application-owned provider connections, secure credentials, and live catalog discovery.
 
-One coherent, UI-free domain for the two built-in direct-API subscription
-providers (``opencode_go`` and ``commandcode_goat``):
+One coherent, UI-free domain for both built-in and user-configured model providers:
 
-- which built-in direct-API providers exist and their safe endpoint
-  identity;
-- whether a credential source is currently usable (presence-only; the
-  credential bytes are never read for a status answer);
-- the last discovered :class:`ProviderCatalogSnapshot` (bounded,
-  deterministic, safely cacheable — model identities and protocol
-  metadata are not secrets);
-- each model's protocol family when deterministically known, and a
-  bounded reason when it is not.
+- Persistent, provider-neutral configuration model (:class:`ProviderConfig`);
+- Secure durable credential storage (Windows Credential Manager via native OS APIs,
+  failing over safely to session-only memory store when unavailable);
+- Connection status and presence-only credential checks (never leaking credential bytes);
+- Model discovery GET /models with bounded normalization and safe error handling;
+- Manual model fallback when live discovery is not supported;
+- Protocol resolution for direct API execution (Chat Completions, Responses, Anthropic Messages).
 
 Concepts that stay separate by contract:
 
-- **Discovery** (this module) is a catalog GET.  It performs no
-  generation inference and confers no scientific status.
+- **Discovery & Management** (this module) is catalog configuration and GET /models.
+  It performs no generation inference and confers no scientific status.
 - **General-runtime execution** resolves through
   :mod:`agentic_debugger.application.model_providers`, which selects the
   explicit route (``direct_api`` / ``legacy_cli``) per model.
-- **Capability Ladder qualification** is untouched by this module: a
-  discovered model is never treatment-eligible and never enters the
-  scientific roster because it exists or can execute.
+- **Capability Ladder qualification** is untouched by this module: adding a
+  generic provider or Ollama connection never changes Capability Ladder eligibility.
 
 Credential security rules:
 
-- Raw keys live only in one process-local session store
-  (:func:`set_session_key`) or in their existing operator-owned sources
-  (provider environment variables, the OpenCode CLI auth store read in
-  place).  Nothing here writes a credential to disk, a catalog, a
-  journal, a log, or an exception.
-- The CommandCode CLI auth store is NOT parsed: its schema cannot be
-  reliably established from this machine, so the direct route fails
-  closed to the environment / session-key sources instead of
-  speculatively parsing an unknown external format.
+- Credentials are NEVER written to repository files, ordinary JSON provider configs,
+  event journals, provenance, session params, logs, screenshots, review artifacts, or argv.
+- On Windows, credentials are stored in Windows Credential Manager under the user's
+  vault (``CRED_PERSIST_USER``).  On other platforms without OS credential support,
+  credentials remain process-local in memory.
+- The application truthfully distinguishes between:
+  ``saved`` (OS secure store), ``session_key`` (memory-only), ``environment``, and ``cli_auth_store``.
 """
 
 from __future__ import annotations
@@ -42,6 +36,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -55,30 +50,55 @@ from agentic_debugger.application.provider_http import (
 )
 
 __all__ = [
+    "CREDENTIAL_SOURCE_CLI_AUTH_STORE",
+    "CREDENTIAL_SOURCE_ENVIRONMENT",
+    "CREDENTIAL_SOURCE_SAVED",
+    "CREDENTIAL_SOURCE_SESSION_KEY",
     "DIRECT_API_PROVIDER_KINDS",
     "DiscoveredProviderModel",
     "PROTOCOL_CHAT_COMPLETIONS",
     "PROTOCOL_MESSAGES",
     "PROTOCOL_RESPONSES",
+    "PROVIDER_CONFIG_SCHEMA_VERSION",
     "ProviderCatalogSnapshot",
+    "ProviderConfig",
     "ProviderConnectionError",
     "ProviderConnectionStatus",
+    "add_manual_model",
+    "add_provider_config",
+    "catalog_cache_path",
     "clear_all_session_keys",
     "clear_session_key",
+    "connection_statuses",
     "credential_source_for",
-    "catalog_cache_path",
+    "delete_provider_config",
+    "delete_secure_credential",
+    "get_provider_config",
+    "has_secure_credential",
     "has_session_key",
+    "inference_path_for",
+    "is_known_provider",
+    "list_configured_providers",
     "load_cached_catalog",
+    "load_provider_configurations",
+    "load_secure_credential",
     "peek_session_key",
-    "provider_connection_status",
     "provider_api_model_id",
+    "provider_base_url",
+    "provider_configurations_path",
+    "provider_connection_status",
     "provider_environment_variable",
     "provider_session_credential_environment",
+    "provider_tls_signature_blocked",
     "provider_transport_credential_environment",
+    "refresh_provider_catalog",
     "resolve_model_protocol",
     "resolve_runtime_credential",
-    "refresh_provider_catalog",
+    "save_cached_catalog",
+    "save_provider_configurations",
+    "save_secure_credential",
     "set_session_key",
+    "update_provider_config",
 ]
 
 # -- protocol families -------------------------------------------------------
@@ -92,44 +112,51 @@ _PROTOCOL_FAMILIES = (
     PROTOCOL_MESSAGES,
 )
 
-#: Providers this module connects through their documented direct APIs.
+PROTOCOL_DISPLAY_LABELS = {
+    PROTOCOL_CHAT_COMPLETIONS: "Chat Completions (/chat/completions)",
+    PROTOCOL_RESPONSES: "Responses (/responses)",
+    PROTOCOL_MESSAGES: "Anthropic Messages (/messages)",
+}
+
+#: Providers historically built-in with direct API contracts
 DIRECT_API_PROVIDER_KINDS = ("opencode_go", "commandcode_goat")
 
-_PROVIDER_LABELS = {
+_BUILTIN_PROVIDER_LABELS = {
     "opencode_go": "OpenCode Go",
     "commandcode_goat": "CommandCode GOAT",
 }
 
-# -- provider endpoint contracts (verified against official provider
-#    documentation and live catalogs, 2026-08-30) -----------------------------
+# -- credential sources ------------------------------------------------------
+
+CREDENTIAL_SOURCE_SAVED = "saved"
+CREDENTIAL_SOURCE_SESSION_KEY = "session_key"
+CREDENTIAL_SOURCE_ENVIRONMENT = "environment"
+CREDENTIAL_SOURCE_CLI_AUTH_STORE = "cli_auth_store"
+
+_PROVIDER_CREDENTIAL_SOURCE_LABELS = {
+    CREDENTIAL_SOURCE_SAVED: "Saved credential",
+    CREDENTIAL_SOURCE_SESSION_KEY: "Session API key (memory-only)",
+    CREDENTIAL_SOURCE_ENVIRONMENT: "Environment variable",
+    CREDENTIAL_SOURCE_CLI_AUTH_STORE: "CLI auth (read in place)",
+}
+
+# -- provider endpoint contracts for built-in providers -----------------------
 
 @dataclass(frozen=True)
-class _ProviderContract:
-    """Provider-owned endpoint facts for one built-in direct API."""
-
+class _BuiltinProviderContract:
     kind: str
     base_url: str
     catalog_path: str
     inference_paths: Mapping[str, str]
-    #: Both endpoints sit behind a bot-protection layer that rejects the
-    #: stdlib TLS signature (HTTP 403 error code 1010, verified); the OS
-    #: curl engine is the deterministic network client when present.
     tls_signature_blocked: bool
     catalog_model_id_pattern: str
-    #: App-supported environment variable.  Command Code documents its
-    #: variable; OpenCode Go currently documents /connect/auth-store setup,
-    #: so OPENCODE_API_KEY is an optional Agentic Debugger source, not a
-    #: claimed canonical OpenCode contract.
     env_var: Optional[str]
-    #: Private process-environment hop for a memory-only UI session key.
     session_env_var: str
-    #: Whether the provider CLI auth store can supply the direct-API
-    #: credential (only when its schema is reliably established).
     auth_store_consumable: bool
 
 
-_CONTRACTS: Mapping[str, _ProviderContract] = {
-    "opencode_go": _ProviderContract(
+_BUILTIN_CONTRACTS: Mapping[str, _BuiltinProviderContract] = {
+    "opencode_go": _BuiltinProviderContract(
         kind="opencode_go",
         base_url="https://opencode.ai/zen/go/v1",
         catalog_path="/models",
@@ -144,7 +171,7 @@ _CONTRACTS: Mapping[str, _ProviderContract] = {
         session_env_var="AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
         auth_store_consumable=True,
     ),
-    "commandcode_goat": _ProviderContract(
+    "commandcode_goat": _BuiltinProviderContract(
         kind="commandcode_goat",
         base_url="https://api.commandcode.ai/provider/v1",
         catalog_path="/models",
@@ -160,6 +187,9 @@ _CONTRACTS: Mapping[str, _ProviderContract] = {
     ),
 }
 
+# Preserve _CONTRACTS alias for internal compatibility
+_CONTRACTS = _BUILTIN_CONTRACTS
+
 
 class ProviderConnectionError(RuntimeError):
     """Fail-closed provider connection error (credential-safe text)."""
@@ -167,16 +197,12 @@ class ProviderConnectionError(RuntimeError):
 
 # -- process-local session credentials ---------------------------------------
 
-#: Bounded process-local API keys keyed by provider kind.  Never
-#: persisted, never logged, never repr'd; cleared when the process ends.
 _SESSION_KEYS: Dict[str, str] = {}
-
 _MAX_SESSION_KEY_CHARS = 4096
 
 
 def _credential_is_usable(value: Any) -> bool:
     """Presence/shape gate shared by every process-local credential source."""
-
     return (
         type(value) is str
         and bool(value.strip())
@@ -187,13 +213,11 @@ def _credential_is_usable(value: Any) -> bool:
 
 def set_session_key(kind: str, value: str) -> None:
     """Store one process-local API key for the app session."""
-
-    if kind not in DIRECT_API_PROVIDER_KINDS:
+    if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
         raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
     if not _credential_is_usable(value):
         raise ProviderConnectionError("API key is missing, invalid, or oversized")
-    stripped = value.strip()
-    _SESSION_KEYS[kind] = stripped
+    _SESSION_KEYS[kind] = value.strip()
 
 
 def has_session_key(kind: str) -> bool:
@@ -202,7 +226,6 @@ def has_session_key(kind: str) -> bool:
 
 def peek_session_key(kind: str) -> Optional[str]:
     """The stored key (runtime boundary only; never for presentation)."""
-
     return _SESSION_KEYS.get(kind)
 
 
@@ -214,8 +237,141 @@ def clear_all_session_keys() -> None:
     _SESSION_KEYS.clear()
 
 
-# -- OpenCode CLI auth store (read in place; schema verified locally
-#    against the operator store: {"opencode-go": {"type": ..., "key": ...}})
+# -- OS-level secure durable credential storage (Windows Credential Manager) ---
+
+_WIN_CRED_PREFIX = "AgenticDebugger:provider:"
+
+
+def _wincred_write(target: str, secret: str) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        advapi32 = ctypes.windll.advapi32
+
+        class CREDENTIAL(ctypes.Structure):
+            _fields_ = [
+                ("Flags", ctypes.wintypes.DWORD),
+                ("Type", ctypes.wintypes.DWORD),
+                ("TargetName", ctypes.wintypes.LPWSTR),
+                ("Comment", ctypes.wintypes.LPWSTR),
+                ("LastWritten", ctypes.wintypes.FILETIME),
+                ("CredentialBlobSize", ctypes.wintypes.DWORD),
+                ("CredentialBlob", ctypes.c_char_p),
+                ("Persist", ctypes.wintypes.DWORD),
+                ("AttributeCount", ctypes.wintypes.DWORD),
+                ("Attributes", ctypes.c_void_p),
+                ("TargetAlias", ctypes.wintypes.LPWSTR),
+                ("UserName", ctypes.wintypes.LPWSTR),
+            ]
+
+        secret_bytes = secret.encode("utf-8")
+        cred = CREDENTIAL()
+        cred.Flags = 0
+        cred.Type = 1  # CRED_TYPE_GENERIC
+        cred.TargetName = target
+        cred.CredentialBlobSize = len(secret_bytes)
+        cred.CredentialBlob = secret_bytes
+        cred.Persist = 2  # CRED_PERSIST_USER
+        cred.UserName = "AgenticDebugger"
+
+        advapi32.CredWriteW.argtypes = [ctypes.POINTER(CREDENTIAL), ctypes.wintypes.DWORD]
+        advapi32.CredWriteW.restype = ctypes.wintypes.BOOL
+        return bool(advapi32.CredWriteW(ctypes.byref(cred), 0))
+    except Exception:
+        return False
+
+
+def _wincred_read(target: str) -> Optional[str]:
+    if sys.platform != "win32":
+        return None
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        advapi32 = ctypes.windll.advapi32
+
+        class CREDENTIAL(ctypes.Structure):
+            _fields_ = [
+                ("Flags", ctypes.wintypes.DWORD),
+                ("Type", ctypes.wintypes.DWORD),
+                ("TargetName", ctypes.wintypes.LPWSTR),
+                ("Comment", ctypes.wintypes.LPWSTR),
+                ("LastWritten", ctypes.wintypes.FILETIME),
+                ("CredentialBlobSize", ctypes.wintypes.DWORD),
+                ("CredentialBlob", ctypes.c_char_p),
+                ("Persist", ctypes.wintypes.DWORD),
+                ("AttributeCount", ctypes.wintypes.DWORD),
+                ("Attributes", ctypes.c_void_p),
+                ("TargetAlias", ctypes.wintypes.LPWSTR),
+                ("UserName", ctypes.wintypes.LPWSTR),
+            ]
+
+        pcred = ctypes.POINTER(CREDENTIAL)()
+        advapi32.CredReadW.argtypes = [
+            ctypes.wintypes.LPWSTR,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.DWORD,
+            ctypes.POINTER(ctypes.POINTER(CREDENTIAL)),
+        ]
+        advapi32.CredReadW.restype = ctypes.wintypes.BOOL
+        ok = advapi32.CredReadW(target, 1, 0, ctypes.byref(pcred))
+        if not ok or not pcred:
+            return None
+        blob = ctypes.string_at(pcred.contents.CredentialBlob, pcred.contents.CredentialBlobSize)
+        advapi32.CredFree.argtypes = [ctypes.c_void_p]
+        advapi32.CredFree(pcred)
+        decoded = blob.decode("utf-8", errors="replace")
+        return decoded if _credential_is_usable(decoded) else None
+    except Exception:
+        return None
+
+
+def _wincred_delete(target: str) -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+        import ctypes.wintypes
+
+        advapi32 = ctypes.windll.advapi32
+        advapi32.CredDeleteW.argtypes = [
+            ctypes.wintypes.LPWSTR,
+            ctypes.wintypes.DWORD,
+            ctypes.wintypes.DWORD,
+        ]
+        advapi32.CredDeleteW.restype = ctypes.wintypes.BOOL
+        return bool(advapi32.CredDeleteW(target, 1, 0))
+    except Exception:
+        return False
+
+
+def save_secure_credential(provider_id: str, secret: str) -> bool:
+    """Save an API key in the OS secure credential store if available."""
+    if not _credential_is_usable(secret):
+        return False
+    return _wincred_write(_WIN_CRED_PREFIX + provider_id, secret.strip())
+
+
+def load_secure_credential(provider_id: str) -> Optional[str]:
+    """Load an API key from the OS secure credential store if available."""
+    return _wincred_read(_WIN_CRED_PREFIX + provider_id)
+
+
+def delete_secure_credential(provider_id: str) -> bool:
+    """Delete an API key from the OS secure credential store."""
+    return _wincred_delete(_WIN_CRED_PREFIX + provider_id)
+
+
+def has_secure_credential(provider_id: str) -> bool:
+    """Presence-only check for a stored credential in the OS secure store."""
+    val = load_secure_credential(provider_id)
+    return bool(val)
+
+
+# -- OpenCode CLI auth store --------------------------------------------------
 
 _MAX_AUTH_STORE_BYTES = 64 * 1024
 
@@ -226,13 +382,6 @@ def opencode_auth_store_path() -> Path:
 
 
 def _read_opencode_auth_store_key(path: Path) -> Optional[str]:
-    """The ``opencode-go`` key from the CLI auth store, or ``None``.
-
-    Strict, bounded, fail-closed: any structural mismatch means "not
-    consumable here", never an inferred credential.  The value is
-    returned only inside the runtime boundary.
-    """
-
     try:
         raw = path.read_bytes()
     except OSError:
@@ -254,106 +403,505 @@ def _read_opencode_auth_store_key(path: Path) -> Optional[str]:
     return key
 
 
-# -- credential sources ------------------------------------------------------
+# -- provider data model & persistence ---------------------------------------
 
-CREDENTIAL_SOURCE_SESSION_KEY = "session_key"
-CREDENTIAL_SOURCE_ENVIRONMENT = "environment"
-CREDENTIAL_SOURCE_CLI_AUTH_STORE = "cli_auth_store"
+PROVIDER_CONFIG_SCHEMA_VERSION = "provider-configurations-v1"
+_MAX_PROVIDERS_CONFIGURED = 32
+_MAX_CONFIG_FILE_BYTES = 1024 * 1024
+
+
+@dataclass(frozen=True)
+class DiscoveredProviderModel:
+    """One model identity in a provider's catalog."""
+
+    kind: str
+    model_id: str
+    display_name: str
+    protocol: Optional[str]
+    runnable: bool
+    unavailable_reason: Optional[str] = None
+
+    @property
+    def provider_id(self) -> str:
+        return self.kind
+
+    @classmethod
+    def create(
+        cls, kind: str, model_id: str, display_name: str, protocol: Optional[str] = None
+    ) -> "DiscoveredProviderModel":
+        proto = protocol if protocol is not None else resolve_model_protocol(kind, model_id)
+        if proto is not None:
+            return cls(
+                kind=kind,
+                model_id=model_id,
+                display_name=display_name,
+                protocol=proto,
+                runnable=True,
+                unavailable_reason=None,
+            )
+        return cls(
+            kind=kind,
+            model_id=model_id,
+            display_name=display_name,
+            protocol=None,
+            runnable=False,
+            unavailable_reason="Protocol not yet resolved for direct API",
+        )
+
+
+@dataclass(frozen=True)
+class ProviderConfig:
+    """Persisted, provider-neutral configuration (NON-SECRET metadata)."""
+
+    provider_id: str
+    name: str
+    base_url: str
+    api_format: str
+    models: Tuple[DiscoveredProviderModel, ...] = ()
+    last_refresh_utc: Optional[str] = None
+    last_refresh_source: Optional[str] = None
+    enabled: bool = True
+    is_builtin: bool = False
+    builtin_kind: Optional[str] = None
+    tls_signature_blocked: bool = False
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "provider_id": self.provider_id,
+            "name": self.name,
+            "base_url": self.base_url,
+            "api_format": self.api_format,
+            "models": [
+                {
+                    "model_id": m.model_id,
+                    "display_name": m.display_name,
+                    "protocol": m.protocol,
+                }
+                for m in self.models
+            ],
+            "last_refresh_utc": self.last_refresh_utc,
+            "last_refresh_source": self.last_refresh_source,
+            "enabled": self.enabled,
+            "is_builtin": self.is_builtin,
+            "builtin_kind": self.builtin_kind,
+            "tls_signature_blocked": self.tls_signature_blocked,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Mapping[str, Any]) -> Optional["ProviderConfig"]:
+        if not isinstance(data, Mapping):
+            return None
+        pid = data.get("provider_id")
+        name = data.get("name")
+        base_url = data.get("base_url")
+        api_format = data.get("api_format", PROTOCOL_CHAT_COMPLETIONS)
+        if not pid or not isinstance(pid, str) or not name or not isinstance(name, str):
+            return None
+        if not base_url or not isinstance(base_url, str):
+            return None
+        if api_format not in _PROTOCOL_FAMILIES:
+            api_format = PROTOCOL_CHAT_COMPLETIONS
+        models_raw = data.get("models", [])
+        models: List[DiscoveredProviderModel] = []
+        if isinstance(models_raw, list):
+            for m in models_raw:
+                if isinstance(m, Mapping) and m.get("model_id"):
+                    mid = str(m["model_id"])
+                    disp = str(m.get("display_name") or mid)
+                    proto = m.get("protocol")
+                    if proto not in _PROTOCOL_FAMILIES:
+                        try:
+                            proto = resolve_model_protocol(pid, mid) or api_format
+                        except Exception:
+                            proto = api_format
+                    models.append(
+                        DiscoveredProviderModel(
+                            kind=pid,
+                            model_id=mid,
+                            display_name=disp,
+                            protocol=proto,
+                            runnable=proto is not None,
+                            unavailable_reason=None if proto else "Protocol unresolved",
+                        )
+                    )
+        return cls(
+            provider_id=pid,
+            name=name,
+            base_url=base_url,
+            api_format=api_format,
+            models=tuple(models),
+            last_refresh_utc=data.get("last_refresh_utc"),
+            last_refresh_source=data.get("last_refresh_source"),
+            enabled=bool(data.get("enabled", True)),
+            is_builtin=bool(data.get("is_builtin", False)),
+            builtin_kind=data.get("builtin_kind"),
+            tls_signature_blocked=bool(data.get("tls_signature_blocked", False)),
+        )
+
+
+def _default_builtin_configs() -> List[ProviderConfig]:
+    """Default built-in presets for initial startup."""
+    return [
+        ProviderConfig(
+            provider_id="opencode_go",
+            name="OpenCode Go",
+            base_url="https://opencode.ai/zen/go/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            is_builtin=True,
+            builtin_kind="opencode_go",
+            tls_signature_blocked=True,
+        ),
+        ProviderConfig(
+            provider_id="commandcode_goat",
+            name="CommandCode GOAT",
+            base_url="https://api.commandcode.ai/provider/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            is_builtin=True,
+            builtin_kind="commandcode_goat",
+            tls_signature_blocked=True,
+        ),
+    ]
+
+
+def provider_configurations_path() -> Path:
+    """User-level persistent configuration path (NOT in Git repository)."""
+    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+    return Path(base) / "AgenticDebugger" / "provider-configurations.json"
+
+
+def load_provider_configurations() -> List[ProviderConfig]:
+    """Load persistent non-secret provider configurations safely."""
+    path = provider_configurations_path()
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return _default_builtin_configs()
+    if len(raw) > _MAX_CONFIG_FILE_BYTES:
+        return _default_builtin_configs()
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return _default_builtin_configs()
+    if not isinstance(data, Mapping) or data.get("schema_version") != PROVIDER_CONFIG_SCHEMA_VERSION:
+        return _default_builtin_configs()
+    providers_raw = data.get("providers")
+    if not isinstance(providers_raw, list):
+        return _default_builtin_configs()
+    configs: List[ProviderConfig] = []
+    seen_ids = set()
+    for item in providers_raw:
+        cfg = ProviderConfig.from_dict(item)
+        if cfg and cfg.provider_id not in seen_ids:
+            seen_ids.add(cfg.provider_id)
+            configs.append(cfg)
+
+    builtin_map = {b.provider_id: b for b in _default_builtin_configs()}
+    for b_id, b_cfg in builtin_map.items():
+        if b_id not in seen_ids:
+            configs.append(b_cfg)
+    return configs
+
+
+def save_provider_configurations(configs: List[ProviderConfig]) -> None:
+    """Atomically persist non-secret provider configurations."""
+    path = provider_configurations_path()
+    payload = json.dumps(
+        {
+            "schema_version": PROVIDER_CONFIG_SCHEMA_VERSION,
+            "providers": [c.to_dict() for c in configs[:_MAX_PROVIDERS_CONFIGURED]],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=1,
+    ).encode("utf-8")
+    if len(payload) > _MAX_CONFIG_FILE_BYTES:
+        raise ProviderConnectionError("provider configuration exceeded file bound")
+    temporary: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=path.name + ".",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+        os.replace(temporary, path)
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise ProviderConnectionError("provider configuration could not be written") from None
+
+
+def list_configured_providers() -> List[ProviderConfig]:
+    """Return all configured providers."""
+    return load_provider_configurations()
+
+
+def get_provider_config(provider_id: str) -> Optional[ProviderConfig]:
+    """Get a single provider configuration by technical ID."""
+    for cfg in load_provider_configurations():
+        if cfg.provider_id == provider_id:
+            return cfg
+    return None
+
+
+def is_known_provider(provider_id: str) -> bool:
+    """Check if a provider ID exists in built-ins or configured providers."""
+    if provider_id in _BUILTIN_CONTRACTS:
+        return True
+    return get_provider_config(provider_id) is not None
+
+
+def _clean_slug(text: str) -> str:
+    cleaned = re.sub(r"[^a-zA-Z0-9_]", "_", text.strip().lower())
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned[:32] or "custom_provider"
+
+
+def add_provider_config(
+    name: str,
+    base_url: str,
+    api_format: str,
+    *,
+    api_key: Optional[str] = None,
+    provider_id: Optional[str] = None,
+    models: Tuple[DiscoveredProviderModel, ...] = (),
+) -> ProviderConfig:
+    """Add a new configured model provider."""
+    if not name or not name.strip():
+        raise ProviderConnectionError("Provider name is required")
+    if not base_url or not base_url.strip():
+        raise ProviderConnectionError("Base URL is required")
+    clean_format = api_format if api_format in _PROTOCOL_FAMILIES else PROTOCOL_CHAT_COMPLETIONS
+
+    configs = load_provider_configurations()
+    if provider_id is None:
+        base_slug = _clean_slug(name)
+        candidate = base_slug
+        counter = 1
+        while any(c.provider_id == candidate for c in configs):
+            candidate = f"{base_slug}_{counter}"
+            counter += 1
+        pid = candidate
+    else:
+        pid = provider_id.strip()
+
+    new_cfg = ProviderConfig(
+        provider_id=pid,
+        name=name.strip(),
+        base_url=base_url.strip().rstrip("/"),
+        api_format=clean_format,
+        models=models,
+        enabled=True,
+        is_builtin=False,
+    )
+    updated = [c for c in configs if c.provider_id != pid] + [new_cfg]
+    save_provider_configurations(updated)
+
+    if api_key and _credential_is_usable(api_key):
+        save_secure_credential(pid, api_key.strip())
+        set_session_key(pid, api_key.strip())
+
+    return new_cfg
+
+
+def update_provider_config(
+    provider_id: str,
+    *,
+    name: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_format: Optional[str] = None,
+    models: Optional[Tuple[DiscoveredProviderModel, ...]] = None,
+    enabled: Optional[bool] = None,
+    api_key: Optional[str] = None,
+) -> ProviderConfig:
+    """Update metadata for an existing provider."""
+    configs = load_provider_configurations()
+    existing = next((c for c in configs if c.provider_id == provider_id), None)
+    if existing is None:
+        raise ProviderConnectionError(f"Provider {provider_id!r} not found")
+
+    new_name = name.strip() if name and name.strip() else existing.name
+    new_url = base_url.strip().rstrip("/") if base_url and base_url.strip() else existing.base_url
+    new_format = (
+        api_format
+        if api_format in _PROTOCOL_FAMILIES
+        else existing.api_format
+    )
+    new_models = models if models is not None else existing.models
+    new_enabled = enabled if enabled is not None else existing.enabled
+
+    updated_cfg = ProviderConfig(
+        provider_id=existing.provider_id,
+        name=new_name,
+        base_url=new_url,
+        api_format=new_format,
+        models=new_models,
+        last_refresh_utc=existing.last_refresh_utc,
+        last_refresh_source=existing.last_refresh_source,
+        enabled=new_enabled,
+        is_builtin=existing.is_builtin,
+        builtin_kind=existing.builtin_kind,
+        tls_signature_blocked=existing.tls_signature_blocked,
+    )
+    updated = [updated_cfg if c.provider_id == provider_id else c for c in configs]
+    save_provider_configurations(updated)
+
+    if api_key and _credential_is_usable(api_key):
+        save_secure_credential(provider_id, api_key.strip())
+        set_session_key(provider_id, api_key.strip())
+
+    return updated_cfg
+
+
+def delete_provider_config(provider_id: str) -> bool:
+    """Delete a provider configuration and its stored credential."""
+    configs = load_provider_configurations()
+    existing = next((c for c in configs if c.provider_id == provider_id), None)
+    if existing is None or existing.is_builtin or provider_id in _BUILTIN_CONTRACTS:
+        return False
+    filtered = [c for c in configs if c.provider_id != provider_id]
+    if len(filtered) == len(configs):
+        return False
+    save_provider_configurations(filtered)
+    delete_secure_credential(provider_id)
+    clear_session_key(provider_id)
+    return True
+
+
+def add_manual_model(
+    provider_id: str,
+    model_id: str,
+    display_name: Optional[str] = None,
+    protocol: Optional[str] = None,
+) -> DiscoveredProviderModel:
+    """Add one model manually to a provider's catalog (fallback for no /models)."""
+    cfg = get_provider_config(provider_id)
+    if cfg is None:
+        raise ProviderConnectionError(f"Provider {provider_id!r} not found")
+    mid = model_id.strip()
+    if not mid:
+        raise ProviderConnectionError("Model ID is required")
+    from agentic_debugger.application.model_providers import format_model_display_name
+
+    disp = display_name.strip() if display_name and display_name.strip() else format_model_display_name(mid)
+    proto = protocol if protocol in _PROTOCOL_FAMILIES else cfg.api_format
+    new_model = DiscoveredProviderModel(
+        kind=provider_id,
+        model_id=mid,
+        display_name=disp,
+        protocol=proto,
+        runnable=proto is not None,
+        unavailable_reason=None if proto else "Protocol unresolved",
+    )
+    existing_models = [m for m in cfg.models if m.model_id != mid]
+    updated_models = tuple(sorted(existing_models + [new_model], key=lambda m: (m.model_id.lower(), m.model_id)))
+    update_provider_config(provider_id, models=updated_models)
+    return new_model
+
+
+# -- credential resolution ----------------------------------------------------
+
+def _session_env_var_for(kind: str) -> str:
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is not None:
+        return contract.session_env_var
+    normalized = re.sub(r"[^A-Za-z0-9_]", "_", kind.upper())
+    return f"AGENTIC_DEBUGGER_PROVIDER_{normalized}_API_KEY"
 
 
 def credential_source_for(kind: str) -> Optional[str]:
-    """Which credential source the direct route can use right now.
-
-    Presence-ordered resolution: process-local session key, then the
-    forwarded session credential, the app-supported provider environment
-    variable, then (OpenCode only)
-    the CLI auth store read in place.  Returns the source label or
-    ``None``; credential bytes are only read when the source is the
-    auth store itself (the store is the value).
-    """
-
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
+    """Which credential source the direct route can use right now."""
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is None and not is_known_provider(kind):
         return None
     if has_session_key(kind):
         return CREDENTIAL_SOURCE_SESSION_KEY
-    if _credential_is_usable(os.environ.get(contract.session_env_var)):
+    session_var = _session_env_var_for(kind)
+    if _credential_is_usable(os.environ.get(session_var)):
         return CREDENTIAL_SOURCE_SESSION_KEY
-    if contract.env_var and _credential_is_usable(os.environ.get(contract.env_var)):
-        return CREDENTIAL_SOURCE_ENVIRONMENT
-    if contract.auth_store_consumable and _read_opencode_auth_store_key(
-        opencode_auth_store_path()
-    ):
-        return CREDENTIAL_SOURCE_CLI_AUTH_STORE
+    if has_secure_credential(kind):
+        return CREDENTIAL_SOURCE_SAVED
+
+    if contract is not None:
+        if contract.env_var and _credential_is_usable(os.environ.get(contract.env_var)):
+            return CREDENTIAL_SOURCE_ENVIRONMENT
+        if contract.auth_store_consumable and _read_opencode_auth_store_key(
+            opencode_auth_store_path()
+        ):
+            return CREDENTIAL_SOURCE_CLI_AUTH_STORE
     return None
 
 
 def resolve_runtime_credential(kind: str) -> Optional[str]:
-    """The credential value for one direct-API request (runtime only).
-
-    Resolution order matches :func:`credential_source_for`.  The value
-    must never cross into presentation, provenance, argv, or evidence;
-    callers pass it only into the HTTP boundary.
-    """
-
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
+    """The credential value for one direct-API request (runtime only)."""
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is None and not is_known_provider(kind):
         return None
     session_value = peek_session_key(kind)
     if session_value:
         return session_value
-    forwarded_value = os.environ.get(contract.session_env_var)
+    session_var = _session_env_var_for(kind)
+    forwarded_value = os.environ.get(session_var)
     if _credential_is_usable(forwarded_value):
         return forwarded_value.strip()
-    if contract.env_var:
-        env_value = os.environ.get(contract.env_var)
-        if _credential_is_usable(env_value):
-            return env_value
-    if contract.auth_store_consumable:
-        return _read_opencode_auth_store_key(opencode_auth_store_path())
+
+    saved_value = load_secure_credential(kind)
+    if saved_value and _credential_is_usable(saved_value):
+        return saved_value.strip()
+
+    if contract is not None:
+        if contract.env_var:
+            env_value = os.environ.get(contract.env_var)
+            if _credential_is_usable(env_value):
+                return env_value.strip()
+        if contract.auth_store_consumable:
+            return _read_opencode_auth_store_key(opencode_auth_store_path())
     return None
 
 
 def provider_environment_variable(kind: str) -> Optional[str]:
-    """The app-supported provider credential variable, if any."""
-
-    contract = _CONTRACTS.get(kind)
+    contract = _BUILTIN_CONTRACTS.get(kind)
     return contract.env_var if contract is not None else None
 
 
 def provider_session_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
-    """Exactly one private UI-to-worker credential hop, or ``None``."""
-
-    contract = _CONTRACTS.get(kind)
-    session_value = peek_session_key(kind)
-    if contract is None or not _credential_is_usable(session_value):
-        return None
-    return {contract.session_env_var: session_value.strip()}
+    """Private UI-to-worker credential hop (exactly one variable)."""
+    secret = peek_session_key(kind)
+    if not secret:
+        saved = load_secure_credential(kind)
+        if saved and _credential_is_usable(saved):
+            secret = saved
+    if secret and _credential_is_usable(secret):
+        session_var = _session_env_var_for(kind)
+        return {session_var: secret.strip()}
+    return None
 
 
 def provider_transport_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
-    """Exactly one credential variable for the direct adapter child.
-
-    The worker may hold a UI session key only in its private forwarded
-    variable.  Preserve that narrow name for the adapter child; otherwise
-    forward the app-supported provider variable.  Auth-store credentials
-    are read in place and need no child override.
-    """
-
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
-        return None
+    """Child environment forwarding for the direct adapter."""
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    session_var = _session_env_var_for(kind)
     session_value = peek_session_key(kind)
     if _credential_is_usable(session_value):
-        return {contract.session_env_var: session_value.strip()}
-    forwarded_value = os.environ.get(contract.session_env_var)
+        return {session_var: session_value.strip()}
+    forwarded_value = os.environ.get(session_var)
     if _credential_is_usable(forwarded_value):
-        return {contract.session_env_var: forwarded_value.strip()}
-    if contract.env_var:
+        return {session_var: forwarded_value.strip()}
+    saved_value = load_secure_credential(kind)
+    if _credential_is_usable(saved_value):
+        return {session_var: saved_value.strip()}
+    if contract and contract.env_var:
         env_value = os.environ.get(contract.env_var)
         if _credential_is_usable(env_value):
             return {contract.env_var: env_value.strip()}
@@ -362,14 +910,6 @@ def provider_transport_credential_environment(
 
 # -- protocol resolution ------------------------------------------------------
 
-#: OpenCode Go — provider-owned, explicit model→protocol mapping grounded
-#: in the official Go endpoint table (https://opencode.ai/docs/go/,
-#: "Endpoints", verified 2026-08-30).  The live ``/models`` payload
-#: carries NO protocol metadata, and the general Zen catalog routes some
-#: shared ids differently (e.g. MiniMax uses /chat/completions on
-#: ``zen/v1`` but /messages on ``zen/go/v1``), so this mapping is
-#: per-provider and intentionally NOT extended by family heuristics:
-#: a model absent from the documented table stays unresolved.
 _OPENCODE_GO_DOCUMENTED_PROTOCOLS: Mapping[str, str] = {
     # /responses (OpenAI Responses family)
     "grok-4.6": PROTOCOL_RESPONSES,
@@ -406,14 +946,6 @@ _OPENCODE_GO_MODEL_PREFIX = "opencode-go/"
 
 
 def resolve_opencode_go_protocol(model_id: str) -> Optional[str]:
-    """Explicit documented protocol for one OpenCode Go model id.
-
-    Accepts the subscription-prefixed (``opencode-go/<id>``) or bare id
-    form.  Unknown models resolve to ``None`` — discovered, never
-    guessed — and the caller must keep them unavailable for direct
-    execution.
-    """
-
     if type(model_id) is not str or not model_id:
         return None
     text = model_id.strip()
@@ -423,16 +955,6 @@ def resolve_opencode_go_protocol(model_id: str) -> Optional[str]:
 
 
 def resolve_commandcode_protocol(model_id: str) -> Optional[str]:
-    """Deterministic provider-documented endpoint routing rule.
-
-    CommandCode documents exactly two families and validates the split
-    server-side: Anthropic models call ``/messages``; OpenAI and
-    open-source models call ``/chat/completions``.  The Anthropic
-    family is identified by the documented model identity shape
-    (``claude-*`` ids or an ``anthropic/`` owner prefix); every other
-    catalog id routes to the OpenAI-compatible family.
-    """
-
     if type(model_id) is not str or not model_id.strip():
         return None
     text = model_id.strip()
@@ -446,26 +968,23 @@ def resolve_commandcode_protocol(model_id: str) -> Optional[str]:
 
 
 def resolve_model_protocol(kind: str, model_id: str) -> Optional[str]:
-    """The deterministic protocol family for one provider model, or ``None``."""
-
+    """Deterministic protocol family for one provider model, or None."""
     if kind == "opencode_go":
         return resolve_opencode_go_protocol(model_id)
     if kind == "commandcode_goat":
         return resolve_commandcode_protocol(model_id)
+    cfg = get_provider_config(kind)
+    if cfg is not None:
+        for m in cfg.models:
+            if m.model_id == model_id and m.protocol:
+                return m.protocol
+        return cfg.api_format
     raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
 
 
 def provider_api_model_id(kind: str, model_id: str) -> str:
-    """Exact model identity sent to a provider's direct API.
-
-    OpenCode's TUI/config namespace uses ``opencode-go/<id>`` while its Go
-    HTTP endpoint documents the bare ``<id>`` value.  Live discovery already
-    returns bare IDs; this narrow conversion keeps the curated offline fallback
-    compatible without sending the TUI namespace to the provider endpoint.
-    CommandCode catalog IDs are already direct-API identities.
-    """
-
-    if kind not in DIRECT_API_PROVIDER_KINDS:
+    """Exact model identity sent to a provider's direct API."""
+    if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
         raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
     if type(model_id) is not str or not model_id.strip():
         raise ProviderConnectionError("provider model id is missing")
@@ -476,29 +995,42 @@ def provider_api_model_id(kind: str, model_id: str) -> str:
 
 
 def inference_path_for(kind: str, protocol: str) -> str:
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
-    path = contract.inference_paths.get(protocol)
-    if path is None:
-        raise ProviderConnectionError(
-            f"provider {contract.kind!r} does not expose the {protocol!r} protocol"
-        )
-    return path
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is not None:
+        path = contract.inference_paths.get(protocol)
+        if path is None:
+            raise ProviderConnectionError(
+                f"provider {contract.kind!r} does not expose the {protocol!r} protocol"
+            )
+        return path
+    cfg = get_provider_config(kind)
+    if cfg is not None:
+        if protocol == PROTOCOL_CHAT_COMPLETIONS:
+            return "/chat/completions"
+        if protocol == PROTOCOL_RESPONSES:
+            return "/responses"
+        if protocol == PROTOCOL_MESSAGES:
+            return "/messages"
+        raise ProviderConnectionError(f"unsupported protocol: {protocol!r}")
+    raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
 
 
 def provider_base_url(kind: str) -> str:
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
-    return contract.base_url
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is not None:
+        return contract.base_url
+    cfg = get_provider_config(kind)
+    if cfg is not None:
+        return cfg.base_url
+    raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
 
 
 def provider_tls_signature_blocked(kind: str) -> bool:
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
-    return contract.tls_signature_blocked
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is not None:
+        return contract.tls_signature_blocked
+    cfg = get_provider_config(kind)
+    return cfg.tls_signature_blocked if cfg is not None else False
 
 
 # -- discovered models and snapshots -----------------------------------------
@@ -507,49 +1039,7 @@ _MAX_CATALOG_MODELS = 256
 _MAX_MODEL_ID_CHARS = 128
 _CATALOG_FETCH_TIMEOUT_SECONDS = 30.0
 _CATALOG_MAX_RESPONSE_BYTES = 1024 * 1024
-
 _SNAPSHOT_SOURCE_LIVE = "live"
-
-
-@dataclass(frozen=True)
-class DiscoveredProviderModel:
-    """One model identity from a provider catalog.
-
-    ``protocol`` is the deterministic protocol family, or ``None`` when
-    the provider contract does not resolve it — such a model is
-    discovered but NOT runnable through the direct API, and the reason
-    is bounded and explicit rather than guessed.
-    """
-
-    kind: str
-    model_id: str
-    display_name: str
-    protocol: Optional[str]
-    runnable: bool
-    unavailable_reason: Optional[str] = None
-
-    @classmethod
-    def create(
-        cls, kind: str, model_id: str, display_name: str
-    ) -> "DiscoveredProviderModel":
-        protocol = resolve_model_protocol(kind, model_id)
-        if protocol is not None:
-            return cls(
-                kind=kind,
-                model_id=model_id,
-                display_name=display_name,
-                protocol=protocol,
-                runnable=True,
-                unavailable_reason=None,
-            )
-        return cls(
-            kind=kind,
-            model_id=model_id,
-            display_name=display_name,
-            protocol=None,
-            runnable=False,
-            unavailable_reason="Protocol not yet resolved for direct API",
-        )
 
 
 @dataclass(frozen=True)
@@ -576,8 +1066,6 @@ class ProviderCatalogSnapshot:
 
     @classmethod
     def from_mapping(cls, value: Mapping[str, Any]) -> Optional["ProviderCatalogSnapshot"]:
-        """Strict cache decode; ``None`` on any structural mismatch."""
-
         if not isinstance(value, Mapping):
             return None
         kind = value.get("kind")
@@ -585,7 +1073,9 @@ class ProviderCatalogSnapshot:
         source = value.get("source")
         models = value.get("models")
         truncated = value.get("truncated")
-        if kind not in DIRECT_API_PROVIDER_KINDS:
+        if not kind or not isinstance(kind, str):
+            return None
+        if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
             return None
         if type(fetched) is not str or not _valid_utc(fetched):
             return None
@@ -595,7 +1085,7 @@ class ProviderCatalogSnapshot:
             return None
         if type(models) is not list or len(models) > _MAX_CATALOG_MODELS:
             return None
-        pattern = _CONTRACTS[kind].catalog_model_id_pattern
+        pattern = _BUILTIN_CONTRACTS[kind].catalog_model_id_pattern if kind in _BUILTIN_CONTRACTS else r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,127}$"
         decoded: List[DiscoveredProviderModel] = []
         for entry in models:
             if not isinstance(entry, Mapping):
@@ -613,8 +1103,6 @@ class ProviderCatalogSnapshot:
                 return None
             expected = resolve_model_protocol(kind, model_id)
             if protocol != expected:
-                # A cached protocol must agree with the current resolver;
-                # a stale cache entry is discarded rather than trusted.
                 return None
             display = _display_name(kind, model_id)
             decoded.append(
@@ -624,11 +1112,7 @@ class ProviderCatalogSnapshot:
                     display_name=display,
                     protocol=protocol,
                     runnable=protocol is not None,
-                    unavailable_reason=(
-                        None
-                        if protocol is not None
-                        else "Protocol not yet resolved for direct API"
-                    ),
+                    unavailable_reason=None if protocol is not None else "Protocol not yet resolved for direct API",
                 )
             )
         ids = [item.model_id for item in decoded]
@@ -664,15 +1148,10 @@ def _display_name(kind: str, model_id: str) -> str:
 def _normalize_catalog(
     kind: str, payload: Mapping[str, Any]
 ) -> Tuple[Tuple[DiscoveredProviderModel, ...], bool]:
-    """Deterministic normalization: validate, dedupe, sort, bound.
+    pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/:-]{0,127}$", re.IGNORECASE)
+    if kind in _BUILTIN_CONTRACTS:
+        pattern = re.compile(_BUILTIN_CONTRACTS[kind].catalog_model_id_pattern)
 
-    Duplicated, invalid, or oversized entries are ignored; ordering is
-    deterministic; no generation inference and no protocol guessing
-    happen here.
-    """
-
-    contract = _CONTRACTS[kind]
-    pattern = re.compile(contract.catalog_model_id_pattern)
     data = payload.get("data")
     if data is None:
         data = payload.get("models")
@@ -680,9 +1159,12 @@ def _normalize_catalog(
         raise ProviderConnectionError("catalog response has no model list")
     seen: Dict[str, None] = {}
     for entry in data:
-        if not isinstance(entry, Mapping):
+        if isinstance(entry, str):
+            model_id = entry
+        elif isinstance(entry, Mapping):
+            model_id = entry.get("id") or entry.get("name") or entry.get("model")
+        else:
             continue
-        model_id = entry.get("id")
         if type(model_id) is not str:
             continue
         stripped = model_id.strip()
@@ -709,24 +1191,12 @@ _MAX_CACHE_FILE_BYTES = 512 * 1024
 
 
 def catalog_cache_path() -> Path:
-    """App-owned cache location (outside the repository and session evidence).
-
-    Model identities and protocol metadata are not secrets; the cache
-    never stores credentials, auth headers, or prompts.
-    """
-
     base = os.environ.get("LOCALAPPDATA") or str(Path.home())
     return Path(base) / "AgenticDebugger" / "provider-catalog-cache.json"
 
 
 def load_cached_catalog(kind: str) -> Optional[ProviderCatalogSnapshot]:
-    """The most recent valid cached snapshot, or ``None``.
-
-    Malformed, oversized, or stale-schema caches fail closed to
-    ``None`` (treated as absent); they are never partially trusted.
-    """
-
-    if kind not in DIRECT_API_PROVIDER_KINDS:
+    if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
         raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
     path = catalog_cache_path()
     try:
@@ -748,9 +1218,7 @@ def load_cached_catalog(kind: str) -> Optional[ProviderCatalogSnapshot]:
 
 
 def save_cached_catalog(snapshot: ProviderCatalogSnapshot) -> None:
-    """Atomically persist one snapshot (bounded; never credentials)."""
-
-    if snapshot.kind not in DIRECT_API_PROVIDER_KINDS:
+    if snapshot.kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(snapshot.kind):
         raise ProviderConnectionError(
             f"unknown direct-API provider: {snapshot.kind!r}"
         )
@@ -765,15 +1233,10 @@ def save_cached_catalog(snapshot: ProviderCatalogSnapshot) -> None:
                 and decoded.get("schema_version") == _CACHE_SCHEMA_VERSION
                 and isinstance(decoded.get("providers"), Mapping)
             ):
-                # Preserve only snapshots that pass the current strict
-                # schema/resolver contract.  Unknown keys and malformed
-                # entries are never carried forward into the app-owned cache.
-                for kind in DIRECT_API_PROVIDER_KINDS:
-                    preserved = ProviderCatalogSnapshot.from_mapping(
-                        decoded["providers"].get(kind)
-                    )
+                for k, v in decoded["providers"].items():
+                    preserved = ProviderCatalogSnapshot.from_mapping(v)
                     if preserved is not None:
-                        existing[kind] = preserved.to_mapping()
+                        existing[k] = preserved.to_mapping()
     except (OSError, UnicodeError, json.JSONDecodeError):
         existing = {}
     existing[snapshot.kind] = snapshot.to_mapping()
@@ -807,14 +1270,11 @@ def save_cached_catalog(snapshot: ProviderCatalogSnapshot) -> None:
                 temporary.unlink(missing_ok=True)
             except OSError:
                 pass
-        raise ProviderConnectionError(
-            "provider catalog cache could not be written"
-        ) from None
+        raise ProviderConnectionError("provider catalog cache could not be written") from None
 
 
 # -- connection status --------------------------------------------------------
 
-#: A cached catalog older than this is presented as stale/unverified.
 _CATALOG_STALE_AFTER = timedelta(days=7)
 
 
@@ -833,6 +1293,9 @@ class ProviderConnectionStatus:
     stale: bool
     status_message: Optional[str] = None
     cached_models: Tuple[DiscoveredProviderModel, ...] = ()
+    api_format: str = PROTOCOL_CHAT_COMPLETIONS
+    enabled: bool = True
+    is_builtin: bool = False
 
 
 def _cached_status_fields(
@@ -859,12 +1322,27 @@ def _cached_status_fields(
 
 def provider_connection_status(kind: str) -> ProviderConnectionStatus:
     """Presence-only connection view; never contacts the provider."""
-
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    cfg = get_provider_config(kind)
+    if cfg is None and contract is None:
         raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+
     source = credential_source_for(kind)
     model_count, last_refresh, refresh_source, stale, cached = _cached_status_fields(kind)
+
+    if contract is not None:
+        label = _BUILTIN_PROVIDER_LABELS.get(kind, kind)
+        base_url_desc = describe_url(contract.base_url + contract.catalog_path)
+        api_format = PROTOCOL_CHAT_COMPLETIONS
+        enabled = True
+        is_builtin = True
+    else:
+        label = cfg.name
+        base_url_desc = describe_url(cfg.base_url)
+        api_format = cfg.api_format
+        enabled = cfg.enabled
+        is_builtin = cfg.is_builtin
+
     message: Optional[str] = None
     if source is None:
         if kind == "commandcode_goat":
@@ -873,12 +1351,15 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
                 "entered for this app session (the CLI auth store is not "
                 "readable by the direct route)"
             )
+        elif kind == "opencode_go":
+            message = "Not connected — no usable credential source found"
         else:
             message = "Not connected — no usable credential source found"
+
     return ProviderConnectionStatus(
         kind=kind,
-        label=_PROVIDER_LABELS[kind],
-        base_url=describe_url(contract.base_url + contract.catalog_path),
+        label=label,
+        base_url=base_url_desc,
         connected=source is not None,
         credential_source=source,
         model_count=model_count,
@@ -887,15 +1368,29 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
         stale=stale,
         status_message=message,
         cached_models=cached,
+        api_format=api_format,
+        enabled=enabled,
+        is_builtin=is_builtin,
     )
 
 
 def connection_statuses() -> List[ProviderConnectionStatus]:
-    return [provider_connection_status(kind) for kind in DIRECT_API_PROVIDER_KINDS]
+    """Return connection statuses for all configured providers."""
+    configs = load_provider_configurations()
+    seen = set()
+    statuses = []
+    for c in configs:
+        if c.provider_id not in seen:
+            seen.add(c.provider_id)
+            statuses.append(provider_connection_status(c.provider_id))
+    for kind in DIRECT_API_PROVIDER_KINDS:
+        if kind not in seen:
+            seen.add(kind)
+            statuses.append(provider_connection_status(kind))
+    return statuses
 
 
 # -- explicit catalog refresh --------------------------------------------------
-
 
 def refresh_provider_catalog(
     kind: str,
@@ -904,26 +1399,36 @@ def refresh_provider_catalog(
     engine: Optional[str] = None,
     credential: Optional[str] = None,
 ) -> ProviderCatalogSnapshot:
-    """Fetch, normalize, cache, and return one live catalog snapshot.
-
-    Explicit, user-initiated catalog discovery: a read-only GET that
-    performs no generation inference and consumes no model credits.
-    Failures raise :class:`ProviderConnectionError` with bounded,
-    credential-safe text; a failed refresh never fabricates an empty
-    successful catalog and leaves the previous cache untouched.
-    """
-
-    contract = _CONTRACTS.get(kind)
-    if contract is None:
+    """Fetch, normalize, cache, and return one live catalog snapshot."""
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    cfg = get_provider_config(kind)
+    if cfg is None and contract is None:
         raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+
     resolved = credential if credential is not None else resolve_runtime_credential(kind)
+    provider_label = _BUILTIN_PROVIDER_LABELS.get(kind, cfg.name if cfg else kind)
     if not resolved:
-        env_hint = f"set {contract.env_var}" if contract.env_var else "connect an API key"
+        env_hint = (
+            f"set {contract.env_var}"
+            if (contract and contract.env_var)
+            else "connect an API key"
+        )
         raise ProviderConnectionError(
-            f"{_PROVIDER_LABELS[kind]}: no usable credential source — "
+            f"{provider_label}: no usable credential source — "
             f"{env_hint} or connect an API key for this app session"
         )
-    url = contract.base_url + contract.catalog_path
+
+    if contract is not None:
+        url = contract.base_url + contract.catalog_path
+        tls_blocked = contract.tls_signature_blocked
+    else:
+        base = cfg.base_url.rstrip("/")
+        if base.endswith("/models"):
+            url = base
+        else:
+            url = base + "/models"
+        tls_blocked = cfg.tls_signature_blocked
+
     try:
         payload = request_json(
             "GET",
@@ -932,23 +1437,31 @@ def refresh_provider_catalog(
             timeout_seconds=timeout_seconds,
             max_response_bytes=_CATALOG_MAX_RESPONSE_BYTES,
             engine=engine,
-            tls_signature_blocked=contract.tls_signature_blocked,
+            tls_signature_blocked=tls_blocked,
         )
     except ProviderHttpError as exc:
         raise ProviderConnectionError(
-            f"{_PROVIDER_LABELS[kind]} catalog refresh failed: {exc}"
+            f"{provider_label} catalog refresh failed: {exc}"
         ) from exc
+
     models, truncated = _normalize_catalog(kind, payload)
     if not models:
         raise ProviderConnectionError(
-            f"{_PROVIDER_LABELS[kind]} catalog refresh returned no usable models"
+            f"{provider_label} catalog refresh returned no usable models"
         )
+
+    now_str = _utc_now()
     snapshot = ProviderCatalogSnapshot(
         kind=kind,
-        fetched_at_utc=_utc_now(),
+        fetched_at_utc=now_str,
         source=_SNAPSHOT_SOURCE_LIVE,
         models=models,
         truncated=truncated,
     )
     save_cached_catalog(snapshot)
+
+    # Also persist to ProviderConfig if known
+    if cfg is not None:
+        update_provider_config(kind, models=models)
+
     return snapshot

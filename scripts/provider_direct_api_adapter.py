@@ -47,6 +47,7 @@ try:
     from agentic_debugger.application.provider_connections import (
         DIRECT_API_PROVIDER_KINDS,
         inference_path_for,
+        is_known_provider,
         provider_api_model_id,
         resolve_model_protocol,
         resolve_runtime_credential,
@@ -60,6 +61,7 @@ except ImportError:  # pragma: no cover - defensive import path (bare child)
     from agentic_debugger.application.provider_connections import (
         DIRECT_API_PROVIDER_KINDS,
         inference_path_for,
+        is_known_provider,
         provider_api_model_id,
         resolve_model_protocol,
         resolve_runtime_credential,
@@ -390,7 +392,7 @@ def run_adapter(
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
 ) -> int:
-    if provider not in DIRECT_API_PROVIDER_KINDS:
+    if provider not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(provider):
         raise ProviderDirectApiError(
             f"unknown direct-API provider: {provider!r}", kind="configuration"
         )
@@ -431,7 +433,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Provider direct-API protocol-1.3 command adapter"
     )
-    parser.add_argument("--provider", required=True, choices=sorted(DIRECT_API_PROVIDER_KINDS))
+    parser.add_argument("--provider", required=True)
     parser.add_argument("--model", required=True)
     parser.add_argument(
         "--protocol",

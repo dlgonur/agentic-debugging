@@ -422,6 +422,8 @@ class HomeScreen(Screen):
         Binding("s", "start_session", "Start debugging", priority=True),
         Binding("n", "start_session", "New session", show=False),
         Binding("p", "start_local_project", "Local Project", priority=True),
+        Binding("m", "open_providers", "Model Providers", priority=True),
+        Binding("c", "open_providers", "Model Providers", show=False, priority=True),
         Binding("h", "open_history", "Session History", priority=True),
         Binding("?", "show_help", "Help", priority=True),
         Binding("q", "quit_app", "Quit", priority=True),
@@ -453,6 +455,13 @@ class HomeScreen(Screen):
                         "Debug a local Git repository",
                         "action-local",
                         id="action-local",
+                    )
+                    yield HomeActionRow(
+                        "M",
+                        "Model Providers",
+                        "Manage external endpoints & API keys",
+                        "action-providers",
+                        id="action-providers",
                     )
                     yield HomeActionRow(
                         "H",
@@ -539,6 +548,8 @@ class HomeScreen(Screen):
             self.action_start_session()
         elif action_id == "action-local":
             self.action_start_local_project()
+        elif action_id == "action-providers":
+            self.action_open_providers()
         elif action_id == "action-history":
             self.action_open_history()
         elif action_id == "action-help":
@@ -565,6 +576,9 @@ class HomeScreen(Screen):
                 initial_target=TARGET_LOCAL_PROJECT,
             )
         )
+
+    def action_open_providers(self) -> None:
+        self.app.push_screen(ModelProvidersScreen())
 
     def action_open_history(self) -> None:
         self.app.push_screen(HistoryScreen())
@@ -1319,14 +1333,15 @@ _PROVIDER_CREDENTIAL_SOURCE_LABELS = {
 }
 
 
-class ProviderConnectionsScreen(Screen):
-    """Manage the built-in direct-API provider connections.
+class ModelProvidersScreen(Screen):
+    """First-class Model Provider Manager: endpoints, credentials, and models.
 
-    Operational surface only: per-provider connection status, credential
-    source, discovered model count, last refresh, explicit refresh
-    (a read-only catalog GET — no generation inference), and memory-only
-    API-key entry.  Scientific qualification is intentionally absent:
-    discovery never changes Capability Ladder eligibility.
+    Operational surface:
+    - Left column: provider sidebar with statuses + '+ Add provider'
+    - Right column: active provider details, credential status, model discovery,
+      manual model fallback, edit/delete, and add provider form.
+    - Fully centered, substantial desktop geometry (width ~98 cols) and responsive
+      adaptation on compact screens.
     """
 
     BINDINGS = [
@@ -1335,84 +1350,153 @@ class ProviderConnectionsScreen(Screen):
         Binding("down", "select_next", "Next provider", show=False),
         Binding("r", "refresh", "Refresh models"),
         Binding("k", "connect_key", "Connect API key"),
+        Binding("a", "add_provider", "Add provider"),
+        Binding("e", "edit_provider", "Edit provider"),
+        Binding("d", "delete_provider", "Delete provider"),
     ]
 
     def __init__(self) -> None:
         super().__init__()
         self._selected_index = 0
+        self._mode = "details"  # "details", "add", "edit"
         self._refreshing: set[str] = set()
         self._message = ""
+        self._form_name = ""
+        self._form_url = ""
+        self._form_key = ""
+        self._form_format = "chat_completions"
+        self._editing_provider_id: Optional[str] = None
+        self._discovery_results: Optional[str] = None
 
     def compose(self) -> ComposeResult:
-        from agentic_debugger.application.provider_connections import (
-            DIRECT_API_PROVIDER_KINDS,
-        )
+        from agentic_debugger.application.provider_connections import connection_statuses
 
+        statuses = connection_statuses()
         with Vertical(id="providers-wrap"):
-            yield Static("PROVIDER CONNECTIONS", id="providers-title")
-            with VerticalScroll(id="providers-list"):
-                for index, kind in enumerate(DIRECT_API_PROVIDER_KINDS):
-                    with Vertical(classes="provider-panel", id=f"provider-panel-{kind}"):
-                        yield Static("", id=f"provider-summary-{kind}", classes="provider-summary")
-                        yield Static("", id=f"provider-refresh-{kind}", classes="provider-refresh")
-                        with Horizontal(classes="provider-actions"):
-                            yield Button(
-                                "Refresh models",
-                                id=f"provider-refresh-button-{kind}",
-                                classes="provider-action-button",
-                            )
-                            yield Button(
-                                "Connect API key",
-                                id=f"provider-key-button-{kind}",
-                                classes="provider-action-button",
-                            )
-            yield Static("", id="providers-status")
-            yield Static(
-                "up/down select   r refresh models   k connect API key   esc back",
-                id="providers-hint",
-            )
+            with Vertical(id="providers-manager-card"):
+                with Horizontal(id="providers-manager-header"):
+                    yield Static("MODEL PROVIDER MANAGER", id="providers-title")
+                    yield Static("Endpoints · OS Secure Store · Direct API", id="providers-subtitle")
+                with Horizontal(id="providers-manager-body"):
+                    with Vertical(id="providers-sidebar"):
+                        yield Static("PROVIDERS", id="providers-sidebar-title")
+                        with VerticalScroll(id="providers-sidebar-list"):
+                            for index, st in enumerate(statuses):
+                                dot = "● " if st.connected else "○ "
+                                label = f"{dot}{st.label}"
+                                yield Button(
+                                    label,
+                                    id=f"provider-select-{st.kind}",
+                                    classes=f"provider-item-button{' -selected' if index == self._selected_index else ''}",
+                                )
+                        yield Button("+ Add provider", id="provider-add-button", classes="primary-action")
+                    with VerticalScroll(id="provider-main-view"):
+                        for st in statuses:
+                            with Vertical(classes="provider-panel", id=f"provider-panel-{st.kind}"):
+                                yield Static("", id=f"provider-summary-{st.kind}", classes="provider-summary")
+                                yield Static("", id=f"provider-refresh-{st.kind}", classes="provider-refresh")
+                                with Horizontal(classes="provider-actions", id=f"provider-actions-{st.kind}"):
+                                    yield Button(
+                                        "Refresh models",
+                                        id=f"provider-refresh-button-{st.kind}",
+                                        classes="provider-action-button",
+                                    )
+                                    yield Button(
+                                        "Connect API key",
+                                        id=f"provider-key-button-{st.kind}",
+                                        classes="provider-action-button",
+                                    )
+                                    yield Button(
+                                        "Edit provider",
+                                        id=f"provider-edit-button-{st.kind}",
+                                        classes="provider-action-button",
+                                    )
+                                    if not st.is_builtin:
+                                        yield Button(
+                                            "Delete",
+                                            id=f"provider-delete-button-{st.kind}",
+                                            classes="provider-action-button danger-action",
+                                        )
+                                yield Static("MODELS", classes="models-header", id=f"provider-models-title-{st.kind}")
+                                with Vertical(classes="models-box", id=f"provider-models-box-{st.kind}"):
+                                    yield Static("", id=f"provider-models-list-{st.kind}", classes="models-list-text")
+                                yield Button(
+                                    "+ Add model (manual)",
+                                    id=f"provider-add-model-button-{st.kind}",
+                                    classes="provider-action-button",
+                                )
+                yield Static("", id="providers-status")
+                yield Static(
+                    "up/down select   r refresh models   k connect key   a add provider   e edit   esc back",
+                    id="providers-hint",
+                )
 
     def on_mount(self) -> None:
         self.render_state()
 
     # -- state ---------------------------------------------------------------
 
-    def _selected_kind(self) -> str:
-        from agentic_debugger.application.provider_connections import (
-            DIRECT_API_PROVIDER_KINDS,
-        )
+    def _current_statuses(self):
+        from agentic_debugger.application.provider_connections import connection_statuses
+        return connection_statuses()
 
-        kinds = list(DIRECT_API_PROVIDER_KINDS)
-        return kinds[min(self._selected_index, len(kinds) - 1)]
+    def _selected_kind(self) -> str:
+        statuses = self._current_statuses()
+        if not statuses:
+            return "opencode_go"
+        idx = max(0, min(self._selected_index, len(statuses) - 1))
+        return statuses[idx].kind
 
     def render_state(self) -> None:
-        from agentic_debugger.application.provider_connections import (
-            connection_statuses,
-        )
+        statuses = self._current_statuses()
+        selected_kind = self._selected_kind()
 
-        statuses = connection_statuses()
+        # Update sidebar buttons
         for index, status in enumerate(statuses):
-            marker = "› " if index == self._selected_index else "  "
+            btn_id = f"#provider-select-{status.kind}"
+            try:
+                btn = self.query_one(btn_id, Button)
+                dot = "● " if status.connected else "○ "
+                btn.label = f"{dot}{status.label}"
+                if index == self._selected_index:
+                    btn.add_class("-selected")
+                else:
+                    btn.remove_class("-selected")
+            except Exception:
+                pass
+
+        # Update main view panels
+        for index, status in enumerate(statuses):
+            panel_id = f"#provider-panel-{status.kind}"
+            try:
+                panel = self.query_one(panel_id, Vertical)
+                # Show only active provider panel
+                panel.display = (index == self._selected_index)
+            except Exception:
+                continue
+
             summary = self.query_one(f"#provider-summary-{status.kind}", Static)
             refresh_line = self.query_one(f"#provider-refresh-{status.kind}", Static)
+            models_list = self.query_one(f"#provider-models-list-{status.kind}", Static)
+
             if status.connected:
                 source = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
                     status.credential_source, status.credential_source or ""
                 )
                 summary.update(
                     Text()
-                    .append(f"{marker}{status.label}", style=f"bold {FOREGROUND}")
-                    .append(
-                        f"   Connected · {source}",
-                        style=f"{PRIMARY}",
-                    )
+                    .append(f"{status.label}", style=f"bold {FOREGROUND}")
+                    .append(f"   Connected · {source}", style=f"{PRIMARY}")
+                    .append(f"\nBase URL: {status.base_url} · Format: {status.api_format}", style=f"{MUTED}")
                 )
             else:
                 summary.update(
                     Text()
-                    .append(f"{marker}{status.label}", style=f"bold {MUTED}")
+                    .append(f"{status.label}", style=f"bold {MUTED}")
                     .append("   Not connected", style=FAINT)
+                    .append(f"\nBase URL: {status.base_url} · Format: {status.api_format}", style=f"{MUTED}")
                 )
+
             lines = []
             if status.model_count:
                 when = (status.last_refresh_utc or "").replace("T", " ").split(".", 1)[0]
@@ -1424,11 +1508,22 @@ class ProviderConnectionsScreen(Screen):
                 lines.append("No catalog yet — refresh models to discover the live catalog")
             if status.status_message:
                 lines.append(status.status_message)
-            if status.kind in self._refreshing:
-                lines.append("Refreshing…")
             refresh_line.update("\n".join(lines) if lines else "")
-        status = self.query_one("#providers-status", Static)
-        status.update(self._message)
+
+            # Render models list
+            model_items = []
+            for m in status.cached_models:
+                proto_str = f" [{m.protocol}]" if m.protocol else ""
+                model_items.append(f"• {m.display_name} ({m.model_id}){proto_str}")
+            if model_items:
+                models_list.update("\n".join(model_items[:24]))
+            elif status.connected:
+                models_list.update("[dim]No models discovered yet. Click 'Refresh models' or '+ Add model'.[/]")
+            else:
+                models_list.update("[dim]Connect API key and refresh models to discover available models.[/]")
+
+        status_widget = self.query_one("#providers-status", Static)
+        status_widget.update(self._message)
 
     # -- actions ---------------------------------------------------------------
 
@@ -1441,11 +1536,8 @@ class ProviderConnectionsScreen(Screen):
             self.render_state()
 
     def action_select_next(self) -> None:
-        from agentic_debugger.application.provider_connections import (
-            DIRECT_API_PROVIDER_KINDS,
-        )
-
-        if self._selected_index < len(DIRECT_API_PROVIDER_KINDS) - 1:
+        statuses = self._current_statuses()
+        if self._selected_index < len(statuses) - 1:
             self._selected_index += 1
             self.render_state()
 
@@ -1481,7 +1573,7 @@ class ProviderConnectionsScreen(Screen):
         except ProviderConnectionError as exc:
             self.app.call_from_thread(self._refresh_finished, kind, False, str(exc))
             return
-        except Exception:  # pragma: no cover - defensive, credential/path safe
+        except Exception:
             self.app.call_from_thread(
                 self._refresh_finished,
                 kind,
@@ -1508,33 +1600,93 @@ class ProviderConnectionsScreen(Screen):
         def handle(value: Optional[str]) -> None:
             if value:
                 from agentic_debugger.application.provider_connections import (
+                    save_secure_credential,
                     set_session_key,
                 )
 
                 try:
                     set_session_key(kind, value)
-                    self._set_message(
-                        "API key: connected for this app session (process memory "
-                        "only — not stored on disk)"
-                    )
+                    saved = save_secure_credential(kind, value)
+                    if saved:
+                        self._set_message("API key: saved securely in OS credential manager")
+                    else:
+                        self._set_message("API key: connected for this app session (memory-only)")
                 except Exception as exc:
                     self._set_message(f"API key rejected: {exc}")
             self.render_state()
 
         self.app.push_screen(
             MaskedKeyEditorScreen(
-                title="API key (masked)",
+                title=f"Connect API key for {kind}",
                 note=(
-                    "Kept in memory for this app session only; the repository "
-                    "does not persist API keys."
+                    "Stored securely in OS Credential Manager (Windows) or memory-only "
+                    "for this session. Never written to project files."
                 ),
                 on_save=handle,
             )
         )
 
+    def action_add_provider(self) -> None:
+        def on_saved(new_cfg):
+            if new_cfg:
+                self._set_message(f"Added provider '{new_cfg.name}'")
+                # Reload screen to refresh widget tree
+                self.app.pop_screen()
+                self.app.push_screen(ModelProvidersScreen())
+
+        self.app.push_screen(AddProviderDialogScreen(on_save=on_saved))
+
+    def action_edit_provider(self) -> None:
+        kind = self._selected_kind()
+        from agentic_debugger.application.provider_connections import get_provider_config
+        cfg = get_provider_config(kind)
+        if not cfg:
+            self._set_message(f"Provider {kind} cannot be edited")
+            return
+
+        def on_saved(updated_cfg):
+            if updated_cfg:
+                self._set_message(f"Updated provider '{updated_cfg.name}'")
+                self.render_state()
+
+        self.app.push_screen(EditProviderDialogScreen(config=cfg, on_save=on_saved))
+
+    def action_delete_provider(self) -> None:
+        kind = self._selected_kind()
+        from agentic_debugger.application.provider_connections import delete_provider_config, get_provider_config
+        cfg = get_provider_config(kind)
+        if cfg and cfg.is_builtin:
+            self._set_message("Built-in providers cannot be deleted")
+            return
+        if delete_provider_config(kind):
+            self._set_message(f"Deleted provider {kind}")
+            self.app.pop_screen()
+            self.app.push_screen(ModelProvidersScreen())
+
+    def _action_add_manual_model(self, kind: str) -> None:
+        def on_added(model_id: Optional[str], display_name: Optional[str], protocol: Optional[str]):
+            if model_id:
+                from agentic_debugger.application.provider_connections import add_manual_model
+                try:
+                    add_manual_model(kind, model_id, display_name, protocol)
+                    self._set_message(f"Added model {model_id}")
+                    self.render_state()
+                except Exception as exc:
+                    self._set_message(f"Failed to add model: {exc}")
+
+        self.app.push_screen(AddManualModelDialogScreen(provider_id=kind, on_save=on_added))
+
     def on_button_pressed(self, event: Any) -> None:
         button_id = getattr(event.button, "id", "") or ""
-        if button_id.startswith("provider-refresh-button-"):
+        if button_id.startswith("provider-select-"):
+            kind = button_id.removeprefix("provider-select-")
+            self._selected_index = self._index_of(kind)
+            self.render_state()
+            event.stop()
+        elif button_id == "provider-add-button":
+            self.action_add_provider()
+            event.stop()
+        elif button_id.startswith("provider-refresh-button-"):
             kind = button_id.removeprefix("provider-refresh-button-")
             self._selected_index = self._index_of(kind)
             self.action_refresh()
@@ -1544,16 +1696,274 @@ class ProviderConnectionsScreen(Screen):
             self._selected_index = self._index_of(kind)
             self.action_connect_key()
             event.stop()
+        elif button_id.startswith("provider-edit-button-"):
+            kind = button_id.removeprefix("provider-edit-button-")
+            self._selected_index = self._index_of(kind)
+            self.action_edit_provider()
+            event.stop()
+        elif button_id.startswith("provider-delete-button-"):
+            kind = button_id.removeprefix("provider-delete-button-")
+            self._selected_index = self._index_of(kind)
+            self.action_delete_provider()
+            event.stop()
+        elif button_id.startswith("provider-add-model-button-"):
+            kind = button_id.removeprefix("provider-add-model-button-")
+            self._selected_index = self._index_of(kind)
+            self._action_add_manual_model(kind)
+            event.stop()
 
     def _index_of(self, kind: str) -> int:
-        from agentic_debugger.application.provider_connections import (
-            DIRECT_API_PROVIDER_KINDS,
-        )
+        statuses = self._current_statuses()
+        for idx, st in enumerate(statuses):
+            if st.kind == kind:
+                return idx
+        return 0
 
+
+class AddProviderDialogScreen(Screen):
+    """Dialog for adding a new generic model provider."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, on_save: Callable[[Any], None]) -> None:
+        super().__init__()
+        self._on_save = on_save
+        self._format = "chat_completions"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="provider-dialog-card"):
+            yield Static("ADD MODEL PROVIDER", id="dialog-title")
+            yield Static("Provider Name", classes="dialog-label")
+            yield Input(placeholder="e.g. Groq Direct or DeepSeek V3", id="input-name")
+            yield Static("Base URL", classes="dialog-label")
+            yield Input(placeholder="https://api.groq.com/openai/v1", id="input-url")
+            yield Static("API Key (optional, stored securely)", classes="dialog-label")
+            yield Input(password=True, placeholder="API key", id="input-key")
+            yield Static("API Protocol Format", classes="dialog-label")
+            with Horizontal(id="format-buttons-row"):
+                yield Button("Chat Completions", id="fmt-chat", classes="fmt-btn -selected")
+                yield Button("Responses", id="fmt-resp", classes="fmt-btn")
+                yield Button("Messages", id="fmt-msg", classes="fmt-btn")
+            yield Static("", id="dialog-feedback")
+            with Horizontal(id="dialog-actions-row"):
+                yield Button("Save provider", id="btn-save-dialog", classes="primary-action")
+                yield Button("Cancel", id="btn-cancel-dialog")
+
+    def on_mount(self) -> None:
+        self.query_one("#input-name", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_save(None)
+
+    def on_button_pressed(self, event: Any) -> None:
+        btn_id = getattr(event.button, "id", "")
+        if btn_id == "fmt-chat":
+            self._format = "chat_completions"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "fmt-resp":
+            self._format = "responses"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "fmt-msg":
+            self._format = "messages"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "btn-cancel-dialog":
+            self.action_cancel()
+            event.stop()
+        elif btn_id == "btn-save-dialog":
+            self._do_save()
+            event.stop()
+
+    def _update_format_buttons(self) -> None:
+        for fid, val in [("fmt-chat", "chat_completions"), ("fmt-resp", "responses"), ("fmt-msg", "messages")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._format == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+
+    def _do_save(self) -> None:
+        name = self.query_one("#input-name", Input).value.strip()
+        url = self.query_one("#input-url", Input).value.strip()
+        key = self.query_one("#input-key", Input).value.strip()
+        feedback = self.query_one("#dialog-feedback", Static)
+
+        if not name:
+            feedback.update("[red]Provider name is required[/]")
+            return
+        if not url:
+            feedback.update("[red]Base URL is required[/]")
+            return
+        from agentic_debugger.application.provider_connections import add_provider_config
         try:
-            return list(DIRECT_API_PROVIDER_KINDS).index(kind)
-        except ValueError:
-            return 0
+            cfg = add_provider_config(
+                name=name,
+                base_url=url,
+                api_format=self._format,
+                api_key=key or None,
+            )
+            self.app.pop_screen()
+            self._on_save(cfg)
+        except Exception as exc:
+            feedback.update(f"[red]Error: {exc}[/]")
+
+
+class EditProviderDialogScreen(Screen):
+    """Dialog for editing an existing model provider."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, config: Any, on_save: Callable[[Any], None]) -> None:
+        super().__init__()
+        self._config = config
+        self._on_save = on_save
+        self._format = config.api_format
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="provider-dialog-card"):
+            yield Static(f"EDIT PROVIDER: {self._config.name}", id="dialog-title")
+            yield Static("Provider Name", classes="dialog-label")
+            yield Input(value=self._config.name, id="input-name")
+            yield Static("Base URL", classes="dialog-label")
+            yield Input(value=self._config.base_url, id="input-url")
+            yield Static("API Key (leave blank to keep current)", classes="dialog-label")
+            yield Input(password=True, placeholder="new API key", id="input-key")
+            yield Static("API Protocol Format", classes="dialog-label")
+            with Horizontal(id="format-buttons-row"):
+                yield Button("Chat Completions", id="fmt-chat", classes=f"fmt-btn {'-selected' if self._format == 'chat_completions' else ''}")
+                yield Button("Responses", id="fmt-resp", classes=f"fmt-btn {'-selected' if self._format == 'responses' else ''}")
+                yield Button("Messages", id="fmt-msg", classes=f"fmt-btn {'-selected' if self._format == 'messages' else ''}")
+            yield Static("", id="dialog-feedback")
+            with Horizontal(id="dialog-actions-row"):
+                yield Button("Save changes", id="btn-save-dialog", classes="primary-action")
+                yield Button("Cancel", id="btn-cancel-dialog")
+
+    def on_mount(self) -> None:
+        self.query_one("#input-name", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_save(None)
+
+    def on_button_pressed(self, event: Any) -> None:
+        btn_id = getattr(event.button, "id", "")
+        if btn_id == "fmt-chat":
+            self._format = "chat_completions"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "fmt-resp":
+            self._format = "responses"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "fmt-msg":
+            self._format = "messages"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "btn-cancel-dialog":
+            self.action_cancel()
+            event.stop()
+        elif btn_id == "btn-save-dialog":
+            self._do_save()
+            event.stop()
+
+    def _update_format_buttons(self) -> None:
+        for fid, val in [("fmt-chat", "chat_completions"), ("fmt-resp", "responses"), ("fmt-msg", "messages")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._format == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+
+    def _do_save(self) -> None:
+        name = self.query_one("#input-name", Input).value.strip()
+        url = self.query_one("#input-url", Input).value.strip()
+        key = self.query_one("#input-key", Input).value.strip()
+        feedback = self.query_one("#dialog-feedback", Static)
+
+        if not name:
+            feedback.update("[red]Provider name is required[/]")
+            return
+        if not url:
+            feedback.update("[red]Base URL is required[/]")
+            return
+        from agentic_debugger.application.provider_connections import update_provider_config
+        try:
+            cfg = update_provider_config(
+                provider_id=self._config.provider_id,
+                name=name,
+                base_url=url,
+                api_format=self._format,
+                api_key=key or None,
+            )
+            self.app.pop_screen()
+            self._on_save(cfg)
+        except Exception as exc:
+            feedback.update(f"[red]Error: {exc}[/]")
+
+
+class AddManualModelDialogScreen(Screen):
+    """Dialog for manually adding a model identifier to a provider."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(self, provider_id: str, on_save: Callable[[Optional[str], Optional[str], Optional[str]], None]) -> None:
+        super().__init__()
+        self._provider_id = provider_id
+        self._on_save = on_save
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="provider-dialog-card"):
+            yield Static(f"ADD MANUAL MODEL ({self._provider_id})", id="dialog-title")
+            yield Static("Model ID (sent to API)", classes="dialog-label")
+            yield Input(placeholder="e.g. llama-3.3-70b-versatile or claude-3-7-sonnet", id="input-model-id")
+            yield Static("Display Name (optional)", classes="dialog-label")
+            yield Input(placeholder="e.g. Llama 3.3 70B", id="input-model-disp")
+            yield Static("", id="dialog-feedback")
+            with Horizontal(id="dialog-actions-row"):
+                yield Button("Add model", id="btn-save-dialog", classes="primary-action")
+                yield Button("Cancel", id="btn-cancel-dialog")
+
+    def on_mount(self) -> None:
+        self.query_one("#input-model-id", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_save(None, None, None)
+
+    def on_button_pressed(self, event: Any) -> None:
+        btn_id = getattr(event.button, "id", "")
+        if btn_id == "btn-cancel-dialog":
+            self.action_cancel()
+            event.stop()
+        elif btn_id == "btn-save-dialog":
+            mid = self.query_one("#input-model-id", Input).value.strip()
+            disp = self.query_one("#input-model-disp", Input).value.strip()
+            feedback = self.query_one("#dialog-feedback", Static)
+            if not mid:
+                feedback.update("[red]Model ID is required[/]")
+                return
+            self.app.pop_screen()
+            self._on_save(mid, disp or None, None)
+            event.stop()
+
+
+# Backward compatibility alias
+ProviderConnectionsScreen = ModelProvidersScreen
 
 
 class StartSessionScreen(Screen):

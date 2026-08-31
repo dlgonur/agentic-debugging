@@ -17,6 +17,8 @@ Supported providers:
 - ``commandcode_goat`` — the operator's Command Code GOAT plan, with the
   same direct-API-first routing over the CommandCode Provider API and
   the local CommandCode CLI as the explicit legacy route.
+- Custom configured providers — user-configured direct-API endpoints
+  stored in persistent provider configurations.
 - ``configured``    — the existing app-owned command-model profile store.
 
 Design rules:
@@ -41,6 +43,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, List, Mapping, Optional, Tuple
@@ -49,7 +52,12 @@ from agentic_debugger.application.provider_connections import (
     DIRECT_API_PROVIDER_KINDS,
     ProviderConnectionError,
     credential_source_for,
+    get_provider_config,
+    is_known_provider,
+    list_configured_providers,
     load_cached_catalog,
+    provider_api_model_id,
+    provider_base_url,
     provider_environment_variable,
     resolve_model_protocol,
 )
@@ -140,105 +148,37 @@ def _normalize_key(s: str) -> str:
 
 
 def format_model_display_name(raw: str) -> str:
-    """Format any model identifier or alias into a clean human-readable name.
+    """Format any model identifier or alias into a clean human-readable name."""
+    if not raw or not isinstance(raw, str):
+        return raw
 
-    Examples:
-        deepseek-v4-flash:cloud -> DeepSeek V4 Flash
-        opencode-go/deepseek-v4-pro -> DeepSeek V4 Pro
-        zai-org/glm-5.2 -> GLM 5.2
-        gpt-oss:120b-cloud -> GPT-OSS 120B
-        nemotron-3-super:cloud -> Nemotron 3 Super
-    """
-    if not raw or raw.strip().lower() in ("offline", ""):
-        return "Offline"
-    text = raw.strip()
-    if "/" in text:
-        text = text.rsplit("/", 1)[-1]
-    if text.endswith(":cloud"):
-        text = text[:-6]
-    elif text.endswith("-cloud"):
-        text = text[:-6]
+    s = raw.strip()
+    if s.endswith(":cloud"):
+        s = s[:-6]
+    if "/" in s:
+        s = s.rsplit("/", 1)[-1]
+    key = _normalize_key(s)
+    if key in _KNOWN_MODEL_MAP:
+        return _KNOWN_MODEL_MAP[key]
 
-    norm = _normalize_key(text)
-    if norm in _KNOWN_MODEL_MAP:
-        return _KNOWN_MODEL_MAP[norm]
-
-    acronyms = {
-        "gpt": "GPT",
-        "oss": "OSS",
-        "glm": "GLM",
-        "llm": "LLM",
-        "v1": "V1",
-        "v2": "V2",
-        "v3": "V3",
-        "v4": "V4",
-        "v5": "V5",
-        "v6": "V6",
-        "moe": "MoE",
-        "ai": "AI",
-        "pdb": "PDB",
-        "cli": "CLI",
-        "deepseek": "DeepSeek",
-        "minimax": "MiniMax",
-        "mimo": "MiMo",
-    }
-    parts = []
-    for chunk in text.replace("_", " ").replace("-", " ").replace(":", " ").split():
-        lower = chunk.lower()
-        if lower in acronyms:
-            parts.append(acronyms[lower])
-        elif lower.endswith("b") and lower[:-1].isdigit():
-            parts.append(f"{lower[:-1]}B")
+    parts = s.replace("_", "-").split("-")
+    formatted_parts: List[str] = []
+    for p in parts:
+        p_lower = p.lower()
+        if p_lower in ("glm", "gpt", "oss", "v4", "v3", "v2", "v1", "ai", "pro", "exp"):
+            formatted_parts.append(p.upper())
+        elif p_lower.startswith("v") and p[1:].isdigit():
+            formatted_parts.append(p.upper())
+        elif p_lower in ("flash", "deepseek", "kimi", "minimax", "qwen", "mistral", "gemma", "nemotron"):
+            formatted_parts.append(p.capitalize())
         else:
-            parts.append(chunk.capitalize())
-    return " ".join(parts) or text
-
-#: Curated presentation defaults captured from the live GOAT catalog
-#: (2026-08-28).  Any plan model id remains accepted at the adapter.
-_COMMANDCODE_DEFAULT_MODELS: Tuple[str, ...] = (
-    "deepseek/deepseek-v4-flash",
-    "deepseek/deepseek-v4-pro",
-    "zai-org/glm-5.2",
-    "zai-org/glm-5.2-fast",
-    "moonshotai/kimi-k3",
-    "qwen/qwen3.8-max",
-    "minimaxai/minimax-m3",
-    "xiaomi/mimo-v2.5-pro",
-    "gpt-5.6-sol",
-    "gpt-5.6-terra",
-)
-
-#: Curated presentation defaults captured from the live OpenCode Go
-#: catalog (2026-08-28).
-_OPENCODE_DEFAULT_MODELS: Tuple[str, ...] = (
-    "opencode-go/deepseek-v4-flash",
-    "opencode-go/deepseek-v4-pro",
-    "opencode-go/glm-5.3",
-    "opencode-go/glm-5.2",
-    "opencode-go/kimi-k3",
-    "opencode-go/kimi-k2.7-code",
-    "opencode-go/qwen3.8-max",
-    "opencode-go/grok-4.6",
-    "opencode-go/minimax-m3",
-)
-
-# Actual CommandCode executable names only; the Windows system shell
-# (cmd.exe) must never be treated as the CommandCode CLI.
-_COMMANDCODE_CLI_CANDIDATES = ("cmdc", "command-code", "commandcode")
-_MAX_MODELS_LISTED = 128
-
-#: Direct-API adapter construction defaults (bounded, explicit).
-_DIRECT_API_DEFAULT_TIMEOUT_SECONDS = 300.0
-_DIRECT_API_TOOL_VERSION = "provider-direct-api-adapter-v1"
-
-
-class ProviderRegistryError(RuntimeError):
-    """Fail-closed provider registry error (never carries credentials)."""
+            formatted_parts.append(p.capitalize())
+    return " ".join(formatted_parts)
 
 
 @dataclass(frozen=True)
 class ProviderModel:
-    """One selectable model offered by one provider."""
+    """One model entry exposed by a provider registry."""
 
     kind: str
     model_id: str
@@ -246,117 +186,100 @@ class ProviderModel:
     provider_label: str
     available: bool
     unavailable_reason: Optional[str] = None
-    #: Informational (non-blocking) detail, e.g. the resolved direct-API
-    #: protocol family for a discovered catalog entry.
     note: Optional[str] = None
 
 
-def _commandcode_auth_store_path() -> Path:
-    return Path.home() / ".commandcode" / "auth.json"
+class ProviderRegistryError(RuntimeError):
+    """Fail-closed registry error with credential-safe text."""
 
 
-def _opencode_auth_store_path() -> Path:
-    # Same location contract as the frozen OpenCode adapter's auth state.
-    profile = os.environ.get("OPENCODE_CONFIG_DIR") or Path.home()
-    return Path(profile) / ".local" / "share" / "opencode" / "auth.json"
+_OPENCODE_DEFAULT_MODELS: Tuple[str, ...] = (
+    "opencode-go/glm-5.3-flash",
+    "opencode-go/kimi-k3",
+    "opencode-go/minimax-m3",
+    "opencode-go/deepseek-v4-flash",
+    "opencode-go/qwen3.8-max",
+    "opencode-go/gpt-5.6-luna",
+)
+
+_COMMANDCODE_DEFAULT_MODELS: Tuple[str, ...] = (
+    "deepseek/deepseek-v4-flash",
+    "anthropic/claude-sonnet-5",
+    "anthropic/claude-haiku-4.5",
+    "moonshotai/Kimi-K3",
+    "google/gemini-3.7-flash",
+    "zai-org/glm-5.2",
+    "gpt-5.6-sol",
+)
 
 
-def _first_on_path(candidates: Tuple[str, ...]) -> Optional[str]:
-    for name in candidates:
-        found = shutil.which(name)
-        if found:
-            return found
-    return None
+def _ollama_availability() -> Tuple[bool, Optional[str]]:
+    from scripts.ollama_cloud_command_adapter import (
+        OLLAMA_API_KEY_ENV_VAR,
+        resolve_ollama_credential,
+    )
 
-
-def _commandcode_availability() -> Tuple[bool, Optional[str]]:
-    """GOAT readiness = operator auth store (or env key) AND local CLI.
-
-    Presence checks only: the key bytes are never read here.
-    """
-
-    environment_var = provider_environment_variable(PROVIDER_KIND_COMMANDCODE)
-    if not (
-        _commandcode_auth_store_path().is_file()
-        or bool(environment_var and os.environ.get(environment_var))
-    ):
-        return False, (
-            "Command Code auth store not found "
-            f"(~/.commandcode/auth.json or {environment_var})"
-        )
-    if _first_on_path(_COMMANDCODE_CLI_CANDIDATES) is None:
-        return False, "CommandCode CLI not found (expected cmdc/command-code/commandcode on PATH)"
-    return True, None
+    credential = resolve_ollama_credential()
+    if credential:
+        return True, None
+    return (
+        False,
+        f"{OLLAMA_API_KEY_ENV_VAR} is unset and no ~/.ollama/id_* key is readable",
+    )
 
 
 def _opencode_availability() -> Tuple[bool, Optional[str]]:
-    if not _opencode_auth_store_path().is_file():
-        return False, "OpenCode auth store not found (~/.local/share/opencode/auth.json)"
-    if shutil.which("opencode") is None:
-        return False, "opencode CLI not found on PATH"
-    return True, None
-
-
-def _direct_connection_available(kind: str) -> Tuple[bool, Optional[str]]:
-    """Whether the direct-API route is currently usable (presence-only).
-
-    The answer never reads or emits credential bytes; a usable source is
-    reported as a source label only.
-    """
-
     from agentic_debugger.application.provider_connections import (
-        CREDENTIAL_SOURCE_CLI_AUTH_STORE,
-        CREDENTIAL_SOURCE_ENVIRONMENT,
-        CREDENTIAL_SOURCE_SESSION_KEY,
-        credential_source_for,
+        opencode_auth_store_path,
     )
 
-    source = credential_source_for(kind)
-    if source is None:
-        return False, None
-    if source == CREDENTIAL_SOURCE_SESSION_KEY:
+    env_var = provider_environment_variable(PROVIDER_KIND_OPENCODE)
+    if env_var and os.environ.get(env_var):
         return True, None
-    if source == CREDENTIAL_SOURCE_ENVIRONMENT:
+    if credential_source_for(PROVIDER_KIND_OPENCODE) is not None:
         return True, None
-    if source == CREDENTIAL_SOURCE_CLI_AUTH_STORE:
+    auth_file = opencode_auth_store_path()
+    if auth_file.is_file():
         return True, None
-    return False, None
+    if shutil.which("opencode") is not None:
+        return True, None
+    return (
+        False,
+        f"neither direct API credential ({env_var or 'API key'}) nor local "
+        f"opencode CLI ({auth_file} / PATH) was found",
+    )
 
 
-def provider_availability() -> List[Tuple[str, bool, Optional[str]]]:
-    """(kind, available, reason) for each subscription provider.
-
-    A provider is available when EITHER the direct-API route has a
-    usable credential source OR the legacy CLI route is fully present
-    (operator auth store + CLI).  The bounded reason names which side
-    is missing; probes stay offline and credential-free.
-    """
-
-    def combined(
-        direct: Tuple[bool, Optional[str]], legacy: Tuple[bool, Optional[str]]
-    ) -> Tuple[bool, Optional[str]]:
-        if direct[0] or legacy[0]:
-            return True, None
-        if legacy[1] is None:
-            return False, "No usable direct-API credential source"
-        return False, f"{legacy[1]}; no usable direct-API credential source"
-
-    results: List[Tuple[str, bool, Optional[str]]] = [
-        (PROVIDER_KIND_OLLAMA, True, None),
-        (
-            PROVIDER_KIND_OPENCODE,
-            *combined(_direct_connection_available(PROVIDER_KIND_OPENCODE), _opencode_availability()),
-        ),
-        (
-            PROVIDER_KIND_COMMANDCODE,
-            *combined(_direct_connection_available(PROVIDER_KIND_COMMANDCODE), _commandcode_availability()),
-        ),
-    ]
-    return results
+def _commandcode_availability() -> Tuple[bool, Optional[str]]:
+    env_var = provider_environment_variable(PROVIDER_KIND_COMMANDCODE)
+    if env_var and os.environ.get(env_var):
+        return True, None
+    if credential_source_for(PROVIDER_KIND_COMMANDCODE) is not None:
+        return True, None
+    if shutil.which("commandcode") is not None:
+        return True, None
+    return (
+        False,
+        f"neither direct API credential ({env_var or 'API key'}) nor local "
+        "commandcode CLI was found",
+    )
 
 
-def _display_name(model_id: str) -> str:
-    return format_model_display_name(model_id)
+def provider_availability(kind: str) -> Tuple[bool, Optional[str]]:
+    """Offline presence check for one provider's readiness."""
+    if kind == PROVIDER_KIND_OLLAMA:
+        return _ollama_availability()
+    if kind == PROVIDER_KIND_OPENCODE:
+        return _opencode_availability()
+    if kind == PROVIDER_KIND_COMMANDCODE:
+        return _commandcode_availability()
+    if is_known_provider(kind):
+        source = credential_source_for(kind)
+        return (
+            source is not None,
+            None if source else "No API credential — connect in Model Providers (press m)",
+        )
+    return False, f"unknown provider {kind!r}"
 
 
 def list_provider_models(
@@ -364,19 +287,7 @@ def list_provider_models(
     include_ollama: bool = True,
     ollama_limit: int = 32,
 ) -> List[ProviderModel]:
-    """Grouped, availability-annotated model summaries for pickers.
-
-    Offline and read-only.  For the subscription providers the most
-    recent valid discovered catalog is used when one has been refreshed
-    (each entry annotated with its resolved direct-API protocol family
-    or the bounded ``Protocol not yet resolved`` reason); otherwise the
-    curated presentation defaults remain the offline fail-safe.  The
-    Ollama Cloud group stays the repository-owned general catalog.
-    Call :func:`list_live_models` for the legacy CLI listing and
-    :func:`agentic_debugger.application.provider_connections.refresh_provider_catalog`
-    for the explicit live refresh.
-    """
-
+    """Grouped, availability-annotated model summaries for pickers."""
     models: List[ProviderModel] = []
     if include_ollama:
         from scripts.ollama_cloud_command_adapter import CLOUD_MODELS
@@ -398,14 +309,35 @@ def list_provider_models(
                     unavailable_reason=unavailable_reason,
                 )
             )
-    models.extend(_subscription_models(PROVIDER_KIND_OPENCODE))
-    models.extend(_subscription_models(PROVIDER_KIND_COMMANDCODE))
+
+    for cfg in list_configured_providers():
+        if not cfg.enabled:
+            continue
+        discovered = _discovered_provider_models(cfg.provider_id)
+        if discovered is not None:
+            models.extend(discovered)
+        elif cfg.is_builtin:
+            models.extend(_subscription_models(cfg.provider_id))
+        elif cfg.models:
+            direct_ok = credential_source_for(cfg.provider_id) is not None
+            for m in cfg.models:
+                models.append(
+                    ProviderModel(
+                        kind=cfg.provider_id,
+                        model_id=m.model_id,
+                        display_name=m.display_name,
+                        provider_label=cfg.name,
+                        available=direct_ok,
+                        unavailable_reason=None if direct_ok else "No direct API credential — connect in Model Providers (press m)",
+                        note=f"direct API · {m.protocol or cfg.api_format}",
+                    )
+                )
+
     return models
 
 
 def _subscription_models(kind: str) -> List[ProviderModel]:
     """Discovered catalog entries when available, curated defaults otherwise."""
-
     discovered = _discovered_provider_models(kind)
     if discovered is not None:
         return discovered
@@ -415,12 +347,13 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
     else:
         available, reason = _commandcode_availability()
         model_ids = _COMMANDCODE_DEFAULT_MODELS
+    label = _PROVIDER_LABELS.get(kind, kind)
     return [
         ProviderModel(
             kind=kind,
             model_id=model_id,
             display_name=format_model_display_name(model_id),
-            provider_label=_PROVIDER_LABELS[kind],
+            provider_label=label,
             available=available,
             unavailable_reason=reason,
         )
@@ -429,17 +362,8 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
 
 
 def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
-    """Picker entries from the cached discovered catalog (or ``None``).
-
-    A cached snapshot is presented honestly: entries are the provider's
-    current catalog identities; direct-API runnability follows the
-    resolved protocol family; a selectable entry needs either a direct
-    credential source or the legacy CLI route.  No cache (or a
-    malformed one, which fails closed to absent) means the caller falls
-    back to the curated presentation defaults.
-    """
-
-    if kind not in DIRECT_API_PROVIDER_KINDS:
+    """Picker entries from the cached discovered catalog (or ``None``)."""
+    if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
         return None
     try:
         snapshot = load_cached_catalog(kind)
@@ -448,10 +372,16 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
     if snapshot is None or not snapshot.models:
         return None
     direct_ok = credential_source_for(kind) is not None
+    cfg = get_provider_config(kind)
+    label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
+
     if kind == PROVIDER_KIND_OPENCODE:
         legacy_ok, legacy_reason = _opencode_availability()
-    else:
+    elif kind == PROVIDER_KIND_COMMANDCODE:
         legacy_ok, legacy_reason = _commandcode_availability()
+    else:
+        legacy_ok, legacy_reason = False, None
+
     models: List[ProviderModel] = []
     for item in snapshot.models:
         note: Optional[str] = None
@@ -461,9 +391,9 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
             if not available:
                 unavailable_reason = (
                     f"{legacy_reason}; no direct API credential — connect in "
-                    "Provider Connections (press c)"
+                    "Model Providers (press m)"
                     if legacy_reason
-                    else "no direct API credential — connect in Provider Connections (press c)"
+                    else "no direct API credential — connect in Model Providers (press m)"
                 )
             note = f"direct API · {item.protocol}"
         else:
@@ -483,7 +413,7 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
                 kind=kind,
                 model_id=item.model_id,
                 display_name=item.display_name,
-                provider_label=_PROVIDER_LABELS[kind],
+                provider_label=label,
                 available=available,
                 unavailable_reason=unavailable_reason,
                 note=note,
@@ -493,63 +423,11 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
 
 
 def list_live_models(kind: str) -> List[str]:
-    """The operator's live plan catalog (explicit, provider-contacting).
+    """Legacy helper returning bare model ID strings."""
+    return [model.model_id for model in list_provider_models() if model.kind == kind]
 
-    Read-only catalog listing; consumes no generation credits.  Only the
-    subscription providers support this; Ollama Cloud exposes its curated
-    roster offline and configured profiles are file-backed.
-    """
 
-    if kind == PROVIDER_KIND_COMMANDCODE:
-        from scripts.commandcode_goat_adapter import CommandCodeAdapterError, run_list_models
-
-        import io
-
-        buffer = io.StringIO()
-        try:
-            run_list_models(buffer)
-        except CommandCodeAdapterError as exc:
-            raise ProviderRegistryError(str(exc)) from exc
-        payload = buffer.getvalue()
-        try:
-            import json
-
-            models = json.loads(payload).get("models")
-        except (json.JSONDecodeError, AttributeError):
-            raise ProviderRegistryError("model listing returned an invalid payload") from None
-        if type(models) is not list:
-            raise ProviderRegistryError("model listing returned an invalid payload")
-        return [item for item in models if type(item) is str][:_MAX_MODELS_LISTED]
-    if kind == PROVIDER_KIND_OPENCODE:
-        executable = shutil.which("opencode")
-        if executable is None:
-            raise ProviderRegistryError("opencode CLI not found on PATH")
-        import subprocess
-
-        try:
-            result = subprocess.run(
-                [executable, "models"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=60,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-            )
-        except subprocess.TimeoutExpired as exc:
-            raise ProviderRegistryError("model listing timed out") from exc
-        if result.returncode != 0:
-            raise ProviderRegistryError(f"model listing failed: {result.stderr[:200]}")
-        models = sorted(
-            {
-                line.strip()
-                for line in result.stdout.splitlines()
-                if line.strip().startswith("opencode-go/")
-            }
-        )
-        return models[:_MAX_MODELS_LISTED]
-    raise ProviderRegistryError(f"provider {kind!r} has no live model listing")
+_DIRECT_API_TOOL_VERSION = "provider-direct-api-adapter-v1"
 
 
 def _direct_api_live_config(
@@ -560,33 +438,37 @@ def _direct_api_live_config(
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """(LiveModelConfig, provenance) for the explicit direct-API route."""
-
-    import sys as _sys
-
-    from agentic_debugger.application.provider_connections import (
-        provider_api_model_id,
-        provider_base_url,
+    """(LiveModelConfig, provenance) for the direct API transport route."""
+    adapter = (
+        Path(__file__).resolve().parent.parent.parent
+        / "scripts"
+        / "provider_direct_api_adapter.py"
     )
-
-    request_timeout = (
-        _DIRECT_API_DEFAULT_TIMEOUT_SECONDS
-        if request_timeout_seconds is None
-        else float(request_timeout_seconds)
-    )
-    if not 1.0 <= request_timeout <= 3600.0:
+    if not adapter.is_file():
         raise ProviderRegistryError(
-            "request timeout must be within [1, 3600] seconds"
+            f"direct API adapter script is missing at {adapter}"
         )
-    root = Path(__file__).resolve().parents[2]
+    request_timeout = (
+        float(request_timeout_seconds)
+        if request_timeout_seconds is not None
+        else 60.0
+    )
     api_model_id = provider_api_model_id(kind, model_id)
+    cfg = get_provider_config(kind)
+    disp = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
+    if cfg is not None:
+        for m in cfg.models:
+            if m.model_id == model_id and m.display_name:
+                disp = m.display_name
+                break
+
     command = [
-        _sys.executable,
-        str(root / "scripts" / "provider_direct_api_adapter.py"),
+        sys.executable,
+        str(adapter),
         "--provider", kind,
         "--model", api_model_id,
         "--protocol", protocol,
-        "--timeout", str(int(request_timeout)),
+        "--request-timeout-seconds", str(request_timeout),
         "--max-logical-model-calls", str(int(logical_call_ceiling)),
     ]
     from agentic_debugger.evaluation.live import LiveModelConfig as _LiveModelConfig
@@ -600,7 +482,7 @@ def _direct_api_live_config(
     return config, {
         "provider": kind,
         "profile_id": model_id,
-        "display_name": model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id,
+        "display_name": disp,
         "protocol_version": "1.3",
         "tool_version": config.tool_version,
         "route": ROUTE_DIRECT_API,
@@ -617,19 +499,8 @@ def resolve_provider_live_config(
     logical_call_ceiling: int = 32,
     request_timeout_seconds: Optional[float] = None,
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """(LiveModelConfig, provenance payload) for one provider model.
-
-    Fail-closed: unknown providers, unavailable providers, and invalid
-    model identities raise :class:`ProviderRegistryError`.  The route is
-    a deterministic pre-flight decision — ``direct_api`` when the model
-    protocol family is resolved and a credential source exists,
-    otherwise ``legacy_cli`` when the provider CLI is available — and is
-    recorded in the provenance payload.  There is no runtime fallback
-    between routes.  The provenance payload carries only provider
-    identity fields, never credentials.
-    """
-
-    if kind not in PROVIDER_KINDS:
+    """(LiveModelConfig, provenance payload) for one provider model."""
+    if kind not in PROVIDER_KINDS and not is_known_provider(kind):
         raise ProviderRegistryError(f"unknown provider kind: {kind!r}")
     if type(model_id) is not str or not model_id.strip():
         raise ProviderRegistryError("model_id must be a non-empty string")
@@ -654,7 +525,7 @@ def resolve_provider_live_config(
             "protocol_version": "1.3",
             "tool_version": config.tool_version,
         }
-    if kind in DIRECT_API_PROVIDER_KINDS:
+    if kind in DIRECT_API_PROVIDER_KINDS or is_known_provider(kind):
         return _resolve_subscription_live_config(
             kind,
             model_id,
@@ -673,8 +544,7 @@ def _resolve_subscription_live_config(
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """Direct-API-first route resolution for the two subscription providers."""
-
+    """Direct-API-first route resolution for built-in and configured providers."""
     protocol: Optional[str]
     try:
         protocol = resolve_model_protocol(kind, model_id)
@@ -683,8 +553,14 @@ def _resolve_subscription_live_config(
     direct_ok = credential_source_for(kind) is not None
     if kind == PROVIDER_KIND_OPENCODE:
         legacy_ok, legacy_reason = _opencode_availability()
-    else:
+    elif kind == PROVIDER_KIND_COMMANDCODE:
         legacy_ok, legacy_reason = _commandcode_availability()
+    else:
+        legacy_ok, legacy_reason = False, None
+
+    cfg = get_provider_config(kind)
+    label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
+
     if protocol is not None and direct_ok:
         return _direct_api_live_config(
             kind,
@@ -702,15 +578,15 @@ def _resolve_subscription_live_config(
         )
     if protocol is None:
         raise ProviderRegistryError(
-            f"{_PROVIDER_LABELS[kind]} model {model_id!r} has no resolved direct-API "
+            f"{label} model {model_id!r} has no resolved direct-API "
             "protocol and the legacy CLI route is unavailable "
             f"({legacy_reason or 'unknown reason'})"
         )
     raise ProviderRegistryError(
-        f"{_PROVIDER_LABELS[kind]} has no usable credential source for the direct "
+        f"{label} has no usable credential source for the direct "
         "API route and the legacy CLI route is unavailable "
-        f"({legacy_reason or 'unknown reason'}); connect in Provider Connections "
-        "(press c from Session Setup)"
+        f"({legacy_reason or 'unknown reason'}); connect in Model Providers "
+        "(press m from Home or Session Setup)"
     )
 
 
@@ -722,7 +598,6 @@ def _legacy_cli_live_config(
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
     """(LiveModelConfig, provenance) for the explicit legacy CLI route."""
-
     if kind == PROVIDER_KIND_OPENCODE:
         from scripts.opencode_provider_adapter import (
             OpenCodeProviderAdapterError,
@@ -737,7 +612,7 @@ def _legacy_cli_live_config(
             )
         except OpenCodeProviderAdapterError as exc:
             raise ProviderRegistryError(str(exc)) from exc
-    else:
+    elif kind == PROVIDER_KIND_COMMANDCODE:
         from scripts.commandcode_goat_adapter import (
             CommandCodeAdapterError,
             build_commandcode_live_config,
@@ -751,6 +626,9 @@ def _legacy_cli_live_config(
             )
         except CommandCodeAdapterError as exc:
             raise ProviderRegistryError(str(exc)) from exc
+    else:
+        raise ProviderRegistryError(f"provider {kind!r} has no legacy CLI route")
+
     return config, {
         "provider": kind,
         "profile_id": model_id,
@@ -764,12 +642,7 @@ def _legacy_cli_live_config(
 def provider_session_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
-    """Session-key-only child-environment override (UI -> worker hop).
-
-    Returns exactly one bounded variable/value pair when a process-local
-    session key is the current credential source, else ``None``.
-    """
-
+    """Session-key-only child-environment override (UI -> worker hop)."""
     from agentic_debugger.application.provider_connections import (
         provider_session_credential_environment as build_environment,
     )
@@ -778,16 +651,7 @@ def provider_session_credential_environment(
 
 
 def provider_transport_environment(kind: str) -> Optional[Mapping[str, str]]:
-    """Bounded child-environment overrides for one provider transport.
-
-    Forwards exactly one credential variable into the adapter child
-    environment when a process-local session key or the provider's
-    documented environment variable is the current credential source.
-    Auth-store credentials need no forwarding: the adapter reads the
-    store in place.  The mapping never contains more than one entry and
-    never reaches evidence.
-    """
-
+    """Bounded child-environment overrides for one provider transport."""
     from agentic_debugger.application.provider_connections import (
         provider_transport_credential_environment,
     )

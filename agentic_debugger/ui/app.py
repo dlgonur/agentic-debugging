@@ -485,7 +485,7 @@ class LocalApplicationV1(App):
         no hop.
         """
 
-        if model_provider not in ("opencode_go", "commandcode_goat"):
+        if not model_provider:
             return None
         from agentic_debugger.application.model_providers import (
             provider_session_credential_environment,
@@ -516,8 +516,8 @@ class LocalApplicationV1(App):
           command transport and ``LiveModelAdapter``;
         - provider model: the same configured-command pipeline with the
           model resolved through the unified provider registry
-          (Ollama Cloud / OpenCode Go / CommandCode GOAT) — the same
-          canonical builder Local Project uses.
+          (Ollama Cloud / OpenCode Go / CommandCode GOAT / configured custom providers) —
+          the same canonical builder Local Project uses.
 
         The workspace is pushed first so the presentation model is ready
         for the first events.
@@ -538,9 +538,9 @@ class LocalApplicationV1(App):
             raise ValueError("offline demo source cannot start the Level-32 task")
         # Provider models run through the configured command source's
         # registry parameter contract; any other pairing fails closed.
-        _REGISTRY_PROVIDERS = ("ollama_cloud", "opencode_go", "commandcode_goat")
         if model_provider is not None:
-            if model_provider not in _REGISTRY_PROVIDERS:
+            from agentic_debugger.application.provider_connections import is_known_provider
+            if model_provider != "ollama_cloud" and not is_known_provider(model_provider):
                 raise ValueError(f"unknown model provider: {model_provider!r}")
             if source_kind is not SourceKind.CONFIGURED_MODEL:
                 raise ValueError(
@@ -759,7 +759,8 @@ class LocalApplicationV1(App):
         if profile_id is None or not str(profile_id).strip():
             raise RuntimeError("Local Project Debug requires a selected model profile")
         registry_provider = None
-        if model_provider in ("ollama_cloud", "opencode_go", "commandcode_goat"):
+        from agentic_debugger.application.provider_connections import is_known_provider
+        if model_provider == "ollama_cloud" or (model_provider and is_known_provider(model_provider)):
             # Registry providers resolve through the unified registry,
             # fail-closed before any worktree or worker resource exists.
             from agentic_debugger.application.model_providers import (

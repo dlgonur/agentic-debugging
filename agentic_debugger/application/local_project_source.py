@@ -107,16 +107,21 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if type(ollama_alias) is not str or not ollama_alias: raise ScenarioInputError("ollama_alias must be a non-empty string or null")
         if len(ollama_alias.encode("utf-8"))>128: raise ScenarioInputError("ollama_alias exceeds bound")
         if contains_credential_shape(ollama_alias): raise ScenarioInputError("ollama_alias contains credential shape")
-    if ollama_alias is not None and not is_ollama: raise ScenarioInputError("ollama_alias requires is_ollama=true")
     provider=params.get("provider")
     if provider is not None:
-        if type(provider) is not str or provider not in _PROVIDER_KINDS: raise ScenarioInputError(f"provider must be one of {sorted(_PROVIDER_KINDS)}")
+        try:
+            from agentic_debugger.application.provider_connections import is_known_provider
+            is_valid_provider = provider in _PROVIDER_KINDS or is_known_provider(provider)
+        except Exception:
+            is_valid_provider = provider in _PROVIDER_KINDS
+        if type(provider) is not str or not is_valid_provider:
+            raise ScenarioInputError(f"provider must be one of {sorted(_PROVIDER_KINDS)}")
     model_id=params.get("model_id")
     if model_id is not None:
         if type(model_id) is not str or not model_id: raise ScenarioInputError("model_id must be a non-empty string or null")
         if len(model_id.encode("utf-8"))>128: raise ScenarioInputError("model_id exceeds bound")
         if contains_credential_shape(model_id): raise ScenarioInputError("model_id contains credential shape")
-    if provider in ("ollama_cloud","opencode_go","commandcode_goat") and model_id is None:
+    if provider and provider != "configured" and model_id is None:
         raise ScenarioInputError(f"provider {provider} requires model_id")
     return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id}
 
@@ -1003,11 +1008,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         # override in the adapter child environment (never argv, never
         # evidence); legacy CLI routes read the operator auth store in
         # place and need no override.
-        transport_environment=(
-            provider_transport_environment(provider)
-            if provider in ("opencode_go", "commandcode_goat")
-            else None
-        )
+        transport_environment = provider_transport_environment(provider)
         transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter, environment=dict(transport_environment) if transport_environment else None)
     elif ollama_profile is not None:
         from scripts.ollama_cloud_command_adapter import build_ollama_live_config

@@ -31,6 +31,8 @@ SECRET = "test-session-key-not-a-real-credential"
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "cache.json")
     monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
+    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
     for name in (
         "OPENCODE_API_KEY",
         "COMMAND_CODE_API_KEY",
