@@ -135,8 +135,8 @@ def test_provider_screen_keyboard_refresh_and_key_entry(
         status_line = str(screen.query_one("#providers-status").render().plain)
         assert "33" in status_line
 
-        # k opens the masked key editor; a submitted value is stored
-        # process-locally and never rendered back.
+        # k opens the masked key editor; a submitted value is typed
+        # via real pilot keyboard events and never rendered back.
         await pilot.press("k")
         await pilot.pause()
         from agentic_debugger.ui.screens import MaskedKeyEditorScreen
@@ -145,7 +145,12 @@ def test_provider_screen_keyboard_refresh_and_key_entry(
         assert isinstance(editor, MaskedKeyEditorScreen)
         from textual.widgets import Input
 
-        editor.query_one("#masked-key-editor", Input).value = SECRET
+        inp = editor.query_one("#masked-key-editor", Input)
+        assert pilot.app.focused is inp
+        assert inp.password is True
+        await pilot.press(*list(SECRET))
+        await pilot.pause()
+        assert inp.value == SECRET
         await pilot.press("enter")
         await pilot.pause()
         assert pc.has_session_key("opencode_go") is True
@@ -584,4 +589,85 @@ def test_connect_api_key_modal_is_centered_across_geometries(
         assert abs(top_margin - bottom_margin) <= 2
 
     run_headless(app, actions, size=geometry)
+
+
+def test_connect_api_key_commandcode_goat_pilot_typing_and_editing_regression(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Production regression: real keyboard typing, backspace editing, and Enter connection for CommandCode GOAT."""
+    fake_key = "fake-sk-goat-connect-99"
+    received_keys: dict[str, str] = {}
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda kind, key: received_keys.__setitem__(kind, key) or True,
+    )
+
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        # 1. Open Model Provider Manager
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # 2. Select CommandCode GOAT
+        await pilot.press("down")
+        await pilot.pause()
+        assert screen._selected_kind() == "commandcode_goat"
+
+        # 3. Open Connect API key
+        await pilot.press("k")
+        await pilot.pause()
+        from agentic_debugger.ui.screens import MaskedKeyEditorScreen
+        from textual.widgets import Input
+
+        modal = pilot.app.screen
+        assert isinstance(modal, MaskedKeyEditorScreen)
+
+        # 4. Confirm masked Input has focus
+        inp = modal.query_one("#masked-key-editor", Input)
+        assert pilot.app.focused is inp
+        assert inp.password is True
+
+        # 5. Enter fake API key through actual Textual Pilot keyboard events, NOT by assigning .value,
+        # with at least one editing operation (typing extra characters and backspacing them).
+        await pilot.press(*list(fake_key + "xyz"))
+        await pilot.pause()
+        await pilot.press("backspace", "backspace", "backspace")
+        await pilot.pause()
+
+        # 6. Prove the Input's internal value became the exact fake key
+        assert inp.value == fake_key
+
+        # 7. Prove the rendered UI never exposes the plaintext key
+        rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
+        assert fake_key not in rendered_svg
+        for node in modal.query("*"):
+            try:
+                plain = node.render().plain if hasattr(node, "render") else ""
+            except Exception:
+                plain = ""
+            assert fake_key not in str(plain)
+
+        # 8. Press Enter
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # 9. Prove the credential callback/storage path receives it
+        assert pc.has_session_key("commandcode_goat") is True
+        assert pc.peek_session_key("commandcode_goat") == fake_key
+        assert received_keys.get("commandcode_goat") == fake_key
+
+        # 10. Prove the modal closes normally
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+        for node in pilot.app.screen.query("*"):
+            try:
+                plain = node.render().plain if hasattr(node, "render") else ""
+            except Exception:
+                plain = ""
+            assert fake_key not in str(plain)
+
+    run_headless(app, actions, size=(100, 30))
+
 

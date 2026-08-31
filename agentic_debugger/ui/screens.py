@@ -1256,20 +1256,6 @@ def _short_unavailable_reason(reason: Optional[str]) -> str:
     return text or "unavailable"
 
 
-class MaskedKeyInput(Input):
-    """Masked single-line input with reliable Enter -> connect."""
-
-    def on_key(self, event: Any) -> None:
-        if getattr(event, "key", None) == "enter":
-            try:
-                self.screen.action_save()  # type: ignore[attr-defined]
-            except Exception:
-                pass
-            event.prevent_default()
-            event.stop()
-            return
-
-
 class MaskedKeyEditorScreen(Screen):
     """Masked API-key entry: memory-only, never persisted or re-shown.
 
@@ -1299,7 +1285,7 @@ class MaskedKeyEditorScreen(Screen):
     def compose(self) -> ComposeResult:
         with Vertical(id="single-line-dialog"):
             yield Static(self.title_text, id="single-line-title")
-            yield MaskedKeyInput(
+            yield Input(
                 password=True, placeholder="paste API key", id="masked-key-editor"
             )
             if self.note_text:
@@ -1310,6 +1296,10 @@ class MaskedKeyEditorScreen(Screen):
 
     def on_mount(self) -> None:
         self.query_one("#masked-key-editor", Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.action_save()
+        event.stop()
 
     def action_save(self) -> None:
         raw = self.query_one("#masked-key-editor", Input).value
