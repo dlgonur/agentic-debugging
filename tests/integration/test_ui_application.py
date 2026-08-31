@@ -202,6 +202,9 @@ class TestBootAndHome:
             assert app.focused.id == "action-local"
 
             await pilot.press("j")
+            assert app.focused.id == "action-providers"
+
+            await pilot.press("j")
             assert app.focused.id == "action-history"
 
             await pilot.press("down")

@@ -30,6 +30,7 @@ from agentic_debugger.ui.screens import (  # noqa: E402
     ChoicePickerScreen,
     ConfirmDeleteProviderDialogScreen,
     EditProviderDialogScreen,
+    ModelCatalogBrowserScreen,
     ProviderConnectionsScreen,
     StartSessionScreen,
 )
@@ -445,11 +446,11 @@ def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch
 
         # Check hint on wide screen
         hint = screen.query_one("#providers-hint")
-        assert str(hint.render().plain) == "↑/↓ select   r refresh models   a add provider   e edit provider   d delete provider   esc back"
+        assert str(hint.render().plain) == "↑/↓ select   b browse models   r refresh models   a add provider   e edit provider   d delete provider   esc back"
 
         # Test compact resize
         screen._update_hint(80)
-        assert str(hint.render().plain) == "↑/↓ select   r refresh   a add   e edit   d delete   esc back"
+        assert str(hint.render().plain) == "↑/↓ select   b browse   r refresh   a add   e edit   d delete   esc back"
         assert "k key" not in str(hint.render().plain)
         assert "Connect API key" not in str(hint.render().plain)
 
@@ -601,9 +602,11 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
         await pilot.press("enter")
         await pilot.pause()
 
-        # 8. Prove the newly entered fake API key reached secure credential storage & session
-        assert pc.has_session_key("commandcode_goat") is True
-        assert pc.peek_session_key("commandcode_goat") == fake_key
+        # 8. Prove the newly entered fake API key reached secure credential storage
+        assert pc.has_secure_credential("commandcode_goat") is True
+        assert pc.load_secure_credential("commandcode_goat") == fake_key
+        assert pc.resolve_runtime_credential("commandcode_goat") == fake_key
+        assert pc.credential_source_for("commandcode_goat") == "saved"
         assert secure_store.get("commandcode_goat") == fake_key
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
 
@@ -631,8 +634,10 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
         await pilot.pause()
 
         # 13. Prove existing credential was PRESERVED after editing with blank API Key
-        assert pc.has_session_key("commandcode_goat") is True
-        assert pc.peek_session_key("commandcode_goat") == fake_key
+        assert pc.has_secure_credential("commandcode_goat") is True
+        assert pc.load_secure_credential("commandcode_goat") == fake_key
+        assert pc.resolve_runtime_credential("commandcode_goat") == fake_key
+        assert pc.credential_source_for("commandcode_goat") == "saved"
         assert secure_store.get("commandcode_goat") == fake_key
         cfg = pc.get_provider_config("commandcode_goat")
         assert cfg is not None
@@ -745,7 +750,7 @@ def test_refresh_without_credential_error_copy(
         await pilot.pause()
 
         new_screen = pilot.app.screen
-        models_text = str(new_screen.query_one("#provider-models-list-unconnected_provider").render().plain)
+        models_text = str(new_screen.query_one("#provider-models-helper-unconnected_provider").render().plain)
         assert "edit provider to add an api key" in models_text.lower()
         assert "connect api key" not in models_text.lower()
 
@@ -755,8 +760,8 @@ def test_refresh_without_credential_error_copy(
 def test_commandcode_goat_62_models_presentation_and_scrolling_navigation(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Truthful model-list presentation communicates all 62 discovered models and supports independent scroll navigation."""
-    from textual.containers import VerticalScroll
+    """Concise catalog summary in Provider Manager and full searchable browsing in dedicated ModelCatalogBrowserScreen."""
+    from textual.widgets import OptionList, Input
 
     models_62 = tuple(
         pc.DiscoveredProviderModel(
@@ -799,43 +804,46 @@ def test_commandcode_goat_62_models_presentation_and_scrolling_navigation(
         screen = pilot.app.screen
         assert isinstance(screen, ProviderConnectionsScreen)
 
-        # 1. Verify truthful helper copy indicates more discovered models than visible rows
+        # 1. Verify concise summary on main view (no 62 model rows mounted directly)
         helper = screen.query_one("#provider-models-helper-commandcode_goat")
         helper_text = str(helper.render().plain)
-        assert "62 discovered models — scroll to view more" in helper_text
+        assert "62 models available" in helper_text
+        browse_btn = screen.query_one("#provider-browse-models-button-commandcode_goat")
+        assert "Browse models" in str(browse_btn.label)
 
-        # 2. Verify all 62 models are in the models list text (not truncated to 24)
-        models_widget = screen.query_one("#provider-models-list-commandcode_goat")
-        list_text = str(models_widget.render().plain)
-        assert "DeepSeek V4 Model 01" in list_text
-        assert "DeepSeek V4 Model 24" in list_text
-        assert "DeepSeek V4 Model 25" in list_text
-        assert "DeepSeek V4 Model 62" in list_text
-
-        # 3. Verify models box is a focusable scrollable widget
-        models_box = screen.query_one("#provider-models-box-commandcode_goat", VerticalScroll)
-        assert models_box.can_focus is True
-
-        # 4. Focus models box and test keyboard arrow scrolling navigation
-        models_box.focus()
+        # 2. Press 'b' to open dedicated ModelCatalogBrowserScreen
+        await pilot.press("b")
         await pilot.pause()
-        assert screen.focused == models_box
+        browser = pilot.app.screen
+        assert isinstance(browser, ModelCatalogBrowserScreen)
 
-        # Scroll down through models
-        await pilot.press("down")
-        await pilot.press("down")
-        await pilot.press("down")
-        await pilot.pause()
-        assert models_box.scroll_y > 0
+        # 3. Verify header title and total model count
+        title = str(browser.query_one("#catalog-title").render().plain)
+        assert "COMMANDCODE GOAT" in title
+        count_text = str(browser.query_one("#catalog-count").render().plain)
+        assert "62 models available" in count_text
 
-        # Page down and end navigation
-        await pilot.press("pagedown")
-        await pilot.pause()
-        assert models_box.scroll_y >= 3
+        # 4. Verify OptionList has all 62 models
+        opt_list = browser.query_one("#catalog-models-list", OptionList)
+        assert opt_list.option_count == 62
 
-        await pilot.press("end")
+        # 5. Test search filter: type 'model-05' to filter down
+        filter_input = browser.query_one("#catalog-filter-input", Input)
+        filter_input.value = "model-05"
         await pilot.pause()
-        assert models_box.scroll_y > 10
+        assert opt_list.option_count == 1
+        filtered_count_text = str(browser.query_one("#catalog-count").render().plain)
+        assert "1 of 62 models" in filtered_count_text
+
+        # Clear filter
+        filter_input.value = ""
+        await pilot.pause()
+        assert opt_list.option_count == 62
+
+        # 6. Test Esc key closes browser and returns to ProviderConnectionsScreen
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
 
     run_headless(app, actions, size=(100, 30))
 
@@ -1003,6 +1011,175 @@ def test_builtin_provider_delete_is_protected_in_ui(
         status_msg = str(screen.query_one("#providers-status").render().plain)
         assert "protected and cannot be deleted" in status_msg
         assert pc.get_provider_config("opencode_go") is not None
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_provider_manager_performance_navigation_does_not_churn_io(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Arrow navigation in Provider Manager uses cached state without network or disk config churn."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    network_calls = []
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.refresh_provider_catalog",
+        lambda kind, **kwargs: network_calls.append(kind),
+    )
+
+    original_load = pc.load_provider_configurations
+    load_counts = [0]
+
+    def counted_load():
+        load_counts[0] += 1
+        return original_load()
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_provider_configurations",
+        counted_load,
+    )
+
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Baseline load count during screen initialization
+        initial_load_count = load_counts[0]
+
+        # Arrow down through all providers
+        await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("down")
+        await pilot.pause()
+        await pilot.press("up")
+        await pilot.pause()
+
+        # 1. Zero network requests triggered during navigation
+        assert len(network_calls) == 0
+
+        # 2. In-memory status cache prevents disk reload churn on navigation
+        assert load_counts[0] == initial_load_count
+
+        # 3. Main view does not mount full model item trees
+        assert len(screen.query(".models-list-text")) == 0
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_truthful_credential_status_labels_in_ui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Provider Manager summary lines truthfully display distinct credential source states."""
+    from agentic_debugger.application.provider_connections import ProviderConnectionStatus
+
+    test_statuses = [
+        ProviderConnectionStatus(
+            kind="prov_saved",
+            label="Provider Saved",
+            base_url="https://api.saved.test/v1",
+            connected=True,
+            credential_source="saved",
+            model_count=10,
+            last_refresh_utc="2026-08-31T12:00:00Z",
+            last_refresh_source="live",
+            stale=False,
+        ),
+        ProviderConnectionStatus(
+            kind="prov_session",
+            label="Provider Session",
+            base_url="https://api.session.test/v1",
+            connected=True,
+            credential_source="session_key",
+            model_count=5,
+            last_refresh_utc="2026-08-31T12:00:00Z",
+            last_refresh_source="live",
+            stale=False,
+        ),
+        ProviderConnectionStatus(
+            kind="prov_env",
+            label="Provider Env",
+            base_url="https://api.env.test/v1",
+            connected=True,
+            credential_source="environment",
+            model_count=0,
+            last_refresh_utc=None,
+            last_refresh_source=None,
+            stale=False,
+        ),
+        ProviderConnectionStatus(
+            kind="prov_cli",
+            label="Provider CLI",
+            base_url="https://api.cli.test/v1",
+            connected=True,
+            credential_source="cli_auth_store",
+            model_count=20,
+            last_refresh_utc="2026-08-31T12:00:00Z",
+            last_refresh_source="live",
+            stale=False,
+        ),
+        ProviderConnectionStatus(
+            kind="prov_none",
+            label="Provider None",
+            base_url="https://api.none.test/v1",
+            connected=False,
+            credential_source=None,
+            model_count=0,
+            last_refresh_utc=None,
+            last_refresh_source=None,
+            stale=False,
+        ),
+    ]
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses",
+        lambda: test_statuses,
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # 1. Check prov_saved
+        summary_saved = str(screen.query_one("#provider-summary-prov_saved").render().plain)
+        assert "Connected · saved" in summary_saved
+
+        # 2. Check prov_session
+        screen._selected_index = screen._index_of("prov_session")
+        screen.render_state()
+        await pilot.pause()
+        summary_session = str(screen.query_one("#provider-summary-prov_session").render().plain)
+        assert "Connected · session only" in summary_session
+
+        # 3. Check prov_env
+        screen._selected_index = screen._index_of("prov_env")
+        screen.render_state()
+        await pilot.pause()
+        summary_env = str(screen.query_one("#provider-summary-prov_env").render().plain)
+        assert "Connected · environment" in summary_env
+
+        # 4. Check prov_cli
+        screen._selected_index = screen._index_of("prov_cli")
+        screen.render_state()
+        await pilot.pause()
+        summary_cli = str(screen.query_one("#provider-summary-prov_cli").render().plain)
+        assert "Connected · CLI auth" in summary_cli
+
+        # 5. Check prov_none
+        screen._selected_index = screen._index_of("prov_none")
+        screen.render_state()
+        await pilot.pause()
+        summary_none = str(screen.query_one("#provider-summary-prov_none").render().plain)
+        assert "Not connected" in summary_none
 
     run_headless(app, actions, size=(100, 30))
 

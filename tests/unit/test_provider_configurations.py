@@ -39,10 +39,20 @@ from agentic_debugger.application.provider_connections import (
     save_secure_credential,
     set_session_key,
     update_provider_config,
+    ProviderConnectionError,
+    credential_source_for,
+    has_secure_credential,
+    load_secure_credential,
+    CREDENTIAL_SOURCE_SAVED,
+    CREDENTIAL_SOURCE_SESSION_KEY,
+    CREDENTIAL_SOURCE_ENVIRONMENT,
+    CREDENTIAL_SOURCE_CLI_AUTH_STORE,
+    _PROVIDER_CREDENTIAL_SOURCE_LABELS,
     PROTOCOL_CHAT_COMPLETIONS,
     PROTOCOL_MESSAGES,
     PROTOCOL_RESPONSES,
 )
+from agentic_debugger.application import provider_connections as pc
 from agentic_debugger.application.model_providers import (
     list_provider_models,
     resolve_provider_live_config,
@@ -180,7 +190,8 @@ def test_edit_provider_credential_update_and_preservation():
         api_format=PROTOCOL_CHAT_COMPLETIONS,
         api_key="initial-mistral-key-111",
     )
-    assert has_session_key("mistral_direct") is True
+    assert has_secure_credential("mistral_direct") is True
+    assert credential_source_for("mistral_direct") == "saved"
     assert resolve_runtime_credential("mistral_direct") == "initial-mistral-key-111"
 
     # 2. Update with new API key -> replaces credential
@@ -820,6 +831,98 @@ def test_delete_provider_cleans_up_catalog_cache_and_secure_store(tmp_path: Path
     # Loading cached catalog for a deleted unknown provider fails closed
     with pytest.raises(Exception):
         load_cached_catalog(pid)
+
+
+def test_durable_credential_source_after_restart_and_reload():
+    """Saving credential persists to secure store and survives simulated restart (cleared session memory)."""
+    cfg = add_provider_config(
+        name="Durable AI Provider",
+        base_url="https://api.durable.ai/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        api_key="durable-secret-key-12345",
+    )
+    pid = cfg.provider_id
+    assert has_secure_credential(pid) is True
+    assert credential_source_for(pid) == CREDENTIAL_SOURCE_SAVED
+
+    # Simulate restart: clear all in-memory process/session state
+    clear_all_session_keys()
+    assert has_session_key(pid) is False
+
+    # After restart, the saved secure credential remains authoritative and resolves without user re-entry
+    assert has_secure_credential(pid) is True
+    assert credential_source_for(pid) == CREDENTIAL_SOURCE_SAVED
+    assert resolve_runtime_credential(pid) == "durable-secret-key-12345"
+
+
+def test_explicit_failure_on_secure_save_failure_no_silent_session_fallback(monkeypatch: pytest.MonkeyPatch):
+    """When secure store save fails, error is explicit and never silently falls back to session memory."""
+    # Force secure store save to fail
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda kind, val: False,
+    )
+    clear_all_session_keys()
+
+    with pytest.raises(ProviderConnectionError, match="Could not save API key securely"):
+        add_provider_config(
+            name="Failing Secure Provider",
+            base_url="https://api.failing.test/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            api_key="failing-secret-key",
+        )
+
+    # Must NOT have silently populated session key
+    assert has_session_key("failing_secure_provider") is False
+    assert credential_source_for("failing_secure_provider") is None
+
+    # Also test update path
+    cfg = add_provider_config(
+        name="Update Fail Target",
+        base_url="https://api.update-fail.test/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+    )
+    with pytest.raises(ProviderConnectionError, match="Could not save API key securely"):
+        update_provider_config(
+            provider_id=cfg.provider_id,
+            api_key="new-failing-secret",
+        )
+    assert has_session_key(cfg.provider_id) is False
+
+
+def test_source_priority_contract(monkeypatch: pytest.MonkeyPatch):
+    """Explicit source priority: saved > session_key > environment > cli_auth_store."""
+    pid = "commandcode_goat"
+    pc.clear_all_session_keys()
+    monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
+    monkeypatch.delenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", raising=False)
+
+    # 1. No credential configured
+    assert pc.credential_source_for(pid) is None
+    assert pc.resolve_runtime_credential(pid) is None
+
+    # 2. Environment variable present
+    monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-key-111")
+    assert pc.credential_source_for(pid) == pc.CREDENTIAL_SOURCE_ENVIRONMENT
+    assert pc.resolve_runtime_credential(pid) == "env-key-111"
+
+    # 3. Session key present (takes priority over environment)
+    pc.set_session_key(pid, "session-key-222")
+    assert pc.credential_source_for(pid) == pc.CREDENTIAL_SOURCE_SESSION_KEY
+    assert pc.resolve_runtime_credential(pid) == "session-key-222"
+
+    # 4. Saved secure credential present (takes priority over both session key and environment)
+    pc.save_secure_credential(pid, "saved-key-333")
+    assert pc.credential_source_for(pid) == pc.CREDENTIAL_SOURCE_SAVED
+    assert pc.resolve_runtime_credential(pid) == "saved-key-333"
+
+
+def test_truthful_credential_source_labels():
+    """Credential source labels map truthfully to distinct states."""
+    assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_SAVED] == "saved"
+    assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_SESSION_KEY] == "session only"
+    assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_ENVIRONMENT] == "environment"
+    assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_CLI_AUTH_STORE] == "CLI auth"
 
 
 

@@ -1257,10 +1257,10 @@ def _short_unavailable_reason(reason: Optional[str]) -> str:
 
 
 _PROVIDER_CREDENTIAL_SOURCE_LABELS = {
-    "saved": "Saved credential",
-    "session_key": "Session API key (memory-only)",
-    "environment": "Environment variable",
-    "cli_auth_store": "CLI auth (read in place)",
+    "saved": "saved",
+    "session_key": "session only",
+    "environment": "environment",
+    "cli_auth_store": "CLI auth",
 }
 
 
@@ -1269,23 +1269,24 @@ class ModelProvidersScreen(Screen):
 
     Operational surface:
     - Left column: provider sidebar with statuses + '+ Add provider'
-    - Right column: active provider details, credential status, model discovery,
-      manual model fallback, edit/delete, and add provider form.
+    - Right column: active provider details, credential status, concise model catalog
+      summary with dedicated Browse models browser, manual model fallback, edit/delete.
     - Fully centered, substantial desktop geometry (width ~98 cols) and responsive
       adaptation on compact screens.
     """
 
     PROVIDERS_HINT = (
-        "↑/↓ select   r refresh models   a add provider   e edit provider   d delete provider   esc back"
+        "↑/↓ select   b browse models   r refresh models   a add provider   e edit provider   d delete provider   esc back"
     )
     PROVIDERS_HINT_COMPACT = (
-        "↑/↓ select   r refresh   a add   e edit   d delete   esc back"
+        "↑/↓ select   b browse   r refresh   a add   e edit   d delete   esc back"
     )
 
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("up", "select_previous", "Previous provider", show=False),
         Binding("down", "select_next", "Next provider", show=False),
+        Binding("b", "browse_models", "Browse models"),
         Binding("r", "refresh", "Refresh models"),
         Binding("a", "add_provider", "Add provider"),
         Binding("e", "edit_provider", "Edit provider"),
@@ -1304,11 +1305,17 @@ class ModelProvidersScreen(Screen):
         self._form_format = "chat_completions"
         self._editing_provider_id: Optional[str] = None
         self._discovery_results: Optional[str] = None
+        self._statuses_cache: Optional[list[Any]] = None
+
+    def _current_statuses(self, force_reload: bool = False):
+        if self._statuses_cache is None or force_reload:
+            from agentic_debugger.application.provider_connections import connection_statuses
+
+            self._statuses_cache = connection_statuses()
+        return self._statuses_cache
 
     def compose(self) -> ComposeResult:
-        from agentic_debugger.application.provider_connections import connection_statuses
-
-        statuses = connection_statuses()
+        statuses = self._current_statuses()
         with Vertical(id="providers-wrap"):
             with Vertical(id="providers-manager-card"):
                 with Horizontal(id="providers-manager-header"):
@@ -1358,13 +1365,17 @@ class ModelProvidersScreen(Screen):
                                         )
                                 yield Static("MODELS", classes="models-header", id=f"provider-models-title-{st.kind}")
                                 yield Static("", classes="models-helper-text", id=f"provider-models-helper-{st.kind}")
-                                with VerticalScroll(classes="models-box", id=f"provider-models-box-{st.kind}", can_focus=True):
-                                    yield Static("", id=f"provider-models-list-{st.kind}", classes="models-list-text")
-                                yield Button(
-                                    "+ Add model (manual)",
-                                    id=f"provider-add-model-button-{st.kind}",
-                                    classes="provider-action-button",
-                                )
+                                with Horizontal(classes="provider-models-actions", id=f"provider-models-actions-{st.kind}"):
+                                    yield Button(
+                                        "Browse models",
+                                        id=f"provider-browse-models-button-{st.kind}",
+                                        classes="provider-action-button primary-action",
+                                    )
+                                    yield Button(
+                                        "+ Add model (manual)",
+                                        id=f"provider-add-model-button-{st.kind}",
+                                        classes="provider-action-button",
+                                    )
                 yield Static("", id="providers-status")
                 yield Static(
                     self.PROVIDERS_HINT,
@@ -1387,10 +1398,6 @@ class ModelProvidersScreen(Screen):
             pass
 
     # -- state ---------------------------------------------------------------
-
-    def _current_statuses(self):
-        from agentic_debugger.application.provider_connections import connection_statuses
-        return connection_statuses()
 
     def _selected_kind(self) -> str:
         statuses = self._current_statuses()
@@ -1429,65 +1436,61 @@ class ModelProvidersScreen(Screen):
             panel_id = f"#provider-panel-{status.kind}"
             try:
                 panel = self.query_one(panel_id, Vertical)
-                # Show only active provider panel
                 panel.display = (index == self._selected_index)
             except Exception:
                 continue
 
             summary = self.query_one(f"#provider-summary-{status.kind}", Static)
             refresh_line = self.query_one(f"#provider-refresh-{status.kind}", Static)
-            models_list = self.query_one(f"#provider-models-list-{status.kind}", Static)
+            models_helper = self.query_one(f"#provider-models-helper-{status.kind}", Static)
+
+            from agentic_debugger.application.provider_connections import PROTOCOL_DISPLAY_LABELS
+
+            proto_raw = PROTOCOL_DISPLAY_LABELS.get(status.api_format, status.api_format)
+            proto_label = proto_raw.split(" (", 1)[0] if " (" in proto_raw else proto_raw
 
             if status.connected:
                 source = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
                     status.credential_source, status.credential_source or ""
                 )
+                source_disp = f"Connected · {source}" if source else "Connected"
                 summary.update(
                     Text()
                     .append(f"{status.label}", style=f"bold {FOREGROUND}")
-                    .append(f"   Connected · {source}", style=f"{PRIMARY}")
-                    .append(f"\nBase URL: {status.base_url} · Format: {status.api_format}", style=f"{MUTED}")
+                    .append(f"   {source_disp}", style=f"{PRIMARY}")
+                    .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
+                    .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
                 )
             else:
                 summary.update(
                     Text()
                     .append(f"{status.label}", style=f"bold {MUTED}")
                     .append("   Not connected", style=FAINT)
-                    .append(f"\nBase URL: {status.base_url} · Format: {status.api_format}", style=f"{MUTED}")
+                    .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
+                    .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
                 )
 
             lines = []
             if status.model_count:
                 when = (status.last_refresh_utc or "").replace("T", " ").split(".", 1)[0]
                 suffix = " · stale/unverified" if status.stale else ""
-                lines.append(
-                    f"{status.model_count} models · last refresh: {when} UTC (live catalog){suffix}"
-                )
+                lines.append(f"Catalog     {status.model_count} models")
+                lines.append(f"Updated     {when} UTC{suffix}" if when else "Updated     —")
             elif status.connected:
-                lines.append("No catalog yet — refresh models to discover the live catalog")
+                lines.append("Catalog     No catalog yet — refresh models to discover the live catalog")
+            else:
+                lines.append("Catalog     Not connected")
             if status.status_message:
                 lines.append(status.status_message)
             refresh_line.update("\n".join(lines) if lines else "")
 
-            # Render models list
-            models_helper = self.query_one(f"#provider-models-helper-{status.kind}", Static)
-            model_items = []
-            for m in status.cached_models:
-                proto_str = f" [{m.protocol}]" if m.protocol else ""
-                model_items.append(f"• {m.display_name} ({m.model_id}){proto_str}")
-            if model_items:
-                models_list.update("\n".join(model_items))
-                count = len(model_items)
-                if count > 6:
-                    models_helper.update(f"{count} discovered models — scroll to view more")
-                else:
-                    models_helper.update(f"{count} discovered model{'s' if count != 1 else ''}")
+            # Models summary
+            if status.model_count:
+                models_helper.update(f"{status.model_count} models available")
             elif status.connected:
-                models_helper.update("")
-                models_list.update("[dim]No models discovered yet. Click 'Refresh models' or '+ Add model'.[/]")
+                models_helper.update("No models discovered yet. Click 'Refresh models' or '+ Add model'.")
             else:
-                models_helper.update("")
-                models_list.update("[dim]No usable credential — edit provider to add an API key and refresh models.[/]")
+                models_helper.update("No usable credential — edit provider to add an API key and refresh models.")
 
         status_widget = self.query_one("#providers-status", Static)
         status_widget.update(self._message)
@@ -1514,6 +1517,20 @@ class ModelProvidersScreen(Screen):
             self.query_one("#providers-status", Static).update(text)
         except Exception:
             pass
+
+    def action_browse_models(self) -> None:
+        statuses = self._current_statuses()
+        if not statuses:
+            return
+        idx = max(0, min(self._selected_index, len(statuses) - 1))
+        current_status = statuses[idx]
+        self.app.push_screen(
+            ModelCatalogBrowserScreen(
+                provider_id=current_status.kind,
+                provider_name=current_status.label,
+                models=current_status.cached_models,
+            )
+        )
 
     def action_refresh(self) -> None:
         kind = self._selected_kind()
@@ -1554,6 +1571,7 @@ class ModelProvidersScreen(Screen):
 
     def _refresh_finished(self, kind: str, ok: bool, detail: str) -> None:
         self._refreshing.discard(kind)
+        self._current_statuses(force_reload=True)
         detail = detail if len(detail) <= 160 else detail[:160] + "…"
         if ok:
             self._set_message(f"Catalog refreshed — {detail}")
@@ -1588,6 +1606,7 @@ class ModelProvidersScreen(Screen):
         def on_saved(updated_cfg):
             if updated_cfg:
                 self._set_message(f"Updated provider '{updated_cfg.name}'")
+                self._current_statuses(force_reload=True)
                 self.render_state()
 
         self.app.push_screen(EditProviderDialogScreen(config=cfg, on_save=on_saved))
@@ -1611,7 +1630,7 @@ class ModelProvidersScreen(Screen):
             if delete_provider_config(kind):
                 self.app.pop_screen()
                 new_screen = ModelProvidersScreen()
-                statuses = new_screen._current_statuses()
+                statuses = new_screen._current_statuses(force_reload=True)
                 new_screen._selected_index = max(0, min(self._selected_index, len(statuses) - 1))
                 self.app.push_screen(new_screen)
                 new_screen._set_message(f"Deleted provider '{label}'")
@@ -1633,6 +1652,7 @@ class ModelProvidersScreen(Screen):
                 try:
                     add_manual_model(kind, model_id, display_name, protocol)
                     self._set_message(f"Added model {model_id}")
+                    self._current_statuses(force_reload=True)
                     self.render_state()
                 except Exception as exc:
                     self._set_message(f"Failed to add model: {exc}")
@@ -1664,6 +1684,11 @@ class ModelProvidersScreen(Screen):
             self._selected_index = self._index_of(kind)
             self.action_delete_provider()
             event.stop()
+        elif button_id.startswith("provider-browse-models-button-"):
+            kind = button_id.removeprefix("provider-browse-models-button-")
+            self._selected_index = self._index_of(kind)
+            self.action_browse_models()
+            event.stop()
         elif button_id.startswith("provider-add-model-button-"):
             kind = button_id.removeprefix("provider-add-model-button-")
             self._selected_index = self._index_of(kind)
@@ -1676,6 +1701,97 @@ class ModelProvidersScreen(Screen):
             if st.kind == kind:
                 return idx
         return 0
+
+
+class ModelCatalogBrowserScreen(Screen):
+    """Dedicated searchable catalog browser for a selected model provider."""
+
+    BINDINGS = [
+        Binding("escape", "back", "Back"),
+    ]
+
+    def __init__(
+        self,
+        provider_id: str,
+        provider_name: str,
+        models: Tuple[DiscoveredProviderModel, ...] = (),
+    ) -> None:
+        super().__init__()
+        self._provider_id = provider_id
+        self._provider_name = provider_name
+        self._all_models = list(models)
+        self._filtered_models = list(models)
+        self._filter_text = ""
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="catalog-browser-card"):
+            with Horizontal(id="catalog-browser-header"):
+                yield Static(f"MODEL CATALOG — {self._provider_name.upper()}", id="catalog-title")
+                yield Static(f"{len(self._all_models)} models", id="catalog-count")
+            yield Input(placeholder="Search / filter models (type name or ID)...", id="catalog-filter-input")
+            yield OptionList(id="catalog-models-list")
+            with Horizontal(id="catalog-browser-footer"):
+                yield Static("↑/↓ navigate   pgup/pgdn page   esc close", id="catalog-browser-hint")
+                yield Button("Close", id="btn-close-catalog", classes="catalog-close-btn")
+
+    def on_mount(self) -> None:
+        self._populate_list()
+        self.query_one("#catalog-filter-input", Input).focus()
+
+    def _populate_list(self) -> None:
+        from textual.widgets.option_list import Option
+
+        opt_list = self.query_one("#catalog-models-list", OptionList)
+        opt_list.clear_options()
+
+        count_widget = self.query_one("#catalog-count", Static)
+        if self._filter_text:
+            count_widget.update(f"{len(self._filtered_models)} of {len(self._all_models)} models")
+        else:
+            count_widget.update(f"{len(self._all_models)} models available")
+
+        if not self._filtered_models:
+            if self._all_models:
+                opt_list.add_option(
+                    Option(Text(f"No models match '{self._filter_text}'", style=FAINT), disabled=True)
+                )
+            else:
+                opt_list.add_option(
+                    Option(Text("No models discovered in catalog yet.", style=FAINT), disabled=True)
+                )
+            return
+
+        for m in self._filtered_models:
+            t = Text()
+            t.append(f"{m.display_name:<34}", style=f"bold {FOREGROUND}")
+            t.append(f"  {m.model_id}", style=f"{MUTED}")
+            if m.protocol:
+                t.append(f" [{m.protocol}]", style=FAINT)
+            opt_list.add_option(Option(t, id=f"model::{m.model_id}"))
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "catalog-filter-input":
+            self._filter_text = event.value.strip().lower()
+            if self._filter_text:
+                self._filtered_models = [
+                    m
+                    for m in self._all_models
+                    if self._filter_text in m.model_id.lower()
+                    or self._filter_text in m.display_name.lower()
+                ]
+            else:
+                self._filtered_models = list(self._all_models)
+            self._populate_list()
+            event.stop()
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_button_pressed(self, event: Any) -> None:
+        btn_id = getattr(event.button, "id", "")
+        if btn_id == "btn-close-catalog":
+            self.action_back()
+            event.stop()
 
 
 class AddProviderDialogScreen(Screen):
@@ -1801,8 +1917,10 @@ class EditProviderDialogScreen(Screen):
         )
 
         source = credential_source_for(self._config.provider_id)
-        if source in (CREDENTIAL_SOURCE_SAVED, CREDENTIAL_SOURCE_SESSION_KEY):
+        if source == CREDENTIAL_SOURCE_SAVED:
             cred_status = "Credential: saved securely"
+        elif source == CREDENTIAL_SOURCE_SESSION_KEY:
+            cred_status = "Credential: session only"
         elif source == CREDENTIAL_SOURCE_ENVIRONMENT:
             cred_status = "Credential: environment variable"
         elif source == CREDENTIAL_SOURCE_CLI_AUTH_STORE:

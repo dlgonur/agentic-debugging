@@ -139,10 +139,10 @@ CREDENTIAL_SOURCE_ENVIRONMENT = "environment"
 CREDENTIAL_SOURCE_CLI_AUTH_STORE = "cli_auth_store"
 
 _PROVIDER_CREDENTIAL_SOURCE_LABELS = {
-    CREDENTIAL_SOURCE_SAVED: "Saved credential",
-    CREDENTIAL_SOURCE_SESSION_KEY: "Session API key (memory-only)",
-    CREDENTIAL_SOURCE_ENVIRONMENT: "Environment variable",
-    CREDENTIAL_SOURCE_CLI_AUTH_STORE: "CLI auth (read in place)",
+    CREDENTIAL_SOURCE_SAVED: "saved",
+    CREDENTIAL_SOURCE_SESSION_KEY: "session only",
+    CREDENTIAL_SOURCE_ENVIRONMENT: "environment",
+    CREDENTIAL_SOURCE_CLI_AUTH_STORE: "CLI auth",
 }
 
 # -- provider endpoint contracts for built-in providers -----------------------
@@ -736,9 +736,15 @@ def add_provider_config(
     updated = [c for c in configs if c.provider_id != pid] + [new_cfg]
     save_provider_configurations(updated)
 
-    if api_key and _credential_is_usable(api_key):
-        save_secure_credential(pid, api_key.strip())
-        set_session_key(pid, api_key.strip())
+    if api_key is not None:
+        stripped = api_key.strip()
+        if stripped:
+            if not _credential_is_usable(stripped):
+                raise ProviderConnectionError("API key is missing, invalid, or oversized")
+            saved = save_secure_credential(pid, stripped)
+            if not saved:
+                raise ProviderConnectionError("Could not save API key securely.")
+            clear_session_key(pid)
 
     return new_cfg
 
@@ -793,9 +799,15 @@ def update_provider_config(
     updated = [updated_cfg if c.provider_id == provider_id else c for c in configs]
     save_provider_configurations(updated)
 
-    if api_key and _credential_is_usable(api_key):
-        save_secure_credential(provider_id, api_key.strip())
-        set_session_key(provider_id, api_key.strip())
+    if api_key is not None:
+        stripped = api_key.strip()
+        if stripped:
+            if not _credential_is_usable(stripped):
+                raise ProviderConnectionError("API key is missing, invalid, or oversized")
+            saved = save_secure_credential(provider_id, stripped)
+            if not saved:
+                raise ProviderConnectionError("Could not save API key securely.")
+            clear_session_key(provider_id)
 
     return updated_cfg
 
@@ -859,13 +871,13 @@ def _session_env_var_for(kind: str) -> str:
 
 def credential_source_for(kind: str) -> Optional[str]:
     """Which credential source the direct route can use right now."""
+    if has_secure_credential(kind):
+        return CREDENTIAL_SOURCE_SAVED
     if has_session_key(kind):
         return CREDENTIAL_SOURCE_SESSION_KEY
     session_var = _session_env_var_for(kind)
     if _credential_is_usable(os.environ.get(session_var)):
         return CREDENTIAL_SOURCE_SESSION_KEY
-    if has_secure_credential(kind):
-        return CREDENTIAL_SOURCE_SAVED
 
     contract = _BUILTIN_CONTRACTS.get(kind)
     if contract is not None:
@@ -880,17 +892,17 @@ def credential_source_for(kind: str) -> Optional[str]:
 
 def resolve_runtime_credential(kind: str) -> Optional[str]:
     """The credential value for one direct-API request (runtime only)."""
+    saved_value = load_secure_credential(kind)
+    if saved_value and _credential_is_usable(saved_value):
+        return saved_value.strip()
+
     session_value = peek_session_key(kind)
-    if session_value:
-        return session_value
+    if session_value and _credential_is_usable(session_value):
+        return session_value.strip()
     session_var = _session_env_var_for(kind)
     forwarded_value = os.environ.get(session_var)
     if _credential_is_usable(forwarded_value):
         return forwarded_value.strip()
-
-    saved_value = load_secure_credential(kind)
-    if saved_value and _credential_is_usable(saved_value):
-        return saved_value.strip()
 
     contract = _BUILTIN_CONTRACTS.get(kind)
     if contract is not None:
@@ -912,11 +924,9 @@ def provider_session_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
     """Private UI-to-worker credential hop (exactly one variable)."""
-    secret = peek_session_key(kind)
-    if not secret:
-        saved = load_secure_credential(kind)
-        if saved and _credential_is_usable(saved):
-            secret = saved
+    secret = load_secure_credential(kind)
+    if not secret or not _credential_is_usable(secret):
+        secret = peek_session_key(kind)
     if secret and _credential_is_usable(secret):
         session_var = _session_env_var_for(kind)
         return {session_var: secret.strip()}
@@ -929,15 +939,15 @@ def provider_transport_credential_environment(
     """Child environment forwarding for the direct adapter."""
     contract = _BUILTIN_CONTRACTS.get(kind)
     session_var = _session_env_var_for(kind)
+    saved_value = load_secure_credential(kind)
+    if _credential_is_usable(saved_value):
+        return {session_var: saved_value.strip()}
     session_value = peek_session_key(kind)
     if _credential_is_usable(session_value):
         return {session_var: session_value.strip()}
     forwarded_value = os.environ.get(session_var)
     if _credential_is_usable(forwarded_value):
         return {session_var: forwarded_value.strip()}
-    saved_value = load_secure_credential(kind)
-    if _credential_is_usable(saved_value):
-        return {session_var: saved_value.strip()}
     if contract and contract.env_var:
         env_value = os.environ.get(contract.env_var)
         if _credential_is_usable(env_value):
