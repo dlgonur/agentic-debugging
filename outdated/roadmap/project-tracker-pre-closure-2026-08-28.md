@@ -1011,7 +1011,7 @@ authorization, route identity, and isolation unchanged):
   (`npm-package-layout`), the bounded package-relative native path, and the
   regular-file/root-containment/version-match flags. Real machine inspection
   confirmed the established npm layout (launcher
-  `C:\Users\benya\AppData\Roaming\npm\opencode.cmd`; native
+  `%APPDATA%\npm\opencode.cmd`; native
   `...\node_modules\opencode-ai\bin\opencode.exe` plus the two platform
   packages, all hard-links of the single 174 MB binary; no sibling exe). All
   synthetic fixtures mirror the production layout (native under

@@ -2,14 +2,22 @@
 
 Evidence-driven software repair for Python projects.
 
-Agentic Debugger combines one controller, typed tools, bounded PDB sessions,
-disposable workspaces, unified-diff patching, immutable event journals, and an
-independent verifier. The terminal application exposes the same repair and
-replay path used by the research harness.
+![Agentic Debugger terminal welcome screen](docs/assets/agentic-debugger-welcome.png)
+
+Agentic Debugger is a Python 3.11+ research prototype that combines a single
+controller, typed tools, bounded PDB sessions, disposable workspaces,
+unified-diff patching, immutable event journals, and an independent verifier.
+The terminal application exposes the same repair and replay path used by the
+research harness.
+
+## Highlights
+
+- Debug curated tasks or a local Git project without modifying the source tree.
+- Inspect bounded source, tests, stack frames, locals, and safe expressions.
+- Apply model-authored patches through strict path and diff validation.
+- Accept repairs only after independent fail-to-pass and pass-to-pass checks.
 
 ## Quick start
-
-Requires Python 3.11 or newer.
 
 ```powershell
 python -m pip install -e ".[app,test]"
@@ -17,59 +25,21 @@ python -m agentic_debugger.ui --doctor
 python -m agentic_debugger.ui
 ```
 
-`--doctor` also reports model-provider readiness. The first task is an
-offline, deterministic demo. It does not contact a model provider. You can
-also run the scientific demo directly:
+`--doctor` reports local application and model-provider readiness. The first
+curated task is an offline deterministic demo and contacts no provider.
+
+Run the scientific demo directly:
 
 ```powershell
 python -m agentic_debugger.demo --output-dir demo-out --task-id curated-off-by-one-002
 ```
 
-Before relying on the public results, run the repository's fail-closed evidence
-gate:
+List or export session history without opening the UI:
 
 ```powershell
-python scripts/verify_public_evidence.py --output public-evidence-attestation.json
+agentic-debugger --list-sessions
+agentic-debugger --export-session SESSION_ID --output session-report.md
 ```
-
-It executes a representative offline repair through independent verification,
-checks replay and cleanup, verifies the frozen R6 chain of custody, regenerates
-the professor-facing traces byte-for-byte, and reruns their leakage audit. The
-attestation states its limits: the scripted offline repair proves the product
-path, not live-model ability; the R6 step verifies accepted frozen evidence
-rather than rerunning the external campaign.
-
-## Model providers
-
-Live sessions can be served by any of the configured providers (see
-[`docs/architecture/model-providers-v1.md`](docs/architecture/model-providers-v1.md)):
-
-| Provider | Route | Readiness |
-|---|---|---|
-| Ollama Cloud | repository-owned qualified roster | always listed |
-| OpenCode Go | local `opencode` CLI (operator auth store) | CLI + auth store present |
-| CommandCode GOAT | local `cmdc` CLI (operator auth store) | CLI + auth store present |
-| Configured profiles | app-owned command-model store | profile configured |
-
-Credentials never enter tracked source, argv, journals, or evidence: each
-subscription adapter runs the operator's CLI, which reads its own auth store.
-
-## Failures, effort, and retries
-
-A failed session is not an empty session. Press `w` in a workspace for the
-counted "what the agent tried" projection (model requests by status,
-directives, tool calls, PDB observations, patches, states, verifier outcome);
-the same section appears in exported session reports. Press `r` to retry a
-session with identical parameters — retries are journal-linked
-(`retry_of_session_id`) so attempt chains stay auditable. Local Project
-sessions support bounded automatic retries (picker 0-3, default 1) for
-transient failures such as transport errors and timeouts. The budget is
-carried forward through the retry chain: for auto-retries=N the chain makes
-at most N automatic retries in total (N+1 attempts), and a manual retry
-starts a fresh attempt with a zero auto-retry budget.
-
-Configured-model and local-project sessions require an operator profile; live execution is explicit. Headless history:
-`agentic-debugger --list-sessions`; safe report: `agentic-debugger --export-session SESSION_ID --output session-report.md`.
 
 ## How it works
 
@@ -85,78 +55,65 @@ task + policy
 The verifier is the correctness authority. A model, controller, or operator
 claim is never treated as proof of a repair.
 
+## Model providers
+
+Live execution is explicit. The application supports Ollama Cloud, OpenCode
+Go, CommandCode GOAT, and operator-configured command profiles. Credentials
+are not written to tracked source, command arguments, journals, or evidence;
+see [the provider architecture](docs/architecture/model-providers-v1.md).
+
 ## Current status
 
-The accepted research cycle is complete. Release tag `v0.1.0` points to
-`d01f7a5`. The current source also includes post-release application and public
-repository cleanup.
+The accepted research cycle and Local Application V1 are complete. Release tag
+`v0.1.0` identifies the accepted release checkpoint; current source also
+contains later application and repository cleanup.
 
-Selected accepted evidence:
+Selected accepted evidence includes a verifier-resolved real-provider product
+session, three verifier-resolved exact-PDB ladder tasks, two authoritative
+Level-32 resolutions in a frozen 15-model matrix, a leakage-clean base-14B
+5/5 result, and project-tuned 7B performance of 8/8 on task-disjoint QuixBugs
+validation. These results have different scopes and are not interchangeable.
+See the [results and evidence index](docs/results-index.md) for evidence paths
+and mandatory qualifiers.
 
-- one real Ollama Cloud product session reached `RESOLVED`, F2P 1/1 and P2P
-  2/2; PDB was not exercised in that session;
-- the exact-PDB 6/100, 12/100, and 18/100 ladder tasks were independently
-  verifier-resolved;
-- the repaired Level-32 treatment produced two authoritative resolutions in a
-  frozen 15-model matrix;
-- R5 resolved 5/5 curated holdout bugs with zero findings across 41 audited
-  prompts;
-- R6 resolved 8/8 task-disjoint QuixBugs validation tasks, without a
-  matched-base causal fine-tuning claim;
-- QuixBugs gold-patch 8/8 validates infrastructure only, not model ability.
+Verify the public evidence locally with:
 
-See [`docs/results-index.md`](docs/results-index.md) for evidence paths and
-mandatory qualifiers.
+```powershell
+python scripts/verify_public_evidence.py --output public-evidence-attestation.json
+```
+
+This gate checks a representative offline repair, independent verification,
+replay and cleanup, the frozen R6 chain of custody, deterministic professor
+trace regeneration, and leakage auditing. It does not rerun external campaigns.
 
 ## Documentation
 
-- [Architecture](docs/architecture/local-application-v1.md)
-- [Result and evidence index](docs/results-index.md)
-- [Technical synthesis](docs/final-report.md)
+- [Application architecture](docs/architecture/local-application-v1.md)
+- [Results and evidence index](docs/results-index.md)
+- [Final technical report](docs/final-report.md)
 - [Project closeout](docs/project-closeout.md)
-- [Closed roadmap](TODO.md)
-- [Execution tracker](docs/project-tracker.md)
 - [Experiment families](experiments/README.md)
+- [Research index](research/README.md)
+- [Closed roadmap](TODO.md)
 - [Superseded material](outdated/docs-archive/)
 - [Historical status log](outdated/docs-archive/status/README-historical-status-log-through-2026-08-07.md)
 
 ## Development
 
 ```powershell
-python -m pytest --collect-only -q
-python -m pytest tests/unit/test_public_documentation_navigation.py -q
+python -m pytest <affected-test-path> -q
 python -m compileall agentic_debugger scripts
 ```
 
-The repository includes frozen experiment evidence and operator tooling. Real
-provider runs, WSL campaigns, and BugsInPy acquisition are not part of ordinary
-test execution. BugsInPy remains license-gated.
+Generated runs, model checkpoints, provider credentials, external datasets,
+and review packages must not be committed. Real-provider, WSL, and
+license-gated dataset campaigns are not ordinary regression tests.
 
-## Repository map
-
-| Path | Purpose |
-|---|---|
-| `agentic_debugger/agent/` | Controller, state, budgets, directives, and tools |
-| `agentic_debugger/runtime/` | Workspaces, commands, patching, tests, and PDB |
-| `agentic_debugger/evaluation/` | Task schema, verifier, and outcome taxonomy |
-| `agentic_debugger/application/` | Sessions, worker boundary, journal, and replay |
-| `agentic_debugger/ui/` | Textual terminal application |
-| `experiments/` | Frozen experiment implementations and evidence |
-| `analysis/` | Controlled comparisons and Level-32 analyses |
-| `research/` | Literature notes and dataset provenance |
-| `tests/` | Unit, integration, and golden trajectories |
-| `outdated/` | Superseded material retained for provenance |
-
-Generated trees such as `_ai-review/`, `runs/`, `operator/`, `outputs/`,
-`artifacts/`, and model checkpoints are ignored and are not release evidence.
-
-## Contributing and security
-
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for development rules and
-[`SECURITY.md`](SECURITY.md) for private vulnerability reporting guidance.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for contribution rules and
+[SECURITY.md](SECURITY.md) for private vulnerability reporting.
 
 ## License
 
 No open-source license is currently granted. The repository may be inspected,
-but reuse and redistribution require permission from the copyright holder. Add
-an explicit `LICENSE` before presenting the project as open source.
+but reuse and redistribution require permission from the copyright holder.
+Add an explicit `LICENSE` before presenting the project as open source.
