@@ -879,6 +879,14 @@ def test_custom_provider_delete_confirmation_and_cancel_flow(
         assert isinstance(confirm_screen, ConfirmDeleteProviderDialogScreen)
         assert "DELETE PROVIDER: Groq Direct Test" in str(confirm_screen.query_one("#dialog-title").render().plain)
 
+        # Verify Cancel initially has focus
+        assert confirm_screen.focused == confirm_screen.query_one("#btn-cancel-dialog")
+
+        # Prove both action labels render visibly in exported terminal presentation
+        rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
+        assert "Delete provider" in rendered_svg
+        assert "Cancel" in rendered_svg
+
         # Cancel deletion
         await pilot.click("#btn-cancel-dialog")
         await pilot.pause()

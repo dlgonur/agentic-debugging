@@ -1975,7 +1975,7 @@ class ConfirmDeleteProviderDialogScreen(Screen):
             )
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
-                yield Button("Delete provider", id="btn-confirm-delete", classes="primary-action danger-action")
+                yield Button("Delete provider", id="btn-confirm-delete", classes="danger-action")
                 yield Button("Cancel", id="btn-cancel-dialog")
 
     def on_mount(self) -> None:
