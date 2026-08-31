@@ -9,6 +9,8 @@ driver for ``App.run_test()``.
 from __future__ import annotations
 
 import asyncio
+import os
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -380,12 +382,29 @@ def run_headless(
     *,
     size: tuple[int, int] = (120, 40),
 ) -> None:
-    """Run one headless app scenario with ``App.run_test`` + Pilot."""
+    """Run one headless app scenario with ``App.run_test`` + Pilot.
 
-    async def _run() -> None:
-        async with app.run_test(size=size) as pilot:
-            await pilot.pause()
-            await actions(pilot)
-            await pilot.pause()
+    Ensures headless review and test rendering cannot mutate the operator's
+    default configuration directory if executed outside an isolated harness.
+    """
+    temp_dir: Optional[tempfile.TemporaryDirectory[str]] = None
+    if "AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH" not in os.environ and "AGENTIC_DEBUGGER_CONFIG_DIR" not in os.environ:
+        temp_dir = tempfile.TemporaryDirectory(prefix="agentic_debugger_headless_")
+        os.environ["AGENTIC_DEBUGGER_CONFIG_DIR"] = temp_dir.name
+        os.environ["AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH"] = str(
+            Path(temp_dir.name) / "provider-configurations.json"
+        )
 
-    asyncio.run(_run())
+    try:
+        async def _run() -> None:
+            async with app.run_test(size=size) as pilot:
+                await pilot.pause()
+                await actions(pilot)
+                await pilot.pause()
+
+        asyncio.run(_run())
+    finally:
+        if temp_dir is not None:
+            os.environ.pop("AGENTIC_DEBUGGER_CONFIG_DIR", None)
+            os.environ.pop("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", None)
+            temp_dir.cleanup()

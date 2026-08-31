@@ -17,14 +17,12 @@ from agentic_debugger.application.provider_connections import (
     _normalize_catalog,
     add_manual_model,
     add_provider_config,
-    cleanup_leaked_review_fixtures,
     clear_all_session_keys,
     connection_statuses,
     delete_provider_config,
     get_provider_config,
     has_session_key,
     is_known_provider,
-    is_leaked_review_fixture,
     list_configured_providers,
     load_provider_configurations,
     provider_api_model_id,
@@ -597,127 +595,130 @@ def test_test_provider_creation_never_leaks_to_default_operator_path(tmp_path: P
     assert "Groq Direct" not in operator_content
 
 
-def test_cleanup_leaked_review_fixtures_removes_known_groq_direct_fixture_only(tmp_path: Path):
-    """cleanup_leaked_review_fixtures removes fake Groq Direct fixtures while preserving real custom providers."""
-    config_file = tmp_path / "provider-configurations.json"
-    data = {
-        "schema_version": "provider-configurations-v1",
-        "providers": [
-            {
-                "provider_id": "opencode_go",
-                "name": "OpenCode Go",
-                "base_url": "https://opencode.ai/zen/go/v1",
-                "api_format": "chat_completions",
-                "is_builtin": True,
-                "enabled": True,
-                "models": [],
-            },
-            {
-                "provider_id": "commandcode_goat",
-                "name": "CommandCode GOAT",
-                "base_url": "https://api.commandcode.ai/provider/v1",
-                "api_format": "chat_completions",
-                "is_builtin": True,
-                "enabled": True,
-                "models": [],
-            },
-            {
-                "provider_id": "ollama_cloud",
-                "name": "Ollama",
-                "base_url": "https://ollama.com",
-                "api_format": "chat_completions",
-                "is_builtin": True,
-                "enabled": True,
-                "models": [],
-            },
-            # Leaked review fixture 1
-            {
-                "provider_id": "groq_direct",
-                "name": "Groq Direct",
-                "base_url": "https://api.groq.com/openai/v1",
-                "api_format": "chat_completions",
-                "is_builtin": False,
-                "enabled": True,
-                "last_refresh_source": "live",
-                "last_refresh_utc": "2026-08-31T12:00:00Z",
-                "models": [
-                    {"display_name": "DeepSeek R1 Distill 70B", "model_id": "deepseek-r1-distill-llama-70b", "protocol": "chat_completions"},
-                    {"display_name": "Llama 3.3 70B Versatile", "model_id": "llama-3.3-70b-versatile", "protocol": "chat_completions"},
-                    {"display_name": "Mixtral 8x7B 32k", "model_id": "mixtral-8x7b-32768", "protocol": "chat_completions"},
-                ],
-                "tls_signature_blocked": False,
-            },
-            # Leaked review fixture 2
-            {
-                "provider_id": "groq_direct_1",
-                "name": "Groq Direct",
-                "base_url": "https://api.groq.com/openai/v1",
-                "api_format": "chat_completions",
-                "is_builtin": False,
-                "enabled": True,
-                "last_refresh_source": None,
-                "last_refresh_utc": None,
-                "models": [],
-                "tls_signature_blocked": False,
-            },
-            # Genuine custom provider that should NOT be removed
-            {
-                "provider_id": "genuine_custom_groq",
-                "name": "My Groq Production",
-                "base_url": "https://api.groq.com/openai/v1",
-                "api_format": "chat_completions",
-                "is_builtin": False,
-                "enabled": True,
-                "models": [{"display_name": "My Custom Model", "model_id": "custom-model-id", "protocol": "chat_completions"}],
-                "tls_signature_blocked": False,
-            },
-        ],
-    }
-    config_file.write_text(json.dumps(data, indent=1), encoding="utf-8")
-
-    removed = cleanup_leaked_review_fixtures(config_file)
-    assert removed == 2
-
-    cleaned_data = json.loads(config_file.read_text(encoding="utf-8"))
-    cleaned_pids = [p["provider_id"] for p in cleaned_data["providers"]]
-    assert "groq_direct" not in cleaned_pids
-    assert "groq_direct_1" not in cleaned_pids
-    assert "genuine_custom_groq" in cleaned_pids
-    assert "opencode_go" in cleaned_pids
-    assert "commandcode_goat" in cleaned_pids
-    assert "ollama_cloud" in cleaned_pids
-
-
-def test_load_provider_configurations_safely_cleans_leaked_fixtures_on_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
-    """load_provider_configurations filters out leaked review fixtures and triggers safe disk cleanup."""
+def test_legitimate_groq_direct_provider_survives_save_reload_and_load(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """A legitimate user-created custom provider named 'Groq Direct' survives save and reload unchanged."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
 
+    # Add custom provider with exact name "Groq Direct" and base URL "https://api.groq.com/openai/v1"
+    created = add_provider_config(
+        name="Groq Direct",
+        base_url="https://api.groq.com/openai/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+    )
+    assert created.provider_id == "groq_direct"
+    assert created.name == "Groq Direct"
+    assert created.base_url == "https://api.groq.com/openai/v1"
+    assert created.models == ()
+
+    # Reload from disk using standard load_provider_configurations()
+    loaded = load_provider_configurations()
+    loaded_map = {c.provider_id: c for c in loaded}
+
+    assert "groq_direct" in loaded_map
+    groq_loaded = loaded_map["groq_direct"]
+    assert groq_loaded.name == "Groq Direct"
+    assert groq_loaded.base_url == "https://api.groq.com/openai/v1"
+    assert groq_loaded.is_builtin is False
+    assert groq_loaded.models == ()
+
+    # Verify built-in providers also remain intact
+    assert "opencode_go" in loaded_map
+    assert "commandcode_goat" in loaded_map
+    assert "ollama_cloud" in loaded_map
+
+
+def test_environment_credential_and_no_secure_store_state_preserves_custom_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Custom providers without OS secure credentials or using environment keys are preserved and never deleted."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+
+    # Write a custom provider directly to disk with no secure credential stored
     data = {
         "schema_version": "provider-configurations-v1",
         "providers": [
             {
-                "provider_id": "groq_direct",
-                "name": "Groq Direct",
-                "base_url": "https://api.groq.com/openai/v1",
+                "provider_id": "custom_prod_proxy",
+                "name": "Production Proxy",
+                "base_url": "https://proxy.internal.corp/v1",
                 "api_format": "chat_completions",
                 "is_builtin": False,
                 "enabled": True,
                 "models": [],
-            },
+            }
         ],
     }
     config_file.write_text(json.dumps(data, indent=1), encoding="utf-8")
 
-    loaded = load_provider_configurations()
-    loaded_pids = [c.provider_id for c in loaded]
-    assert "groq_direct" not in loaded_pids
-    assert "opencode_go" in loaded_pids
-    assert "commandcode_goat" in loaded_pids
-    assert "ollama_cloud" in loaded_pids
+    # Load configurations in absence of any OS secure credential
+    configs = load_provider_configurations()
+    pids = [c.provider_id for c in configs]
+    assert "custom_prod_proxy" in pids
 
-    # Verify on-disk file was cleaned
-    cleaned_on_disk = json.loads(config_file.read_text(encoding="utf-8"))
-    assert not any(p["provider_id"] == "groq_direct" for p in cleaned_on_disk["providers"])
+    # Verify on-disk file was not deleted or rewritten
+    on_disk = json.loads(config_file.read_text(encoding="utf-8"))
+    assert any(p["provider_id"] == "custom_prod_proxy" for p in on_disk["providers"])
+
+
+def test_headless_render_execution_uses_isolated_config_and_never_mutates_operator_state(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Headless render/review executions isolate config path and leave operator configuration byte-for-byte untouched."""
+    operator_file = tmp_path / "operator_config" / "provider-configurations.json"
+    operator_file.parent.mkdir(parents=True, exist_ok=True)
+    initial_operator_bytes = json.dumps({
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {"provider_id": "opencode_go", "name": "OpenCode Go", "base_url": "https://opencode.ai/zen/go/v1", "api_format": "chat_completions", "is_builtin": True, "enabled": True, "models": []},
+            {"provider_id": "commandcode_goat", "name": "CommandCode GOAT", "base_url": "https://api.commandcode.ai/provider/v1", "api_format": "chat_completions", "is_builtin": True, "enabled": True, "models": []},
+            {"provider_id": "ollama_cloud", "name": "Ollama", "base_url": "https://ollama.com", "api_format": "chat_completions", "is_builtin": True, "enabled": True, "models": []},
+        ],
+    }, indent=2).encode("utf-8")
+    operator_file.write_bytes(initial_operator_bytes)
+
+    # Point default operator config path to operator_file
+    monkeypatch.setenv("LOCALAPPDATA", str(operator_file.parent.parent))
+
+    # Run a subprocess that invokes run_headless to add a test custom provider
+    import textwrap
+    integration_dir = REPO_ROOT / "tests" / "integration"
+    script = textwrap.dedent(f"""
+        import os, sys, tempfile
+        from pathlib import Path
+        sys.path.insert(0, {repr(str(REPO_ROOT))})
+        sys.path.insert(0, {repr(str(integration_dir))})
+        from agentic_debugger.ui.app import LocalApplicationV1
+        from agentic_debugger.application.history import HistoryStore
+        from agentic_debugger.ui.screens import ProviderConnectionsScreen, AddProviderDialogScreen
+        from ui_support import run_headless
+        from textual.widgets import Input
+
+        app = LocalApplicationV1(history_store=HistoryStore(Path(tempfile.mkdtemp())))
+
+        async def actions(pilot):
+            await pilot.press("m")
+            await pilot.pause()
+            await pilot.click("#provider-add-button")
+            await pilot.pause()
+            add_dlg = pilot.app.screen
+            add_dlg.query_one("#input-name", Input).value = "Render Fake Provider"
+            add_dlg.query_one("#input-url", Input).value = "https://api.fake.render/v1"
+            await pilot.click("#btn-save-dialog")
+            await pilot.pause()
+
+        run_headless(app, actions, size=(100, 30))
+    """)
+    cmd = [sys.executable, "-c", script]
+    import subprocess
+    # Run without AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH / AGENTIC_DEBUGGER_CONFIG_DIR in env
+    env = os.environ.copy()
+    env.pop("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", None)
+    env.pop("AGENTIC_DEBUGGER_CONFIG_DIR", None)
+    env["LOCALAPPDATA"] = str(operator_file.parent.parent)
+
+    res = subprocess.run(cmd, capture_output=True, text=True, env=env)
+    assert res.returncode == 0, f"Subprocess failed: {res.stderr}"
+
+    # Operator file must remain 100% byte-for-byte identical
+    assert operator_file.read_bytes() == initial_operator_bytes
+
 
 
