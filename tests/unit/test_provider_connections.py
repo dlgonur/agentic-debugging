@@ -30,6 +30,14 @@ SECRET = "test-session-key-not-a-real-credential"
 @pytest.fixture(autouse=True)
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "cache.json")
+    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    for name in (
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 @pytest.fixture(autouse=True)
@@ -166,6 +174,15 @@ class TestDiscoveredModels:
 
 
 class TestCredentials:
+    def test_forwarded_session_credential_is_a_worker_runtime_source(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY", "forwarded-session-value"
+        )
+        assert pc.credential_source_for("opencode_go") == "session_key"
+        assert pc.resolve_runtime_credential("opencode_go") == "forwarded-session-value"
+
     def test_session_key_store_round_trip(self) -> None:
         assert pc.has_session_key("opencode_go") is False
         pc.set_session_key("opencode_go", SECRET)
@@ -189,14 +206,14 @@ class TestCredentials:
     ) -> None:
         with pytest.raises(pc.ProviderConnectionError):
             pc.set_session_key("commandcode_goat", "secret\nheader-injection")
-        monkeypatch.setenv("CMD_API_KEY", "secret\rinvalid")
+        monkeypatch.setenv("COMMAND_CODE_API_KEY", "secret\rinvalid")
         assert pc.credential_source_for("commandcode_goat") is None
         assert pc.resolve_runtime_credential("commandcode_goat") is None
 
     def test_resolution_order_session_key_beats_environment(
         self, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.setenv("CMD_API_KEY", "env-value")
+        monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-value")
         pc.set_session_key("commandcode_goat", SECRET)
         assert pc.resolve_runtime_credential("commandcode_goat") == SECRET
         assert pc.credential_source_for("commandcode_goat") == "session_key"
@@ -227,7 +244,7 @@ class TestCredentials:
         store = tmp_path / "auth.json"
         store.write_text(json.dumps({"key": "some-credential"}), encoding="utf-8")
         monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
-        monkeypatch.delenv("CMD_API_KEY", raising=False)
+        monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
         assert pc.credential_source_for("commandcode_goat") is None
 
     def test_malformed_opencode_store_fails_closed(
@@ -385,13 +402,13 @@ class TestCatalogRefresh:
     def test_refresh_requires_credential(
         self, fake_commandcode_endpoint, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        monkeypatch.delenv("CMD_API_KEY", raising=False)
+        monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
         with fake_commandcode_endpoint(
             lambda request: (200, catalog_payload(["deepseek/deepseek-v4-flash"]))
         ):
             with pytest.raises(pc.ProviderConnectionError) as excinfo:
                 pc.refresh_provider_catalog("commandcode_goat", engine="stdlib")
-        assert "CMD_API_KEY" in str(excinfo.value)
+        assert "COMMAND_CODE_API_KEY" in str(excinfo.value)
 
     def test_refresh_failure_is_bounded_and_sanitized(
         self, fake_commandcode_endpoint
@@ -606,12 +623,12 @@ class TestCatalogCache:
 
 class TestConnectionStatus:
     def test_not_connected_status(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CMD_API_KEY", raising=False)
+        monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
         status = pc.provider_connection_status("commandcode_goat")
         assert status.connected is False
         assert status.credential_source is None
         assert status.model_count == 0
-        assert status.status_message and "CMD_API_KEY" in status.status_message
+        assert status.status_message and "COMMAND_CODE_API_KEY" in status.status_message
 
     def test_connected_with_session_key(self) -> None:
         pc.set_session_key("commandcode_goat", SECRET)

@@ -851,7 +851,7 @@ Button {
 }
 
 .provider-action-button {
-    height: 1;
+    height: 3;
     min-width: 16;
     margin: 0 2 0 0;
     padding: 0 1;

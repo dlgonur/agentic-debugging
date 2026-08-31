@@ -7,6 +7,7 @@ is contacted, no credential value is ever rendered.
 
 from __future__ import annotations
 
+from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -299,4 +300,24 @@ def test_provider_screen_usable_at_compact_geometry(
         assert region.width <= 80
 
     run_headless(app, actions, size=(80, 24))
+
+
+@pytest.mark.parametrize("size", [(120, 32), (80, 24)])
+def test_provider_action_labels_are_visible_in_rendered_terminal(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, size: tuple[int, int]
+) -> None:
+    app = make_app(tmp_path)
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses",
+        lambda: fake_statuses(connected_opencode=True, connected_goat=True),
+    )
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        rendered_svg = unescape(pilot.app.export_screenshot()).replace("\xa0", " ")
+        assert "Refresh models" in rendered_svg
+        assert "Connect API key" in rendered_svg
+
+    run_headless(app, actions, size=size)
 

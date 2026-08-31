@@ -50,6 +50,7 @@ from agentic_debugger.application.provider_connections import (
     ProviderConnectionError,
     credential_source_for,
     load_cached_catalog,
+    provider_environment_variable,
     resolve_model_protocol,
 )
 
@@ -274,11 +275,15 @@ def _commandcode_availability() -> Tuple[bool, Optional[str]]:
     Presence checks only: the key bytes are never read here.
     """
 
+    environment_var = provider_environment_variable(PROVIDER_KIND_COMMANDCODE)
     if not (
         _commandcode_auth_store_path().is_file()
-        or bool(os.environ.get("CMD_API_KEY"))
+        or bool(environment_var and os.environ.get(environment_var))
     ):
-        return False, "Command Code auth store not found (~/.commandcode/auth.json or CMD_API_KEY)"
+        return False, (
+            "Command Code auth store not found "
+            f"(~/.commandcode/auth.json or {environment_var})"
+        )
     if _first_on_path(_COMMANDCODE_CLI_CANDIDATES) is None:
         return False, "CommandCode CLI not found (expected cmdc/command-code/commandcode on PATH)"
     return True, None
@@ -756,21 +761,6 @@ def _legacy_cli_live_config(
     }
 
 
-#: Injected session-credential variables forwarded into the direct-API
-#: adapter's child environment (the same credential boundary the accepted
-#: CLI adapters use).  Values are forwarded in memory only and are never
-#: part of argv, evidence, or diagnostics.
-_PROVIDER_SESSION_CREDENTIAL_VARS = {
-    PROVIDER_KIND_OPENCODE: "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
-    PROVIDER_KIND_COMMANDCODE: "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
-}
-
-_PROVIDER_ENV_VARS = {
-    PROVIDER_KIND_OPENCODE: "OPENCODE_API_KEY",
-    PROVIDER_KIND_COMMANDCODE: "CMD_API_KEY",
-}
-
-
 def provider_session_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
@@ -780,14 +770,11 @@ def provider_session_credential_environment(
     session key is the current credential source, else ``None``.
     """
 
-    if kind not in DIRECT_API_PROVIDER_KINDS:
-        return None
-    from agentic_debugger.application.provider_connections import peek_session_key
+    from agentic_debugger.application.provider_connections import (
+        provider_session_credential_environment as build_environment,
+    )
 
-    session_value = peek_session_key(kind)
-    if not session_value:
-        return None
-    return {_PROVIDER_SESSION_CREDENTIAL_VARS[kind]: session_value}
+    return build_environment(kind)
 
 
 def provider_transport_environment(kind: str) -> Optional[Mapping[str, str]]:
@@ -801,15 +788,8 @@ def provider_transport_environment(kind: str) -> Optional[Mapping[str, str]]:
     never reaches evidence.
     """
 
-    if kind not in DIRECT_API_PROVIDER_KINDS:
-        return None
-    from agentic_debugger.application.provider_connections import peek_session_key
+    from agentic_debugger.application.provider_connections import (
+        provider_transport_credential_environment,
+    )
 
-    session_value = peek_session_key(kind)
-    if session_value:
-        return {_PROVIDER_SESSION_CREDENTIAL_VARS[kind]: session_value}
-    env_var = _PROVIDER_ENV_VARS[kind]
-    env_value = os.environ.get(env_var)
-    if env_value:
-        return {env_var: env_value}
-    return None
+    return provider_transport_credential_environment(kind)

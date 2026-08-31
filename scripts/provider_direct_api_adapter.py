@@ -13,7 +13,7 @@ Contract (identical to the accepted adapters):
 3. Build the instruction-wrapped prompt (shared frozen shaping —
    imported, not duplicated).
 4. Resolve the credential inside this boundary only: the app-injected
-   session credential, the provider's documented environment variable,
+   session credential, the app-supported provider environment source,
    or (OpenCode Go) the CLI auth store read in place.  The value never
    appears in argv, diagnostics, evidence, or this process's output.
 5. Shape ONE provider request for the model's resolved protocol family
@@ -33,7 +33,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -84,15 +83,6 @@ MAX_PROVIDER_RESPONSE_BYTES = 4 * 1024 * 1024
 #: so a directive-sized completion always fits with margin.
 _MESSAGES_MAX_TOKENS = 16384
 
-#: App-injected session credential variables (per provider kind).  The
-#: app passes the credential through the child environment — the same
-#: boundary the accepted CLI adapters use — never through argv.
-_INJECTED_CREDENTIAL_VARS = {
-    "opencode_go": "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
-    "commandcode_goat": "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
-}
-
-
 class ProviderDirectApiError(RuntimeError):
     def __init__(self, message: str, *, kind: str = "adapter_error") -> None:
         super().__init__(frozen.redact(message)[:400])
@@ -100,15 +90,13 @@ class ProviderDirectApiError(RuntimeError):
 
 
 def _resolve_credential(provider: str) -> str:
-    """Credential resolution inside the runtime boundary (order: injected
-    session credential, documented provider environment variable, CLI
-    auth store where consumable).  Never logs or echoes the value."""
+    """Resolve through the provider-owned runtime credential contract.
 
-    injected = _INJECTED_CREDENTIAL_VARS.get(provider)
-    if injected:
-        value = os.environ.get(injected)
-        if value and value.strip():
-            return value.strip()
+    That contract covers the private session hop, supported provider
+    environment source, and consumable auth store without duplicating any
+    variable names here.  The value is never logged or echoed.
+    """
+
     value = resolve_runtime_credential(provider)
     if value and value.strip():
         return value.strip()

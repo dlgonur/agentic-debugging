@@ -39,6 +39,14 @@ def _clean_session_keys():
 @pytest.fixture(autouse=True)
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent.json")
+    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    for name in (
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def _cached_snapshot(kind: str, model_ids: list[str]) -> ProviderCatalogSnapshot:
@@ -163,12 +171,22 @@ class TestTransportEnvironment:
         assert env == {"AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": SECRET}
 
     def test_documented_env_var_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setenv("CMD_API_KEY", "env-key-value")
+        monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-key-value")
         env = mp.provider_transport_environment("commandcode_goat")
-        assert env == {"CMD_API_KEY": "env-key-value"}
+        assert env == {"COMMAND_CODE_API_KEY": "env-key-value"}
+
+    def test_forwarded_worker_session_key_reaches_adapter_child(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv(
+            "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY", "worker-hop-value"
+        )
+        assert mp.provider_transport_environment("opencode_go") == {
+            "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": "worker-hop-value"
+        }
 
     def test_no_source_no_environment(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.delenv("CMD_API_KEY", raising=False)
+        monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
         monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
         assert mp.provider_transport_environment("commandcode_goat") is None
 
@@ -181,7 +199,7 @@ class TestTransportEnvironment:
         pc.set_session_key("opencode_go", SECRET)
         hop = mp.provider_session_credential_environment("opencode_go")
         assert hop == {"AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": SECRET}
-        monkeypatch.setenv("CMD_API_KEY", "env-key-value")
+        monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-key-value")
         assert mp.provider_session_credential_environment("commandcode_goat") is None
 
 

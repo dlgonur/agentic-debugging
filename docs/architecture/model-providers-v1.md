@@ -64,8 +64,11 @@ retry: one request, one engine, no fallback.
   catalog cache, session params, journals, events, provenance, logs, argv,
   or diagnostics.
 - Resolution order inside the runtime boundary: process-local session key
-  (UI "Connect API key", memory-only) → provider environment variable
-  (`CMD_API_KEY` per current CommandCode docs; `OPENCODE_API_KEY`) →
+  (UI "Connect API key", memory-only, forwarded to the worker and adapter by
+  one private provider-owned environment name) → provider environment source
+  (`COMMAND_CODE_API_KEY`, the current documented Command Code override for
+  `auth.json`; optional app-supported `OPENCODE_API_KEY`, not represented as a
+  documented OpenCode Go variable) →
   OpenCode CLI auth store read in place
   (`~/.local/share/opencode/auth.json`, `opencode-go` entry — schema
   verified). The CommandCode CLI auth store is NOT parsed: its schema is not
@@ -121,7 +124,7 @@ transport for Local Project Debug (and any future live surface):
 |---|---|---|
 | `ollama_cloud` | repository Ollama Cloud roster (unchanged accepted route) | Ollama adapter contract |
 | `opencode_go` | `scripts/opencode_provider_adapter.py` → verified `opencode` CLI | `~/.local/share/opencode/auth.json` (read in place by the CLI) |
-| `commandcode_goat` | `scripts/commandcode_goat_adapter.py` → `node <command-code>/dist/index.mjs` | `~/.commandcode/auth.json` (read in place by the CLI) or `CMD_API_KEY` |
+| `commandcode_goat` | `scripts/commandcode_goat_adapter.py` → `node <command-code>/dist/index.mjs` | `~/.commandcode/auth.json` (read in place by the CLI) or documented `COMMAND_CODE_API_KEY` override |
 | `configured` | existing `CommandModelConfigStore` profiles (unchanged) | profile command's own contract |
 
 The frozen OpenCode Go campaign adapter (`opencode_go_command_adapter.py`)

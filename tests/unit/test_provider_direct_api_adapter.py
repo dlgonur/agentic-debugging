@@ -58,8 +58,16 @@ class _FakeStdin:
 
 
 @pytest.fixture(autouse=True)
-def _clean_session_keys():
+def _clean_session_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
     pc.clear_all_session_keys()
+    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    for name in (
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
     yield
     pc.clear_all_session_keys()
 
@@ -76,7 +84,7 @@ def fake_commandcode(monkeypatch: pytest.MonkeyPatch):
                 original, base_url=server.base_url, tls_signature_blocked=False
             )
             monkeypatch.setitem(pc._CONTRACTS, "commandcode_goat", fake)
-            monkeypatch.setenv("CMD_API_KEY", SECRET)
+            monkeypatch.setenv("COMMAND_CODE_API_KEY", SECRET)
             yield server
 
     return factory
@@ -239,7 +247,7 @@ class TestCredentialBoundary:
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ) as server:
-            monkeypatch.delenv("CMD_API_KEY", raising=False)
+            monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
             code, out, err = run_adapter()
             assert code == 0
         assert server.requests[0]["authorization"] == "Bearer session-key-value"
@@ -248,7 +256,7 @@ class TestCredentialBoundary:
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ):
-            monkeypatch.delenv("CMD_API_KEY", raising=False)
+            monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
             code, out, err = run_adapter()
         assert code == 1
         envelope = json.loads(err)
@@ -270,12 +278,13 @@ class TestCredentialBoundary:
             resolve_provider_live_config,
         )
 
+        pc.set_session_key("opencode_go", SECRET)
         config, provenance = resolve_provider_live_config(
-            "opencode_go",
-            "opencode-go/deepseek-v4-flash",
+            "opencode_go", "opencode-go/deepseek-v4-flash"
         )
         assert all(SECRET not in part for part in config.command)
         assert not any("key" in part.lower() for part in config.command)
+        assert SECRET not in json.dumps(provenance)
 
 
 class TestExactlyOneInference:
@@ -443,7 +452,7 @@ class TestSubprocessContract:
                 cwd=str(tmp_path),
                 env={
                     "PATH": os.environ.get("PATH", ""),
-                    "CMD_API_KEY": SECRET,
+                    "COMMAND_CODE_API_KEY": SECRET,
                     "PYTHONIOENCODING": "utf-8",
                     "SystemRoot": os.environ.get("SystemRoot", ""),
                 },

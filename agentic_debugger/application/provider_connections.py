@@ -72,7 +72,11 @@ __all__ = [
     "peek_session_key",
     "provider_connection_status",
     "provider_api_model_id",
+    "provider_environment_variable",
+    "provider_session_credential_environment",
+    "provider_transport_credential_environment",
     "resolve_model_protocol",
+    "resolve_runtime_credential",
     "refresh_provider_catalog",
     "set_session_key",
 ]
@@ -112,8 +116,13 @@ class _ProviderContract:
     #: curl engine is the deterministic network client when present.
     tls_signature_blocked: bool
     catalog_model_id_pattern: str
-    #: Canonical environment variable documented by the provider.
+    #: App-supported environment variable.  Command Code documents its
+    #: variable; OpenCode Go currently documents /connect/auth-store setup,
+    #: so OPENCODE_API_KEY is an optional Agentic Debugger source, not a
+    #: claimed canonical OpenCode contract.
     env_var: Optional[str]
+    #: Private process-environment hop for a memory-only UI session key.
+    session_env_var: str
     #: Whether the provider CLI auth store can supply the direct-API
     #: credential (only when its schema is reliably established).
     auth_store_consumable: bool
@@ -132,6 +141,7 @@ _CONTRACTS: Mapping[str, _ProviderContract] = {
         tls_signature_blocked=True,
         catalog_model_id_pattern=r"^[a-z0-9][a-z0-9._-]{0,79}$",
         env_var="OPENCODE_API_KEY",
+        session_env_var="AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
         auth_store_consumable=True,
     ),
     "commandcode_goat": _ProviderContract(
@@ -144,7 +154,8 @@ _CONTRACTS: Mapping[str, _ProviderContract] = {
         },
         tls_signature_blocked=True,
         catalog_model_id_pattern=r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,99}$",
-        env_var="CMD_API_KEY",
+        env_var="COMMAND_CODE_API_KEY",
+        session_env_var="AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
         auth_store_consumable=False,
     ),
 }
@@ -254,7 +265,8 @@ def credential_source_for(kind: str) -> Optional[str]:
     """Which credential source the direct route can use right now.
 
     Presence-ordered resolution: process-local session key, then the
-    provider's documented environment variable, then (OpenCode only)
+    forwarded session credential, the app-supported provider environment
+    variable, then (OpenCode only)
     the CLI auth store read in place.  Returns the source label or
     ``None``; credential bytes are only read when the source is the
     auth store itself (the store is the value).
@@ -264,6 +276,8 @@ def credential_source_for(kind: str) -> Optional[str]:
     if contract is None:
         return None
     if has_session_key(kind):
+        return CREDENTIAL_SOURCE_SESSION_KEY
+    if _credential_is_usable(os.environ.get(contract.session_env_var)):
         return CREDENTIAL_SOURCE_SESSION_KEY
     if contract.env_var and _credential_is_usable(os.environ.get(contract.env_var)):
         return CREDENTIAL_SOURCE_ENVIRONMENT
@@ -288,12 +302,61 @@ def resolve_runtime_credential(kind: str) -> Optional[str]:
     session_value = peek_session_key(kind)
     if session_value:
         return session_value
+    forwarded_value = os.environ.get(contract.session_env_var)
+    if _credential_is_usable(forwarded_value):
+        return forwarded_value.strip()
     if contract.env_var:
         env_value = os.environ.get(contract.env_var)
         if _credential_is_usable(env_value):
             return env_value
     if contract.auth_store_consumable:
         return _read_opencode_auth_store_key(opencode_auth_store_path())
+    return None
+
+
+def provider_environment_variable(kind: str) -> Optional[str]:
+    """The app-supported provider credential variable, if any."""
+
+    contract = _CONTRACTS.get(kind)
+    return contract.env_var if contract is not None else None
+
+
+def provider_session_credential_environment(
+    kind: str,
+) -> Optional[Mapping[str, str]]:
+    """Exactly one private UI-to-worker credential hop, or ``None``."""
+
+    contract = _CONTRACTS.get(kind)
+    session_value = peek_session_key(kind)
+    if contract is None or not _credential_is_usable(session_value):
+        return None
+    return {contract.session_env_var: session_value.strip()}
+
+
+def provider_transport_credential_environment(
+    kind: str,
+) -> Optional[Mapping[str, str]]:
+    """Exactly one credential variable for the direct adapter child.
+
+    The worker may hold a UI session key only in its private forwarded
+    variable.  Preserve that narrow name for the adapter child; otherwise
+    forward the app-supported provider variable.  Auth-store credentials
+    are read in place and need no child override.
+    """
+
+    contract = _CONTRACTS.get(kind)
+    if contract is None:
+        return None
+    session_value = peek_session_key(kind)
+    if _credential_is_usable(session_value):
+        return {contract.session_env_var: session_value.strip()}
+    forwarded_value = os.environ.get(contract.session_env_var)
+    if _credential_is_usable(forwarded_value):
+        return {contract.session_env_var: forwarded_value.strip()}
+    if contract.env_var:
+        env_value = os.environ.get(contract.env_var)
+        if _credential_is_usable(env_value):
+            return {contract.env_var: env_value.strip()}
     return None
 
 
@@ -806,7 +869,7 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
     if source is None:
         if kind == "commandcode_goat":
             message = (
-                "Not connected — direct API needs CMD_API_KEY or an API key "
+                f"Not connected — direct API needs {contract.env_var} or an API key "
                 "entered for this app session (the CLI auth store is not "
                 "readable by the direct route)"
             )

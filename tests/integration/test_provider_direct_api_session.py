@@ -15,10 +15,12 @@ usable credential source (no network attempt is possible).
 
 from __future__ import annotations
 
+import asyncio
 import json
 import subprocess
 import sys
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -28,6 +30,9 @@ import pytest
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ui_support import run_headless  # noqa: E402
 
 from agentic_debugger.application import model_providers as mp  # noqa: E402
 from agentic_debugger.application import provider_connections as pc  # noqa: E402
@@ -60,6 +65,7 @@ from agentic_debugger.application.session import (  # noqa: E402
 )
 from agentic_debugger.application.sources import ExecutionSourceSpec  # noqa: E402
 from agentic_debugger.cancellation import CancellationToken  # noqa: E402
+from agentic_debugger.ui.app import LocalApplicationV1  # noqa: E402
 
 SECRET = "e2e-session-credential-not-real"
 
@@ -71,6 +77,29 @@ _PATCH = (
     "-    return a - b\n"
     "+    return a + b\n"
 )
+
+
+@pytest.fixture(autouse=True)
+def _hermetic_provider_credentials(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Normal integration tests never observe operator auth or env state."""
+
+    pc.clear_all_session_keys()
+    isolated_home = tmp_path / "operator-state-hidden"
+    isolated_home.mkdir(exist_ok=True)
+    monkeypatch.setenv("HOME", str(isolated_home))
+    monkeypatch.setenv("USERPROFILE", str(isolated_home))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "local-app-data"))
+    for name in (
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    yield
+    pc.clear_all_session_keys()
 
 
 def _make_git_repo(tmp_path: Path) -> Path:
@@ -268,7 +297,15 @@ def _wrap_registry_for_fake_endpoint(monkeypatch: pytest.MonkeyPatch, base_url: 
     monkeypatch.setattr(mp, "resolve_provider_live_config", wrapped)
 
 
-def _local_params(repo: Path, head: str, isolated: Path, parent_tmpdir: Path) -> dict:
+def _local_params(
+    repo: Path,
+    head: str,
+    isolated: Path,
+    parent_tmpdir: Path,
+    *,
+    provider: str = "commandcode_goat",
+    model_id: str = "deepseek/deepseek-v4-flash",
+) -> dict:
     return {
         "project_repo_path": str(repo),
         "project_head": head,
@@ -279,13 +316,54 @@ def _local_params(repo: Path, head: str, isolated: Path, parent_tmpdir: Path) ->
         "parent_tmpdir": str(parent_tmpdir),
         "policy": "static-baseline",
         "config_root": str(repo / "config"),
-        "profile_id": "deepseek/deepseek-v4-flash",
-        "provider": "commandcode_goat",
-        "model_id": "deepseek/deepseek-v4-flash",
+        "profile_id": model_id,
+        "provider": provider,
+        "model_id": model_id,
     }
 
 
-def test_local_project_session_executes_through_direct_api(
+def _install_worker_fake_endpoint(
+    monkeypatch: pytest.MonkeyPatch, base_url: str
+) -> None:
+    """Keep the production worker boundary while adding the adapter's
+    evaluation-only local endpoint flags inside that fresh process."""
+
+    project_root = str(REPO_ROOT).replace("\\", "/")
+    wrapped_source = """
+def _wrapped(kind, model_id, protocol, *, logical_call_ceiling, request_timeout_seconds):
+    config, provenance = _real(
+        kind,
+        model_id,
+        protocol,
+        logical_call_ceiling=logical_call_ceiling,
+        request_timeout_seconds=request_timeout_seconds,
+    )
+    command = tuple(config.command) + ("--base-url", _base_url, "--engine", "stdlib")
+    return type(config)(
+        model_name=config.model_name,
+        command=command,
+        request_timeout_seconds=config.request_timeout_seconds,
+        tool_version=config.tool_version,
+    ), provenance
+"""
+
+    def worker_argv(_self: SessionWorkerProcess) -> List[str]:
+        bootstrap = (
+            "import runpy, sys; "
+            f"sys.path.insert(0, {project_root!r}); "
+            "from agentic_debugger.application import model_providers as _mp; "
+            "_real = _mp._direct_api_live_config; "
+            f"_base_url = {base_url!r}; "
+            f"exec({wrapped_source!r}); "
+            "_mp._direct_api_live_config = _wrapped; "
+            "runpy.run_module('agentic_debugger.application.worker', run_name='__main__')"
+        )
+        return [sys.executable, "-I", "-u", "-c", bootstrap]
+
+    monkeypatch.setattr(SessionWorkerProcess, "_worker_argv", worker_argv)
+
+
+def test_commandcode_local_project_session_executes_through_direct_api(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     pc.clear_all_session_keys()
@@ -387,6 +465,69 @@ def test_local_project_session_executes_through_direct_api(
         cleanup_parent_tmpdir(wt.parent_tmpdir, repo)
 
 
+def test_opencode_ui_app_worker_session_key_reaches_direct_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Full memory-only hop: app store -> worker environment -> worker route
+    -> minimal adapter environment -> Authorization header."""
+
+    repo = _make_git_repo(tmp_path)
+    app = LocalApplicationV1(history_store=HistoryStore(tmp_path / "history"))
+    pc.set_session_key("opencode_go", SECRET)
+    captured: dict[str, Any] = {}
+    with _ScriptedChatServer() as server:
+        _install_worker_fake_endpoint(monkeypatch, server.base_url)
+
+        async def actions(pilot):
+            pilot.app.start_local_project_session(
+                project_path=str(repo),
+                bug_description="add returns a - b instead of a + b",
+                reproduction_command="python repro.py",
+                verification_command="python -m pytest -q test_regression.py",
+                profile_id="opencode-go/deepseek-v4-flash",
+                model_provider="opencode_go",
+                max_elapsed_seconds=120,
+            )
+            runner = pilot.app.live_runner
+            assert runner is not None
+            captured["runner"] = runner
+            assert runner.worker._child_environment == {
+                "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": SECRET
+            }
+            assert SECRET not in " ".join(runner.worker._worker_argv())
+
+            deadline = time.monotonic() + 120
+            while runner.terminal is None and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            assert runner.terminal is not None
+            assert runner.terminal.status.value == "succeeded"
+
+        run_headless(app, actions, size=(120, 32))
+        runner = captured["runner"]
+
+        assert server.request_count >= 6
+        for record in server.calls:
+            assert record["path"] == "/chat/completions"
+            assert record["authorization"] == f"Bearer {SECRET}"
+
+    journal_path = runner.worker.journal_path
+    read = read_session_journal(journal_path)
+    assert read.state is JournalReadState.COMPLETE
+    validate_session_event_stream(read.events)
+    provenance = next(
+        event.payload
+        for event in read.events
+        if event.event_kind is SessionEventKind.MODEL_CONFIGURED
+    )
+    assert provenance["provider"] == "opencode_go"
+    assert provenance["profile_id"] == "opencode-go/deepseek-v4-flash"
+    assert provenance["route"] == "direct_api"
+    assert provenance["api_protocol"] == "chat_completions"
+    assert provenance["provider_model_id"] == "deepseek-v4-flash"
+    assert SECRET not in json.dumps(provenance)
+    assert SECRET not in journal_path.read_text(encoding="utf-8")
+
+
 def test_worker_fails_closed_without_credential_and_no_network(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -398,7 +539,7 @@ def test_worker_fails_closed_without_credential_and_no_network(
     wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
     store = HistoryStore(tmp_path / "hist")
     try:
-        monkeypatch.delenv("CMD_API_KEY", raising=False)
+        monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
         spec = SessionSpec(
             task_id="local-project-debug",
             source=ExecutionSourceSpec(
