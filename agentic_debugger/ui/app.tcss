@@ -962,15 +962,26 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     margin: 1 0 0 0;
 }
 
-.models-box {
+.models-helper-text {
     width: 100%;
     height: auto;
-    max-height: 8;
+    color: $foreground-muted;
+    text-style: italic;
+    margin: 0 0 1 0;
+}
+
+.models-box {
+    width: 100%;
+    height: 8;
     background: $background;
     border: round $line;
     padding: 0 1;
     margin: 0 0 1 0;
     scrollbar-size: 1 1;
+}
+
+.models-box:focus {
+    border: round $primary;
 }
 
 .models-list-text {
@@ -998,7 +1009,7 @@ ModelProvidersScreen, ProviderConnectionsScreen {
 
 /* -- Provider Dialogs -------------------------------------------------- */
 
-AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen {
+AddProviderDialogScreen, EditProviderDialogScreen, AddManualModelDialogScreen, ConfirmDeleteProviderDialogScreen {
     align: center middle;
     background: $background 80%;
 }

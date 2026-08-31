@@ -28,6 +28,7 @@ from agentic_debugger.ui.app import LocalApplicationV1  # noqa: E402
 from agentic_debugger.ui.screens import (  # noqa: E402
     AddProviderDialogScreen,
     ChoicePickerScreen,
+    ConfirmDeleteProviderDialogScreen,
     EditProviderDialogScreen,
     ProviderConnectionsScreen,
     StartSessionScreen,
@@ -444,11 +445,11 @@ def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch
 
         # Check hint on wide screen
         hint = screen.query_one("#providers-hint")
-        assert str(hint.render().plain) == "↑/↓ select   r refresh models   a add provider   e edit provider   esc back"
+        assert str(hint.render().plain) == "↑/↓ select   r refresh models   a add provider   e edit provider   d delete provider   esc back"
 
         # Test compact resize
         screen._update_hint(80)
-        assert str(hint.render().plain) == "↑/↓ select   r refresh   a add   e edit   esc back"
+        assert str(hint.render().plain) == "↑/↓ select   r refresh   a add   e edit   d delete   esc back"
         assert "k key" not in str(hint.render().plain)
         assert "Connect API key" not in str(hint.render().plain)
 
@@ -749,5 +750,253 @@ def test_refresh_without_credential_error_copy(
         assert "connect api key" not in models_text.lower()
 
     run_headless(app, actions, size=(100, 30))
+
+
+def test_commandcode_goat_62_models_presentation_and_scrolling_navigation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Truthful model-list presentation communicates all 62 discovered models and supports independent scroll navigation."""
+    from textual.containers import VerticalScroll
+
+    models_62 = tuple(
+        pc.DiscoveredProviderModel(
+            kind="commandcode_goat",
+            model_id=f"deepseek/deepseek-v4-model-{i:02d}",
+            display_name=f"DeepSeek V4 Model {i:02d}",
+            protocol="chat_completions",
+            runnable=True,
+        )
+        for i in range(1, 63)
+    )
+
+    def _status_with_62_models():
+        return [
+            pc.ProviderConnectionStatus(
+                kind="commandcode_goat",
+                label="CommandCode GOAT",
+                base_url="https://api.commandcode.ai/provider/v1",
+                connected=True,
+                credential_source="saved",
+                model_count=62,
+                last_refresh_utc="2026-08-31T12:00:00Z",
+                last_refresh_source="live",
+                stale=False,
+                status_message=None,
+                cached_models=models_62,
+                is_builtin=True,
+            )
+        ]
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses",
+        _status_with_62_models,
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # 1. Verify truthful helper copy indicates more discovered models than visible rows
+        helper = screen.query_one("#provider-models-helper-commandcode_goat")
+        helper_text = str(helper.render().plain)
+        assert "62 discovered models — scroll to view more" in helper_text
+
+        # 2. Verify all 62 models are in the models list text (not truncated to 24)
+        models_widget = screen.query_one("#provider-models-list-commandcode_goat")
+        list_text = str(models_widget.render().plain)
+        assert "DeepSeek V4 Model 01" in list_text
+        assert "DeepSeek V4 Model 24" in list_text
+        assert "DeepSeek V4 Model 25" in list_text
+        assert "DeepSeek V4 Model 62" in list_text
+
+        # 3. Verify models box is a focusable scrollable widget
+        models_box = screen.query_one("#provider-models-box-commandcode_goat", VerticalScroll)
+        assert models_box.can_focus is True
+
+        # 4. Focus models box and test keyboard arrow scrolling navigation
+        models_box.focus()
+        await pilot.pause()
+        assert screen.focused == models_box
+
+        # Scroll down through models
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.pause()
+        assert models_box.scroll_y > 0
+
+        # Page down and end navigation
+        await pilot.press("pagedown")
+        await pilot.pause()
+        assert models_box.scroll_y >= 3
+
+        await pilot.press("end")
+        await pilot.pause()
+        assert models_box.scroll_y > 10
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_custom_provider_delete_confirmation_and_cancel_flow(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Deleting a custom provider opens a confirmation dialog that can be cancelled without deleting."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    pc.add_provider_config(
+        name="Groq Direct Test",
+        base_url="https://api.groq.com/openai/v1",
+        api_format="chat_completions",
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Select custom provider
+        screen._selected_index = screen._index_of("groq_direct_test")
+        screen.render_state()
+        await pilot.pause()
+
+        # Delete button is enabled for custom provider
+        del_btn = screen.query_one("#provider-delete-button-groq_direct_test")
+        assert del_btn.disabled is False
+        assert "Delete provider" in str(del_btn.label)
+
+        # Press 'd' to open confirmation dialog
+        await pilot.press("d")
+        await pilot.pause()
+        confirm_screen = pilot.app.screen
+        assert isinstance(confirm_screen, ConfirmDeleteProviderDialogScreen)
+        assert "DELETE PROVIDER: Groq Direct Test" in str(confirm_screen.query_one("#dialog-title").render().plain)
+
+        # Cancel deletion
+        await pilot.click("#btn-cancel-dialog")
+        await pilot.pause()
+
+        # Verify back on provider screen and provider was NOT deleted
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+        assert pc.get_provider_config("groq_direct_test") is not None
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_custom_provider_delete_confirmed_removes_config_and_updates_selection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Confirming custom provider deletion removes config, secure credential, and safely updates selection."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    store = {}
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda k, v: store.__setitem__(k, v) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_secure_credential",
+        lambda k: store.get(k),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.delete_secure_credential",
+        lambda k: store.pop(k, None) is not None,
+    )
+
+    pc.add_provider_config(
+        name="Temporary Custom",
+        base_url="https://api.temp.test/v1",
+        api_format="chat_completions",
+        api_key="secret-temp-key-1234",
+    )
+    assert pc.get_provider_config("temporary_custom") is not None
+    assert store.get("temporary_custom") == "secret-temp-key-1234"
+
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Select temporary_custom
+        screen._selected_index = screen._index_of("temporary_custom")
+        screen.render_state()
+        await pilot.pause()
+
+        # Click delete button
+        await pilot.click("#provider-delete-button-temporary_custom")
+        await pilot.pause()
+        confirm_screen = pilot.app.screen
+        assert isinstance(confirm_screen, ConfirmDeleteProviderDialogScreen)
+
+        # Confirm deletion
+        await pilot.click("#btn-confirm-delete")
+        await pilot.pause()
+
+        # Verify provider and credentials are completely removed
+        assert pc.get_provider_config("temporary_custom") is None
+        assert "temporary_custom" not in store
+        assert pc.has_session_key("temporary_custom") is False
+
+        # Verify UI remains stable and selection is safely updated
+        active_screen = pilot.app.screen
+        assert isinstance(active_screen, ProviderConnectionsScreen)
+        status_msg = str(active_screen.query_one("#providers-status").render().plain)
+        assert "Deleted provider 'Temporary Custom'" in status_msg
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_builtin_provider_delete_is_protected_in_ui(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Built-in providers display protected status on delete action and reject deletion."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Select built-in OpenCode Go
+        screen._selected_index = screen._index_of("opencode_go")
+        screen.render_state()
+        await pilot.pause()
+
+        # Verify delete button is disabled and marked protected
+        del_btn = screen.query_one("#provider-delete-button-opencode_go")
+        assert del_btn.disabled is True
+        assert "Delete (protected)" in str(del_btn.label)
+
+        # Pressing 'd' produces truthful protected status feedback
+        await pilot.press("d")
+        await pilot.pause()
+
+        # No confirm dialog opened; status message shows protection feedback
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+        status_msg = str(screen.query_one("#providers-status").render().plain)
+        assert "protected and cannot be deleted" in status_msg
+        assert pc.get_provider_config("opencode_go") is not None
+
+    run_headless(app, actions, size=(100, 30))
+
 
 

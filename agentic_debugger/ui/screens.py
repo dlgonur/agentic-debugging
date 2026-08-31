@@ -1276,10 +1276,10 @@ class ModelProvidersScreen(Screen):
     """
 
     PROVIDERS_HINT = (
-        "↑/↓ select   r refresh models   a add provider   e edit provider   esc back"
+        "↑/↓ select   r refresh models   a add provider   e edit provider   d delete provider   esc back"
     )
     PROVIDERS_HINT_COMPACT = (
-        "↑/↓ select   r refresh   a add   e edit   esc back"
+        "↑/↓ select   r refresh   a add   e edit   d delete   esc back"
     )
 
     BINDINGS = [
@@ -1345,12 +1345,20 @@ class ModelProvidersScreen(Screen):
                                     )
                                     if not st.is_builtin:
                                         yield Button(
-                                            "Delete",
+                                            "Delete provider",
                                             id=f"provider-delete-button-{st.kind}",
                                             classes="provider-action-button danger-action",
                                         )
+                                    else:
+                                        yield Button(
+                                            "Delete (protected)",
+                                            id=f"provider-delete-button-{st.kind}",
+                                            classes="provider-action-button -disabled",
+                                            disabled=True,
+                                        )
                                 yield Static("MODELS", classes="models-header", id=f"provider-models-title-{st.kind}")
-                                with Vertical(classes="models-box", id=f"provider-models-box-{st.kind}"):
+                                yield Static("", classes="models-helper-text", id=f"provider-models-helper-{st.kind}")
+                                with VerticalScroll(classes="models-box", id=f"provider-models-box-{st.kind}", can_focus=True):
                                     yield Static("", id=f"provider-models-list-{st.kind}", classes="models-list-text")
                                 yield Button(
                                     "+ Add model (manual)",
@@ -1462,15 +1470,23 @@ class ModelProvidersScreen(Screen):
             refresh_line.update("\n".join(lines) if lines else "")
 
             # Render models list
+            models_helper = self.query_one(f"#provider-models-helper-{status.kind}", Static)
             model_items = []
             for m in status.cached_models:
                 proto_str = f" [{m.protocol}]" if m.protocol else ""
                 model_items.append(f"• {m.display_name} ({m.model_id}){proto_str}")
             if model_items:
-                models_list.update("\n".join(model_items[:24]))
+                models_list.update("\n".join(model_items))
+                count = len(model_items)
+                if count > 6:
+                    models_helper.update(f"{count} discovered models — scroll to view more")
+                else:
+                    models_helper.update(f"{count} discovered model{'s' if count != 1 else ''}")
             elif status.connected:
+                models_helper.update("")
                 models_list.update("[dim]No models discovered yet. Click 'Refresh models' or '+ Add model'.[/]")
             else:
+                models_helper.update("")
                 models_list.update("[dim]No usable credential — edit provider to add an API key and refresh models.[/]")
 
         status_widget = self.query_one("#providers-status", Static)
@@ -1579,15 +1595,36 @@ class ModelProvidersScreen(Screen):
     def action_delete_provider(self) -> None:
         kind = self._selected_kind()
         label = self._selected_label()
-        from agentic_debugger.application.provider_connections import delete_provider_config, get_provider_config
+        from agentic_debugger.application.provider_connections import (
+            DIRECT_API_PROVIDER_KINDS,
+            get_provider_config,
+        )
         cfg = get_provider_config(kind)
-        if cfg and cfg.is_builtin:
-            self._set_message("Built-in providers cannot be deleted")
+        if (cfg and cfg.is_builtin) or kind in DIRECT_API_PROVIDER_KINDS:
+            self._set_message(f"Built-in provider '{label}' is protected and cannot be deleted")
             return
-        if delete_provider_config(kind):
-            self._set_message(f"Deleted provider '{label}'")
-            self.app.pop_screen()
-            self.app.push_screen(ModelProvidersScreen())
+
+        def on_confirmed(confirmed: bool) -> None:
+            if not confirmed:
+                return
+            from agentic_debugger.application.provider_connections import delete_provider_config
+            if delete_provider_config(kind):
+                self.app.pop_screen()
+                new_screen = ModelProvidersScreen()
+                statuses = new_screen._current_statuses()
+                new_screen._selected_index = max(0, min(self._selected_index, len(statuses) - 1))
+                self.app.push_screen(new_screen)
+                new_screen._set_message(f"Deleted provider '{label}'")
+            else:
+                self._set_message(f"Failed to delete provider '{label}'")
+
+        self.app.push_screen(
+            ConfirmDeleteProviderDialogScreen(
+                provider_id=kind,
+                provider_name=label,
+                on_confirm=on_confirmed,
+            )
+        )
 
     def _action_add_manual_model(self, kind: str) -> None:
         def on_added(model_id: Optional[str], display_name: Optional[str], protocol: Optional[str]):
@@ -1907,6 +1944,55 @@ class AddManualModelDialogScreen(Screen):
                 return
             self.app.pop_screen()
             self._on_save(mid, disp or None, None)
+            event.stop()
+
+
+class ConfirmDeleteProviderDialogScreen(Screen):
+    """Dialog for confirming deletion of a custom model provider."""
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+    ]
+
+    def __init__(
+        self,
+        provider_id: str,
+        provider_name: str,
+        on_confirm: Callable[[bool], None],
+    ) -> None:
+        super().__init__()
+        self._provider_id = provider_id
+        self._provider_name = provider_name
+        self._on_confirm = on_confirm
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="provider-dialog-card"):
+            yield Static(f"DELETE PROVIDER: {self._provider_name}", id="dialog-title")
+            yield Static(
+                f"Are you sure you want to delete '{self._provider_name}' ({self._provider_id})?\n\n"
+                "This will remove its persisted configuration and any securely stored credentials.",
+                classes="dialog-label",
+            )
+            yield Static("", id="dialog-feedback")
+            with Horizontal(id="dialog-actions-row"):
+                yield Button("Delete provider", id="btn-confirm-delete", classes="primary-action danger-action")
+                yield Button("Cancel", id="btn-cancel-dialog")
+
+    def on_mount(self) -> None:
+        self.query_one("#btn-cancel-dialog", Button).focus()
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_confirm(False)
+
+    def on_button_pressed(self, event: Any) -> None:
+        btn_id = getattr(event.button, "id", "")
+        if btn_id == "btn-confirm-delete":
+            self.app.pop_screen()
+            self._on_confirm(True)
+            event.stop()
+        elif btn_id == "btn-cancel-dialog":
+            self.action_cancel()
             event.stop()
 
 

@@ -13,17 +13,20 @@ import pytest
 
 from agentic_debugger.application.provider_connections import (
     DiscoveredProviderModel,
+    ProviderCatalogSnapshot,
     ProviderConfig,
     _normalize_catalog,
     add_manual_model,
     add_provider_config,
     clear_all_session_keys,
     connection_statuses,
+    delete_cached_catalog,
     delete_provider_config,
     get_provider_config,
     has_session_key,
     is_known_provider,
     list_configured_providers,
+    load_cached_catalog,
     load_provider_configurations,
     provider_api_model_id,
     provider_base_url,
@@ -31,6 +34,7 @@ from agentic_debugger.application.provider_connections import (
     refresh_provider_catalog,
     resolve_model_protocol,
     resolve_runtime_credential,
+    save_cached_catalog,
     save_provider_configurations,
     save_secure_credential,
     set_session_key,
@@ -764,6 +768,59 @@ def test_headless_render_execution_uses_isolated_config_and_never_mutates_operat
 
     # Operator file must remain 100% byte-for-byte identical
     assert operator_file.read_bytes() == initial_operator_bytes
+
+
+def test_delete_provider_cleans_up_catalog_cache_and_secure_store(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Deleting a custom provider purges config, secure credentials, and cached catalog entries."""
+    cache_path = tmp_path / "provider-catalog-cache.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.catalog_cache_path",
+        lambda: cache_path,
+    )
+
+    # Add custom provider with API key
+    cfg = add_provider_config(
+        name="Purge Target Provider",
+        base_url="https://api.purge-target.test/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        api_key="secret-key-to-purge",
+    )
+    pid = cfg.provider_id
+    assert get_provider_config(pid) is not None
+
+    # Save a cached catalog snapshot for this provider
+    snapshot = ProviderCatalogSnapshot(
+        kind=pid,
+        fetched_at_utc="2026-08-31T12:00:00Z",
+        source="live",
+        models=(
+            DiscoveredProviderModel(
+                kind=pid,
+                model_id="purge-model-1",
+                display_name="Purge Model 1",
+                protocol=PROTOCOL_CHAT_COMPLETIONS,
+                runnable=True,
+            ),
+        ),
+    )
+    save_cached_catalog(snapshot)
+    assert load_cached_catalog(pid) is not None
+
+    # Delete provider
+    deleted = delete_provider_config(pid)
+    assert deleted is True
+
+    # Verify config removed
+    assert get_provider_config(pid) is None
+
+    # Verify catalog cache entry removed from disk
+    raw_cache = json.loads(cache_path.read_text(encoding="utf-8"))
+    assert pid not in raw_cache.get("providers", {})
+
+    # Loading cached catalog for a deleted unknown provider fails closed
+    with pytest.raises(Exception):
+        load_cached_catalog(pid)
+
 
 
 

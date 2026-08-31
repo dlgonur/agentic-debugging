@@ -73,6 +73,7 @@ __all__ = [
     "clear_session_key",
     "connection_statuses",
     "credential_source_for",
+    "delete_cached_catalog",
     "delete_provider_config",
     "delete_secure_credential",
     "get_provider_config",
@@ -800,10 +801,10 @@ def update_provider_config(
 
 
 def delete_provider_config(provider_id: str) -> bool:
-    """Delete a provider configuration and its stored credential."""
+    """Delete a provider configuration, its stored credential, and cached catalog."""
     configs = load_provider_configurations()
     existing = next((c for c in configs if c.provider_id == provider_id), None)
-    if existing is None or existing.is_builtin or provider_id in _BUILTIN_CONTRACTS:
+    if existing is None or existing.is_builtin or provider_id in _BUILTIN_CONTRACTS or provider_id in DIRECT_API_PROVIDER_KINDS:
         return False
     filtered = [c for c in configs if c.provider_id != provider_id]
     if len(filtered) == len(configs):
@@ -811,6 +812,7 @@ def delete_provider_config(provider_id: str) -> bool:
     save_provider_configurations(filtered)
     delete_secure_credential(provider_id)
     clear_session_key(provider_id)
+    delete_cached_catalog(provider_id)
     return True
 
 
@@ -1303,6 +1305,60 @@ def save_cached_catalog(snapshot: ProviderCatalogSnapshot) -> None:
             except OSError:
                 pass
         raise ProviderConnectionError("provider catalog cache could not be written") from None
+
+
+def delete_cached_catalog(kind: str) -> None:
+    """Purge any cached catalog entry for one provider."""
+    path = catalog_cache_path()
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return
+    if len(raw) > _MAX_CACHE_FILE_BYTES:
+        return
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        return
+    if (
+        not isinstance(decoded, Mapping)
+        or decoded.get("schema_version") != _CACHE_SCHEMA_VERSION
+        or not isinstance(decoded.get("providers"), dict)
+    ):
+        return
+    if kind not in decoded["providers"]:
+        return
+    del decoded["providers"][kind]
+    payload = json.dumps(
+        {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "providers": decoded["providers"],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=1,
+    ).encode("utf-8")
+    if len(payload) > _MAX_CACHE_FILE_BYTES:
+        return
+    temporary: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=path.name + ".",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+        os.replace(temporary, path)
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # -- connection status --------------------------------------------------------
