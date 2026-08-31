@@ -69,6 +69,7 @@ __all__ = [
     "add_manual_model",
     "add_provider_config",
     "catalog_cache_path",
+    "cleanup_leaked_review_fixtures",
     "clear_all_session_keys",
     "clear_session_key",
     "connection_statuses",
@@ -80,6 +81,7 @@ __all__ = [
     "has_session_key",
     "inference_path_for",
     "is_known_provider",
+    "is_leaked_review_fixture",
     "list_configured_providers",
     "load_cached_catalog",
     "load_provider_configurations",
@@ -578,8 +580,108 @@ def _default_builtin_configs() -> List[ProviderConfig]:
     return configs
 
 
+_KNOWN_REVIEW_FIXTURE_IDS = {"groq_direct", "groq_direct_1"}
+_KNOWN_REVIEW_FIXTURE_MODELS = {
+    "deepseek-r1-distill-llama-70b",
+    "llama-3.3-70b-versatile",
+    "mixtral-8x7b-32768",
+}
+
+
+def is_leaked_review_fixture(cfg: ProviderConfig) -> bool:
+    """Return True only if cfg precisely matches a known review/render test fixture."""
+    if cfg.is_builtin:
+        return False
+    if cfg.provider_id not in _KNOWN_REVIEW_FIXTURE_IDS:
+        return False
+    if cfg.name != "Groq Direct":
+        return False
+    if cfg.base_url != "https://api.groq.com/openai/v1":
+        return False
+    # If the user stored a real secret in OS credential store, do not treat as fixture
+    if has_secure_credential(cfg.provider_id):
+        return False
+    # Check that models either match the test fixture models or are empty
+    if cfg.models:
+        model_ids = {m.model_id for m in cfg.models}
+        if not model_ids.issubset(_KNOWN_REVIEW_FIXTURE_MODELS):
+            return False
+    return True
+
+
+def cleanup_leaked_review_fixtures(config_path: Optional[Path] = None) -> int:
+    """Safely remove known review/test fixture providers from persistent user configuration.
+
+    Returns the number of leaked fixture providers removed.
+    """
+    path = config_path if config_path is not None else provider_configurations_path()
+    try:
+        raw = path.read_bytes()
+    except Exception:
+        return 0
+    if len(raw) > _MAX_CONFIG_FILE_BYTES:
+        return 0
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except Exception:
+        return 0
+    if not isinstance(data, Mapping) or data.get("schema_version") != PROVIDER_CONFIG_SCHEMA_VERSION:
+        return 0
+    providers_raw = data.get("providers")
+    if not isinstance(providers_raw, list):
+        return 0
+
+    cleaned: List[Dict[str, Any]] = []
+    removed_count = 0
+    for item in providers_raw:
+        cfg = ProviderConfig.from_dict(item)
+        if cfg and is_leaked_review_fixture(cfg):
+            removed_count += 1
+            delete_secure_credential(cfg.provider_id)
+            clear_session_key(cfg.provider_id)
+            continue
+        cleaned.append(item)
+
+    if removed_count > 0:
+        payload = json.dumps(
+            {
+                "schema_version": PROVIDER_CONFIG_SCHEMA_VERSION,
+                "providers": cleaned[:_MAX_PROVIDERS_CONFIGURED],
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            indent=1,
+        ).encode("utf-8")
+        temporary: Optional[Path] = None
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with tempfile.NamedTemporaryFile(
+                mode="wb",
+                prefix=path.name + ".",
+                suffix=".tmp",
+                dir=path.parent,
+                delete=False,
+            ) as stream:
+                temporary = Path(stream.name)
+                stream.write(payload)
+            os.replace(temporary, path)
+        except OSError:
+            if temporary is not None:
+                try:
+                    temporary.unlink(missing_ok=True)
+                except OSError:
+                    pass
+    return removed_count
+
+
 def provider_configurations_path() -> Path:
     """User-level persistent configuration path (NOT in Git repository)."""
+    override = os.environ.get("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH")
+    if override and override.strip():
+        return Path(override.strip())
+    config_dir = os.environ.get("AGENTIC_DEBUGGER_CONFIG_DIR")
+    if config_dir and config_dir.strip():
+        return Path(config_dir.strip()) / "provider-configurations.json"
     base = os.environ.get("LOCALAPPDATA") or os.environ.get("USERPROFILE") or os.environ.get("HOME")
     if not base:
         try:
@@ -609,16 +711,28 @@ def load_provider_configurations() -> List[ProviderConfig]:
         return _default_builtin_configs()
     configs: List[ProviderConfig] = []
     seen_ids = set()
+    has_leaked_fixture = False
     for item in providers_raw:
         cfg = ProviderConfig.from_dict(item)
-        if cfg and cfg.provider_id not in seen_ids:
-            seen_ids.add(cfg.provider_id)
-            configs.append(cfg)
+        if cfg:
+            if is_leaked_review_fixture(cfg):
+                has_leaked_fixture = True
+                continue
+            if cfg.provider_id not in seen_ids:
+                seen_ids.add(cfg.provider_id)
+                configs.append(cfg)
 
     builtin_map = {b.provider_id: b for b in _default_builtin_configs()}
     for b_id, b_cfg in builtin_map.items():
         if b_id not in seen_ids:
             configs.append(b_cfg)
+
+    if has_leaked_fixture:
+        try:
+            cleanup_leaked_review_fixtures(path)
+        except Exception:
+            pass
+
     return configs
 
 

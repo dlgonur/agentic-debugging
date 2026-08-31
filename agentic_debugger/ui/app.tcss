@@ -453,7 +453,7 @@ BugDescriptionEditorScreen {
     color: $error;
 }
 
-SingleLineFieldEditorScreen {
+SingleLineFieldEditorScreen, _SingleLineEditorScreen, MaskedKeyEditorScreen {
     align: center middle;
     background: $background 90%;
 }
@@ -475,7 +475,7 @@ SingleLineFieldEditorScreen {
     text-style: bold;
 }
 
-#single-line-editor {
+#single-line-editor, #masked-key-editor {
     width: 1fr;
     height: 1;
     min-height: 1;
@@ -485,7 +485,7 @@ SingleLineFieldEditorScreen {
     padding: 0 1;
 }
 
-#single-line-editor:focus {
+#single-line-editor:focus, #masked-key-editor:focus {
     border: round $focus-ring;
 }
 
@@ -526,15 +526,15 @@ SingleLineFieldEditorScreen {
     color: $foreground-muted;
 }
 
+#single-line-note {
+    height: auto;
+    color: $foreground-muted;
+    margin: 1 0 0 0;
+}
+
 #single-line-error {
     height: auto;
     color: $error;
-}
-
-/* Legacy alias also centered (the tiny upper-left implementation is removed) */
-_SingleLineEditorScreen {
-    align: center middle;
-    background: $background 90%;
 }
 
 /* -- workspace ----------------------------------------------------------- */

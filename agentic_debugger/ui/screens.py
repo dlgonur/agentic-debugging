@@ -1303,7 +1303,7 @@ class MaskedKeyEditorScreen(Screen):
                 password=True, placeholder="paste API key", id="masked-key-editor"
             )
             if self.note_text:
-                yield Static(self.note_text, id="single-line-error")
+                yield Static(self.note_text, id="single-line-note")
             with Horizontal(id="single-line-actions"):
                 yield Button("Connect", id="single-line-save-button", classes="primary-action")
             yield Static("Enter connect    Esc cancel", id="single-line-hint")
@@ -1466,6 +1466,13 @@ class ModelProvidersScreen(Screen):
         idx = max(0, min(self._selected_index, len(statuses) - 1))
         return statuses[idx].kind
 
+    def _selected_label(self) -> str:
+        statuses = self._current_statuses()
+        if not statuses:
+            return "OpenCode Go"
+        idx = max(0, min(self._selected_index, len(statuses) - 1))
+        return statuses[idx].label
+
     def render_state(self) -> None:
         statuses = self._current_statuses()
         selected_kind = self._selected_kind()
@@ -1615,6 +1622,7 @@ class ModelProvidersScreen(Screen):
 
     def action_connect_key(self) -> None:
         kind = self._selected_kind()
+        label = self._selected_label()
 
         def handle(value: Optional[str]) -> None:
             if value:
@@ -1636,10 +1644,10 @@ class ModelProvidersScreen(Screen):
 
         self.app.push_screen(
             MaskedKeyEditorScreen(
-                title=f"Connect API key for {kind}",
+                title=f"Connect API key for {label}",
                 note=(
-                    "Stored securely in OS Credential Manager (Windows) or memory-only "
-                    "for this session. Never written to project files."
+                    "Saved securely in Windows Credential Manager.\n"
+                    "Falls back to session-only memory if unavailable."
                 ),
                 on_save=handle,
             )
@@ -1662,10 +1670,11 @@ class ModelProvidersScreen(Screen):
 
     def action_edit_provider(self) -> None:
         kind = self._selected_kind()
+        label = self._selected_label()
         from agentic_debugger.application.provider_connections import get_provider_config
         cfg = get_provider_config(kind)
         if not cfg:
-            self._set_message(f"Provider {kind} cannot be edited")
+            self._set_message(f"Provider '{label}' cannot be edited")
             return
 
         def on_saved(updated_cfg):
@@ -1677,13 +1686,14 @@ class ModelProvidersScreen(Screen):
 
     def action_delete_provider(self) -> None:
         kind = self._selected_kind()
+        label = self._selected_label()
         from agentic_debugger.application.provider_connections import delete_provider_config, get_provider_config
         cfg = get_provider_config(kind)
         if cfg and cfg.is_builtin:
             self._set_message("Built-in providers cannot be deleted")
             return
         if delete_provider_config(kind):
-            self._set_message(f"Deleted provider {kind}")
+            self._set_message(f"Deleted provider '{label}'")
             self.app.pop_screen()
             self.app.push_screen(ModelProvidersScreen())
 

@@ -509,3 +509,79 @@ def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest
         assert cfg.base_url == "https://api.fastinference.corp/v1"
 
     run_headless(app, actions, size=(100, 30))
+
+
+def test_connect_api_key_modal_displays_user_facing_display_name_and_concise_note(tmp_path: Path) -> None:
+    """Connect API key modal displays configured display name and concise security note."""
+    from agentic_debugger.ui.screens import MaskedKeyEditorScreen, Static
+
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Select CommandCode GOAT (index 1 in standard list)
+        screen._selected_index = 1
+        screen.render_state()
+        await pilot.press("k")
+        await pilot.pause()
+
+        modal = pilot.app.screen
+        assert isinstance(modal, MaskedKeyEditorScreen)
+        title_static = modal.query_one("#single-line-title", Static)
+        assert str(title_static.render().plain) == "Connect API key for CommandCode GOAT"
+
+        note_static = modal.query_one("#single-line-note", Static)
+        note_plain = str(note_static.render().plain)
+        assert "Saved securely in Windows Credential Manager." in note_plain
+        assert "Falls back to session-only memory if unavailable." in note_plain
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+    run_headless(app, actions, size=(100, 30))
+
+
+@pytest.mark.parametrize("geometry", [(120, 32), (100, 30), (80, 24)])
+def test_connect_api_key_modal_is_centered_across_geometries(
+    tmp_path: Path, geometry: tuple[int, int]
+) -> None:
+    """Connect API key modal is horizontally and vertically centered at various window sizes."""
+    from agentic_debugger.ui.screens import MaskedKeyEditorScreen
+
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        await pilot.press("k")
+        await pilot.pause()
+
+        modal = pilot.app.screen
+        assert isinstance(modal, MaskedKeyEditorScreen)
+        assert modal.styles.align == ("center", "middle")
+
+        dialog = modal.query_one("#single-line-dialog")
+        w, h = geometry
+        # Dialog region must be bounded and strictly within the viewport
+        assert dialog.region.width <= min(70, w)
+        assert dialog.region.x >= 0
+        assert dialog.region.y >= 0
+        assert dialog.region.x + dialog.region.width <= w
+        assert dialog.region.y + dialog.region.height <= h
+
+        # Check horizontal centering (margins approximately equal within 1 col)
+        left_margin = dialog.region.x
+        right_margin = w - (dialog.region.x + dialog.region.width)
+        assert abs(left_margin - right_margin) <= 2
+
+        # Check vertical centering (margins approximately equal within 1 row)
+        top_margin = dialog.region.y
+        bottom_margin = h - (dialog.region.y + dialog.region.height)
+        assert abs(top_margin - bottom_margin) <= 2
+
+    run_headless(app, actions, size=geometry)
+
