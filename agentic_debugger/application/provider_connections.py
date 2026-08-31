@@ -47,6 +47,8 @@ from agentic_debugger.application.provider_http import (
     ProviderHttpError,
     describe_url,
     request_json,
+    sanitize_text,
+    validate_and_canonicalize_url,
 )
 
 __all__ = [
@@ -99,6 +101,7 @@ __all__ = [
     "save_secure_credential",
     "set_session_key",
     "update_provider_config",
+    "validate_and_canonicalize_url",
 ]
 
 # -- protocol families -------------------------------------------------------
@@ -513,6 +516,10 @@ class ProviderConfig:
             return None
         if not base_url or not isinstance(base_url, str):
             return None
+        try:
+            clean_url = validate_and_canonicalize_url(base_url)
+        except Exception:
+            return None
         if api_format not in _PROTOCOL_FAMILIES:
             api_format = PROTOCOL_CHAT_COMPLETIONS
         models_raw = data.get("models", [])
@@ -541,7 +548,7 @@ class ProviderConfig:
         return cls(
             provider_id=pid,
             name=name,
-            base_url=base_url,
+            base_url=clean_url,
             api_format=api_format,
             models=tuple(models),
             last_refresh_utc=data.get("last_refresh_utc"),
@@ -555,35 +562,20 @@ class ProviderConfig:
 
 def _default_builtin_configs() -> List[ProviderConfig]:
     """Default built-in presets for initial startup."""
-    return [
-        ProviderConfig(
-            provider_id="opencode_go",
-            name="OpenCode Go",
-            base_url="https://opencode.ai/zen/go/v1",
-            api_format=PROTOCOL_CHAT_COMPLETIONS,
-            is_builtin=True,
-            builtin_kind="opencode_go",
-            tls_signature_blocked=True,
-        ),
-        ProviderConfig(
-            provider_id="commandcode_goat",
-            name="CommandCode GOAT",
-            base_url="https://api.commandcode.ai/provider/v1",
-            api_format=PROTOCOL_CHAT_COMPLETIONS,
-            is_builtin=True,
-            builtin_kind="commandcode_goat",
-            tls_signature_blocked=True,
-        ),
-        ProviderConfig(
-            provider_id="ollama_cloud",
-            name="Ollama",
-            base_url="https://ollama.com",
-            api_format=PROTOCOL_CHAT_COMPLETIONS,
-            is_builtin=True,
-            builtin_kind="ollama_cloud",
-            tls_signature_blocked=False,
-        ),
-    ]
+    configs: List[ProviderConfig] = []
+    for kind, contract in _BUILTIN_CONTRACTS.items():
+        configs.append(
+            ProviderConfig(
+                provider_id=kind,
+                name=_BUILTIN_PROVIDER_LABELS.get(kind, kind),
+                base_url=contract.base_url,
+                api_format=PROTOCOL_CHAT_COMPLETIONS,
+                is_builtin=True,
+                builtin_kind=kind,
+                tls_signature_blocked=contract.tls_signature_blocked,
+            )
+        )
+    return configs
 
 
 def provider_configurations_path() -> Path:
@@ -706,6 +698,10 @@ def add_provider_config(
         raise ProviderConnectionError("Provider name is required")
     if not base_url or not base_url.strip():
         raise ProviderConnectionError("Base URL is required")
+    try:
+        clean_url = validate_and_canonicalize_url(base_url)
+    except ProviderHttpError as exc:
+        raise ProviderConnectionError(str(exc)) from None
     clean_format = api_format if api_format in _PROTOCOL_FAMILIES else PROTOCOL_CHAT_COMPLETIONS
 
     configs = load_provider_configurations()
@@ -723,7 +719,7 @@ def add_provider_config(
     new_cfg = ProviderConfig(
         provider_id=pid,
         name=name.strip(),
-        base_url=base_url.strip().rstrip("/"),
+        base_url=clean_url,
         api_format=clean_format,
         models=models,
         enabled=True,
@@ -756,7 +752,15 @@ def update_provider_config(
         raise ProviderConnectionError(f"Provider {provider_id!r} not found")
 
     new_name = name.strip() if name and name.strip() else existing.name
-    new_url = base_url.strip().rstrip("/") if base_url and base_url.strip() else existing.base_url
+    if base_url is not None:
+        if not base_url.strip():
+            raise ProviderConnectionError("Base URL is required")
+        try:
+            new_url = validate_and_canonicalize_url(base_url)
+        except ProviderHttpError as exc:
+            raise ProviderConnectionError(str(exc)) from None
+    else:
+        new_url = existing.base_url
     new_format = (
         api_format
         if api_format in _PROTOCOL_FAMILIES
@@ -780,13 +784,6 @@ def update_provider_config(
     )
     updated = [updated_cfg if c.provider_id == provider_id else c for c in configs]
     save_provider_configurations(updated)
-
-    if provider_id in _BUILTIN_CONTRACTS:
-        from dataclasses import replace
-        _BUILTIN_CONTRACTS[provider_id] = replace(
-            _BUILTIN_CONTRACTS[provider_id],
-            base_url=new_url,
-        )
 
     if api_key and _credential_is_usable(api_key):
         save_secure_credential(provider_id, api_key.strip())
@@ -1042,12 +1039,12 @@ def inference_path_for(kind: str, protocol: str) -> str:
 
 
 def provider_base_url(kind: str) -> str:
-    contract = _BUILTIN_CONTRACTS.get(kind)
-    if contract is not None:
-        return contract.base_url
     cfg = get_provider_config(kind)
     if cfg is not None and cfg.base_url:
         return cfg.base_url
+    contract = _BUILTIN_CONTRACTS.get(kind)
+    if contract is not None:
+        return contract.base_url
     raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
 
 
@@ -1451,16 +1448,18 @@ def refresh_provider_catalog(
             f"{env_hint} or connect an API key for this app session"
         )
 
+    base = (cfg.base_url if cfg and cfg.base_url else (contract.base_url if contract else "")).rstrip("/")
     if contract is not None:
-        url = contract.base_url + contract.catalog_path
+        catalog_path = contract.catalog_path
         tls_blocked = contract.tls_signature_blocked
     else:
-        base = cfg.base_url.rstrip("/")
-        if base.endswith("/models"):
-            url = base
-        else:
-            url = base + "/models"
-        tls_blocked = cfg.tls_signature_blocked
+        catalog_path = "/models"
+        tls_blocked = cfg.tls_signature_blocked if cfg else False
+
+    if base.endswith(catalog_path):
+        url = base
+    else:
+        url = base + catalog_path
 
     try:
         payload = request_json(
@@ -1473,9 +1472,10 @@ def refresh_provider_catalog(
             tls_signature_blocked=tls_blocked,
         )
     except ProviderHttpError as exc:
+        sanitized = sanitize_text(str(exc), active_credential=resolved)
         raise ProviderConnectionError(
-            f"{provider_label} catalog refresh failed: {exc}"
-        ) from exc
+            f"{provider_label} catalog refresh failed: {sanitized}"
+        ) from None
 
     models, truncated = _normalize_catalog(kind, payload)
     if not models:

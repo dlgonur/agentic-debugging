@@ -118,19 +118,26 @@ class TestModelListing:
         models = mp.list_provider_models(include_ollama=True)
         assert any(m.kind == mp.PROVIDER_KIND_OLLAMA for m in models)
 
-    def test_catalog_only_ollama_model_is_not_available_in_local_project(self) -> None:
+    def test_uncredentialed_ollama_model_is_not_available(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from agentic_debugger.application import provider_connections as pc
+        pc.clear_all_session_keys()
+        monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTIC_DEBUGGER_OLLAMA_API_KEY", raising=False)
+        monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
         models = mp.list_provider_models(include_ollama=True)
         kimi3 = next((m for m in models if m.model_id == "kimi-k3:cloud"), None)
         assert kimi3 is not None
         assert kimi3.available is False
         assert kimi3.unavailable_reason is not None
-        assert "Catalog entry only" in kimi3.unavailable_reason
+        assert "no direct API credential" in kimi3.unavailable_reason
 
-        # In contrast, GLM-5.3-Flash declares a transport profile and is runnable locally
-        glm = next((m for m in models if m.model_id == "glm-5.3-flash:cloud"), None)
-        assert glm is not None
-        assert glm.available is True
-        assert glm.unavailable_reason is None
+        # When credential is connected, it becomes available
+        pc.set_session_key("ollama_cloud", "test-key")
+        models_connected = mp.list_provider_models(include_ollama=True)
+        kimi3_conn = next((m for m in models_connected if m.model_id == "kimi-k3:cloud"), None)
+        assert kimi3_conn is not None
+        assert kimi3_conn.available is True
+        assert kimi3_conn.unavailable_reason is None
 
     def test_glm_5_3_flash_in_general_ollama_roster(self) -> None:
         models = mp.list_provider_models(include_ollama=True)
@@ -138,7 +145,6 @@ class TestModelListing:
         assert glm is not None
         assert glm.kind == mp.PROVIDER_KIND_OLLAMA
         assert glm.display_name == "GLM 5.3 Flash"
-        assert glm.available is True
 
     def test_glm_5_3_flash_not_in_level32_qualified_roster(self) -> None:
         from agentic_debugger.application.level32 import level32_model_profiles
@@ -184,17 +190,26 @@ class TestResolution:
         with pytest.raises(mp.ProviderRegistryError):
             mp.resolve_provider_live_config(mp.PROVIDER_KIND_CONFIGURED, "anything")
 
-    def test_catalog_only_ollama_model_fails_resolution(self) -> None:
+    def test_uncredentialed_ollama_model_fails_resolution(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        from agentic_debugger.application import provider_connections as pc
+        pc.clear_all_session_keys()
+        monkeypatch.delenv("OLLAMA_API_KEY", raising=False)
+        monkeypatch.delenv("AGENTIC_DEBUGGER_OLLAMA_API_KEY", raising=False)
+        monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
         with pytest.raises(mp.ProviderRegistryError) as excinfo:
             mp.resolve_provider_live_config(mp.PROVIDER_KIND_OLLAMA, "kimi-k3:cloud")
-        assert "not supported" in str(excinfo.value).casefold() or "not eligible" in str(excinfo.value).casefold()
+        assert "no usable credential source" in str(excinfo.value)
 
     def test_glm_5_3_flash_resolves_live_config_and_provenance(self) -> None:
+        from agentic_debugger.application import provider_connections as pc
+        pc.set_session_key("ollama_cloud", "test-ollama-credential")
         config, provenance = mp.resolve_provider_live_config(
             mp.PROVIDER_KIND_OLLAMA, "glm-5.3-flash:cloud"
         )
         assert provenance["provider"] == mp.PROVIDER_KIND_OLLAMA
         assert provenance["profile_id"] == "glm-5.3-flash:cloud"
+        assert provenance["route"] == mp.ROUTE_DIRECT_API
+        assert provenance["api_protocol"] == "chat_completions"
         assert config.model_name == "glm-5.3-flash:cloud"
 
     def test_level32_fails_closed_on_unqualified_model(self) -> None:

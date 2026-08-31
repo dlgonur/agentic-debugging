@@ -434,3 +434,78 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
             assert "ladder" in str(c.disabled_reason).lower() or "unavailable" in str(c.disabled_reason).lower()
 
     run_headless(app, actions, size=(120, 32))
+
+
+def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Action buttons render full labels and footer hint adapts to geometry."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Check Edit Provider button label is complete
+        edit_btn = screen.query_one("#provider-edit-button-opencode_go")
+        assert str(edit_btn.label) == "Edit provider"
+
+        # Check hint on wide screen
+        hint = screen.query_one("#providers-hint")
+        assert str(hint.render().plain).startswith("↑/↓ select   r refresh models")
+
+        # Test compact resize
+        screen._update_hint(80)
+        assert str(hint.render().plain).startswith("↑/↓ select   r refresh   k key")
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Add Provider dialog has Save & discover button and auto-refreshes on credentialed save."""
+    from textual.widgets import Input, Button
+    from agentic_debugger.ui.screens import AddProviderDialogScreen
+
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+
+        # Click + Add provider
+        await pilot.click("#provider-add-button")
+        await pilot.pause()
+        add_dlg = pilot.app.screen
+        assert isinstance(add_dlg, AddProviderDialogScreen)
+
+        # Verify button label is "Save & discover"
+        save_btn = add_dlg.query_one("#btn-save-dialog", Button)
+        assert str(save_btn.label) == "Save & discover"
+
+        # Fill valid details
+        add_dlg.query_one("#input-name", Input).value = "Fast Inference Corp"
+        add_dlg.query_one("#input-url", Input).value = "https://api.fastinference.corp/v1"
+        add_dlg.query_one("#input-key", Input).value = "test-fast-key"
+
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        # Check that provider was added
+        cfg = pc.get_provider_config("fast_inference_corp")
+        assert cfg is not None
+        assert cfg.name == "Fast Inference Corp"
+        assert cfg.base_url == "https://api.fastinference.corp/v1"
+
+    run_headless(app, actions, size=(100, 30))

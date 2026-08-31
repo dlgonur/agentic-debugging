@@ -370,3 +370,176 @@ def test_failed_refresh_preserves_existing_catalog(monkeypatch: pytest.MonkeyPat
     assert cfg is not None
     assert len(cfg.models) == 1
     assert cfg.models[0].model_id == "model-existing"
+
+
+def test_base_url_validation_rejects_credentials_queries_and_fragments(tmp_path: Path):
+    """Base URLs with userinfo, queries, fragments, non-loopback http, or control chars are rejected."""
+    from agentic_debugger.application.provider_connections import (
+        ProviderConnectionError,
+        add_provider_config,
+        update_provider_config,
+        ProviderConfig,
+    )
+
+    invalid_urls = [
+        "https://user:password@api.example.com/v1",
+        "https://api.example.com/v1?token=secret123",
+        "https://api.example.com/v1#section",
+        "http://insecure.remote.host.com/v1",
+        "https://api.example.com/v1\r\ninjected:header",
+        "ftp://api.example.com/v1",
+        "",
+        "https://" + "a" * 2050 + ".com",
+    ]
+
+    for bad_url in invalid_urls:
+        with pytest.raises(ProviderConnectionError):
+            add_provider_config(name="Bad Provider", base_url=bad_url, api_format=PROTOCOL_CHAT_COMPLETIONS)
+
+        # Also rejected by from_dict
+        parsed = ProviderConfig.from_dict({
+            "provider_id": "test_bad",
+            "name": "Bad",
+            "base_url": bad_url,
+        })
+        assert parsed is None
+
+
+def test_base_url_validation_accepts_valid_https_and_loopback_http():
+    """Valid HTTPS endpoints and loopback HTTP endpoints are accepted and canonicalized."""
+    cfg1 = add_provider_config(
+        name="Valid HTTPS",
+        base_url="https://api.groq.com/openai/v1/",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+    )
+    assert cfg1.base_url == "https://api.groq.com/openai/v1"
+
+    cfg2 = add_provider_config(
+        name="Localhost HTTP",
+        base_url="http://localhost:11434/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+    )
+    assert cfg2.base_url == "http://localhost:11434/v1"
+
+    cfg3 = add_provider_config(
+        name="Loopback IP HTTP",
+        base_url="http://127.0.0.1:8000/",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+    )
+    assert cfg3.base_url == "http://127.0.0.1:8000"
+
+
+def test_builtin_edits_authoritative_across_app_restart():
+    """Edits to built-in providers are persisted and remain authoritative across restarts."""
+    # 1. Update built-in endpoints
+    update_provider_config("opencode_go", base_url="https://custom.opencode.proxy.corp/v1")
+    update_provider_config("commandcode_goat", base_url="https://custom.commandcode.proxy.corp/v1")
+    update_provider_config("ollama_cloud", base_url="http://127.0.0.1:11434")
+
+    # 2. Simulate fresh application restart by calling load_provider_configurations
+    reloaded = load_provider_configurations()
+    reloaded_map = {c.provider_id: c for c in reloaded}
+
+    assert reloaded_map["opencode_go"].base_url == "https://custom.opencode.proxy.corp/v1"
+    assert reloaded_map["commandcode_goat"].base_url == "https://custom.commandcode.proxy.corp/v1"
+    assert reloaded_map["ollama_cloud"].base_url == "http://127.0.0.1:11434"
+
+    # 3. provider_base_url also resolves the persisted edits
+    assert provider_base_url("opencode_go") == "https://custom.opencode.proxy.corp/v1"
+    assert provider_base_url("commandcode_goat") == "https://custom.commandcode.proxy.corp/v1"
+    assert provider_base_url("ollama_cloud") == "http://127.0.0.1:11434"
+
+
+def test_ollama_general_runtime_common_provider_contract_end_to_end(tmp_path: Path):
+    """General runtime Ollama uses the common Provider Manager contract end-to-end."""
+    directive = (
+        '{"kind": "action", "name": "get_source_window", '
+        '"arguments": {"path": "pkg/mod.py", "start_line": 1, "end_line": 40}}'
+    )
+    secret_key = "ollama-secret-session-token"
+
+    def fake_ollama_handler(request):
+        if request["path"] == "/v1/models":
+            return 200, {
+                "object": "list",
+                "data": [
+                    {"id": "ollama/custom-llama-3", "name": "Custom Llama 3"},
+                    {"id": "ollama/deepseek-r1-custom", "name": "DeepSeek R1 Custom"},
+                ],
+            }
+        elif request["path"] == "/v1/chat/completions":
+            return 200, scripted_chat_completion(directive)
+        return 404, {"error": "not found"}
+
+    with FakeProviderServer(fake_ollama_handler) as server:
+        # 1. Update Ollama base URL to the fake server endpoint
+        update_provider_config("ollama_cloud", base_url=server.base_url)
+        set_session_key("ollama_cloud", secret_key)
+
+        # 2. Refresh catalog via common Provider Manager
+        snapshot = refresh_provider_catalog("ollama_cloud", engine="stdlib")
+        assert len(snapshot.models) == 2
+        assert snapshot.models[0].model_id == "ollama/custom-llama-3"
+
+        # 3. Verify general picker lists the refreshed models
+        picker_models = list_provider_models(include_ollama=True)
+        ollama_models = [m for m in picker_models if m.kind == "ollama_cloud"]
+        ollama_ids = [m.model_id for m in ollama_models]
+        assert "ollama/custom-llama-3" in ollama_ids
+        assert "ollama/deepseek-r1-custom" in ollama_ids
+
+        # 4. Resolve live config for selected Ollama model
+        live_cfg, provenance = resolve_provider_live_config("ollama_cloud", "ollama/custom-llama-3")
+        assert provenance["provider"] == "ollama_cloud"
+        assert provenance["route"] == "direct_api"
+        assert provenance["api_protocol"] == "chat_completions"
+        assert provenance["profile_id"] == "ollama/custom-llama-3"
+        assert "--base-url" in live_cfg.command
+        assert server.base_url in live_cfg.command
+
+        # 5. Execute live config in child process against fake Ollama endpoint
+        child_env = dict(os.environ)
+        child_env.update(provider_transport_credential_environment("ollama_cloud"))
+        child_env["PYTHONPATH"] = f"{str(REPO_ROOT)};{str(REPO_ROOT / 'scripts')}"
+
+        request_data = {
+            "protocol": {"version": "1.3", "logical_model_call_index": 0},
+            "context": {"task_id": "test-task", "state": "UNDERSTAND"},
+        }
+        result = subprocess.run(
+            list(live_cfg.command),
+            input=(json.dumps(request_data) + "\n").encode("utf-8"),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            env=child_env,
+        )
+        assert result.returncode == 0, f"Adapter failed: {result.stderr.decode('utf-8', errors='replace')}"
+        stdout_text = result.stdout.decode("utf-8", errors="replace")
+        assert secret_key not in stdout_text
+        assert secret_key not in result.stderr.decode("utf-8", errors="replace")
+
+        # 6. Verify fake server received request with authorization and correct path
+        assert any(r["path"] == "/v1/chat/completions" for r in server.requests)
+        chat_req = next(r for r in server.requests if r["path"] == "/v1/chat/completions")
+        assert chat_req["authorization"] == f"Bearer {secret_key}"
+
+
+def test_rejected_credential_url_never_enters_persistence_or_provenance(tmp_path: Path):
+    """Rejected URLs containing secrets never touch disk or provenance."""
+    secret = "leak-test-secret-998877"
+    bad_url = f"https://user:{secret}@malicious.endpoint.corp/v1"
+    from agentic_debugger.application.provider_connections import (
+        ProviderConnectionError,
+        add_provider_config,
+        provider_configurations_path,
+    )
+
+    with pytest.raises(ProviderConnectionError):
+        add_provider_config(name="Leak Test", base_url=bad_url, api_format=PROTOCOL_CHAT_COMPLETIONS)
+
+    config_path = provider_configurations_path()
+    if config_path.exists():
+        content = config_path.read_text(encoding="utf-8")
+        assert secret not in content
+

@@ -55,6 +55,7 @@ try:
     from agentic_debugger.application.provider_http import (
         ProviderHttpError,
         request_json,
+        sanitize_text,
     )
 except ImportError:  # pragma: no cover - defensive import path (bare child)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -69,6 +70,7 @@ except ImportError:  # pragma: no cover - defensive import path (bare child)
     from agentic_debugger.application.provider_http import (
         ProviderHttpError,
         request_json,
+        sanitize_text,
     )
 
 PROVIDER_COMPLETION_SCHEMA_VERSION = "provider-completion-v1"
@@ -360,7 +362,8 @@ def perform_inference(
             "invalid_url": "configuration",
             "invalid_request": "invalid_request",
         }.get(exc.kind, "http_error")
-        raise ProviderDirectApiError(str(exc), kind=kind) from None
+        sanitized_msg = sanitize_text(str(exc), active_credential=credential)
+        raise ProviderDirectApiError(sanitized_msg, kind=kind) from None
     text = extract_completion(protocol, response)
     if not text or not text.strip():
         raise ProviderDirectApiError(

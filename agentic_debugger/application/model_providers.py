@@ -214,6 +214,20 @@ _OPENCODE_DEFAULT_MODELS: Tuple[str, ...] = (
     "opencode-go/minimax-m3",
 )
 
+#: Curated presentation defaults for general-runtime Ollama Cloud when
+#: unrefreshed (live catalog discovery is preferred).
+_OLLAMA_DEFAULT_MODELS: Tuple[str, ...] = (
+    "deepseek-v4-flash:cloud",
+    "deepseek-v4-pro:cloud",
+    "glm-5.3-flash:cloud",
+    "glm-5.2:cloud",
+    "gpt-oss:20b-cloud",
+    "gpt-oss:120b-cloud",
+    "kimi-k3:cloud",
+    "minimax-m3:cloud",
+    "qwen3.8-max:cloud",
+)
+
 # Actual CommandCode executable names only; the Windows system shell
 # (cmd.exe) must never be treated as the CommandCode CLI.
 _COMMANDCODE_CLI_CANDIDATES = ("cmdc", "command-code", "commandcode")
@@ -327,25 +341,7 @@ def list_provider_models(
     """Grouped, availability-annotated model summaries for pickers."""
     models: List[ProviderModel] = []
     if include_ollama:
-        from scripts.ollama_cloud_command_adapter import CLOUD_MODELS
-
-        for spec in sorted(CLOUD_MODELS.values(), key=lambda item: item.local_alias)[:ollama_limit]:
-            is_runnable = bool(spec.transport_profile_declared or spec.transport_verified)
-            unavailable_reason = (
-                None
-                if is_runnable
-                else "Catalog entry only: no transport profile declared for local execution"
-            )
-            models.append(
-                ProviderModel(
-                    kind=PROVIDER_KIND_OLLAMA,
-                    model_id=spec.local_alias,
-                    display_name=format_model_display_name(spec.local_alias),
-                    provider_label=_PROVIDER_LABELS[PROVIDER_KIND_OLLAMA],
-                    available=is_runnable,
-                    unavailable_reason=unavailable_reason,
-                )
-            )
+        models.extend(_subscription_models(PROVIDER_KIND_OLLAMA)[:ollama_limit])
 
     models.extend(_subscription_models(PROVIDER_KIND_OPENCODE))
     models.extend(_subscription_models(PROVIDER_KIND_COMMANDCODE))
@@ -364,7 +360,7 @@ def list_provider_models(
                 direct_ok = credential_source_for(cfg.provider_id) is not None
                 for m in cfg.models:
                     proto_note = f"direct API · {m.protocol}" if m.protocol else None
-                    reason = None if direct_ok else f"no direct API credential — connect in Model Providers (press m)"
+                    reason = None if direct_ok else "no direct API credential — connect in Model Providers (press m)"
                     models.append(
                         ProviderModel(
                             kind=cfg.provider_id,
@@ -392,6 +388,11 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
     elif kind == PROVIDER_KIND_COMMANDCODE:
         available, reason = _commandcode_availability()
         model_ids = _COMMANDCODE_DEFAULT_MODELS
+    elif kind == PROVIDER_KIND_OLLAMA:
+        direct_ok = credential_source_for(kind) is not None
+        available = direct_ok
+        reason = None if direct_ok else "no direct API credential — connect in Model Providers (press m)"
+        model_ids = _OLLAMA_DEFAULT_MODELS
     else:
         cfg = get_provider_config(kind)
         direct_ok = credential_source_for(kind) is not None
@@ -403,7 +404,7 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
                     display_name=m.display_name or format_model_display_name(m.model_id),
                     provider_label=cfg.name,
                     available=direct_ok and bool(m.protocol),
-                    unavailable_reason=None if direct_ok else "no direct API credential",
+                    unavailable_reason=None if direct_ok else "no direct API credential — connect in Model Providers (press m)",
                     note=f"direct API · {m.protocol}" if m.protocol else None,
                 )
                 for m in cfg.models
@@ -419,6 +420,7 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
             provider_label=label,
             available=available,
             unavailable_reason=reason,
+            note="direct API · chat_completions" if kind == PROVIDER_KIND_OLLAMA else None,
         )
         for model_id in model_ids
     ]
@@ -612,28 +614,6 @@ def resolve_provider_live_config(
         raise ProviderRegistryError(f"unknown provider kind: {kind!r}")
     if type(model_id) is not str or not model_id.strip():
         raise ProviderRegistryError("model_id must be a non-empty string")
-    if kind == PROVIDER_KIND_OLLAMA:
-        from scripts.ollama_cloud_command_adapter import (
-            OllamaAdapterError,
-            build_ollama_live_config,
-        )
-
-        try:
-            config = build_ollama_live_config(
-                model_id,
-                logical_call_ceiling=logical_call_ceiling,
-                request_timeout_seconds=request_timeout_seconds,
-            )
-        except OllamaAdapterError as exc:
-            raise ProviderRegistryError(str(exc)) from exc
-        return config, {
-            "provider": kind,
-            "profile_id": model_id,
-            "display_name": format_model_display_name(model_id),
-            "protocol_version": "1.3",
-            "tool_version": config.tool_version,
-            "route": ROUTE_DIRECT_API,
-        }
     if kind in DIRECT_API_PROVIDER_KINDS or is_known_provider(kind):
         return _resolve_subscription_live_config(
             kind,

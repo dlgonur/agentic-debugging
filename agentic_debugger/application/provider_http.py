@@ -47,6 +47,8 @@ __all__ = [
     "curl_executable",
     "describe_url",
     "request_json",
+    "sanitize_text",
+    "validate_and_canonicalize_url",
 ]
 
 #: Default bounded response capture (4 MiB): generous enough for any
@@ -86,18 +88,34 @@ class ProviderHttpError(RuntimeError):
     echoed beyond a bounded, redacted snippet.
     """
 
-    def __init__(self, message: str, *, kind: str, status: Optional[int] = None) -> None:
-        super().__init__(sanitize_text(message))
+    def __init__(
+        self,
+        message: str,
+        *,
+        kind: str,
+        status: Optional[int] = None,
+        active_credential: Optional[str] = None,
+    ) -> None:
+        super().__init__(sanitize_text(message, active_credential=active_credential))
         self.kind = kind
         self.status = status
 
 
-def sanitize_text(text: str, limit: int = _MAX_ERROR_SNIPPET_CHARS) -> str:
-    """Redact credential-shaped tokens and bound a diagnostic string."""
+def sanitize_text(
+    text: str,
+    limit: int = _MAX_ERROR_SNIPPET_CHARS,
+    *,
+    active_credential: Optional[str] = None,
+) -> str:
+    """Redact credential-shaped tokens, exact active credentials, and bound a diagnostic string."""
 
     if type(text) is not str:
         text = str(text)
-    redacted = _SECRET_VALUE.sub("<redacted>", text)
+    redacted = text
+    if active_credential and isinstance(active_credential, str) and active_credential.strip():
+        secret = active_credential.strip()
+        redacted = redacted.replace(secret, "<redacted>")
+    redacted = _SECRET_VALUE.sub("<redacted>", redacted)
     redacted = redacted.replace("\r", " ").replace("\n", " ")
     encoded = redacted.encode("utf-8", errors="replace")
     if len(encoded) > limit:
@@ -121,16 +139,52 @@ def describe_url(url: str) -> str:
     return f"{parts.scheme}://{host}{port}{parts.path or ''}"
 
 
-def _validate_url(url: str) -> None:
+def validate_and_canonicalize_url(url: str) -> str:
+    """Validate and canonicalize a provider base URL before persistence/execution.
+
+    Fail-closed rules:
+    - non-empty string within bound (_MAX_URL_CHARS);
+    - no control characters;
+    - scheme must be https for non-loopback; http accepted only for loopback;
+    - no username, password, or userinfo (@);
+    - no query string (?);
+    - no fragment (#);
+    - valid hostname required;
+    - normalized trailing slash behavior.
+    """
     if type(url) is not str or not url or len(url) > _MAX_URL_CHARS:
         raise ProviderHttpError("provider URL is missing or oversized", kind="invalid_url")
     if any(ord(character) < 32 or ord(character) == 127 for character in url):
         raise ProviderHttpError(
             "provider URL contains control characters", kind="invalid_url"
         )
-    parts = urlsplit(url)
+    url_trimmed = url.strip()
+    if not url_trimmed:
+        raise ProviderHttpError("provider URL is missing", kind="invalid_url")
+    if "?" in url_trimmed:
+        raise ProviderHttpError(
+            "provider URL must not embed queries", kind="invalid_url"
+        )
+    if "#" in url_trimmed:
+        raise ProviderHttpError(
+            "provider URL must not embed fragments", kind="invalid_url"
+        )
+
+    parts = urlsplit(url_trimmed)
     if parts.scheme not in ("https", "http"):
         raise ProviderHttpError("provider URL scheme is not allowed", kind="invalid_url")
+    if not parts.hostname:
+        raise ProviderHttpError("provider URL is missing a valid host", kind="invalid_url")
+    if parts.username or parts.password or ("@" in (parts.netloc or "")):
+        raise ProviderHttpError(
+            "provider URL must not embed credentials or userinfo", kind="invalid_url"
+        )
+    if parts.query or parts.fragment:
+        raise ProviderHttpError(
+            "provider URL must not embed credentials, queries, or fragments",
+            kind="invalid_url",
+        )
+
     if parts.scheme == "http":
         host = (parts.hostname or "").lower()
         if host not in _LOOPBACK_HOSTS:
@@ -138,11 +192,15 @@ def _validate_url(url: str) -> None:
                 "provider URL must use HTTPS (plain HTTP is accepted only for loopback tests)",
                 kind="invalid_url",
             )
-    if parts.username or parts.password or parts.query or parts.fragment:
-        raise ProviderHttpError(
-            "provider URL must not embed credentials, queries, or fragments",
-            kind="invalid_url",
-        )
+
+    port_str = f":{parts.port}" if parts.port else ""
+    path_clean = (parts.path or "").rstrip("/")
+    canonical = f"{parts.scheme}://{parts.hostname}{port_str}{path_clean}"
+    return canonical
+
+
+def _validate_url(url: str) -> None:
+    validate_and_canonicalize_url(url)
 
 
 def _body_bytes(
@@ -211,9 +269,10 @@ def _stdlib_request(
                 status=int(exc.code),
             ) from None
         raise ProviderHttpError(
-            f"provider returned HTTP {exc.code}: {sanitize_text(snippet)}",
+            f"provider returned HTTP {exc.code}: {sanitize_text(snippet, active_credential=credential)}",
             kind="http_status",
             status=int(exc.code),
+            active_credential=credential,
         ) from None
     except TimeoutError as exc:
         raise ProviderHttpError("provider request timed out", kind="timeout") from exc
@@ -222,8 +281,9 @@ def _stdlib_request(
         if isinstance(reason, (TimeoutError, OSError)) and "timed out" in str(reason).lower():
             raise ProviderHttpError("provider request timed out", kind="timeout") from None
         raise ProviderHttpError(
-            f"provider request failed: {sanitize_text(str(reason))}",
+            f"provider request failed: {sanitize_text(str(reason), active_credential=credential)}",
             kind="connection_error",
+            active_credential=credential,
         ) from None
     return _parse_response(payload_bytes, status, max_response_bytes)
 
@@ -294,8 +354,9 @@ def _curl_request(
         )
     except (OSError, ValueError) as exc:
         raise ProviderHttpError(
-            f"curl engine could not be launched: {sanitize_text(str(exc))}",
+            f"curl engine could not be launched: {sanitize_text(str(exc), active_credential=credential)}",
             kind="engine_unavailable",
+            active_credential=credential,
         ) from None
     assert process is not None
     threads = [
@@ -343,8 +404,9 @@ def _curl_request(
     if not marker:
         raise ProviderHttpError(
             "curl engine returned no HTTP status: "
-            f"{sanitize_text(stderr.text())}",
+            f"{sanitize_text(stderr.text(), active_credential=credential)}",
             kind="connection_error",
+            active_credential=credential,
         )
     try:
         status = int(status_text.strip())
@@ -362,9 +424,10 @@ def _curl_request(
         )
     if not 200 <= status < 300:
         raise ProviderHttpError(
-            f"provider returned HTTP {status}: {sanitize_text(body)}",
+            f"provider returned HTTP {status}: {sanitize_text(body, active_credential=credential)}",
             kind="http_status",
             status=status,
+            active_credential=credential,
         )
     return _parse_response(body.encode("utf-8"), status, max_response_bytes)
 

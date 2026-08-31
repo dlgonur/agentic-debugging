@@ -278,3 +278,40 @@ class TestErrorSanitization:
                     timeout_seconds=5,
                 )
         assert "super-secret-key-value" not in str(excinfo.value)
+
+    def test_exact_active_credential_redacted_even_without_keyword_shape(self) -> None:
+        secret = "my-custom-unshaped-token-87654"
+        with FakeProviderServer(
+            lambda request: (401, {"error": f"Invalid token {secret} rejected by server"})
+        ) as server:
+            with pytest.raises(ProviderHttpError) as excinfo:
+                request_json(
+                    "GET",
+                    server.base_url + "/models",
+                    credential=secret,
+                    engine="stdlib",
+                    timeout_seconds=5,
+                )
+        assert secret not in str(excinfo.value)
+        assert "<redacted>" in str(excinfo.value)
+        assert not hasattr(excinfo.value, "credential")
+        assert not hasattr(excinfo.value, "active_credential")
+
+    @pytest.mark.skipif(curl_executable() is None, reason="OS curl client not installed")
+    def test_exact_active_credential_redacted_in_curl_error(self) -> None:
+        secret = "curl-raw-unshaped-secret-112233"
+        with FakeProviderServer(
+            lambda request: (401, {"error": f"Unauthorized access for token {secret}"})
+        ) as server:
+            with pytest.raises(ProviderHttpError) as excinfo:
+                request_json(
+                    "GET",
+                    server.base_url + "/models",
+                    credential=secret,
+                    engine="curl",
+                    timeout_seconds=10,
+                )
+        assert secret not in str(excinfo.value)
+        assert "<redacted>" in str(excinfo.value)
+        assert not hasattr(excinfo.value, "credential")
+        assert not hasattr(excinfo.value, "active_credential")

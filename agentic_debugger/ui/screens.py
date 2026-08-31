@@ -1344,6 +1344,13 @@ class ModelProvidersScreen(Screen):
       adaptation on compact screens.
     """
 
+    PROVIDERS_HINT = (
+        "↑/↓ select   r refresh models   k connect key   a add provider   e edit provider   esc back"
+    )
+    PROVIDERS_HINT_COMPACT = (
+        "↑/↓ select   r refresh   k key   a add   e edit   esc back"
+    )
+
     BINDINGS = [
         Binding("escape", "back", "Back"),
         Binding("up", "select_previous", "Previous provider", show=False),
@@ -1427,12 +1434,24 @@ class ModelProvidersScreen(Screen):
                                 )
                 yield Static("", id="providers-status")
                 yield Static(
-                    "up/down select   r refresh models   k connect key   a add provider   e edit   esc back",
+                    self.PROVIDERS_HINT,
                     id="providers-hint",
                 )
 
     def on_mount(self) -> None:
+        self._update_hint(self.size.width)
         self.render_state()
+
+    def on_resize(self, event: Any) -> None:
+        width = getattr(event, "size", None).width if hasattr(event, "size") and event.size else self.size.width
+        self._update_hint(width)
+
+    def _update_hint(self, width: int) -> None:
+        try:
+            hint = self.query_one("#providers-hint", Static)
+            hint.update(self.PROVIDERS_HINT_COMPACT if width < 95 else self.PROVIDERS_HINT)
+        except Exception:
+            pass
 
     # -- state ---------------------------------------------------------------
 
@@ -1632,7 +1651,12 @@ class ModelProvidersScreen(Screen):
                 self._set_message(f"Added provider '{new_cfg.name}'")
                 # Reload screen to refresh widget tree
                 self.app.pop_screen()
-                self.app.push_screen(ModelProvidersScreen())
+                new_screen = ModelProvidersScreen()
+                new_screen._selected_index = new_screen._index_of(new_cfg.provider_id)
+                self.app.push_screen(new_screen)
+                from agentic_debugger.application.provider_connections import credential_source_for
+                if credential_source_for(new_cfg.provider_id) is not None:
+                    new_screen.action_refresh()
 
         self.app.push_screen(AddProviderDialogScreen(on_save=on_saved))
 
@@ -1748,7 +1772,7 @@ class AddProviderDialogScreen(Screen):
                 yield Button("Messages", id="fmt-msg", classes="fmt-btn")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
-                yield Button("Save provider", id="btn-save-dialog", classes="primary-action")
+                yield Button("Save & discover", id="btn-save-dialog", classes="primary-action")
                 yield Button("Cancel", id="btn-cancel-dialog")
 
     def on_mount(self) -> None:
