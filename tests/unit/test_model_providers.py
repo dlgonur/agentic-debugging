@@ -25,11 +25,22 @@ class TestAvailability:
         monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
         monkeypatch.setattr(mp, "_first_on_path", lambda candidates: None)
         monkeypatch.setattr(mp.shutil, "which", lambda name: None)
+        monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
         results = {kind: (ok, reason) for kind, ok, reason in mp.provider_availability()}
         assert results[mp.PROVIDER_KIND_OLLAMA] == (True, None)
         assert results[mp.PROVIDER_KIND_OPENCODE][0] is False
         assert results[mp.PROVIDER_KIND_COMMANDCODE][0] is False
         assert "auth store" in results[mp.PROVIDER_KIND_OPENCODE][1]
+
+    def test_direct_credential_alone_satisfies_availability(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """A usable direct-API credential source serves a provider even
+        when the legacy CLI is entirely absent."""
+        monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (True, None))
+        monkeypatch.setattr(mp, "_first_on_path", lambda candidates: None)
+        monkeypatch.setattr(mp.shutil, "which", lambda name: None)
+        results = {kind: ok for kind, ok, _ in mp.provider_availability()}
+        assert results[mp.PROVIDER_KIND_OPENCODE] is True
+        assert results[mp.PROVIDER_KIND_COMMANDCODE] is True
 
     def test_ready_when_stores_and_clis_exist(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         (tmp_path / "cc-auth.json").write_text("{}", encoding="utf-8")
@@ -38,6 +49,7 @@ class TestAvailability:
         monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
         monkeypatch.setattr(mp, "_first_on_path", lambda candidates: "x")
         monkeypatch.setattr(mp.shutil, "which", lambda name: "x")
+        monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
         results = {kind: ok for kind, ok, _ in mp.provider_availability()}
         assert all(results.values())
 
@@ -51,6 +63,7 @@ class TestAvailability:
         (tmp_path / "oc-auth.json").write_text("{}", encoding="utf-8")
         monkeypatch.setattr(mp, "_commandcode_auth_store_path", lambda: tmp_path / "cc-auth.json")
         monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
+        monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
 
         system_cmd = r"C:\Windows\System32\cmd.exe"
 
@@ -74,6 +87,15 @@ class TestAvailability:
 
 
 class TestModelListing:
+    @pytest.fixture(autouse=True)
+    def _isolated_catalog_cache(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        """Isolate the machine-local catalog cache so listing always
+        exercises the curated fail-safe unless a test supplies a cache."""
+        from agentic_debugger.application import provider_connections as pc
+
+        monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent-cache.json")
+        monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
+
     def test_grouped_listing_annotates_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(mp, "_opencode_availability", lambda: (False, "no auth store"))
         monkeypatch.setattr(mp, "_commandcode_availability", lambda: (True, None))

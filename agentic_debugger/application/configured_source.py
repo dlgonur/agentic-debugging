@@ -275,6 +275,19 @@ def run_configured_session(
         live_config, provenance, fingerprint = _resolve_registry_model(
             provider, model_id
         )
+        # Direct-API routes receive exactly one bounded credential
+        # override in the adapter child environment (never argv, never
+        # evidence); legacy CLI routes read the operator auth store in
+        # place and need no override.
+        from agentic_debugger.application.model_providers import (
+            provider_transport_environment,
+        )
+
+        environment = (
+            dict(provider_transport_environment(provider))
+            if provider in ("opencode_go", "commandcode_goat")
+            else None
+        )
         ctx.emitter.emit(
             SessionEventKind.MODEL_CONFIGURED,
             {
@@ -286,6 +299,26 @@ def run_configured_session(
                 ),
                 "tool_version": str(live_config.tool_version),
                 "provider": provider,
+                **(
+                    {"route": str(provenance["route"])}
+                    if "route" in provenance
+                    else {}
+                ),
+                **(
+                    {"api_protocol": str(provenance["api_protocol"])}
+                    if "api_protocol" in provenance
+                    else {}
+                ),
+                **(
+                    {"provider_model_id": str(provenance["provider_model_id"])}
+                    if "provider_model_id" in provenance
+                    else {}
+                ),
+                **(
+                    {"endpoint": str(provenance["endpoint"])}
+                    if "endpoint" in provenance
+                    else {}
+                ),
             },
         )
     else:

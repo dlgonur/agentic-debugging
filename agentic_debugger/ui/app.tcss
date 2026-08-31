@@ -789,3 +789,95 @@ Button {
     align: left middle;
     margin: 1 0 0 0;
 }
+
+/* -- provider connections screen --------------------------------------- */
+
+#providers-wrap {
+    width: 74;
+    max-width: 94%;
+    height: auto;
+    max-height: 90%;
+    padding: 1 2;
+    background: $surface;
+    border: round $line;
+}
+
+#providers-title {
+    height: 1;
+    padding: 0;
+    margin: 0 0 1 0;
+    color: $primary;
+    text-style: bold;
+}
+
+#providers-list {
+    width: 100%;
+    height: auto;
+    max-height: 14;
+    padding: 0;
+    scrollbar-size: 1 1;
+    scrollbar-color: $line-strong;
+    scrollbar-background: $surface;
+}
+
+.provider-panel {
+    width: 100%;
+    height: auto;
+    padding: 0 1;
+    margin: 0 0 1 0;
+    background: $surface;
+}
+
+.provider-summary {
+    width: 100%;
+    height: 1;
+    padding: 0;
+    margin: 0;
+}
+
+.provider-refresh {
+    width: 100%;
+    height: auto;
+    padding: 0 0 0 2;
+    margin: 0 0 1 0;
+    color: $foreground-muted;
+}
+
+.provider-actions {
+    width: 100%;
+    height: auto;
+    padding: 0 0 0 2;
+    margin: 0;
+}
+
+.provider-action-button {
+    height: 1;
+    min-width: 16;
+    margin: 0 2 0 0;
+    padding: 0 1;
+    background: $surface;
+    border: round $line;
+    color: $foreground;
+}
+
+.provider-action-button:focus {
+    background: $selection;
+    color: $primary;
+}
+
+#providers-status {
+    width: 100%;
+    height: auto;
+    min-height: 1;
+    margin: 1 0 0 0;
+    padding: 0;
+    color: $foreground-muted;
+}
+
+#providers-hint {
+    width: 100%;
+    height: 1;
+    margin: 1 0 0 0;
+    padding: 0;
+    color: $foreground-muted;
+}

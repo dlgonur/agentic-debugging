@@ -121,6 +121,7 @@ class SessionWorkerProcess:
         pre_start_delay_seconds: float = 0.0,
         retry_of_session_id: Optional[str] = None,
         job_factory: Optional[Callable[[], WindowsProcessTreeJob]] = None,
+        child_environment: Optional[Mapping[str, str]] = None,
     ) -> None:
         from agentic_debugger.application.events import validate_session_id
 
@@ -132,6 +133,22 @@ class SessionWorkerProcess:
         if type(spec) is not SessionSpec:
             raise ApplicationInputError("spec must be a SessionSpec")
         self._spec = spec
+        # Bounded, in-memory child-environment overrides (e.g. one
+        # provider credential variable for direct-API routes).  Values
+        # travel only into the worker process environment — never into
+        # argv, the start message, scenario params, or the journal.
+        self._child_environment: Optional[Dict[str, str]] = None
+        if child_environment is not None:
+            if not isinstance(child_environment, Mapping):
+                raise ApplicationInputError(
+                    "child_environment must be a mapping of strings or None"
+                )
+            for name, value in child_environment.items():
+                if type(name) is not str or not name or type(value) is not str:
+                    raise ApplicationInputError(
+                        "child_environment overrides must be string pairs"
+                    )
+            self._child_environment = dict(child_environment)
         if type(run_id) is not str or not run_id:
             raise ApplicationInputError("run_id must be a non-empty string")
         self._run_id = run_id
@@ -276,6 +293,11 @@ class SessionWorkerProcess:
         self._started = True
         creationflags = spawn_suspended_on_windows()
         try:
+            spawn_environment = (
+                {**os.environ, **self._child_environment}
+                if self._child_environment
+                else None
+            )
             self._proc = subprocess.Popen(
                 self._worker_argv(),
                 # The worker is spawned with the durable session directory as
@@ -288,6 +310,7 @@ class SessionWorkerProcess:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
+                env=spawn_environment,
                 start_new_session=sys.platform != "win32",
                 creationflags=creationflags,
             )

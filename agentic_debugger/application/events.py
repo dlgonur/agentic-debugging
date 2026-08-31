@@ -858,7 +858,10 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
     ``session.started``.  It never carries the executable, argv,
     environment overrides, or any credential-shaped value: history/replay
     stores configuration provenance and a fingerprint, not a live
-    executable object.
+    executable object.  Optional additive fields ``route``
+    (``direct_api``/``legacy_cli``) and ``api_protocol`` (the provider
+    protocol family) distinguish how a subscription provider served a
+    session without changing historical payloads.
     """
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.configured payload must be a mapping")
@@ -869,7 +872,16 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         "protocol_version",
         "tool_version",
     }
-    optional = {"treatment_revision", "treatment_id", "result_location", "provider"}
+    optional = {
+        "treatment_revision",
+        "treatment_id",
+        "result_location",
+        "provider",
+        "route",
+        "api_protocol",
+        "provider_model_id",
+        "endpoint",
+    }
     _check_required(payload, required, "model.configured payload")
     _check_no_unknown(payload, required | optional, "model.configured payload")
     result = {
@@ -897,6 +909,14 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         result["result_location"] = _bounded_text(payload["result_location"], "result_location", MAX_SHORT_TEXT_CHARS)
     if "provider" in payload:
         result["provider"] = _bounded_text(payload["provider"], "provider", MAX_SHORT_TEXT_CHARS)
+    if "route" in payload:
+        result["route"] = _bounded_text(payload["route"], "route", MAX_SHORT_TEXT_CHARS)
+    if "api_protocol" in payload:
+        result["api_protocol"] = _bounded_text(payload["api_protocol"], "api_protocol", MAX_SHORT_TEXT_CHARS)
+    if "provider_model_id" in payload:
+        result["provider_model_id"] = _bounded_text(payload["provider_model_id"], "provider_model_id", MAX_SHORT_TEXT_CHARS)
+    if "endpoint" in payload:
+        result["endpoint"] = _bounded_text(payload["endpoint"], "endpoint", MAX_SHORT_TEXT_CHARS)
     return result
 
 

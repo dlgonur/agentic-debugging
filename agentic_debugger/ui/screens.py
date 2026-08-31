@@ -13,6 +13,7 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
+from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
@@ -159,8 +160,8 @@ _CLASSIFICATION_STYLE = {
 }
 
 # Canonical user-facing keyboard vocabulary shared by footers and help.
-START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   H history   Esc back   Ctrl+C quit"
-START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   H history   Esc back"
+START_FOOTER = "↑/↓ move   Enter edit   S run   P local project   C providers   H history   Esc back   Ctrl+C quit"
+START_FOOTER_COMPACT = "↑/↓ move   Enter edit   S run   P local   C providers   H history   Esc back"
 WORKSPACE_FOOTER_ACTIVE = "left/right views   1-7 tabs   c cancel   h history   n new session   ctrl+c quit"
 WORKSPACE_FOOTER_ACTIVE_COMPACT = "left/right views   1-7 tabs   c cancel   h history   ctrl+c quit"
 WORKSPACE_FOOTER_IDLE = "left/right views   1-7 tabs   h history   n new session   w effort   r retry   ctrl+c quit"
@@ -1241,6 +1242,320 @@ def _short_unavailable_reason(reason: Optional[str]) -> str:
     return text or "unavailable"
 
 
+class MaskedKeyInput(Input):
+    """Masked single-line input with reliable Enter -> connect."""
+
+    def on_key(self, event: Any) -> None:
+        if getattr(event, "key", None) == "enter":
+            try:
+                self.screen.action_save()  # type: ignore[attr-defined]
+            except Exception:
+                pass
+            event.prevent_default()
+            event.stop()
+            return
+
+
+class MaskedKeyEditorScreen(Screen):
+    """Masked API-key entry: memory-only, never persisted or re-shown.
+
+    The repository has no durable secret store, so a pasted key is
+    kept process-local for this app session only.  The screen states
+    that plainly, masks the value while typing, and never renders the
+    submitted value again.
+    """
+
+    BINDINGS = [
+        Binding("escape", "cancel", "Cancel"),
+        Binding("enter", "save", "Save", show=False),
+    ]
+
+    def __init__(
+        self,
+        *,
+        title: str,
+        on_save: Callable[[Optional[str]], None],
+        note: str = "",
+    ) -> None:
+        super().__init__()
+        self.title_text = title
+        self.note_text = note
+        self._on_save = on_save
+
+    def compose(self) -> ComposeResult:
+        with Vertical(id="single-line-dialog"):
+            yield Static(self.title_text, id="single-line-title")
+            yield MaskedKeyInput(
+                password=True, placeholder="paste API key", id="masked-key-editor"
+            )
+            if self.note_text:
+                yield Static(self.note_text, id="single-line-error")
+            with Horizontal(id="single-line-actions"):
+                yield Button("Connect", id="single-line-save-button", classes="primary-action")
+            yield Static("Enter connect    Esc cancel", id="single-line-hint")
+
+    def on_mount(self) -> None:
+        self.query_one("#masked-key-editor", Input).focus()
+
+    def action_save(self) -> None:
+        raw = self.query_one("#masked-key-editor", Input).value
+        self.app.pop_screen()
+        self._on_save(raw.strip() or None)
+
+    def action_cancel(self) -> None:
+        self.app.pop_screen()
+        self._on_save(None)
+
+    def on_button_pressed(self, event: Any) -> None:
+        if getattr(event.button, "id", None) == "single-line-save-button":
+            self.action_save()
+            event.stop()
+
+
+_PROVIDER_CREDENTIAL_SOURCE_LABELS = {
+    "session_key": "Session API key (memory-only)",
+    "environment": "Environment variable",
+    "cli_auth_store": "CLI auth (read in place)",
+}
+
+
+class ProviderConnectionsScreen(Screen):
+    """Manage the built-in direct-API provider connections.
+
+    Operational surface only: per-provider connection status, credential
+    source, discovered model count, last refresh, explicit refresh
+    (a read-only catalog GET — no generation inference), and memory-only
+    API-key entry.  Scientific qualification is intentionally absent:
+    discovery never changes Capability Ladder eligibility.
+    """
+
+    BINDINGS = [
+        Binding("escape", "back", "Back"),
+        Binding("up", "select_previous", "Previous provider", show=False),
+        Binding("down", "select_next", "Next provider", show=False),
+        Binding("r", "refresh", "Refresh models"),
+        Binding("k", "connect_key", "Connect API key"),
+    ]
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._selected_index = 0
+        self._refreshing: set[str] = set()
+        self._message = ""
+
+    def compose(self) -> ComposeResult:
+        from agentic_debugger.application.provider_connections import (
+            DIRECT_API_PROVIDER_KINDS,
+        )
+
+        with Vertical(id="providers-wrap"):
+            yield Static("PROVIDER CONNECTIONS", id="providers-title")
+            with VerticalScroll(id="providers-list"):
+                for index, kind in enumerate(DIRECT_API_PROVIDER_KINDS):
+                    with Vertical(classes="provider-panel", id=f"provider-panel-{kind}"):
+                        yield Static("", id=f"provider-summary-{kind}", classes="provider-summary")
+                        yield Static("", id=f"provider-refresh-{kind}", classes="provider-refresh")
+                        with Horizontal(classes="provider-actions"):
+                            yield Button(
+                                "Refresh models",
+                                id=f"provider-refresh-button-{kind}",
+                                classes="provider-action-button",
+                            )
+                            yield Button(
+                                "Connect API key",
+                                id=f"provider-key-button-{kind}",
+                                classes="provider-action-button",
+                            )
+            yield Static("", id="providers-status")
+            yield Static(
+                "up/down select   r refresh models   k connect API key   esc back",
+                id="providers-hint",
+            )
+
+    def on_mount(self) -> None:
+        self.render_state()
+
+    # -- state ---------------------------------------------------------------
+
+    def _selected_kind(self) -> str:
+        from agentic_debugger.application.provider_connections import (
+            DIRECT_API_PROVIDER_KINDS,
+        )
+
+        kinds = list(DIRECT_API_PROVIDER_KINDS)
+        return kinds[min(self._selected_index, len(kinds) - 1)]
+
+    def render_state(self) -> None:
+        from agentic_debugger.application.provider_connections import (
+            connection_statuses,
+        )
+
+        statuses = connection_statuses()
+        for index, status in enumerate(statuses):
+            marker = "› " if index == self._selected_index else "  "
+            summary = self.query_one(f"#provider-summary-{status.kind}", Static)
+            refresh_line = self.query_one(f"#provider-refresh-{status.kind}", Static)
+            if status.connected:
+                source = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
+                    status.credential_source, status.credential_source or ""
+                )
+                summary.update(
+                    Text()
+                    .append(f"{marker}{status.label}", style=f"bold {FOREGROUND}")
+                    .append(
+                        f"   Connected · {source}",
+                        style=f"{PRIMARY}",
+                    )
+                )
+            else:
+                summary.update(
+                    Text()
+                    .append(f"{marker}{status.label}", style=f"bold {MUTED}")
+                    .append("   Not connected", style=FAINT)
+                )
+            lines = []
+            if status.model_count:
+                when = (status.last_refresh_utc or "").replace("T", " ").split(".", 1)[0]
+                suffix = " · stale/unverified" if status.stale else ""
+                lines.append(
+                    f"{status.model_count} models · last refresh: {when} UTC (live catalog){suffix}"
+                )
+            elif status.connected:
+                lines.append("No catalog yet — refresh models to discover the live catalog")
+            if status.status_message:
+                lines.append(status.status_message)
+            if status.kind in self._refreshing:
+                lines.append("Refreshing…")
+            refresh_line.update("\n".join(lines) if lines else "")
+        status = self.query_one("#providers-status", Static)
+        status.update(self._message)
+
+    # -- actions ---------------------------------------------------------------
+
+    def action_back(self) -> None:
+        self.app.pop_screen()
+
+    def action_select_previous(self) -> None:
+        if self._selected_index > 0:
+            self._selected_index -= 1
+            self.render_state()
+
+    def action_select_next(self) -> None:
+        from agentic_debugger.application.provider_connections import (
+            DIRECT_API_PROVIDER_KINDS,
+        )
+
+        if self._selected_index < len(DIRECT_API_PROVIDER_KINDS) - 1:
+            self._selected_index += 1
+            self.render_state()
+
+    def _set_message(self, text: str) -> None:
+        self._message = text
+        try:
+            self.query_one("#providers-status", Static).update(text)
+        except Exception:
+            pass
+
+    def action_refresh(self) -> None:
+        kind = self._selected_kind()
+        if kind in self._refreshing:
+            return
+        self._refreshing.add(kind)
+        self._set_message("")
+        self.render_state()
+        self.run_worker(
+            partial(self._refresh_catalog, kind),
+            name=f"refresh-{kind}",
+            exclusive=False,
+            thread=True,
+        )
+
+    def _refresh_catalog(self, kind: str):
+        from agentic_debugger.application.provider_connections import (
+            ProviderConnectionError,
+            refresh_provider_catalog,
+        )
+
+        try:
+            snapshot = refresh_provider_catalog(kind)
+        except ProviderConnectionError as exc:
+            self.app.call_from_thread(self._refresh_finished, kind, False, str(exc))
+            return
+        except Exception:  # pragma: no cover - defensive, credential/path safe
+            self.app.call_from_thread(
+                self._refresh_finished,
+                kind,
+                False,
+                "catalog refresh failed unexpectedly; retry or check the connection",
+            )
+            return
+        self.app.call_from_thread(
+            self._refresh_finished, kind, True, f"{len(snapshot.models)} models"
+        )
+
+    def _refresh_finished(self, kind: str, ok: bool, detail: str) -> None:
+        self._refreshing.discard(kind)
+        detail = detail if len(detail) <= 160 else detail[:160] + "…"
+        if ok:
+            self._set_message(f"Catalog refreshed — {detail}")
+        else:
+            self._set_message(f"Refresh failed — {detail}")
+        self.render_state()
+
+    def action_connect_key(self) -> None:
+        kind = self._selected_kind()
+
+        def handle(value: Optional[str]) -> None:
+            if value:
+                from agentic_debugger.application.provider_connections import (
+                    set_session_key,
+                )
+
+                try:
+                    set_session_key(kind, value)
+                    self._set_message(
+                        "API key: connected for this app session (process memory "
+                        "only — not stored on disk)"
+                    )
+                except Exception as exc:
+                    self._set_message(f"API key rejected: {exc}")
+            self.render_state()
+
+        self.app.push_screen(
+            MaskedKeyEditorScreen(
+                title="API key (masked)",
+                note=(
+                    "Kept in memory for this app session only; the repository "
+                    "does not persist API keys."
+                ),
+                on_save=handle,
+            )
+        )
+
+    def on_button_pressed(self, event: Any) -> None:
+        button_id = getattr(event.button, "id", "") or ""
+        if button_id.startswith("provider-refresh-button-"):
+            kind = button_id.removeprefix("provider-refresh-button-")
+            self._selected_index = self._index_of(kind)
+            self.action_refresh()
+            event.stop()
+        elif button_id.startswith("provider-key-button-"):
+            kind = button_id.removeprefix("provider-key-button-")
+            self._selected_index = self._index_of(kind)
+            self.action_connect_key()
+            event.stop()
+
+    def _index_of(self, kind: str) -> int:
+        from agentic_debugger.application.provider_connections import (
+            DIRECT_API_PROVIDER_KINDS,
+        )
+
+        try:
+            return list(DIRECT_API_PROVIDER_KINDS).index(kind)
+        except ValueError:
+            return 0
+
+
 class StartSessionScreen(Screen):
     """The ONE session-setup surface for every target and provider.
 
@@ -1259,6 +1574,7 @@ class StartSessionScreen(Screen):
         Binding("down", "move_down", "Next setting", show=False, priority=True),
         Binding("s", "start", "Run"),
         Binding("p", "focus_local_project", "Local project"),
+        Binding("c", "open_providers", "Providers"),
         Binding("h", "history", "History"),
         Binding("enter", "confirm", "Confirm", show=False),
         Binding("escape", "cancel", "Back"),
@@ -1414,7 +1730,7 @@ class StartSessionScreen(Screen):
                         item.kind,
                         item.model_id,
                         item.display_name,
-                        detail="",
+                        detail=item.note or "",
                         available=item.available,
                         unavailable_reason=item.unavailable_reason,
                     )
@@ -1786,18 +2102,29 @@ class StartSessionScreen(Screen):
                     display_name = effective.display or effective.model_id
                 else:
                     display_name = format_model_display_name(effective.display or effective.model_id)
+                # Discovered-catalog detail (direct-API protocol family or
+                # the bounded unresolved-protocol note) stays secondary.
+                secondary = effective.detail if effective.available else ""
                 choices.append(
                     ChoiceOption(
                         self._model_choice_key(effective.choice),
                         display_name,
                         "",
-                        secondary="",
+                        secondary=secondary,
                         group=group if index == 0 else "",
                         group_note=group_note if index == 0 or group_note else "",
                         disabled=disabled,
                         disabled_reason=reason,
                     )
                 )
+        choices.append(
+            ChoiceOption(
+                "providers:manage",
+                "Manage provider connections…",
+                "status, model refresh, API key (press c anytime)",
+                group="",
+            )
+        )
         self.app.push_screen(
             ChoicePickerScreen(
                 title="Select model",
@@ -1985,6 +2312,11 @@ class StartSessionScreen(Screen):
         elif row_key == ROW_TASK:
             self._config = replace(self._config, task_id=value)
         elif row_key == ROW_MODEL:
+            if value == "providers:manage":
+                # The picker's management entry never mutates the model
+                # selection; it opens the provider-connections surface.
+                self.app.push_screen(ProviderConnectionsScreen())
+                return
             provider, _, model_id = value.partition(":")
             if provider == PROVIDER_OFFLINE:
                 self._config = replace(self._config, model=OFFLINE_CHOICE)
@@ -2241,6 +2573,10 @@ class StartSessionScreen(Screen):
         if self._config.target != TARGET_LOCAL_PROJECT:
             self._choice_selected(ROW_TARGET, TARGET_LOCAL_PROJECT)
         self._focus_row(ROW_PROJECT)
+
+    def action_open_providers(self) -> None:
+        """C: open the provider-connections management surface."""
+        self.app.push_screen(ProviderConnectionsScreen())
 
     def action_quit_app(self) -> None:
         self.app.action_quit()

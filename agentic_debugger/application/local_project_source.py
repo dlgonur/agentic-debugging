@@ -930,6 +930,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         # credential material anywhere near the journal.
         from agentic_debugger.application.model_providers import (
             ProviderRegistryError,
+            provider_transport_environment,
             resolve_provider_live_config,
         )
         try:
@@ -998,7 +999,16 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     if provider_live_config is not None:
         live_config=provider_live_config
         limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
-        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter)
+        # Direct-API routes receive exactly one bounded credential
+        # override in the adapter child environment (never argv, never
+        # evidence); legacy CLI routes read the operator auth store in
+        # place and need no override.
+        transport_environment=(
+            provider_transport_environment(provider)
+            if provider in ("opencode_go", "commandcode_goat")
+            else None
+        )
+        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter, environment=dict(transport_environment) if transport_environment else None)
     elif ollama_profile is not None:
         from scripts.ollama_cloud_command_adapter import build_ollama_live_config
         live_config = build_ollama_live_config(ollama_profile.alias, logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS)

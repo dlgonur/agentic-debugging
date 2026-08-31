@@ -1,0 +1,302 @@
+"""Product-surface coverage for Provider Connections and the dynamic
+general model picker.
+
+Uses fake connection statuses and fake catalogs only: no real provider
+is contacted, no credential value is ever rendered.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+textual = pytest.importorskip("textual")
+
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+from ui_support import run_headless  # noqa: E402
+
+from agentic_debugger.application.history import HistoryStore  # noqa: E402
+from agentic_debugger.application.model_providers import ProviderModel  # noqa: E402
+from agentic_debugger.application import provider_connections as pc  # noqa: E402
+from agentic_debugger.ui.app import LocalApplicationV1  # noqa: E402
+from agentic_debugger.ui.screens import (  # noqa: E402
+    ChoicePickerScreen,
+    ProviderConnectionsScreen,
+    StartSessionScreen,
+)
+
+SECRET = "ui-test-key-not-a-real-credential"
+
+
+def make_app(tmp_path: Path) -> LocalApplicationV1:
+    return LocalApplicationV1(history_store=HistoryStore(tmp_path))
+
+
+def fake_statuses(connected_opencode: bool = True, connected_goat: bool = False):
+    from agentic_debugger.application.provider_connections import (
+        ProviderConnectionStatus,
+    )
+
+    def _status(kind: str, connected: bool, model_count: int) -> ProviderConnectionStatus:
+        return ProviderConnectionStatus(
+            kind=kind,
+            label="OpenCode Go" if kind == "opencode_go" else "CommandCode GOAT",
+            base_url=(
+                "https://opencode.ai/zen/go/v1/models"
+                if kind == "opencode_go"
+                else "https://api.commandcode.ai/provider/v1/models"
+            ),
+            connected=connected,
+            credential_source="session_key" if connected else None,
+            model_count=model_count,
+            last_refresh_utc="2026-08-30T12:00:00Z" if model_count else None,
+            last_refresh_source="live" if model_count else None,
+            stale=False,
+            status_message=None if connected else "Not connected — no credential",
+            cached_models=(),
+        )
+
+    return [
+        _status("opencode_go", connected_opencode, 33 if connected_opencode else 0),
+        _status("commandcode_goat", connected_goat, 27 if connected_goat else 0),
+    ]
+
+
+@pytest.fixture(autouse=True)
+def _clean_session_keys():
+    pc.clear_all_session_keys()
+    yield
+    pc.clear_all_session_keys()
+
+
+def test_provider_connections_screen_renders_both_providers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = make_app(tmp_path)
+    statuses = fake_statuses()
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses", lambda: statuses
+    )
+
+    def scenario(pilot):
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+        for status in statuses:
+            refresh_line = str(
+                screen.query_one(f"#provider-refresh-{status.kind}").render().plain
+            )
+            if status.model_count:
+                assert f"{status.model_count} models" in refresh_line
+                assert "2026-08-30" in refresh_line
+            else:
+                assert "Not connected" in refresh_line
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        scenario(pilot)
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_provider_screen_keyboard_refresh_and_key_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = make_app(tmp_path)
+    statuses = fake_statuses()
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses", lambda: statuses
+    )
+    refreshed: list[str] = []
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.refresh_provider_catalog",
+        lambda kind, **kwargs: (
+            refreshed.append(kind),
+            SimpleNamespace(models=[SimpleNamespace(model_id="m")] * 33),
+        )[1],
+    )
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+        await pilot.press("r")
+        await pilot.pause()
+        for _ in range(30):
+            await pilot.pause()
+        assert refreshed == ["opencode_go"]
+        status_line = str(screen.query_one("#providers-status").render().plain)
+        assert "33" in status_line
+
+        # k opens the masked key editor; a submitted value is stored
+        # process-locally and never rendered back.
+        await pilot.press("k")
+        await pilot.pause()
+        from agentic_debugger.ui.screens import MaskedKeyEditorScreen
+
+        editor = pilot.app.screen
+        assert isinstance(editor, MaskedKeyEditorScreen)
+        from textual.widgets import Input
+
+        editor.query_one("#masked-key-editor", Input).value = SECRET
+        await pilot.press("enter")
+        await pilot.pause()
+        assert pc.has_session_key("opencode_go") is True
+        for node in screen.query("*"):
+            try:
+                plain = node.render().plain if hasattr(node, "render") else ""
+            except Exception:
+                plain = ""
+            assert SECRET not in str(plain)
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_start_session_c_binding_opens_provider_connections(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = make_app(tmp_path)
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses", lambda: fake_statuses()
+    )
+
+    async def actions(pilot):
+        await pilot.press("s")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, StartSessionScreen)
+        await pilot.press("c")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, StartSessionScreen)
+
+    run_headless(app, actions, size=(120, 32))
+
+
+def test_model_picker_shows_discovered_notes_and_management_entry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = make_app(tmp_path)
+    models = (
+        ProviderModel(
+            "opencode_go",
+            "opencode-go/kimi-k3",
+            "Kimi K3",
+            "OpenCode Go",
+            True,
+            note=f"direct API · {pc.PROTOCOL_CHAT_COMPLETIONS}",
+        ),
+        ProviderModel(
+            "opencode_go",
+            "opencode-go/glm-5",
+            "GLM 5",
+            "OpenCode Go",
+            True,
+            note="direct API: protocol not yet resolved",
+        ),
+        ProviderModel(
+            "commandcode_goat",
+            "deepseek/deepseek-v4-flash",
+            "DeepSeek V4 Flash",
+            "CommandCode GOAT",
+            False,
+            unavailable_reason="no direct API credential — connect in Provider Connections (press c)",
+        ),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.ui.screens.list_provider_models",
+        lambda **kwargs: models,
+    )
+    monkeypatch.setattr(
+        app, "ollama_cloud_model_profiles", lambda: ()
+    )
+    monkeypatch.setattr(
+        app,
+        "configured_profiles",
+        lambda: ((), None),
+    )
+
+    async def actions(pilot):
+        await pilot.press("s")
+        await pilot.pause()
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+        start._open_model_picker()
+        await pilot.pause()
+        picker = pilot.app.screen
+        assert isinstance(picker, ChoicePickerScreen)
+        values = [choice.value for choice in picker.choices]
+        assert "opencode_go:opencode-go/kimi-k3" in values
+        assert "opencode_go:opencode-go/glm-5" in values
+        assert "commandcode_goat:deepseek/deepseek-v4-flash" in values
+        assert "providers:manage" in values
+        # Provider identity preserved: same display text never collapses
+        # distinct provider routes.
+        titles = [choice.title for choice in picker.choices]
+        assert "Kimi K3" in titles
+        goat = next(
+            c for c in picker.choices
+            if c.value == "commandcode_goat:deepseek/deepseek-v4-flash"
+        )
+        assert goat.disabled is True
+
+    run_headless(app, actions, size=(120, 32))
+
+
+def test_model_picker_management_entry_opens_provider_screen(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = make_app(tmp_path)
+    monkeypatch.setattr(
+        "agentic_debugger.ui.screens.list_provider_models",
+        lambda **kwargs: (),
+    )
+    monkeypatch.setattr(app, "ollama_cloud_model_profiles", lambda: ())
+    monkeypatch.setattr(app, "configured_profiles", lambda: ((), None))
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses", lambda: fake_statuses()
+    )
+
+    async def actions(pilot):
+        await pilot.press("s")
+        await pilot.pause()
+        start = pilot.app.screen
+        assert isinstance(start, StartSessionScreen)
+        start._open_model_picker()
+        await pilot.pause()
+        picker = pilot.app.screen
+        assert isinstance(picker, ChoicePickerScreen)
+        picker._on_select("providers:manage")
+        await pilot.pause()
+        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
+
+    run_headless(app, actions, size=(120, 32))
+
+
+def test_provider_screen_usable_at_compact_geometry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    app = make_app(tmp_path)
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.connection_statuses", lambda: fake_statuses()
+    )
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+        title = screen.query_one("#providers-title")
+        assert title.visible
+        region = screen.query_one("#providers-wrap").region
+        assert region.width <= 80
+
+    run_headless(app, actions, size=(80, 24))
+

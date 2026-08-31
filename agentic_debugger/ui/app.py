@@ -34,7 +34,7 @@ import secrets
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Mapping, Optional, Tuple
 
 from textual.app import App
 from textual.binding import Binding
@@ -473,6 +473,26 @@ class LocalApplicationV1(App):
     def ollama_cloud_model_profiles(self):
         return self.level32_model_profiles()
 
+    def _provider_child_environment(
+        self, model_provider: Optional[str]
+    ) -> Optional[Mapping[str, str]]:
+        """Bounded worker-spawn credential hop for direct-API providers.
+
+        A process-local (memory-only) API key entered in Provider
+        Connections reaches the worker through its child environment —
+        never through argv, the start message, scenario params, or the
+        journal.  Environment-variable and auth-store credentials need
+        no hop.
+        """
+
+        if model_provider not in ("opencode_go", "commandcode_goat"):
+            return None
+        from agentic_debugger.application.model_providers import (
+            provider_session_credential_environment,
+        )
+
+        return provider_session_credential_environment(model_provider)
+
     def start_live_session(
         self,
         *,
@@ -630,6 +650,15 @@ class LocalApplicationV1(App):
                 ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
                 max_elapsed_seconds=max_elapsed_seconds,
                 retry_of_session_id=retry_of_session_id,
+                **(
+                    {
+                        "child_environment": self._provider_child_environment(
+                            model_provider
+                        )
+                    }
+                    if model_provider in ("opencode_go", "commandcode_goat")
+                    else {}
+                ),
             )
         if source_kind is not SourceKind.LEVEL32_OPERATOR:
             # Uniform retry contract: invoke(retry_of, remaining).  Live
@@ -861,6 +890,15 @@ class LocalApplicationV1(App):
                 ready_timeout_seconds=_READY_TIMEOUT_SECONDS,
                 max_elapsed_seconds=max_elapsed_seconds,
                 retry_of_session_id=retry_of_session_id,
+                **(
+                    {
+                        "child_environment": self._provider_child_environment(
+                            model_provider
+                        )
+                    }
+                    if model_provider in ("opencode_go", "commandcode_goat")
+                    else {}
+                ),
             )
             # Retry-budget contract: every invoke names the REMAINING chain
             # budget explicitly as a required argument — never a lambda
