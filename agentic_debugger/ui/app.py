@@ -528,6 +528,14 @@ class LocalApplicationV1(App):
         # displayed selection is authoritative.  A curated offline task must not
         # be executed as a Level-32/Ollama Cloud session via a stale fallback,
         # and a ladder task must not be executed as a local offline demo.
+        if task_id == LEVEL32_TASK_ID and source_kind is not SourceKind.LEVEL32_OPERATOR:
+            raise ValueError(
+                "Level-32 task requires the Level-32 operator source"
+            )
+        if source_kind is SourceKind.LEVEL32_OPERATOR and task_id != LEVEL32_TASK_ID:
+            raise ValueError(
+                "Level-32 operator sessions require the canonical task id"
+            )
         if source_kind is SourceKind.OFFLINE_DEMO and task_id in LADDER_TASK_IDS:
             raise ValueError("offline demo source cannot start a ladder task")
         # CONFIGURED_MODEL is the shared provider-neutral runtime for
@@ -537,8 +545,6 @@ class LocalApplicationV1(App):
         # ladder and frozen Level-32 operator treatments.
         if source_kind is SourceKind.OLLAMA_CLOUD_LADDER and task_id not in LADDER_TASK_IDS:
             raise ValueError("Ollama Cloud ladder source requires a ladder task")
-        if source_kind is SourceKind.OFFLINE_DEMO and task_id == LEVEL32_TASK_ID:
-            raise ValueError("offline demo source cannot start the Level-32 task")
         # Provider models run through the configured command source's
         # registry parameter contract; any other pairing fails closed.
         if model_provider is not None:

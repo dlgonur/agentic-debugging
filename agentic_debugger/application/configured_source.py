@@ -71,15 +71,12 @@ from agentic_debugger.evaluation.live import (
     LiveRunLimits,
 )
 
-# Lower ladder runtime contracts (provider-neutral, task-specific)
-try:
-    from agentic_debugger.application.ollama_cloud_source import (
-        LADDER_RUNTIME_CONTRACTS,
-        ladder_runtime_contract,
-    )
-except Exception:  # pragma: no cover - import guard for minimal env
-    LADDER_RUNTIME_CONTRACTS = {}  # type: ignore
-    ladder_runtime_contract = None  # type: ignore
+from agentic_debugger.application.level32 import LEVEL32_TASK_ID
+from agentic_debugger.application.ollama_cloud_source import (
+    LADDER_RUNTIME_CONTRACTS,
+    ladder_runtime_contract,
+)
+from agentic_debugger.demo.catalog import scenario_for
 
 #: The one production configured command-model source name the worker
 #: dispatches.
@@ -291,29 +288,32 @@ def run_configured_session(
         raise ScenarioInputError("configured source requires the shared emitter")
     task_id = ctx.emitter.task_id
 
+    # Defense in depth: Level 32 is strictly qualified-only via the
+    # authoritative Level32OperatorWorker. It must never enter the
+    # configured command source under any circumstances.
+    if task_id == LEVEL32_TASK_ID:
+        raise ScenarioInputError(
+            f"Level-32 task {task_id!r} cannot be executed as a configured session; "
+            "it requires the Level-32 operator source"
+        )
+
     # Provider-neutral lower-ladder contract: if task_id is an accepted
     # lower ladder rung, the rung's budget/proof contract must be honored
     # regardless of which provider is selected. This preserves the task
-    # mechanics while varying only the transport.
-    is_lower_ladder = False
-    ladder_contract = None
-    ladder_scenario = None
-    if ladder_runtime_contract is not None:
-        try:
-            ladder_contract = ladder_runtime_contract(task_id)
-            from agentic_debugger.demo.catalog import scenario_for
-
-            ladder_scenario = scenario_for(task_id)
-            if ladder_scenario.runtime_probe.exact_public_reproduction:
-                is_lower_ladder = True
-            else:
-                ladder_contract = None
-                ladder_scenario = None
-                is_lower_ladder = False
-        except Exception:
-            ladder_contract = None
-            ladder_scenario = None
-            is_lower_ladder = False
+    # mechanics while varying only the transport. A contract or scenario
+    # loading failure fails closed immediately.
+    if task_id in LADDER_RUNTIME_CONTRACTS:
+        ladder_contract = ladder_runtime_contract(task_id)
+        ladder_scenario = scenario_for(task_id)
+        if not ladder_scenario.runtime_probe.exact_public_reproduction:
+            raise ScenarioInputError(
+                f"lower ladder task {task_id!r} requires exact public reproduction probe"
+            )
+        is_lower_ladder = True
+    else:
+        is_lower_ladder = False
+        ladder_contract = None
+        ladder_scenario = None
 
     cwd: Optional[Path] = None
     environment: Optional[dict[str, str]] = None

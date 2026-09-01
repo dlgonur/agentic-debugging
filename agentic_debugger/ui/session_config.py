@@ -377,7 +377,7 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
             )
         return issues, notes
     # Lower ladder rungs (6, 12, 18): any executable provider model.
-    notes = ["Research tasks use the canonical operator contract; any configured provider may run the rung."]
+    notes: list[str] = []
     if config.model.is_offline:
         issues.append(
             ReadinessIssue(
@@ -386,7 +386,7 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
                 "Ladder runs require a live model — choose a provider model.",
             )
         )
-        return issues, notes
+        return issues, ["Research tasks use the canonical operator contract."]
     model = catalog.find_model(config.model)
     ladder_entry = catalog.ladder_model(config.model)
     effective = ladder_entry if ladder_entry is not None else model
@@ -418,6 +418,8 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
         # Executable but not qualified: truthfully surface the distinction
         if ladder_entry is None:
             notes.append("Executable provider model — not a qualified scientific treatment.")
+        else:
+            notes.append("Research tasks use the canonical operator contract.")
     return issues, notes
 
 

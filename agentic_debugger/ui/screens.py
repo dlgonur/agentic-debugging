@@ -2119,6 +2119,19 @@ class ConfirmDeleteProviderDialogScreen(Screen):
 ProviderConnectionsScreen = ModelProvidersScreen
 
 
+def _provider_label(provider: str) -> str:
+    if provider in PROVIDER_LABELS:
+        return PROVIDER_LABELS[provider]
+    try:
+        from agentic_debugger.application.provider_connections import get_provider_config
+        cfg = get_provider_config(provider)
+        if cfg is not None:
+            return cfg.name
+    except Exception:
+        pass
+    return provider
+
+
 class StartSessionScreen(Screen):
     """The ONE session-setup surface for every target and provider.
 
@@ -2502,7 +2515,7 @@ class StartSessionScreen(Screen):
         descriptions = {
             TARGET_CURATED: "Reproducible in-repo fixture; offline or any provider.",
             TARGET_LOCAL_PROJECT: "Your clean Git repository; describe the bug.",
-            TARGET_LADDER: "Scientific capability rungs; qualified Ollama models.",
+            TARGET_LADDER: "Levels 6/12/18: configured provider models allowed; Level 32: frozen qualified treatment.",
         }
         choices = [
             ChoiceOption(
@@ -2577,12 +2590,30 @@ class StartSessionScreen(Screen):
                 disabled_reason=offline_reason,
             )
         )
-        groups = (
+        builtin_groups: list[tuple[str, str]] = [
             (PROVIDER_OLLAMA, "OLLAMA CLOUD"),
             (PROVIDER_OPENCODE, "OPENCODE GO"),
             (PROVIDER_COMMANDCODE, "COMMANDCODE GOAT"),
-            (PROVIDER_CONFIGURED, "CUSTOM COMMAND PROFILES"),
-        )
+        ]
+        custom_groups: list[tuple[str, str]] = []
+        try:
+            from agentic_debugger.application.provider_connections import list_configured_providers
+            for cfg in list_configured_providers():
+                if cfg.provider_id in (
+                    PROVIDER_OLLAMA,
+                    PROVIDER_OPENCODE,
+                    PROVIDER_COMMANDCODE,
+                    PROVIDER_CONFIGURED,
+                    PROVIDER_OFFLINE,
+                ):
+                    continue
+                if not cfg.enabled:
+                    continue
+                custom_groups.append((cfg.provider_id, cfg.name.upper()))
+        except Exception:
+            pass
+        configured_group = (PROVIDER_CONFIGURED, "CUSTOM COMMAND PROFILES")
+        groups = tuple(builtin_groups + custom_groups + [configured_group])
 
         # One stable provider world for every target.  The qualified roster
         # annotates Ollama entries; it never replaces the general catalog or
@@ -2604,7 +2635,7 @@ class StartSessionScreen(Screen):
             key = (option.provider, option.model_id)
             if key not in seen_keys:
                 seen_keys.add(key)
-                options_by_provider[PROVIDER_OLLAMA].append(option)
+                options_by_provider.setdefault(PROVIDER_OLLAMA, []).append(option)
 
         for provider, group in groups:
             provider_options = options_by_provider.get(provider, [])
@@ -2622,7 +2653,11 @@ class StartSessionScreen(Screen):
                     group_note = "none configured"
                 elif provider_options and not any(opt.available for opt in provider_options):
                     first_reason = provider_options[0].unavailable_reason or ""
-                    if "auth store not found" in first_reason.lower() or "cli not found" in first_reason.lower():
+                    if (
+                        "auth store not found" in first_reason.lower()
+                        or "cli not found" in first_reason.lower()
+                        or "no direct api credential" in first_reason.lower()
+                    ):
                         group_note = "not configured"
                     else:
                         group_note = _short_unavailable_reason(first_reason)
@@ -2632,7 +2667,11 @@ class StartSessionScreen(Screen):
                 group_note = "none configured"
             elif provider_options and not any(opt.available for opt in provider_options):
                 first_reason = provider_options[0].unavailable_reason or ""
-                if "auth store not found" in first_reason.lower() or "cli not found" in first_reason.lower():
+                if (
+                    "auth store not found" in first_reason.lower()
+                    or "cli not found" in first_reason.lower()
+                    or "no direct api credential" in first_reason.lower()
+                ):
                     group_note = "not configured"
                 else:
                     group_note = _short_unavailable_reason(first_reason)
@@ -2641,7 +2680,7 @@ class StartSessionScreen(Screen):
                 reason = (
                     _short_unavailable_reason(self._catalog.configured_error)
                     if provider == PROVIDER_CONFIGURED and self._catalog.configured_error
-                    else f"No {PROVIDER_LABELS[provider]} models configured"
+                    else f"No {_provider_label(provider)} models configured"
                 )
                 title = (
                     "Configuration error"
@@ -2980,7 +3019,7 @@ class StartSessionScreen(Screen):
         choice = self._config.model
         if choice.is_offline:
             return "Offline", "Offline"
-        label = PROVIDER_LABELS.get(choice.provider, choice.provider)
+        label = _provider_label(choice.provider)
         if choice.provider == PROVIDER_CONFIGURED:
             display = choice.display or choice.model_id
         else:
@@ -3065,7 +3104,10 @@ class StartSessionScreen(Screen):
             if config.time_limit_seconds is None
             else str(config.time_limit_seconds),
         )
-        fitted(ROW_AUTO_RETRY, f"{config.auto_retries} on retryable failure")
+        if config.target == TARGET_LADDER:
+            fitted(ROW_AUTO_RETRY, "0 automatic retries")
+        else:
+            fitted(ROW_AUTO_RETRY, f"{config.auto_retries} on retryable failure")
 
         # -- blockers / status (concise actionable blocker when necessary) --
         status = self.query_one("#start-status", Static)
@@ -3079,7 +3121,7 @@ class StartSessionScreen(Screen):
 
         # Trust notices stay visible at every width (not only in the rail)
         notes = self.query_one("#start-notes", Static)
-        if readiness.notes and config.model.provider == PROVIDER_CONFIGURED:
+        if readiness.notes:
             notes.update(
                 f"[{FAINT}]{'   '.join(_markup_escape(note) for note in readiness.notes)}[/]"
             )
