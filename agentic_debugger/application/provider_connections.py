@@ -679,15 +679,16 @@ def quarantine_provider(provider_id: str) -> None:
     after the durable write succeeds.  Any I/O failure raises a bounded
     credential-free ProviderConnectionError and leaves in-memory state
     unchanged (abort before mutation).
+
+    An existing but unreadable/corrupt quarantine file is UNKNOWN durable
+    state and must remain fail-closed: the error is propagated, no mutation
+    occurs, and the file is left untouched.  Callers (notably
+    _commit_provider_and_credential) abort before any credential mutation.
     """
     if not provider_id or not isinstance(provider_id, str):
         return
-    try:
-        existing = _read_quarantine_file()
-    except ProviderConnectionError:
-        existing = set(_QUARANTINED_PROVIDERS)
-    else:
-        existing.update(_QUARANTINED_PROVIDERS)
+    existing = _read_quarantine_file()
+    existing.update(_QUARANTINED_PROVIDERS)
     existing.add(provider_id)
     _write_quarantine_state(existing)
     _QUARANTINED_PROVIDERS.update(existing)
@@ -699,19 +700,15 @@ def clear_provider_quarantine(provider_id: str) -> None:
     The in-memory entry is cleared only after the durable state is
     successfully updated.  If the durable clear fails, the provider remains
     blocked (fail closed) and a bounded error is raised.
+
+    An existing but unreadable/corrupt quarantine file is UNKNOWN durable
+    state and must remain fail-closed: the error is propagated and the file
+    is left byte-for-byte untouched.  No reconstruction from in-memory state
+    is attempted.
     """
     if not provider_id or not isinstance(provider_id, str):
         return
-    try:
-        existing = _read_quarantine_file()
-    except ProviderConnectionError:
-        remaining = set(_QUARANTINED_PROVIDERS)
-        remaining.discard(provider_id)
-        _write_quarantine_state(remaining)
-        _QUARANTINED_PROVIDERS.discard(provider_id)
-        _QUARANTINED_PROVIDERS.clear()
-        _QUARANTINED_PROVIDERS.update(remaining)
-        return
+    existing = _read_quarantine_file()
     durable_contains = provider_id in existing
     memory_contains = provider_id in _QUARANTINED_PROVIDERS
     if not durable_contains and not memory_contains:
