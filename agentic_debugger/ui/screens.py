@@ -1473,6 +1473,7 @@ class ModelProvidersScreen(Screen):
             lines = []
             if status.model_count:
                 when = (status.last_refresh_utc or "").replace("T", " ").split(".", 1)[0]
+                when = when.removesuffix("Z").removesuffix("+00:00").strip()
                 suffix = " · stale/unverified" if status.stale else ""
                 lines.append(f"Catalog     {status.model_count} models")
                 lines.append(f"Updated     {when} UTC{suffix}" if when else "Updated     —")

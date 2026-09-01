@@ -43,3 +43,6 @@ agentic_debugger = ["datasets/curated/*/task.json"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+markers = [
+    "native_secure_store: exercise the real OS secure store with generated fake credentials only (never a real provider secret)",
+]

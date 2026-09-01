@@ -692,6 +692,62 @@ def _clean_slug(text: str) -> str:
     return cleaned[:32] or "custom_provider"
 
 
+def _commit_provider_and_credential(
+    provider_id: str,
+    updated_configs: List[ProviderConfig],
+    api_key: Optional[str],
+) -> None:
+    """Commit one logical provider save: secure credential first, then configuration.
+
+    Provider mutation and credential mutation must behave as one safe logical
+    save.  Ordering and rollback keep the two durable stores consistent from
+    the caller's perspective:
+
+    - An unusable key or a failed secure-store write raises before the
+      configuration is touched, so the persisted configuration (and its
+      current credential association) stays authoritative.
+    - If the configuration write fails after the credential was replaced, the
+      previous credential is restored; when no previous credential existed
+      (or restoration itself fails) the newly written credential is deleted,
+      failing closed so no key is left bound to a configuration that never
+      accepted it and no old credential can travel to a newly requested
+      endpoint.  Credential values never leave this boundary, including in
+      error text.
+    """
+    stripped = api_key.strip() if api_key is not None else ""
+    previous_credential: Optional[str] = None
+    if stripped:
+        if not _credential_is_usable(stripped):
+            raise ProviderConnectionError("API key is missing, invalid, or oversized")
+        previous_credential = load_secure_credential(provider_id)
+        if not save_secure_credential(provider_id, stripped):
+            raise ProviderConnectionError("Could not save API key securely.")
+    try:
+        save_provider_configurations(updated_configs)
+    except ProviderConnectionError:
+        if not stripped:
+            raise
+        if previous_credential is not None and save_secure_credential(
+            provider_id, previous_credential
+        ):
+            rollback_note = "the previous credential state was restored"
+        elif delete_secure_credential(provider_id):
+            rollback_note = (
+                "no API key remains stored for this provider"
+                if previous_credential is None
+                else "the stored API key could not be restored and was removed; re-enter it before retrying"
+            )
+        else:
+            rollback_note = (
+                "the stored API key state could not be restored; "
+                "remove it from the OS secure store before retrying"
+            )
+        raise ProviderConnectionError(
+            "provider configuration could not be written; no provider changes "
+            f"were applied and {rollback_note}"
+        ) from None
+
+
 def add_provider_config(
     name: str,
     base_url: str,
@@ -734,17 +790,9 @@ def add_provider_config(
         is_builtin=False,
     )
     updated = [c for c in configs if c.provider_id != pid] + [new_cfg]
-    save_provider_configurations(updated)
-
-    if api_key is not None:
-        stripped = api_key.strip()
-        if stripped:
-            if not _credential_is_usable(stripped):
-                raise ProviderConnectionError("API key is missing, invalid, or oversized")
-            saved = save_secure_credential(pid, stripped)
-            if not saved:
-                raise ProviderConnectionError("Could not save API key securely.")
-            clear_session_key(pid)
+    _commit_provider_and_credential(pid, updated, api_key)
+    if api_key is not None and api_key.strip():
+        clear_session_key(pid)
 
     return new_cfg
 
@@ -797,17 +845,9 @@ def update_provider_config(
         tls_signature_blocked=existing.tls_signature_blocked,
     )
     updated = [updated_cfg if c.provider_id == provider_id else c for c in configs]
-    save_provider_configurations(updated)
-
-    if api_key is not None:
-        stripped = api_key.strip()
-        if stripped:
-            if not _credential_is_usable(stripped):
-                raise ProviderConnectionError("API key is missing, invalid, or oversized")
-            saved = save_secure_credential(provider_id, stripped)
-            if not saved:
-                raise ProviderConnectionError("Could not save API key securely.")
-            clear_session_key(provider_id)
+    _commit_provider_and_credential(provider_id, updated, api_key)
+    if api_key is not None and api_key.strip():
+        clear_session_key(provider_id)
 
     return updated_cfg
 

@@ -63,7 +63,7 @@ from agentic_debugger.application.level32 import level32_model_profiles
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT / "tests" / "unit"))
-from fake_provider_server import FakeProviderServer, scripted_chat_completion
+from fake_provider_server import FakeProviderServer, catalog_payload, scripted_chat_completion
 
 
 @pytest.fixture(autouse=True)
@@ -923,6 +923,295 @@ def test_truthful_credential_source_labels():
     assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_SESSION_KEY] == "session only"
     assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_ENVIRONMENT] == "environment"
     assert _PROVIDER_CREDENTIAL_SOURCE_LABELS[CREDENTIAL_SOURCE_CLI_AUTH_STORE] == "CLI auth"
+
+
+# -- transactional provider/credential atomicity (regressions against c8aef31) ---
+
+
+def test_add_provider_atomic_when_secure_save_fails(monkeypatch: pytest.MonkeyPatch):
+    """A failed secure save during Add Provider commits nothing at all.
+
+    Against c8aef318 the provider configuration was persisted BEFORE the
+    secure-store attempt, so the supposedly failed provider existed on disk.
+    """
+    from agentic_debugger.application.provider_connections import (
+        provider_configurations_path,
+    )
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda kind, val: False,
+    )
+    clear_all_session_keys()
+
+    with pytest.raises(ProviderConnectionError, match="Could not save API key securely"):
+        add_provider_config(
+            name="Atomic Failure",
+            base_url="https://new.example/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            api_key="fake-new-key",
+        )
+
+    assert get_provider_config("atomic_failure") is None
+    assert is_known_provider("atomic_failure") is False
+    assert has_session_key("atomic_failure") is False
+    assert has_secure_credential("atomic_failure") is False
+
+    config_path = provider_configurations_path()
+    if config_path.exists():
+        content = config_path.read_text(encoding="utf-8")
+        assert "atomic_failure" not in content
+        assert "new.example" not in content
+
+
+def test_add_provider_unusable_key_rejected_before_any_mutation():
+    """An invalid API key is rejected before the configuration is written."""
+    with pytest.raises(
+        ProviderConnectionError, match="API key is missing, invalid, or oversized"
+    ):
+        add_provider_config(
+            name="Bad Key Provider",
+            base_url="https://badkey.example/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            api_key="bad\x07key",
+        )
+    assert get_provider_config("bad_key_provider") is None
+    assert has_session_key("bad_key_provider") is False
+
+
+def test_update_provider_atomic_when_secure_save_fails(monkeypatch: pytest.MonkeyPatch):
+    """A failed secure save during Edit Provider keeps the original provider fully authoritative."""
+    from agentic_debugger.application.provider_connections import (
+        provider_configurations_path,
+    )
+
+    seed = add_provider_config(
+        name="Original",
+        base_url="https://old.example/v1",
+        api_format=PROTOCOL_MESSAGES,
+        api_key="fake-old-key",
+    )
+    pid = seed.provider_id
+    add_manual_model(pid, "original-model-1", "Original Model 1")
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda kind, val: False,
+    )
+
+    with pytest.raises(ProviderConnectionError, match="Could not save API key securely"):
+        update_provider_config(
+            provider_id=pid,
+            name="Changed",
+            base_url="https://new.example/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            api_key="fake-new-key",
+        )
+
+    reloaded = get_provider_config(pid)
+    assert reloaded is not None
+    assert reloaded.name == "Original"
+    assert reloaded.base_url == "https://old.example/v1"
+    assert reloaded.api_format == PROTOCOL_MESSAGES
+    assert [m.model_id for m in reloaded.models] == ["original-model-1"]
+    assert reloaded.enabled is True
+
+    # No accepted configuration references the rejected endpoint
+    config_path = provider_configurations_path()
+    assert "https://new.example" not in config_path.read_text(encoding="utf-8")
+
+    # The existing credential remains safely associated with the original provider
+    assert resolve_runtime_credential(pid) == "fake-old-key"
+    assert credential_source_for(pid) == CREDENTIAL_SOURCE_SAVED
+    assert has_session_key(pid) is False
+
+
+def test_failed_update_never_sends_credential_to_rejected_endpoint(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """After a rejected endpoint+credential edit, the normal resolution/catalog-refresh
+    boundary never forwards the stored credential to the rejected endpoint."""
+    def responder(request):
+        if request["path"] == "/v1/models":
+            return 200, catalog_payload(["original-model-1"])
+        return 404, {"error": "not scripted"}
+
+    with FakeProviderServer(responder) as server:
+        seed = add_provider_config(
+            name="Endpoint Guard",
+            base_url=f"{server.base_url}/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            api_key="fake-old-key",
+        )
+        pid = seed.provider_id
+
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_connections.save_secure_credential",
+            lambda kind, val: False,
+        )
+        with pytest.raises(ProviderConnectionError):
+            update_provider_config(
+                provider_id=pid,
+                name="Endpoint Guard Changed",
+                base_url="https://new.example/v1",
+                api_key="fake-new-key",
+            )
+
+        # Normal provider resolution after the failed edit resolves the ORIGINAL endpoint
+        assert provider_base_url(pid) == f"{server.base_url}/v1"
+
+        recorded_urls: list[str] = []
+        real_request_json = pc.request_json
+
+        def recording_request_json(method, url, **kwargs):
+            recorded_urls.append(url)
+            return real_request_json(method, url, **kwargs)
+
+        monkeypatch.setattr(pc, "request_json", recording_request_json)
+
+        snapshot = refresh_provider_catalog(pid)
+
+        # Every catalog request went to the original loopback endpoint only
+        assert recorded_urls == [f"{server.base_url}/v1/models"]
+        assert all("new.example" not in url for url in recorded_urls)
+        assert len(server.requests) == 1
+        assert server.requests[0]["path"] == "/v1/models"
+        assert server.requests[0]["authorization"] == "Bearer fake-old-key"
+        assert snapshot.models[0].model_id == "original-model-1"
+
+
+def test_config_write_failure_after_credential_mutation_restores_previous_pair(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """If the configuration write fails after the secure store was updated, the
+    previous credential/config pair is restored (never new endpoint + old key,
+    never old endpoint + unintended new key)."""
+    seed = add_provider_config(
+        name="Rollback Target",
+        base_url="https://old.example/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        api_key="fake-old-key",
+    )
+    pid = seed.provider_id
+
+    def _failing_save(configs):
+        raise ProviderConnectionError("provider configuration could not be written")
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_provider_configurations",
+        _failing_save,
+    )
+
+    with pytest.raises(
+        ProviderConnectionError, match="provider configuration could not be written"
+    ) as excinfo:
+        update_provider_config(
+            provider_id=pid,
+            name="Rollback Target Changed",
+            base_url="https://new.example/v1",
+            api_key="fake-new-key",
+        )
+
+    # Rollback error text never exposes either credential value
+    error_text = str(excinfo.value)
+    assert "fake-old-key" not in error_text
+    assert "fake-new-key" not in error_text
+
+    reloaded = get_provider_config(pid)
+    assert reloaded is not None
+    assert reloaded.name == "Rollback Target"
+    assert reloaded.base_url == "https://old.example/v1"
+    assert resolve_runtime_credential(pid) == "fake-old-key"
+    assert has_session_key(pid) is False
+
+
+def test_config_write_failure_after_first_add_leaves_no_provider_and_no_credential(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A failed Add Provider whose configuration write fails leaves no provider,
+    no stored credential, and no session residue."""
+
+    def _failing_save(configs):
+        raise ProviderConnectionError("provider configuration could not be written")
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_provider_configurations",
+        _failing_save,
+    )
+
+    with pytest.raises(
+        ProviderConnectionError, match="provider configuration could not be written"
+    ):
+        add_provider_config(
+            name="No Residue",
+            base_url="https://residue.example/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            api_key="fake-new-key",
+        )
+
+    assert get_provider_config("no_residue") is None
+    assert has_secure_credential("no_residue") is False
+    assert credential_source_for("no_residue") is None
+    assert has_session_key("no_residue") is False
+
+
+def test_unrestorable_credential_rolls_back_to_deleted_key(monkeypatch: pytest.MonkeyPatch):
+    """When the previous credential cannot be restored after a failed configuration
+    write, the stored key is deleted so no unintended pair remains active."""
+    seed = add_provider_config(
+        name="Fail Closed Target",
+        base_url="https://old.example/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        api_key="fake-old-key",
+    )
+    pid = seed.provider_id
+
+    secure_calls: list[str] = []
+
+    def flaky_save(kind, val):
+        # The new-key write succeeds; the restore write of the old key fails.
+        secure_calls.append("save")
+        return len(secure_calls) == 1
+
+    deleted: list[str] = []
+
+    def recording_delete(kind):
+        deleted.append(kind)
+        return True
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        flaky_save,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.delete_secure_credential",
+        recording_delete,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_secure_credential",
+        lambda kind: "fake-old-key" if kind == pid else None,
+    )
+
+    def _failing_save(configs):
+        raise ProviderConnectionError("provider configuration could not be written")
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_provider_configurations",
+        _failing_save,
+    )
+
+    with pytest.raises(
+        ProviderConnectionError, match="could not be restored and was removed"
+    ):
+        update_provider_config(
+            provider_id=pid,
+            base_url="https://new.example/v1",
+            api_key="fake-new-key",
+        )
+
+    # Fail closed: the stored key was deleted rather than left paired with the
+    # original configuration as an unintended replacement credential.
+    assert deleted == [pid]
 
 
 

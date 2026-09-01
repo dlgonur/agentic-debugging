@@ -1185,3 +1185,118 @@ def test_truthful_credential_status_labels_in_ui(
 
 
 
+
+
+def test_add_provider_dialog_secure_save_failure_commits_nothing_and_keeps_dialog_open(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Secure-save failure in the Add Provider dialog leaves the dialog open with a
+    bounded error, adds no provider behind the modal, and starts no discovery.
+
+    Against c8aef318 the provider was persisted before the secure-store attempt,
+    so the "failed" provider existed behind the still-open dialog.
+    """
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    store: dict[str, str] = {}
+    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: False)
+    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
+    discovered: list[str] = []
+    monkeypatch.setattr(
+        pc,
+        "refresh_provider_catalog",
+        lambda kind, **kwargs: discovered.append(kind) or SimpleNamespace(models=[]),
+    )
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        await pilot.press("a")
+        await pilot.pause()
+        dlg = pilot.app.screen
+        assert isinstance(dlg, AddProviderDialogScreen)
+        from textual.widgets import Input, Static
+
+        dlg.query_one("#input-name", Input).value = "Atomic Failure"
+        dlg.query_one("#input-url", Input).value = "https://new.example/v1"
+        dlg.query_one("#input-key", Input).value = "fake-new-key"
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        # Dialog remains open with a bounded, credential-free error
+        assert pilot.app.screen is dlg
+        feedback = str(dlg.query_one("#dialog-feedback", Static).render().plain)
+        assert "Could not save API key securely" in feedback
+        assert "fake-new-key" not in feedback
+
+        # Nothing committed behind the modal and no discovery started
+        assert pc.get_provider_config("atomic_failure") is None
+        assert discovered == []
+
+    run_headless(app, actions, size=(100, 30))
+
+
+def test_edit_provider_dialog_secure_save_failure_keeps_original_authoritative(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Secure-save failure in the Edit Provider dialog keeps the dialog open and the
+    original provider (name, endpoint) authoritative."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.provider_configurations_path",
+        lambda: config_file,
+    )
+    store: dict[str, str] = {}
+    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: store.__setitem__(k, v) or True)
+    monkeypatch.setattr(pc, "load_secure_credential", lambda k: store.get(k))
+    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in store)
+    monkeypatch.setattr(pc, "delete_secure_credential", lambda k: store.pop(k, None) is not None)
+
+    pc.add_provider_config(
+        name="Original",
+        base_url="https://old.example/v1",
+        api_format="messages",
+        api_key="fake-old-key",
+    )
+    assert store.get("original") == "fake-old-key"
+
+    # Now force the replacement save to fail
+    monkeypatch.setattr(pc, "save_secure_credential", lambda k, v: False)
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.app.push_screen(ProviderConnectionsScreen())
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ProviderConnectionsScreen)
+        screen._selected_index = screen._index_of("original")
+        screen.render_state()
+        await pilot.pause()
+        await pilot.press("e")
+        await pilot.pause()
+        dlg = pilot.app.screen
+        assert isinstance(dlg, EditProviderDialogScreen)
+        from textual.widgets import Input, Static
+
+        dlg.query_one("#input-name", Input).value = "Changed"
+        dlg.query_one("#input-url", Input).value = "https://new.example/v1"
+        dlg.query_one("#input-key", Input).value = "fake-new-key"
+        await pilot.click("#btn-save-dialog")
+        await pilot.pause()
+
+        assert pilot.app.screen is dlg
+        feedback = str(dlg.query_one("#dialog-feedback", Static).render().plain)
+        assert "Could not save API key securely" in feedback
+
+        cfg = pc.get_provider_config("original")
+        assert cfg is not None
+        assert cfg.name == "Original"
+        assert cfg.base_url == "https://old.example/v1"
+        assert pc.load_secure_credential("original") == "fake-old-key"
+
+    run_headless(app, actions, size=(100, 30))
