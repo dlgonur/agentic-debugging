@@ -71,6 +71,16 @@ from agentic_debugger.evaluation.live import (
     LiveRunLimits,
 )
 
+# Lower ladder runtime contracts (provider-neutral, task-specific)
+try:
+    from agentic_debugger.application.ollama_cloud_source import (
+        LADDER_RUNTIME_CONTRACTS,
+        ladder_runtime_contract,
+    )
+except Exception:  # pragma: no cover - import guard for minimal env
+    LADDER_RUNTIME_CONTRACTS = {}  # type: ignore
+    ladder_runtime_contract = None  # type: ignore
+
 #: The one production configured command-model source name the worker
 #: dispatches.
 CONFIGURED_SOURCE_NAME = "configured_command_model"
@@ -219,7 +229,7 @@ def _validate_registry_params(
 
 
 def _resolve_registry_model(
-    provider: str, model_id: str
+    provider: str, model_id: str, *, logical_call_ceiling: int | None = None
 ) -> tuple[Any, Any, str]:
     """(LiveModelConfig, provenance payload, config_fingerprint) for one
     provider-registry model.
@@ -238,11 +248,16 @@ def _resolve_registry_model(
         resolve_provider_live_config,
     )
 
+    ceiling = (
+        _DEFAULT_MAX_MODEL_REQUESTS
+        if logical_call_ceiling is None
+        else int(logical_call_ceiling)
+    )
     try:
         live_config, provenance = resolve_provider_live_config(
             provider,
             model_id,
-            logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS,
+            logical_call_ceiling=ceiling,
         )
     except ProviderRegistryError as exc:
         raise ScenarioInputError(
@@ -276,13 +291,41 @@ def run_configured_session(
         raise ScenarioInputError("configured source requires the shared emitter")
     task_id = ctx.emitter.task_id
 
+    # Provider-neutral lower-ladder contract: if task_id is an accepted
+    # lower ladder rung, the rung's budget/proof contract must be honored
+    # regardless of which provider is selected. This preserves the task
+    # mechanics while varying only the transport.
+    is_lower_ladder = False
+    ladder_contract = None
+    ladder_scenario = None
+    if ladder_runtime_contract is not None:
+        try:
+            ladder_contract = ladder_runtime_contract(task_id)
+            from agentic_debugger.demo.catalog import scenario_for
+
+            ladder_scenario = scenario_for(task_id)
+            if ladder_scenario.runtime_probe.exact_public_reproduction:
+                is_lower_ladder = True
+            else:
+                ladder_contract = None
+                ladder_scenario = None
+                is_lower_ladder = False
+        except Exception:
+            ladder_contract = None
+            ladder_scenario = None
+            is_lower_ladder = False
+
     cwd: Optional[Path] = None
     environment: Optional[dict[str, str]] = None
     if "provider" in params or "model_id" in params:
         provider, model_id, policy_value = _validate_registry_params(params)
         policy = DemoPolicy(policy_value)
+        # Lower ladder ceiling is task-specific (24), not the general 64
+        ceiling = (
+            ladder_contract.max_model_requests if is_lower_ladder else None
+        )
         live_config, provenance, fingerprint = _resolve_registry_model(
-            provider, model_id
+            provider, model_id, logical_call_ceiling=ceiling
         )
         # Direct-API routes receive exactly one bounded credential
         # override in the adapter child environment (never argv, never
@@ -380,17 +423,30 @@ def run_configured_session(
         )
         cwd = profile.cwd
         environment = dict(profile.environment) if profile.environment else None
-    limits = LiveRunLimits(
-        max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS,
-        max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
-        # The session deadline is enforced by the worker's cancellation
-        # token (deadline + transport poll), never duplicated into a second
-        # model-phase budget that could race the token's timeout
-        # classification.
-        max_elapsed_seconds=None,
-        max_retries=_DEFAULT_MAX_RETRIES,
-        max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
-    )
+    # Lower ladder contract is provider-neutral: same budgets/proof
+    # regardless of whether the model comes from the registry or a
+    # store profile. Outside ladder, keep general defaults.
+    if is_lower_ladder and ladder_contract is not None:
+        limits = LiveRunLimits(
+            max_model_requests=ladder_contract.max_model_requests,
+            max_controller_steps=ladder_contract.max_controller_steps,
+            max_model_phase_seconds=ladder_contract.max_model_phase_seconds,
+            max_retries=ladder_contract.max_retries,
+            continue_on_task_failure=False,
+            max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
+        )
+    else:
+        limits = LiveRunLimits(
+            max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS,
+            max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
+            # The session deadline is enforced by the worker's cancellation
+            # token (deadline + transport poll), never duplicated into a second
+            # model-phase budget that could race the token's timeout
+            # classification.
+            max_elapsed_seconds=None,
+            max_retries=_DEFAULT_MAX_RETRIES,
+            max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
+        )
 
     def _initial_patch(workspace: Any) -> str:
         # The configured model proposes its own candidate through the real
@@ -407,18 +463,36 @@ def run_configured_session(
             environment=environment,
         )
         run_id = ctx.run_id or f"{task_id}--{policy_value}"
-        adapter = LiveModelAdapter(
-            task=demo_context.task,
-            policy=policy,
-            config=live_config,
-            transport=transport,
-            limits=limits,
-            registry=registry,
-            evaluation_id=ctx.emitter.session_id,
-            case_id=f"{ctx.emitter.session_id}:{task_id}",
-            run_id=run_id,
-            trajectory_id=run_id,
-        )
+        # Lower ladder exact-PDB proof binding (provider-neutral)
+        if is_lower_ladder and ladder_scenario is not None:
+            adapter = LiveModelAdapter(
+                task=demo_context.task,
+                policy=policy,
+                config=live_config,
+                transport=transport,
+                limits=limits,
+                registry=registry,
+                evaluation_id=ctx.emitter.session_id,
+                case_id=f"{ctx.emitter.session_id}:{task_id}",
+                run_id=run_id,
+                trajectory_id=run_id,
+                proof_required=ladder_scenario.runtime_probe.exact_public_reproduction,
+                proof_source_line=ladder_scenario.runtime_probe.breakpoint_line,
+                proof_observed_local_names=ladder_scenario.runtime_probe.inspect_expressions,
+            )
+        else:
+            adapter = LiveModelAdapter(
+                task=demo_context.task,
+                policy=policy,
+                config=live_config,
+                transport=transport,
+                limits=limits,
+                registry=registry,
+                evaluation_id=ctx.emitter.session_id,
+                case_id=f"{ctx.emitter.session_id}:{task_id}",
+                run_id=run_id,
+                trajectory_id=run_id,
+            )
         adapters.append(adapter)
         return adapter
 
@@ -438,6 +512,12 @@ def run_configured_session(
         return demo_context.candidate_patch
 
     try:
+        # Lower ladder uses task-specific controller step ceiling
+        _max_calls = (
+            ladder_contract.max_controller_steps
+            if is_lower_ladder and ladder_contract is not None
+            else _DEFAULT_MAX_CONTROLLER_STEPS
+        )
         run_local_session(
             ctx,
             task_id=task_id,
@@ -446,7 +526,7 @@ def run_configured_session(
             model_factory=_model_factory,
             verifier_patch=_verifier_patch,
             fail_on_controller_failure=True,
-            max_model_calls=_DEFAULT_MAX_CONTROLLER_STEPS,
+            max_model_calls=_max_calls,
             registry_pdb_policy=pdb_policy_for(policy),
         )
     except ModelExecutionError as exc:

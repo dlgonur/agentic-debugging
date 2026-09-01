@@ -414,6 +414,10 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
                 f"Configuration error: {catalog.configured_error}",
             )
         )
+    else:
+        # Executable but not qualified: truthfully surface the distinction
+        if ladder_entry is None:
+            notes.append("Executable provider model — not a qualified scientific treatment.")
     return issues, notes
 
 
