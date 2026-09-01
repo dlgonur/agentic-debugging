@@ -1214,5 +1214,207 @@ def test_unrestorable_credential_rolls_back_to_deleted_key(monkeypatch: pytest.M
     assert deleted == [pid]
 
 
+# -- catastrophic rollback: restore AND delete both fail (regression vs c7adaad) ---
+
+
+def _catastrophic_fixture(
+    monkeypatch: pytest.MonkeyPatch,
+    server_url: str,
+    provider_id: str = "catastrophic",
+):
+    """Force restore and delete to fail after a successful new-key write.
+
+    Returns (provider_id, fake server) with the durable failure state applied.
+    """
+    _secure: dict[str, str] = {}
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        lambda kind, val: _secure.__setitem__(kind, val) or True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_secure_credential",
+        lambda kind: _secure.get(kind),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.has_secure_credential",
+        lambda kind: kind in _secure,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.delete_secure_credential",
+        lambda kind: _secure.pop(kind, None) is not None,
+    )
+    add_provider_config(
+        name="Catastrophic",
+        base_url=server_url,
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id=provider_id,
+        api_key="fake-old-key",
+    )
+    real_save_configurations = save_provider_configurations
+    # The new-key write succeeds; restore AND delete both fail afterward.
+    call_count = 0
+
+    def failing_save(kind, val):
+        nonlocal call_count
+        call_count += 1
+        return call_count == 1
+
+    def undo_failure_mocks() -> None:
+        """Restore working secure-store/config mocks (used to prove recovery)."""
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_connections.save_secure_credential",
+            lambda kind, val: _secure.__setitem__(kind, val) or True,
+        )
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_connections.load_secure_credential",
+            lambda kind: _secure.get(kind),
+        )
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_connections.has_secure_credential",
+            lambda kind: kind in _secure,
+        )
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_connections.delete_secure_credential",
+            lambda kind: _secure.pop(kind, None) is not None,
+        )
+        monkeypatch.setattr(
+            "agentic_debugger.application.provider_connections.save_provider_configurations",
+            real_save_configurations,
+        )
+
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_secure_credential",
+        failing_save,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.load_secure_credential",
+        lambda kind: "fake-old-key" if kind == provider_id else None,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.delete_secure_credential",
+        lambda kind: False,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.save_provider_configurations",
+        lambda configs: (_ for _ in ()).throw(
+            ProviderConnectionError("provider configuration could not be written")
+        ),
+    )
+
+    with pytest.raises(ProviderConnectionError):
+        update_provider_config(
+            provider_id=provider_id,
+            base_url="https://new.example/v1",
+            api_key="fake-new-key",
+        )
+    return provider_id, undo_failure_mocks
+
+
+def test_catastrophic_rollback_failure_quarantines_durably(monkeypatch: pytest.MonkeyPatch):
+    """restore-fails AND delete-fails leaves a durable fail-closed quarantine state
+    that survives a fresh process/reload simulation."""
+    pid, _ = _catastrophic_fixture(monkeypatch, "https://old.example/v1")
+
+    # Persisted configuration still describes the ORIGINAL endpoint
+    cfg = get_provider_config(pid)
+    assert cfg is not None
+    assert cfg.base_url == "https://old.example/v1"
+
+    # Simulate a fresh process: drop all in-memory state and reload everything
+    clear_all_session_keys()
+    load_provider_configurations()
+
+    # The quarantine is durable: the provider resolves no credential at all.
+    # The unintended key may still occupy the OS slot (deletion failed) but it
+    # must never be SELECTED, resolved, or forwarded.
+    assert has_secure_credential(pid) is True  # uncommitted residue remains
+    assert credential_source_for(pid) is None
+    assert resolve_runtime_credential(pid) is None
+    assert has_session_key(pid) is False
+    assert provider_transport_environment(pid) is None
+    assert pc.provider_session_credential_environment(pid) is None
+
+
+def test_catastrophic_rollback_failure_blocks_refresh_before_http_in_current_process(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A quarantined provider fails refresh BEFORE HTTP transport in the current process."""
+    def responder(request):
+        return 200, catalog_payload(["model-1"])
+
+    with FakeProviderServer(responder) as server:
+        pid, _ = _catastrophic_fixture(monkeypatch, server.base_url)
+
+        with pytest.raises(
+            ProviderConnectionError, match="requires recovery"
+        ):
+            refresh_provider_catalog(pid)
+
+        assert server.request_count == 0
+
+
+def test_catastrophic_rollback_failure_blocks_refresh_after_restart(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """After a fresh process/reload, the durable quarantine still blocks refresh
+    before HTTP transport."""
+    def responder(request):
+        return 200, catalog_payload(["model-1"])
+
+    with FakeProviderServer(responder) as server:
+        pid, _ = _catastrophic_fixture(monkeypatch, server.base_url)
+
+        # Simulate a fresh process/reload preserving the durable failure state
+        clear_all_session_keys()
+        load_provider_configurations()
+        _current_statuses = pc.connection_statuses()
+        assert any(s.kind == pid and not s.connected for s in _current_statuses)
+
+        with pytest.raises(
+            ProviderConnectionError, match="requires recovery"
+        ):
+            refresh_provider_catalog(pid)
+
+        assert server.request_count == 0
+        assert resolve_runtime_credential(pid) is None
+
+
+def test_catastrophic_recovery_via_explicit_successful_save(monkeypatch: pytest.MonkeyPatch):
+    """A subsequent successful Edit Provider save clears quarantine and restores
+    normal request capability."""
+    def responder(request):
+        if request["path"] == "/v1/models":
+            return 200, catalog_payload(["recovered-model-1"])
+        return 404, {"error": "not scripted"}
+
+    with FakeProviderServer(responder) as server:
+        pid, undo_failure_mocks = _catastrophic_fixture(monkeypatch, f"{server.base_url}/v1")
+
+        # Fresh process/reload preserving the durable failure state
+        clear_all_session_keys()
+        load_provider_configurations()
+        with pytest.raises(ProviderConnectionError, match="requires recovery"):
+            refresh_provider_catalog(pid)
+        assert server.request_count == 0
+
+        # Explicit successful re-save establishes a coherent config+credential pair
+        undo_failure_mocks()
+        recovered = update_provider_config(
+            provider_id=pid,
+            name="Catastrophic Recovered",
+            base_url=f"{server.base_url}/v1",
+            api_key="recovered-new-key",
+        )
+        assert recovered.name == "Catastrophic Recovered"
+        assert credential_source_for(pid) == CREDENTIAL_SOURCE_SAVED
+        assert resolve_runtime_credential(pid) == "recovered-new-key"
+
+        # Normal provider request becomes possible again
+        snapshot = refresh_provider_catalog(pid)
+        assert server.request_count == 1
+        assert snapshot.models[0].model_id == "recovered-model-1"
+        assert server.requests[0]["authorization"] == "Bearer recovered-new-key"
+
+
 
 

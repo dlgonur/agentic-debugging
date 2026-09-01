@@ -29,6 +29,10 @@ Credential security rules:
   credentials remain process-local in memory.
 - The application truthfully distinguishes between:
   ``saved`` (OS secure store), ``session_key`` (memory-only), ``environment``, and ``cli_auth_store``.
+- A provider whose credential/config association is indeterminate (catastrophic
+  rollback failure) is durably quarantined: credential resolution returns no
+  source and no request is issued until the operator explicitly re-establishes
+  a coherent credential pair by saving the provider again.
 """
 
 from __future__ import annotations
@@ -81,6 +85,7 @@ __all__ = [
     "has_session_key",
     "inference_path_for",
     "is_known_provider",
+    "is_provider_quarantined",
     "list_configured_providers",
     "load_cached_catalog",
     "load_provider_configurations",
@@ -91,9 +96,12 @@ __all__ = [
     "provider_configurations_path",
     "provider_connection_status",
     "provider_environment_variable",
+    "provider_quarantine_path",
     "provider_session_credential_environment",
     "provider_tls_signature_blocked",
     "provider_transport_credential_environment",
+    "quarantine_provider",
+    "quarantined_providers",
     "refresh_provider_catalog",
     "resolve_model_protocol",
     "resolve_runtime_credential",
@@ -596,6 +604,162 @@ def provider_configurations_path() -> Path:
     return Path(base) / "AgenticDebugger" / "provider-configurations.json"
 
 
+# -- durable credential quarantine (catastrophic rollback fail-closed) ---------
+#
+# If a provider+credential save fails AND neither rollback restore nor deletion
+# of the unintended credential succeeds, the OS secure-store slot may hold a
+# credential whose association with the persisted configuration was never
+# committed.  The provider is recorded in a durable quarantine file so that
+# every credential-resolution boundary returns None until the operator
+# explicitly re-establishes a coherent credential/config pair.  The in-memory
+# overlay covers the case where the quarantine file itself cannot be written.
+
+_QUARANTINE_SCHEMA_VERSION = "provider-credential-quarantine-v1"
+_MAX_QUARANTINE_FILE_BYTES = 256 * 1024
+
+_QUARANTINED_PROVIDERS: set[str] = set()
+
+
+def provider_quarantine_path() -> Path:
+    """Durable credential-quarantine state path (next to the provider config)."""
+    config_path = provider_configurations_path()
+    return config_path.with_name("provider-credential-quarantine.json")
+
+
+def quarantine_provider(provider_id: str) -> None:
+    """Durably mark one provider as requiring credential recovery."""
+    if not provider_id or not isinstance(provider_id, str):
+        return
+    _QUARANTINED_PROVIDERS.add(provider_id)
+    try:
+        existing = _read_quarantine_file()
+    except ProviderConnectionError:
+        existing = set()
+    existing.add(provider_id)
+    payload = json.dumps(
+        {
+            "schema_version": _QUARANTINE_SCHEMA_VERSION,
+            "providers": sorted(existing),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=1,
+    ).encode("utf-8")
+    if len(payload) > _MAX_QUARANTINE_FILE_BYTES:
+        return
+    path = provider_quarantine_path()
+    temporary: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=path.name + ".",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+        os.replace(temporary, path)
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        # The in-memory overlay keeps the guard active for this process even if
+        # the durable write failed; restart relies on the real OS store being
+        # cleared (or the quarantine file landing on a later recovery attempt).
+
+
+def clear_provider_quarantine(provider_id: str) -> None:
+    """Clear quarantine after a coherent credential/config pair was re-established."""
+    _QUARANTINED_PROVIDERS.discard(provider_id)
+    try:
+        current = _read_quarantine_file()
+    except ProviderConnectionError:
+        current = set()
+    if provider_id not in current:
+        return
+    current.discard(provider_id)
+    path = provider_quarantine_path()
+    if not current:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return
+    payload = json.dumps(
+        {
+            "schema_version": _QUARANTINE_SCHEMA_VERSION,
+            "providers": sorted(current),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=1,
+    ).encode("utf-8")
+    if len(payload) > _MAX_QUARANTINE_FILE_BYTES:
+        return
+    temporary: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=path.name + ".",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+        os.replace(temporary, path)
+    except OSError:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+def _read_quarantine_file() -> set[str]:
+    path = provider_quarantine_path()
+    try:
+        raw = path.read_bytes()
+    except OSError:
+        return set()
+    if len(raw) > _MAX_QUARANTINE_FILE_BYTES:
+        raise ProviderConnectionError("provider credential quarantine file exceeded its bound")
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError):
+        raise ProviderConnectionError("provider credential quarantine file is malformed")
+    if not isinstance(value, Mapping) or value.get("schema_version") != _QUARANTINE_SCHEMA_VERSION:
+        return set()
+    providers = value.get("providers")
+    if not isinstance(providers, list):
+        return set()
+    return {str(p) for p in providers if isinstance(p, str) and p}
+
+
+def _load_quarantined_providers() -> set[str]:
+    result = set(_QUARANTINED_PROVIDERS)
+    try:
+        result.update(_read_quarantine_file())
+    except ProviderConnectionError:
+        pass
+    return result
+
+
+def is_provider_quarantined(provider_id: str) -> bool:
+    """Whether one provider's credential association is in an indeterminate state."""
+    return provider_id in _load_quarantined_providers()
+
+
+def quarantined_providers() -> List[str]:
+    """Sorted durable quarantine list (credential-free)."""
+    return sorted(_load_quarantined_providers())
+
+
 def load_provider_configurations() -> List[ProviderConfig]:
     """Load persistent non-secret provider configurations safely."""
     try:
@@ -713,6 +877,10 @@ def _commit_provider_and_credential(
       accepted it and no old credential can travel to a newly requested
       endpoint.  Credential values never leave this boundary, including in
       error text.
+    - If restore AND delete both fail, the credential/configuration association
+      is indeterminate: the provider is durably quarantined so no credential can
+      resolve and no request can be issued until the operator explicitly saves a
+      coherent credential pair again.
     """
     stripped = api_key.strip() if api_key is not None else ""
     previous_credential: Optional[str] = None
@@ -738,9 +906,15 @@ def _commit_provider_and_credential(
                 else "the stored API key could not be restored and was removed; re-enter it before retrying"
             )
         else:
+            # Neither restore nor delete succeeded: the secure-store slot may
+            # hold an uncommitted credential while the persisted configuration
+            # still describes the original provider.  Block request capability
+            # durably until a coherent pair is re-established.
+            quarantine_provider(provider_id)
+            clear_session_key(provider_id)
             rollback_note = (
-                "the stored API key state could not be restored; "
-                "remove it from the OS secure store before retrying"
+                "the credential state requires recovery; "
+                "edit this provider and save an API key again"
             )
         raise ProviderConnectionError(
             "provider configuration could not be written; no provider changes "
@@ -793,6 +967,7 @@ def add_provider_config(
     _commit_provider_and_credential(pid, updated, api_key)
     if api_key is not None and api_key.strip():
         clear_session_key(pid)
+        clear_provider_quarantine(pid)
 
     return new_cfg
 
@@ -848,6 +1023,7 @@ def update_provider_config(
     _commit_provider_and_credential(provider_id, updated, api_key)
     if api_key is not None and api_key.strip():
         clear_session_key(provider_id)
+        clear_provider_quarantine(provider_id)
 
     return updated_cfg
 
@@ -911,6 +1087,9 @@ def _session_env_var_for(kind: str) -> str:
 
 def credential_source_for(kind: str) -> Optional[str]:
     """Which credential source the direct route can use right now."""
+    if is_provider_quarantined(kind):
+        # Indeterminate credential/config association: never select a source.
+        return None
     if has_secure_credential(kind):
         return CREDENTIAL_SOURCE_SAVED
     if has_session_key(kind):
@@ -932,6 +1111,8 @@ def credential_source_for(kind: str) -> Optional[str]:
 
 def resolve_runtime_credential(kind: str) -> Optional[str]:
     """The credential value for one direct-API request (runtime only)."""
+    if is_provider_quarantined(kind):
+        return None
     saved_value = load_secure_credential(kind)
     if saved_value and _credential_is_usable(saved_value):
         return saved_value.strip()
@@ -964,6 +1145,8 @@ def provider_session_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
     """Private UI-to-worker credential hop (exactly one variable)."""
+    if is_provider_quarantined(kind):
+        return None
     secret = load_secure_credential(kind)
     if not secret or not _credential_is_usable(secret):
         secret = peek_session_key(kind)
@@ -977,6 +1160,8 @@ def provider_transport_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
     """Child environment forwarding for the direct adapter."""
+    if is_provider_quarantined(kind):
+        return None
     contract = _BUILTIN_CONTRACTS.get(kind)
     session_var = _session_env_var_for(kind)
     saved_value = load_secure_credential(kind)
@@ -1488,7 +1673,9 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
 
     message: Optional[str] = None
     if source is None:
-        if kind == "commandcode_goat":
+        if is_provider_quarantined(kind):
+            message = "Credential state requires recovery. Edit provider and save an API key again."
+        elif kind == "commandcode_goat":
             message = (
                 f"Not connected — direct API needs {contract.env_var} or an API key "
                 "(the CLI auth store is not readable by the direct route; "
@@ -1543,6 +1730,10 @@ def refresh_provider_catalog(
     credential: Optional[str] = None,
 ) -> ProviderCatalogSnapshot:
     """Fetch, normalize, cache, and return one live catalog snapshot."""
+    if is_provider_quarantined(kind):
+        raise ProviderConnectionError(
+            "Credential state requires recovery. Edit provider and save an API key again."
+        )
     contract = _BUILTIN_CONTRACTS.get(kind)
     cfg = get_provider_config(kind)
     if cfg is None and contract is None:
