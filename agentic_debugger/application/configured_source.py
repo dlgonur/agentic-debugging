@@ -292,11 +292,8 @@ def run_configured_session(
             provider_transport_environment,
         )
 
-        environment = (
-            dict(provider_transport_environment(provider))
-            if provider in ("opencode_go", "commandcode_goat")
-            else None
-        )
+        _env = provider_transport_environment(provider)
+        environment = dict(_env) if _env is not None else None
         ctx.emitter.emit(
             SessionEventKind.MODEL_CONFIGURED,
             {

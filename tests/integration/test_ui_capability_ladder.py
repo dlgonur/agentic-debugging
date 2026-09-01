@@ -88,8 +88,9 @@ def test_ladder_setup_and_start_use_one_unified_surface(tmp_path: Path, monkeypa
         assert profiles, "qualified roster expected on this machine"
         # Before a model is chosen the run is honestly blocked; no silent
         # default mutates the user's (offline) selection.
+        # For lower ladder rungs any live provider is now executable
         assert start.start_available is False
-        assert "qualified Ollama" in start.query_one("#start-status").render().plain
+        assert "live model" in start.query_one("#start-status").render().plain.lower()
         start._choice_selected("model", f"ollama_cloud:{profiles[0].alias}")
         assert start.profile_id == profiles[0].alias
         assert start.start_available is True
@@ -549,10 +550,11 @@ def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
             assert "Scientific ladder contract" in by_value[key].disabled_reason
         offline = by_value["offline:"]
         assert offline.disabled is True
-        assert "qualified Ollama Cloud" in offline.disabled_reason
+        assert "live model" in offline.disabled_reason.lower()
 
-        # A colliding CommandCode model id remains CommandCode and blocked;
-        # Start cannot reinterpret it as the qualified Ollama alias.
+        # A colliding CommandCode model id remains CommandCode and blocked
+        # for the frozen Level-32 treatment; it is not reinterpreted as the
+        # qualified Ollama alias.
         pilot.app.pop_screen()
         await pilot.pause()
         start._choice_selected("model", f"commandcode_goat:{collision_id}")

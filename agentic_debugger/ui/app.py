@@ -530,8 +530,11 @@ class LocalApplicationV1(App):
         # and a ladder task must not be executed as a local offline demo.
         if source_kind is SourceKind.OFFLINE_DEMO and task_id in LADDER_TASK_IDS:
             raise ValueError("offline demo source cannot start a ladder task")
-        if source_kind is SourceKind.CONFIGURED_MODEL and task_id in LADDER_TASK_IDS:
-            raise ValueError("configured model source cannot start a ladder task")
+        # CONFIGURED_MODEL is the shared provider-neutral runtime for
+        # curated, local-project, and now interactive ladder tasks.
+        # Ladder tasks via CONFIGURED_MODEL are executable generic
+        # provider runs, distinguishable from the qualified Ollama
+        # ladder and frozen Level-32 operator treatments.
         if source_kind is SourceKind.OLLAMA_CLOUD_LADDER and task_id not in LADDER_TASK_IDS:
             raise ValueError("Ollama Cloud ladder source requires a ladder task")
         if source_kind is SourceKind.OFFLINE_DEMO and task_id == LEVEL32_TASK_ID:
@@ -639,6 +642,14 @@ class LocalApplicationV1(App):
                 ),
                 budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
             )
+            # Provider-neutral runtime: any direct-API provider that
+            # has a session-key credential needs the child hop; the
+            # helper returns None when no hop is required.
+            _child_env = (
+                self._provider_child_environment(model_provider)
+                if model_provider is not None
+                else None
+            )
             worker = SessionWorkerProcess(
                 session_dir=self.history_store.session_dir(session_id),
                 session_id=session_id,
@@ -651,13 +662,7 @@ class LocalApplicationV1(App):
                 max_elapsed_seconds=max_elapsed_seconds,
                 retry_of_session_id=retry_of_session_id,
                 **(
-                    {
-                        "child_environment": self._provider_child_environment(
-                            model_provider
-                        )
-                    }
-                    if model_provider in ("opencode_go", "commandcode_goat")
-                    else {}
+                    {"child_environment": _child_env} if _child_env is not None else {}
                 ),
             )
         if source_kind is not SourceKind.LEVEL32_OPERATOR:
@@ -880,6 +885,11 @@ class LocalApplicationV1(App):
                         scenario_params["provider"] = "configured"
             except Exception:
                 pass
+            _child_env_lp = (
+                self._provider_child_environment(model_provider)
+                if model_provider is not None
+                else None
+            )
             worker = SessionWorkerProcess(
                 session_dir=self.history_store.session_dir(session_id),
                 session_id=session_id,
@@ -892,12 +902,8 @@ class LocalApplicationV1(App):
                 max_elapsed_seconds=max_elapsed_seconds,
                 retry_of_session_id=retry_of_session_id,
                 **(
-                    {
-                        "child_environment": self._provider_child_environment(
-                            model_provider
-                        )
-                    }
-                    if model_provider in ("opencode_go", "commandcode_goat")
+                    {"child_environment": _child_env_lp}
+                    if _child_env_lp is not None
                     else {}
                 ),
             )

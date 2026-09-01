@@ -217,19 +217,58 @@ class TestLadderTarget:
         assert any(item.field == ROW_TASK for item in readiness.issues)
 
     def test_empty_roster_blocks(self):
+        # For lower ladder rungs, an empty qualified roster does not block
+        # a generic executable provider model.  Level-32 remains the
+        # frozen qualified treatment.
         catalog = _catalog(ladder_models=())
         readiness = derive_readiness(self._ladder(), catalog, _CLEAN)
-        assert readiness.ready is False
-        assert any("qualified Ollama" in item.message for item in readiness.issues)
+        # Lower ladder Level 6 with an available Ollama model via
+        # find_model is executable even when ladder_models is empty
+        assert readiness.ready is True
+        # Level-32 with empty roster must still report qualification gap
+        from agentic_debugger.application.level32 import LEVEL32_TASK_ID
 
-    def test_non_ollama_model_blocks(self):
-        readiness = derive_readiness(
-            self._ladder(model=ModelChoice(PROVIDER_COMMANDCODE, "zai-org/glm-5.2", "glm-5.2")),
-            _catalog(),
+        level32_catalog = _catalog(
+            tasks=(
+                TaskOption("curated-off-by-one-002", "Return the complete recent window"),
+                TaskOption(LEVEL32_TASK_ID, "Level 32/100 — Cookiecutter #967", ladder=True),
+            ),
+            ladder_models=(),
+        )
+        level32_readiness = derive_readiness(
+            SessionConfig(
+                target=TARGET_LADDER,
+                task_id=LEVEL32_TASK_ID,
+                model=ModelChoice(PROVIDER_OLLAMA, "qwen3.5:cloud", "qwen3.5"),
+            ),
+            level32_catalog,
             _CLEAN,
         )
-        assert readiness.ready is False
-        assert any(item.field == ROW_MODEL for item in readiness.issues)
+        assert level32_readiness.ready is False
+        assert any("qualified Ollama" in item.message for item in level32_readiness.issues)
+
+    def test_non_ollama_model_blocks(self):
+        # Lower ladder interactive runs now accept any executable provider
+        catalog = SessionCatalog(
+            tasks=(
+                TaskOption("curated-off-by-one-002", "Return the complete recent window"),
+                TaskOption("pdb-required-boundary-006", "Level 6/100", ladder=True),
+            ),
+            models=(
+                ModelOption(PROVIDER_OFFLINE, "", "Offline"),
+                ModelOption(PROVIDER_OLLAMA, "qwen3.5:cloud", "qwen3.5"),
+                ModelOption(PROVIDER_COMMANDCODE, "zai-org/glm-5.2", "GLM 5.2", available=True),
+            ),
+            ladder_models=(
+                ModelOption(PROVIDER_OLLAMA, "qwen3.5:cloud", "qwen3.5"),
+            ),
+        )
+        readiness = derive_readiness(
+            self._ladder(model=ModelChoice(PROVIDER_COMMANDCODE, "zai-org/glm-5.2", "glm-5.2")),
+            catalog,
+            _CLEAN,
+        )
+        assert readiness.ready is True
 
     def test_provider_identity_collision_cannot_satisfy_qualification(self):
         collision = ModelChoice(
@@ -237,18 +276,32 @@ class TestLadderTarget:
             "qwen3.5:cloud",
             "CommandCode alias collision",
         )
-        catalog = _catalog()
+        # Catalog contains the colliding CommandCode model as executable,
+        # but ladder qualification remains bound to provider identity.
+        catalog = SessionCatalog(
+            tasks=(
+                TaskOption("curated-off-by-one-002", "Return the complete recent window"),
+                TaskOption("pdb-required-boundary-006", "Level 6/100", ladder=True),
+            ),
+            models=(
+                ModelOption(PROVIDER_OFFLINE, "", "Offline"),
+                ModelOption(PROVIDER_OLLAMA, "qwen3.5:cloud", "qwen3.5"),
+                ModelOption(PROVIDER_COMMANDCODE, "qwen3.5:cloud", "CommandCode alias collision", available=True),
+            ),
+            ladder_models=(
+                ModelOption(PROVIDER_OLLAMA, "qwen3.5:cloud", "qwen3.5"),
+            ),
+        )
         assert catalog.ladder_model(collision) is None
         readiness = derive_readiness(
             self._ladder(model=collision),
             catalog,
             _CLEAN,
         )
-        assert readiness.ready is False
-        assert any(
-            item.field == ROW_MODEL and "qualified Ollama Cloud" in item.message
-            for item in readiness.issues
-        )
+        # Collision is executable as a CommandCode model for lower ladder,
+        # but not as a qualified Ollama treatment
+        assert readiness.ready is True
+        assert catalog.ladder_model(collision) is None
 
     def test_frozen_rows_are_disabled_with_reasons(self):
         readiness = derive_readiness(self._ladder(), _catalog(), _CLEAN)
@@ -297,12 +350,16 @@ class TestModelCompatibility:
         assert model_compatibility(TARGET_LOCAL_PROJECT, option)[0] is True
 
     def test_non_ollama_models_blocked_for_ladder_with_reason(self):
+        # Interactive ladder now accepts any live provider model; the
+        # qualification distinction is enforced at readiness for the
+        # frozen Level-32 treatment, not via the generic compatibility
+        # matrix.
         for provider in (PROVIDER_OPENCODE, PROVIDER_COMMANDCODE, PROVIDER_CONFIGURED):
             ok, reason = model_compatibility(
                 TARGET_LADDER, ModelOption(provider, "m", "m")
             )
-            assert ok is False
-            assert "ladder" in reason.lower()
+            assert ok is True
+            assert reason == ""
 
 
 class TestStatusLineAuthority:

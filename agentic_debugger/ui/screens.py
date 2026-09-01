@@ -2609,8 +2609,23 @@ class StartSessionScreen(Screen):
         for provider, group in groups:
             provider_options = options_by_provider.get(provider, [])
             group_note = ""
-            if target == TARGET_LADDER and provider != PROVIDER_OLLAMA:
-                group_note = "unavailable for Capability Ladder"
+            is_level32 = target == TARGET_LADDER and self._config.task_id == LEVEL32_TASK_ID
+            if is_level32 and provider != PROVIDER_OLLAMA:
+                group_note = "unavailable for Capability Ladder (frozen Level-32 contract)"
+            elif target == TARGET_LADDER and not is_level32:
+                # Interactive lower ladder: any configured provider is executable.
+                # Blanket "unavailable for Capability Ladder" is removed; only
+                # concrete availability determines group status.
+                if provider == PROVIDER_CONFIGURED and self._catalog.configured_error:
+                    group_note = "configuration error"
+                elif provider == PROVIDER_CONFIGURED and not provider_options:
+                    group_note = "none configured"
+                elif provider_options and not any(opt.available for opt in provider_options):
+                    first_reason = provider_options[0].unavailable_reason or ""
+                    if "auth store not found" in first_reason.lower() or "cli not found" in first_reason.lower():
+                        group_note = "not configured"
+                    else:
+                        group_note = _short_unavailable_reason(first_reason)
             elif provider == PROVIDER_CONFIGURED and self._catalog.configured_error:
                 group_note = "configuration error"
             elif provider == PROVIDER_CONFIGURED and not provider_options:
@@ -2649,11 +2664,37 @@ class StartSessionScreen(Screen):
             for index, option in enumerate(provider_options):
                 qualified = self._catalog.ladder_model(option.choice)
                 effective = qualified or option
-                compatible, compat_reason = model_compatibility(
-                    target,
-                    effective,
-                    ladder_qualified=qualified is not None,
-                )
+                is_level32 = target == TARGET_LADDER and self._config.task_id == LEVEL32_TASK_ID
+                if target == TARGET_LADDER and is_level32:
+                    # Frozen Level-32: only qualified Ollama models are runnable
+                    if provider != PROVIDER_OLLAMA or qualified is None:
+                        compatible = False
+                        compat_reason = (
+                            "Scientific ladder contract: qualified Ollama Cloud models only"
+                            if provider != PROVIDER_OLLAMA
+                            else "Scientific ladder contract: Ollama model is not qualified"
+                        )
+                    else:
+                        compatible, compat_reason = model_compatibility(
+                            target,
+                            effective,
+                            ladder_qualified=True,
+                        )
+                elif target == TARGET_LADDER:
+                    # Interactive lower ladder: any executable provider model
+                    compatible, compat_reason = model_compatibility(
+                        target,
+                        effective,
+                        ladder_qualified=qualified is not None,
+                    )
+                    # model_compatibility now allows any for ladder, so
+                    # qualified distinction does not block execution
+                else:
+                    compatible, compat_reason = model_compatibility(
+                        target,
+                        effective,
+                        ladder_qualified=qualified is not None,
+                    )
                 disabled = not effective.available or not compatible
                 if not compatible:
                     reason = compat_reason
@@ -3164,22 +3205,51 @@ class StartSessionScreen(Screen):
         try:
             if config.target == TARGET_LADDER:
                 task_id = str(config.task_id)
-                source_kind = (
-                    SourceKind.LEVEL32_OPERATOR
-                    if task_id == LEVEL32_TASK_ID
-                    else SourceKind.OLLAMA_CLOUD_LADDER
-                )
-                self.app.start_live_session(
-                    task_id=task_id,
-                    policy=(
-                        "exact-pdb-level32-frozen"
-                        if task_id == LEVEL32_TASK_ID
-                        else "pdb-on-uncertainty"
-                    ),
-                    max_elapsed_seconds=None,
-                    source_kind=source_kind,
-                    profile_id=config.model.model_id,
-                )
+                is_level32 = task_id == LEVEL32_TASK_ID
+                # Distinguish executable vs qualified: qualified Ollama
+                # models use the frozen/canonical ladder operator paths;
+                # all other executable providers use the shared
+                # configured-provider runtime (direct API) so the
+                # provider_id/model_id survive to the worker.
+                ladder_entry = self._catalog.ladder_model(config.model)
+                if is_level32:
+                    # Frozen Level-32: only qualified Ollama via the
+                    # authoritative operator (readiness enforces qualification)
+                    self.app.start_live_session(
+                        task_id=task_id,
+                        policy="exact-pdb-level32-frozen",
+                        max_elapsed_seconds=None,
+                        source_kind=SourceKind.LEVEL32_OPERATOR,
+                        profile_id=config.model.model_id,
+                    )
+                    return
+                # Lower ladder rungs (6, 12, 18)
+                if ladder_entry is not None:
+                    # Qualified Ollama retains canonical ladder path
+                    self.app.start_live_session(
+                        task_id=task_id,
+                        policy="pdb-on-uncertainty",
+                        max_elapsed_seconds=None,
+                        source_kind=SourceKind.OLLAMA_CLOUD_LADDER,
+                        profile_id=config.model.model_id,
+                    )
+                elif config.model.provider == PROVIDER_CONFIGURED:
+                    self.app.start_live_session(
+                        task_id=task_id,
+                        policy="pdb-on-uncertainty",
+                        max_elapsed_seconds=None,
+                        source_kind=SourceKind.CONFIGURED_MODEL,
+                        profile_id=config.model.model_id,
+                    )
+                else:
+                    self.app.start_live_session(
+                        task_id=task_id,
+                        policy="pdb-on-uncertainty",
+                        max_elapsed_seconds=None,
+                        source_kind=SourceKind.CONFIGURED_MODEL,
+                        profile_id=config.model.model_id,
+                        model_provider=config.model.provider,
+                    )
                 return
             if config.target == TARGET_LOCAL_PROJECT:
                 provider = (

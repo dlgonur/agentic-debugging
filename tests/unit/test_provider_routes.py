@@ -340,9 +340,14 @@ class TestDynamicCatalogListing:
 
 class TestCapabilityLadderRemainsFailClosed:
     def test_discovered_subscription_models_are_ladder_incompatible(self) -> None:
+        # Subscription models are now executable for interactive lower
+        # ladder rungs (via the shared provider runtime), but they remain
+        # distinct from the frozen qualified Ollama treatment.
         from agentic_debugger.ui.session_config import (
             TARGET_LADDER,
+            ModelChoice,
             ModelOption,
+            SessionCatalog,
             model_compatibility,
         )
 
@@ -354,8 +359,16 @@ class TestCapabilityLadderRemainsFailClosed:
                 provider, model_id, "Some Model", available=True
             )
             compatible, reason = model_compatibility(TARGET_LADDER, option)
-            assert compatible is False
-            assert "ladder" in reason.lower()
+            # Executable for interactive ladder
+            assert compatible is True
+            assert reason == ""
+            # But never satisfies the qualified roster
+            catalog = SessionCatalog(
+                models=(option,),
+                ladder_models=(ModelOption("ollama_cloud", model_id, "Some Model"),),
+            )
+            choice = ModelChoice(provider, model_id, "Some Model")
+            assert catalog.ladder_model(choice) is None
 
     def test_ladder_catalog_never_resolves_subscription_models(self) -> None:
         """``SessionCatalog.ladder_model`` binds qualification to provider

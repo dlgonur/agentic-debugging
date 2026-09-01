@@ -274,26 +274,24 @@ def model_compatibility(
     Pure policy: availability of the provider itself is a separate
     concern (``option.available``); this answers contract compatibility
     only, with the exact reason shown in the picker and the pre-flight.
+
+    For the Capability Ladder, interactive runs accept any executable
+    provider model.  Qualification (``ladder_qualified``) is a scientific
+    distinction enforced by readiness for the frozen Level-32 treatment,
+    not a universal runtime allowlist.
     """
     provider = option.provider
     if provider == PROVIDER_OFFLINE:
         if target == TARGET_LOCAL_PROJECT:
             return False, "Local Project requires a live model"
         if target == TARGET_LADDER:
-            return False, "Ladder runs use qualified Ollama Cloud models"
+            return False, "Ladder runs require a live model"
         return True, ""
-    if target == TARGET_LADDER and provider == PROVIDER_OLLAMA:
-        if ladder_qualified:
-            return True, ""
-        return (
-            False,
-            "Scientific ladder contract: Ollama model is not qualified",
-        )
     if target == TARGET_LADDER:
-        return (
-            False,
-            "Scientific ladder contract: qualified Ollama Cloud models only",
-        )
+        # Any live provider model is executable for interactive ladder
+        # rungs.  Qualification is checked separately for the frozen
+        # Level-32 official treatment.
+        return True, ""
     return True, ""
 
 
@@ -330,8 +328,12 @@ def _row_states(target: str) -> dict:
 
 
 def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
-    issues = []
-    notes = ["Research tasks use the canonical Ollama Cloud operator contract."]
+    # Executable vs qualified distinction: any live provider model is
+    # runnable for interactive ladder rungs.  Qualification is retained
+    # strictly for the frozen Level-32 official treatment.
+    from agentic_debugger.application.level32 import LEVEL32_TASK_ID
+
+    issues: list[ReadinessIssue] = []
     task = catalog.find_task(config.task_id)
     if task is None or not task.ladder:
         issues.append(
@@ -342,21 +344,74 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
                 "Level rung in Task.",
             )
         )
-    if not catalog.ladder_models:
+        return issues, ["Research tasks use the canonical operator contract."]
+    is_level32 = config.task_id == LEVEL32_TASK_ID
+    if is_level32:
+        notes = ["Frozen Level-32 official treatment; qualified Ollama Cloud models only."]
+        if not catalog.ladder_models:
+            issues.append(
+                ReadinessIssue(
+                    ROW_MODEL,
+                    SEVERITY_ERROR,
+                    "No qualified Ollama models available — the research "
+                    "operator roster is not installed.",
+                )
+            )
+            return issues, notes
+        if config.model.is_offline:
+            issues.append(
+                ReadinessIssue(
+                    ROW_MODEL,
+                    SEVERITY_ERROR,
+                    "Ladder runs require a live model — choose a provider model.",
+                )
+            )
+            return issues, notes
+        if catalog.ladder_model(config.model) is None:
+            issues.append(
+                ReadinessIssue(
+                    ROW_MODEL,
+                    SEVERITY_ERROR,
+                    "Choose a qualified Ollama Cloud model for ladder runs.",
+                )
+            )
+        return issues, notes
+    # Lower ladder rungs (6, 12, 18): any executable provider model.
+    notes = ["Research tasks use the canonical operator contract; any configured provider may run the rung."]
+    if config.model.is_offline:
         issues.append(
             ReadinessIssue(
                 ROW_MODEL,
                 SEVERITY_ERROR,
-                "No qualified Ollama models available — the research "
-                "operator roster is not installed.",
+                "Ladder runs require a live model — choose a provider model.",
             )
         )
-    elif catalog.ladder_model(config.model) is None:
+        return issues, notes
+    model = catalog.find_model(config.model)
+    ladder_entry = catalog.ladder_model(config.model)
+    effective = ladder_entry if ladder_entry is not None else model
+    if effective is None:
         issues.append(
             ReadinessIssue(
                 ROW_MODEL,
                 SEVERITY_ERROR,
-                "Choose a qualified Ollama Cloud model for ladder runs.",
+                "Selected model is no longer offered — choose a model.",
+            )
+        )
+    elif not effective.available:
+        issues.append(
+            ReadinessIssue(
+                ROW_MODEL,
+                SEVERITY_ERROR,
+                effective.unavailable_reason or "Selected model is unavailable.",
+            )
+        )
+    elif config.model.provider == PROVIDER_CONFIGURED and catalog.configured_error:
+        issues.append(
+            ReadinessIssue(
+                ROW_MODEL,
+                SEVERITY_ERROR,
+                f"Configuration error: {catalog.configured_error}",
             )
         )
     return issues, notes
