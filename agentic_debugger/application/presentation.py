@@ -349,6 +349,7 @@ class SessionViewState:
     #: illegal_action, invalid_argument) retained so a terminal session can
     #: show the typed cause instead of only a generic "model error".
     latest_model_error_kind: Optional[str] = None
+    latest_model_error_message: Optional[str] = None
     latest_controller_step_index: Optional[int] = None
     current_tool_name: Optional[str] = None
     #: Last structured target a tool event carried (e.g. a source range).
@@ -1030,11 +1031,19 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
             if payload.get("status") != "ok"
             else None
         )
+        error_message = (
+            payload.get("error_message")
+            if payload.get("status") != "ok"
+            else None
+        )
         return replace(
             state, latest_model_request_index=payload["request_index"],
             outstanding_model_request_index=outstanding,
             latest_model_error_kind=(
                 error_kind if type(error_kind) is str else state.latest_model_error_kind
+            ),
+            latest_model_error_message=(
+                error_message if type(error_message) is str else state.latest_model_error_message
             ),
             controller_phase=controller_phase, run_id=run_id, timeline=timeline,
         )

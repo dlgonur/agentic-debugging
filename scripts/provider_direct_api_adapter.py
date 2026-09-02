@@ -175,22 +175,26 @@ def build_provider_payload(
     *,
     system_prompt: str,
     user_prompt: str,
+    chat_delivery: prompt_shaper.ChatCompletionsSystemDelivery = (
+        prompt_shaper.ChatCompletionsSystemDelivery.INLINE_USER_V1
+    ),
 ) -> Mapping[str, Any]:
     """The bounded provider request for one protocol family.
 
-    One shared provider-neutral prompt pair (the protocol-1.3 system
-    instruction plus the request-specific user message) shaped per family
-    using each protocol's dedicated system/instruction channel; no hidden
-    parameters, no streaming, no retries.
+    Chat Completions uses the conservative OpenAI-compatible common denominator:
+    ONE user-role message containing the system instruction + request-specific
+    guidance + canonical public request, via prompt_shaper authority.
+    Responses and Anthropic Messages retain their dedicated system channels.
     """
 
     if protocol == "chat_completions":
         return {
             "model": model_id,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
+            "messages": prompt_shaper.build_chat_completions_messages(
+                system_prompt=system_prompt,
+                user_prompt=user_prompt,
+                delivery=chat_delivery,
+            ),
             "stream": False,
         }
     if protocol == "responses":

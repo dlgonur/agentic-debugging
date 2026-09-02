@@ -172,6 +172,37 @@ class TestProviderNeutralAuthority:
         assert shaper.PUBLIC_REQUEST_START in messages[1]["content"]
         assert shaper.PUBLIC_REQUEST_END in messages[1]["content"]
 
+    def test_build_chat_completions_messages_inline_user_delivery(self) -> None:
+        request = _diagnosis_request()
+        messages = shaper.build_chat_completions_messages(request)
+        assert len(messages) == 1
+        assert messages[0]["role"] == "user"
+        content = messages[0]["content"]
+        assert content.startswith(shaper.SYSTEM_PROMPT.rstrip())
+        assert "Current diagnosis decision (express_root_cause_hypothesis):" in content
+        assert "Current diagnosis legal representation:" in content
+        assert "hypothesis-boundary-006" in content
+        assert "window_tail.py" in content
+        assert "window_tail" in content
+        assert '"obs-locals"' in content
+        assert '"requested_size"' in content
+        assert shaper.PUBLIC_REQUEST_START in content
+        assert shaper.PUBLIC_REQUEST_END in content
+
+    def test_build_chat_completions_messages_separate_system_delivery(self) -> None:
+        request = _diagnosis_request()
+        messages = shaper.build_chat_completions_messages(
+            request,
+            delivery=shaper.ChatCompletionsSystemDelivery.SEPARATE_SYSTEM_V1,
+        )
+        assert [m["role"] for m in messages] == ["system", "user"]
+        assert messages[0]["content"] == shaper.SYSTEM_PROMPT
+        assert shaper.PUBLIC_REQUEST_START in messages[1]["content"]
+
+    def test_combine_prompts_for_user_delivery(self) -> None:
+        combined = shaper.combine_prompts_for_user_delivery("system instruction\n", "user body")
+        assert combined == "system instruction\n\nuser body"
+
     def test_user_message_carries_the_canonical_request_verbatim(self) -> None:
         request = _diagnosis_request()
         user = shaper.build_user_protocol_message(request)

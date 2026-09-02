@@ -835,13 +835,23 @@ def _fold_workstream_event(
     if kind == "model.request_completed":
         ordinal = payload["request_index"] + 1
         failed = payload.get("status") in ("error", "timeout")
+        error_detail: Optional[str] = None
+        if failed:
+            error_kind = payload.get("error_kind")
+            error_message = payload.get("error_message")
+            if error_kind and error_message and error_message != error_kind:
+                error_detail = f"{error_kind} · {error_message}"
+            elif error_kind:
+                error_detail = error_kind
+            elif error_message:
+                error_detail = error_message
         return _settle(
             entries,
             kind=WorkstreamKind.MODEL_REQUEST,
             status=WorkstreamStatus.FAILED if failed else WorkstreamStatus.COMPLETED,
             sequence=sequence,
             ordinal=ordinal,
-            detail=payload.get("error_kind") if failed else None,
+            detail=error_detail,
             timestamp_utc=timestamp_utc,
             duration_seconds=duration_seconds,
         )

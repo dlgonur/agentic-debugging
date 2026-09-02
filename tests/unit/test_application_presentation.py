@@ -1167,3 +1167,79 @@ def test_model_error_header_surfaces_typed_rejection_cause():
     head = render_view_header(view, mode="LIVE", mode_style="bold")
     text_head = head.plain if hasattr(head, "plain") else str(head)
     assert "model error (malformed_directive)" in text_head
+
+
+def test_workspace_header_and_workstream_surface_sanitized_http_error():
+    """When a model request fails with http_error, the live header and workstream
+    surface the sanitized error detail (HTTP status and message snippet) without secrets."""
+    from agentic_debugger.application.workstream import WorkstreamKind, WorkstreamStatus
+    from agentic_debugger.application.events import SessionTerminationReason
+    from agentic_debugger.ui.screens import render_view_header
+
+    view = initial_session_view(
+        PresentationIdentity(
+            task_id="pdb-required-boundary-006",
+            source_kind=SourceKind.CONFIGURED_MODEL,
+        )
+    )
+    secret_key = "secret-token-not-leaked-12345"
+
+    def event(sequence, kind, payload):
+        return SessionEvent(
+            schema_version="session-event-v1",
+            session_id="session-http-err",
+            task_id="pdb-required-boundary-006",
+            run_id="run-http-err",
+            sequence=sequence,
+            timestamp_utc="2026-01-01T00:00:00Z",
+            source_kind=SourceKind.CONFIGURED_MODEL,
+            event_kind=kind,
+            controller_phase=None,
+            payload=payload,
+        )
+
+    sanitized_error = "provider returned HTTP 400: invalid_request_error: separate system role is not supported"
+    events = [
+        event(1, SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0}),
+        event(
+            2,
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "error",
+                "error_kind": "http_error",
+                "error_message": sanitized_error,
+            },
+        ),
+        event(
+            3,
+            SessionEventKind.SESSION_FAILED,
+            {"status": "failed", "termination_reason": "model_error"},
+        ),
+    ]
+    for e in events:
+        view = reduce_event(view, e)
+
+    # 1. State properties
+    assert view.termination_reason is SessionTerminationReason.MODEL_ERROR
+    assert view.latest_model_error_kind == "http_error"
+    assert view.latest_model_error_message == sanitized_error
+
+    # 2. Header presentation
+    head = render_view_header(view, mode="LIVE", mode_style="bold")
+    text_head = head.plain if hasattr(head, "plain") else str(head)
+    assert "400" in text_head
+    assert "invalid_request_error: separate system role is not supported" in text_head
+    assert secret_key not in text_head
+    assert "Authorization" not in text_head
+    assert "Bearer" not in text_head
+
+    # 3. Workstream presentation
+    model_entries = [e for e in view.workstream if e.kind is WorkstreamKind.MODEL_REQUEST]
+    assert len(model_entries) == 1
+    req_entry = model_entries[0]
+    assert req_entry.status is WorkstreamStatus.FAILED
+    assert req_entry.detail == f"http_error · {sanitized_error}"
+    assert "400" in req_entry.detail
+    assert "invalid_request_error" in req_entry.detail
+    assert secret_key not in req_entry.detail

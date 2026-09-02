@@ -266,17 +266,15 @@ class TestInferenceFamilies:
         body = json.loads(server.requests[0]["body"].decode("utf-8"))
         import protocol_prompt_shaper as shaper
 
-        assert [message["role"] for message in body["messages"]] == [
-            "system",
-            "user",
-        ]
-        assert body["messages"][0]["content"] == shaper.SYSTEM_PROMPT
+        assert [message["role"] for message in body["messages"]] == ["user"]
+        assert body["messages"][0]["content"].startswith(shaper.SYSTEM_PROMPT.rstrip())
         assert (
             "=== BEGIN PUBLIC REQUEST ==="
-            in body["messages"][1]["content"]
+            in body["messages"][0]["content"]
         )
-        assert body["messages"][1]["content"].startswith(
+        assert (
             "Current request legal decision surface:"
+            in body["messages"][0]["content"]
         )
 
 
@@ -369,6 +367,34 @@ class TestExactlyOneInference:
             assert server.request_count == 1
         assert code == 1
         assert json.loads(err)["kind"] == "invalid_response"
+
+    def test_http_400_surfaces_status_and_sanitized_snippet_without_credentials(
+        self, fake_commandcode
+    ) -> None:
+        """Provider 400 error surfaces HTTP status and sanitized message snippet,
+        with zero credential or authorization leakage."""
+        provider_err = {
+            "error": {
+                "message": "unsupported role: system",
+                "type": "invalid_request_error",
+            }
+        }
+        with fake_commandcode(lambda request: (400, provider_err)):
+            code, out, err = run_adapter()
+        assert code == 1
+        envelope = json.loads(err)
+        assert envelope["schema_version"] == "command-error-v1"
+        assert envelope["kind"] == "http_error"
+        msg = envelope["message"]
+        # HTTP status visible
+        assert "400" in msg
+        # Bounded sanitized provider error visible
+        assert "unsupported role: system" in msg
+        # Credential absent
+        assert SECRET not in msg
+        assert SECRET not in err
+        # Authorization value absent
+        assert "Bearer" not in msg
 
 
 class TestFailClosed:

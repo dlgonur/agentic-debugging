@@ -340,13 +340,22 @@ def render_view_header(
             # Surface the typed cause the architecture already owns (e.g.
             # malformed_directive, illegal_action, invalid_argument) instead
             # of only a generic "model error"; the bounded timeline retains
-            # the same typed information.
+            # the same typed information.  When an HTTP error occurs, surface
+            # the sanitized bounded error detail (HTTP status and provider snippet).
             error_kind = getattr(view, "latest_model_error_kind", None)
-            verifier = (
-                f"model error ({error_kind})"
-                if type(error_kind) is str and error_kind
-                else "model error"
-            )
+            error_msg = getattr(view, "latest_model_error_message", None)
+            if type(error_kind) is str and error_kind:
+                if (
+                    type(error_msg) is str
+                    and error_msg
+                    and error_msg != error_kind
+                    and error_kind == "http_error"
+                ):
+                    verifier = f"model error ({error_kind} · {error_msg})"
+                else:
+                    verifier = f"model error ({error_kind})"
+            else:
+                verifier = "model error"
         elif view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
             verifier = "controller budget exhausted"
         elif view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:

@@ -67,6 +67,26 @@ FROZEN_SCIENTIFIC_V1 = PromptProfile.FROZEN_SCIENTIFIC_V1
 INTERACTIVE_PROVIDER_V2 = PromptProfile.INTERACTIVE_PROVIDER_V2
 
 
+class ChatCompletionsSystemDelivery(str, Enum):
+    """Wire envelope delivery strategy for Chat Completions system instructions.
+
+    INLINE_USER_V1 is the conservative OpenAI-compatible common denominator:
+    folds the system instruction and request-specific guidance into ONE
+    user-role message. This is proven compatible with endpoints/models (e.g.
+    CommandCode / Muse) that reject a separate system-role message.
+
+    SEPARATE_SYSTEM_V1 provides the separate system-role message
+    messages[0]=system, messages[1]=user when explicitly required.
+    """
+
+    INLINE_USER_V1 = "inline_user_v1"
+    SEPARATE_SYSTEM_V1 = "separate_system_v1"
+
+
+INLINE_USER_V1 = ChatCompletionsSystemDelivery.INLINE_USER_V1
+SEPARATE_SYSTEM_V1 = ChatCompletionsSystemDelivery.SEPARATE_SYSTEM_V1
+
+
 class ProtocolPromptError(ValueError):
     """Neutral bounded failure; adapters map it to their typed errors."""
 
@@ -957,3 +977,50 @@ def build_chat_messages(
             ),
         },
     ]
+
+
+def combine_prompts_for_user_delivery(system_prompt: str, user_prompt: str) -> str:
+    """Combine system instruction and user prompt into a single user message body.
+
+    Used by the conservative OpenAI-compatible wire envelope where system
+    instructions are inlined into the single user-role message.
+    """
+    return f"{system_prompt.rstrip()}\n\n{user_prompt}"
+
+
+def build_chat_completions_messages(
+    request: Mapping[str, Any] | None = None,
+    *,
+    prompt_profile: PromptProfile = PromptProfile.INTERACTIVE_PROVIDER_V2,
+    delivery: ChatCompletionsSystemDelivery = ChatCompletionsSystemDelivery.INLINE_USER_V1,
+    system_prompt: str | None = None,
+    user_prompt: str | None = None,
+    max_request_bytes: int = MAX_PUBLIC_REQUEST_BYTES,
+) -> list[dict[str, str]]:
+    """Build the Chat Completions wire envelope.
+
+    Default delivery is INLINE_USER_V1: ONE user-role message containing the
+    system instruction + request-specific guidance + canonical public request.
+    When system_prompt and user_prompt are provided, formats them per delivery.
+    Otherwise derives them from the request and prompt_profile.
+    """
+    if system_prompt is None or user_prompt is None:
+        if request is None:
+            raise ProtocolPromptError("request is required when prompts are not provided")
+        system_prompt = build_system_instructions(request, prompt_profile=prompt_profile)
+        user_prompt = build_user_protocol_message(
+            request, prompt_profile=prompt_profile, max_request_bytes=max_request_bytes
+        )
+    if delivery == ChatCompletionsSystemDelivery.INLINE_USER_V1:
+        return [
+            {
+                "role": "user",
+                "content": combine_prompts_for_user_delivery(system_prompt, user_prompt),
+            }
+        ]
+    if delivery == ChatCompletionsSystemDelivery.SEPARATE_SYSTEM_V1:
+        return [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+    raise ProtocolPromptError(f"unsupported Chat Completions delivery: {delivery!r}")

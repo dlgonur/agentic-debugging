@@ -926,20 +926,23 @@ class _RepairingLadderServer:
 
         messages = body.get("messages", [])
         roles = [message.get("role") for message in messages]
-        if roles != ["system", "user"]:
-            self.prompt_failures.append(f"expected system+user roles, got {roles}")
+        if roles != ["user"]:
+            self.prompt_failures.append(f"expected single user role ['user'], got {roles}")
             return
-        system_content = messages[0].get("content", "")
-        user_content = messages[1].get("content", "")
-        if not system_content.startswith("You are the debugging decision model"):
-            self.prompt_failures.append("system role is not the protocol instruction")
+        user_content = messages[0].get("content", "")
+        if not user_content.startswith("You are the debugging decision model"):
+            self.prompt_failures.append("user content does not start with protocol system instruction")
         expected = [
+            "You are the debugging decision model",
             "Legal action representation",
             "express_root_cause_hypothesis",
             "Current diagnosis decision",
+            "Current diagnosis legal representation",
             self.scenario.hypothesis_id,
             self.scenario.localization.file_path,
             self.scenario.localization.symbol,
+            "=== BEGIN PUBLIC REQUEST ===",
+            "=== END PUBLIC REQUEST ===",
         ]
         for needle in expected:
             if needle not in user_content:
@@ -973,7 +976,27 @@ class _RepairingLadderServer:
 
     def _respond_chat(self, body: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
         messages = body.get("messages", [])
-        user_message = messages[-1]["content"] if messages else ""
+        roles = [message.get("role") for message in messages]
+        if "system" in roles:
+            return 400, {
+                "error": {
+                    "message": (
+                        "system role is not supported by this Chat Completions endpoint; "
+                        "use single user message delivery"
+                    ),
+                    "type": "invalid_request_error",
+                    "code": "unsupported_role",
+                }
+            }
+        if roles != ["user"]:
+            return 400, {
+                "error": {
+                    "message": f"expected exactly ['user'] role, got {roles}",
+                    "type": "invalid_request_error",
+                    "code": "invalid_roles",
+                }
+            }
+        user_message = messages[0]["content"] if messages else ""
         payload = self._public_payload(user_message)
         logical_index = payload.get("protocol", {}).get("logical_model_call_index")
         directive = None
@@ -1161,6 +1184,16 @@ def test_level6_diagnosis_malformed_directive_repaired_through_feedback_to_resol
         assert all(call["authorization"] == f"Bearer {SECRET}" for call in chat_calls)
         bodies = [json.loads(call["body"].decode("utf-8")) for call in chat_calls]
         assert all(body["model"] == "zai-org/muse-spark-1.2-contributor" for body in bodies)
+        # Compatible Chat Completions envelope: single user message containing
+        # the system instruction + interactive guidance + canonical request.
+        assert all([m.get("role") for m in body.get("messages", [])] == ["user"] for body in bodies)
+        assert all(len(body.get("messages", [])) == 1 for body in bodies)
+        assert all(
+            body["messages"][0]["content"].startswith("You are the debugging decision model")
+            for body in bodies
+        )
+        assert all("=== BEGIN PUBLIC REQUEST ===" in body["messages"][0]["content"] for body in bodies)
+        assert all("=== END PUBLIC REQUEST ===" in body["messages"][0]["content"] for body in bodies)
         # Interactive ladder contract: 24-request ceiling respected even
         # with the repair consuming one extra real request.
         assert len(chat_calls) <= 24, f"Level-6 contract allows 24 requests, got {len(chat_calls)}"
@@ -1184,6 +1217,12 @@ def test_level6_diagnosis_malformed_directive_repaired_through_feedback_to_resol
             f"controller advanced on the malformed attempt: {len(diagnosis_starts)} starts at index {diagnosis_index}"
         )
         assert len(started) <= 24
+        # Exactly one HTTP attempt for each normal logical request, plus
+        # exactly one attempt for the diagnosis directive repair: no HTTP
+        # compatibility retry.
+        assert len(chat_calls) == len(started) + 1, (
+            f"expected exactly one attempt per request + 1 repair, got {len(chat_calls)} calls for {len(started)} requests"
+        )
         completed = [
             event for event in read.events
             if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
@@ -1225,3 +1264,33 @@ def test_level6_diagnosis_malformed_directive_repaired_through_feedback_to_resol
         assert fixture.is_file()
 
         real_app.live_runner.close() if real_app.live_runner else None
+
+
+def test_fake_provider_rejects_separate_system_role_with_http_400() -> None:
+    """The fake CommandCode/Muse provider deliberately rejects separate system role."""
+
+    with _RepairingLadderServer(LADDER_LEVEL_6_TASK, {"requested_size"}) as server:
+        import urllib.error
+        import urllib.request
+
+        req = urllib.request.Request(
+            f"{server.base_url}/chat/completions",
+            data=json.dumps(
+                {
+                    "model": "zai-org/muse-spark-1.2-contributor",
+                    "messages": [
+                        {"role": "system", "content": "You are a debugger"},
+                        {"role": "user", "content": "hello"},
+                    ],
+                }
+            ).encode("utf-8"),
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(req)
+        assert exc_info.value.code == 400
+        error_body = json.loads(exc_info.value.read().decode("utf-8"))
+        assert error_body["error"]["type"] == "invalid_request_error"
+        assert error_body["error"]["code"] == "unsupported_role"
+        assert "system role is not supported" in error_body["error"]["message"]
