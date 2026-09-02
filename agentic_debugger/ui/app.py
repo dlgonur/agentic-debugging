@@ -549,7 +549,7 @@ class LocalApplicationV1(App):
         # registry parameter contract; any other pairing fails closed.
         if model_provider is not None:
             from agentic_debugger.application.provider_connections import is_known_provider
-            if model_provider != "ollama_cloud" and not is_known_provider(model_provider):
+            if not is_known_provider(model_provider):
                 raise ValueError(f"unknown model provider: {model_provider!r}")
             if source_kind is not SourceKind.CONFIGURED_MODEL:
                 raise ValueError(
@@ -771,7 +771,7 @@ class LocalApplicationV1(App):
             raise RuntimeError("Local Project Debug requires a selected model profile")
         registry_provider = None
         from agentic_debugger.application.provider_connections import is_known_provider
-        if model_provider == "ollama_cloud" or (model_provider and is_known_provider(model_provider)):
+        if model_provider and is_known_provider(model_provider):
             # Registry providers resolve through the unified registry,
             # fail-closed before any worktree or worker resource exists.
             from agentic_debugger.application.model_providers import (

@@ -622,19 +622,15 @@ def resolve_provider_live_config(
     request_timeout_seconds: Optional[float] = None,
 ) -> Tuple[Any, Mapping[str, Any]]:
     """(LiveModelConfig, provenance payload) for one provider model."""
-    if kind not in PROVIDER_KINDS and not is_known_provider(kind):
-        raise ProviderRegistryError(f"unknown provider kind: {kind!r}")
+    if not is_known_provider(kind):
+        raise ProviderRegistryError(f"provider {kind!r} is not configured")
     if type(model_id) is not str or not model_id.strip():
         raise ProviderRegistryError("model_id must be a non-empty string")
-    if kind in DIRECT_API_PROVIDER_KINDS or is_known_provider(kind):
-        return _resolve_subscription_live_config(
-            kind,
-            model_id,
-            logical_call_ceiling=logical_call_ceiling,
-            request_timeout_seconds=request_timeout_seconds,
-        )
-    raise ProviderRegistryError(
-        "configured profiles resolve through CommandModelConfigStore, not the provider registry"
+    return _resolve_subscription_live_config(
+        kind,
+        model_id,
+        logical_call_ceiling=logical_call_ceiling,
+        request_timeout_seconds=request_timeout_seconds,
     )
 
 
@@ -645,7 +641,10 @@ def _resolve_subscription_live_config(
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """Direct-API-first route resolution for built-in and configured providers."""
+    """Direct-API-first route resolution for configured providers."""
+    cfg = get_provider_config(kind)
+    if cfg is None or not cfg.enabled:
+        raise ProviderRegistryError(f"provider {kind!r} is not configured")
     protocol: Optional[str]
     try:
         protocol = resolve_model_protocol(kind, model_id)
@@ -659,8 +658,7 @@ def _resolve_subscription_live_config(
     else:
         legacy_ok, legacy_reason = False, None
 
-    cfg = get_provider_config(kind)
-    label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
+    label = cfg.name
 
     if protocol is not None and direct_ok:
         return _direct_api_live_config(

@@ -98,6 +98,18 @@ def _hermetic_provider_credentials(
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
+    )
     yield
     pc.clear_all_session_keys()
 

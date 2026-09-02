@@ -87,6 +87,12 @@ def _isolate_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(pc, "provider_quarantine_path", lambda: tmp_path / "quarantine.json")
     pc._QUARANTINED_PROVIDERS.clear()
     pc.clear_all_session_keys()
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
     yield
     pc.clear_all_session_keys()
     pc._QUARANTINED_PROVIDERS.clear()

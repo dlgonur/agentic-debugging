@@ -245,12 +245,13 @@ def test_manual_model_addition():
 
 
 def test_malformed_json_fallback(tmp_path: Path):
-    """Malformed config JSON does not crash or overwrite without notice; fails closed to empty."""
+    """Malformed config JSON fails closed and raises ProviderConnectionError."""
     config_file = tmp_path / "provider-configurations.json"
     config_file.write_text("{corrupt json content...", encoding="utf-8")
 
-    configs = load_provider_configurations()
-    assert configs == []
+    with pytest.raises(ProviderConnectionError):
+        load_provider_configurations()
+    assert config_file.read_text(encoding="utf-8") == "{corrupt json content..."
 
 
 def test_provider_identity_preservation_and_no_ollama_leakage():
@@ -292,6 +293,12 @@ def test_capability_ladder_isolation_with_ollama_and_custom_providers():
 
 def test_adapter_command_contract_reconciled_with_timeout_flag():
     """Application builder constructs adapter command with --timeout, not --request-timeout-seconds."""
+    add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
     set_session_key("commandcode_goat", "secret-cc-key")
     live_cfg, prov = resolve_provider_live_config(
         "commandcode_goat", "deepseek/deepseek-v4-flash", request_timeout_seconds=45.0
@@ -896,8 +903,14 @@ def test_explicit_failure_on_secure_save_failure_no_silent_session_fallback(monk
 
 
 def test_source_priority_contract(monkeypatch: pytest.MonkeyPatch):
-    """Explicit source priority: saved > session_key > environment > cli_auth_store."""
+    """Explicit source priority: saved > session_key > environment > cli_auth_store for configured provider."""
     pid = "commandcode_goat"
+    add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
     pc.clear_all_session_keys()
     monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
     monkeypatch.delenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", raising=False)

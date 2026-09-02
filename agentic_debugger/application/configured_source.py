@@ -173,8 +173,6 @@ def _validate_store_params(
 
 
 def _is_registry_provider(provider: str) -> bool:
-    if provider == "ollama_cloud":
-        return True
     try:
         from agentic_debugger.application.provider_connections import is_known_provider
         return is_known_provider(provider)

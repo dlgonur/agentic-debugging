@@ -569,6 +569,11 @@ class ProviderConfig:
         )
 
 
+PROVIDER_CONFIG_SCHEMA_VERSION = "provider-configurations-v1"
+_MAX_CONFIG_FILE_BYTES = 256 * 1024
+_MAX_PROVIDERS_CONFIGURED = 64
+
+
 def _default_builtin_configs() -> List[ProviderConfig]:
     """Default built-in presets for initial startup."""
     configs: List[ProviderConfig] = []
@@ -759,31 +764,84 @@ def quarantined_providers() -> List[str]:
     return sorted(_load_quarantined_providers())
 
 
-def load_provider_configurations() -> List[ProviderConfig]:
-    """Load persistent non-secret provider configurations safely."""
+def _migrate_legacy_builtin_records(
+    cleaned_configs: List[ProviderConfig],
+    legacy_ids: List[str],
+) -> None:
+    """Migrate away legacy auto-seeded built-in provider records and purge their orphan state."""
     try:
-        path = provider_configurations_path()
+        save_provider_configurations(cleaned_configs)
+    except Exception as exc:
+        raise ProviderConnectionError(
+            "legacy provider migration could not save updated configuration"
+        ) from exc
+
+    for pid in legacy_ids:
+        try:
+            delete_cached_catalog(pid)
+            delete_secure_credential(pid)
+            clear_session_key(pid)
+            if is_provider_quarantined(pid):
+                clear_provider_quarantine(pid)
+        except Exception as exc:
+            raise ProviderConnectionError(
+                f"legacy provider state cleanup failed for {pid!r}"
+            ) from exc
+
+
+def load_provider_configurations() -> List[ProviderConfig]:
+    """Load persistent non-secret provider configurations safely.
+
+    Distinguishes strictly between a genuinely absent file (returns []) and an
+    existing file that is unreadable, oversized, malformed, or has an invalid
+    schema (fails closed by raising ProviderConnectionError).
+
+    Automatically migrates away any legacy auto-seeded built-in records
+    (is_builtin=True) so the registry reflects only user-owned connections.
+    """
+    path = provider_configurations_path()
+    try:
         raw = path.read_bytes()
-    except Exception:
+    except FileNotFoundError:
         return []
+    except OSError:
+        raise ProviderConnectionError("provider configuration could not be read") from None
+
     if len(raw) > _MAX_CONFIG_FILE_BYTES:
-        return []
+        raise ProviderConnectionError("provider configuration exceeded file bound")
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
-        return []
+        raise ProviderConnectionError("provider configuration file is malformed") from None
+
     if not isinstance(data, Mapping) or data.get("schema_version") != PROVIDER_CONFIG_SCHEMA_VERSION:
-        return []
+        raise ProviderConnectionError("provider configuration has an invalid schema version")
     providers_raw = data.get("providers")
     if not isinstance(providers_raw, list):
-        return []
+        raise ProviderConnectionError("provider configuration payload is invalid")
+
     configs: List[ProviderConfig] = []
     seen_ids = set()
+    has_legacy_builtins = False
+    legacy_builtin_ids: List[str] = []
+
     for item in providers_raw:
+        if not isinstance(item, Mapping):
+            raise ProviderConnectionError("provider configuration entry is invalid")
         cfg = ProviderConfig.from_dict(item)
-        if cfg and cfg.provider_id not in seen_ids:
-            seen_ids.add(cfg.provider_id)
+        if cfg is None:
+            raise ProviderConnectionError("provider configuration entry is invalid")
+        if cfg.provider_id in seen_ids:
+            continue
+        seen_ids.add(cfg.provider_id)
+        if cfg.is_builtin is True:
+            has_legacy_builtins = True
+            legacy_builtin_ids.append(cfg.provider_id)
+        else:
             configs.append(cfg)
+
+    if has_legacy_builtins:
+        _migrate_legacy_builtin_records(configs, legacy_builtin_ids)
 
     return configs
 
@@ -838,10 +896,12 @@ def get_provider_config(provider_id: str) -> Optional[ProviderConfig]:
 
 
 def is_known_provider(provider_id: str) -> bool:
-    """Check if a provider ID exists in built-ins or configured providers."""
-    if provider_id in _BUILTIN_CONTRACTS:
-        return True
-    return get_provider_config(provider_id) is not None
+    """Check if a provider ID corresponds to an active configured provider."""
+    try:
+        cfg = get_provider_config(provider_id)
+        return cfg is not None and cfg.enabled
+    except ProviderConnectionError:
+        return False
 
 
 def _clean_slug(text: str) -> str:
@@ -1100,6 +1160,9 @@ def _session_env_var_for(kind: str) -> str:
 
 def credential_source_for(kind: str) -> Optional[str]:
     """Which credential source the direct route can use right now."""
+    cfg = get_provider_config(kind)
+    if cfg is None or not cfg.enabled:
+        return None
     if is_provider_quarantined(kind):
         # Indeterminate credential/config association: never select a source.
         return None
@@ -1124,6 +1187,14 @@ def credential_source_for(kind: str) -> Optional[str]:
 
 def resolve_runtime_credential(kind: str) -> Optional[str]:
     """The credential value for one direct-API request (runtime only)."""
+    session_var = _session_env_var_for(kind)
+    forwarded_value = os.environ.get(session_var)
+    if _credential_is_usable(forwarded_value):
+        return forwarded_value.strip()
+
+    cfg = get_provider_config(kind)
+    if cfg is None or not cfg.enabled:
+        return None
     if is_provider_quarantined(kind):
         return None
     saved_value = load_secure_credential(kind)
@@ -1133,10 +1204,6 @@ def resolve_runtime_credential(kind: str) -> Optional[str]:
     session_value = peek_session_key(kind)
     if session_value and _credential_is_usable(session_value):
         return session_value.strip()
-    session_var = _session_env_var_for(kind)
-    forwarded_value = os.environ.get(session_var)
-    if _credential_is_usable(forwarded_value):
-        return forwarded_value.strip()
 
     contract = _BUILTIN_CONTRACTS.get(kind)
     if contract is not None:
@@ -1159,6 +1226,9 @@ def provider_session_credential_environment(
 ) -> Optional[Mapping[str, str]]:
     """Private UI-to-worker credential hop (exactly one variable)."""
     if is_provider_quarantined(kind):
+        return None
+    cfg = get_provider_config(kind)
+    if cfg is None or not cfg.enabled:
         return None
     secret = load_secure_credential(kind)
     if not secret or not _credential_is_usable(secret):
@@ -1186,7 +1256,8 @@ def provider_transport_credential_environment(
     forwarded_value = os.environ.get(session_var)
     if _credential_is_usable(forwarded_value):
         return {session_var: forwarded_value.strip()}
-    if contract and contract.env_var:
+    cfg = get_provider_config(kind)
+    if cfg is not None and cfg.enabled and contract and contract.env_var:
         env_value = os.environ.get(contract.env_var)
         if _credential_is_usable(env_value):
             return {contract.env_var: env_value.strip()}
@@ -1254,17 +1325,17 @@ def resolve_commandcode_protocol(model_id: str) -> Optional[str]:
 
 def resolve_model_protocol(kind: str, model_id: str) -> Optional[str]:
     """Deterministic protocol family for one provider model, or None."""
+    cfg = get_provider_config(kind)
+    if cfg is None or not cfg.enabled:
+        raise ProviderConnectionError(f"provider {kind!r} is not configured")
     if kind == "opencode_go":
         return resolve_opencode_go_protocol(model_id)
     if kind == "commandcode_goat":
         return resolve_commandcode_protocol(model_id)
-    cfg = get_provider_config(kind)
-    if cfg is not None:
-        for m in cfg.models:
-            if m.model_id == model_id and m.protocol:
-                return m.protocol
-        return cfg.api_format
-    raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+    for m in cfg.models:
+        if m.model_id == model_id and m.protocol:
+            return m.protocol
+    return cfg.api_format
 
 
 def provider_api_model_id(kind: str, model_id: str) -> str:
@@ -1299,10 +1370,7 @@ def provider_base_url(kind: str) -> str:
     cfg = get_provider_config(kind)
     if cfg is not None and cfg.base_url:
         return cfg.base_url
-    contract = _BUILTIN_CONTRACTS.get(kind)
-    if contract is not None:
-        return contract.base_url
-    raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+    raise ProviderConnectionError(f"provider {kind!r} is not configured")
 
 
 def provider_tls_signature_blocked(kind: str) -> bool:
@@ -1481,8 +1549,8 @@ def catalog_cache_path() -> Path:
 
 
 def load_cached_catalog(kind: str) -> Optional[ProviderCatalogSnapshot]:
-    if kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(kind):
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+    if not is_known_provider(kind):
+        raise ProviderConnectionError(f"provider {kind!r} is not configured")
     path = catalog_cache_path()
     try:
         raw = path.read_bytes()
@@ -1503,9 +1571,9 @@ def load_cached_catalog(kind: str) -> Optional[ProviderCatalogSnapshot]:
 
 
 def save_cached_catalog(snapshot: ProviderCatalogSnapshot) -> None:
-    if snapshot.kind not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(snapshot.kind):
+    if not is_known_provider(snapshot.kind):
         raise ProviderConnectionError(
-            f"unknown direct-API provider: {snapshot.kind!r}"
+            f"provider {snapshot.kind!r} is not configured"
         )
     path = catalog_cache_path()
     existing: Dict[str, Any] = {}
@@ -1661,44 +1729,34 @@ def _cached_status_fields(
 
 def provider_connection_status(kind: str) -> ProviderConnectionStatus:
     """Presence-only connection view; never contacts the provider."""
-    contract = _BUILTIN_CONTRACTS.get(kind)
     cfg = get_provider_config(kind)
-    if cfg is None and contract is None:
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+    if cfg is None:
+        raise ProviderConnectionError(f"provider {kind!r} is not configured")
 
+    contract = _BUILTIN_CONTRACTS.get(kind)
     source = credential_source_for(kind)
     model_count, last_refresh, refresh_source, stale, cached = _cached_status_fields(kind)
 
-    if cfg is not None:
-        label = cfg.name
-        base_url_desc = describe_url(cfg.base_url)
-        api_format = cfg.api_format
-        enabled = cfg.enabled
-        is_builtin = cfg.is_builtin
-        if not cached and cfg.models:
-            cached = cfg.models
-            model_count = len(cfg.models)
-            last_refresh = cfg.last_refresh_utc
-            refresh_source = cfg.last_refresh_source
-    elif contract is not None:
-        label = _BUILTIN_PROVIDER_LABELS.get(kind, kind)
-        base_url_desc = describe_url(contract.base_url)
-        api_format = PROTOCOL_CHAT_COMPLETIONS
-        enabled = True
-        is_builtin = True
+    label = cfg.name
+    base_url_desc = describe_url(cfg.base_url)
+    api_format = cfg.api_format
+    enabled = cfg.enabled
+    is_builtin = cfg.is_builtin
+    if not cached and cfg.models:
+        cached = cfg.models
+        model_count = len(cfg.models)
+        last_refresh = cfg.last_refresh_utc
+        refresh_source = cfg.last_refresh_source
 
     message: Optional[str] = None
     if source is None:
         if is_provider_quarantined(kind):
             message = "Credential state requires recovery. Edit provider and save an API key again."
-        elif kind == "commandcode_goat":
+        elif contract is not None and contract.env_var:
             message = (
                 f"Not connected — direct API needs {contract.env_var} or an API key "
-                "(the CLI auth store is not readable by the direct route; "
-                "edit provider to add an API key)"
+                "(edit provider to add an API key)"
             )
-        elif kind == "opencode_go":
-            message = "Not connected — no usable credential source found (edit provider to add an API key)"
         else:
             message = "Not connected — no usable credential source found (edit provider to add an API key)"
 
@@ -1746,13 +1804,13 @@ def refresh_provider_catalog(
         raise ProviderConnectionError(
             "Credential state requires recovery. Edit provider and save an API key again."
         )
-    contract = _BUILTIN_CONTRACTS.get(kind)
     cfg = get_provider_config(kind)
-    if cfg is None and contract is None:
-        raise ProviderConnectionError(f"unknown direct-API provider: {kind!r}")
+    if cfg is None or not cfg.enabled:
+        raise ProviderConnectionError(f"provider {kind!r} is not configured")
 
+    contract = _BUILTIN_CONTRACTS.get(kind)
     resolved = credential if credential is not None else resolve_runtime_credential(kind)
-    provider_label = _BUILTIN_PROVIDER_LABELS.get(kind, cfg.name if cfg else kind)
+    provider_label = cfg.name
     if not resolved:
         env_hint = (
             f"set {contract.env_var} or "
@@ -1764,13 +1822,13 @@ def refresh_provider_catalog(
             f"{env_hint}edit provider to add an API key"
         )
 
-    base = (cfg.base_url if cfg and cfg.base_url else (contract.base_url if contract else "")).rstrip("/")
+    base = cfg.base_url.rstrip("/")
     if contract is not None:
         catalog_path = contract.catalog_path
         tls_blocked = contract.tls_signature_blocked
     else:
         catalog_path = "/models"
-        tls_blocked = cfg.tls_signature_blocked if cfg else False
+        tls_blocked = cfg.tls_signature_blocked
 
     if base.endswith(catalog_path):
         url = base

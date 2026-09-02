@@ -41,6 +41,18 @@ def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
+    )
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
 
 
 @pytest.fixture(autouse=True)
@@ -271,22 +283,20 @@ class TestCredentials:
 
 @pytest.fixture
 def fake_commandcode_endpoint(monkeypatch: pytest.MonkeyPatch):
-    """Run refresh against a local fake of the CommandCode /models endpoint.
-
-    The provider contract entry is replaced wholesale (loopback fake base
-    URL, stdlib TLS profile), so no real provider is contacted.
-    """
+    """Run refresh against a local fake of the CommandCode /models endpoint."""
     from contextlib import contextmanager
-    from dataclasses import replace as _replace
     from fake_provider_server import FakeProviderServer
 
     @contextmanager
     def factory(responder):
         with FakeProviderServer(responder) as server:
-            original = pc._CONTRACTS["commandcode_goat"]
-            fake = _replace(original, base_url=server.base_url, tls_signature_blocked=False)
-            monkeypatch.setitem(pc._CONTRACTS, "commandcode_goat", fake)
-            yield server
+            old_cfg = pc.get_provider_config("commandcode_goat")
+            pc.update_provider_config("commandcode_goat", base_url=server.base_url)
+            try:
+                yield server
+            finally:
+                if old_cfg:
+                    pc.update_provider_config("commandcode_goat", base_url=old_cfg.base_url)
 
     return factory
 
@@ -294,18 +304,19 @@ def fake_commandcode_endpoint(monkeypatch: pytest.MonkeyPatch):
 @pytest.fixture
 def fake_opencode_endpoint(monkeypatch: pytest.MonkeyPatch):
     """Run OpenCode discovery against a local fake of the documented endpoint."""
-
     from contextlib import contextmanager
-    from dataclasses import replace as _replace
     from fake_provider_server import FakeProviderServer
 
     @contextmanager
     def factory(responder):
         with FakeProviderServer(responder) as server:
-            original = pc._CONTRACTS["opencode_go"]
-            fake = _replace(original, base_url=server.base_url, tls_signature_blocked=False)
-            monkeypatch.setitem(pc._CONTRACTS, "opencode_go", fake)
-            yield server
+            old_cfg = pc.get_provider_config("opencode_go")
+            pc.update_provider_config("opencode_go", base_url=server.base_url)
+            try:
+                yield server
+            finally:
+                if old_cfg:
+                    pc.update_provider_config("opencode_go", base_url=old_cfg.base_url)
 
     return factory
 
@@ -655,19 +666,6 @@ class TestConnectionStatus:
         assert status.last_refresh_source == "live"
 
     def test_status_covers_both_builtins(self) -> None:
-        assert pc.connection_statuses() == []
-        pc.add_provider_config(
-            name="OpenCode Go",
-            base_url="https://opencode.ai/zen/go/v1",
-            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
-            provider_id="opencode_go",
-        )
-        pc.add_provider_config(
-            name="CommandCode GOAT",
-            base_url="https://api.commandcode.ai/provider/v1",
-            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
-            provider_id="commandcode_goat",
-        )
         statuses = pc.connection_statuses()
         assert [s.kind for s in statuses] == ["opencode_go", "commandcode_goat"]
 

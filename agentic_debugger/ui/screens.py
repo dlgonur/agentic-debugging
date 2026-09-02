@@ -1306,16 +1306,26 @@ class ModelProvidersScreen(Screen):
         self._editing_provider_id: Optional[str] = None
         self._discovery_results: Optional[str] = None
         self._statuses_cache: Optional[list[Any]] = None
+        self._config_error: Optional[str] = None
 
     def _current_statuses(self, force_reload: bool = False):
         if self._statuses_cache is None or force_reload:
-            from agentic_debugger.application.provider_connections import connection_statuses
+            from agentic_debugger.application.provider_connections import (
+                ProviderConnectionError,
+                connection_statuses,
+            )
 
-            self._statuses_cache = connection_statuses()
+            try:
+                self._statuses_cache = connection_statuses()
+                self._config_error = None
+            except ProviderConnectionError as exc:
+                self._statuses_cache = []
+                self._config_error = str(exc)
         return self._statuses_cache
 
     def compose(self) -> ComposeResult:
         statuses = self._current_statuses()
+        config_error = self._config_error
         with Vertical(id="providers-wrap"):
             with Vertical(id="providers-manager-card"):
                 with Horizontal(id="providers-manager-header"):
@@ -1325,7 +1335,9 @@ class ModelProvidersScreen(Screen):
                     with Vertical(id="providers-sidebar"):
                         yield Static("PROVIDERS", id="providers-sidebar-title")
                         with VerticalScroll(id="providers-sidebar-list"):
-                            if not statuses:
+                            if config_error:
+                                yield Static("Configuration Error", id="providers-empty-label", classes="providers-empty-text")
+                            elif not statuses:
                                 yield Static("No providers configured.", id="providers-empty-label", classes="providers-empty-text")
                             else:
                                 for index, st in enumerate(statuses):
@@ -1338,7 +1350,16 @@ class ModelProvidersScreen(Screen):
                                     )
                         yield Button("+ Add provider", id="provider-add-button", classes="primary-action")
                     with VerticalScroll(id="provider-main-view"):
-                        if not statuses:
+                        if config_error:
+                            with Vertical(classes="provider-empty-panel", id="provider-empty-panel"):
+                                yield Static("Configuration Error", id="provider-empty-message", classes="provider-empty-title")
+                                yield Static(
+                                    f"Provider configuration error: {config_error}\n"
+                                    "Please check or restore provider-configurations.json.",
+                                    id="provider-empty-detail",
+                                    classes="provider-empty-detail",
+                                )
+                        elif not statuses:
                             with Vertical(classes="provider-empty-panel", id="provider-empty-panel"):
                                 yield Static("No providers configured.", id="provider-empty-message", classes="provider-empty-title")
                                 yield Static(
@@ -1422,7 +1443,8 @@ class ModelProvidersScreen(Screen):
         if not statuses:
             try:
                 status_widget = self.query_one("#providers-status", Static)
-                status_widget.update(self._message)
+                msg = self._message or (f"Configuration error: {self._config_error}" if self._config_error else "")
+                status_widget.update(msg)
             except Exception:
                 pass
             return

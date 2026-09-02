@@ -240,3 +240,236 @@ def test_test_suite_does_not_contaminate_production_paths(tmp_path: Path, monkey
     assert current_config_content == prod_config_content
     assert current_cache_content == prod_cache_content
     assert current_quarantine_content == prod_quarantine_content
+
+
+def test_legacy_auto_seeded_builtin_records_migrated_and_purged_on_upgrade(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Legacy is_builtin=True records are migrated away on load and orphan state purged."""
+    config_file = tmp_path / "provider-configurations.json"
+    cache_file = tmp_path / "provider-catalog-cache.json"
+    quarantine_file = tmp_path / "provider-credential-quarantine.json"
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CATALOG_CACHE_PATH", str(cache_file))
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_QUARANTINE_PATH", str(quarantine_file))
+
+    # Seed old provider-configurations.json with legacy is_builtin=True records and a custom provider
+    legacy_payload = {
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {
+                "provider_id": "opencode_go",
+                "name": "OpenCode Go",
+                "base_url": "https://opencode.ai/zen/go/v1",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [],
+            },
+            {
+                "provider_id": "commandcode_goat",
+                "name": "CommandCode GOAT",
+                "base_url": "http://127.0.0.1:56207",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [
+                    {"model_id": "deepseek/deepseek-v4-flash", "display_name": "DeepSeek V4 Flash", "protocol": "chat_completions"},
+                    {"model_id": "zai-org/glm-5.2", "display_name": "GLM 5.2", "protocol": "chat_completions"},
+                ],
+            },
+            {
+                "provider_id": "ollama_cloud",
+                "name": "Ollama Cloud",
+                "base_url": "https://ollama.com",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [],
+            },
+            {
+                "provider_id": "user_custom_fast",
+                "name": "User Custom Fast",
+                "base_url": "https://api.fastuser.ai/v1",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": False,
+                "models": [],
+            },
+        ],
+    }
+    config_file.write_text(json.dumps(legacy_payload, indent=2), encoding="utf-8")
+
+    # Seed legacy credentials, cache, session key, and quarantine
+    pc.save_secure_credential("commandcode_goat", "legacy-fake-cc-key")
+    pc.save_secure_credential("user_custom_fast", "user-fast-key-12345")
+    pc.set_session_key("commandcode_goat", "legacy-session-key")
+    pc.quarantine_provider("commandcode_goat")
+
+    # 1. Load configurations -> triggers automatic migration
+    configs = pc.load_provider_configurations()
+
+    # Assert: only user_custom_fast survived; all is_builtin=True records were filtered out
+    assert len(configs) == 1
+    assert configs[0].provider_id == "user_custom_fast"
+    assert configs[0].is_builtin is False
+
+    # Assert: disk configuration was updated cleanly
+    persisted = json.loads(config_file.read_text(encoding="utf-8"))
+    persisted_ids = [p["provider_id"] for p in persisted["providers"]]
+    assert persisted_ids == ["user_custom_fast"]
+    assert "commandcode_goat" not in persisted_ids
+    assert "opencode_go" not in persisted_ids
+    assert "ollama_cloud" not in persisted_ids
+
+    # Assert: orphan state for legacy builtins was purged
+    assert pc.has_secure_credential("commandcode_goat") is False
+    assert pc.has_session_key("commandcode_goat") is False
+    assert pc.is_provider_quarantined("commandcode_goat") is False
+
+    # Assert: user-created credentials were NOT touched
+    assert pc.has_secure_credential("user_custom_fast") is True
+    assert pc.load_secure_credential("user_custom_fast") == "user-fast-key-12345"
+
+    # 2. Re-creating CommandCode GOAT explicitly works cleanly as a user-owned provider
+    created = pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+        api_key="new-explicit-key-999",
+    )
+    assert created.provider_id == "commandcode_goat"
+    assert created.is_builtin is False
+    assert created.base_url == "https://api.commandcode.ai/provider/v1"
+    assert pc.has_secure_credential("commandcode_goat") is True
+    assert pc.load_secure_credential("commandcode_goat") == "new-explicit-key-999"
+    assert pc.credential_source_for("commandcode_goat") == pc.CREDENTIAL_SOURCE_SAVED
+
+
+def test_corrupt_config_fails_closed_and_preserves_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Corrupt config file fails closed with ProviderConnectionError and stays byte-for-byte unchanged."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+
+    # Write corrupt JSON bytes
+    corrupt_bytes = b"{\n  \"schema_version\": \"provider-configurations-v1\",\n  \"providers\": [CORRUPT SYNTAX HERE..."
+    config_file.write_bytes(corrupt_bytes)
+
+    # 1. Loading fails closed with ProviderConnectionError
+    with pytest.raises(pc.ProviderConnectionError) as exc_info:
+        pc.load_provider_configurations()
+    assert "malformed" in str(exc_info.value) or "invalid" in str(exc_info.value)
+
+    # Assert file on disk was NOT modified or overwritten
+    assert config_file.read_bytes() == corrupt_bytes
+
+    # 2. Mutation operations fail closed without corrupting or overwriting the file
+    with pytest.raises(pc.ProviderConnectionError):
+        pc.add_provider_config(
+            name="Attempted Provider",
+            base_url="https://api.attempt.com/v1",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        )
+    assert config_file.read_bytes() == corrupt_bytes
+
+    with pytest.raises(pc.ProviderConnectionError):
+        pc.delete_provider_config("any_provider")
+    assert config_file.read_bytes() == corrupt_bytes
+
+    # 3. ModelProvidersScreen displays Configuration Error banner rather than "No providers configured."
+    app = make_app(tmp_path)
+
+    async def actions(pilot):
+        await pilot.press("m")
+        await pilot.pause()
+        screen = pilot.app.screen
+        assert isinstance(screen, ModelProvidersScreen)
+
+        # Header / sidebar shows configuration error
+        empty_label = screen.query_one("#providers-empty-label")
+        assert "Configuration Error" in str(empty_label.render().plain)
+
+        # Main panel details show configuration error
+        msg = screen.query_one("#provider-empty-message")
+        assert "Configuration Error" in str(msg.render().plain)
+        detail = screen.query_one("#provider-empty-detail")
+        assert "Provider configuration error" in str(detail.render().plain)
+
+    run_headless(app, actions, size=(120, 32))
+
+    # Verify bytes still unchanged after UI render
+    assert config_file.read_bytes() == corrupt_bytes
+
+
+def test_corrupt_config_oversized_and_invalid_schema_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Oversized file and invalid schema versions fail closed."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+
+    # 1. Oversized file (> 256KB)
+    huge_data = json.dumps({"schema_version": "provider-configurations-v1", "providers": []}).encode("utf-8") + (b" " * (300 * 1024))
+    config_file.write_bytes(huge_data)
+    with pytest.raises(pc.ProviderConnectionError) as exc:
+        pc.load_provider_configurations()
+    assert "exceeded" in str(exc.value) or "bound" in str(exc.value)
+
+    # 2. Invalid schema version
+    bad_schema = json.dumps({"schema_version": "unknown-v99", "providers": []}).encode("utf-8")
+    config_file.write_bytes(bad_schema)
+    with pytest.raises(pc.ProviderConnectionError) as exc2:
+        pc.load_provider_configurations()
+    assert "schema" in str(exc2.value)
+
+
+def test_connection_authority_separation_unconfigured_builtins_fail_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unconfigured built-ins fail closed before provider request, child process creation, or HTTP."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+
+    # Environment variables set for built-in providers
+    monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-cc-key-12345")
+    monkeypatch.setenv("OPENCODE_API_KEY", "env-oc-key-12345")
+
+    # Built-ins are NOT in configured providers
+    assert pc.is_known_provider("commandcode_goat") is False
+    assert pc.is_known_provider("opencode_go") is False
+    assert pc.credential_source_for("commandcode_goat") is None
+    assert pc.credential_source_for("opencode_go") is None
+    assert pc.resolve_runtime_credential("commandcode_goat") is None
+    assert pc.resolve_runtime_credential("opencode_go") is None
+
+    # Base URL raises ProviderConnectionError
+    with pytest.raises(pc.ProviderConnectionError):
+        pc.provider_base_url("commandcode_goat")
+
+    # Protocol resolution raises ProviderConnectionError
+    with pytest.raises(pc.ProviderConnectionError):
+        pc.resolve_model_protocol("commandcode_goat", "deepseek/deepseek-v4-flash")
+
+    # Model providers live config resolution raises ProviderRegistryError
+    from agentic_debugger.application.model_providers import (
+        ProviderRegistryError,
+        resolve_provider_live_config,
+    )
+    with pytest.raises(ProviderRegistryError) as exc_reg:
+        resolve_provider_live_config("commandcode_goat", "deepseek/deepseek-v4-flash")
+    assert "not configured" in str(exc_reg.value)
+
+    # Configured source validation fails closed
+    from agentic_debugger.application.configured_source import _validate_registry_params
+    from agentic_debugger.application.worker_scenarios import ScenarioInputError
+    with pytest.raises(ScenarioInputError) as exc_scen:
+        _validate_registry_params({
+            "provider": "commandcode_goat",
+            "model_id": "deepseek/deepseek-v4-flash",
+        })
+    assert "not a known provider" in str(exc_scen.value)
+
