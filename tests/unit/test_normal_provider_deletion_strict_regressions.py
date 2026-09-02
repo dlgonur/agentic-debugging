@@ -397,17 +397,14 @@ def test_ui_delete_does_not_lie_on_failure_and_empty_state(
         assert isinstance(current, ModelProvidersScreen)
         statuses = current._current_statuses(force_reload=True)
         assert any(s.kind == "deletable" for s in statuses)
-        # Bounded failure text, not success
-        # _set_message writes to #providers-status
-        try:
-            from textual.widgets import Static
+        # Bounded failure text, not success — authoritative, no exception swallowing
+        # _set_message writes to #providers-status (real widget contract)
+        from textual.widgets import Static
 
-            msg = str(current.query_one("#providers-status", Static).render().plain)
-            assert "Failed to delete provider" in msg
-            assert "provider credential cleanup could not be completed" in msg
-            assert "Deleted provider" not in msg
-        except Exception:
-            pass
+        msg = str(current.query_one("#providers-status", Static).render().plain)
+        assert "Failed to delete provider" in msg
+        assert "provider credential cleanup could not be completed" in msg
+        assert "Deleted provider" not in msg
         assert pc.get_provider_config("deletable") is not None
 
     run_headless(app, actions_fail, size=(120, 32))
