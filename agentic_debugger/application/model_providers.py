@@ -340,40 +340,45 @@ def list_provider_models(
 ) -> List[ProviderModel]:
     """Grouped, availability-annotated model summaries for pickers."""
     models: List[ProviderModel] = []
-    if include_ollama:
-        models.extend(_subscription_models(PROVIDER_KIND_OLLAMA)[:ollama_limit])
-
-    models.extend(_subscription_models(PROVIDER_KIND_OPENCODE))
-    models.extend(_subscription_models(PROVIDER_KIND_COMMANDCODE))
-
-    # Any other custom configured providers
     try:
-        for cfg in list_configured_providers():
-            if cfg.provider_id in (PROVIDER_KIND_OPENCODE, PROVIDER_KIND_COMMANDCODE, PROVIDER_KIND_OLLAMA):
-                continue
-            if not cfg.enabled:
-                continue
-            cfg_models = _discovered_provider_models(cfg.provider_id)
-            if cfg_models:
-                models.extend(cfg_models)
-            elif cfg.models:
-                direct_ok = credential_source_for(cfg.provider_id) is not None
-                for m in cfg.models:
-                    proto_note = f"direct API · {m.protocol}" if m.protocol else None
-                    reason = None if direct_ok else "no direct API credential — connect in Model Providers (press m)"
-                    models.append(
-                        ProviderModel(
-                            kind=cfg.provider_id,
-                            model_id=m.model_id,
-                            display_name=m.display_name or format_model_display_name(m.model_id),
-                            provider_label=cfg.name,
-                            available=direct_ok and bool(m.protocol),
-                            unavailable_reason=reason,
-                            note=proto_note,
-                        )
-                    )
+        configured = list_configured_providers()
     except Exception:
-        pass
+        configured = []
+
+    for cfg in configured:
+        if not cfg.enabled:
+            continue
+        kind = cfg.provider_id
+        if kind == PROVIDER_KIND_OLLAMA and not include_ollama:
+            continue
+        discovered = _discovered_provider_models(kind)
+        if discovered:
+            if kind == PROVIDER_KIND_OLLAMA and ollama_limit:
+                models.extend(discovered[:ollama_limit])
+            else:
+                models.extend(discovered)
+        elif cfg.models:
+            direct_ok = credential_source_for(cfg.provider_id) is not None
+            for m in cfg.models:
+                proto_note = f"direct API · {m.protocol}" if m.protocol else None
+                reason = None if direct_ok else "no direct API credential — connect in Model Providers (press m)"
+                models.append(
+                    ProviderModel(
+                        kind=cfg.provider_id,
+                        model_id=m.model_id,
+                        display_name=m.display_name or format_model_display_name(m.model_id),
+                        provider_label=cfg.name,
+                        available=direct_ok and bool(m.protocol),
+                        unavailable_reason=reason,
+                        note=proto_note,
+                    )
+                )
+        elif kind in (PROVIDER_KIND_OPENCODE, PROVIDER_KIND_COMMANDCODE, PROVIDER_KIND_OLLAMA):
+            sub = _subscription_models(kind)
+            if kind == PROVIDER_KIND_OLLAMA and ollama_limit:
+                models.extend(sub[:ollama_limit])
+            else:
+                models.extend(sub)
     return models
 
 
@@ -383,10 +388,16 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
     if discovered is not None:
         return discovered
     if kind == PROVIDER_KIND_OPENCODE:
-        available, reason = _opencode_availability()
+        direct_ok = credential_source_for(kind) is not None
+        legacy_ok, legacy_reason = _opencode_availability()
+        available = direct_ok or legacy_ok
+        reason = None if available else (legacy_reason or "no direct API credential — connect in Model Providers (press m)")
         model_ids: Tuple[str, ...] = _OPENCODE_DEFAULT_MODELS
     elif kind == PROVIDER_KIND_COMMANDCODE:
-        available, reason = _commandcode_availability()
+        direct_ok = credential_source_for(kind) is not None
+        legacy_ok, legacy_reason = _commandcode_availability()
+        available = direct_ok or legacy_ok
+        reason = None if available else (legacy_reason or "no direct API credential — connect in Model Providers (press m)")
         model_ids = _COMMANDCODE_DEFAULT_MODELS
     elif kind == PROVIDER_KIND_OLLAMA:
         direct_ok = credential_source_for(kind) is not None
@@ -411,7 +422,8 @@ def _subscription_models(kind: str) -> List[ProviderModel]:
             ]
         return []
 
-    label = _PROVIDER_LABELS.get(kind, kind)
+    cfg = get_provider_config(kind)
+    label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
     return [
         ProviderModel(
             kind=kind,

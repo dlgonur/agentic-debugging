@@ -269,7 +269,7 @@ _WIN_CRED_PREFIX = "AgenticDebugger:provider:"
 
 
 def _wincred_write(target: str, secret: str) -> bool:
-    if sys.platform != "win32":
+    if sys.platform != "win32" or os.environ.get("AGENTIC_DEBUGGER_DISABLE_SECURE_STORE") == "1":
         return False
     try:
         import ctypes
@@ -311,7 +311,7 @@ def _wincred_write(target: str, secret: str) -> bool:
 
 
 def _wincred_read(target: str) -> Optional[str]:
-    if sys.platform != "win32":
+    if sys.platform != "win32" or os.environ.get("AGENTIC_DEBUGGER_DISABLE_SECURE_STORE") == "1":
         return None
     try:
         import ctypes
@@ -356,7 +356,7 @@ def _wincred_read(target: str) -> Optional[str]:
 
 
 def _wincred_delete(target: str) -> bool:
-    if sys.platform != "win32":
+    if sys.platform != "win32" or os.environ.get("AGENTIC_DEBUGGER_DISABLE_SECURE_STORE") == "1":
         return False
     try:
         import ctypes
@@ -623,6 +623,9 @@ _QUARANTINED_PROVIDERS: set[str] = set()
 
 def provider_quarantine_path() -> Path:
     """Durable credential-quarantine state path (next to the provider config)."""
+    override = os.environ.get("AGENTIC_DEBUGGER_PROVIDER_QUARANTINE_PATH")
+    if override and override.strip():
+        return Path(override.strip())
     config_path = provider_configurations_path()
     return config_path.with_name("provider-credential-quarantine.json")
 
@@ -762,18 +765,18 @@ def load_provider_configurations() -> List[ProviderConfig]:
         path = provider_configurations_path()
         raw = path.read_bytes()
     except Exception:
-        return _default_builtin_configs()
+        return []
     if len(raw) > _MAX_CONFIG_FILE_BYTES:
-        return _default_builtin_configs()
+        return []
     try:
         data = json.loads(raw.decode("utf-8"))
     except (UnicodeError, json.JSONDecodeError):
-        return _default_builtin_configs()
+        return []
     if not isinstance(data, Mapping) or data.get("schema_version") != PROVIDER_CONFIG_SCHEMA_VERSION:
-        return _default_builtin_configs()
+        return []
     providers_raw = data.get("providers")
     if not isinstance(providers_raw, list):
-        return _default_builtin_configs()
+        return []
     configs: List[ProviderConfig] = []
     seen_ids = set()
     for item in providers_raw:
@@ -781,11 +784,6 @@ def load_provider_configurations() -> List[ProviderConfig]:
         if cfg and cfg.provider_id not in seen_ids:
             seen_ids.add(cfg.provider_id)
             configs.append(cfg)
-
-    builtin_map = {b.provider_id: b for b in _default_builtin_configs()}
-    for b_id, b_cfg in builtin_map.items():
-        if b_id not in seen_ids:
-            configs.append(b_cfg)
 
     return configs
 
@@ -1047,7 +1045,7 @@ def delete_provider_config(provider_id: str) -> bool:
     """Delete a provider configuration, its stored credential, and cached catalog."""
     configs = load_provider_configurations()
     existing = next((c for c in configs if c.provider_id == provider_id), None)
-    if existing is None or existing.is_builtin or provider_id in _BUILTIN_CONTRACTS or provider_id in DIRECT_API_PROVIDER_KINDS:
+    if existing is None:
         return False
     filtered = [c for c in configs if c.provider_id != provider_id]
     if len(filtered) == len(configs):
@@ -1475,8 +1473,11 @@ _MAX_CACHE_FILE_BYTES = 512 * 1024
 
 
 def catalog_cache_path() -> Path:
-    base = os.environ.get("LOCALAPPDATA") or str(Path.home())
-    return Path(base) / "AgenticDebugger" / "provider-catalog-cache.json"
+    override = os.environ.get("AGENTIC_DEBUGGER_PROVIDER_CATALOG_CACHE_PATH")
+    if override and override.strip():
+        return Path(override.strip())
+    config_path = provider_configurations_path()
+    return config_path.with_name("provider-catalog-cache.json")
 
 
 def load_cached_catalog(kind: str) -> Optional[ProviderCatalogSnapshot]:
@@ -1728,10 +1729,6 @@ def connection_statuses() -> List[ProviderConnectionStatus]:
         if c.provider_id not in seen:
             seen.add(c.provider_id)
             statuses.append(provider_connection_status(c.provider_id))
-    for kind in DIRECT_API_PROVIDER_KINDS:
-        if kind not in seen:
-            seen.add(kind)
-            statuses.append(provider_connection_status(kind))
     return statuses
 
 

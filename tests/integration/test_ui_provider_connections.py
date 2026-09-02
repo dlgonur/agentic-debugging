@@ -199,6 +199,18 @@ def test_model_picker_shows_discovered_notes_and_management_entry(
             unavailable_reason="no direct API credential — connect in Provider Connections (press c)",
         ),
     )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://api.opencode.ai/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
+    )
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
     monkeypatch.setattr(
         "agentic_debugger.ui.screens.list_provider_models",
         lambda **kwargs: models,
@@ -409,8 +421,10 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
         await pilot.pause()
         start = pilot.app.screen
         assert isinstance(start, StartSessionScreen)
-        # Select Ladder Target
+        # Select Ladder Target and Level 32 frozen task
+        from agentic_debugger.application.level32 import LEVEL32_TASK_ID
         start._choice_selected("target", "ladder")
+        start._choice_selected("task", LEVEL32_TASK_ID)
         await pilot.pause()
         start._open_model_picker()
         await pilot.pause()
@@ -418,7 +432,7 @@ def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkey
         assert isinstance(picker, ChoicePickerScreen)
         custom_choices = [c for c in picker.choices if "custom_ai" in str(c.value)]
         for c in custom_choices:
-            # Custom provider models must be disabled / ineligible for Ladder
+            # Custom provider models must be disabled / ineligible for Level 32 Ladder
             assert c.disabled is True
             assert "ladder" in str(c.disabled_reason).lower() or "unavailable" in str(c.disabled_reason).lower()
 
@@ -431,6 +445,12 @@ def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
+    )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://api.opencode.ai/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
     )
     app = make_app(tmp_path)
 
@@ -554,6 +574,13 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
         lambda kind: kind in secure_store,
     )
 
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+
     app = make_app(tmp_path)
 
     async def actions(pilot):
@@ -651,6 +678,13 @@ def test_edit_provider_dialog_is_centered_across_geometries(
     tmp_path: Path, geometry: tuple[int, int]
 ) -> None:
     """Edit provider dialog is horizontally centered at standard window sizes."""
+    config_file = tmp_path / "provider-configurations.json"
+    pc.add_provider_config(
+        name="Test Provider",
+        base_url="https://api.test.ai/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="test_provider",
+    )
     app = make_app(tmp_path)
 
     async def actions(pilot):
@@ -715,6 +749,12 @@ def test_refresh_without_credential_error_copy(
         lambda: config_file,
     )
     monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
     app = make_app(tmp_path)
 
     async def actions(pilot):
@@ -975,14 +1015,20 @@ def test_custom_provider_delete_confirmed_removes_config_and_updates_selection(
     run_headless(app, actions, size=(100, 30))
 
 
-def test_builtin_provider_delete_is_protected_in_ui(
+def test_provider_delete_returns_to_empty_state(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Built-in providers display protected status on delete action and reject deletion."""
+    """Deleting a user-configured provider returns Provider Manager to zero configured providers."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setattr(
         "agentic_debugger.application.provider_connections.provider_configurations_path",
         lambda: config_file,
+    )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://api.opencode.ai/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
     )
     app = make_app(tmp_path)
 
@@ -992,25 +1038,31 @@ def test_builtin_provider_delete_is_protected_in_ui(
         screen = pilot.app.screen
         assert isinstance(screen, ProviderConnectionsScreen)
 
-        # Select built-in OpenCode Go
+        # Select OpenCode Go
         screen._selected_index = screen._index_of("opencode_go")
         screen.render_state()
         await pilot.pause()
 
-        # Verify delete button is disabled and marked protected
+        # Verify delete button is enabled with "Delete provider"
         del_btn = screen.query_one("#provider-delete-button-opencode_go")
-        assert del_btn.disabled is True
-        assert "Delete (protected)" in str(del_btn.label)
+        assert del_btn.disabled is False
+        assert "Delete provider" in str(del_btn.label)
 
-        # Pressing 'd' produces truthful protected status feedback
+        # Pressing 'd' opens confirm delete dialog
         await pilot.press("d")
         await pilot.pause()
 
-        # No confirm dialog opened; status message shows protection feedback
-        assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
-        status_msg = str(screen.query_one("#providers-status").render().plain)
-        assert "protected and cannot be deleted" in status_msg
-        assert pc.get_provider_config("opencode_go") is not None
+        confirm_dlg = pilot.app.screen
+        assert isinstance(confirm_dlg, ConfirmDeleteProviderDialogScreen)
+        await pilot.click("#btn-confirm-delete")
+        await pilot.pause()
+
+        # Provider deleted, screen returned to 0 configured providers
+        assert pc.get_provider_config("opencode_go") is None
+        new_screen = pilot.app.screen
+        assert isinstance(new_screen, ProviderConnectionsScreen)
+        empty_label = new_screen.query_one("#providers-empty-label")
+        assert "No providers configured." in str(empty_label.render().plain)
 
     run_headless(app, actions, size=(100, 30))
 

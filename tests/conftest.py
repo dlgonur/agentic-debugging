@@ -31,6 +31,7 @@ def _global_provider_test_isolation(
     # In-memory mock for OS secure store so tests never touch real Windows Credential Manager
     # unless a test is explicitly marked for native secure store execution.
     if not request.node.get_closest_marker("native_secure_store"):
+        monkeypatch.setenv("AGENTIC_DEBUGGER_DISABLE_SECURE_STORE", "1")
         _secure_store: Dict[str, str] = {}
         monkeypatch.setattr(
             pc,

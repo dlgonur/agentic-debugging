@@ -1325,57 +1325,61 @@ class ModelProvidersScreen(Screen):
                     with Vertical(id="providers-sidebar"):
                         yield Static("PROVIDERS", id="providers-sidebar-title")
                         with VerticalScroll(id="providers-sidebar-list"):
-                            for index, st in enumerate(statuses):
-                                dot = "● " if st.connected else "○ "
-                                label = f"{dot}{st.label}"
-                                yield Button(
-                                    label,
-                                    id=f"provider-select-{st.kind}",
-                                    classes=f"provider-item-button{' -selected' if index == self._selected_index else ''}",
-                                )
+                            if not statuses:
+                                yield Static("No providers configured.", id="providers-empty-label", classes="providers-empty-text")
+                            else:
+                                for index, st in enumerate(statuses):
+                                    dot = "● " if st.connected else "○ "
+                                    label = f"{dot}{st.label}"
+                                    yield Button(
+                                        label,
+                                        id=f"provider-select-{st.kind}",
+                                        classes=f"provider-item-button{' -selected' if index == self._selected_index else ''}",
+                                    )
                         yield Button("+ Add provider", id="provider-add-button", classes="primary-action")
                     with VerticalScroll(id="provider-main-view"):
-                        for st in statuses:
-                            with Vertical(classes="provider-panel", id=f"provider-panel-{st.kind}"):
-                                yield Static("", id=f"provider-summary-{st.kind}", classes="provider-summary")
-                                yield Static("", id=f"provider-refresh-{st.kind}", classes="provider-refresh")
-                                with Horizontal(classes="provider-actions", id=f"provider-actions-{st.kind}"):
-                                    yield Button(
-                                        "Refresh models",
-                                        id=f"provider-refresh-button-{st.kind}",
-                                        classes="provider-action-button",
-                                    )
-                                    yield Button(
-                                        "Edit provider",
-                                        id=f"provider-edit-button-{st.kind}",
-                                        classes="provider-action-button",
-                                    )
-                                    if not st.is_builtin:
+                        if not statuses:
+                            with Vertical(classes="provider-empty-panel", id="provider-empty-panel"):
+                                yield Static("No providers configured.", id="provider-empty-message", classes="provider-empty-title")
+                                yield Static(
+                                    "Use '+ Add provider' on the left to configure a model provider endpoint.",
+                                    id="provider-empty-detail",
+                                    classes="provider-empty-detail",
+                                )
+                        else:
+                            for st in statuses:
+                                with Vertical(classes="provider-panel", id=f"provider-panel-{st.kind}"):
+                                    yield Static("", id=f"provider-summary-{st.kind}", classes="provider-summary")
+                                    yield Static("", id=f"provider-refresh-{st.kind}", classes="provider-refresh")
+                                    with Horizontal(classes="provider-actions", id=f"provider-actions-{st.kind}"):
+                                        yield Button(
+                                            "Refresh models",
+                                            id=f"provider-refresh-button-{st.kind}",
+                                            classes="provider-action-button",
+                                        )
+                                        yield Button(
+                                            "Edit provider",
+                                            id=f"provider-edit-button-{st.kind}",
+                                            classes="provider-action-button",
+                                        )
                                         yield Button(
                                             "Delete provider",
                                             id=f"provider-delete-button-{st.kind}",
                                             classes="provider-action-button danger-action",
                                         )
-                                    else:
+                                    yield Static("MODELS", classes="models-header", id=f"provider-models-title-{st.kind}")
+                                    yield Static("", classes="models-helper-text", id=f"provider-models-helper-{st.kind}")
+                                    with Horizontal(classes="provider-models-actions", id=f"provider-models-actions-{st.kind}"):
                                         yield Button(
-                                            "Delete (protected)",
-                                            id=f"provider-delete-button-{st.kind}",
-                                            classes="provider-action-button -disabled",
-                                            disabled=True,
+                                            "Browse models",
+                                            id=f"provider-browse-models-button-{st.kind}",
+                                            classes="provider-action-button primary-action",
                                         )
-                                yield Static("MODELS", classes="models-header", id=f"provider-models-title-{st.kind}")
-                                yield Static("", classes="models-helper-text", id=f"provider-models-helper-{st.kind}")
-                                with Horizontal(classes="provider-models-actions", id=f"provider-models-actions-{st.kind}"):
-                                    yield Button(
-                                        "Browse models",
-                                        id=f"provider-browse-models-button-{st.kind}",
-                                        classes="provider-action-button primary-action",
-                                    )
-                                    yield Button(
-                                        "+ Add model (manual)",
-                                        id=f"provider-add-model-button-{st.kind}",
-                                        classes="provider-action-button",
-                                    )
+                                        yield Button(
+                                            "+ Add model (manual)",
+                                            id=f"provider-add-model-button-{st.kind}",
+                                            classes="provider-action-button",
+                                        )
                 yield Static("", id="providers-status")
                 yield Static(
                     self.PROVIDERS_HINT,
@@ -1402,19 +1406,27 @@ class ModelProvidersScreen(Screen):
     def _selected_kind(self) -> str:
         statuses = self._current_statuses()
         if not statuses:
-            return "opencode_go"
+            return ""
         idx = max(0, min(self._selected_index, len(statuses) - 1))
         return statuses[idx].kind
 
     def _selected_label(self) -> str:
         statuses = self._current_statuses()
         if not statuses:
-            return "OpenCode Go"
+            return ""
         idx = max(0, min(self._selected_index, len(statuses) - 1))
         return statuses[idx].label
 
     def render_state(self) -> None:
         statuses = self._current_statuses()
+        if not statuses:
+            try:
+                status_widget = self.query_one("#providers-status", Static)
+                status_widget.update(self._message)
+            except Exception:
+                pass
+            return
+
         selected_kind = self._selected_kind()
 
         # Update sidebar buttons
@@ -1535,6 +1547,8 @@ class ModelProvidersScreen(Screen):
 
     def action_refresh(self) -> None:
         kind = self._selected_kind()
+        if not kind:
+            return
         if kind in self._refreshing:
             return
         self._refreshing.add(kind)
@@ -1598,6 +1612,8 @@ class ModelProvidersScreen(Screen):
     def action_edit_provider(self) -> None:
         kind = self._selected_kind()
         label = self._selected_label()
+        if not kind:
+            return
         from agentic_debugger.application.provider_connections import get_provider_config
         cfg = get_provider_config(kind)
         if not cfg:
@@ -1615,13 +1631,7 @@ class ModelProvidersScreen(Screen):
     def action_delete_provider(self) -> None:
         kind = self._selected_kind()
         label = self._selected_label()
-        from agentic_debugger.application.provider_connections import (
-            DIRECT_API_PROVIDER_KINDS,
-            get_provider_config,
-        )
-        cfg = get_provider_config(kind)
-        if (cfg and cfg.is_builtin) or kind in DIRECT_API_PROVIDER_KINDS:
-            self._set_message(f"Built-in provider '{label}' is protected and cannot be deleted")
+        if not kind:
             return
 
         def on_confirmed(confirmed: bool) -> None:
@@ -2590,30 +2600,22 @@ class StartSessionScreen(Screen):
                 disabled_reason=offline_reason,
             )
         )
-        builtin_groups: list[tuple[str, str]] = [
-            (PROVIDER_OLLAMA, "OLLAMA CLOUD"),
-            (PROVIDER_OPENCODE, "OPENCODE GO"),
-            (PROVIDER_COMMANDCODE, "COMMANDCODE GOAT"),
-        ]
-        custom_groups: list[tuple[str, str]] = []
+        provider_groups: list[tuple[str, str]] = []
         try:
             from agentic_debugger.application.provider_connections import list_configured_providers
             for cfg in list_configured_providers():
                 if cfg.provider_id in (
-                    PROVIDER_OLLAMA,
-                    PROVIDER_OPENCODE,
-                    PROVIDER_COMMANDCODE,
                     PROVIDER_CONFIGURED,
                     PROVIDER_OFFLINE,
                 ):
                     continue
                 if not cfg.enabled:
                     continue
-                custom_groups.append((cfg.provider_id, cfg.name.upper()))
+                provider_groups.append((cfg.provider_id, cfg.name.upper()))
         except Exception:
             pass
         configured_group = (PROVIDER_CONFIGURED, "CUSTOM COMMAND PROFILES")
-        groups = tuple(builtin_groups + custom_groups + [configured_group])
+        groups = tuple(provider_groups + [configured_group])
 
         # One stable provider world for every target.  The qualified roster
         # annotates Ollama entries; it never replaces the general catalog or

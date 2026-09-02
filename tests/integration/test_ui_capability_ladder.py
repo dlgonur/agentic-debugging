@@ -389,9 +389,18 @@ def test_live_context_panel_is_wide_only(tmp_path: Path) -> None:
     run_headless(narrow_app, narrow_scenario, size=(80, 32))
 
 
-def test_level32_model_selection_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """Deterministic, provider-free proof that selecting model X in the unified
-    picker passes model X strictly to start_live_session."""
+def test_level32_model_selection_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Selecting a qualified model in the ONE unified picker routes to Level32 operator without hardcoded alias."""
+    from agentic_debugger.application import provider_connections as pc
+
+    pc.add_provider_config(
+        name="Ollama",
+        base_url="https://ollama.com",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="ollama_cloud",
+    )
     app = make_app(tmp_path)
     start_calls = []
 
@@ -447,6 +456,12 @@ def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """Changing Target changes compatibility, never provider discoverability."""
+    from agentic_debugger.application import provider_connections as pc
+
+    pc.add_provider_config(name="Ollama Cloud", base_url="https://ollama.com", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="ollama_cloud")
+    pc.add_provider_config(name="OpenCode Go", base_url="https://opencode.ai/zen/go/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="opencode_go")
+    pc.add_provider_config(name="CommandCode GOAT", base_url="https://api.commandcode.ai/provider/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="commandcode_goat")
+
     app = make_app(tmp_path)
     qualified = level32_model_profiles()[0]
     collision_id = qualified.alias

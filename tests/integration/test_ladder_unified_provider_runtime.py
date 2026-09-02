@@ -238,9 +238,11 @@ def test_ladder_with_configured_provider_executes_through_direct_api(
             DiscoveredProviderModel.create("commandcode_goat", "deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", protocol="chat_completions"),
             DiscoveredProviderModel.create("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", protocol="chat_completions"),
         )
-        update_provider_config(
-            "commandcode_goat",
+        add_provider_config(
+            name="CommandCode GOAT",
             base_url=server.base_url,
+            api_format="chat_completions",
+            provider_id="commandcode_goat",
             models=builtin_models,
         )
         try:
@@ -794,9 +796,11 @@ def test_level18_ui_shows_executable_not_qualified_notice(tmp_path: Path, monkey
 
     with _ScriptedLadderServer() as server:
         base = server.base_url
-        update_provider_config(
-            "commandcode_goat",
+        pc.add_provider_config(
+            name="CommandCode GOAT",
             base_url=base,
+            api_format="chat_completions",
+            provider_id="commandcode_goat",
             models=(DiscoveredProviderModel.create("commandcode_goat", "deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", protocol="chat_completions"),),
         )
         pc.save_secure_credential("commandcode_goat", SECRET)

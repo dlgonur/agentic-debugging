@@ -94,31 +94,13 @@ def _isolate_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     clear_all_session_keys()
 
 
-def test_builtin_providers_default_present():
-    """Default configuration contains built-in providers (OpenCode, CommandCode, and Ollama)."""
+def test_fresh_provider_config_is_empty():
+    """A fresh installation has zero configured providers (no implicit or pre-seeded entries)."""
     configs = list_configured_providers()
-    provider_ids = [c.provider_id for c in configs]
-    assert "opencode_go" in provider_ids
-    assert "commandcode_goat" in provider_ids
-    assert "ollama_cloud" in provider_ids
-
-    opencode = get_provider_config("opencode_go")
-    assert opencode is not None
-    assert opencode.is_builtin is True
-    assert opencode.api_format == PROTOCOL_CHAT_COMPLETIONS
-    assert opencode.base_url == "https://opencode.ai/zen/go/v1"
-
-    commandcode = get_provider_config("commandcode_goat")
-    assert commandcode is not None
-    assert commandcode.is_builtin is True
-    assert commandcode.api_format == PROTOCOL_CHAT_COMPLETIONS
-    assert commandcode.base_url == "https://api.commandcode.ai/provider/v1"
-
-    ollama = get_provider_config("ollama_cloud")
-    assert ollama is not None
-    assert ollama.is_builtin is True
-    assert ollama.api_format == PROTOCOL_CHAT_COMPLETIONS
-    assert ollama.base_url == "https://ollama.com"
+    assert configs == []
+    assert get_provider_config("opencode_go") is None
+    assert get_provider_config("commandcode_goat") is None
+    assert get_provider_config("ollama_cloud") is None
 
 
 def test_crud_custom_provider():
@@ -161,18 +143,28 @@ def test_crud_custom_provider():
     assert is_known_provider("groq_direct") is False
 
 
-def test_builtin_cannot_be_deleted():
-    """Built-in provider configs cannot be deleted."""
-    assert delete_provider_config("opencode_go") is False
+def test_user_created_provider_can_be_deleted():
+    """User-created provider configurations can be deleted to return registry to zero providers."""
+    add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
+    )
     assert get_provider_config("opencode_go") is not None
-    assert delete_provider_config("commandcode_goat") is False
-    assert get_provider_config("commandcode_goat") is not None
-    assert delete_provider_config("ollama_cloud") is False
-    assert get_provider_config("ollama_cloud") is not None
+    assert delete_provider_config("opencode_go") is True
+    assert get_provider_config("opencode_go") is None
+    assert list_configured_providers() == []
 
 
 def test_builtin_provider_edit_is_authoritative_for_general_runtime():
-    """Persisted edits to built-in provider base URL are respected by runtime helpers."""
+    """Persisted edits to provider base URL are respected by runtime helpers."""
+    add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
+    )
     updated = update_provider_config(
         provider_id="opencode_go",
         base_url="https://custom.opencode.gateway.test/v1",
@@ -210,7 +202,13 @@ def test_edit_provider_credential_update_and_preservation():
     assert resolve_runtime_credential("mistral_direct") == "updated-mistral-key-222"
     assert get_provider_config("mistral_direct").base_url == "https://api.mistral.ai/v2"
 
-    # 4. Built-in provider (CommandCode GOAT) credential update and preservation
+    # 4. CommandCode GOAT credential update and preservation
+    add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
     update_provider_config(
         provider_id="commandcode_goat",
         api_key="goat-fake-key-999",
@@ -247,15 +245,12 @@ def test_manual_model_addition():
 
 
 def test_malformed_json_fallback(tmp_path: Path):
-    """Malformed config JSON does not crash or overwrite without notice."""
+    """Malformed config JSON does not crash or overwrite without notice; fails closed to empty."""
     config_file = tmp_path / "provider-configurations.json"
     config_file.write_text("{corrupt json content...", encoding="utf-8")
 
     configs = load_provider_configurations()
-    assert len(configs) >= 3
-    assert any(c.provider_id == "opencode_go" for c in configs)
-    assert any(c.provider_id == "commandcode_goat" for c in configs)
-    assert any(c.provider_id == "ollama_cloud" for c in configs)
+    assert configs == []
 
 
 def test_provider_identity_preservation_and_no_ollama_leakage():
@@ -487,8 +482,12 @@ def test_base_url_validation_accepts_valid_https_and_loopback_http():
 
 
 def test_builtin_edits_authoritative_across_app_restart():
-    """Edits to built-in providers are persisted and remain authoritative across restarts."""
-    # 1. Update built-in endpoints
+    """Edits to configured providers are persisted and remain authoritative across restarts."""
+    add_provider_config(name="OpenCode Go", base_url="https://opencode.ai/zen/go/v1", api_format=PROTOCOL_CHAT_COMPLETIONS, provider_id="opencode_go")
+    add_provider_config(name="CommandCode GOAT", base_url="https://api.commandcode.ai/provider/v1", api_format=PROTOCOL_CHAT_COMPLETIONS, provider_id="commandcode_goat")
+    add_provider_config(name="Ollama", base_url="https://ollama.com", api_format=PROTOCOL_CHAT_COMPLETIONS, provider_id="ollama_cloud")
+
+    # 1. Update endpoints
     update_provider_config("opencode_go", base_url="https://custom.opencode.proxy.corp/v1")
     update_provider_config("commandcode_goat", base_url="https://custom.commandcode.proxy.corp/v1")
     update_provider_config("ollama_cloud", base_url="http://127.0.0.1:11434")
@@ -529,8 +528,13 @@ def test_ollama_general_runtime_common_provider_contract_end_to_end(tmp_path: Pa
         return 404, {"error": "not found"}
 
     with FakeProviderServer(fake_ollama_handler) as server:
-        # 1. Update Ollama base URL to the fake server endpoint
-        update_provider_config("ollama_cloud", base_url=server.base_url)
+        # 1. Add Ollama provider configuration pointing to the fake server endpoint
+        add_provider_config(
+            name="Ollama",
+            base_url=server.base_url,
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="ollama_cloud",
+        )
         set_session_key("ollama_cloud", secret_key)
 
         # 2. Refresh catalog via common Provider Manager
@@ -682,10 +686,11 @@ def test_legitimate_groq_direct_provider_survives_save_reload_and_load(tmp_path:
     assert groq_loaded.is_builtin is False
     assert groq_loaded.models == ()
 
-    # Verify built-in providers also remain intact
-    assert "opencode_go" in loaded_map
-    assert "commandcode_goat" in loaded_map
-    assert "ollama_cloud" in loaded_map
+    # Verify no implicit providers were created
+    assert len(loaded_map) == 1
+    assert "opencode_go" not in loaded_map
+    assert "commandcode_goat" not in loaded_map
+    assert "ollama_cloud" not in loaded_map
 
 
 def test_environment_credential_and_no_secure_store_state_preserves_custom_providers(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

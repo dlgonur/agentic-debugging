@@ -655,8 +655,21 @@ class TestConnectionStatus:
         assert status.last_refresh_source == "live"
 
     def test_status_covers_both_builtins(self) -> None:
+        assert pc.connection_statuses() == []
+        pc.add_provider_config(
+            name="OpenCode Go",
+            base_url="https://opencode.ai/zen/go/v1",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="opencode_go",
+        )
+        pc.add_provider_config(
+            name="CommandCode GOAT",
+            base_url="https://api.commandcode.ai/provider/v1",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="commandcode_goat",
+        )
         statuses = pc.connection_statuses()
-        assert [s.kind for s in statuses] == list(pc.DIRECT_API_PROVIDER_KINDS)
+        assert [s.kind for s in statuses] == ["opencode_go", "commandcode_goat"]
 
     def test_endpoint_identity_is_safe(self) -> None:
         status = pc.provider_connection_status("opencode_go")

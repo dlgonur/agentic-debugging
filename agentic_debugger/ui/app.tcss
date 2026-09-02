@@ -860,6 +860,34 @@ ModelProvidersScreen, ProviderConnectionsScreen {
     scrollbar-size: 1 1;
 }
 
+.providers-empty-text {
+    width: 100%;
+    height: auto;
+    color: $foreground-muted;
+    padding: 1 0;
+}
+
+.provider-empty-panel {
+    width: 100%;
+    height: 100%;
+    align: center middle;
+    padding: 2 1;
+}
+
+.provider-empty-title {
+    width: 100%;
+    text-align: center;
+    color: $foreground-muted;
+    text-style: bold;
+    margin: 0 0 1 0;
+}
+
+.provider-empty-detail {
+    width: 100%;
+    text-align: center;
+    color: $foreground-muted;
+}
+
 .provider-item-button {
     width: 100%;
     height: 3;
