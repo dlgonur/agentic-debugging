@@ -843,6 +843,42 @@ def _purge_legacy_cached_catalog(kind: str) -> None:
         ) from exc
 
 
+def _purge_provider_state_strict(provider_id: str) -> None:
+    """Strictly purge all reusable state for one user-owned provider.
+
+    Used by :func:`delete_provider_config` and intentionally reuses the same
+    strict boundaries as legacy migration so the two paths cannot diverge.
+
+    1. If a saved credential exists, delete it and verify absence.
+    2. Clear the process/session key.
+    3. Strictly purge this provider's cached catalog entry (reusing the
+       strict ``_purge_legacy_cached_catalog`` boundary — missing file/entry
+       is success, corrupt/unreadable/unwritable is failure).
+    4. Clear this provider's quarantine marker and verify it is no longer
+       quarantined, preserving corrupt-quarantine fail-closed semantics.
+
+    Any failure raises :class:`ProviderConnectionError` and leaves the
+    provider configuration on disk so deletion is retryable.
+    """
+
+    previous_cred = load_secure_credential(provider_id)
+    if previous_cred is not None:
+        deleted = delete_secure_credential(provider_id)
+        remaining = load_secure_credential(provider_id)
+        if not deleted or remaining is not None:
+            raise ProviderConnectionError(
+                "provider credential cleanup could not be completed"
+            )
+
+    clear_session_key(provider_id)
+    _purge_legacy_cached_catalog(provider_id)
+    clear_provider_quarantine(provider_id)
+    if is_provider_quarantined(provider_id):
+        raise ProviderConnectionError(
+            "provider quarantine cleanup could not be completed"
+        )
+
+
 def _migrate_legacy_builtin_records(
     cleaned_configs: List[ProviderConfig],
     legacy_ids: List[str],
@@ -1195,7 +1231,39 @@ def update_provider_config(
 
 
 def delete_provider_config(provider_id: str) -> bool:
-    """Delete a provider configuration, its stored credential, and cached catalog."""
+    """Delete a provider configuration and all of its reusable state.
+
+    Strict invariant (see :func:`_purge_provider_state_strict`): a successful
+    deletion guarantees that *all* of the following are true::
+
+        provider configuration absent
+        saved secure credential absent
+        process/session credential absent
+        cached provider catalog absent
+        provider-specific valid quarantine marker absent
+
+    Ordering is strict and fail-closed::
+
+        verify provider exists
+            ↓
+        strictly purge reusable provider state
+            ↓
+        atomically persist filtered provider config LAST
+
+    If any purge step fails, :class:`ProviderConnectionError` is raised and the
+    provider configuration remains durably present so the operation is
+    retryable.  If final config persistence fails after state cleanup, the
+    provider remains configured but disconnected (no credential/catalog) until
+    retry — fail-closed and truthful.
+
+    Returns:
+        True if the provider was present and fully deleted, False if no such
+        provider existed.  Cleanup failures raise.
+
+    Deleting provider A never touches provider B's credential, catalog entry,
+    quarantine state, or configuration.
+    """
+
     configs = load_provider_configurations()
     existing = next((c for c in configs if c.provider_id == provider_id), None)
     if existing is None:
@@ -1203,10 +1271,17 @@ def delete_provider_config(provider_id: str) -> bool:
     filtered = [c for c in configs if c.provider_id != provider_id]
     if len(filtered) == len(configs):
         return False
-    save_provider_configurations(filtered)
-    delete_secure_credential(provider_id)
-    clear_session_key(provider_id)
-    delete_cached_catalog(provider_id)
+    # Strict purge BEFORE config persistence so no orphan credential/catalog
+    # can survive a successful ``return True``.
+    _purge_provider_state_strict(provider_id)
+    try:
+        save_provider_configurations(filtered)
+    except ProviderConnectionError:
+        raise
+    except Exception as exc:  # pragma: no cover - defensive
+        raise ProviderConnectionError(
+            "provider configuration could not be written"
+        ) from exc
     return True
 
 

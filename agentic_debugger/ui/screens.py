@@ -1659,8 +1659,24 @@ class ModelProvidersScreen(Screen):
         def on_confirmed(confirmed: bool) -> None:
             if not confirmed:
                 return
-            from agentic_debugger.application.provider_connections import delete_provider_config
-            if delete_provider_config(kind):
+            from agentic_debugger.application.provider_connections import (
+                ProviderConnectionError,
+                delete_provider_config,
+            )
+
+            try:
+                deleted = delete_provider_config(kind)
+            except ProviderConnectionError:
+                self._set_message(
+                    f"Failed to delete provider '{label}': provider credential cleanup could not be completed"
+                )
+                return
+            except Exception:
+                self._set_message(
+                    f"Failed to delete provider '{label}': provider credential cleanup could not be completed"
+                )
+                return
+            if deleted:
                 self.app.pop_screen()
                 new_screen = ModelProvidersScreen()
                 statuses = new_screen._current_statuses(force_reload=True)
