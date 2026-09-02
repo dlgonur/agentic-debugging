@@ -764,29 +764,122 @@ def quarantined_providers() -> List[str]:
     return sorted(_load_quarantined_providers())
 
 
+def _purge_legacy_cached_catalog(kind: str) -> None:
+    """Strictly purge cached catalog for one legacy provider during migration.
+
+    Fails closed if the cache file cannot be read, is corrupt/oversized/invalid,
+    or cannot be written back cleanly.
+    """
+    path = catalog_cache_path()
+    try:
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        return
+    except OSError as exc:
+        raise ProviderConnectionError(
+            "provider catalog cache could not be read during legacy migration"
+        ) from exc
+
+    if len(raw) > _MAX_CACHE_FILE_BYTES:
+        raise ProviderConnectionError(
+            "provider catalog cache exceeded file bound during legacy migration"
+        )
+    try:
+        decoded = json.loads(raw.decode("utf-8"))
+    except (UnicodeError, json.JSONDecodeError) as exc:
+        raise ProviderConnectionError(
+            "provider catalog cache is malformed during legacy migration"
+        ) from exc
+
+    if (
+        not isinstance(decoded, Mapping)
+        or decoded.get("schema_version") != _CACHE_SCHEMA_VERSION
+        or not isinstance(decoded.get("providers"), dict)
+    ):
+        raise ProviderConnectionError(
+            "provider catalog cache is invalid during legacy migration"
+        )
+
+    providers = decoded["providers"]
+    if kind not in providers:
+        return
+
+    del providers[kind]
+    payload = json.dumps(
+        {
+            "schema_version": _CACHE_SCHEMA_VERSION,
+            "providers": providers,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        indent=1,
+    ).encode("utf-8")
+    if len(payload) > _MAX_CACHE_FILE_BYTES:
+        raise ProviderConnectionError(
+            "provider catalog cache exceeded file bound during legacy migration"
+        )
+
+    temporary: Optional[Path] = None
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(
+            mode="wb",
+            prefix=path.name + ".",
+            suffix=".tmp",
+            dir=path.parent,
+            delete=False,
+        ) as stream:
+            temporary = Path(stream.name)
+            stream.write(payload)
+        os.replace(temporary, path)
+    except OSError as exc:
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass
+        raise ProviderConnectionError(
+            "provider catalog cache could not be written during legacy migration"
+        ) from exc
+
+
 def _migrate_legacy_builtin_records(
     cleaned_configs: List[ProviderConfig],
     legacy_ids: List[str],
 ) -> None:
-    """Migrate away legacy auto-seeded built-in provider records and purge their orphan state."""
+    """Migrate away legacy auto-seeded built-in provider records and purge their orphan state.
+
+    Invariant: All associated legacy state (credentials, session keys, cached
+    catalogs, and quarantine markers) MUST be successfully and verifiably purged
+    BEFORE the cleaned configuration is committed to disk. If any cleanup step
+    or the final configuration persistence fails, a ProviderConnectionError is
+    raised and the durable legacy records remain on disk so migration remains
+    retryable.
+    """
+    for pid in legacy_ids:
+        previous_cred = load_secure_credential(pid)
+        if previous_cred is not None:
+            deleted = delete_secure_credential(pid)
+            remaining = load_secure_credential(pid)
+            if not deleted or remaining is not None:
+                raise ProviderConnectionError(
+                    f"legacy provider credential cleanup failed for {pid!r}"
+                )
+
+        clear_session_key(pid)
+        _purge_legacy_cached_catalog(pid)
+        clear_provider_quarantine(pid)
+        if is_provider_quarantined(pid):
+            raise ProviderConnectionError(
+                f"legacy provider quarantine cleanup failed for {pid!r}"
+            )
+
     try:
         save_provider_configurations(cleaned_configs)
     except Exception as exc:
         raise ProviderConnectionError(
             "legacy provider migration could not save updated configuration"
         ) from exc
-
-    for pid in legacy_ids:
-        try:
-            delete_cached_catalog(pid)
-            delete_secure_credential(pid)
-            clear_session_key(pid)
-            if is_provider_quarantined(pid):
-                clear_provider_quarantine(pid)
-        except Exception as exc:
-            raise ProviderConnectionError(
-                f"legacy provider state cleanup failed for {pid!r}"
-            ) from exc
 
 
 def load_provider_configurations() -> List[ProviderConfig]:
@@ -1187,16 +1280,17 @@ def credential_source_for(kind: str) -> Optional[str]:
 
 def resolve_runtime_credential(kind: str) -> Optional[str]:
     """The credential value for one direct-API request (runtime only)."""
-    session_var = _session_env_var_for(kind)
-    forwarded_value = os.environ.get(session_var)
-    if _credential_is_usable(forwarded_value):
-        return forwarded_value.strip()
-
     cfg = get_provider_config(kind)
     if cfg is None or not cfg.enabled:
         return None
     if is_provider_quarantined(kind):
         return None
+
+    session_var = _session_env_var_for(kind)
+    forwarded_value = os.environ.get(session_var)
+    if _credential_is_usable(forwarded_value):
+        return forwarded_value.strip()
+
     saved_value = load_secure_credential(kind)
     if saved_value and _credential_is_usable(saved_value):
         return saved_value.strip()
@@ -1243,6 +1337,9 @@ def provider_transport_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
     """Child environment forwarding for the direct adapter."""
+    cfg = get_provider_config(kind)
+    if cfg is None or not cfg.enabled:
+        return None
     if is_provider_quarantined(kind):
         return None
     contract = _BUILTIN_CONTRACTS.get(kind)
@@ -1256,8 +1353,7 @@ def provider_transport_credential_environment(
     forwarded_value = os.environ.get(session_var)
     if _credential_is_usable(forwarded_value):
         return {session_var: forwarded_value.strip()}
-    cfg = get_provider_config(kind)
-    if cfg is not None and cfg.enabled and contract and contract.env_var:
+    if contract and contract.env_var:
         env_value = os.environ.get(contract.env_var)
         if _credential_is_usable(env_value):
             return {contract.env_var: env_value.strip()}

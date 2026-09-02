@@ -149,6 +149,24 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
     bounded explicit environment/cwd, and tree-wide termination.
     """
 
+    @staticmethod
+    def subprocess_environment() -> Dict[str, str]:
+        environment = dict(JsonlCommandTransport.subprocess_environment())
+        for name in (
+            "LOCALAPPDATA",
+            "USERPROFILE",
+            "HOME",
+            "AGENTIC_DEBUGGER_CONFIG_DIR",
+            "AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH",
+            "AGENTIC_DEBUGGER_PROVIDER_CATALOG_CACHE_PATH",
+            "AGENTIC_DEBUGGER_PROVIDER_QUARANTINE_PATH",
+            "AGENTIC_DEBUGGER_DISABLE_SECURE_STORE",
+        ):
+            val = os.environ.get(name)
+            if val is not None:
+                environment[name] = val
+        return environment
+
     def __init__(
         self,
         config: LiveModelConfig,

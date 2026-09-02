@@ -445,6 +445,8 @@ def test_connection_authority_separation_unconfigured_builtins_fail_closed(
     assert pc.credential_source_for("opencode_go") is None
     assert pc.resolve_runtime_credential("commandcode_goat") is None
     assert pc.resolve_runtime_credential("opencode_go") is None
+    assert pc.provider_transport_credential_environment("commandcode_goat") is None
+    assert pc.provider_transport_credential_environment("opencode_go") is None
 
     # Base URL raises ProviderConnectionError
     with pytest.raises(pc.ProviderConnectionError):
@@ -473,3 +475,249 @@ def test_connection_authority_separation_unconfigured_builtins_fail_closed(
         })
     assert "not a known provider" in str(exc_scen.value)
 
+
+def test_orphan_credential_reuse_regression_and_retry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Secure credential deletion failure during migration fails closed, remains retryable, and never resurrects."""
+    config_file = tmp_path / "provider-configurations.json"
+    cache_file = tmp_path / "provider-catalog-cache.json"
+    quarantine_file = tmp_path / "provider-credential-quarantine.json"
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CATALOG_CACHE_PATH", str(cache_file))
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_QUARANTINE_PATH", str(quarantine_file))
+
+    # 1. Seed legacy: commandcode_goat with is_builtin=True
+    legacy_payload = {
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {
+                "provider_id": "commandcode_goat",
+                "name": "CommandCode GOAT",
+                "base_url": "https://api.commandcode.ai/provider/v1",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [],
+            }
+        ],
+    }
+    config_file.write_text(json.dumps(legacy_payload, indent=2), encoding="utf-8")
+
+    # 2. Seed saved legacy credential in secure storage
+    pc.save_secure_credential("commandcode_goat", "legacy-orphan-test-key-12345")
+    assert pc.has_secure_credential("commandcode_goat") is True
+    assert pc.load_secure_credential("commandcode_goat") == "legacy-orphan-test-key-12345"
+
+    # 3. Fault-inject secure deletion failure
+    original_delete = pc.delete_secure_credential
+    monkeypatch.setattr(pc, "delete_secure_credential", lambda pid: False)
+
+    # 4. Trigger migration -> MUST fail closed with ProviderConnectionError
+    with pytest.raises(pc.ProviderConnectionError) as exc_info:
+        pc.load_provider_configurations()
+    assert "credential cleanup failed" in str(exc_info.value)
+
+    # Assert: migration authority was NOT lost, provider config file still contains is_builtin=True
+    persisted_on_disk = json.loads(config_file.read_text(encoding="utf-8"))
+    assert len(persisted_on_disk["providers"]) == 1
+    assert persisted_on_disk["providers"][0]["provider_id"] == "commandcode_goat"
+    assert persisted_on_disk["providers"][0]["is_builtin"] is True
+    assert pc.has_secure_credential("commandcode_goat") is True
+
+    # 5. Restore credential deletion
+    monkeypatch.setattr(pc, "delete_secure_credential", original_delete)
+
+    # 6. Retry migration -> completes cleanly
+    configs = pc.load_provider_configurations()
+    assert configs == []
+    assert pc.has_secure_credential("commandcode_goat") is False
+    assert pc.load_secure_credential("commandcode_goat") is None
+    persisted_after = json.loads(config_file.read_text(encoding="utf-8"))
+    assert persisted_after["providers"] == []
+
+    # 7. Explicitly recreate CommandCode with correct URL and api_key=None
+    created = pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+        api_key=None,
+    )
+    assert created.provider_id == "commandcode_goat"
+    assert pc.has_secure_credential("commandcode_goat") is False
+    assert pc.credential_source_for("commandcode_goat") is None
+    assert pc.resolve_runtime_credential("commandcode_goat") is None
+
+    # 8. Explicitly save a NEW key
+    pc.update_provider_config(
+        provider_id="commandcode_goat",
+        api_key="new-explicit-key-99999",
+    )
+    assert pc.has_secure_credential("commandcode_goat") is True
+    assert pc.credential_source_for("commandcode_goat") == pc.CREDENTIAL_SOURCE_SAVED
+    assert pc.resolve_runtime_credential("commandcode_goat") == "new-explicit-key-99999"
+
+
+def test_legacy_migration_stale_catalog_purge_failure_and_non_reuse(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Stale catalog purge failure during migration fails closed; after successful migration stale catalog never reappears."""
+    config_file = tmp_path / "provider-configurations.json"
+    cache_file = tmp_path / "provider-catalog-cache.json"
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CATALOG_CACHE_PATH", str(cache_file))
+
+    # Seed legacy config
+    legacy_payload = {
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {
+                "provider_id": "commandcode_goat",
+                "name": "CommandCode GOAT",
+                "base_url": "http://127.0.0.1:56207",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [],
+            }
+        ],
+    }
+    config_file.write_text(json.dumps(legacy_payload, indent=2), encoding="utf-8")
+
+    # Seed cache file with 2 models
+    cache_data = {
+        "schema_version": "provider-catalog-cache-v1",
+        "providers": {
+            "commandcode_goat": {
+                "kind": "commandcode_goat",
+                "fetched_at_utc": "2026-09-02T00:00:00Z",
+                "source": "live",
+                "truncated": False,
+                "models": [
+                    {"model_id": "localhost/local-model-1", "protocol": "chat_completions"},
+                    {"model_id": "localhost/local-model-2", "protocol": "chat_completions"},
+                ],
+            }
+        },
+    }
+    cache_file.write_text(json.dumps(cache_data, indent=2), encoding="utf-8")
+
+    # Fault-inject cache write failure during purge
+    original_replace = os.replace
+    def failing_replace(src, dst):
+        if "provider-catalog-cache.json" in str(dst):
+            raise OSError("simulated disk error writing catalog cache")
+        return original_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", failing_replace)
+
+    # Migration fails closed
+    with pytest.raises(pc.ProviderConnectionError) as exc_info:
+        pc.load_provider_configurations()
+    assert "catalog cache could not be written" in str(exc_info.value)
+
+    # Config file still has legacy record (not committed)
+    persisted = json.loads(config_file.read_text(encoding="utf-8"))
+    assert persisted["providers"][0]["is_builtin"] is True
+
+    # Restore replace and retry migration
+    monkeypatch.setattr(os, "replace", original_replace)
+    configs = pc.load_provider_configurations()
+    assert configs == []
+    assert json.loads(config_file.read_text(encoding="utf-8"))["providers"] == []
+
+    # Re-create CommandCode provider explicitly
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+
+    # Previous localhost 2-model catalog must NOT reappear
+    assert pc.load_cached_catalog("commandcode_goat") is None
+    status = pc.provider_connection_status("commandcode_goat")
+    assert status.model_count == 0
+    assert status.cached_models == ()
+
+
+def test_legacy_migration_corrupt_quarantine_fails_closed_and_preserves_bytes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Corrupt quarantine file causes migration to fail closed without overwriting quarantine or config."""
+    config_file = tmp_path / "provider-configurations.json"
+    quarantine_file = tmp_path / "provider-credential-quarantine.json"
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_QUARANTINE_PATH", str(quarantine_file))
+
+    # Seed legacy config
+    legacy_payload = {
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {
+                "provider_id": "commandcode_goat",
+                "name": "CommandCode GOAT",
+                "base_url": "https://api.commandcode.ai/provider/v1",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [],
+            }
+        ],
+    }
+    config_file.write_text(json.dumps(legacy_payload, indent=2), encoding="utf-8")
+
+    corrupt_quarantine_bytes = b"{\n  \"schema_version\": \"unknown-v99\", [CORRUPT..."
+    quarantine_file.write_bytes(corrupt_quarantine_bytes)
+
+    # Migration fails closed
+    with pytest.raises(pc.ProviderConnectionError):
+        pc.load_provider_configurations()
+
+    # Quarantine bytes and config bytes are untouched
+    assert quarantine_file.read_bytes() == corrupt_quarantine_bytes
+    assert json.loads(config_file.read_text(encoding="utf-8"))["providers"][0]["is_builtin"] is True
+
+    # Fix quarantine file and retry
+    quarantine_file.unlink()
+    configs = pc.load_provider_configurations()
+    assert configs == []
+
+
+def test_forwarded_credential_authority_boundary(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Forwarded private credential is rejected when provider is unconfigured, accepted when configured."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+
+    # Set ambient env and private session env
+    monkeypatch.setenv("COMMAND_CODE_API_KEY", "ambient-test-key-111")
+    monkeypatch.setenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", "forwarded-private-key-222")
+
+    # 1. Unconfigured provider -> all credential resolution helpers return None
+    assert pc.is_known_provider("commandcode_goat") is False
+    assert pc.credential_source_for("commandcode_goat") is None
+    assert pc.resolve_runtime_credential("commandcode_goat") is None
+    assert pc.provider_transport_credential_environment("commandcode_goat") is None
+    assert pc.provider_session_credential_environment("commandcode_goat") is None
+
+    # 2. Explicitly configure provider
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+
+    # 3. Configured provider -> forwarded private session variable is accepted for worker hop
+    assert pc.is_known_provider("commandcode_goat") is True
+    assert pc.credential_source_for("commandcode_goat") == pc.CREDENTIAL_SOURCE_SESSION_KEY
+    assert pc.resolve_runtime_credential("commandcode_goat") == "forwarded-private-key-222"
+    assert pc.provider_transport_credential_environment("commandcode_goat") == {
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": "forwarded-private-key-222"
+    }

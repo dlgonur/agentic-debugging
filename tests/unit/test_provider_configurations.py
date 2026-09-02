@@ -1434,5 +1434,80 @@ def test_catastrophic_recovery_via_explicit_successful_save(monkeypatch: pytest.
         assert server.requests[0]["authorization"] == "Bearer recovered-new-key"
 
 
+def test_migration_transaction_ordering_clean_state_first(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Migration strictly cleans state before committing config; if credential deletion fails, config marker remains."""
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+
+    # Seed legacy config
+    legacy_payload = {
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {
+                "provider_id": "commandcode_goat",
+                "name": "CommandCode GOAT",
+                "base_url": "https://api.commandcode.ai/provider/v1",
+                "api_format": "chat_completions",
+                "enabled": True,
+                "is_builtin": True,
+                "models": [],
+            }
+        ],
+    }
+    config_file.write_text(json.dumps(legacy_payload), encoding="utf-8")
+
+    # Mock secure store with a saved key
+    store = {"commandcode_goat": "legacy-secret-key"}
+    monkeypatch.setattr(pc, "load_secure_credential", lambda pid: store.get(pid))
+    monkeypatch.setattr(pc, "has_secure_credential", lambda pid: pid in store)
+
+    # 1. Fault-inject deletion failure (returns False, key still in store)
+    monkeypatch.setattr(pc, "delete_secure_credential", lambda pid: False)
+
+    # Migration fails closed
+    with pytest.raises(ProviderConnectionError) as exc_info:
+        load_provider_configurations()
+    assert "credential cleanup failed" in str(exc_info.value)
+
+    # Durable configuration on disk was NOT updated
+    raw_disk = json.loads(config_file.read_text(encoding="utf-8"))
+    assert len(raw_disk["providers"]) == 1
+    assert raw_disk["providers"][0]["is_builtin"] is True
+
+    # 2. Fix deletion and retry
+    def successful_delete(pid):
+        store.pop(pid, None)
+        return True
+
+    monkeypatch.setattr(pc, "delete_secure_credential", successful_delete)
+    configs = load_provider_configurations()
+    assert configs == []
+    raw_disk_after = json.loads(config_file.read_text(encoding="utf-8"))
+    assert raw_disk_after["providers"] == []
+    assert store == {}
 
 
+def test_credential_helpers_reject_unconfigured_provider_with_forwarded_and_ambient_env(monkeypatch: pytest.MonkeyPatch):
+    """resolve_runtime_credential and provider_transport_credential_environment reject unconfigured providers."""
+    monkeypatch.setenv("COMMAND_CODE_API_KEY", "ambient-test-key")
+    monkeypatch.setenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", "forwarded-session-key")
+
+    assert is_known_provider("commandcode_goat") is False
+    assert credential_source_for("commandcode_goat") is None
+    assert resolve_runtime_credential("commandcode_goat") is None
+    assert provider_transport_credential_environment("commandcode_goat") is None
+    assert provider_transport_environment("commandcode_goat") is None
+
+    # Recreating provider explicitly permits forwarded private session variable
+    add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+    assert is_known_provider("commandcode_goat") is True
+    assert credential_source_for("commandcode_goat") == CREDENTIAL_SOURCE_SESSION_KEY
+    assert resolve_runtime_credential("commandcode_goat") == "forwarded-session-key"
+    assert provider_transport_credential_environment("commandcode_goat") == {
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": "forwarded-session-key"
+    }
