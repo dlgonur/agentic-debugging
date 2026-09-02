@@ -10,8 +10,10 @@ Contract (identical to the accepted adapters):
 
 1. Read exactly one protocol-1.3 JSON request object from stdin.
 2. Validate the request context and the logical-call envelope.
-3. Build the instruction-wrapped prompt (shared frozen shaping —
-   imported, not duplicated).
+3. Build the model-facing prompt pair through the provider-neutral
+   protocol-1.3 shaping authority (``scripts/protocol_prompt_shaper.py``),
+   then shape it per protocol family using that family's dedicated
+   system/instruction channel.
 4. Resolve the credential inside this boundary only: the app-injected
    session credential, the app-supported provider environment source,
    or (OpenCode Go) the CLI auth store read in place.  The value never
@@ -42,6 +44,12 @@ try:
 except ImportError:  # pragma: no cover - defensive import path
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     import opencode_go_command_adapter as frozen
+
+try:
+    import protocol_prompt_shaper as prompt_shaper
+except ImportError:  # pragma: no cover - defensive import path
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import protocol_prompt_shaper as prompt_shaper
 
 try:
     from agentic_debugger.application.provider_connections import (
@@ -157,27 +165,42 @@ def validate_logical_call_index(request: Mapping[str, Any], maximum: int) -> Non
 
 
 def build_provider_payload(
-    protocol: str, model_id: str, prompt: str
+    protocol: str,
+    model_id: str,
+    *,
+    system_prompt: str,
+    user_prompt: str,
 ) -> Mapping[str, Any]:
     """The bounded provider request for one protocol family.
 
-    One shared prompt (the protocol-1.3 instruction-wrapped message)
-    shaped per family; no hidden parameters, no streaming, no retries.
+    One shared provider-neutral prompt pair (the protocol-1.3 system
+    instruction plus the request-specific user message) shaped per family
+    using each protocol's dedicated system/instruction channel; no hidden
+    parameters, no streaming, no retries.
     """
 
     if protocol == "chat_completions":
         return {
             "model": model_id,
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
             "stream": False,
         }
     if protocol == "responses":
-        return {"model": model_id, "input": prompt, "stream": False}
+        return {
+            "model": model_id,
+            "instructions": system_prompt,
+            "input": user_prompt,
+            "stream": False,
+        }
     if protocol == "messages":
         return {
             "model": model_id,
             "max_tokens": _MESSAGES_MAX_TOKENS,
-            "messages": [{"role": "user", "content": prompt}],
+            "system": system_prompt,
+            "messages": [{"role": "user", "content": user_prompt}],
         }
     raise ProviderDirectApiError(
         f"unsupported protocol family: {protocol!r}", kind="configuration"
@@ -310,8 +333,9 @@ def perform_inference(
     provider: str,
     model_id: str,
     protocol: str,
-    prompt: str,
     *,
+    system_prompt: str,
+    user_prompt: str,
     timeout_seconds: float,
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
@@ -331,7 +355,10 @@ def perform_inference(
         )
     path = inference_path_for(provider, protocol)
     payload = build_provider_payload(
-        protocol, provider_api_model_id(provider, model_id), prompt
+        protocol,
+        provider_api_model_id(provider, model_id),
+        system_prompt=system_prompt,
+        user_prompt=user_prompt,
     )
     endpoint = (base_url or provider_base_url(provider)).rstrip("/")
     tls_blocked = False
@@ -418,15 +445,22 @@ def run_adapter(
             )
     request = read_request(stdin_stream)
     validate_logical_call_index(request, max_logical_calls)
+    # The provider-neutral protocol-1.3 shaping authority: the same mature
+    # system-role instruction and request-specific legal-representation
+    # guidance every model transport consumes.  The direct-API route keeps
+    # its own established public-request byte ceiling.
     try:
-        message = frozen.build_protocol_message(request)
-    except ValueError as exc:
-        raise ProviderDirectApiError(str(exc), kind="request_too_large") from None
+        system_message, user_message = prompt_shaper.build_chat_messages(
+            request, max_request_bytes=frozen.MAX_PUBLIC_REQUEST_BYTES
+        )
+    except prompt_shaper.ProtocolPromptError as exc:
+        raise ProviderDirectApiError(str(exc), kind=exc.kind) from None
     text, usage = perform_inference(
         provider,
         model,
         protocol,
-        message,
+        system_prompt=system_message["content"],
+        user_prompt=user_message["content"],
         timeout_seconds=timeout_seconds,
         engine=engine,
         base_url=base_url,

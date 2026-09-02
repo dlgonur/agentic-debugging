@@ -1003,7 +1003,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     registry=_build_local_registry(demo_context, pdb_policy=pdb_policy_for(policy), interactive_debugger_controls=False)
     if provider_live_config is not None:
         live_config=provider_live_config
-        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
+        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
         # Direct-API routes receive exactly one bounded credential
         # override in the adapter child environment (never argv, never
         # evidence); legacy CLI routes read the operator auth store in
@@ -1013,11 +1013,11 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     elif ollama_profile is not None:
         from scripts.ollama_cloud_command_adapter import build_ollama_live_config
         live_config = build_ollama_live_config(ollama_profile.alias, logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS)
-        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
+        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
         transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter)
     else:
         live_config=LiveModelConfig(model_name=profile.display_name, command=profile.live_command(), request_timeout_seconds=profile.request_timeout_seconds, tool_version=profile.tool_version)
-        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
+        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
         transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter, cwd=profile.cwd, environment=dict(profile.environment) if profile.environment else None)
     # Safe durable model provenance (same contract as the configured/ladder
     # sources): the journal records which model actually serves this Local

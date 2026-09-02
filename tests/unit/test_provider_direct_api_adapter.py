@@ -71,6 +71,21 @@ def _clean_session_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
+    # The provider store is user-owned: the two builtin direct-API providers
+    # must exist explicitly (as in production) so model/protocol resolution
+    # follows the real configured path instead of an auto-seeded fallback.
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/provider/v1",
+        api_format=pc.PROTOCOL_RESPONSES,
+        provider_id="opencode_go",
+    )
     yield
     pc.clear_all_session_keys()
 
@@ -87,6 +102,11 @@ def fake_commandcode(monkeypatch: pytest.MonkeyPatch):
                 original, base_url=server.base_url, tls_signature_blocked=False
             )
             monkeypatch.setitem(pc._CONTRACTS, "commandcode_goat", fake)
+            # The user-owned provider configuration owns the runtime base
+            # URL; point it at the fake server like an operator would.
+            pc.update_provider_config(
+                "commandcode_goat", base_url=server.base_url
+            )
             monkeypatch.setenv("COMMAND_CODE_API_KEY", SECRET)
             yield server
 
@@ -106,6 +126,7 @@ def fake_opencode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
                 original, base_url=server.base_url, tls_signature_blocked=False
             )
             monkeypatch.setitem(pc._CONTRACTS, "opencode_go", fake)
+            pc.update_provider_config("opencode_go", base_url=server.base_url)
             store = tmp_path / "auth.json"
             store.write_text(
                 json.dumps({"opencode-go": {"type": "api", "key": SECRET}}),
@@ -191,7 +212,12 @@ class TestInferenceFamilies:
         assert payload["directive_content"] == _DIRECTIVE
         assert server.requests[0]["path"] == "/responses"
         body = json.loads(server.requests[0]["body"].decode("utf-8"))
-        assert body["input"].startswith("You are")
+        # The Responses family uses its dedicated instructions channel for
+        # the system instruction; the user message carries the public
+        # request (never a system+user concatenation).
+        assert body["instructions"].startswith("You are")
+        assert "=== BEGIN PUBLIC REQUEST ===" in body["input"]
+        assert not body["input"].startswith("You are")
 
     def test_messages_family_direct_inference(self, fake_commandcode) -> None:
         with fake_commandcode(
@@ -206,6 +232,11 @@ class TestInferenceFamilies:
         assert server.requests[0]["path"] == "/messages"
         body = json.loads(server.requests[0]["body"].decode("utf-8"))
         assert body["max_tokens"] == adapter._MESSAGES_MAX_TOKENS
+        # The Anthropic Messages family uses the dedicated top-level system
+        # channel; the user message is bounded user input only.
+        assert body["system"].startswith("You are")
+        assert [m["role"] for m in body["messages"]] == ["user"]
+        assert "=== BEGIN PUBLIC REQUEST ===" in body["messages"][-1]["content"]
 
     def test_messages_family_maps_input_tokens(self, fake_commandcode) -> None:
         payload_body = scripted_messages_output(_DIRECTIVE)
@@ -225,16 +256,28 @@ class TestInferenceFamilies:
         assert "usage" not in payload
 
     def test_prompt_uses_shared_protocol_shaping(self, fake_commandcode) -> None:
-        """One shared protocol-1.3 shaping, imported not duplicated."""
+        """One provider-neutral protocol-1.3 shaping, imported not duplicated:
+        a real system role plus the request-shaped user message."""
 
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ) as server:
             run_adapter()
         body = json.loads(server.requests[0]["body"].decode("utf-8"))
-        from opencode_go_command_adapter import PUBLIC_REQUEST_START
+        import protocol_prompt_shaper as shaper
 
-        assert PUBLIC_REQUEST_START in body["messages"][0]["content"]
+        assert [message["role"] for message in body["messages"]] == [
+            "system",
+            "user",
+        ]
+        assert body["messages"][0]["content"] == shaper.SYSTEM_PROMPT
+        assert (
+            "=== BEGIN PUBLIC REQUEST ==="
+            in body["messages"][1]["content"]
+        )
+        assert body["messages"][1]["content"].startswith(
+            "Current request legal decision surface:"
+        )
 
 
 class TestCredentialBoundary:
@@ -422,6 +465,28 @@ class TestSubprocessContract:
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ) as server:
+            # An isolated user-owned provider store for the child: the
+            # child must never read (or hit) the operator's real
+            # provider configuration.
+            child_config = tmp_path / "child-provider-config.json"
+            child_config.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "provider-configurations-v1",
+                        "providers": [
+                            {
+                                "name": "CommandCode GOAT",
+                                "provider_id": "commandcode_goat",
+                                "base_url": server.base_url,
+                                "api_format": "chat_completions",
+                                "created_utc": "2026-01-01T00:00:00Z",
+                                "models": [],
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
             bootstrap = (
                 "import sys; "
                 f"sys.path.insert(0, {str(REPO_ROOT)!r}); "
@@ -456,6 +521,7 @@ class TestSubprocessContract:
                 env={
                     "PATH": os.environ.get("PATH", ""),
                     "COMMAND_CODE_API_KEY": SECRET,
+                    "AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH": str(child_config),
                     "PYTHONIOENCODING": "utf-8",
                     "SystemRoot": os.environ.get("SystemRoot", ""),
                 },

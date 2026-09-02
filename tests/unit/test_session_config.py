@@ -211,6 +211,42 @@ class TestLadderTarget:
         assert readiness.run_label == "Start session"
         assert any("operator contract" in note for note in readiness.notes)
 
+    def test_unqualified_provider_model_notes_show_bounded_directive_repair(self):
+        from agentic_debugger.application.ollama_cloud_source import (
+            INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+        )
+
+        catalog = _catalog(
+            models=_catalog().models
+            + (
+                ModelOption(
+                    PROVIDER_COMMANDCODE,
+                    "deepseek/deepseek-v4-flash",
+                    "DeepSeek",
+                ),
+            )
+        )
+        readiness = derive_readiness(
+            self._ladder(
+                model=ModelChoice(
+                    PROVIDER_COMMANDCODE, "deepseek/deepseek-v4-flash", "DeepSeek"
+                )
+            ),
+            catalog,
+            _CLEAN,
+        )
+        assert readiness.ready is True
+        joined = " | ".join(readiness.notes)
+        assert "interactive ladder execution" in joined.lower()
+        assert (
+            f"directive repair: up to {INTERACTIVE_LADDER_DIRECTIVE_REPAIRS}" in joined.lower()
+        )
+        assert "not a qualified scientific treatment" in joined.lower()
+        # The qualified Ollama ladder model never shows the interactive
+        # directive-repair budget.
+        qualified = derive_readiness(self._ladder(), _catalog(), _CLEAN)
+        assert "directive repair" not in " | ".join(qualified.notes).lower()
+
     def test_curated_task_under_ladder_blocks(self):
         readiness = derive_readiness(self._ladder(task_id="curated-off-by-one-002"), _catalog(), _CLEAN)
         assert readiness.ready is False

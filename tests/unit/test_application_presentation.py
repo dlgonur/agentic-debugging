@@ -1106,3 +1106,64 @@ class TestTimelineDurationTruth:
             ),
         )
         assert state.timeline[-1].duration_seconds is None
+
+
+def test_model_error_header_surfaces_typed_rejection_cause():
+    """A terminal model error shows the typed cause the architecture owns
+    (e.g. malformed_directive), not only a generic label."""
+    from agentic_debugger.application.presentation import (
+        PresentationIdentity,
+        initial_session_view,
+        reduce_event,
+    )
+    from agentic_debugger.application.events import (
+        SessionEvent,
+        SessionEventKind,
+        SessionStatus,
+        SessionTerminationReason,
+        SourceKind,
+    )
+    from agentic_debugger.ui.screens import render_view_header
+
+    view = initial_session_view(
+        PresentationIdentity(task_id="pdb-required-boundary-006", source_kind=SourceKind.CONFIGURED_MODEL)
+    )
+    def event(sequence, kind, payload):
+        return SessionEvent(
+            schema_version="session-event-v1",
+            session_id="session-x",
+            task_id="pdb-required-boundary-006",
+            run_id="run-x",
+            sequence=sequence,
+            timestamp_utc="2026-01-01T00:00:00Z",
+            source_kind=SourceKind.CONFIGURED_MODEL,
+            event_kind=kind,
+            controller_phase=None,
+            payload=payload,
+        )
+
+    events = [
+        event(1, SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 12}),
+        event(
+            2,
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 12,
+                "status": "error",
+                "error_kind": "malformed_directive",
+                "error_message": "invalid model directive",
+            },
+        ),
+        event(
+            3,
+            SessionEventKind.SESSION_FAILED,
+            {"status": "failed", "termination_reason": "model_error"},
+        ),
+    ]
+    for event in events:
+        view = reduce_event(view, event)
+    assert view.termination_reason is SessionTerminationReason.MODEL_ERROR
+    assert view.latest_model_error_kind == "malformed_directive"
+    head = render_view_header(view, mode="LIVE", mode_style="bold")
+    text_head = head.plain if hasattr(head, "plain") else str(head)
+    assert "model error (malformed_directive)" in text_head

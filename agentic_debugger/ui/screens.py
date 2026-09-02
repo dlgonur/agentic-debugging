@@ -337,7 +337,16 @@ def render_view_header(
         elif view.verifier_stages:
             verifier = "verifier incomplete" if view.status.terminal else "verifier running"
         elif view.termination_reason is SessionTerminationReason.MODEL_ERROR:
-            verifier = "model error"
+            # Surface the typed cause the architecture already owns (e.g.
+            # malformed_directive, illegal_action, invalid_argument) instead
+            # of only a generic "model error"; the bounded timeline retains
+            # the same typed information.
+            error_kind = getattr(view, "latest_model_error_kind", None)
+            verifier = (
+                f"model error ({error_kind})"
+                if type(error_kind) is str and error_kind
+                else "model error"
+            )
         elif view.termination_reason is SessionTerminationReason.DIRECTIVE_EXHAUSTED:
             verifier = "controller budget exhausted"
         elif view.termination_reason is SessionTerminationReason.CONTROLLER_FAILED:

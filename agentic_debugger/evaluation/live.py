@@ -365,21 +365,33 @@ class LiveExecutionAuthorization:
 
 @dataclass(frozen=True)
 class LiveRunLimits:
-    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None; treatment_budget:"LiveTreatmentBudget|None"=None
+    # ``max_retries`` governs provider/transport retries only.  A malformed
+    # or illegal model directive is NOT a network retry: bounded directive
+    # repair attempts (same controller snapshot, typed directive_feedback,
+    # no controller advance, no tool dispatch, real model requests inside
+    # the overall request ceiling) are governed separately by
+    # ``max_directive_repairs``.  The frozen scientific default is 0
+    # (one malformed directive terminates the case); interactive runs opt
+    # in explicitly.
+    max_model_requests:int=64; max_controller_steps:int=64; max_model_phase_seconds:int=900; max_retries:int=2; continue_on_task_failure:bool=True; max_response_bytes:int=MAX_MODEL_RESPONSE_BYTES; max_elapsed_seconds:int|None=None; treatment_budget:"LiveTreatmentBudget|None"=None; max_directive_repairs:int=0
     def __post_init__(self):
         if self.max_elapsed_seconds is not None:
             if type(self.max_elapsed_seconds) is not int:
                 raise LiveConfigurationError("max_elapsed_seconds is invalid")
             object.__setattr__(self,"max_model_phase_seconds",self.max_elapsed_seconds)
-        for name,value,low,high in (("max_model_requests",self.max_model_requests,1,512),("max_controller_steps",self.max_controller_steps,1,256),("max_model_phase_seconds",self.max_model_phase_seconds,1,3600),("max_retries",self.max_retries,0,8),("max_response_bytes",self.max_response_bytes,1024,4*1024*1024)):
+        for name,value,low,high in (("max_model_requests",self.max_model_requests,1,512),("max_controller_steps",self.max_controller_steps,1,256),("max_model_phase_seconds",self.max_model_phase_seconds,1,3600),("max_retries",self.max_retries,0,8),("max_response_bytes",self.max_response_bytes,1024,4*1024*1024),("max_directive_repairs",self.max_directive_repairs,0,8)):
             if type(value) is not int or not low<=value<=high: raise LiveConfigurationError(name+" is invalid")
         if type(self.continue_on_task_failure) is not bool: raise LiveConfigurationError("continue_on_task_failure is invalid")
         if self.treatment_budget is not None:
             if not isinstance(self.treatment_budget, LiveTreatmentBudget): raise LiveConfigurationError("treatment_budget is invalid")
             if self.max_model_requests != self.treatment_budget.max_model_requests or self.max_controller_steps != self.treatment_budget.max_controller_steps or self.max_retries != self.treatment_budget.max_retries:
                 raise LiveConfigurationError("treatment budget must be the authoritative global envelope")
+            # The frozen treatment identity carries zero directive repairs;
+            # a treatment-budgeted run must never silently repair directives.
+            if self.max_directive_repairs != 0:
+                raise LiveConfigurationError("treatment budget admits zero directive repairs")
     def to_mapping(self) -> dict[str,Any]:
-        result={"max_model_requests":self.max_model_requests,"max_controller_steps":self.max_controller_steps,"max_model_phase_seconds":self.max_model_phase_seconds,"max_retries":self.max_retries,"max_response_bytes":self.max_response_bytes,"continue_on_task_failure":self.continue_on_task_failure}
+        result={"max_model_requests":self.max_model_requests,"max_controller_steps":self.max_controller_steps,"max_model_phase_seconds":self.max_model_phase_seconds,"max_retries":self.max_retries,"max_directive_repairs":self.max_directive_repairs,"max_response_bytes":self.max_response_bytes,"continue_on_task_failure":self.continue_on_task_failure}
         if self.treatment_budget is not None: result["treatment_budget"]=self.treatment_budget.to_mapping()
         return result
 
@@ -576,13 +588,15 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; stream_frame_count:int=0; thinking_bytes:int=0; action_content_bytes:int=0; retries:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); directive_rejections:int=0; directive_rejection_categories:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
+    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; stream_frame_count:int=0; thinking_bytes:int=0; action_content_bytes:int=0; retries:int=0; directive_repairs:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); directive_rejections:int=0; directive_rejection_categories:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
     def directive_rejection(self, category):
         self.directive_rejections+=1
         if category not in self.directive_rejection_categories: self.directive_rejection_categories.append(category)
+    def directive_repair(self):
+        self.directive_repairs+=1
     def usage(self,value):
         names=("prompt_tokens","completion_tokens","total_tokens")
         if not isinstance(value,Mapping):
@@ -598,7 +612,7 @@ class LiveModelMetrics:
         for source,target in (("stream_frame_count","stream_frame_count"),("thinking_bytes","thinking_bytes"),("content_bytes","action_content_bytes")):
             number=value.get(source)
             if type(number) is int and number>=0: setattr(self,target,getattr(self,target)+number)
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"stream_frame_count":self.stream_frame_count,"thinking_bytes":self.thinking_bytes,"action_content_bytes":self.action_content_bytes,"retry_count":self.retries,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"directive_rejection_count":self.directive_rejections,"directive_rejection_categories":self.directive_rejection_categories,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"stream_frame_count":self.stream_frame_count,"thinking_bytes":self.thinking_bytes,"action_content_bytes":self.action_content_bytes,"retry_count":self.retries,"directive_repair_count":self.directive_repairs,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"directive_rejection_count":self.directive_rejections,"directive_rejection_categories":self.directive_rejection_categories,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "", *, stage: str | None = None, reason_code: str | None = None, content: str | None = None) -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail, stage=stage, reason_code=reason_code, content=content, directive_rejection=True)
@@ -2256,9 +2270,21 @@ class LiveModelAdapter:
         self.history.append(history_entry)
         del self.history[:-MODEL_HISTORY_WINDOW]
         rejection: dict[str, Any] | None = None
-        for attempt in range(self.limits.max_retries+1):
+        # Provider/transport retries and directive repairs are distinct
+        # bounded concepts.  A transport failure (timeout, HTTP, process)
+        # may be retried only under ``max_retries``.  A malformed or
+        # illegal model directive is never a network retry: it consumes a
+        # directive repair (same controller snapshot, typed
+        # directive_feedback on the next request, no controller advance,
+        # no tool dispatch) under ``max_directive_repairs``.  Every attempt
+        # is a real model request inside the overall request ceiling.
+        transport_retries_used = 0
+        directive_repairs_used = 0
+        attempt = 0
+        while True:
+            attempt += 1
             if self.metrics.model_requests>=self.limits.max_model_requests: self.metrics.termination_reason="model_request_limit"; raise LiveModelAdapterError("live model request limit reached")
-            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt+1,contracts=effective_contract,legal_targets=legal_targets,directive_schema=directive_schema,rejection=rejection))
+            request=redact_for_recording(self._request_context(snapshot,logical_request_index=logical_request_index,transport_attempt_index=attempt,contracts=effective_contract,legal_targets=legal_targets,directive_schema=directive_schema,rejection=rejection))
             final_content: str | None = None
             try:
                 request_bytes=json.dumps(request,ensure_ascii=False,allow_nan=False).encode("utf-8")
@@ -2299,7 +2325,7 @@ class LiveModelAdapter:
                 self.metrics.activity(response.get("transport_activity"))
                 attempt_record={
                     "model_call_index": logical_request_index,
-                    "transport_attempt_index": attempt+1,
+                    "transport_attempt_index": attempt,
                     "state": snapshot.state.value,
                     "directive": None,
                     "provider_transport_completed": True,
@@ -2367,7 +2393,8 @@ class LiveModelAdapter:
             except LiveTransportError as exc:
                 rejection=None
                 self.metrics.error(exc.kind)
-                if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
+                if transport_retries_used<self.limits.max_retries:
+                    transport_retries_used+=1; self.metrics.retries+=1; continue
                 self.metrics.termination_reason="request_timeout" if exc.timed_out else "provider_or_transport_error"; raise LiveModelAdapterError(
                     "model transport failed",
                     directive_rejection=False,
@@ -2379,22 +2406,25 @@ class LiveModelAdapter:
                     raise
                 if final_content is not None and exc.content is None:
                     exc.content = final_content
-                rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt+1}
+                rejection={"category":exc.category.value,"message":exc.detail or "the directive was rejected","rejected_transport_attempt":attempt}
                 if (
                     self.directive_attempts
                     and self.directive_attempts[-1].get("model_call_index") == logical_request_index
-                    and self.directive_attempts[-1].get("transport_attempt_index") == attempt+1
+                    and self.directive_attempts[-1].get("transport_attempt_index") == attempt
                     and self.directive_attempts[-1].get("accepted") is False
                 ):
                     self.directive_attempts[-1]["rejection"] = dict(rejection)
                 evidence = serialize_rejection_evidence(stage=exc.stage, category=exc.category.value, reason_code=exc.reason_code, reason=exc.detail, content=exc.content)
                 if validate_rejection_evidence(evidence):
                     self.directive_rejection_evidence.append(evidence)
-                    if self.directive_attempts and self.directive_attempts[-1].get("model_call_index") == logical_request_index and self.directive_attempts[-1].get("transport_attempt_index") == attempt+1:
+                    if self.directive_attempts and self.directive_attempts[-1].get("model_call_index") == logical_request_index and self.directive_attempts[-1].get("transport_attempt_index") == attempt:
                         self.directive_attempts[-1]["rejection_evidence"] = evidence
                 self.directive_rejections.append(dict(rejection))
                 self.metrics.directive_rejection(exc.category.value)
-                if attempt<self.limits.max_retries: self.metrics.retries+=1; continue
+                if directive_repairs_used<self.limits.max_directive_repairs:
+                    directive_repairs_used+=1
+                    self.metrics.directive_repair()
+                    continue
                 self.metrics.termination_reason="directive_rejected"; raise
             finally:
                 self.model_phase_elapsed_seconds += max(0.0,self.clock()-phase_started)

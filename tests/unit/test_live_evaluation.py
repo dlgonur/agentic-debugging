@@ -208,7 +208,7 @@ def _case(tmp_path: Path, transport, **kwargs):
         repetition=kwargs.pop("repetition", 1),
         workspace_parent=tmp_path,
         config=config(),
-        limits=kwargs.pop("limits", LiveRunLimits(max_model_requests=32, max_controller_steps=32)),
+        limits=kwargs.pop("limits", LiveRunLimits(max_model_requests=32, max_controller_steps=32, max_directive_repairs=2)),
         transport=transport,
         **kwargs,
     )
@@ -216,7 +216,7 @@ def _case(tmp_path: Path, transport, **kwargs):
 
 def _single_case_report(case):
     payload = case.to_mapping()
-    limits = LiveRunLimits(max_model_requests=32, max_controller_steps=32)
+    limits = LiveRunLimits(max_model_requests=32, max_controller_steps=32, max_directive_repairs=2)
     evaluation_id = "single-case-validation"
     return {
         "schema_version": "1.1",
@@ -293,7 +293,7 @@ def test_token_usage_survives_redaction_and_secret_values_do_not():
 def test_adapter_request_and_retry_limits_and_unknown_usage():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
     transport = FakeTransport([{"directive": {"kind": "transition", "target_state": "Failed", "reason": "fake stop"}}], failures=2)
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=2), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=2, max_directive_repairs=2), registry=_test_live_registry())
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
     directive = adapter.next_directive(ControllerSnapshot("run", task.task_id, ControllerState.REPRODUCE, 0, ControllerBudgetLimits.from_task_constraints(task.constraints), ControllerBudgetState(), HypothesisLedger()))
@@ -308,7 +308,7 @@ def test_timeout_classification_and_measurements_survive_adapter_failure():
     task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
     transport = FakeTransport(failures=0)
     transport.request = lambda payload, timeout_seconds: (_ for _ in ()).throw(LiveTransportError("timeout", kind="request_timeout", timed_out=True))
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=transport, limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0, max_directive_repairs=0), registry=_test_live_registry())
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
     with pytest.raises(Exception):
@@ -368,7 +368,7 @@ def test_typed_command_error_kind_survives_and_arbitrary_stderr_is_discarded():
         transport=JsonlCommandTransport(
             LiveModelConfig("local", typed_command), max_output_bytes=1024
         ),
-        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
         registry=_test_live_registry(),
     )
     with pytest.raises(LiveModelAdapterError) as adapter_error:
@@ -435,7 +435,7 @@ def test_process_stdin_and_wait_share_the_declared_timeout():
     assert error.value.kind == "request_timeout"
 
 def test_case_provider_failure_and_controller_exception_retain_measurements(workspace_parent, monkeypatch):
-    provider = _case(workspace_parent, FakeTransport(failures=99), limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2, max_retries=1))
+    provider = _case(workspace_parent, FakeTransport(failures=99), limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2, max_retries=1, max_directive_repairs=1))
     assert provider.status is LiveCaseStatus.PROVIDER_ERROR
     assert provider.measurements["model_request_count"] == 2
     assert provider.measurements["provider_error_count"] == 2
@@ -871,7 +871,7 @@ def test_live_uncertainty_gate_is_machine_enforced(kwargs, allowed):
         policy=DemoPolicy.PDB_ON_UNCERTAINTY,
         config=config(),
         transport=transport,
-        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
         registry=_test_live_registry(),
     )
     snapshot = _gate_snapshot(task, **kwargs)
@@ -897,7 +897,7 @@ def test_static_live_policy_does_not_advertise_or_accept_runtime_evidence():
         policy=DemoPolicy.STATIC_BASELINE,
         config=config(),
         transport=transport,
-        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
         registry=_test_live_registry(),
     )
     with pytest.raises(LiveModelAdapterError):
@@ -1006,7 +1006,7 @@ def test_failure_trace_is_advertised_only_after_successful_baseline(tmp_path):
             policy=DemoPolicy.PDB_ON_UNCERTAINTY,
             config=config(),
             transport=transport,
-            limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+            limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
             registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
             proof_required=proof_required,
         )
@@ -1176,7 +1176,7 @@ def test_exact_proof_diagnosis_contract_requires_unique_successful_pdb_observati
             policy=DemoPolicy.PDB_ON_UNCERTAINTY,
             config=config(),
             transport=transport,
-            limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+            limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
             registry=build_registry(context, pdb_policy=PdbPolicy.ON_UNCERTAINTY),
             proof_required=True,
         )
@@ -1433,7 +1433,7 @@ def test_exhausted_pdb_observation_is_illegal_action_and_recovers_to_stop(tmp_pa
             policy=DemoPolicy.PDB_ON_UNCERTAINTY,
             config=config(),
             transport=ExhaustedObservationTransport(),
-            limits=LiveRunLimits(max_model_requests=2, max_retries=1),
+            limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1),
             registry=registry,
         )
         adapter._runtime_transition_authorized = True
@@ -1448,7 +1448,8 @@ def test_exhausted_pdb_observation_is_illegal_action_and_recovers_to_stop(tmp_pa
         assert captured[1]["protocol"]["transport_attempt_index"] == 2
         assert adapter.metrics.model_requests == 2
         assert adapter.metrics.model_responses == 2
-        assert adapter.metrics.retries == 1
+        assert adapter.metrics.retries == 0
+        assert adapter.metrics.directive_repairs == 1
     finally:
         workspace.cleanup()
 
@@ -1553,7 +1554,7 @@ def test_state_illegal_hypothesis_directive_gets_bounded_feedback_and_recovers()
         policy=DemoPolicy.STATIC_BASELINE,
         config=config(),
         transport=IllegalHypothesisThenValid(),
-        limits=LiveRunLimits(max_model_requests=2, max_retries=1),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1),
         registry=_test_live_registry(),
     )
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
@@ -1573,13 +1574,14 @@ def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and
             return {"usage": {"prompt_tokens": 5, "completion_tokens": 6, "total_tokens": 11}, "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     directive = adapter.next_directive(ControllerSnapshot("retry-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
     assert directive.target_state is ControllerState.FAILED
     assert adapter.metrics.model_requests == 2
     assert adapter.metrics.model_responses == 2
-    assert adapter.metrics.retries == 1
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.directive_repairs == 1
     assert adapter.metrics.to_mapping()["token_usage"] == {"prompt_tokens": 8, "completion_tokens": 10, "total_tokens": 18, "provider_reported": True, "missing_fields": []}
     assert captured[0]["protocol"]["logical_model_call_index"] == captured[1]["protocol"]["logical_model_call_index"] == 0
     assert captured[0]["protocol"]["transport_attempt_index"] == 1
@@ -1613,7 +1615,7 @@ def test_stream_activity_is_aggregated_without_reasoning_content():
         policy=DemoPolicy.STATIC_BASELINE,
         config=config(),
         transport=ActivityTransport(),
-        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
         registry=_test_live_registry(),
     )
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
@@ -1655,7 +1657,7 @@ def test_non_string_or_unknown_directive_kind_is_bounded_and_recovers(bad_kind):
         policy=DemoPolicy.STATIC_BASELINE,
         config=config(),
         transport=BadKindThenValidTransport(),
-        limits=LiveRunLimits(max_model_requests=2, max_retries=1),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1),
         registry=_test_live_registry(),
     )
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
@@ -1663,7 +1665,8 @@ def test_non_string_or_unknown_directive_kind_is_bounded_and_recovers(bad_kind):
     assert directive.target_state is ControllerState.FAILED
     assert adapter.metrics.model_requests == 2
     assert adapter.metrics.model_responses == 2
-    assert adapter.metrics.retries == 1
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.directive_repairs == 1
     assert adapter.metrics.to_mapping()["token_usage"] == {
         "prompt_tokens": 4,
         "completion_tokens": 6,
@@ -1698,7 +1701,7 @@ def test_non_string_directive_kind_terminates_without_retry_and_retains_usage():
         policy=DemoPolicy.STATIC_BASELINE,
         config=config(),
         transport=InvalidKindTransport(),
-        limits=LiveRunLimits(max_model_requests=1, max_retries=0),
+        limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0),
         registry=_test_live_registry(),
     )
     with pytest.raises(LiveModelAdapterError):
@@ -1789,7 +1792,7 @@ def test_illegal_action_rejection_carries_category_and_recovers_on_retry():
                 # extract_failing_test is a real ActionName but is only legal in Understand, not Reproduce.
                 return {"directive": {"kind": "action", "name": "extract_failing_test", "arguments": {}}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalActionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalActionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     assert captured[0]["directive_feedback"] is None
@@ -1809,7 +1812,7 @@ def test_illegal_transition_rejection_carries_category_and_recovers_on_retry():
                 # Patch is not reachable directly from Reproduce.
                 return {"directive": {"kind": "transition", "target_state": "Patch", "reason": "skip ahead"}}
             return {"directive": {"kind": "transition", "target_state": "Understand", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalTransitionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=IllegalTransitionThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.UNDERSTAND
     feedback = captured[1]["directive_feedback"]
@@ -1826,7 +1829,7 @@ def test_invalid_argument_value_rejection_for_reproduction_phase_and_hypothesis_
             if len(captured) == 1:
                 return {"directive": {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "post_patch"}}}
             return {"directive": {"kind": "action", "name": "run_reproduction", "arguments": {"phase": "baseline"}}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadPhaseThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadPhaseThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.arguments["phase"] == "baseline"
     feedback = captured[1]["directive_feedback"]
@@ -1840,7 +1843,7 @@ def test_invalid_argument_value_rejection_for_reproduction_phase_and_hypothesis_
             if len(captured2) == 1:
                 return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "extreme", "evidence_refs": [], "requires_runtime_evidence": False}}
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadConfidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadConfidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive2 = adapter2.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive2.hypothesis_id == "h1"
     feedback2 = captured2[1]["directive_feedback"]
@@ -1857,7 +1860,7 @@ def test_malformed_directive_rejection_for_unknown_kind_and_missing_field():
             if len(captured) == 1:
                 return {"directive": {"kind": "bogus-kind"}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=UnknownKindThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=UnknownKindThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     feedback = captured[1]["directive_feedback"]
@@ -1870,7 +1873,7 @@ def test_malformed_directive_rejection_for_unknown_kind_and_missing_field():
             if len(captured2) == 1:
                 return {"directive": {"kind": "transition", "target_state": "Failed"}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingReasonThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter2 = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingReasonThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     adapter2.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     feedback2 = captured2[1]["directive_feedback"]
     assert feedback2["category"] == "malformed_directive"
@@ -1886,7 +1889,7 @@ def test_add_hypothesis_missing_evidence_refs_is_rejected_and_corrected_on_retry
             if len(captured) == 1:
                 return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "requires_runtime_evidence": False}}
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingEvidenceRefsThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingEvidenceRefsThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive.hypothesis_id == "h1"
     assert directive.evidence_refs == ()
@@ -1905,7 +1908,7 @@ def test_add_hypothesis_missing_requires_runtime_evidence_is_rejected():
             if len(captured) == 1:
                 return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": []}}
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingRequiresRuntimeEvidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=MissingRequiresRuntimeEvidenceThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     feedback = captured[1]["directive_feedback"]
     assert feedback["category"] == "malformed_directive"
@@ -1926,7 +1929,7 @@ def test_hypothesis_evidence_refs_non_array_shapes_are_rejected_not_coerced():
                 if len(captured) == 1:
                     return {"directive": add_hypothesis_directive(bad_evidence_refs)}
                 return {"directive": add_hypothesis_directive([])}
-        adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+        adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
         directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
         assert directive.evidence_refs == (), bad_evidence_refs
         feedback = captured[1]["directive_feedback"]
@@ -1945,7 +1948,7 @@ def test_revise_hypothesis_evidence_refs_non_array_shape_is_rejected_not_coerced
             if len(captured) == 1:
                 return {"directive": {"kind": "revise_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": "abc", "requires_runtime_evidence": False}}
             return {"directive": {"kind": "revise_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": [], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=BadShapeThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive.evidence_refs == ()
     feedback = captured[1]["directive_feedback"]
@@ -1960,7 +1963,7 @@ def test_hypothesis_valid_json_array_evidence_refs_is_accepted_unchanged():
         def request(self, payload, timeout_seconds):
             captured.append(payload)
             return {"directive": {"kind": "add_hypothesis", "hypothesis_id": "h1", "statement": "root cause", "confidence": "low", "evidence_refs": ["obs-1", "obs-2"], "requires_runtime_evidence": False}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ValidArrayTransport(), limits=LiveRunLimits(max_model_requests=1, max_retries=0), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=ValidArrayTransport(), limits=LiveRunLimits(max_model_requests=1, max_retries=0, max_directive_repairs=0), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.UNDERSTAND))
     assert directive.evidence_refs == ("obs-1", "obs-2")
     assert captured[0]["directive_feedback"] is None
@@ -1975,7 +1978,7 @@ def test_request_instructions_distinguish_null_from_non_null_directive_feedback(
             if len(captured) == 1:
                 return {"directive": {"kind": "bogus-kind"}}
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert captured[0]["directive_feedback"] is None
     assert captured[1]["directive_feedback"] is not None
@@ -1996,7 +1999,7 @@ def test_ambiguous_response_envelope_is_rejected_rather_than_silently_resolved()
                     "directive": {"kind": "transition", "target_state": "Failed", "reason": "nested directive"},
                 }
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AmbiguousThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AmbiguousThenValidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     feedback = captured[1]["directive_feedback"]
@@ -2014,7 +2017,7 @@ def test_transport_failure_does_not_carry_forward_prior_directive_rejection_feed
             if len(captured) == 2:
                 raise LiveTransportError("provider unavailable", kind="provider_failure")
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenTransportErrorThenValidTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidThenTransportErrorThenValidTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2, max_directive_repairs=2), registry=_test_live_registry())
     directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert directive.target_state is ControllerState.FAILED
     assert captured[0]["directive_feedback"] is None
@@ -2029,14 +2032,15 @@ def test_repeating_an_illegal_action_after_feedback_is_measurable_and_terminates
         def request(self, payload, timeout_seconds):
             captured.append(payload)
             return {"directive": {"kind": "action", "name": "extract_failing_test", "arguments": {}}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AlwaysIllegalActionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=AlwaysIllegalActionTransport(), limits=LiveRunLimits(max_model_requests=3, max_retries=2, max_directive_repairs=2), registry=_test_live_registry())
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
     assert adapter.metrics.termination_reason == "directive_rejected"
     assert adapter.metrics.provider_errors == 0
     assert adapter.metrics.directive_rejections == 3
     assert adapter.metrics.model_requests == 3
-    assert adapter.metrics.retries == 2
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.directive_repairs == 2
     assert captured[0]["directive_feedback"] is None
     assert all(entry["directive_feedback"]["category"] == "illegal_action" for entry in captured[1:])
 
@@ -2058,7 +2062,7 @@ def test_all_provider_completed_invalid_directives_terminate_as_model_directive_
             return {"usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5}, "directive": {"kind": "not-a-directive"}}
     from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
     from agentic_debugger.agent.model_adapter import ControllerSnapshot
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1), registry=_test_live_registry())
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=InvalidTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
     limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
     with pytest.raises(LiveModelAdapterError):
         adapter.next_directive(ControllerSnapshot("invalid-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
@@ -2067,7 +2071,8 @@ def test_all_provider_completed_invalid_directives_terminate_as_model_directive_
     assert adapter.metrics.directive_rejections == 2
     assert adapter.metrics.model_requests == 2
     assert adapter.metrics.model_responses == 2
-    assert adapter.metrics.retries == 1
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.directive_repairs == 1
     assert adapter.metrics.to_mapping()["token_usage"]["total_tokens"] == 10
 
 
@@ -2087,7 +2092,7 @@ def _run_single_taxonomy_case(response=None, *, failure=None):
             repetition=1,
             workspace_parent=str(parent),
             config=config(),
-            limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0, continue_on_task_failure=False),
+            limits=LiveRunLimits(max_model_requests=1, max_controller_steps=1, max_retries=0, max_directive_repairs=0, continue_on_task_failure=False),
             transport=Transport(),
             retain_observable_model_directives=True,
         )
@@ -2181,7 +2186,7 @@ def test_successful_fake_model_uses_controller_patch_lifecycle_verifier_and_even
     assert not list(workspace_parent.iterdir())
 
 def test_pdb_enabled_live_case_uses_real_probe_observation_and_cleans_up(workspace_parent):
-    result = _case(workspace_parent, PdbScriptedTransport(_patch()), policy=DemoPolicy.PDB_ON_UNCERTAINTY, limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32))
+    result = _case(workspace_parent, PdbScriptedTransport(_patch()), policy=DemoPolicy.PDB_ON_UNCERTAINTY, limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32, max_directive_repairs=2))
     assert result.status is LiveCaseStatus.RESOLVED
     assert result.measurements["successful_pdb_observation_count"] >= 1
     assert result.measurements["failed_pdb_observation_count"] == 0
@@ -2191,7 +2196,7 @@ def test_pdb_enabled_live_case_uses_real_probe_observation_and_cleans_up(workspa
 
 
 def test_rejected_patch_attempt_cannot_be_verified_as_resolved(workspace_parent):
-    result = _case(workspace_parent, ScriptedTransport(_patch(), invalid_patch=True), limits=LiveRunLimits(max_model_requests=20, max_controller_steps=20))
+    result = _case(workspace_parent, ScriptedTransport(_patch(), invalid_patch=True), limits=LiveRunLimits(max_model_requests=20, max_controller_steps=20, max_directive_repairs=2))
     assert result.status is LiveCaseStatus.UNRESOLVED
     assert result.verifier["executed"] is False
     assert result.reporting["completed"] is True
@@ -2291,7 +2296,7 @@ def test_configuration_fingerprint_is_stable_safe_and_sensitive_to_material_chan
     changed = LiveModelConfig("test-model", ("test-model-command",), request_timeout_seconds=61.0)
     assert same.configuration_fingerprint == config().configuration_fingerprint
     assert same.configuration_fingerprint != changed.configuration_fingerprint
-    metadata = same.to_metadata(LiveRunLimits(max_model_requests=7, max_controller_steps=8, max_retries=1, continue_on_task_failure=False))
+    metadata = same.to_metadata(LiveRunLimits(max_model_requests=7, max_controller_steps=8, max_retries=1, max_directive_repairs=1, continue_on_task_failure=False))
     assert metadata["configuration_fingerprint"] == same.configuration_fingerprint
     assert metadata["limits"]["max_model_requests"] == 7
     assert metadata["continue_on_task_failure"] is False
@@ -2311,7 +2316,7 @@ def test_model_timing_accumulates_transport_only_across_requests_and_retries():
             if calls["count"] == 1:
                 raise LiveTransportError("retry", kind="provider_failure")
             return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "timed"}}
-    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=TimedTransport(), limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=1), registry=_test_live_registry(), clock=lambda: now[0])
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=TimedTransport(), limits=LiveRunLimits(max_model_requests=3, max_controller_steps=3, max_retries=1, max_directive_repairs=1), registry=_test_live_registry(), clock=lambda: now[0])
     snapshot = ControllerSnapshot("timed-run", task.task_id, ControllerState.REPRODUCE, 0, ControllerBudgetLimits.from_task_constraints(task.constraints), ControllerBudgetState(), HypothesisLedger())
     adapter.next_directive(snapshot)
     now[0] += 4.0
@@ -2344,7 +2349,7 @@ def test_frozen_model_phase_remaining_is_the_outer_transport_bound():
         policy=DemoPolicy.STATIC_BASELINE,
         config=LiveModelConfig("test-model", ("test-model-command",), request_timeout_seconds=3600.0),
         transport=OverlongTransport(),
-        limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2, max_model_phase_seconds=1, max_retries=0),
+        limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2, max_model_phase_seconds=1, max_retries=0, max_directive_repairs=0),
         registry=_test_live_registry(),
         clock=lambda: now[0],
     )
@@ -2579,7 +2584,7 @@ def test_cli_exit_zero_and_three_follow_complete_or_interrupted_reports(workspac
     from agentic_debugger.evaluation import live_cli as live_cli_module
     config_path = workspace_parent / "config.json"
     config_path.write_text(json.dumps({"model_name": "local-fake", "command": ["not-launched"]}))
-    resolved_report = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE,), repetitions=1, workspace_parent=workspace_parent, transport_factory=lambda *args: ScriptedTransport(_patch()), evaluation_id="cli-resolved")
+    resolved_report = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32, max_directive_repairs=2), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE,), repetitions=1, workspace_parent=workspace_parent, transport_factory=lambda *args: ScriptedTransport(_patch()), evaluation_id="cli-resolved")
     monkeypatch.setattr(live_cli_module, "run_live_evaluation", lambda **kwargs: resolved_report)
     assert live_main(["--live", "--confirm-live-model-access", "--config", str(config_path), "--output", str(workspace_parent / "resolved.json")]) == 0
     interrupted_report = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=2, max_controller_steps=2), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE,), repetitions=1, workspace_parent=workspace_parent, transport_factory=lambda *args: FakeTransport(interrupt=True), evaluation_id="cli-interrupted")
@@ -2615,7 +2620,7 @@ def test_cli_rejects_internal_malformed_configured_report_before_writing(workspa
     from agentic_debugger.evaluation import live_cli as live_cli_module
     config_path = workspace_parent / "config.json"
     config_path.write_text(json.dumps({"model_name": "local-fake", "command": ["not-launched"]}))
-    valid = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE,), repetitions=1, workspace_parent=workspace_parent, transport_factory=lambda *args: ScriptedTransport(_patch()))
+    valid = run_live_evaluation(repository_root=ROOT, authorization=LiveExecutionAuthorization.authorize(True, True), config=config(), limits=LiveRunLimits(max_model_requests=32, max_controller_steps=32, max_directive_repairs=2), task_ids=(TASK_ID,), policies=(DemoPolicy.STATIC_BASELINE,), repetitions=1, workspace_parent=workspace_parent, transport_factory=lambda *args: ScriptedTransport(_patch()))
     malformed = dict(valid)
     malformed.pop("configuration")
     monkeypatch.setattr(live_cli_module, "run_live_evaluation", lambda **kwargs: malformed)
@@ -2653,3 +2658,351 @@ def test_adversarial_nested_tokens_are_redacted_but_typed_usage_survives():
     assert result["event"]["metadata"]["tokens"] == "<redacted>"
     assert "secret-value" not in json.dumps(result)
     assert "credential-value" not in json.dumps(result)
+
+
+# -- bounded directive repair (distinct from provider/transport retry) --------
+
+def _task():
+    return DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+
+
+def test_directive_repair_sends_feedback_without_advancing_the_controller():
+    """A malformed directive is corrected by a bounded repair attempt: the
+    same controller snapshot is re-sent with typed directive_feedback, the
+    controller does not advance, and the correction is a real model request."""
+    task = _task()
+    captured = []
+
+    class WrongWrapperThenValidTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                # Realistic malformed output: valid JSON, wrong top-level
+                # wrapper (an "action" key instead of the legal kind/name
+                # top-level shape).
+                return {"directive": {"action": {"name": "express_root_cause_hypothesis", "arguments": {}}}}
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "corrected"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=WrongWrapperThenValidTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=2),
+        registry=_test_live_registry(),
+    )
+    directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+
+    assert directive.target_state is ControllerState.FAILED
+    # The correction consumed a real second model request for the SAME
+    # logical call: no controller advance, one extra transport attempt.
+    assert len(captured) == 2
+    assert captured[0]["protocol"]["logical_model_call_index"] == captured[1]["protocol"]["logical_model_call_index"]
+    assert captured[0]["protocol"]["transport_attempt_index"] == 1
+    assert captured[1]["protocol"]["transport_attempt_index"] == 2
+    # Typed feedback travels on the correction request only.
+    assert captured[0]["directive_feedback"] is None
+    assert captured[1]["directive_feedback"]["category"] == "malformed_directive"
+    assert captured[1]["directive_feedback"]["rejected_transport_attempt"] == 1
+    # Budgets stay separated: zero provider retries, one directive repair.
+    assert adapter.metrics.model_requests == 2
+    assert adapter.metrics.transport_attempts == 2
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.directive_repairs == 1
+    assert adapter.metrics.directive_rejections == 1
+    assert adapter.metrics.to_mapping()["directive_repair_count"] == 1
+    assert adapter.metrics.termination_reason is None
+    # The rejected attempt is retained as typed bounded evidence.
+    assert adapter.directive_attempts[0]["accepted"] is False
+    assert adapter.directive_attempts[0]["rejection"]["category"] == "malformed_directive"
+    assert adapter.directive_attempts[1]["accepted"] is True
+
+
+def test_zero_directive_repairs_is_the_frozen_scientific_default():
+    """Qualified treatments allow no repair: one malformed directive is
+    terminal (the pre-repair ladder behavior is preserved at zero)."""
+    task = _task()
+
+    class AlwaysMalformedTransport:
+        def request(self, payload, timeout_seconds):
+            return {"directive": {"kind": "not-a-directive"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=AlwaysMalformedTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=0),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.model_requests == 1
+    assert adapter.metrics.directive_repairs == 0
+    assert adapter.metrics.retries == 0
+
+
+def test_directive_repair_exhaustion_terminates_after_bounded_attempts():
+    task = _task()
+
+    class AlwaysMalformedTransport:
+        def request(self, payload, timeout_seconds):
+            return {"directive": {"kind": "not-a-directive"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=AlwaysMalformedTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=2),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.model_requests == 3
+    assert adapter.metrics.directive_rejections == 3
+    assert adapter.metrics.directive_repairs == 2
+
+
+def test_transport_failure_is_never_retried_under_directive_repairs():
+    """The repair budget covers malformed directives only; a provider/
+    transport failure remains governed by max_retries alone."""
+    task = _task()
+
+    class FailingTransport:
+        def request(self, payload, timeout_seconds):
+            raise LiveTransportError("provider unavailable", kind="provider_failure")
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=FailingTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=2),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.model_requests == 1
+    assert adapter.metrics.directive_repairs == 0
+    assert adapter.metrics.provider_errors == 1
+
+
+def test_directive_repairs_stay_inside_the_model_request_ceiling():
+    task = _task()
+    captured = []
+
+    class AlwaysMalformedTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            return {"directive": {"kind": "not-a-directive"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=AlwaysMalformedTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=8),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError, match="live model request limit reached"):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.termination_reason == "model_request_limit"
+    assert len(captured) == 2
+
+
+def test_treatment_budget_enforces_zero_directive_repairs():
+    from agentic_debugger.evaluation.live import LiveTreatmentBudget
+    budget = LiveTreatmentBudget(max_retries=1)
+    LiveRunLimits(
+        max_model_requests=budget.max_model_requests,
+        max_controller_steps=budget.max_controller_steps,
+        max_retries=budget.max_retries,
+        treatment_budget=budget,
+        max_directive_repairs=0,
+    )
+    with pytest.raises(LiveConfigurationError):
+        LiveRunLimits(
+            max_model_requests=budget.max_model_requests,
+            max_controller_steps=budget.max_controller_steps,
+            max_retries=budget.max_retries,
+            treatment_budget=budget,
+            max_directive_repairs=1,
+        )
+
+
+def test_ladder_contracts_remain_zero_directive_repairs_for_qualified_runs():
+    from agentic_debugger.application.ollama_cloud_source import (
+        INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+        LADDER_RUNTIME_CONTRACTS,
+    )
+    assert INTERACTIVE_LADDER_DIRECTIVE_REPAIRS == 2
+    for contract in LADDER_RUNTIME_CONTRACTS.values():
+        assert contract.max_retries == 0
+        assert contract.max_directive_
+
+
+# -- bounded directive repair (distinct from provider/transport retry) --------
+
+def _repair_task():
+    return DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+
+
+def test_directive_repair_sends_feedback_without_advancing_the_controller():
+    """A malformed directive is corrected by a bounded repair attempt: the
+    same controller snapshot is re-sent with typed directive_feedback, the
+    controller does not advance, and the correction is a real model request."""
+    task = _repair_task()
+    captured = []
+
+    class WrongWrapperThenValidTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                # Realistic malformed output: valid JSON, wrong top-level
+                # wrapper (an "action" key instead of the legal kind/name
+                # top-level shape).
+                return {"directive": {"action": {"name": "express_root_cause_hypothesis", "arguments": {}}}}
+            return {"directive": {"kind": "transition", "target_state": "Failed", "reason": "corrected"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=WrongWrapperThenValidTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=2),
+        registry=_test_live_registry(),
+    )
+    directive = adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+
+    assert directive.target_state is ControllerState.FAILED
+    # The correction consumed a real second model request for the SAME
+    # logical call: no controller advance, one extra transport attempt.
+    assert len(captured) == 2
+    assert captured[0]["protocol"]["logical_model_call_index"] == captured[1]["protocol"]["logical_model_call_index"]
+    assert captured[0]["protocol"]["transport_attempt_index"] == 1
+    assert captured[1]["protocol"]["transport_attempt_index"] == 2
+    # Typed feedback travels on the correction request only.
+    assert captured[0]["directive_feedback"] is None
+    assert captured[1]["directive_feedback"]["category"] == "malformed_directive"
+    assert captured[1]["directive_feedback"]["rejected_transport_attempt"] == 1
+    # Budgets stay separated: zero provider retries, one directive repair.
+    assert adapter.metrics.model_requests == 2
+    assert adapter.metrics.transport_attempts == 2
+    assert adapter.metrics.retries == 0
+    assert adapter.metrics.directive_repairs == 1
+    assert adapter.metrics.directive_rejections == 1
+    assert adapter.metrics.to_mapping()["directive_repair_count"] == 1
+    assert adapter.metrics.termination_reason is None
+    # The rejected attempt is retained as typed bounded evidence.
+    assert adapter.directive_attempts[0]["accepted"] is False
+    assert adapter.directive_attempts[0]["rejection"]["category"] == "malformed_directive"
+    assert adapter.directive_attempts[1]["accepted"] is True
+
+
+def test_zero_directive_repairs_is_the_frozen_scientific_default():
+    """Qualified treatments allow no repair: one malformed directive is
+    terminal (the pre-repair ladder behavior is preserved at zero)."""
+    task = _repair_task()
+
+    class AlwaysMalformedTransport:
+        def request(self, payload, timeout_seconds):
+            return {"directive": {"kind": "not-a-directive"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=AlwaysMalformedTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=0),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.model_requests == 1
+    assert adapter.metrics.directive_repairs == 0
+    assert adapter.metrics.retries == 0
+
+
+def test_directive_repair_exhaustion_terminates_after_bounded_attempts():
+    task = _repair_task()
+
+    class AlwaysMalformedTransport:
+        def request(self, payload, timeout_seconds):
+            return {"directive": {"kind": "not-a-directive"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=AlwaysMalformedTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=2),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.termination_reason == "directive_rejected"
+    assert adapter.metrics.model_requests == 3
+    assert adapter.metrics.directive_rejections == 3
+    assert adapter.metrics.directive_repairs == 2
+
+
+def test_transport_failure_is_never_retried_under_directive_repairs():
+    """The repair budget covers malformed directives only; a provider/
+    transport failure remains governed by max_retries alone."""
+    task = _repair_task()
+
+    class FailingTransport:
+        def request(self, payload, timeout_seconds):
+            raise LiveTransportError("provider unavailable", kind="provider_failure")
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=FailingTransport(),
+        limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=2),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.model_requests == 1
+    assert adapter.metrics.directive_repairs == 0
+    assert adapter.metrics.provider_errors == 1
+
+
+def test_directive_repairs_stay_inside_the_model_request_ceiling():
+    task = _repair_task()
+    captured = []
+
+    class AlwaysMalformedTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            return {"directive": {"kind": "not-a-directive"}}
+
+    adapter = LiveModelAdapter(
+        task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(),
+        transport=AlwaysMalformedTransport(),
+        limits=LiveRunLimits(max_model_requests=2, max_retries=0, max_directive_repairs=8),
+        registry=_test_live_registry(),
+    )
+    with pytest.raises(LiveModelAdapterError, match="live model request limit reached"):
+        adapter.next_directive(_snapshot(task, ControllerState.REPRODUCE))
+    assert adapter.metrics.termination_reason == "model_request_limit"
+    assert len(captured) == 2
+
+
+def test_treatment_budget_enforces_zero_directive_repairs():
+    from agentic_debugger.evaluation.live import LiveTreatmentBudget
+    budget = LiveTreatmentBudget(max_retries=1)
+    LiveRunLimits(
+        max_model_requests=budget.max_model_requests,
+        max_controller_steps=budget.max_controller_steps,
+        max_retries=budget.max_retries,
+        treatment_budget=budget,
+        max_directive_repairs=0,
+    )
+    with pytest.raises(LiveConfigurationError):
+        LiveRunLimits(
+            max_model_requests=budget.max_model_requests,
+            max_controller_steps=budget.max_controller_steps,
+            max_retries=budget.max_retries,
+            treatment_budget=budget,
+            max_directive_repairs=1,
+        )
+
+
+def test_ladder_contracts_remain_zero_directive_repairs_for_qualified_runs():
+    from agentic_debugger.application.ollama_cloud_source import (
+        INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+        LADDER_RUNTIME_CONTRACTS,
+    )
+    assert INTERACTIVE_LADDER_DIRECTIVE_REPAIRS == 2
+    for contract in LADDER_RUNTIME_CONTRACTS.values():
+        assert contract.max_retries == 0
+        assert contract.max_directive_repairs == 0

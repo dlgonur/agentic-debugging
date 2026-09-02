@@ -345,6 +345,10 @@ class SessionViewState:
     #: parse display summaries.  They are derived exclusively from v1 events.
     latest_model_request_index: Optional[int] = None
     outstanding_model_request_index: Optional[int] = None
+    #: Last typed model-request failure kind (e.g. malformed_directive,
+    #: illegal_action, invalid_argument) retained so a terminal session can
+    #: show the typed cause instead of only a generic "model error".
+    latest_model_error_kind: Optional[str] = None
     latest_controller_step_index: Optional[int] = None
     current_tool_name: Optional[str] = None
     #: Last structured target a tool event carried (e.g. a source range).
@@ -1021,9 +1025,17 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
         outstanding = state.outstanding_model_request_index
         if outstanding == payload["request_index"]:
             outstanding = None
+        error_kind = (
+            payload.get("error_kind")
+            if payload.get("status") != "ok"
+            else None
+        )
         return replace(
             state, latest_model_request_index=payload["request_index"],
             outstanding_model_request_index=outstanding,
+            latest_model_error_kind=(
+                error_kind if type(error_kind) is str else state.latest_model_error_kind
+            ),
             controller_phase=controller_phase, run_id=run_id, timeline=timeline,
         )
 

@@ -415,9 +415,19 @@ def _ladder_readiness(config: SessionConfig, catalog: SessionCatalog):
             )
         )
     else:
-        # Executable but not qualified: truthfully surface the distinction
+        # Executable but not qualified: truthfully surface the distinction,
+        # including the interactive-only directive-repair budget (the
+        # qualified ladder and frozen Level-32 treatments remain at zero).
         if ladder_entry is None:
-            notes.append("Executable provider model — not a qualified scientific treatment.")
+            from agentic_debugger.application.ollama_cloud_source import (
+                INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+            )
+
+            notes.append(
+                "Interactive ladder execution · directive repair: up to "
+                f"{INTERACTIVE_LADDER_DIRECTIVE_REPAIRS} — not a qualified "
+                "scientific treatment."
+            )
         else:
             notes.append("Research tasks use the canonical operator contract.")
     return issues, notes

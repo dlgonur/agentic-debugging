@@ -34,12 +34,28 @@ _MAX_ALIAS_CHARS = 128
 
 @dataclass(frozen=True)
 class LadderRuntimeContract:
-    """Frozen accepted live-treatment bounds for one lower ladder rung."""
+    """Frozen accepted live-treatment bounds for one lower ladder rung.
+
+    ``max_retries`` and ``max_directive_repairs`` are distinct bounded
+    concepts: the first governs provider/transport retries, the second the
+    interactive directive-correction budget.  The qualified scientific
+    treatment carries zero of both; only the interactive unqualified
+    provider runtime (the configured-provider source) opts into bounded
+    directive repairs.
+    """
 
     max_model_requests: int
     max_controller_steps: int
     max_model_phase_seconds: int
     max_retries: int = 0
+    max_directive_repairs: int = 0
+
+
+#: Bounded directive-repair budget for INTERACTIVE unqualified provider
+#: ladder runs (the configured-provider runtime).  Executable interactive
+#: execution is explicitly NOT a qualified scientific treatment; the
+#: qualified ladder and frozen Level-32 treatments remain at zero repairs.
+INTERACTIVE_LADDER_DIRECTIVE_REPAIRS = 2
 
 
 LADDER_RUNTIME_CONTRACTS: dict[str, LadderRuntimeContract] = {
@@ -159,6 +175,7 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
         max_controller_steps=contract.max_controller_steps,
         max_model_phase_seconds=contract.max_model_phase_seconds,
         max_retries=contract.max_retries,
+        max_directive_repairs=contract.max_directive_repairs,
         continue_on_task_failure=False,
     )
     _progress(ctx, OperatorStage.STARTING)
@@ -233,6 +250,7 @@ def run_ollama_cloud_session(ctx: ScenarioContext, params: Mapping[str, Any]) ->
 
 
 __all__ = [
+    "INTERACTIVE_LADDER_DIRECTIVE_REPAIRS",
     "LADDER_RUNTIME_CONTRACTS",
     "LadderRuntimeContract",
     "OLLAMA_CLOUD_SOURCE_NAME",

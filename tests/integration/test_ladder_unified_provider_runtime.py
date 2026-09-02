@@ -481,7 +481,10 @@ def test_ladder_with_configured_provider_executes_through_direct_api(
 
 def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     """Direct budget regression: Level 18 and Level 6 via configured source must use 24/24/3600|600/0."""
-    from agentic_debugger.application.ollama_cloud_source import ladder_runtime_contract
+    from agentic_debugger.application.ollama_cloud_source import (
+        INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
+        ladder_runtime_contract,
+    )
     from agentic_debugger.application import model_providers as mp
     from agentic_debugger.application.configured_source import (
         run_configured_session,
@@ -493,14 +496,16 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
     from agentic_debugger.application.journal import SessionEventJournal
     from agentic_debugger.evaluation.live import LiveRunLimits
 
-    # Verify the canonical contracts themselves
+    # Verify the canonical contracts themselves: the qualified ladder
+    # treatment stays at zero provider retries AND zero directive repairs.
     c18 = ladder_runtime_contract(LADDER_LEVEL_18_TASK)
-    assert (c18.max_model_requests, c18.max_controller_steps, c18.max_model_phase_seconds, c18.max_retries) == (24, 24, 3600, 0)
+    assert (c18.max_model_requests, c18.max_controller_steps, c18.max_model_phase_seconds, c18.max_retries, c18.max_directive_repairs) == (24, 24, 3600, 0, 0)
     c6 = ladder_runtime_contract(LADDER_LEVEL_6_TASK)
-    assert (c6.max_model_requests, c6.max_controller_steps, c6.max_model_phase_seconds, c6.max_retries) == (24, 24, 600, 0)
+    assert (c6.max_model_requests, c6.max_controller_steps, c6.max_model_phase_seconds, c6.max_retries, c6.max_directive_repairs) == (24, 24, 600, 0, 0)
     assert _DEFAULT_MAX_MODEL_REQUESTS == 64
     assert _DEFAULT_MAX_CONTROLLER_STEPS == 64
     assert _DEFAULT_MAX_RETRIES == 2
+    assert INTERACTIVE_LADDER_DIRECTIVE_REPAIRS == 2
 
     captured_runs: list[dict[str, Any]] = []
     captured_limits: list[LiveRunLimits] = []
@@ -555,6 +560,9 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
     assert captured_limits[0].max_controller_steps == 24
     assert captured_limits[0].max_model_phase_seconds == 3600
     assert captured_limits[0].max_retries == 0
+    # Interactive unqualified provider ladder run: bounded directive
+    # repairs are explicit, while provider retries remain zero.
+    assert captured_limits[0].max_directive_repairs == INTERACTIVE_LADDER_DIRECTIVE_REPAIRS == 2
     assert resolved_ceilings["commandcode_goat:deepseek/deepseek-v4-flash"] == 24
 
     # 2. Ordinary curated task: configured source chooses 64 ceiling, 64/64/None/2 limits
@@ -580,6 +588,7 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
     assert captured_limits[1].max_model_requests == 64
     assert captured_limits[1].max_controller_steps == 64
     assert captured_limits[1].max_retries == 2
+    assert captured_limits[1].max_directive_repairs == 2
     assert resolved_ceilings["commandcode_goat:zai-org/glm-5.2"] == 64
 
 
@@ -832,7 +841,9 @@ def test_level18_ui_shows_executable_not_qualified_notice(tmp_path: Path, monkey
             # Verify notice in start-notes and context-summary
             start_notes_plain = start.query_one("#start-notes").render().plain
             context_plain = start.query_one("#context-summary").render().plain
-            assert "executable provider model — not a qualified scientific treatment" in start_notes_plain.lower()
+            assert "interactive ladder execution" in start_notes_plain.lower()
+            assert "directive repair: up to 2" in start_notes_plain.lower()
+            assert "not a qualified scientific treatment" in start_notes_plain.lower()
             assert "not a qualified" in context_plain.lower() or "executable provider model" in context_plain.lower()
 
             # Generate real Textual screenshot
@@ -856,3 +867,361 @@ def test_level18_ui_shows_executable_not_qualified_notice(tmp_path: Path, monkey
             (review_dir / "level18-commandcode.svg").write_text(svg_content, encoding="utf-8")
 
         run_headless(app, scenario, size=(120, 36))
+
+
+class _RepairingLadderServer:
+    """Fake direct-API provider that drives the REAL Level-6 exact-PDB path.
+
+    Unlike a perfect scripted transport, the post-PDB diagnosis decision is
+    answered WRONG first (a realistic malformed directive with a wrong
+    top-level wrapper) and only corrected after the harness re-sent the
+    request with typed ``directive_feedback``.  The server also inspects the
+    model-facing prompt it actually received.
+    """
+
+    def __init__(self, task_id: str, observed_names: set[str]) -> None:
+        self.calls: List[Dict[str, Any]] = []
+        self.prompt_failures: List[str] = []
+        self.diagnosis_calls: List[Dict[str, Any]] = []
+        self.observed_local_names = frozenset(observed_names)
+        self._lock = threading.Lock()
+        self._transport = LadderConfiguredTransport(task_id, observed_names)
+        self.scenario = self._transport.scenario
+
+    def _catalog_payload(self) -> Dict[str, Any]:
+        return {
+            "object": "list",
+            "data": [
+                {"id": "zai-org/muse-spark-1.2-contributor", "object": "model", "created": 1, "owned_by": "fake"}
+            ],
+        }
+
+    @staticmethod
+    def _public_payload(user_message: str) -> Dict[str, Any]:
+        if "=== BEGIN PUBLIC REQUEST ===" in user_message:
+            between = user_message.split("=== BEGIN PUBLIC REQUEST ===", 1)[1].split("=== END PUBLIC REQUEST ===", 1)[0]
+        else:
+            between = user_message
+        return json.loads(between.strip())
+
+    def _is_diagnosis_request(self, payload: Dict[str, Any]) -> bool:
+        controller = payload.get("controller", {})
+        if controller.get("state") != "Understand":
+            return False
+        if "express_root_cause_hypothesis" not in controller.get("allowed_actions", []):
+            return False
+        observations = [
+            entry.get("last_observation")
+            for entry in payload.get("history", [])
+            if isinstance(entry, dict) and isinstance(entry.get("last_observation"), dict)
+        ]
+        return any(
+            item.get("name") == "get_frame_locals"
+            for item in observations
+            if isinstance(item, dict)
+        )
+
+    def _check_prompt_shape(self, body: Dict[str, Any], payload: Dict[str, Any]) -> None:
+        """Assert the model-facing contract the model actually received."""
+
+        messages = body.get("messages", [])
+        roles = [message.get("role") for message in messages]
+        if roles != ["system", "user"]:
+            self.prompt_failures.append(f"expected system+user roles, got {roles}")
+            return
+        system_content = messages[0].get("content", "")
+        user_content = messages[1].get("content", "")
+        if not system_content.startswith("You are the debugging decision model"):
+            self.prompt_failures.append("system role is not the protocol instruction")
+        expected = [
+            "Legal action representation",
+            "express_root_cause_hypothesis",
+            "Current diagnosis decision",
+            self.scenario.hypothesis_id,
+            self.scenario.localization.file_path,
+            self.scenario.localization.symbol,
+        ]
+        for needle in expected:
+            if needle not in user_content:
+                self.prompt_failures.append(f"user guidance missing {needle!r}")
+        # The evidence example must derive from THIS request's own public
+        # PDB observations and frame locals (never fixture-side oracles).
+        observations = {}
+        for entry in payload.get("history", []):
+            item = entry.get("last_observation") if isinstance(entry, dict) else None
+            if isinstance(item, dict) and isinstance(item.get("observation_id"), str):
+                observations[item["observation_id"]] = item
+        proof_ids = [
+            observation_id
+            for observation_id, item in observations.items()
+            if item.get("name") in {"start_pdb_session", "get_stack_summary", "get_frame_locals", "next_pdb_session"}
+        ]
+        for observation_id in proof_ids:
+            if f'"{observation_id}"' not in user_content:
+                self.prompt_failures.append(f"evidence_refs example missing {observation_id!r}")
+        locals_observation = next(
+            (item for item in observations.values() if item.get("name") == "get_frame_locals"),
+            None,
+        )
+        if locals_observation is not None:
+            for local in locals_observation.get("payload", {}).get("locals", []):
+                if isinstance(local, dict) and local.get("name") in self.observed_local_names:
+                    if f'"{local["name"]}"' not in user_content:
+                        self.prompt_failures.append(
+                            f"observed_values example missing {local['name']!r}"
+                        )
+
+    def _respond_chat(self, body: Dict[str, Any]) -> tuple[int, Dict[str, Any]]:
+        messages = body.get("messages", [])
+        user_message = messages[-1]["content"] if messages else ""
+        payload = self._public_payload(user_message)
+        logical_index = payload.get("protocol", {}).get("logical_model_call_index")
+        directive = None
+        if self._is_diagnosis_request(payload):
+            self.diagnosis_calls.append(payload)
+            self._check_prompt_shape(body, payload)
+            if payload.get("directive_feedback") is None:
+                # Realistic harness failure: valid JSON, wrong top-level
+                # wrapper (the exact CommandCode-style MODEL #13 failure).
+                directive = {
+                    "action": {
+                        "kind": "action",
+                        "name": "express_root_cause_hypothesis",
+                        "arguments": {"hypothesis_id": self.scenario.hypothesis_id},
+                    }
+                }
+            else:
+                directive = self._transport.request(payload, timeout_seconds=30)
+        elif logical_index == 2:
+            # The proof gate constrains the Understand source window to the
+            # exact breakpoint line (same accepted override as the Level-18
+            # scripted server).
+            directive = {
+                "kind": "action",
+                "name": "get_source_window",
+                "arguments": {
+                    "path": self.scenario.localization.file_path,
+                    "line": self.scenario.runtime_probe.breakpoint_line,
+                },
+            }
+        else:
+            directive = self._transport.request(payload, timeout_seconds=30)
+        content = json.dumps(directive)
+        return 200, {
+            "id": "chatcmpl-ladder",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": content}}],
+            "usage": {"prompt_tokens": 5, "completion_tokens": 5, "total_tokens": 10},
+        }
+
+    def handler(self, request: Dict[str, Any]) -> tuple[int, Any]:
+        with self._lock:
+            self.calls.append(request)
+        path = request["path"]
+        method = request["method"]
+        if method == "GET" and (path.startswith("/models") or path.startswith("/v1/models")):
+            return 200, self._catalog_payload()
+        if method == "POST" and path.endswith("/chat/completions"):
+            body = json.loads(request["body"].decode("utf-8"))
+            return self._respond_chat(body)
+        return 404, {"error": "not found"}
+
+    def __enter__(self) -> "_RepairingLadderServer":
+        outer = self
+
+        class Handler(BaseHTTPRequestHandler):
+            def _handle(self) -> None:
+                length = int(self.headers.get("Content-Length") or 0)
+                body = self.rfile.read(length) if length else b""
+                status, payload = outer.handler(
+                    {
+                        "method": self.command,
+                        "path": self.path,
+                        "authorization": self.headers.get("Authorization"),
+                        "body": body,
+                    }
+                )
+                encoded = json.dumps(payload).encode("utf-8")
+                self.send_response(status)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(encoded)))
+                self.end_headers()
+                self.wfile.write(encoded)
+
+            def do_GET(self) -> None:  # noqa: N802
+                self._handle()
+
+            def do_POST(self) -> None:  # noqa: N802
+                self._handle()
+
+            def log_message(self, format: str, *args):  # noqa: A003
+                return
+
+        server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self._server = server
+        self.port = server.server_address[1]
+        self.base_url = f"http://127.0.0.1:{self.port}"
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        return self
+
+    def __exit__(self, *exc: Any) -> None:
+        self._server.shutdown()
+        self._server.server_close()
+
+
+def test_level6_diagnosis_malformed_directive_repaired_through_feedback_to_resolved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """REAL harness behavior at the Level-6 post-PDB diagnosis decision.
+
+    The first provider completion returns a realistic malformed directive;
+    the run must record the typed rejection, re-send the SAME controller
+    snapshot with directive_feedback, accept the corrected diagnosis, and
+    still complete Patch -> Validate -> independent verifier -> RESOLVED
+    inside every bounded budget, on the same provider/model.
+    """
+
+    with _RepairingLadderServer(LADDER_LEVEL_6_TASK, {"requested_size"}) as server:
+        from agentic_debugger.application.provider_connections import (
+            DiscoveredProviderModel,
+            add_provider_config,
+        )
+
+        fake_models = (
+            DiscoveredProviderModel.create(
+                "commandcode_goat",
+                "zai-org/muse-spark-1.2-contributor",
+                "Muse Spark 1.2 Contributor",
+                protocol="chat_completions",
+            ),
+        )
+        add_provider_config(
+            name="CommandCode GOAT",
+            base_url=server.base_url,
+            api_format="chat_completions",
+            provider_id="commandcode_goat",
+            models=fake_models,
+        )
+        pc.set_session_key("commandcode_goat", SECRET)
+        pc.clear_all_session_keys()
+        pc.set_session_key("commandcode_goat", SECRET)
+
+        real_app = LocalApplicationV1(history_store=HistoryStore(tmp_path / "history"))
+        captured: dict[str, Any] = {}
+
+        async def real_scenario(pilot):
+            pilot.app.start_live_session(
+                task_id=LADDER_LEVEL_6_TASK,
+                policy="pdb-on-uncertainty",
+                max_elapsed_seconds=120,
+                source_kind=SourceKind.CONFIGURED_MODEL,
+                profile_id="zai-org/muse-spark-1.2-contributor",
+                model_provider="commandcode_goat",
+            )
+            runner = pilot.app.live_runner
+            assert runner is not None
+            captured["runner"] = runner
+            deadline = time.monotonic() + 120
+            while runner.terminal is None and time.monotonic() < deadline:
+                await asyncio.sleep(0.05)
+            assert runner.terminal is not None, "worker did not reach terminal"
+            captured["terminal"] = runner.terminal
+            captured["session_dir"] = runner.worker.session_dir
+
+        run_headless(real_app, real_scenario, size=(120, 32))
+
+        # 1. The diagnosis decision took exactly two provider completions:
+        #    malformed first, corrected after typed directive_feedback.
+        assert len(server.diagnosis_calls) == 2, (
+            f"expected 2 diagnosis-decision completions, got {len(server.diagnosis_calls)}"
+        )
+        first, second = server.diagnosis_calls
+        assert first["directive_feedback"] is None
+        feedback = second["directive_feedback"]
+        assert feedback is not None and feedback["category"] == "malformed_directive"
+        assert feedback["rejected_transport_attempt"] == 1
+        # Same controller snapshot: identical logical index, next attempt.
+        assert (
+            first["protocol"]["logical_model_call_index"]
+            == second["protocol"]["logical_model_call_index"]
+        )
+        diagnosis_index = first["protocol"]["logical_model_call_index"]
+        assert (
+            second["protocol"]["transport_attempt_index"]
+            == first["protocol"]["transport_attempt_index"] + 1
+        )
+
+        # 2. The model-facing prompt shape was correct on BOTH attempts.
+        assert server.prompt_failures == [], server.prompt_failures
+
+        # 3. Provider identity preserved across the correction: every call
+        #    hit the same direct-API provider route with the same credential.
+        chat_calls = [call for call in server.calls if call["path"].endswith("/chat/completions")]
+        assert len(chat_calls) >= 2
+        assert all(call["path"] == "/chat/completions" for call in server.calls)
+        assert all(call["authorization"] == f"Bearer {SECRET}" for call in chat_calls)
+        bodies = [json.loads(call["body"].decode("utf-8")) for call in chat_calls]
+        assert all(body["model"] == "zai-org/muse-spark-1.2-contributor" for body in bodies)
+        # Interactive ladder contract: 24-request ceiling respected even
+        # with the repair consuming one extra real request.
+        assert len(chat_calls) <= 24, f"Level-6 contract allows 24 requests, got {len(chat_calls)}"
+
+        journal_path = captured["session_dir"] / "session.events.jsonl"
+        time.sleep(0.3)
+        read = read_session_journal(journal_path)
+        assert read.state is JournalReadState.COMPLETE
+        validate_session_event_stream(read.events)
+
+        # 4. Controller did NOT advance on the malformed attempt: exactly
+        #    one model request event at the diagnosis logical index, and no
+        #    tool was dispatched by the malformed directive (the diagnosis
+        #    action records a diagnosis, not a tool dispatch).
+        started = [
+            event for event in read.events
+            if event.event_kind is SessionEventKind.MODEL_REQUEST_STARTED
+        ]
+        diagnosis_starts = [event for event in started if event.payload["request_index"] == diagnosis_index]
+        assert len(diagnosis_starts) == 1, (
+            f"controller advanced on the malformed attempt: {len(diagnosis_starts)} starts at index {diagnosis_index}"
+        )
+        assert len(started) <= 24
+        completed = [
+            event for event in read.events
+            if event.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED
+        ]
+        diagnosis_completions = [
+            event for event in completed
+            if event.payload["request_index"] == diagnosis_index
+        ]
+        assert len(diagnosis_completions) == 1
+        assert diagnosis_completions[0].payload["status"] == "ok"
+
+        # 5. The corrected diagnosis was accepted exactly once, then the
+        #    run continued through patch, validation, and the verifier.
+        express_directives = [
+            event for event in read.events
+            if event.event_kind is SessionEventKind.MODEL_DIRECTIVE_ACCEPTED
+            and event.payload.get("action_name") == "express_root_cause_hypothesis"
+        ]
+        assert len(express_directives) == 1
+        patch_applied = [
+            event for event in read.events
+            if event.event_kind is SessionEventKind.PATCH_APPLIED
+        ]
+        assert len(patch_applied) == 1
+        verifier_completed = [
+            event for event in read.events
+            if event.event_kind is SessionEventKind.VERIFIER_COMPLETED
+        ]
+        assert len(verifier_completed) == 1
+        assert verifier_completed[0].payload.get("status") == "COMPLETED"
+        assert verifier_completed[0].payload.get("outcome") == "RESOLVED"
+
+        # 6. Terminal state and hygiene.
+        assert captured["terminal"].status == SessionStatus.SUCCEEDED
+        assert captured["terminal"].termination_reason == SessionTerminationReason.DONE
+        assert captured["terminal"].cleanup_verified is True
+        assert SECRET not in journal_path.read_text(encoding="utf-8")
+        fixture = REPO_ROOT / "agentic_debugger/datasets/curated" / LADDER_LEVEL_6_TASK / "window_tail.py"
+        assert fixture.is_file()
+
+        real_app.live_runner.close() if real_app.live_runner else None

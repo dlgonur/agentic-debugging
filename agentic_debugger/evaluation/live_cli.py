@@ -14,7 +14,7 @@ def build_parser():
     p.add_argument("--repository-root",default="."); p.add_argument("--config",required=True); p.add_argument("--output",default="live-results.json"); p.add_argument("--human-output")
     p.add_argument("--live",action="store_true"); p.add_argument("--confirm-live-model-access",action="store_true")
     p.add_argument("--task-id",action="append"); p.add_argument("--policy",choices=[x.value for x in DemoPolicy],action="append"); p.add_argument("--run-label",help="safe report-visible label; a unique execution identity is appended")
-    p.add_argument("--repetitions",type=int,default=1); p.add_argument("--max-model-requests",type=int,default=64); p.add_argument("--max-controller-steps",type=int,default=64); p.add_argument("--max-model-phase-seconds","--max-elapsed-seconds",dest="max_model_phase_seconds",type=int,default=900,help="per-case cumulative model-phase emergency guard checked between requests; not an active-response or whole-case deadline"); p.add_argument("--max-retries",type=int,default=2); p.add_argument("--max-response-bytes",type=int,default=1048576); p.add_argument("--stop-on-task-failure",action="store_true")
+    p.add_argument("--repetitions",type=int,default=1); p.add_argument("--max-model-requests",type=int,default=64); p.add_argument("--max-controller-steps",type=int,default=64); p.add_argument("--max-model-phase-seconds","--max-elapsed-seconds",dest="max_model_phase_seconds",type=int,default=900,help="per-case cumulative model-phase emergency guard checked between requests; not an active-response or whole-case deadline"); p.add_argument("--max-retries",type=int,default=2,help="provider/transport retries only; malformed directives are not network retries"); p.add_argument("--max-directive-repairs",type=int,default=2,help="bounded directive repair attempts (typed directive_feedback correction), distinct from provider retries"); p.add_argument("--max-response-bytes",type=int,default=1048576); p.add_argument("--stop-on-task-failure",action="store_true")
     return p
 
 def main(argv=None):
@@ -30,7 +30,7 @@ def main(argv=None):
         print("live execution rejected; no model configuration was read",file=sys.stderr); return 2
     try:
         config=LiveModelConfig.from_file(args.config)
-        limits=LiveRunLimits(args.max_model_requests,args.max_controller_steps,args.max_model_phase_seconds,args.max_retries,not args.stop_on_task_failure,args.max_response_bytes)
+        limits=LiveRunLimits(args.max_model_requests,args.max_controller_steps,args.max_model_phase_seconds,args.max_retries,not args.stop_on_task_failure,args.max_response_bytes,max_directive_repairs=args.max_directive_repairs)
         report=run_live_evaluation(repository_root=args.repository_root,authorization=LiveExecutionAuthorization.authorize(True,True),config=config,limits=limits,task_ids=tuple(args.task_id) if args.task_id else None,policies=tuple(DemoPolicy(x) for x in args.policy) if args.policy else None,repetitions=args.repetitions,evaluation_id=args.run_label)
     except (LiveConfigurationError,LiveOptInError) as exc:
         report=rejected_live_report(str(exc))

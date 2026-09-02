@@ -40,6 +40,9 @@ def _clean_session_keys():
 def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent.json")
     monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    monkeypatch.setattr(
+        pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json"
+    )
     for name in (
         "OPENCODE_API_KEY",
         "COMMAND_CODE_API_KEY",
@@ -47,6 +50,20 @@ def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
+    # The provider store is user-owned (no auto-seeded builtins): create
+    # the two builtin direct-API providers explicitly, as production does.
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+    )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/provider/v1",
+        api_format=pc.PROTOCOL_RESPONSES,
+        provider_id="opencode_go",
+    )
 
 
 def _cached_snapshot(kind: str, model_ids: list[str]) -> ProviderCatalogSnapshot:

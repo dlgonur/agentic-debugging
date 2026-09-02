@@ -73,6 +73,7 @@ from agentic_debugger.evaluation.live import (
 
 from agentic_debugger.application.level32 import LEVEL32_TASK_ID
 from agentic_debugger.application.ollama_cloud_source import (
+    INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
     LADDER_RUNTIME_CONTRACTS,
     ladder_runtime_contract,
 )
@@ -424,12 +425,16 @@ def run_configured_session(
     # Lower ladder contract is provider-neutral: same budgets/proof
     # regardless of whether the model comes from the registry or a
     # store profile. Outside ladder, keep general defaults.
+    # Directive repair is an explicit interactive-only concept: these are
+    # executable unqualified provider runs, never a qualified scientific
+    # treatment (the qualified ladder and Level-32 paths keep zero).
     if is_lower_ladder and ladder_contract is not None:
         limits = LiveRunLimits(
             max_model_requests=ladder_contract.max_model_requests,
             max_controller_steps=ladder_contract.max_controller_steps,
             max_model_phase_seconds=ladder_contract.max_model_phase_seconds,
             max_retries=ladder_contract.max_retries,
+            max_directive_repairs=INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,
             continue_on_task_failure=False,
             max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
         )
@@ -443,6 +448,7 @@ def run_configured_session(
             # classification.
             max_elapsed_seconds=None,
             max_retries=_DEFAULT_MAX_RETRIES,
+            max_directive_repairs=_DEFAULT_MAX_RETRIES,
             max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
         )
 
