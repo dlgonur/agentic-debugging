@@ -613,11 +613,49 @@ OLD_COUNT_FORMULA = prompt_shaper.OLD_COUNT_FORMULA
 NEW_COUNT_FORMULA = prompt_shaper.NEW_COUNT_FORMULA
 APPLY_PATCH_DIRECTIVE_SHAPE = prompt_shaper.APPLY_PATCH_DIRECTIVE_SHAPE
 
+#: Explicit prompt-profile identity for this transport.
+#: Qualified scientific Ollama ladder and Level-32 use the frozen profile
+#: to preserve byte-for-byte pre-9fab308 provenance.
+OLLAMA_PROMPT_PROFILE = prompt_shaper.PromptProfile.FROZEN_SCIENTIFIC_V1
+PROMPT_PROFILE = OLLAMA_PROMPT_PROFILE
+
 illustrative_action_directive = prompt_shaper.illustrative_action_directive
-build_apply_patch_guidance = prompt_shaper.build_apply_patch_guidance
-build_system_instructions = prompt_shaper.build_system_instructions
-build_request_guidance = prompt_shaper.build_request_guidance
-build_user_protocol_message = prompt_shaper.build_user_protocol_message
+
+
+def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:  # type: ignore[override]
+    try:
+        return prompt_shaper.build_apply_patch_guidance(
+            request, prompt_profile=prompt_shaper.PromptProfile.FROZEN_SCIENTIFIC_V1
+        )
+    except prompt_shaper.ProtocolPromptError as exc:
+        raise OllamaAdapterError(str(exc), kind=exc.kind) from None
+
+
+def build_system_instructions(request: Mapping[str, Any]) -> str:  # type: ignore[override]
+    try:
+        return prompt_shaper.build_system_instructions(
+            request, prompt_profile=prompt_shaper.PromptProfile.FROZEN_SCIENTIFIC_V1
+        )
+    except prompt_shaper.ProtocolPromptError as exc:
+        raise OllamaAdapterError(str(exc), kind=exc.kind) from None
+
+
+def build_request_guidance(request: Mapping[str, Any]) -> str:  # type: ignore[override]
+    try:
+        return prompt_shaper.build_request_guidance(
+            request, prompt_profile=prompt_shaper.PromptProfile.FROZEN_SCIENTIFIC_V1
+        )
+    except prompt_shaper.ProtocolPromptError as exc:
+        raise OllamaAdapterError(str(exc), kind=exc.kind) from None
+
+
+def build_user_protocol_message(request: Mapping[str, Any]) -> str:  # type: ignore[override]
+    try:
+        return prompt_shaper.build_user_protocol_message(
+            request, prompt_profile=prompt_shaper.PromptProfile.FROZEN_SCIENTIFIC_V1
+        )
+    except prompt_shaper.ProtocolPromptError as exc:
+        raise OllamaAdapterError(str(exc), kind=exc.kind) from None
 
 
 def _directive_fields_match_validator() -> bool:
@@ -630,7 +668,9 @@ if not _directive_fields_match_validator():
 
 def build_chat_messages(request: Mapping[str, Any]) -> list[dict[str, str]]:
     try:
-        return prompt_shaper.build_chat_messages(request)
+        return prompt_shaper.build_chat_messages(
+            request, prompt_profile=prompt_shaper.PromptProfile.FROZEN_SCIENTIFIC_V1
+        )
     except prompt_shaper.ProtocolPromptError as exc:
         raise OllamaAdapterError(str(exc), kind=exc.kind) from None
 

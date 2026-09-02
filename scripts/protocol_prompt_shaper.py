@@ -1,4 +1,4 @@
-"""Provider-neutral protocol-1.3 prompt-shaping authority.
+"""Provider-neutral protocol-1.3 prompt-shaping authority with explicit prompt profiles.
 
 One canonical model-facing contract consumed by every model transport
 (the Ollama Cloud command adapter and the provider direct-API adapter).
@@ -6,6 +6,22 @@ The semantics are the accepted mature ladder-facing shaping: a real
 system-role instruction, the exact legal top-level directive forms, and
 request-specific legal action / transition / hypothesis / diagnosis
 representations derived only from the current public protocol request.
+
+Two explicit, typed prompt profiles distinguish scientific treatment
+identity from interactive enhancement:
+
+* FROZEN_SCIENTIFIC_V1 — reproduces the pre-9fab308 accepted Ollama
+  model-facing prompt BYTE-FOR-BYTE for the same canonical request.  Used
+  for all currently qualified scientific paths (lower ladder Level 6/12/18
+  via Ollama and frozen Level-32).  Critically, it does NOT contain the
+  new interactive ``Current diagnosis decision ...`` block.
+
+* INTERACTIVE_PROVIDER_V2 — the enhanced profile introduced by 9fab308:
+  real system-role shaping plus request-specific legal action
+  representations including the exact post-PDB diagnosis decision shape
+  derived from current public controller/contract/PDB evidence.  Used for
+  CONFIGURED_MODEL direct providers, CommandCode, OpenCode-compatible and
+  interactive unqualified ladder runs (bounded directive repairs = 2).
 
 The module is deliberately self-contained (no repository-package imports):
 command adapters run as bare child processes whose only guaranteed import
@@ -20,6 +36,7 @@ Adapters keep their own public-request byte ceilings by passing
 from __future__ import annotations
 
 import json
+from enum import Enum
 from typing import Any, Mapping
 
 MAX_PUBLIC_REQUEST_BYTES = 32_768
@@ -31,6 +48,23 @@ PUBLIC_REQUEST_END = "=== END PUBLIC REQUEST ==="
 #: public ``get_frame_locals`` observation.  The full payload remains in the
 #: canonical request; this bounds only the duplicated example.
 _MAX_DIAGNOSIS_OBSERVED_EXAMPLES = 6
+
+
+class PromptProfile(str, Enum):
+    """Explicit, typed prompt-profile identity.
+
+    FROZEN_SCIENTIFIC_V1 is the byte-for-byte pre-9fab308 Ollama prompt.
+    INTERACTIVE_PROVIDER_V2 is the enhanced interactive prompt with
+    request-specific diagnosis guidance.
+    """
+
+    FROZEN_SCIENTIFIC_V1 = "frozen_scientific_v1"
+    INTERACTIVE_PROVIDER_V2 = "interactive_provider_v2"
+
+
+# Convenient aliases matching the spec's naming.
+FROZEN_SCIENTIFIC_V1 = PromptProfile.FROZEN_SCIENTIFIC_V1
+INTERACTIVE_PROVIDER_V2 = PromptProfile.INTERACTIVE_PROVIDER_V2
 
 
 class ProtocolPromptError(ValueError):
@@ -104,9 +138,17 @@ def directive_fields_match_validator(
     )
 
 
-def build_system_instructions(request: Mapping[str, Any]) -> str:
+def build_system_instructions(
+    request: Mapping[str, Any],
+    *,
+    prompt_profile: PromptProfile = PromptProfile.FROZEN_SCIENTIFIC_V1,
+) -> str:
     """The provider-neutral system-role instruction (request-independent)."""
 
+    # System prompt is identical for both profiles (the mature instruction).
+    # Profile is accepted for explicit identity tracking.
+    _ = prompt_profile
+    _ = request
     return SYSTEM_PROMPT
 
 
@@ -269,8 +311,50 @@ def _latest_ok_observation(
     return matches[-1] if matches else None
 
 
-def _public_breakpoint_source(request: Mapping[str, Any]) -> tuple[str, int, str] | None:
-    """Return a source line already visible in the current exact-PDB history."""
+def _public_breakpoint_source_frozen(request: Mapping[str, Any]) -> tuple[str, int, str] | None:
+    """Frozen: parent's exact logic without observation_id dedup (byte-for-byte)."""
+
+    controller = request.get("controller")
+    observations = [
+        entry.get("last_observation")
+        for entry in request.get("history", [])
+        if isinstance(entry, Mapping)
+    ]
+    if isinstance(controller, Mapping):
+        observations.append(controller.get("last_observation"))
+    breakpoint_line: int | None = None
+    source_lines: dict[tuple[str, int], str] = {}
+    for observation in observations:
+        if not isinstance(observation, Mapping):
+            continue
+        payload = observation.get("payload")
+        if not isinstance(payload, Mapping):
+            continue
+        proof = payload.get("proof")
+        if isinstance(proof, Mapping) and type(proof.get("breakpoint_line")) is int:
+            breakpoint_line = proof["breakpoint_line"]
+        lines = payload.get("lines")
+        if isinstance(lines, list):
+            for entry in lines:
+                if not isinstance(entry, Mapping):
+                    continue
+                path = entry.get("path")
+                number = entry.get("line_number")
+                text = entry.get("text")
+                if type(path) is str and type(number) is int and type(text) is str:
+                    source_lines[(path, number)] = text
+    if breakpoint_line is None:
+        return None
+    matches = [
+        (path, number, text)
+        for (path, number), text in source_lines.items()
+        if number == breakpoint_line
+    ]
+    return matches[0] if len(matches) == 1 else None
+
+
+def _public_breakpoint_source_interactive(request: Mapping[str, Any]) -> tuple[str, int, str] | None:
+    """Interactive: uses deduped public observations."""
 
     breakpoint_line: int | None = None
     source_lines: dict[tuple[str, int], str] = {}
@@ -301,7 +385,19 @@ def _public_breakpoint_source(request: Mapping[str, Any]) -> tuple[str, int, str
     return matches[0] if len(matches) == 1 else None
 
 
-def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
+def _public_breakpoint_source(
+    request: Mapping[str, Any], prompt_profile: PromptProfile
+) -> tuple[str, int, str] | None:
+    if prompt_profile == PromptProfile.FROZEN_SCIENTIFIC_V1:
+        return _public_breakpoint_source_frozen(request)
+    return _public_breakpoint_source_interactive(request)
+
+
+def build_apply_patch_guidance(
+    request: Mapping[str, Any],
+    *,
+    prompt_profile: PromptProfile = PromptProfile.FROZEN_SCIENTIFIC_V1,
+) -> str:
     """PatchManager-derived apply_patch format and recovery rules."""
 
     controller = request.get("controller")
@@ -348,7 +444,7 @@ def build_apply_patch_guidance(request: Mapping[str, Any]) -> str:
         "A rejected apply_patch does not create an active patch and does not mutate the workspace.",
         "After a rejected patch, do not call revert_patch merely to undo that rejected patch.",
     ]
-    breakpoint_source = _public_breakpoint_source(request)
+    breakpoint_source = _public_breakpoint_source(request, prompt_profile)
     if breakpoint_source is not None:
         path, line_number, old_line = breakpoint_source
         lines.extend(
@@ -557,8 +653,127 @@ def _diagnosis_example(request: Mapping[str, Any]) -> dict[str, Any] | None:
     }
 
 
-def build_request_guidance(request: Mapping[str, Any]) -> str:
-    """Request-specific legal shapes derived from the current protocol request."""
+def _build_request_guidance_frozen(request: Mapping[str, Any]) -> str:
+    """FROZEN_SCIENTIFIC_V1: exact parent 1abce96 logic, no diagnosis."""
+
+    kinds = set(_directive_kinds(request))
+    controller = request.get("controller")
+    if not isinstance(controller, Mapping):
+        controller = {}
+    lines = [
+        "Current request legal decision surface:",
+        "Return exactly one JSON object using only the exact protocol field names.",
+        "Do not invent keys named action, payload, or transition.",
+        "Do not combine an action and a transition.",
+    ]
+    proof_gate = request.get("proof_gate")
+    if isinstance(proof_gate, Mapping):
+        next_actions = proof_gate.get("next_required_actions")
+        if isinstance(next_actions, list) and all(type(item) is str for item in next_actions):
+            lines.append(
+                "Exact-proof next required actions: "
+                + (", ".join(next_actions) if next_actions else "none; use a legal transition")
+                + "."
+            )
+    directive_schema = request.get("directive_schema")
+    if isinstance(directive_schema, Mapping):
+        for hypothesis_kind in ("add_hypothesis", "revise_hypothesis"):
+            if hypothesis_kind not in kinds:
+                continue
+            schema = directive_schema.get(hypothesis_kind)
+            constraints = schema.get("constraints") if isinstance(schema, Mapping) else None
+            runtime_constraint = (
+                constraints.get("requires_runtime_evidence")
+                if isinstance(constraints, Mapping)
+                else None
+            )
+            runtime_values = (
+                runtime_constraint.get("enum")
+                if isinstance(runtime_constraint, Mapping)
+                else None
+            )
+            runtime_value = (
+                runtime_values[0]
+                if isinstance(runtime_values, list)
+                and len(runtime_values) == 1
+                and type(runtime_values[0]) is bool
+                else False
+            )
+            def constrained_value(field: str, fallback: Any) -> Any:
+                constraint = constraints.get(field) if isinstance(constraints, Mapping) else None
+                if isinstance(constraint, Mapping) and "example" in constraint:
+                    return constraint["example"]
+                values = constraint.get("enum") if isinstance(constraint, Mapping) else None
+                return values[0] if isinstance(values, list) and len(values) == 1 else fallback
+
+            example = {
+                "kind": hypothesis_kind,
+                "hypothesis_id": constrained_value("hypothesis_id", "hypothesis-1"),
+                "statement": "bounded hypothesis",
+                "confidence": constrained_value("confidence", "low"),
+                "evidence_refs": constrained_value("evidence_refs", []),
+                "requires_runtime_evidence": runtime_value,
+            }
+            lines.append(
+                "Legal hypothesis representation: "
+                + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+            )
+            if hypothesis_kind == "revise_hypothesis":
+                lines.append(
+                    "For revise_hypothesis, replace evidence_refs with actual observation_id values from current history."
+                )
+    allowed = controller.get("allowed_actions")
+    contracts = request.get("action_contracts")
+    if "action" in kinds and isinstance(allowed, list):
+        for name in allowed:
+            if type(name) is not str or not name:
+                continue
+            example = illustrative_action_directive(name, contracts)
+            lines.append(
+                "Legal action representation: "
+                + json.dumps(example, ensure_ascii=False, separators=(",", ":"))
+            )
+            if any(
+                type(value) is str and value.startswith("<") and value.endswith(">")
+                for value in example.get("arguments", {}).values()
+            ):
+                lines.append(
+                    "Every angle-bracket value in that action shape is structural; replace it with a substantive current value and never copy the placeholder literally."
+                )
+            if name == "start_pdb_session":
+                lines.append(
+                    "The shown breakpoint number is only a shape. Replace it with a visible executable target-function line; not def/import/module code."
+                )
+            if name == "apply_patch":
+                lines.append(build_apply_patch_guidance(request, prompt_profile=PromptProfile.FROZEN_SCIENTIFIC_V1))
+    targets = controller.get("legal_transition_targets")
+    if "transition" in kinds and isinstance(targets, list) and targets:
+        legal_targets = [target for target in targets if type(target) is str]
+        if len(legal_targets) == 1:
+            lines.append(
+                "Legal transition representation: "
+                + json.dumps(
+                    {
+                        "kind": "transition",
+                        "target_state": legal_targets[0],
+                        "reason": "advance using the sole legal target",
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            )
+        elif legal_targets:
+            lines.append(
+                "Legal transition representation: "
+                '{"kind":"transition","target_state":"<one of '
+                + ", ".join(legal_targets)
+                + '>","reason":"<bounded reason>"}'
+            )
+    return "\n".join(lines)
+
+
+def _build_request_guidance_interactive(request: Mapping[str, Any]) -> str:
+    """INTERACTIVE_PROVIDER_V2: enhanced with request-specific diagnosis."""
 
     kinds = set(_directive_kinds(request))
     controller = request.get("controller")
@@ -650,7 +865,7 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
                     "The shown breakpoint number is only a shape. Replace it with a visible executable target-function line; not def/import/module code."
                 )
             if name == "apply_patch":
-                lines.append(build_apply_patch_guidance(request))
+                lines.append(build_apply_patch_guidance(request, prompt_profile=PromptProfile.INTERACTIVE_PROVIDER_V2))
             if name == "express_root_cause_hypothesis":
                 diagnosis_advertised = True
     if diagnosis_advertised and isinstance(allowed, list):
@@ -693,16 +908,31 @@ def build_request_guidance(request: Mapping[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def build_request_guidance(
+    request: Mapping[str, Any],
+    *,
+    prompt_profile: PromptProfile = PromptProfile.FROZEN_SCIENTIFIC_V1,
+) -> str:
+    """Request-specific legal shapes derived from the current protocol request."""
+
+    if prompt_profile == PromptProfile.FROZEN_SCIENTIFIC_V1:
+        return _build_request_guidance_frozen(request)
+    if prompt_profile == PromptProfile.INTERACTIVE_PROVIDER_V2:
+        return _build_request_guidance_interactive(request)
+    raise ProtocolPromptError(f"unknown prompt profile: {prompt_profile!r}")
+
+
 def build_user_protocol_message(
     request: Mapping[str, Any],
     *,
+    prompt_profile: PromptProfile = PromptProfile.FROZEN_SCIENTIFIC_V1,
     max_request_bytes: int = MAX_PUBLIC_REQUEST_BYTES,
 ) -> str:
     """The user-role body: request-specific guidance plus the canonical request."""
 
     canonical = canonical_public_request(request, max_request_bytes=max_request_bytes)
     return (
-        f"{build_request_guidance(request)}\n\n"
+        f"{build_request_guidance(request, prompt_profile=prompt_profile)}\n\n"
         f"{PUBLIC_REQUEST_START}\n{canonical}\n{PUBLIC_REQUEST_END}"
     )
 
@@ -710,6 +940,7 @@ def build_user_protocol_message(
 def build_chat_messages(
     request: Mapping[str, Any],
     *,
+    prompt_profile: PromptProfile = PromptProfile.FROZEN_SCIENTIFIC_V1,
     max_request_bytes: int = MAX_PUBLIC_REQUEST_BYTES,
 ) -> list[dict[str, str]]:
     """The canonical system/user message pair every transport adapts."""
@@ -717,12 +948,12 @@ def build_chat_messages(
     return [
         {
             "role": "system",
-            "content": build_system_instructions(request),
+            "content": build_system_instructions(request, prompt_profile=prompt_profile),
         },
         {
             "role": "user",
             "content": build_user_protocol_message(
-                request, max_request_bytes=max_request_bytes
+                request, prompt_profile=prompt_profile, max_request_bytes=max_request_bytes
             ),
         },
     ]

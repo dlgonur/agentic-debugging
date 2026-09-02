@@ -214,7 +214,9 @@ class TestProviderNeutralAuthority:
 
 class TestDiagnosisDecisionShape:
     def test_diagnosis_shape_derives_exact_public_values(self) -> None:
-        guidance = shaper.build_request_guidance(_diagnosis_request())
+        guidance = shaper.build_request_guidance(
+            _diagnosis_request(), prompt_profile=shaper.PromptProfile.INTERACTIVE_PROVIDER_V2
+        )
         assert "Legal action representation" in guidance
         assert "express_root_cause_hypothesis" in guidance
         assert "Current diagnosis decision (express_root_cause_hypothesis)" in guidance
@@ -234,7 +236,9 @@ class TestDiagnosisDecisionShape:
         request = _diagnosis_request()
         request["history"] = []
         request["controller"]["hypotheses"] = []
-        guidance = shaper.build_request_guidance(request)
+        guidance = shaper.build_request_guidance(
+            request, prompt_profile=shaper.PromptProfile.INTERACTIVE_PROVIDER_V2
+        )
         assert "<current active hypothesis_id>" in guidance
         assert '"target_file":"<diagnosed file>"' in guidance
         assert '"target_symbol":"<diagnosed function>"' in guidance

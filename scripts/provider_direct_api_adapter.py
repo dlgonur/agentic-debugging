@@ -84,6 +84,11 @@ except ImportError:  # pragma: no cover - defensive import path (bare child)
 PROVIDER_COMPLETION_SCHEMA_VERSION = "provider-completion-v1"
 TOOL_VERSION = "provider-direct-api-adapter-v1"
 
+#: Explicit prompt-profile identity for this transport.
+#: Direct-API / interactive provider runs use the enhanced profile.
+PROVIDER_PROMPT_PROFILE = prompt_shaper.PromptProfile.INTERACTIVE_PROVIDER_V2  # type: ignore[attr-defined]
+PROMPT_PROFILE = PROVIDER_PROMPT_PROFILE
+
 DEFAULT_TIMEOUT_SECONDS = 300.0
 DEFAULT_MAX_LOGICAL_MODEL_CALLS = 64
 
@@ -447,11 +452,14 @@ def run_adapter(
     validate_logical_call_index(request, max_logical_calls)
     # The provider-neutral protocol-1.3 shaping authority: the same mature
     # system-role instruction and request-specific legal-representation
-    # guidance every model transport consumes.  The direct-API route keeps
-    # its own established public-request byte ceiling.
+    # guidance every model transport consumes.  The direct-API route uses
+    # the interactive enhanced profile (diagnosis guidance, bounded repairs).
+    # This is intentionally NOT the frozen scientific treatment.
     try:
         system_message, user_message = prompt_shaper.build_chat_messages(
-            request, max_request_bytes=frozen.MAX_PUBLIC_REQUEST_BYTES
+            request,
+            prompt_profile=prompt_shaper.PromptProfile.INTERACTIVE_PROVIDER_V2,
+            max_request_bytes=frozen.MAX_PUBLIC_REQUEST_BYTES,
         )
     except prompt_shaper.ProtocolPromptError as exc:
         raise ProviderDirectApiError(str(exc), kind=exc.kind) from None
