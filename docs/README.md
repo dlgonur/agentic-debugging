@@ -31,7 +31,16 @@ Accepted architecture and infrastructure designs. The current active application
 architecture is `architecture/local-application-v1.md`; existing records include
 the MVP implementation plan, PDB trajectory post-mortem integration, verifier
 forwarder/cache repair, root-cause explanation metric, preference exporter, and
-repository RAG.
+repository RAG. `architecture/agentic-debugger-v2-plan.md` is the accepted V2
+target/migration **plan** (no V2 implementation has occurred).
+
+## adr/
+
+Architecture decision records (`NNNN-*.md`). `adr/0001-control-execution-plane-separation.md`
+records the accepted V2 control/execution plane decision (logical seams, no
+process split; verifier physical isolation deferred). ADRs with status
+`Proposed` are decisions under review, not accepted architecture; `Accepted`
+records an agreed target/migration direction, not completed implementation.
 
 ## evaluation/
 
