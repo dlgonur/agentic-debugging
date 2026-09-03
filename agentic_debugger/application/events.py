@@ -879,6 +879,7 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         "provider",
         "route",
         "api_protocol",
+        "auth_mode",
         "provider_model_id",
         "endpoint",
     }
@@ -913,6 +914,8 @@ def _payload_model_configured(payload: Mapping[str, Any]) -> dict[str, Any]:
         result["route"] = _bounded_text(payload["route"], "route", MAX_SHORT_TEXT_CHARS)
     if "api_protocol" in payload:
         result["api_protocol"] = _bounded_text(payload["api_protocol"], "api_protocol", MAX_SHORT_TEXT_CHARS)
+    if "auth_mode" in payload:
+        result["auth_mode"] = _bounded_text(payload["auth_mode"], "auth_mode", MAX_SHORT_TEXT_CHARS)
     if "provider_model_id" in payload:
         result["provider_model_id"] = _bounded_text(payload["provider_model_id"], "provider_model_id", MAX_SHORT_TEXT_CHARS)
     if "endpoint" in payload:

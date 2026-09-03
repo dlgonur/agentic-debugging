@@ -32,6 +32,10 @@ from agentic_debugger.runtime.pdb_protocol import (
     serialize_response,
     deserialize_request,
 )
+from agentic_debugger.runtime.python_launcher import (
+    build_worker_env,
+    resolve_worker_executable,
+)
 from agentic_debugger.runtime.workspace import TaskWorkspace
 
 _DEFAULT_STARTUP_TIMEOUT = 5.0
@@ -370,13 +374,31 @@ class PdbSession:
                 "runpy.run_module("
                 "'agentic_debugger.runtime.pdb_worker', run_name='__main__')"
             )
+        # Central Windows-venv launch authority: inside a Windows virtual
+        # environment this is the real base interpreter (the venv
+        # redirector would otherwise fork a grandchild whose PID can never
+        # equal the Popen PID checked by the handshake).  The venv
+        # identity itself travels via ``_worker_env``.
         return [
-            sys.executable,
+            resolve_worker_executable(),
             "-I",
             "-u",
             "-c",
             bootstrap,
         ]
+
+    def _worker_env(self) -> Optional[Dict[str, str]]:
+        """Environment for the worker subprocess (``None`` = inherit).
+
+        Inside a Windows virtual environment this carries the standard
+        ``__PYVENV_LAUNCHER__`` identity (CPython bpo-35797) so the
+        directly launched base interpreter computes the same
+        ``sys.executable``/``sys.prefix``/``sys.path`` as the redirector
+        would have.  A subclass that launches through a non-Python
+        bridge (e.g. WSL) overrides this to ``None``: the launcher
+        identity must never leak into a foreign PID namespace.
+        """
+        return build_worker_env(None)
 
     def _worker_cwd(self) -> str:
         """Windows-side ``Popen`` cwd for the worker process.
@@ -418,6 +440,7 @@ class PdbSession:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 shell=False,
+                env=self._worker_env(),
                 start_new_session=sys.platform != "win32",
                 creationflags=(
                     subprocess.CREATE_NEW_PROCESS_GROUP

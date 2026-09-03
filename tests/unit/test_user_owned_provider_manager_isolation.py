@@ -706,12 +706,15 @@ def test_forwarded_credential_authority_boundary(
     assert pc.provider_transport_credential_environment("commandcode_goat") is None
     assert pc.provider_session_credential_environment("commandcode_goat") is None
 
-    # 2. Explicitly configure provider
+    # 2. Explicitly configure provider with the historical transport
+    # profile (the historical forwarded session variable belongs to that
+    # explicit contract, never to the bare technical ID).
     pc.add_provider_config(
         name="CommandCode GOAT",
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
     )
 
     # 3. Configured provider -> forwarded private session variable is accepted for worker hop
@@ -721,3 +724,77 @@ def test_forwarded_credential_authority_boundary(
     assert pc.provider_transport_credential_environment("commandcode_goat") == {
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": "forwarded-private-key-222"
     }
+
+
+def test_add_provider_dialog_discovers_catalog_after_screen_reload(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Add Provider (dialog UI, credentialed) auto-refreshes the catalog.
+
+    Regression: the post-add auto-refresh once called ``action_refresh``
+    on the replacement ModelProvidersScreen before that screen mounted,
+    so the worker never ran and the provider stayed stuck in the
+    refreshing set with an empty catalog.  The refresh must actually
+    execute once the new screen is mounted (loopback fake endpoint).
+    """
+    import asyncio
+    import time
+
+    from fake_provider_server import FakeProviderServer, catalog_payload
+    from textual.widgets import Input
+
+    from agentic_debugger.ui.screens import AddProviderDialogScreen
+
+    config_file = tmp_path / "provider-configurations.json"
+    monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+    monkeypatch.setenv(
+        "AGENTIC_DEBUGGER_PROVIDER_CATALOG_CACHE_PATH",
+        str(tmp_path / "provider-catalog-cache.json"),
+    )
+    secure_store: Dict[str, str] = {}
+    monkeypatch.setattr(
+        pc, "save_secure_credential", lambda k, v: secure_store.__setitem__(k, v) or True
+    )
+    monkeypatch.setattr(pc, "load_secure_credential", lambda k: secure_store.get(k))
+    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in secure_store)
+    pc.clear_all_session_keys()
+
+    app = make_app(tmp_path)
+
+    with FakeProviderServer(
+        lambda req: (200, catalog_payload(["dialog-model-1", "dialog-model-2"]))
+    ) as server:
+
+        async def actions(pilot) -> None:
+            await pilot.press("m")
+            await pilot.pause()
+            assert isinstance(pilot.app.screen, ModelProvidersScreen)
+            assert pc.list_configured_providers() == []
+
+            pilot.app.screen.action_add_provider()
+            await pilot.pause()
+            dialog = pilot.app.screen
+            assert isinstance(dialog, AddProviderDialogScreen)
+            dialog.query_one("#input-name", Input).value = "Dialog Provider"
+            dialog.query_one("#input-url", Input).value = server.base_url
+            dialog.query_one("#input-key", Input).value = "dialog-key-not-real"
+            dialog._do_save()
+            await pilot.pause()
+
+            deadline = time.monotonic() + 30
+            while time.monotonic() < deadline:
+                cfg = pc.get_provider_config("dialog_provider")
+                if cfg is not None and len(cfg.models) >= 2:
+                    break
+                await asyncio.sleep(0.05)
+                await pilot.pause()
+
+            cfg = pc.get_provider_config("dialog_provider")
+            assert cfg is not None, "provider missing after dialog save"
+            assert {m.model_id for m in cfg.models} >= {"dialog-model-1", "dialog-model-2"}
+            assert server.request_count >= 1
+            screen = pilot.app.screen
+            assert isinstance(screen, ModelProvidersScreen)
+            assert screen._refreshing == set(), "refresh must complete, not stick"
+
+        run_headless(app, actions, size=(120, 32))

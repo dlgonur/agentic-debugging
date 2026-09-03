@@ -400,6 +400,7 @@ def test_level32_model_selection_authority(
         base_url="https://ollama.com",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="ollama_cloud",
+        transport_profile=pc.TRANSPORT_OLLAMA_CLOUD,
     )
     app = make_app(tmp_path)
     start_calls = []
@@ -458,9 +459,9 @@ def test_real_model_picker_keeps_provider_groups_visible_across_target_switch(
     """Changing Target changes compatibility, never provider discoverability."""
     from agentic_debugger.application import provider_connections as pc
 
-    pc.add_provider_config(name="Ollama Cloud", base_url="https://ollama.com", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="ollama_cloud")
-    pc.add_provider_config(name="OpenCode Go", base_url="https://opencode.ai/zen/go/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="opencode_go")
-    pc.add_provider_config(name="CommandCode GOAT", base_url="https://api.commandcode.ai/provider/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="commandcode_goat")
+    pc.add_provider_config(name="Ollama Cloud", base_url="https://ollama.com", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="ollama_cloud", transport_profile=pc.TRANSPORT_OLLAMA_CLOUD)
+    pc.add_provider_config(name="OpenCode Go", base_url="https://opencode.ai/zen/go/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="opencode_go", transport_profile=pc.TRANSPORT_OPENCODE_GO)
+    pc.add_provider_config(name="CommandCode GOAT", base_url="https://api.commandcode.ai/provider/v1", api_format=pc.PROTOCOL_CHAT_COMPLETIONS, provider_id="commandcode_goat", transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT)
 
     app = make_app(tmp_path)
     qualified = level32_model_profiles()[0]

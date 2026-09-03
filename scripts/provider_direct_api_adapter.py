@@ -53,11 +53,8 @@ except ImportError:  # pragma: no cover - defensive import path
 
 try:
     from agentic_debugger.application.provider_connections import (
-        DIRECT_API_PROVIDER_KINDS,
         inference_path_for,
-        is_known_provider,
         provider_api_model_id,
-        resolve_model_protocol,
         resolve_runtime_credential,
     )
     from agentic_debugger.application.provider_http import (
@@ -68,11 +65,8 @@ try:
 except ImportError:  # pragma: no cover - defensive import path (bare child)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from agentic_debugger.application.provider_connections import (
-        DIRECT_API_PROVIDER_KINDS,
         inference_path_for,
-        is_known_provider,
         provider_api_model_id,
-        resolve_model_protocol,
         resolve_runtime_credential,
     )
     from agentic_debugger.application.provider_http import (
@@ -106,14 +100,46 @@ class ProviderDirectApiError(RuntimeError):
         self.kind = kind
 
 
-def _resolve_credential(provider: str) -> str:
+def _load_child_auth_mode(provider: str) -> str:
+    """Strict child-side authentication authority (never guesses).
+
+    Loads the configured ``auth_mode`` for ``provider`` from the child
+    process's own provider configuration view.  Any failure — missing,
+    disabled, quarantined, corrupt, or unreadable configuration — raises
+    a typed configuration error BEFORE any HTTP request.  There is no
+    Bearer default: silently choosing an authentication mode the
+    operator never configured would send credentials (or omit them)
+    under false semantics.
+    """
+    try:
+        from agentic_debugger.application.provider_connections import (
+            provider_auth_mode,
+        )
+    except ImportError as exc:
+        raise ProviderDirectApiError(
+            f"provider {provider!r} authentication is not configured",
+            kind="configuration",
+        ) from exc
+    try:
+        return provider_auth_mode(provider)
+    except Exception as exc:
+        raise ProviderDirectApiError(
+            f"provider {provider!r} authentication is not configured: {exc}",
+            kind="configuration",
+        ) from None
+
+
+def _resolve_credential(provider: str, auth_mode: str) -> Optional[str]:
     """Resolve through the provider-owned runtime credential contract.
 
     That contract covers the private session hop, supported provider
     environment source, and consumable auth store without duplicating any
-    variable names here.  The value is never logged or echoed.
+    variable names here.  The value is never logged or echoed.  No-auth
+    providers resolve to ``None`` and send no credential header.
     """
 
+    if auth_mode == "none":
+        return None
     value = resolve_runtime_credential(provider)
     if value and value.strip():
         return value.strip()
@@ -238,11 +264,26 @@ def _extract_chat_completions(payload: Mapping[str, Any]) -> str:
         )
     message = first.get("message")
     if isinstance(message, Mapping):
-        text = _bounded_text(message.get("content"))
-        if text:
-            return text
+        content = message.get("content")
+        # Supported common shapes: plain string, or a list of text parts
+        # (e.g. [{"type": "text", "text": "..."}]).  Non-text thinking /
+        # metadata blocks are ignored; refusal/empty content fails closed.
+        if type(content) is str and content.strip():
+            return content
+        if type(content) is list:
+            parts: list[str] = []
+            for piece in content:
+                if not isinstance(piece, Mapping):
+                    continue
+                if piece.get("type") not in ("text", "output_text"):
+                    continue
+                piece_text = _bounded_text(piece.get("text"))
+                if piece_text:
+                    parts.append(piece_text)
+            if parts:
+                return "".join(parts)
     text = _bounded_text(first.get("text"))
-    if text:
+    if text and text.strip():
         return text
     raise ProviderDirectApiError(
         "completion response has no message content", kind="invalid_completion"
@@ -282,6 +323,7 @@ def _extract_messages(payload: Mapping[str, Any]) -> str:
     if type(content) is list:
         parts: list[str] = []
         for piece in content:
+            # Ignore non-text thinking/metadata blocks; only text counts.
             if isinstance(piece, Mapping) and piece.get("type") == "text":
                 piece_text = _bounded_text(piece.get("text"))
                 if piece_text:
@@ -289,7 +331,7 @@ def _extract_messages(payload: Mapping[str, Any]) -> str:
         if parts:
             return "".join(parts)
     text = _bounded_text(content)
-    if text:
+    if text and text.strip():
         return text
     raise ProviderDirectApiError(
         "messages payload has no text content", kind="invalid_completion"
@@ -348,20 +390,24 @@ def perform_inference(
     timeout_seconds: float,
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
+    auth_mode: Optional[str] = None,
 ) -> tuple[str, Optional[dict]]:
-    """Exactly ONE provider inference for one transport request."""
+    """Exactly ONE provider inference for one transport request.
+
+    ``auth_mode`` carries the parent-verified authentication contract
+    (``run_adapter`` agreement-checks it against child configuration
+    before calling here).  When omitted, the child resolves its own
+    configured mode strictly — a missing/unreadable configuration fails
+    closed instead of guessing Bearer.
+    """
 
     from agentic_debugger.application.provider_connections import (
         provider_base_url,
         provider_tls_signature_blocked,
     )
 
-    credential = resolve_runtime_credential(provider)
-    if credential is None:
-        raise ProviderDirectApiError(
-            f"no usable credential source for direct-API provider {provider!r}",
-            kind="configuration",
-        )
+    verified_auth = auth_mode if auth_mode is not None else _load_child_auth_mode(provider)
+    credential = _resolve_credential(provider, verified_auth)
     path = inference_path_for(provider, protocol)
     payload = build_provider_payload(
         protocol,
@@ -369,6 +415,10 @@ def perform_inference(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
     )
+    # Canonical endpoint authority: the explicit --base-url passed by the
+    # live config (which equals the configured provider Base URL) wins;
+    # otherwise the configured Base URL is authoritative.  Credentials
+    # travel only via headers/environment, never argv.
     endpoint = (base_url or provider_base_url(provider)).rstrip("/")
     tls_blocked = False
     try:
@@ -385,6 +435,7 @@ def perform_inference(
             max_response_bytes=MAX_PROVIDER_RESPONSE_BYTES,
             engine=engine,
             tls_signature_blocked=tls_blocked,
+            auth_mode=verified_auth,
         )
     except ProviderHttpError as exc:
         kind = {
@@ -435,23 +486,70 @@ def run_adapter(
     max_logical_calls: int = DEFAULT_MAX_LOGICAL_MODEL_CALLS,
     engine: Optional[str] = None,
     base_url: Optional[str] = None,
+    auth_mode: Optional[str] = None,
 ) -> int:
+    """Verify parent/child configuration identity, then run one inference.
+
+    Authentication authority is explicit and fail-closed across the
+    parent → worker → transport → child boundary: the parent passes the
+    non-secret ``auth_mode`` (and endpoint) it resolved, and the child
+    agreement-checks both against its own configuration view BEFORE any
+    HTTP request.  Missing/corrupt/mismatched child metadata fails with
+    a typed configuration error and zero network attempts.  Credentials
+    never travel via argv.
+    """
     if protocol not in ("chat_completions", "responses", "messages"):
         raise ProviderDirectApiError(
             f"unknown protocol: {protocol!r}", kind="configuration"
         )
-    if not base_url:
-        if provider not in DIRECT_API_PROVIDER_KINDS and not is_known_provider(provider):
-            raise ProviderDirectApiError(
-                f"unknown direct-API provider: {provider!r}", kind="configuration"
-            )
-        resolved_proto = resolve_model_protocol(provider, model)
-        if resolved_proto is not None and protocol != resolved_proto:
-            raise ProviderDirectApiError(
-                "declared protocol does not match the provider-resolved protocol "
-                "for this model",
-                kind="configuration",
-            )
+    try:
+        from agentic_debugger.application.provider_connections import (
+            effective_model_protocol,
+            get_provider_config,
+        )
+    except ImportError as exc:
+        raise ProviderDirectApiError(
+            "provider configuration is unavailable in this child process",
+            kind="configuration",
+        ) from exc
+    try:
+        child_cfg = get_provider_config(provider)
+    except Exception as exc:
+        raise ProviderDirectApiError(
+            f"provider {provider!r} configuration could not be verified: {exc}",
+            kind="configuration",
+        ) from None
+    if child_cfg is None or not child_cfg.enabled:
+        raise ProviderDirectApiError(
+            f"unknown direct-API provider: {provider!r}", kind="configuration"
+        )
+    if auth_mode is not None and auth_mode != child_cfg.auth_mode:
+        raise ProviderDirectApiError(
+            "parent/child authentication contract disagrees for provider "
+            f"{provider!r}",
+            kind="configuration",
+        )
+    verified_auth = child_cfg.auth_mode
+    if base_url is not None and base_url.rstrip("/") != child_cfg.base_url.rstrip("/"):
+        raise ProviderDirectApiError(
+            "parent/child endpoint contract disagrees for provider "
+            f"{provider!r}",
+            kind="configuration",
+        )
+    verified_endpoint = child_cfg.base_url
+    try:
+        effective = effective_model_protocol(provider, model)
+    except Exception as exc:
+        raise ProviderDirectApiError(
+            f"provider {provider!r} model {model!r} is not executable: {exc}",
+            kind="configuration",
+        ) from None
+    if protocol != effective:
+        raise ProviderDirectApiError(
+            "declared protocol does not match the provider-resolved protocol "
+            "for this model",
+            kind="configuration",
+        )
     request = read_request(stdin_stream)
     validate_logical_call_index(request, max_logical_calls)
     # The provider-neutral protocol-1.3 shaping authority: the same mature
@@ -475,7 +573,8 @@ def run_adapter(
         user_prompt=user_message["content"],
         timeout_seconds=timeout_seconds,
         engine=engine,
-        base_url=base_url,
+        base_url=verified_endpoint,
+        auth_mode=verified_auth,
     )
     response: dict[str, Any] = {
         "provider_completion_schema_version": PROVIDER_COMPLETION_SCHEMA_VERSION,
@@ -506,11 +605,20 @@ def main() -> None:
     )
     parser.add_argument("--engine", default=None, choices=("stdlib", "curl"))
     parser.add_argument(
+        "--auth-mode",
+        default=None,
+        choices=("bearer", "anthropic", "none"),
+        help=(
+            "Parent-verified authentication contract (non-secret); the child "
+            "agreement-checks it against its own configuration before any request."
+        ),
+    )
+    parser.add_argument(
         "--base-url",
         default=None,
         help=(
-            "Evaluation-only endpoint override (local fake provider servers); "
-            "production never passes this flag."
+            "Canonical configured provider endpoint (passed explicitly by the "
+            "live config so parent, worker, and adapter agree byte-for-byte)."
         ),
     )
     args = parser.parse_args()
@@ -526,6 +634,7 @@ def main() -> None:
                 max_logical_calls=args.max_logical_model_calls,
                 engine=args.engine,
                 base_url=args.base_url,
+                auth_mode=args.auth_mode,
             )
         )
     except ProviderDirectApiError as exc:

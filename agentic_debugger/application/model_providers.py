@@ -4,21 +4,29 @@ One place answers: which model providers can this machine serve, which
 models do they offer, and how does a live session construct their
 transport configuration.
 
-Supported providers:
+The registry is user-owned: a fresh installation configures zero
+providers, and every provider — including the historical kinds below —
+is created explicitly through the Model Providers manager
+(:mod:`agentic_debugger.application.provider_connections`).
 
-- ``ollama_cloud``  — the repository-owned general Ollama Cloud catalog;
+Historical provider kinds (configured explicitly, with preserved endpoint
+contracts):
+
+- ``ollama_cloud``  — Ollama (Chat Completions-compatible cloud endpoint);
   scientific qualification is a separate capability-ladder contract.
-- ``opencode_go``   — the operator's OpenCode Go subscription.  The
-  general catalog is discovered from the provider's live ``/models``
-  endpoint (:mod:`agentic_debugger.application.provider_connections`);
-  execution prefers the direct provider API (``scripts/provider_direct_api_adapter.py``)
-  and keeps the verified local OpenCode CLI
-  (``scripts/opencode_provider_adapter.py``) as the explicit legacy route.
-- ``commandcode_goat`` — the operator's Command Code GOAT plan, with the
-  same direct-API-first routing over the CommandCode Provider API and
-  the local CommandCode CLI as the explicit legacy route.
-- ``configured``    — the existing app-owned command-model profile store.
-- Custom configured direct-API providers managed through Model Provider Manager.
+- ``opencode_go``   — OpenCode Go.  Execution prefers the direct provider
+  API (``scripts/provider_direct_api_adapter.py``) and keeps the verified
+  local OpenCode CLI (``scripts/opencode_provider_adapter.py``) as the
+  explicit legacy route.
+- ``commandcode_goat`` — Command Code GOAT, with the same direct-API-first
+  routing over the CommandCode Provider API and the local CommandCode CLI
+  as the explicit legacy route.
+
+Arbitrary user-configured direct-API providers resolve through the same
+registry (direct API route only; there is no legacy CLI route for them).
+
+- ``configured``    — the app-owned command-model profile store (its own
+  legacy/profile-store contract, never resolved here).
 """
 
 from __future__ import annotations
@@ -32,6 +40,10 @@ from typing import Any, List, Mapping, Optional, Tuple
 
 from agentic_debugger.application.provider_connections import (
     DIRECT_API_PROVIDER_KINDS,
+    TRANSPORT_COMMANDCODE_GOAT,
+    TRANSPORT_GENERIC,
+    TRANSPORT_OLLAMA_CLOUD,
+    TRANSPORT_OPENCODE_GO,
     ProviderConnectionError,
     credential_source_for,
     get_provider_config,
@@ -298,14 +310,69 @@ def _opencode_availability() -> Tuple[bool, Optional[str]]:
 
 def _direct_connection_available(kind: str) -> Tuple[bool, Optional[str]]:
     """Whether the direct-API route is currently usable (presence-only)."""
-    source = credential_source_for(kind)
+    try:
+        source = credential_source_for(kind)
+    except Exception:
+        return False, "provider configuration error — check Model Providers"
     if source is None:
+        try:
+            from agentic_debugger.application.provider_connections import (
+                get_provider_config,
+                is_provider_quarantined,
+            )
+
+            cfg = get_provider_config(kind)
+            if cfg is not None and cfg.auth_mode == "none" and not is_provider_quarantined(kind):
+                return True, None
+        except Exception:
+            pass
         return False, None
     return True, None
 
 
+def _has_executable_model(kind: str, cfg: Any) -> bool:
+    """Whether any known model for one provider has an executable transport.
+
+    Considers the cached discovered catalog first (the picker's preferred
+    source), then the configured models.  Empty catalogs yield True:
+    provider-level readiness is credential-scoped, and model runnability
+    is reported per model.  Never raises.
+    """
+    try:
+        from agentic_debugger.application.provider_connections import (
+            is_protocol_executable,
+            load_cached_catalog,
+        )
+
+        try:
+            snapshot = load_cached_catalog(kind)
+        except Exception:
+            snapshot = None
+        if snapshot is not None and snapshot.models:
+            protocols = [m.protocol for m in snapshot.models]
+        else:
+            protocols = [m.protocol for m in (cfg.models if cfg is not None else ())]
+        if not protocols:
+            return True
+        return any(is_protocol_executable(kind, p) for p in protocols)
+    except Exception:
+        return True
+
+
 def provider_availability() -> List[Tuple[str, bool, Optional[str]]]:
-    """(kind, available, reason) for each provider."""
+    """(kind, available, reason) derived from user-owned configured truth.
+
+    Fresh installs contain zero configured providers, so unconfigured
+    historical identifiers never appear ready.  Every configured provider
+    — including arbitrary user IDs — is representable.  Corrupt
+    configuration surfaces as an explicit error entry rather than a
+    healthy zero-provider state.
+    """
+    from agentic_debugger.application.provider_connections import (
+        ProviderConnectionError,
+        list_configured_providers,
+    )
+
     def combined(
         direct: Tuple[bool, Optional[str]], legacy: Tuple[bool, Optional[str]]
     ) -> Tuple[bool, Optional[str]]:
@@ -315,17 +382,57 @@ def provider_availability() -> List[Tuple[str, bool, Optional[str]]]:
             return False, "No usable direct-API credential source"
         return False, f"{legacy[1]}; no usable direct-API credential source"
 
-    results: List[Tuple[str, bool, Optional[str]]] = [
-        (PROVIDER_KIND_OLLAMA, True, None),
-        (
-            PROVIDER_KIND_OPENCODE,
-            *combined(_direct_connection_available(PROVIDER_KIND_OPENCODE), _opencode_availability()),
-        ),
-        (
-            PROVIDER_KIND_COMMANDCODE,
-            *combined(_direct_connection_available(PROVIDER_KIND_COMMANDCODE), _commandcode_availability()),
-        ),
-    ]
+    try:
+        configured = list_configured_providers()
+    except ProviderConnectionError as exc:
+        return [("__provider_registry__", False, f"provider configuration error: {exc}")]
+    except Exception:
+        return [("__provider_registry__", False, "provider configuration error")]
+
+    results: List[Tuple[str, bool, Optional[str]]] = []
+    for cfg in configured:
+        kind = cfg.provider_id
+        # Legacy CLI routes are allowed ONLY for providers explicitly
+        # carrying the corresponding historical transport profile.  A
+        # generic provider — even one identified ``opencode_go`` or
+        # ``commandcode_goat`` — never falls into a local CLI.
+        if cfg.transport_profile == TRANSPORT_OPENCODE_GO:
+            legacy = _opencode_availability()
+            ok, reason = combined(_direct_connection_available(kind), legacy)
+            legacy_ok = legacy[0]
+        elif cfg.transport_profile == TRANSPORT_COMMANDCODE_GOAT:
+            legacy = _commandcode_availability()
+            ok, reason = combined(_direct_connection_available(kind), legacy)
+            legacy_ok = legacy[0]
+        else:
+            legacy_ok = False
+            direct_ok, _ = _direct_connection_available(kind)
+            if direct_ok:
+                ok, reason = True, None
+            else:
+                ok, reason = False, None
+                try:
+                    from agentic_debugger.application.provider_connections import (
+                        is_provider_quarantined,
+                    )
+
+                    if is_provider_quarantined(kind):
+                        reason = "credential recovery required — re-enter the API key"
+                    elif cfg.auth_mode == "none":
+                        # No-auth loopback is ready when configured; models
+                        # determine runnability per model.
+                        ok, reason = True, None
+                    else:
+                        reason = "No usable direct-API credential source"
+                except Exception:
+                    reason = "No usable direct-API credential source"
+        if ok and not legacy_ok and not _has_executable_model(kind, cfg):
+            ok = False
+            reason = (
+                "no configured model has an executable transport for this "
+                "provider's authentication and transport profile"
+            )
+        results.append((kind, ok, reason))
     return results
 
 
@@ -338,12 +445,25 @@ def list_provider_models(
     include_ollama: bool = True,
     ollama_limit: int = 32,
 ) -> List[ProviderModel]:
-    """Grouped, availability-annotated model summaries for pickers."""
+    """Grouped, availability-annotated model summaries for pickers.
+
+    Fail-closed on registry corruption: a malformed provider registry
+    raises :class:`ProviderRegistryError` (credential-safe) instead of
+    being swallowed into a healthy-looking empty list.  Callers surface
+    the error to the UI/doctor rather than presenting a fresh-install
+    state.
+    """
+    from agentic_debugger.application.provider_connections import (
+        ProviderConnectionError,
+    )
+
     models: List[ProviderModel] = []
     try:
         configured = list_configured_providers()
-    except Exception:
-        configured = []
+    except ProviderConnectionError as exc:
+        raise ProviderRegistryError(f"provider configuration error: {exc}") from None
+    except Exception as exc:
+        raise ProviderRegistryError(f"provider configuration error: {exc}") from None
 
     for cfg in configured:
         if not cfg.enabled:
@@ -358,22 +478,29 @@ def list_provider_models(
             else:
                 models.extend(discovered)
         elif cfg.models:
-            direct_ok = credential_source_for(cfg.provider_id) is not None
+            direct_ok = _direct_runnable(cfg.provider_id)
             for m in cfg.models:
                 proto_note = f"direct API · {m.protocol}" if m.protocol else None
-                reason = None if direct_ok else "no direct API credential — connect in Model Providers (press m)"
+                executable, blocker = _executability(cfg, m.protocol)
+                ok = direct_ok and executable
+                if ok:
+                    reason = None
+                elif not executable:
+                    reason = blocker
+                else:
+                    reason = "no direct API credential — connect in Model Providers (press m)"
                 models.append(
                     ProviderModel(
                         kind=cfg.provider_id,
                         model_id=m.model_id,
                         display_name=m.display_name or format_model_display_name(m.model_id),
                         provider_label=cfg.name,
-                        available=direct_ok and bool(m.protocol),
+                        available=ok,
                         unavailable_reason=reason,
                         note=proto_note,
                     )
                 )
-        elif kind in (PROVIDER_KIND_OPENCODE, PROVIDER_KIND_COMMANDCODE, PROVIDER_KIND_OLLAMA):
+        elif cfg.transport_profile in (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT, TRANSPORT_OLLAMA_CLOUD):
             sub = _subscription_models(kind)
             if kind == PROVIDER_KIND_OLLAMA and ollama_limit:
                 models.extend(sub[:ollama_limit])
@@ -382,47 +509,114 @@ def list_provider_models(
     return models
 
 
+def _direct_runnable(kind: str) -> bool:
+    """Whether the direct-API route can run now (no-auth counts as ready)."""
+    try:
+        from agentic_debugger.application.provider_connections import (
+            get_provider_config as _get_cfg,
+        )
+
+        _cfg = _get_cfg(kind)
+        if _cfg is not None and _cfg.auth_mode == "none":
+            return True
+    except Exception:
+        pass
+    try:
+        return credential_source_for(kind) is not None
+    except Exception:
+        return False
+
+
+def _legacy_for_config(cfg: Any) -> Tuple[bool, Optional[str]]:
+    """Legacy CLI availability for one configured provider, if eligible.
+
+    Allowed ONLY for providers explicitly carrying the corresponding
+    historical transport profile.  Generic providers never consult the
+    local CLIs, so a generic ``opencode_go`` identity cannot fall into a
+    CLI route when direct resolution fails.
+    """
+    if cfg is None:
+        return False, None
+    if cfg.transport_profile == TRANSPORT_OPENCODE_GO:
+        return _opencode_availability()
+    if cfg.transport_profile == TRANSPORT_COMMANDCODE_GOAT:
+        return _commandcode_availability()
+    return False, None
+
+
+def _executability(cfg: Any, protocol: Optional[str]) -> Tuple[bool, Optional[str]]:
+    """(executable, blocker_reason) for one model protocol."""
+    if protocol is None:
+        return False, "Protocol not yet resolved for direct API"
+    try:
+        from agentic_debugger.application.provider_connections import (
+            protocol_blocker_reason,
+        )
+
+        reason = protocol_blocker_reason(cfg.provider_id, protocol)
+    except Exception:
+        return False, "provider configuration error — check Model Providers"
+    if reason is not None:
+        return False, reason
+    return True, None
+
+
 def _subscription_models(kind: str) -> List[ProviderModel]:
-    """Discovered catalog entries when available, curated defaults otherwise."""
+    """Discovered catalog entries when available, curated defaults otherwise.
+
+    Curated legacy defaults exist only for explicitly historical
+    profiles; generic providers (whatever their ID) resolve through
+    their configured models.
+    """
     discovered = _discovered_provider_models(kind)
     if discovered is not None:
         return discovered
-    if kind == PROVIDER_KIND_OPENCODE:
-        direct_ok = credential_source_for(kind) is not None
+    cfg = get_provider_config(kind)
+    profile = cfg.transport_profile if cfg is not None else TRANSPORT_GENERIC
+    if profile == TRANSPORT_OPENCODE_GO:
+        direct_ok = _direct_runnable(kind)
         legacy_ok, legacy_reason = _opencode_availability()
         available = direct_ok or legacy_ok
         reason = None if available else (legacy_reason or "no direct API credential — connect in Model Providers (press m)")
         model_ids: Tuple[str, ...] = _OPENCODE_DEFAULT_MODELS
-    elif kind == PROVIDER_KIND_COMMANDCODE:
-        direct_ok = credential_source_for(kind) is not None
+    elif profile == TRANSPORT_COMMANDCODE_GOAT:
+        direct_ok = _direct_runnable(kind)
         legacy_ok, legacy_reason = _commandcode_availability()
         available = direct_ok or legacy_ok
         reason = None if available else (legacy_reason or "no direct API credential — connect in Model Providers (press m)")
         model_ids = _COMMANDCODE_DEFAULT_MODELS
-    elif kind == PROVIDER_KIND_OLLAMA:
-        direct_ok = credential_source_for(kind) is not None
+    elif profile == TRANSPORT_OLLAMA_CLOUD:
+        direct_ok = _direct_runnable(kind)
         available = direct_ok
         reason = None if direct_ok else "no direct API credential — connect in Model Providers (press m)"
         model_ids = _OLLAMA_DEFAULT_MODELS
     else:
-        cfg = get_provider_config(kind)
-        direct_ok = credential_source_for(kind) is not None
+        direct_ok = _direct_runnable(kind)
         if cfg and cfg.models:
-            return [
-                ProviderModel(
-                    kind=kind,
-                    model_id=m.model_id,
-                    display_name=m.display_name or format_model_display_name(m.model_id),
-                    provider_label=cfg.name,
-                    available=direct_ok and bool(m.protocol),
-                    unavailable_reason=None if direct_ok else "no direct API credential — connect in Model Providers (press m)",
-                    note=f"direct API · {m.protocol}" if m.protocol else None,
+            entries = []
+            for m in cfg.models:
+                executable, blocker = _executability(cfg, m.protocol)
+                ok = direct_ok and executable
+                entries.append(
+                    ProviderModel(
+                        kind=kind,
+                        model_id=m.model_id,
+                        display_name=m.display_name or format_model_display_name(m.model_id),
+                        provider_label=cfg.name,
+                        available=ok,
+                        unavailable_reason=None
+                        if ok
+                        else (
+                            blocker
+                            if not executable
+                            else "no direct API credential — connect in Model Providers (press m)"
+                        ),
+                        note=f"direct API · {m.protocol}" if m.protocol else None,
+                    )
                 )
-                for m in cfg.models
-            ]
+            return entries
         return []
 
-    cfg = get_provider_config(kind)
     label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
     return [
         ProviderModel(
@@ -447,30 +641,31 @@ def _discovered_provider_models(kind: str) -> Optional[List[ProviderModel]]:
     if snapshot is None or not snapshot.models:
         return None
 
-    direct_ok = credential_source_for(kind) is not None
-    if kind == PROVIDER_KIND_OPENCODE:
-        legacy_ok, legacy_reason = _opencode_availability()
-    elif kind == PROVIDER_KIND_COMMANDCODE:
-        legacy_ok, legacy_reason = _commandcode_availability()
-    else:
-        legacy_ok, legacy_reason = False, None
-
+    direct_ok = _direct_runnable(kind)
     cfg = get_provider_config(kind)
+    legacy_ok, legacy_reason = _legacy_for_config(cfg)
+
     label = cfg.name if cfg else _PROVIDER_LABELS.get(kind, kind)
 
     models: List[ProviderModel] = []
     for item in snapshot.models:
         note: Optional[str] = None
         if item.protocol is not None:
-            available = direct_ok or legacy_ok
+            executable, blocker = (
+                _executability(cfg, item.protocol) if cfg is not None else (False, "provider is not configured")
+            )
+            available = executable and (direct_ok or legacy_ok)
             unavailable_reason: Optional[str] = None
             if not available:
-                unavailable_reason = (
-                    f"{legacy_reason}; no direct API credential — connect in "
-                    "Provider Connections (press c)"
-                    if legacy_reason
-                    else "no direct API credential — connect in Provider Connections (press c)"
-                )
+                if not executable:
+                    unavailable_reason = blocker
+                elif legacy_reason:
+                    unavailable_reason = (
+                        f"{legacy_reason}; no direct API credential — connect in "
+                        "Model Providers (press m)"
+                    )
+                else:
+                    unavailable_reason = "no direct API credential — connect in Model Providers (press m)"
             note = f"direct API · {item.protocol}"
         else:
             available = legacy_ok
@@ -558,7 +753,13 @@ def _direct_api_live_config(
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """(LiveModelConfig, provenance) for the explicit direct HTTP route."""
+    """(LiveModelConfig, provenance) for the explicit direct HTTP route.
+
+    Single canonical endpoint authority: the configured provider Base URL
+    is passed explicitly as ``--base-url`` so parent, worker, and child
+    adapter agree byte-for-byte.  Credentials never travel via argv —
+    only through the bounded credential environment hop.
+    """
     request_timeout = (
         _DIRECT_API_DEFAULT_TIMEOUT_SECONDS
         if request_timeout_seconds is None
@@ -577,7 +778,9 @@ def _direct_api_live_config(
 
     cfg = get_provider_config(kind)
     disp = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
+    auth_mode = "bearer"
     if cfg is not None:
+        auth_mode = cfg.auth_mode
         for m in cfg.models:
             if m.model_id == model_id and m.display_name:
                 disp = m.display_name
@@ -589,6 +792,7 @@ def _direct_api_live_config(
         "--provider", kind,
         "--model", api_model_id,
         "--protocol", protocol,
+        "--auth-mode", auth_mode,
         "--timeout", str(int(request_timeout)),
         "--max-logical-model-calls", str(int(logical_call_ceiling)),
         "--base-url", endpoint,
@@ -609,6 +813,7 @@ def _direct_api_live_config(
         "tool_version": config.tool_version,
         "route": ROUTE_DIRECT_API,
         "api_protocol": protocol,
+        "auth_mode": auth_mode,
         "provider_model_id": api_model_id,
         "endpoint": endpoint,
     }
@@ -641,33 +846,65 @@ def _resolve_subscription_live_config(
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """Direct-API-first route resolution for configured providers."""
+    """Direct-API-first route resolution for configured providers.
+
+    One clear rule for the effective model protocol: it is resolved
+    (provider default, manual/discovered entry, or explicit historical
+    resolver) and then validated against (1) the provider authentication
+    mode, (2) the explicit transport-profile capability set, and (3)
+    inference-path availability — via the shared effective authority.
+    Unsupported effective combinations and missing credentials fail
+    BEFORE execution with actionable text.  No silent fallback, no
+    provider/model/protocol substitution, no direct-to-CLI fallback after
+    a failed direct request.  Legacy CLI fallback is eligible only for
+    providers explicitly carrying the corresponding historical transport
+    profile.
+    """
     cfg = get_provider_config(kind)
     if cfg is None or not cfg.enabled:
         raise ProviderRegistryError(f"provider {kind!r} is not configured")
-    protocol: Optional[str]
     try:
-        protocol = resolve_model_protocol(kind, model_id)
+        from agentic_debugger.application.provider_connections import (
+            is_provider_quarantined as _is_q,
+            resolve_model_protocol as _resolve,
+        )
+
+        if _is_q(kind):
+            raise ProviderConnectionError(
+                f"{cfg.name}: credential recovery required — re-enter the API key"
+            )
+        resolved = _resolve(kind, model_id)
     except ProviderConnectionError as exc:
         raise ProviderRegistryError(str(exc)) from exc
-    direct_ok = credential_source_for(kind) is not None
-    if kind == PROVIDER_KIND_OPENCODE:
-        legacy_ok, legacy_reason = _opencode_availability()
-    elif kind == PROVIDER_KIND_COMMANDCODE:
-        legacy_ok, legacy_reason = _commandcode_availability()
-    else:
-        legacy_ok, legacy_reason = False, None
+    direct_ok = _direct_runnable(kind)
+    legacy_ok, legacy_reason = _legacy_for_config(cfg)
 
     label = cfg.name
 
-    if protocol is not None and direct_ok:
-        return _direct_api_live_config(
-            kind,
-            model_id,
-            protocol,
-            logical_call_ceiling=logical_call_ceiling,
-            request_timeout_seconds=request_timeout_seconds,
-        )
+    if resolved is not None:
+        # The effective direct-route protocol must satisfy the provider
+        # authentication matrix and the explicit transport-profile
+        # capability set.  A known-impossible effective pair fails here,
+        # before LiveModelConfig creation — it never reaches the adapter
+        # as a late harness failure.  (Legacy CLI eligibility below is a
+        # separate, provenance-visible transport decision for explicitly
+        # historical profiles.)
+        try:
+            from agentic_debugger.application.provider_connections import (
+                effective_model_protocol as _effective,
+            )
+
+            protocol = _effective(kind, model_id)
+        except ProviderConnectionError as exc:
+            raise ProviderRegistryError(str(exc)) from exc
+        if direct_ok:
+            return _direct_api_live_config(
+                kind,
+                model_id,
+                protocol,
+                logical_call_ceiling=logical_call_ceiling,
+                request_timeout_seconds=request_timeout_seconds,
+            )
     if legacy_ok:
         return _legacy_cli_live_config(
             kind,
@@ -675,7 +912,7 @@ def _resolve_subscription_live_config(
             logical_call_ceiling=logical_call_ceiling,
             request_timeout_seconds=request_timeout_seconds,
         )
-    if protocol is None:
+    if resolved is None:
         raise ProviderRegistryError(
             f"{label} model {model_id!r} has no resolved direct-API "
             "protocol and the legacy CLI route is unavailable "
@@ -696,22 +933,45 @@ def _legacy_cli_live_config(
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
 ) -> Tuple[Any, Mapping[str, Any]]:
-    """(LiveModelConfig, provenance) for the explicit legacy CLI route."""
-    if kind == PROVIDER_KIND_OPENCODE:
+    """(LiveModelConfig, provenance) for the explicit legacy CLI route.
+
+    Defense in depth: the caller gates on the explicit historical
+    transport profile, and this constructor re-checks it — a generic
+    provider can never reach a CLI adapter even if routing is bypassed.
+    """
+    cfg = get_provider_config(kind)
+    profile = cfg.transport_profile if cfg is not None else TRANSPORT_GENERIC
+    if profile == TRANSPORT_OPENCODE_GO:
         from scripts.opencode_provider_adapter import (
             OpenCodeProviderAdapterError,
             build_opencode_live_config,
         )
 
+        # Bounded legacy auth mechanism: the explicit historical
+        # transport profile may read the operator auth store at a
+        # non-default OPENCODE_CONFIG_DIR location.  Pass the bounded
+        # absolute store path explicitly (--auth-file, non-secret) so the
+        # adapter child does not depend on inheriting OPENCODE_CONFIG_DIR.
+        # Generic providers never reach this branch by construction.
+        auth_file: Optional[str] = None
+        try:
+            from agentic_debugger.application.provider_connections import (
+                provider_legacy_cli_auth_file as _legacy_auth_file,
+            )
+
+            auth_file = _legacy_auth_file(kind)
+        except Exception:
+            auth_file = None
         try:
             config = build_opencode_live_config(
                 model_id,
                 logical_call_ceiling=logical_call_ceiling,
                 request_timeout_seconds=request_timeout_seconds,
+                auth_file=auth_file,
             )
         except OpenCodeProviderAdapterError as exc:
             raise ProviderRegistryError(str(exc)) from exc
-    elif kind == PROVIDER_KIND_COMMANDCODE:
+    elif profile == TRANSPORT_COMMANDCODE_GOAT:
         from scripts.commandcode_goat_adapter import (
             CommandCodeAdapterError,
             build_commandcode_live_config,

@@ -46,12 +46,14 @@ def _isolated_cache(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         base_url="https://opencode.ai/zen/go/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="opencode_go",
+        transport_profile=pc.TRANSPORT_OPENCODE_GO,
     )
     pc.add_provider_config(
         name="CommandCode GOAT",
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
     )
 
 

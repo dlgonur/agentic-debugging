@@ -33,6 +33,7 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import ssl
 import subprocess
 import threading
 import urllib.error
@@ -42,14 +43,34 @@ from typing import Any, Mapping, Optional
 from urllib.parse import urlsplit
 
 __all__ = [
+    "AUTH_ANTHROPIC",
+    "AUTH_BEARER",
+    "AUTH_MODES",
+    "AUTH_NONE",
     "DEFAULT_MAX_RESPONSE_BYTES",
     "ProviderHttpError",
+    "ANTHROPIC_VERSION_HEADER",
     "curl_executable",
     "describe_url",
     "request_json",
     "sanitize_text",
     "validate_and_canonicalize_url",
 ]
+
+#: Explicit authentication modes for provider transport.  Protocol family
+#: and authentication mode are independent: Bearer covers OpenAI-compatible
+#: Chat Completions / Responses / Messages gateways, ``anthropic`` covers
+#: native Anthropic Messages header semantics, and ``none`` covers
+#: loopback/self-hosted OpenAI-compatible endpoints that require no
+#: credential.  Unsupported combinations are rejected by the provider
+#: configuration authority before execution, never guessed at request time.
+AUTH_BEARER = "bearer"
+AUTH_ANTHROPIC = "anthropic"
+AUTH_NONE = "none"
+AUTH_MODES = (AUTH_BEARER, AUTH_ANTHROPIC, AUTH_NONE)
+
+#: Pinned Anthropic API version header sent for native Anthropic auth.
+ANTHROPIC_VERSION_HEADER = "2023-06-01"
 
 #: Default bounded response capture (4 MiB): generous enough for any
 #: documented catalog/completion payload, tight enough to fail fast on
@@ -242,17 +263,45 @@ def _stdlib_request(
     body: Optional[bytes],
     timeout_seconds: float,
     max_response_bytes: int,
+    auth_mode: str = AUTH_BEARER,
 ) -> Mapping[str, Any]:
     headers = {"Accept": "application/json"}
-    if credential:
-        headers["Authorization"] = f"Bearer {credential}"
+    if auth_mode == AUTH_ANTHROPIC:
+        if credential:
+            headers["x-api-key"] = credential
+        headers["anthropic-version"] = ANTHROPIC_VERSION_HEADER
+    elif auth_mode == AUTH_NONE:
+        pass
+    else:
+        if credential:
+            headers["Authorization"] = f"Bearer {credential}"
     if body is not None:
         headers["Content-Type"] = "application/json"
     request = urllib.request.Request(
         url, data=body, headers=headers, method=method
     )
+    # Per-request fresh TLS context (never the ambient process default):
+    # CPython's urllib module-global opener freezes its SSL context AND
+    # proxy environment at the first urlopen call in the process, so an
+    # ambient call would silently ignore a later SSL_CERT_FILE/proxy
+    # change.  Passing an explicit context forces a fresh opener per
+    # request, so connection testing, catalog discovery, and inference
+    # share the same current trust/proxy authority as the transport
+    # child (a fresh process).  Verification stays fully enabled
+    # (create_default_context: CERT_REQUIRED + hostname checking); a
+    # custom CA is trusted only via the bounded network authority.
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        context = ssl.create_default_context()
+    except Exception as exc:
+        raise ProviderHttpError(
+            f"provider request failed: {sanitize_text(str(exc), active_credential=credential)}",
+            kind="connection_error",
+            active_credential=credential,
+        ) from None
+    try:
+        with urllib.request.urlopen(
+            request, timeout=timeout_seconds, context=context
+        ) as response:
             status = int(response.status)
             payload_bytes = response.read(max_response_bytes + 1)
     except urllib.error.HTTPError as exc:
@@ -294,6 +343,7 @@ def _curl_config(
     *,
     credential: Optional[str],
     body: Optional[bytes],
+    auth_mode: str = AUTH_BEARER,
 ) -> str:
     """Build a curl stdin config; the credential never touches argv."""
 
@@ -301,8 +351,15 @@ def _curl_config(
         return value.replace("\\", "\\\\").replace('"', '\\"')
 
     lines = [f'url = "{quote(url)}"', f'request = "{quote(method)}"']
-    if credential:
-        lines.append(f'header = "Authorization: Bearer {quote(credential)}"')
+    if auth_mode == AUTH_ANTHROPIC:
+        if credential:
+            lines.append(f'header = "x-api-key: {quote(credential)}"')
+        lines.append(f'header = "anthropic-version: {ANTHROPIC_VERSION_HEADER}"')
+    elif auth_mode == AUTH_NONE:
+        pass
+    else:
+        if credential:
+            lines.append(f'header = "Authorization: Bearer {quote(credential)}"')
     lines.append('header = "Accept: application/json"')
     if body is not None:
         lines.append('header = "Content-Type: application/json"')
@@ -322,6 +379,7 @@ def _curl_request(
     timeout_seconds: float,
     max_response_bytes: int,
     executable: str,
+    auth_mode: str = AUTH_BEARER,
 ) -> Mapping[str, Any]:
     argv = [
         executable,
@@ -340,7 +398,7 @@ def _curl_request(
     ]
     if url.lower().startswith("https://"):
         argv.extend(["--proto", "=https"])
-    config = _curl_config(method, url, credential=credential, body=body).encode("utf-8")
+    config = _curl_config(method, url, credential=credential, body=body, auth_mode=auth_mode).encode("utf-8")
     stdout = _BoundedCapture(max_response_bytes + 64)
     stderr = _BoundedCapture(4096)
     process: Optional[subprocess.Popen] = None
@@ -509,6 +567,7 @@ def request_json(
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     engine: Optional[str] = None,
     tls_signature_blocked: bool = False,
+    auth_mode: str = AUTH_BEARER,
 ) -> Mapping[str, Any]:
     """One bounded JSON request; exactly one network attempt.
 
@@ -518,7 +577,20 @@ def request_json(
     endpoint contract declares a TLS-signature block and a curl client
     exists.  There is no engine fallback and no retry: a failure raises
     the typed :class:`ProviderHttpError` once.
+
+    ``auth_mode`` selects the credential wire contract without guessing:
+    ``"bearer"`` sends ``Authorization: Bearer``, ``"anthropic"`` sends
+    ``x-api-key`` plus the pinned ``anthropic-version``, and ``"none"``
+    sends no credential header.  The credential value itself never
+    touches argv, logs, or error text beyond redaction.
     """
+
+    if type(method) is not str or method not in ("GET", "POST"):
+        raise ProviderHttpError("method must be GET or POST", kind="invalid_request")
+    if type(auth_mode) is not str or auth_mode not in AUTH_MODES:
+        raise ProviderHttpError(f"unknown auth mode: {auth_mode!r}", kind="invalid_request")
+    if auth_mode == AUTH_NONE and credential is not None:
+        raise ProviderHttpError("no-auth provider must not send a credential", kind="invalid_request")
 
     if type(method) is not str or method not in ("GET", "POST"):
         raise ProviderHttpError("method must be GET or POST", kind="invalid_request")
@@ -561,6 +633,7 @@ def request_json(
             timeout_seconds=float(timeout_seconds),
             max_response_bytes=max_response_bytes,
             executable=executable,
+            auth_mode=auth_mode,
         )
     if chosen == "stdlib":
         return _stdlib_request(
@@ -570,5 +643,6 @@ def request_json(
             body=body,
             timeout_seconds=float(timeout_seconds),
             max_response_bytes=max_response_bytes,
+            auth_mode=auth_mode,
         )
     raise ProviderHttpError(f"unknown HTTP engine: {chosen!r}", kind="invalid_request")

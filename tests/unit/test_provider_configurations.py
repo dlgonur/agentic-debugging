@@ -51,6 +51,9 @@ from agentic_debugger.application.provider_connections import (
     PROTOCOL_CHAT_COMPLETIONS,
     PROTOCOL_MESSAGES,
     PROTOCOL_RESPONSES,
+    TRANSPORT_COMMANDCODE_GOAT,
+    TRANSPORT_OLLAMA_CLOUD,
+    TRANSPORT_OPENCODE_GO,
 )
 from agentic_debugger.application import provider_connections as pc
 from agentic_debugger.application.model_providers import (
@@ -71,6 +74,19 @@ def _isolate_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     """Isolate provider configuration file and credentials for every test."""
     config_file = tmp_path / "provider-configurations.json"
     monkeypatch.setenv("AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH", str(config_file))
+    # Deterministic ambient isolation: endpoint/credential authority tests
+    # must not flap on operator-machine ambient credentials or CLI auth
+    # stores.  Tests that need an ambient source set it explicitly.
+    for _var in (
+        "OLLAMA_API_KEY",
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+        "AGENTIC_DEBUGGER_OLLAMA_API_KEY",
+    ):
+        monkeypatch.delenv(_var, raising=False)
+    monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(tmp_path / "opencode-home"))
     # In-memory mock for OS secure store
     _secure_store: dict[str, str] = {}
     monkeypatch.setattr(
@@ -174,7 +190,9 @@ def test_builtin_provider_edit_is_authoritative_for_general_runtime():
 
 
 def test_edit_provider_credential_update_and_preservation():
-    """Editing a provider with a new API key updates secure storage; blank API key preserves existing credential."""
+    """Editing a provider with a new API key updates secure storage; a blank
+    API key preserves the existing credential only while the endpoint stays
+    unchanged — changing Base URL requires re-entering the key."""
     # 1. Add custom provider with initial API key
     cfg = add_provider_config(
         name="Mistral Direct",
@@ -193,14 +211,37 @@ def test_edit_provider_credential_update_and_preservation():
     )
     assert resolve_runtime_credential("mistral_direct") == "updated-mistral-key-222"
 
-    # 3. Update unrelated metadata with blank / None api_key -> PRESERVES existing credential
+    # 3. Same-endpoint edit with blank / None api_key -> PRESERVES existing credential
     update_provider_config(
         provider_id="mistral_direct",
-        base_url="https://api.mistral.ai/v2",
+        name="Mistral Direct Renamed",
         api_key=None,
     )
     assert resolve_runtime_credential("mistral_direct") == "updated-mistral-key-222"
+    assert get_provider_config("mistral_direct").name == "Mistral Direct Renamed"
+    assert get_provider_config("mistral_direct").base_url == "https://api.mistral.ai/v1"
+
+    # 3b. Endpoint change with blank key while a credential is stored fails
+    # closed: the stored key must never silently rebind to the new endpoint.
+    with pytest.raises(ProviderConnectionError) as excinfo:
+        update_provider_config(
+            provider_id="mistral_direct",
+            base_url="https://api.mistral.ai/v2",
+            api_key=None,
+        )
+    assert "re-enter" in str(excinfo.value)
+    # Durable state is unchanged: old endpoint, old credential.
+    assert get_provider_config("mistral_direct").base_url == "https://api.mistral.ai/v1"
+    assert resolve_runtime_credential("mistral_direct") == "updated-mistral-key-222"
+
+    # 3c. Endpoint change WITH a re-entered key commits a coherent pair.
+    update_provider_config(
+        provider_id="mistral_direct",
+        base_url="https://api.mistral.ai/v2",
+        api_key="rotated-mistral-key-333",
+    )
     assert get_provider_config("mistral_direct").base_url == "https://api.mistral.ai/v2"
+    assert resolve_runtime_credential("mistral_direct") == "rotated-mistral-key-333"
 
     # 4. CommandCode GOAT credential update and preservation
     add_provider_config(
@@ -215,14 +256,21 @@ def test_edit_provider_credential_update_and_preservation():
     )
     assert resolve_runtime_credential("commandcode_goat") == "goat-fake-key-999"
 
-    # Update CommandCode GOAT base_url leaving api_key blank -> credential preserved
+    # Same-endpoint edit preserves the credential; endpoint change with a
+    # blank key fails closed instead of rebinding it.
     update_provider_config(
         provider_id="commandcode_goat",
-        base_url="https://api.commandcode.ai/provider/v2",
+        name="CommandCode GOAT Relay",
         api_key=None,
     )
     assert resolve_runtime_credential("commandcode_goat") == "goat-fake-key-999"
-    assert get_provider_config("commandcode_goat").base_url == "https://api.commandcode.ai/provider/v2"
+    with pytest.raises(ProviderConnectionError):
+        update_provider_config(
+            provider_id="commandcode_goat",
+            base_url="https://api.commandcode.ai/provider/v2",
+            api_key=None,
+        )
+    assert provider_base_url("commandcode_goat") == "https://api.commandcode.ai/provider/v1"
 
 
 def test_manual_model_addition():
@@ -541,6 +589,7 @@ def test_ollama_general_runtime_common_provider_contract_end_to_end(tmp_path: Pa
             base_url=server.base_url,
             api_format=PROTOCOL_CHAT_COMPLETIONS,
             provider_id="ollama_cloud",
+            transport_profile=TRANSPORT_OLLAMA_CLOUD,
         )
         set_session_key("ollama_cloud", secret_key)
 
@@ -776,7 +825,7 @@ def test_headless_render_execution_uses_isolated_config_and_never_mutates_operat
             await pilot.click("#btn-save-dialog")
             await pilot.pause()
 
-        run_headless(app, actions, size=(100, 30))
+        run_headless(app, actions, size=(110, 45))
     """)
     cmd = [sys.executable, "-c", script]
     import subprocess
@@ -910,6 +959,7 @@ def test_source_priority_contract(monkeypatch: pytest.MonkeyPatch):
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
     )
     pc.clear_all_session_keys()
     monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
@@ -1504,6 +1554,7 @@ def test_credential_helpers_reject_unconfigured_provider_with_forwarded_and_ambi
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
     )
     assert is_known_provider("commandcode_goat") is True
     assert credential_source_for("commandcode_goat") == CREDENTIAL_SOURCE_SESSION_KEY
@@ -1511,3 +1562,257 @@ def test_credential_helpers_reject_unconfigured_provider_with_forwarded_and_ambi
     assert provider_transport_credential_environment("commandcode_goat") == {
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": "forwarded-session-key"
     }
+
+
+# -- provider-platform integrity regressions -----------------------------------
+
+
+def test_endpoint_change_blank_key_never_rebinds_old_credential():
+    """The stored credential can never be forwarded to a newly requested
+    endpoint merely because Base URL changed and the API-key field was
+    left blank: the edit fails closed and the durable pair is unchanged."""
+    with FakeProviderServer() as server:
+        add_provider_config(
+            name="Binding Guard",
+            base_url=server.base_url,
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="binding_guard",
+            api_key="old-binding-key",
+        )
+        with pytest.raises(ProviderConnectionError) as excinfo:
+            update_provider_config(
+                provider_id="binding_guard",
+                base_url="http://127.0.0.1:9/other",
+                api_key=None,
+            )
+        assert "re-enter" in str(excinfo.value)
+
+        # The credential remains bound to the ORIGINAL endpoint only: the
+        # durable configuration was not mutated and no request went out.
+        cfg = get_provider_config("binding_guard")
+        assert cfg.base_url == server.base_url
+        assert resolve_runtime_credential("binding_guard") == "old-binding-key"
+        assert server.request_count == 0
+
+        # Explicit re-entry rebinds coherently in one transaction.
+        update_provider_config(
+            provider_id="binding_guard",
+            base_url="https://rebound.example/v1",
+            api_key="new-binding-key",
+        )
+        assert provider_base_url("binding_guard") == "https://rebound.example/v1"
+        assert resolve_runtime_credential("binding_guard") == "new-binding-key"
+
+
+def test_endpoint_change_blank_key_allowed_without_stored_credential():
+    """No stored credential means nothing can be silently rebound: an
+    endpoint-only edit succeeds and the provider stays credential-free."""
+    add_provider_config(
+        name="No Key Yet",
+        base_url="https://api.example.net/v1",
+        api_format=PROTOCOL_MESSAGES,
+        provider_id="no_key_yet",
+    )
+    updated = update_provider_config(
+        provider_id="no_key_yet",
+        base_url="https://api.example.net/v2",
+        api_key=None,
+    )
+    assert updated.base_url == "https://api.example.net/v2"
+    assert credential_source_for("no_key_yet") is None
+
+
+def test_provider_limit_sixty_five_fails_explicitly(tmp_path: Path):
+    """At the 64-provider bound, adding provider 65 fails explicitly and
+    durable state stays coherent: reload agrees with the failure."""
+    from agentic_debugger.application.provider_connections import (
+        _MAX_PROVIDERS_CONFIGURED,
+    )
+
+    assert _MAX_PROVIDERS_CONFIGURED == 64
+    for index in range(_MAX_PROVIDERS_CONFIGURED):
+        add_provider_config(
+            name=f"Bound Provider {index:02d}",
+            base_url=f"https://bound-{index:02d}.example/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+        )
+    with pytest.raises(ProviderConnectionError) as excinfo:
+        add_provider_config(
+            name="One Too Many",
+            base_url="https://over-bound.example/v1",
+            api_format=PROTOCOL_CHAT_COMPLETIONS,
+        )
+    assert "provider limit reached" in str(excinfo.value)
+
+    reloaded = load_provider_configurations()
+    assert len(reloaded) == _MAX_PROVIDERS_CONFIGURED
+    assert all(c.provider_id != "one_too_many" for c in reloaded)
+    assert all(c.name != "One Too Many" for c in reloaded)
+
+    # Saving an over-bound list directly is also rejected, never truncated.
+    with pytest.raises(ProviderConnectionError):
+        save_provider_configurations(list(reloaded) + [reloaded[0]])
+
+
+def test_duplicate_persisted_provider_identity_fails_closed(tmp_path: Path):
+    """Duplicate durable provider ids are rejected at load rather than
+    silently choosing one; the contradictory file stays untouched."""
+    config_file = tmp_path / "provider-configurations.json"
+    duplicate_payload = {
+        "schema_version": "provider-configurations-v1",
+        "providers": [
+            {
+                "provider_id": "dup_provider",
+                "name": "First",
+                "base_url": "https://first.example/v1",
+                "api_format": "chat_completions",
+                "models": [],
+            },
+            {
+                "provider_id": "dup_provider",
+                "name": "Second",
+                "base_url": "https://second.example/v1",
+                "api_format": "messages",
+                "models": [],
+            },
+        ],
+    }
+    config_file.write_text(json.dumps(duplicate_payload, indent=1), encoding="utf-8")
+    with pytest.raises(ProviderConnectionError) as excinfo:
+        load_provider_configurations()
+    assert "duplicate provider identity" in str(excinfo.value)
+    assert json.loads(config_file.read_text(encoding="utf-8")) == duplicate_payload
+
+
+def test_unknown_api_format_fails_closed_not_coerced(tmp_path: Path):
+    """Unknown protocol-family values are rejected at add, at update, and
+    at load — never silently coerced to chat_completions."""
+    with pytest.raises(ProviderConnectionError) as add_error:
+        add_provider_config(
+            name="Weird Format",
+            base_url="https://weird.example/v1",
+            api_format="grpc-streaming",
+        )
+    assert "unknown API protocol format" in str(add_error.value)
+
+    add_provider_config(
+        name="Valid Format",
+        base_url="https://valid.example/v1",
+        api_format=PROTOCOL_MESSAGES,
+        provider_id="valid_format",
+    )
+    with pytest.raises(ProviderConnectionError) as update_error:
+        update_provider_config(
+            provider_id="valid_format",
+            api_format="rest-legacy",
+        )
+    assert "unknown API protocol format" in str(update_error.value)
+    # The invalid update changed nothing.
+    assert get_provider_config("valid_format").api_format == PROTOCOL_MESSAGES
+
+    config_file = tmp_path / "provider-configurations.json"
+    config_file.write_text(
+        json.dumps(
+            {
+                "schema_version": "provider-configurations-v1",
+                "providers": [
+                    {
+                        "provider_id": "persisted_weird",
+                        "name": "Persisted Weird",
+                        "base_url": "https://persisted.example/v1",
+                        "api_format": "openai-realtime",
+                        "models": [],
+                    }
+                ],
+            },
+            indent=1,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(ProviderConnectionError):
+        load_provider_configurations()
+
+
+def test_persisted_model_protocol_is_never_inferred(tmp_path: Path):
+    """A malformed persisted model protocol fails the load; a missing
+    (None) protocol loads as honestly unresolved, never normalized into
+    runnable state."""
+    def _write(model_protocol):
+        payload = {
+            "schema_version": "provider-configurations-v1",
+            "providers": [
+                {
+                    "provider_id": "proto_probe",
+                    "name": "Proto Probe",
+                    "base_url": "https://proto.example/v1",
+                    "api_format": "messages",
+                    "models": [
+                        {
+                            "model_id": "m1",
+                            "display_name": "M1",
+                            "protocol": model_protocol,
+                        }
+                    ],
+                }
+            ],
+        }
+        config_file = tmp_path / "provider-configurations.json"
+        config_file.write_text(json.dumps(payload, indent=1), encoding="utf-8")
+        return config_file
+
+    # Unknown protocol identity: fail closed at load.
+    _write("carrier-pigeon")
+    with pytest.raises(ProviderConnectionError):
+        load_provider_configurations()
+
+    # Missing protocol (None): loads unresolved, not runnable, not inferred.
+    _write(None)
+    configs = load_provider_configurations()
+    assert len(configs) == 1
+    model = configs[0].models[0]
+    assert model.protocol is None
+    assert model.runnable is False
+    assert model.unavailable_reason == "Protocol unresolved"
+
+
+def test_explicit_provider_id_grammar_enforced():
+    """Explicit provider ids must match the bounded safe technical-ID
+    grammar shared with generated ids; malformed ids fail closed."""
+    from agentic_debugger.application.provider_connections import (
+        is_valid_provider_id,
+    )
+
+    for valid in ("a", "ollama_cloud", "groq_direct", "p2", "x" * 32):
+        assert is_valid_provider_id(valid) is True
+    for invalid in (
+        "",
+        "Bad-ID",
+        "my provider",
+        "provider/id",
+        "x" * 33,
+        "UPPER",
+        "dash-case",
+        "semi;colon",
+    ):
+        assert is_valid_provider_id(invalid) is False
+
+    for invalid_id in ("Bad-ID", "my provider", "x" * 33):
+        with pytest.raises(ProviderConnectionError) as excinfo:
+            add_provider_config(
+                name="Grammar Probe",
+                base_url="https://grammar.example/v1",
+                api_format=PROTOCOL_CHAT_COMPLETIONS,
+                provider_id=invalid_id,
+            )
+        assert "provider id" in str(excinfo.value)
+
+    # A valid explicit id is accepted and persisted exactly.
+    created = add_provider_config(
+        name="Grammar OK",
+        base_url="https://grammar.example/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="grammar_ok_2",
+    )
+    assert created.provider_id == "grammar_ok_2"
+    assert get_provider_config("grammar_ok_2").provider_id == "grammar_ok_2"
+

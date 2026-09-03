@@ -69,6 +69,39 @@ class TestParamContract:
         assert validated["provider"] == "ollama_cloud"
         assert validated["model_id"] == "qwen3.5:cloud"
 
+    def test_arbitrary_configured_provider_is_valid(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """An arbitrary user-configured provider passes Local Project
+        parameter validation (registry authority, not a fixed id set)."""
+        from agentic_debugger.application import provider_connections as pc
+
+        monkeypatch.setattr(
+            pc, "provider_configurations_path", lambda: tmp_path / "providers.json"
+        )
+        pc.add_provider_config(
+            name="My Custom Gateway",
+            base_url="https://gateway.internal.example/v1",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="my_custom_gateway",
+        )
+        params = _base_params() | {
+            "provider": "my_custom_gateway",
+            "model_id": "custom-model-x",
+        }
+        validated = _validate_params(params)
+        assert validated["provider"] == "my_custom_gateway"
+
+    def test_unconfigured_arbitrary_provider_fails_validation(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Provider ids outside the known kinds must be explicitly
+        configured; unknown arbitrary ids fail closed."""
+        from agentic_debugger.application import provider_connections as pc
+
+        monkeypatch.setattr(
+            pc, "provider_configurations_path", lambda: tmp_path / "providers.json"
+        )
+        params = _base_params() | {"provider": "never_configured", "model_id": "m"}
+        with pytest.raises(ScenarioInputError):
+            _validate_params(params)
+
 
 class TestSourceResolution:
     def test_registry_error_maps_to_scenario_input_error(self, tmp_path: Path) -> None:
@@ -224,3 +257,114 @@ class TestSourceResolution:
         assert emitter.provenance["provider"] == "ollama_cloud"
         assert emitter.provenance["profile_id"] == "glm-5.3-flash:cloud"
         assert emitter.provenance["display_name"] == "glm-5.3-flash"
+
+    def test_arbitrary_custom_provider_routes_through_registry_not_profile_store(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """An arbitrary user-configured provider executes through the
+        canonical registry resolver in Local Project — never falling into
+        the legacy CommandModelConfigStore path — with truthful
+        provider/model provenance."""
+
+        from agentic_debugger.application import (
+            command_config,
+            provider_connections as pc,
+        )
+        from agentic_debugger.application.events import SessionEventKind, SourceKind
+        from agentic_debugger.application.local_project_source import (
+            run_local_project_session,
+        )
+        from agentic_debugger.application.worker_scenarios import ScenarioContext
+        from agentic_debugger.cancellation import CancellationToken
+
+        monkeypatch.setenv(
+            "AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH",
+            str(tmp_path / "provider-configurations.json"),
+        )
+        pc.add_provider_config(
+            name="My Custom Gateway",
+            base_url="https://gateway.internal.example/v1",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="my_custom_gateway",
+        )
+        pc.add_manual_model("my_custom_gateway", "custom-model-x", "Custom Model X")
+        pc.set_session_key("my_custom_gateway", "custom-gateway-key-not-real")
+
+        monkeypatch.setattr(
+            command_config.CommandModelConfigStore,
+            "get",
+            lambda *_args, **_kwargs: (_ for _ in ()).throw(
+                AssertionError(
+                    "a registry provider must never fall through to the "
+                    "command-profile store"
+                )
+            ),
+        )
+
+        from agentic_debugger.application import local_project_source
+
+        class NoopObservability:
+            def diagnosis_recorded(self, **_kwargs):
+                pass
+
+            def source_snapshot(self, _snapshot):
+                pass
+
+        monkeypatch.setattr(
+            local_project_source,
+            "SessionObservability",
+            lambda *_args, **_kwargs: NoopObservability(),
+        )
+        monkeypatch.setattr(
+            local_project_source,
+            "_inventory_tracked_python_files",
+            lambda _isolated: ["sample.py"],
+        )
+
+        repo = tmp_path / "isolated"
+        repo.mkdir()
+        (repo / "sample.py").write_text("value = 1\n", encoding="utf-8")
+
+        class StopAfterProvenance(RuntimeError):
+            pass
+
+        class Emitter:
+            session_id = "session-custom-provider"
+            task_id = "local-project-debug"
+            source_kind = SourceKind.LOCAL_PROJECT
+
+            def __init__(self) -> None:
+                self.provenance = None
+
+            def emit(self, kind, payload):
+                if kind is SessionEventKind.MODEL_CONFIGURED:
+                    self.provenance = dict(payload)
+                    raise StopAfterProvenance
+
+        ctx = ScenarioContext(
+            work_dir=tmp_path,
+            token=CancellationToken(),
+            emitter=Emitter(),
+            run_id="run-custom-provider",
+        )
+        params = _base_params() | {
+            "project_repo_path": str(repo),
+            "isolated_workspace": str(repo),
+            "provider": "my_custom_gateway",
+            "model_id": "custom-model-x",
+            "profile_id": "custom-model-x",
+        }
+
+        with pytest.raises(StopAfterProvenance):
+            run_local_project_session(ctx, params)
+
+        provenance = ctx.emitter.provenance
+        assert provenance is not None
+        assert provenance["provider"] == "my_custom_gateway"
+        assert provenance["profile_id"] == "custom-model-x"
+        assert provenance["route"] == "direct_api"
+        assert provenance["api_protocol"] == "chat_completions"
+        assert provenance["provider_model_id"] == "custom-model-x"
+        assert provenance["endpoint"] == "https://gateway.internal.example/v1"
+        assert provenance["display_name"] == "Custom Model X"
+        assert "custom-gateway-key-not-real" not in str(provenance)

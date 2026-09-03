@@ -165,6 +165,23 @@ class CancellableJsonlCommandTransport(JsonlCommandTransport):
             val = os.environ.get(name)
             if val is not None:
                 environment[name] = val
+        # Bounded network/trust parity: the same operator TLS/proxy
+        # subset the parent provider HTTP path depends on (SSL_CERT_*,
+        # CURL_CA_BUNDLE, *_PROXY/NO_PROXY in both casings) reaches the
+        # adapter child without inheriting the full process environment.
+        # Values are potentially credential-bearing and must never be
+        # logged, journaled, or embedded in diagnostics; only the
+        # allowlisted names flow here.
+        try:
+            from agentic_debugger.application.provider_connections import (
+                provider_transport_network_environment as _network_env,
+            )
+
+            for key, value in _network_env().items():
+                if key not in environment:
+                    environment[key] = value
+        except Exception:
+            pass
         return environment
 
     def __init__(

@@ -60,7 +60,11 @@ Validation evidence:
 
 - Release tag: `v0.1.0` at `d01f7a5`.
 - Mandatory roadmap: complete.
-- Active required engineering campaign: none.
+- Active required engineering campaign: provider-platform integrity
+  convergence (`fix/provider-platform-integrity-v1`, 2026-09-03) —
+  user-owned provider registry routing, endpoint/credential binding
+  safety, strict fail-closed persistence, and documentation/CI truth for
+  the Model Providers platform.
 - Merge/push during the 2026-08-28 closure pass: none.
 - Full historical tracker:
   `outdated/roadmap/project-tracker-pre-closure-2026-08-28.md`.
@@ -73,7 +77,7 @@ Validation evidence:
 | Runtime | Bounded commands, disposable workspaces, patch lifecycle, test runner, PDB protocol/session/worker |
 | Verification | Independent baseline, F2P, P2P, syntax, full-suite, cleanup, and immutability authority |
 | Evidence | Strict JSON-compatible events, durable journal, replay, golden trajectories, frozen evaluation traces |
-| Product | Terminal application with live/replay history, configured command, Ollama ladder, and local-project debugging |
+| Product | Terminal application with live/replay history, configured command, user-owned provider platform with capability ladder, and local-project debugging |
 | Research | R1-R6, RAG/comparison/preference infrastructure, Level-32 repaired treatment and matrix |
 | Datasets | Five curated fixtures; QuixBugs infrastructure; BugsInPy fail-closed license gate |
 

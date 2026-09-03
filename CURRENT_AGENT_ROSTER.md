@@ -41,15 +41,23 @@ mutation of `research/quixbugs/PAIRED_PILOT_V4.json`.
 ## Product runtime decision-model route
 
 - The current accepted **product runtime** route is the unified provider
-  registry (`agentic_debugger/application/model_providers.py`, accepted
-  2026-08-28 — see `docs/architecture/model-providers-v1.md`): Local
-  Project Debug and other live surfaces may be served by
-  **Ollama Cloud** (repository roster, unchanged accepted route), the
-  operator's **OpenCode Go** subscription through the verified local CLI
-  (`scripts/opencode_provider_adapter.py`), or the operator's
-  **Command Code GOAT** plan through the local CLI
-  (`scripts/commandcode_goat_adapter.py`), plus the existing configured
-  command profiles.  See
+  registry (`agentic_debugger/application/model_providers.py`; the
+  user-owned rework is described in
+  `docs/architecture/model-providers-v1.md`): the provider registry is
+  user-owned — a fresh installation configures zero providers, and every
+  provider (including **Ollama**, **OpenCode Go**, and **Command Code
+  GOAT**, plus arbitrary user-defined direct-API providers) is created
+  explicitly in the Model Providers manager. Local Project Debug and the
+  other live surfaces resolve any enabled configured provider through
+  one canonical resolver: the direct provider API route
+  (`scripts/provider_direct_api_adapter.py`, explicit per-provider auth
+  contract — Bearer, native Anthropic Messages, or no-auth loopback —
+  over Chat Completions / Responses / Messages-compatible endpoints,
+  gated by the provider's explicit transport profile) first, with the local CLIs
+  (`scripts/opencode_provider_adapter.py`,
+  `scripts/commandcode_goat_adapter.py`) as the explicit `legacy_cli`
+  route (eligible only for explicitly historical transport profiles),
+  plus the app-owned configured command profiles.  See
   `docs/architecture/ollama-cloud-command-adapter-v1.md` and
   `docs/architecture/local-application-v1.md` for the earlier Ollama-only
   accepted proof (successful session `sess-20260817-103258-3d1193`).
@@ -58,9 +66,10 @@ mutation of `research/quixbugs/PAIRED_PILOT_V4.json`.
   independent verifier F2P 1/1 and P2P 1/1 (`_ai-review/goal-mode-2026-08-28`).
   This proves the product path over that provider; it is one session, not
   a model-ability benchmark.
-- Subscription adapters run the operator's authenticated CLIs; credential
-  bytes stay in the operator-owned auth stores and never enter tracked
-  source, argv, journals, or evidence.
+- Direct-route credentials are saved in the OS secure credential store
+  (Windows Credential Manager) or held in session memory, and are never
+  written to tracked source, argv, journals, or evidence; the legacy CLI
+  routes read the operator-owned auth stores in place.
 - The same Ollama Cloud adapter also accepts an experimental
   `nemotron-3-nano:30b-cloud` profile through `--model`. A completed
   five-task Harness V2 capability probe for that profile is closed
@@ -135,8 +144,8 @@ mutation of `research/quixbugs/PAIRED_PILOT_V4.json`.
 
 - `docs/architecture/local-application-v1.md` — Local Application product
   surface
-- `docs/architecture/ollama-cloud-command-adapter-v1.md` — current accepted
-  product-runtime adapter
+- `docs/architecture/ollama-cloud-command-adapter-v1.md` — Ollama Cloud
+  CLI adapter contract (`legacy_cli` route; qualified treatment roster)
 - `research/quixbugs/PAIRED_PILOT_V4.json` — frozen optional OpenCode Go
   six-case live manifest (RETAIN_OPTIONAL; do not mutate onto Ollama)
 - `docs/datasets/quixbugs/paired-pilot-v2.md` — retained v2 derivation and route contract

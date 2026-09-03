@@ -64,12 +64,18 @@ failure visibility, and retry.
 - [ ] OpenCode Go end-to-end Local Project session (adapters proven at
   the transport level and by unit tests; a full product session on the
   subscription remains to be run and recorded).
-- [ ] Claude models through CommandCode route via the CLI (works through
-  `cmdc`; raw-API `/messages` not implemented).
+- [x] Claude models through CommandCode route: the direct-API route
+  resolves Claude-family (`claude*`, `anthropic/*`) CommandCode models
+  to the Anthropic Messages protocol deterministically.
 - [ ] Headless Local Project CLI (the smoke script demonstrates the
   worker path; a tracked operator CLI would make it a first-class entry).
-- [ ] Providers management screen (availability + live catalog refresh +
-  app-managed configured profiles for curated tasks).
+- [x] Providers management screen: the Model Providers manager (press
+  `m`) owns the user-configured provider registry — availability, live
+  GET /models catalog refresh, manual models, secure credentials, and
+  deletion — with zero providers on a fresh installation.
+- [ ] Deterministic regeneration of the README welcome screenshot (the
+  current PNG predates the Model Providers home action; no tracked
+  regeneration script exists yet).
 
 The former chronological TODO is retained at
 `outdated/roadmap/TODO-pre-closure-2026-08-28.md`.

@@ -59,6 +59,26 @@ jobs:
           tests/integration/test_ui_capability_ladder.py
           -q
 
+      - name: Run provider-platform regression checks
+        run: >-
+          python -m pytest
+          tests/unit/test_provider_configurations.py
+          tests/unit/test_model_providers.py
+          tests/unit/test_provider_routes.py
+          tests/unit/test_configured_provider_params.py
+          tests/unit/test_local_project_provider_params.py
+          tests/unit/test_user_owned_provider_manager_isolation.py
+          tests/unit/test_provider_direct_api_adapter.py
+          tests/unit/test_provider_platform_integrity.py
+          tests/unit/test_provider_transport_authority.py
+          tests/unit/test_provider_execution_environment.py
+          tests/unit/test_provider_connections.py
+          tests/unit/test_provider_http.py
+          tests/integration/test_provider_direct_api_session.py
+          tests/integration/test_ladder_unified_provider_runtime.py
+          tests/integration/test_ui_provider_connections.py
+          -q
+
       - name: Build wheel
         run: python -m pip wheel . --no-deps --wheel-dir dist
 
@@ -80,3 +100,62 @@ jobs:
           )
           assert any(name.endswith(".dist-info/entry_points.txt") for name in names)
           PY
+
+  windows-venv-smoke:
+    # Durable protection for the Windows-venv worker-identity contract: a
+    # stock Scripts\python.exe redirector must drive PDB sessions with a
+    # strict PID handshake (CPython bpo-35797 bypass, no copied
+    # interpreter).  Small and bounded: one venv per Python version, one
+    # install, the targeted identity regression plus the smallest
+    # worker/nested-PDB smoke.  Offline after installation; no live
+    # providers, no scientific campaigns.
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.13"]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Create standard venv
+        run: python -m venv .venv-ci-smoke
+
+      - name: Install package
+        run: .venv-ci-smoke/Scripts/python.exe -m pip install -e ".[app,test]"
+
+      - name: Prove stock-venv runner
+        # The smoke below is meaningful only when driven by the untouched
+        # redirector; fail here instead of silently skipping that proof.
+        run: >-
+          .venv-ci-smoke/Scripts/python.exe -c
+          "import sys;
+          assert sys.platform == 'win32';
+          base = getattr(sys, '_base_executable', None);
+          assert isinstance(base, str) and base
+          and sys.executable != base
+          and sys.executable.lower().endswith('scripts\\python.exe'),
+          (sys.executable, base);
+          print('stock venv:', sys.executable);
+          print('base:', base)"
+
+      - name: Compile source
+        run: .venv-ci-smoke/Scripts/python.exe -m compileall -q agentic_debugger scripts
+
+      - name: Run venv/PDB worker identity regression
+        run: >-
+          .venv-ci-smoke/Scripts/python.exe -m pytest
+          tests/unit/test_windows_venv_worker_identity.py
+          -q
+
+      - name: Run worker/nested-PDB smoke
+        run: >-
+          .venv-ci-smoke/Scripts/python.exe -m pytest
+          "tests/integration/test_worker_process.py::TestWorkerCancellation::test_pdb_worker_gone_after_normal_completion"
+          "tests/integration/test_worker_process.py::TestWorkerCancellation::test_pdb_worker_gone_after_cooperative_cancel"
+          -q

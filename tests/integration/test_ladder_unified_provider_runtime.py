@@ -92,6 +92,7 @@ def _isolate_provider_config(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
     )
     yield
     pc.clear_all_session_keys()
@@ -244,11 +245,12 @@ def test_ladder_with_configured_provider_executes_through_direct_api(
             DiscoveredProviderModel.create("commandcode_goat", "deepseek/deepseek-v4-flash", "DeepSeek V4 Flash", protocol="chat_completions"),
             DiscoveredProviderModel.create("commandcode_goat", "zai-org/glm-5.2", "GLM 5.2", protocol="chat_completions"),
         )
-        add_provider_config(
-            name="CommandCode GOAT",
+        # UPDATE is the only mutation route for the fixture's existing
+        # provider: repoint it at the fake server explicitly (historical
+        # transport profile preserved).
+        update_provider_config(
+            "commandcode_goat",
             base_url=server.base_url,
-            api_format="chat_completions",
-            provider_id="commandcode_goat",
             models=builtin_models,
         )
         try:
@@ -1106,7 +1108,7 @@ def test_level6_diagnosis_malformed_directive_repaired_through_feedback_to_resol
     with _RepairingLadderServer(LADDER_LEVEL_6_TASK, {"requested_size"}) as server:
         from agentic_debugger.application.provider_connections import (
             DiscoveredProviderModel,
-            add_provider_config,
+            update_provider_config,
         )
 
         fake_models = (
@@ -1117,11 +1119,9 @@ def test_level6_diagnosis_malformed_directive_repaired_through_feedback_to_resol
                 protocol="chat_completions",
             ),
         )
-        add_provider_config(
-            name="CommandCode GOAT",
+        update_provider_config(
+            "commandcode_goat",
             base_url=server.base_url,
-            api_format="chat_completions",
-            provider_id="commandcode_goat",
             models=fake_models,
         )
         pc.set_session_key("commandcode_goat", SECRET)

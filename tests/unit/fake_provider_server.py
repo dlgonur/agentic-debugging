@@ -69,6 +69,8 @@ class FakeProviderServer:
                         "method": self.command,
                         "path": self.path,
                         "authorization": self.headers.get("Authorization"),
+                        "x_api_key": self.headers.get("x-api-key"),
+                        "anthropic_version": self.headers.get("anthropic-version"),
                         "content_type": self.headers.get("Content-Type"),
                         "body": body,
                     }

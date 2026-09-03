@@ -1,7 +1,13 @@
 """Local Project Debug execution source — generic Python project, real model/controller.
 
-Reuses the existing production configured-model architecture:
-- CommandModelConfigStore / validated profile (required)
+Model selection is one of two exclusive contracts:
+- any enabled configured provider (``provider`` id + ``model_id``) resolves
+  through the unified provider registry (``resolve_provider_live_config``),
+  exactly like the configured/interactive source;
+- otherwise the app-owned configured-command architecture applies:
+  CommandModelConfigStore / validated profile (required).
+
+Both reuse:
 - CancellableJsonlCommandTransport + LiveModelAdapter (real JSONL)
 - DeterministicController + ToolRegistry + PDB + PatchManager
 - bounded snapshots, run_reproduction, PDB, apply_patch, syntax, verification
@@ -115,7 +121,10 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
         except Exception:
             is_valid_provider = provider in _PROVIDER_KINDS
         if type(provider) is not str or not is_valid_provider:
-            raise ScenarioInputError(f"provider must be one of {sorted(_PROVIDER_KINDS)}")
+            raise ScenarioInputError(
+                "provider must be 'configured' or an explicitly configured "
+                "provider id (manage providers in Model Providers)"
+            )
     model_id=params.get("model_id")
     if model_id is not None:
         if type(model_id) is not str or not model_id: raise ScenarioInputError("model_id must be a non-empty string or null")
@@ -929,10 +938,14 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     ollama_profile = None
     provider_live_config = None
     provider_provenance = None
-    if provider in ("ollama_cloud", "opencode_go", "commandcode_goat"):
-        # Registry providers resolve through the unified registry: one
-        # validated construction path, fail-closed availability, and no
-        # credential material anywhere near the journal.
+    if provider is not None and provider != "configured":
+        # Registry-authority routing: ANY enabled configured provider —
+        # including arbitrary user-configured direct-API providers —
+        # resolves through the unified registry, so there is one validated
+        # construction path, fail-closed availability, and no credential
+        # material anywhere near the journal.  The special ``configured``
+        # provider id remains the app-owned command-profile store contract
+        # handled below; an unconfigured provider id fails closed here.
         from agentic_debugger.application.model_providers import (
             ProviderRegistryError,
             provider_transport_environment,

@@ -79,12 +79,14 @@ def _clean_session_keys(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
     )
     pc.add_provider_config(
         name="OpenCode Go",
         base_url="https://opencode.ai/provider/v1",
         api_format=pc.PROTOCOL_RESPONSES,
         provider_id="opencode_go",
+        transport_profile=pc.TRANSPORT_OPENCODE_GO,
     )
     yield
     pc.clear_all_session_keys()
@@ -287,10 +289,13 @@ class TestCredentialBoundary:
         assert server.requests[0]["authorization"] == f"Bearer {SECRET}"
 
     def test_injected_session_credential_wins(self, fake_commandcode, monkeypatch) -> None:
-        pc.set_session_key("commandcode_goat", "session-key-value")
+        # The session key is installed after the fixture's endpoint
+        # configuration: an endpoint change with an already-associated
+        # credential requires explicit key re-entry (fail-closed binding).
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ) as server:
+            pc.set_session_key("commandcode_goat", "session-key-value")
             monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
             code, out, err = run_adapter()
             assert code == 0
@@ -498,15 +503,23 @@ class TestSubprocessContract:
             child_config.write_text(
                 json.dumps(
                     {
-                        "schema_version": "provider-configurations-v1",
+                        "schema_version": "provider-configurations-v2",
                         "providers": [
                             {
                                 "name": "CommandCode GOAT",
                                 "provider_id": "commandcode_goat",
                                 "base_url": server.base_url,
                                 "api_format": "chat_completions",
-                                "created_utc": "2026-01-01T00:00:00Z",
+                                "auth_mode": "bearer",
+                                "catalog_mode": "openai",
+                                "transport_profile": "commandcode_goat",
                                 "models": [],
+                                "enabled": True,
+                                "is_builtin": False,
+                                "builtin_kind": None,
+                                "tls_signature_blocked": False,
+                                "last_refresh_utc": None,
+                                "last_refresh_source": None,
                             }
                         ],
                     }

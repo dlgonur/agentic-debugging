@@ -266,7 +266,18 @@ class SessionWorkerProcess:
             "runpy.run_module("
             "'agentic_debugger.application.worker', run_name='__main__')"
         )
-        return [sys.executable, "-I", "-u", "-c", bootstrap]
+        # Same central Windows-venv launch authority as the PDB worker:
+        # inside a Windows virtual environment launch the real base
+        # interpreter directly so the Popen PID is the worker itself
+        # (the suspended-spawn JOB assignment and resume below must
+        # target the actual worker, not the venv redirector).  The venv
+        # identity travels via ``__PYVENV_LAUNCHER__`` in the spawn
+        # environment (see ``start``).
+        from agentic_debugger.runtime.python_launcher import (
+            resolve_worker_executable,
+        )
+
+        return [resolve_worker_executable(), "-I", "-u", "-c", bootstrap]
 
     # -- lifecycle ----------------------------------------------------------
 
@@ -293,11 +304,20 @@ class SessionWorkerProcess:
         self._started = True
         creationflags = spawn_suspended_on_windows()
         try:
-            spawn_environment = (
+            from agentic_debugger.runtime.python_launcher import build_worker_env
+
+            merged_environment = (
                 {**os.environ, **self._child_environment}
                 if self._child_environment
                 else None
             )
+            # Central Windows-venv launch authority: inside a Windows
+            # virtual environment the worker is the directly launched
+            # base interpreter and this environment carries the standard
+            # ``__PYVENV_LAUNCHER__`` identity so it keeps the venv
+            # prefix/packages.  Outside a venv a stale launcher variable
+            # is scrubbed so the child keeps its own prefix.
+            spawn_environment = build_worker_env(merged_environment)
             self._proc = subprocess.Popen(
                 self._worker_argv(),
                 # The worker is spawned with the durable session directory as

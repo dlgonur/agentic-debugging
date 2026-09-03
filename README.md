@@ -57,10 +57,9 @@ claim is never treated as proof of a repair.
 
 ## Model providers
 
-Live execution is explicit. The application supports Ollama Cloud, OpenCode
-Go, CommandCode GOAT, and operator-configured command profiles. Credentials
-are not written to tracked source, command arguments, journals, or evidence;
-see [the provider architecture](docs/architecture/model-providers-v1.md).
+Live execution is explicit. Providers are user-configured in the Model Providers manager
+(press `m`; fresh installs ship none) with an explicit transport profile; credentials stay in
+the OS secure store — never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
 
 ## Current status
 

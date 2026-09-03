@@ -224,6 +224,13 @@ The live adapter retains request history, directive attempts, acceptance/rejecti
 
 The application should reuse this explicit configured-command capability. It should not claim generic provider support or become a provider-management product.
 
+> **Superseded (2026-09):** the Local Application now owns the Model
+> Providers manager (press `m`) — a user-owned provider registry
+> supporting arbitrary Bearer-authenticated direct-API endpoints with
+> secure credential storage. This paragraph records the original V1
+> scope decision and is retained as history; see
+> `docs/architecture/model-providers-v1.md` for the current contract.
+
 ### 2.9 Local GPU and evaluator paths are not a V1 prerequisite
 
 The R6 evaluator uses in-process local model transports and blocking generation calls. A blocking `model.generate()` call cannot be assumed to stop cooperatively because a TUI worker was cancelled.
@@ -415,6 +422,10 @@ Configuration fields:
 - artifact destination.
 
 For a configured model, display model label, command/configuration fingerprint, tool version, and limits. Do not edit credentials or present provider/account management.
+
+> **Superseded (2026-09):** the Model Providers manager now presents
+> provider/account management with secure credential entry; this V1
+> display-only rule is retained as history.
 
 ### 6.3 Live session workspace
 
@@ -761,7 +772,9 @@ Recorded/replay sources are always labeled as such and never enter the live-star
 
 - in-process local GPU model execution;
 - WSL/QuixBugs evaluation campaigns;
-- arbitrary provider configuration;
+- ~~arbitrary provider configuration~~ (no longer deferred — delivered by
+  the Model Providers manager, 2026-09; see
+  `docs/architecture/model-providers-v1.md`);
 - arbitrary repository/task ingestion.
 
 ### 11.3 Model configuration UX
@@ -775,6 +788,12 @@ The application selects a validated JSON configuration or named local profile an
 - live/offline status.
 
 It does not store credentials, edit provider accounts, download models, or install runtimes.
+
+> **Superseded (2026-09):** the application now stores provider
+> credentials in the OS secure credential store (never in tracked files)
+> and edits provider accounts through the Model Providers manager. Model
+> downloads and runtime installation remain out of scope. This V1 rule is
+> retained as history.
 
 ## 12. Run history and replay
 
@@ -1203,6 +1222,9 @@ surface reported 65/65 passing.
 
 **Non-goals:** Browser support, code editing, arbitrary PDB console, or provider configuration.
 
+> **Superseded (2026-09):** provider configuration is now a delivered
+> product capability (Model Providers manager); the other non-goals stand.
+
 ### Task 7 — Wire deterministic live sessions
 
 **Status:** ACCEPTED (2026-08-15).
@@ -1334,6 +1356,11 @@ accepted application architecture and complete release-quality V1 hardening.
 campaigns/model hosting, arbitrary repository support, QuixBugs campaign
 control, browser UI, IDE/editor behavior, or OS-level network sandboxing.
 
+> **Superseded in part (2026-09):** provider credential storage in the OS
+> secure credential store and user-configured direct-API providers are now
+> delivered (Model Providers manager). Marketplace/SDK integration, GPU
+> hosting, and the remaining items stay non-goals.
+
 ## 17. Principal risks and mitigations
 
 | Risk | Mitigation |
@@ -1366,7 +1393,9 @@ control, browser UI, IDE/editor behavior, or OS-level network sandboxing.
 - Arbitrary user-issued debugger commands.
 - Manual patch editor.
 - User-controlled verification/classification.
-- Provider marketplace or credential management.
+- Provider marketplace or credential management. *(Superseded 2026-09:
+  provider credential management is delivered; marketplace integration
+  remains out of scope.)*
 - Training/evaluator campaign orchestration.
 - Mandatory local GPU support.
 - Mutation or reinterpretation of accepted evidence.

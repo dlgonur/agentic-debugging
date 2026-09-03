@@ -17,9 +17,63 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 
 from agentic_debugger.application import model_providers as mp  # noqa: E402
+from agentic_debugger.application import provider_connections as pc  # noqa: E402
+
+
+def _isolate_and_configure_user_owned_registry(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Isolate machine-local provider state and explicitly configure the
+    historical providers under test.
+
+    The provider store is user-owned: a fresh installation has zero
+    configured providers and no implicit built-ins, so tests exercising
+    Ollama/OpenCode/CommandCode must configure them exactly as an
+    operator would.
+    """
+    monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent-cache.json")
+    monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json")
+    monkeypatch.setattr(pc, "load_secure_credential", lambda kind: None)
+    monkeypatch.setattr(pc, "has_secure_credential", lambda kind: False)
+    monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json")
+    for name in (
+        "OPENCODE_API_KEY",
+        "COMMAND_CODE_API_KEY",
+        "OLLAMA_API_KEY",
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY",
+        "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
+        "AGENTIC_DEBUGGER_OLLAMA_API_KEY",
+    ):
+        monkeypatch.delenv(name, raising=False)
+    pc.clear_all_session_keys()
+    pc.add_provider_config(
+        name="Ollama",
+        base_url="https://ollama.com",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="ollama_cloud",
+        transport_profile=pc.TRANSPORT_OLLAMA_CLOUD,
+    )
+    pc.add_provider_config(
+        name="OpenCode Go",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="opencode_go",
+        transport_profile=pc.TRANSPORT_OPENCODE_GO,
+    )
+    pc.add_provider_config(
+        name="CommandCode GOAT",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
+    )
 
 
 class TestAvailability:
+    @pytest.fixture(autouse=True)
+    def _configured_registry(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _isolate_and_configure_user_owned_registry(monkeypatch, tmp_path)
+
     def test_availability_shapes(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         monkeypatch.setattr(mp, "_commandcode_auth_store_path", lambda: tmp_path / "cc-auth.json")
         monkeypatch.setattr(mp, "_opencode_auth_store_path", lambda: tmp_path / "oc-auth.json")
@@ -27,7 +81,10 @@ class TestAvailability:
         monkeypatch.setattr(mp.shutil, "which", lambda name: None)
         monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
         results = {kind: (ok, reason) for kind, ok, reason in mp.provider_availability()}
-        assert results[mp.PROVIDER_KIND_OLLAMA] == (True, None)
+        # User-owned truth: with no credential and no legacy CLI, no
+        # configured provider is ready — including Ollama.  Fresh installs
+        # show zero providers, never a hardcoded ready Ollama.
+        assert results[mp.PROVIDER_KIND_OLLAMA][0] is False
         assert results[mp.PROVIDER_KIND_OPENCODE][0] is False
         assert results[mp.PROVIDER_KIND_COMMANDCODE][0] is False
         assert "auth store" in results[mp.PROVIDER_KIND_OPENCODE][1]
@@ -51,7 +108,11 @@ class TestAvailability:
         monkeypatch.setattr(mp.shutil, "which", lambda name: "x")
         monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
         results = {kind: ok for kind, ok, _ in mp.provider_availability()}
-        assert all(results.values())
+        # Legacy CLI routes satisfy OpenCode/CommandCode; Ollama Cloud has
+        # no legacy route so it stays unavailable without a credential.
+        assert results[mp.PROVIDER_KIND_OPENCODE] is True
+        assert results[mp.PROVIDER_KIND_COMMANDCODE] is True
+        assert results[mp.PROVIDER_KIND_OLLAMA] is False
 
     def test_system_cmd_exe_does_not_satisfy_commandcode(
         self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
@@ -91,10 +152,7 @@ class TestModelListing:
     def _isolated_catalog_cache(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         """Isolate the machine-local catalog cache so listing always
         exercises the curated fail-safe unless a test supplies a cache."""
-        from agentic_debugger.application import provider_connections as pc
-
-        monkeypatch.setattr(pc, "catalog_cache_path", lambda: tmp_path / "absent-cache.json")
-        monkeypatch.setattr(pc, "provider_configurations_path", lambda: tmp_path / "absent-config.json")
+        _isolate_and_configure_user_owned_registry(monkeypatch, tmp_path)
         monkeypatch.setattr(mp, "_direct_connection_available", lambda kind: (False, None))
 
     def test_grouped_listing_annotates_unavailable(self, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,6 +215,10 @@ class TestModelListing:
 
 
 class TestResolution:
+    @pytest.fixture(autouse=True)
+    def _isolated_configured_registry(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        _isolate_and_configure_user_owned_registry(monkeypatch, tmp_path)
+
     def test_unknown_provider_fails_closed(self) -> None:
         with pytest.raises(mp.ProviderRegistryError):
             mp.resolve_provider_live_config("mystery", "model")

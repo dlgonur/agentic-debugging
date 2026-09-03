@@ -21,6 +21,33 @@ from agentic_debugger.application.worker_scenarios import ScenarioInputError
 _POLICY = "pdb-on-uncertainty"
 
 
+@pytest.fixture(autouse=True)
+def _isolated_configured_registry(monkeypatch: pytest.MonkeyPatch, tmp_path):
+    """Isolate the machine-local provider store and explicitly configure
+    the historical providers these tests exercise.
+
+    The registry is user-owned (no implicit built-ins), so validation of
+    registry provider ids must not depend on operator-local state.
+    """
+    from agentic_debugger.application import provider_connections as pc
+
+    monkeypatch.setattr(
+        pc, "provider_configurations_path", lambda: tmp_path / "provider-configurations.json"
+    )
+    for pid, name in (
+        ("ollama_cloud", "Ollama"),
+        ("opencode_go", "OpenCode Go"),
+        ("commandcode_goat", "CommandCode GOAT"),
+    ):
+        pc.add_provider_config(
+            name=name,
+            base_url=f"https://{pid}.example/v1",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id=pid,
+        )
+    yield
+
+
 def _registry_params(**overrides):
     params = {"provider": "opencode_go", "model_id": "opencode-go/glm-5.3", "policy": _POLICY}
     params.update(overrides)

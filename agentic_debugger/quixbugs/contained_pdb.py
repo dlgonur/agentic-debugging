@@ -298,6 +298,12 @@ class ContainedPdbSession(PdbSession):
     def _worker_cwd(self) -> str:
         return tempfile.gettempdir()
 
+    def _worker_env(self) -> None:
+        # The worker is reached through the ``wsl.exe`` bridge into a
+        # different OS's PID namespace; the Windows venv launcher identity
+        # must never leak into that bridge environment.
+        return None
+
     def _expected_worker_pid(self) -> Optional[int]:
         # ``self._proc.pid`` is the Windows process ID of the spawned
         # ``wsl.exe`` bridge; the worker reports its own PID from inside a

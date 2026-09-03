@@ -1325,6 +1325,10 @@ class ModelProvidersScreen(Screen):
         self._discovery_results: Optional[str] = None
         self._statuses_cache: Optional[list[Any]] = None
         self._config_error: Optional[str] = None
+        # Deferred auto-refresh consumed in on_mount: a worker started on
+        # an unmounted screen never runs and would mark the provider as
+        # refreshing forever.
+        self._pending_refresh_provider: Optional[str] = None
 
     def _current_statuses(self, force_reload: bool = False):
         if self._statuses_cache is None or force_reload:
@@ -1428,6 +1432,11 @@ class ModelProvidersScreen(Screen):
     def on_mount(self) -> None:
         self._update_hint(self.size.width)
         self.render_state()
+        if self._pending_refresh_provider is not None:
+            provider_id = self._pending_refresh_provider
+            self._pending_refresh_provider = None
+            if self._selected_kind() == provider_id:
+                self.action_refresh()
 
     def on_resize(self, event: Any) -> None:
         width = getattr(event, "size", None).width if hasattr(event, "size") and event.size else self.size.width
@@ -1496,10 +1505,21 @@ class ModelProvidersScreen(Screen):
             refresh_line = self.query_one(f"#provider-refresh-{status.kind}", Static)
             models_helper = self.query_one(f"#provider-models-helper-{status.kind}", Static)
 
-            from agentic_debugger.application.provider_connections import PROTOCOL_DISPLAY_LABELS
+            from agentic_debugger.application.provider_connections import (
+                AUTH_DISPLAY_LABELS,
+                PROTOCOL_DISPLAY_LABELS,
+                TRANSPORT_DISPLAY_LABELS,
+            )
 
             proto_raw = PROTOCOL_DISPLAY_LABELS.get(status.api_format, status.api_format)
             proto_label = proto_raw.split(" (", 1)[0] if " (" in proto_raw else proto_raw
+            auth_label = AUTH_DISPLAY_LABELS.get(
+                getattr(status, "auth_mode", "bearer"), getattr(status, "auth_mode", "")
+            )
+            profile_label = TRANSPORT_DISPLAY_LABELS.get(
+                getattr(status, "transport_profile", "generic"),
+                getattr(status, "transport_profile", ""),
+            )
 
             if status.connected:
                 source = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
@@ -1512,6 +1532,8 @@ class ModelProvidersScreen(Screen):
                     .append(f"   {source_disp}", style=f"{PRIMARY}")
                     .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
                     .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
+                    .append(f"\nAuth        {auth_label}", style=f"{MUTED}")
+                    .append(f"\nTransport   {profile_label}", style=f"{MUTED}")
                 )
             else:
                 summary.update(
@@ -1520,6 +1542,8 @@ class ModelProvidersScreen(Screen):
                     .append("   Not connected", style=FAINT)
                     .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
                     .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
+                    .append(f"\nAuth        {auth_label}", style=f"{MUTED}")
+                    .append(f"\nTransport   {profile_label}", style=f"{MUTED}")
                 )
 
             lines = []
@@ -1642,10 +1666,12 @@ class ModelProvidersScreen(Screen):
                 self.app.pop_screen()
                 new_screen = ModelProvidersScreen()
                 new_screen._selected_index = new_screen._index_of(new_cfg.provider_id)
-                self.app.push_screen(new_screen)
                 from agentic_debugger.application.provider_connections import credential_source_for
                 if credential_source_for(new_cfg.provider_id) is not None:
-                    new_screen.action_refresh()
+                    # Consumed by the mounted screen: starting the refresh
+                    # worker before the screen mounts would never run it.
+                    new_screen._pending_refresh_provider = new_cfg.provider_id
+                self.app.push_screen(new_screen)
 
         self.app.push_screen(AddProviderDialogScreen(on_save=on_saved))
 
@@ -1872,6 +1898,9 @@ class AddProviderDialogScreen(Screen):
         super().__init__()
         self._on_save = on_save
         self._format = "chat_completions"
+        self._auth = "bearer"
+        self._catalog = "openai"
+        self._profile = "generic"
 
     def compose(self) -> ComposeResult:
         with Vertical(id="provider-dialog-card"):
@@ -1880,13 +1909,28 @@ class AddProviderDialogScreen(Screen):
             yield Input(placeholder="e.g. Groq Direct or DeepSeek V3", id="input-name")
             yield Static("Base URL", classes="dialog-label")
             yield Input(placeholder="https://api.groq.com/openai/v1", id="input-url")
-            yield Static("API Key (optional, stored securely)", classes="dialog-label")
+            yield Static("API Key (optional for no-auth loopback; stored securely)", classes="dialog-label")
             yield Input(password=True, placeholder="API key", id="input-key")
             yield Static("API Protocol Format", classes="dialog-label")
             with Horizontal(id="format-buttons-row"):
                 yield Button("Chat Completions", id="fmt-chat", classes="fmt-btn -selected")
                 yield Button("Responses", id="fmt-resp", classes="fmt-btn")
                 yield Button("Messages", id="fmt-msg", classes="fmt-btn")
+            yield Static("Authentication", classes="dialog-label")
+            with Horizontal(id="auth-buttons-row"):
+                yield Button("Bearer", id="auth-bearer", classes="fmt-btn -selected")
+                yield Button("Anthropic", id="auth-anthropic", classes="fmt-btn")
+                yield Button("None (loopback)", id="auth-none", classes="fmt-btn")
+            yield Static("Catalog", classes="dialog-label")
+            with Horizontal(id="catalog-buttons-row"):
+                yield Button("Auto (/models)", id="cat-auto", classes="fmt-btn -selected")
+                yield Button("Manual only", id="cat-manual", classes="fmt-btn")
+            yield Static("Transport Profile (generic unless a historical endpoint contract is intended)", classes="dialog-label")
+            with Horizontal(id="profile-buttons-row"):
+                yield Button("Generic", id="prof-generic", classes="fmt-btn -selected")
+                yield Button("Ollama Cloud", id="prof-ollama", classes="fmt-btn")
+                yield Button("OpenCode Go", id="prof-opencode", classes="fmt-btn")
+                yield Button("CommandCode", id="prof-commandcode", classes="fmt-btn")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save & discover", id="btn-save-dialog", classes="primary-action")
@@ -1917,6 +1961,42 @@ class AddProviderDialogScreen(Screen):
             self._format = "messages"
             self._update_format_buttons()
             event.stop()
+        elif btn_id == "auth-bearer":
+            self._auth = "bearer"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "auth-anthropic":
+            self._auth = "anthropic"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "auth-none":
+            self._auth = "none"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "cat-auto":
+            self._catalog = "openai"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "cat-manual":
+            self._catalog = "disabled"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-generic":
+            self._profile = "generic"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-ollama":
+            self._profile = "ollama_cloud"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-opencode":
+            self._profile = "opencode_go"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-commandcode":
+            self._profile = "commandcode_goat"
+            self._update_format_buttons()
+            event.stop()
         elif btn_id == "btn-cancel-dialog":
             self.action_cancel()
             event.stop()
@@ -1929,6 +2009,33 @@ class AddProviderDialogScreen(Screen):
             try:
                 b = self.query_one(f"#{fid}", Button)
                 if self._format == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+        for fid, val in [("prof-generic", "generic"), ("prof-ollama", "ollama_cloud"), ("prof-opencode", "opencode_go"), ("prof-commandcode", "commandcode_goat")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._profile == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+        for fid, val in [("auth-bearer", "bearer"), ("auth-anthropic", "anthropic"), ("auth-none", "none")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._auth == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+        for fid, val in [("cat-auto", "openai"), ("cat-manual", "disabled")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._catalog == val:
                     b.add_class("-selected")
                 else:
                     b.remove_class("-selected")
@@ -1954,6 +2061,9 @@ class AddProviderDialogScreen(Screen):
                 base_url=url,
                 api_format=self._format,
                 api_key=key or None,
+                auth_mode=self._auth,
+                catalog_mode=self._catalog,
+                transport_profile=self._profile,
             )
             self.app.pop_screen()
             self._on_save(cfg)
@@ -1973,6 +2083,9 @@ class EditProviderDialogScreen(Screen):
         self._config = config
         self._on_save = on_save
         self._format = config.api_format
+        self._auth = getattr(config, "auth_mode", "bearer")
+        self._catalog = getattr(config, "catalog_mode", "openai")
+        self._profile = getattr(config, "transport_profile", "generic")
 
     def compose(self) -> ComposeResult:
         from agentic_debugger.application.provider_connections import (
@@ -1983,7 +2096,10 @@ class EditProviderDialogScreen(Screen):
             CREDENTIAL_SOURCE_CLI_AUTH_STORE,
         )
 
-        source = credential_source_for(self._config.provider_id)
+        try:
+            source = credential_source_for(self._config.provider_id)
+        except Exception:
+            source = None
         if source == CREDENTIAL_SOURCE_SAVED:
             cred_status = "Credential: saved securely"
         elif source == CREDENTIAL_SOURCE_SESSION_KEY:
@@ -1993,7 +2109,10 @@ class EditProviderDialogScreen(Screen):
         elif source == CREDENTIAL_SOURCE_CLI_AUTH_STORE:
             cred_status = "Credential: CLI auth (read in place)"
         else:
-            cred_status = "Credential: none configured"
+            if getattr(self._config, "auth_mode", "bearer") == "none":
+                cred_status = "Credential: none required (loopback)"
+            else:
+                cred_status = "Credential: none configured"
 
         with Vertical(id="provider-dialog-card"):
             yield Static(f"EDIT PROVIDER: {self._config.name}", id="dialog-title")
@@ -2001,7 +2120,7 @@ class EditProviderDialogScreen(Screen):
             yield Input(value=self._config.name, id="input-name")
             yield Static("Base URL", classes="dialog-label")
             yield Input(value=self._config.base_url, id="input-url")
-            yield Static("API Key (leave blank to keep current)", classes="dialog-label")
+            yield Static("API Key (blank keeps current; re-enter when Base URL changes)", classes="dialog-label")
             yield Input(password=True, placeholder="new API key", id="input-key")
             yield Static(cred_status, id="dialog-credential-status", classes="dialog-cred-status")
             yield Static("API Protocol Format", classes="dialog-label")
@@ -2009,6 +2128,21 @@ class EditProviderDialogScreen(Screen):
                 yield Button("Chat Completions", id="fmt-chat", classes=f"fmt-btn {'-selected' if self._format == 'chat_completions' else ''}")
                 yield Button("Responses", id="fmt-resp", classes=f"fmt-btn {'-selected' if self._format == 'responses' else ''}")
                 yield Button("Messages", id="fmt-msg", classes=f"fmt-btn {'-selected' if self._format == 'messages' else ''}")
+            yield Static("Authentication", classes="dialog-label")
+            with Horizontal(id="auth-buttons-row"):
+                yield Button("Bearer", id="auth-bearer", classes=f"fmt-btn {'-selected' if self._auth == 'bearer' else ''}")
+                yield Button("Anthropic", id="auth-anthropic", classes=f"fmt-btn {'-selected' if self._auth == 'anthropic' else ''}")
+                yield Button("None (loopback)", id="auth-none", classes=f"fmt-btn {'-selected' if self._auth == 'none' else ''}")
+            yield Static("Catalog", classes="dialog-label")
+            with Horizontal(id="catalog-buttons-row"):
+                yield Button("Auto (/models)", id="cat-auto", classes=f"fmt-btn {'-selected' if self._catalog == 'openai' else ''}")
+                yield Button("Manual only", id="cat-manual", classes=f"fmt-btn {'-selected' if self._catalog == 'disabled' else ''}")
+            yield Static("Transport Profile (generic unless a historical endpoint contract is intended)", classes="dialog-label")
+            with Horizontal(id="profile-buttons-row"):
+                yield Button("Generic", id="prof-generic", classes=f"fmt-btn {'-selected' if self._profile == 'generic' else ''}")
+                yield Button("Ollama Cloud", id="prof-ollama", classes=f"fmt-btn {'-selected' if self._profile == 'ollama_cloud' else ''}")
+                yield Button("OpenCode Go", id="prof-opencode", classes=f"fmt-btn {'-selected' if self._profile == 'opencode_go' else ''}")
+                yield Button("CommandCode", id="prof-commandcode", classes=f"fmt-btn {'-selected' if self._profile == 'commandcode_goat' else ''}")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save changes", id="btn-save-dialog", classes="primary-action")
@@ -2039,6 +2173,42 @@ class EditProviderDialogScreen(Screen):
             self._format = "messages"
             self._update_format_buttons()
             event.stop()
+        elif btn_id == "auth-bearer":
+            self._auth = "bearer"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "auth-anthropic":
+            self._auth = "anthropic"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "auth-none":
+            self._auth = "none"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "cat-auto":
+            self._catalog = "openai"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "cat-manual":
+            self._catalog = "disabled"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-generic":
+            self._profile = "generic"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-ollama":
+            self._profile = "ollama_cloud"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-opencode":
+            self._profile = "opencode_go"
+            self._update_format_buttons()
+            event.stop()
+        elif btn_id == "prof-commandcode":
+            self._profile = "commandcode_goat"
+            self._update_format_buttons()
+            event.stop()
         elif btn_id == "btn-cancel-dialog":
             self.action_cancel()
             event.stop()
@@ -2051,6 +2221,33 @@ class EditProviderDialogScreen(Screen):
             try:
                 b = self.query_one(f"#{fid}", Button)
                 if self._format == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+        for fid, val in [("prof-generic", "generic"), ("prof-ollama", "ollama_cloud"), ("prof-opencode", "opencode_go"), ("prof-commandcode", "commandcode_goat")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._profile == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+        for fid, val in [("auth-bearer", "bearer"), ("auth-anthropic", "anthropic"), ("auth-none", "none")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._auth == val:
+                    b.add_class("-selected")
+                else:
+                    b.remove_class("-selected")
+            except Exception:
+                pass
+        for fid, val in [("cat-auto", "openai"), ("cat-manual", "disabled")]:
+            try:
+                b = self.query_one(f"#{fid}", Button)
+                if self._catalog == val:
                     b.add_class("-selected")
                 else:
                     b.remove_class("-selected")
@@ -2077,6 +2274,9 @@ class EditProviderDialogScreen(Screen):
                 base_url=url,
                 api_format=self._format,
                 api_key=key or None,
+                auth_mode=self._auth,
+                catalog_mode=self._catalog,
+                transport_profile=self._profile,
             )
             self.app.pop_screen()
             self._on_save(cfg)
@@ -2361,6 +2561,7 @@ class StartSessionScreen(Screen):
             )
         ]
         provider_reasons: dict[str, Optional[str]] = {}
+        provider_registry_error: Optional[str] = None
         try:
             for item in list_provider_models(include_ollama=True):
                 if not item.available and item.provider_label not in provider_reasons:
@@ -2377,8 +2578,26 @@ class StartSessionScreen(Screen):
                         unavailable_reason=item.unavailable_reason,
                     )
                 )
-        except Exception:
-            pass
+        except Exception as exc:
+            # Fail-closed: a corrupt provider registry must never look like
+            # a healthy fresh install.  Surface a disabled, credential-safe
+            # configuration-error entry instead of an empty state.
+            from agentic_debugger.application.model_providers import ProviderRegistryError
+
+            if isinstance(exc, ProviderRegistryError):
+                provider_registry_error = str(exc)[:160]
+            else:
+                provider_registry_error = "provider configuration error"
+            models.append(
+                ModelOption(
+                    "__provider_registry_error__",
+                    "",
+                    "Configuration Error",
+                    detail="",
+                    available=False,
+                    unavailable_reason=provider_registry_error,
+                )
+            )
 
         configured_error: Optional[str] = None
         try:
@@ -2821,8 +3040,8 @@ class StartSessionScreen(Screen):
         choices.append(
             ChoiceOption(
                 "providers:manage",
-                "Manage provider connections…",
-                "status, model refresh, API key (press c anytime)",
+                "Manage model providers…",
+                "status, model refresh, API key (press m anytime)",
                 group="",
             )
         )

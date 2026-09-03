@@ -50,6 +50,37 @@ PROVIDER_OPENCODE = "opencode_go"
 PROVIDER_COMMANDCODE = "commandcode_goat"
 PROVIDER_CONFIGURED = "configured"
 
+
+def _squatted_by_generic_ollama() -> bool:
+    """Whether a generic-profile provider squats the Ollama identity.
+
+    Consults the explicit transport authority (never the display name):
+    only a configured, enabled ``ollama_cloud`` record whose transport
+    profile is NOT the historical Ollama profile counts as a squatter.
+    Any configuration failure fails closed toward squatted (unqualified)
+    rather than guessing historical semantics.  An absent record means
+    no squatter (roster-only scientific path unaffected).
+    """
+    try:
+        from agentic_debugger.application.provider_connections import (
+            get_provider_config,
+        )
+    except Exception:
+        return True
+    try:
+        cfg = get_provider_config(PROVIDER_OLLAMA)
+    except Exception:
+        return True
+    if cfg is None or not cfg.enabled:
+        return False
+    try:
+        from agentic_debugger.application.provider_connections import (
+            TRANSPORT_OLLAMA_CLOUD,
+        )
+    except Exception:
+        return True
+    return cfg.transport_profile != TRANSPORT_OLLAMA_CLOUD
+
 PROVIDER_LABELS = {
     PROVIDER_OFFLINE: "Offline",
     PROVIDER_OLLAMA: "Ollama Cloud",
@@ -196,8 +227,18 @@ class SessionCatalog:
         therefore binds the frozen roster alias to its provider identity;
         a configured or subscription model with the same text must never be
         reinterpreted as the qualified Ollama model.
+
+        Additionally, qualification requires the absence of a generic
+        squatter: when a user-owned provider identified ``ollama_cloud``
+        carries the generic (non-historical) transport profile, text
+        matches against the qualified roster fail closed (return None) so
+        a generic model can never satisfy Level-32 qualification or take
+        the canonical ladder operator path.  Remove or rename the generic
+        provider to restore qualification.
         """
         if choice.provider != PROVIDER_OLLAMA:
+            return None
+        if _squatted_by_generic_ollama():
             return None
         return next(
             (

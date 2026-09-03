@@ -98,17 +98,34 @@ def _hermetic_provider_credentials(
         "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY",
     ):
         monkeypatch.delenv(name, raising=False)
+    # Deterministic ambient isolation: the operator machine's CLI auth
+    # store and OS vault must never satisfy (or block, via the
+    # endpoint-rebinding guard) these endpoint-repointing tests.
+    monkeypatch.setattr(
+        pc, "opencode_auth_store_path", lambda: tmp_path / "missing-auth.json"
+    )
+    _vault: dict[str, str] = {}
+    monkeypatch.setattr(
+        pc, "save_secure_credential", lambda k, v: _vault.__setitem__(k, v) or True
+    )
+    monkeypatch.setattr(pc, "load_secure_credential", lambda k: _vault.get(k))
+    monkeypatch.setattr(pc, "has_secure_credential", lambda k: k in _vault)
+    monkeypatch.setattr(
+        pc, "delete_secure_credential", lambda k: _vault.pop(k, None) is not None
+    )
     pc.add_provider_config(
         name="CommandCode GOAT",
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
     )
     pc.add_provider_config(
         name="OpenCode Go",
         base_url="https://opencode.ai/zen/go/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="opencode_go",
+        transport_profile=pc.TRANSPORT_OPENCODE_GO,
     )
     yield
     pc.clear_all_session_keys()
@@ -281,32 +298,17 @@ class _ScriptedChatServer:
 
 
 def _wrap_registry_for_fake_endpoint(monkeypatch: pytest.MonkeyPatch, base_url: str) -> None:
-    """Redirect ONLY the adapter's evaluation-only endpoint flag.
+    """Point the configured provider at the loopback fake endpoint genuinely.
 
-    Everything else (route decision, transport construction, provenance)
-    stays the production path.
+    The single canonical endpoint authority requires parent, worker, and
+    adapter to agree byte-for-byte, so tests repoint the actual provider
+    configuration (like an operator would) instead of appending an
+    evaluation-only ``--base-url`` override behind the resolver's back.
+    Everything else stays the production path.  Callers must invoke this
+    BEFORE establishing any session credential so the endpoint/credential
+    rebinding guard sees a clean state.
     """
-    real_resolve = mp.resolve_provider_live_config
-
-    def wrapped(kind, model_id, **kwargs):
-        config, provenance = real_resolve(kind, model_id, **kwargs)
-        command = list(config.command) + [
-            "--base-url",
-            base_url,
-            "--engine",
-            "stdlib",
-        ]
-        return (
-            type(config)(
-                model_name=config.model_name,
-                command=tuple(command),
-                request_timeout_seconds=config.request_timeout_seconds,
-                tool_version=config.tool_version,
-            ),
-            provenance,
-        )
-
-    monkeypatch.setattr(mp, "resolve_provider_live_config", wrapped)
+    pc.update_provider_config("commandcode_goat", base_url=base_url)
 
 
 def _local_params(
@@ -337,42 +339,15 @@ def _local_params(
 def _install_worker_fake_endpoint(
     monkeypatch: pytest.MonkeyPatch, base_url: str
 ) -> None:
-    """Keep the production worker boundary while adding the adapter's
-    evaluation-only local endpoint flags inside that fresh process."""
+    """Point the configured provider at the loopback fake endpoint genuinely.
 
-    project_root = str(REPO_ROOT).replace("\\", "/")
-    wrapped_source = """
-def _wrapped(kind, model_id, protocol, *, logical_call_ceiling, request_timeout_seconds):
-    config, provenance = _real(
-        kind,
-        model_id,
-        protocol,
-        logical_call_ceiling=logical_call_ceiling,
-        request_timeout_seconds=request_timeout_seconds,
-    )
-    command = tuple(config.command) + ("--base-url", _base_url, "--engine", "stdlib")
-    return type(config)(
-        model_name=config.model_name,
-        command=command,
-        request_timeout_seconds=config.request_timeout_seconds,
-        tool_version=config.tool_version,
-    ), provenance
-"""
-
-    def worker_argv(_self: SessionWorkerProcess) -> List[str]:
-        bootstrap = (
-            "import runpy, sys; "
-            f"sys.path.insert(0, {project_root!r}); "
-            "from agentic_debugger.application import model_providers as _mp; "
-            "_real = _mp._direct_api_live_config; "
-            f"_base_url = {base_url!r}; "
-            f"exec({wrapped_source!r}); "
-            "_mp._direct_api_live_config = _wrapped; "
-            "runpy.run_module('agentic_debugger.application.worker', run_name='__main__')"
-        )
-        return [sys.executable, "-I", "-u", "-c", bootstrap]
-
-    monkeypatch.setattr(SessionWorkerProcess, "_worker_argv", worker_argv)
+    The worker is a fresh process that reads the same provider
+    configuration file, so repointing the actual configuration keeps the
+    single canonical endpoint authority intact (parent, worker, and
+    adapter agree byte-for-byte).  Must be called BEFORE establishing
+    any session credential.
+    """
+    pc.update_provider_config("opencode_go", base_url=base_url)
 
 
 def test_commandcode_local_project_session_executes_through_direct_api(
@@ -460,11 +435,124 @@ def test_commandcode_local_project_session_executes_through_direct_api(
         assert provenance["route"] == "direct_api"
         assert provenance["api_protocol"] == "chat_completions"
         assert provenance["provider_model_id"] == "deepseek/deepseek-v4-flash"
-        assert provenance["endpoint"] == "https://api.commandcode.ai/provider/v1"
+        assert provenance["endpoint"] == server.base_url
         assert SECRET not in json.dumps(provenance)
         assert SECRET not in journal_path.read_text(encoding="utf-8")
 
         # The verifier independently evaluated the candidate.
+        verifier = next(
+            event.payload
+            for event in read.events
+            if event.event_kind is SessionEventKind.VERIFIER_COMPLETED
+        )
+        assert verifier["status"] == "COMPLETED"
+    finally:
+        from agentic_debugger.application.local_project import cleanup_parent_tmpdir
+
+        cleanup_parent_tmpdir(wt.parent_tmpdir, repo)
+
+
+def test_arbitrary_custom_provider_local_project_session_direct_api(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An arbitrary user-configured provider executes end-to-end through
+    the canonical Local Project direct-API route.
+
+    No registry wrapping is needed: the provider is genuinely configured
+    against the loopback fake endpoint, so the production resolver,
+    transport, adapter subprocess, controller, and verifier all run the
+    exact generic-provider path (loopback-only; no real provider contact).
+    """
+
+    custom_secret = "custom-provider-credential-not-real"
+    repo = _make_git_repo(tmp_path)
+    validated = validate_local_project(str(repo), launch_cwd=tmp_path)
+    wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
+    try:
+        with _ScriptedChatServer() as server:
+            pc.add_provider_config(
+                name="My Custom Gateway",
+                base_url=server.base_url,
+                api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+                provider_id="my_custom_gateway",
+            )
+            pc.add_manual_model("my_custom_gateway", "custom-model-x", "Custom Model X")
+            pc.set_session_key("my_custom_gateway", custom_secret)
+
+            session_id = "sess-e2e-custom-provider-001"
+            journal_path = tmp_path / "session-custom" / "session.events.jsonl"
+            journal_path.parent.mkdir(parents=True, exist_ok=True)
+            journal = SessionEventJournal(
+                journal_path,
+                session_id=session_id,
+                task_id="local-project-debug",
+                source_kind=SourceKind.LOCAL_PROJECT,
+            )
+            emitter = SessionEventEmitter(
+                session_id=session_id,
+                task_id="local-project-debug",
+                source_kind=SourceKind.LOCAL_PROJECT,
+                sink=journal,
+            )
+            emitter.emit(SessionEventKind.SESSION_CREATED, {"spec_fingerprint": "a" * 64})
+            emitter.bind_run_id("run-e2e-custom")
+            emitter.emit(SessionEventKind.SESSION_STARTED, {})
+            ctx = ScenarioContext(
+                work_dir=tmp_path / "work-custom",
+                token=CancellationToken(),
+                journal=journal,
+                emitter=emitter,
+                run_id="run-e2e-custom",
+                session_dir=journal_path.parent,
+            )
+            disposition = run_local_project_session(
+                ctx,
+                _local_params(
+                    repo,
+                    validated.head_commit,
+                    wt.isolated_path,
+                    wt.parent_tmpdir,
+                    provider="my_custom_gateway",
+                    model_id="custom-model-x",
+                ),
+            )
+            emitter.emit(SessionEventKind.CLEANUP_STARTED, {})
+            emitter.emit(
+                SessionEventKind.CLEANUP_COMPLETED,
+                {"verified": True},
+            )
+            emitter.emit(
+                SessionEventKind.SESSION_COMPLETED,
+                {"status": "succeeded", "termination_reason": "done"},
+            )
+
+        assert disposition == "FIXED"
+
+        # The generic direct-API route served the session: every inference
+        # was one POST to the fake endpoint with the custom credential.
+        assert server.request_count >= 6
+        for record in server.calls:
+            assert record["path"] == "/chat/completions"
+            assert record["authorization"] == f"Bearer {custom_secret}"
+
+        # Durable provenance names the arbitrary provider truthfully.
+        read = read_session_journal(journal_path)
+        assert read.state is JournalReadState.COMPLETE
+        validate_session_event_stream(read.events)
+        provenance = next(
+            event.payload
+            for event in read.events
+            if event.event_kind is SessionEventKind.MODEL_CONFIGURED
+        )
+        assert provenance["provider"] == "my_custom_gateway"
+        assert provenance["profile_id"] == "custom-model-x"
+        assert provenance["route"] == "direct_api"
+        assert provenance["api_protocol"] == "chat_completions"
+        assert provenance["provider_model_id"] == "custom-model-x"
+        assert provenance["endpoint"].startswith("http://127.0.0.1:")
+        assert custom_secret not in json.dumps(provenance)
+        assert custom_secret not in journal_path.read_text(encoding="utf-8")
+
         verifier = next(
             event.payload
             for event in read.events
@@ -485,10 +573,10 @@ def test_opencode_ui_app_worker_session_key_reaches_direct_api(
 
     repo = _make_git_repo(tmp_path)
     app = LocalApplicationV1(history_store=HistoryStore(tmp_path / "history"))
-    pc.set_session_key("opencode_go", SECRET)
     captured: dict[str, Any] = {}
     with _ScriptedChatServer() as server:
         _install_worker_fake_endpoint(monkeypatch, server.base_url)
+        pc.set_session_key("opencode_go", SECRET)
 
         async def actions(pilot):
             pilot.app.start_local_project_session(

@@ -170,6 +170,7 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
         from types import SimpleNamespace
 
         from agentic_debugger.application import level32, local_project, model_providers
+        from agentic_debugger.application import provider_connections as pc
         from agentic_debugger.application.events import SourceKind
         from agentic_debugger.application.local_project import (
             reset_launch_cwd,
@@ -183,6 +184,21 @@ def test_general_ollama_ui_start_uses_registry_without_level32_or_profile_store(
         from agentic_debugger.ui.screens import ChoicePickerScreen
 
         reset_launch_cwd()
+        # The provider registry is user-owned: isolate the machine-local
+        # store and explicitly configure the provider this test exercises
+        # (the picker's provider groups derive from configured providers).
+        monkeypatch.setattr(
+            pc,
+            "provider_configurations_path",
+            lambda: tmp_path / "provider-configurations.json",
+        )
+        pc.clear_all_session_keys()
+        pc.add_provider_config(
+            name="Ollama",
+            base_url="https://ollama.com",
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id="ollama_cloud",
+        )
         repo = _make_repo(tmp_path, "general-ollama-project")
         set_launch_cwd_for_tests(tmp_path)
         app = LocalApplicationV1(history_root=tmp_path / "general-ollama-history")

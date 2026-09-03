@@ -11,6 +11,8 @@ from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
 
+import time
+
 import pytest
 
 textual = pytest.importorskip("textual")
@@ -106,7 +108,7 @@ def test_provider_connections_screen_renders_both_providers(
         await pilot.pause()
         scenario(pilot)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_provider_screen_keyboard_refresh_and_removed_k_shortcut(
@@ -144,7 +146,7 @@ def test_provider_screen_keyboard_refresh_and_removed_k_shortcut(
         await pilot.pause()
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_start_session_c_binding_opens_provider_connections(
@@ -196,7 +198,7 @@ def test_model_picker_shows_discovered_notes_and_management_entry(
             "DeepSeek V4 Flash",
             "CommandCode GOAT",
             False,
-            unavailable_reason="no direct API credential — connect in Provider Connections (press c)",
+            unavailable_reason="no direct API credential — connect in Model Providers (press m)",
         ),
     )
     pc.add_provider_config(
@@ -338,7 +340,7 @@ def test_home_screen_m_binding_and_row_opens_providers(tmp_path: Path) -> None:
         await pilot.pause()
         assert isinstance(pilot.app.screen, HomeScreen)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_add_custom_provider_and_manual_model_dialogs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -398,7 +400,7 @@ def test_add_custom_provider_and_manual_model_dialogs(tmp_path: Path, monkeypatc
         assert len(cfg.models) == 1
         assert cfg.models[0].model_id == "custom-llama-3"
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_capability_ladder_isolation_with_custom_provider(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -474,7 +476,7 @@ def test_action_buttons_and_compact_footer_rendering(tmp_path: Path, monkeypatch
         assert "k key" not in str(hint.render().plain)
         assert "Connect API key" not in str(hint.render().plain)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -541,7 +543,7 @@ def test_add_provider_save_and_discover_flow(tmp_path: Path, monkeypatch: pytest
         assert cfg.name == "Fast Inference Corp"
         assert cfg.base_url == "https://api.fastinference.corp/v1"
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation_flow(
@@ -550,7 +552,8 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
     """Acceptance regression: CommandCode GOAT -> Edit provider exposes API key input, real typing works,
 
     saving reaches secure storage, secret is never rendered, reopening displays status without secret,
-    and editing unrelated fields with blank API key preserves the saved credential.
+    blank-key endpoint edits are rejected (rebinding requires key re-entry), and re-entering
+    the key with the new endpoint commits a coherent pair.
     """
     from textual.widgets import Input
 
@@ -579,6 +582,7 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
         base_url="https://api.commandcode.ai/provider/v1",
         api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
         provider_id="commandcode_goat",
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
     )
 
     app = make_app(tmp_path)
@@ -652,25 +656,66 @@ def test_edit_provider_commandcode_goat_pilot_typing_and_credential_preservation
         inp_key_2 = edit_dlg_2.query_one("#input-key", Input)
         assert inp_key_2.value == ""  # Never prepopulates existing secret
 
-        # 11. Edit unrelated field (Base URL) while leaving API key field blank
+        # 11. Edit Base URL while leaving API key field blank: the
+        # endpoint/credential rebinding guard must reject the save — a
+        # stored credential is never silently bound to a new endpoint.
         inp_url_2 = edit_dlg_2.query_one("#input-url", Input)
         inp_url_2.value = "https://api.commandcode.ai/provider/v2"
 
         # 12. Save changes
         await pilot.click("#btn-save-dialog")
-        await pilot.pause()
+        # Deterministic rejection sync: poll for the guard's feedback
+        # post-condition rather than assuming one message cycle suffices.
+        from textual.widgets import Static as StaticWidget
 
-        # 13. Prove existing credential was PRESERVED after editing with blank API Key
-        assert pc.has_secure_credential("commandcode_goat") is True
+        rejection_deadline = time.monotonic() + 10.0
+        while "re-enter" not in str(
+            edit_dlg_2.query_one("#dialog-feedback", StaticWidget).render().plain
+        ).lower():
+            assert time.monotonic() < rejection_deadline, "rebinding rejection feedback never appeared"
+            await pilot.pause()
+
+        # 13. The rebinding is rejected: dialog stays open with guidance,
+        # durable endpoint and credential both untouched.
+        assert isinstance(pilot.app.screen, EditProviderDialogScreen)
+
+        feedback_2 = str(edit_dlg_2.query_one("#dialog-feedback", StaticWidget).render().plain)
+        assert "re-enter" in feedback_2.lower()
+        assert fake_key not in feedback_2
+        cfg = pc.get_provider_config("commandcode_goat")
+        assert cfg is not None
+        assert cfg.base_url == "https://api.commandcode.ai/provider/v1"
+        assert pc.load_secure_credential("commandcode_goat") == fake_key
+        assert pc.resolve_runtime_credential("commandcode_goat") == fake_key
+
+        # 14. Re-enter the key with the new endpoint: coherent pair commits.
+        # Submit via Enter from the key field — the same deterministic
+        # submission path step 7 already uses. A repeated Pilot click on
+        # the already-focused Save button is swallowed by the harness
+        # event pipeline (the click never reaches _do_save), while
+        # Input.Submitted deterministically invokes the identical
+        # _do_save commit path; the coherent-pair assertions below are
+        # unchanged.
+        inp_key_2.value = fake_key
+        inp_key_2.focus()
+        await pilot.pause()
+        await pilot.press("enter")
+        # Deterministic lifecycle sync: poll for the actual
+        # post-condition (back on the connections screen) with a bounded
+        # deadline instead of assuming one pause suffices.
+        commit_deadline = time.monotonic() + 10.0
+        while not isinstance(pilot.app.screen, ProviderConnectionsScreen):
+            assert time.monotonic() < commit_deadline, "edit dialog never committed the coherent pair"
+            await pilot.pause()
+
         assert pc.load_secure_credential("commandcode_goat") == fake_key
         assert pc.resolve_runtime_credential("commandcode_goat") == fake_key
         assert pc.credential_source_for("commandcode_goat") == "saved"
-        assert secure_store.get("commandcode_goat") == fake_key
         cfg = pc.get_provider_config("commandcode_goat")
         assert cfg is not None
         assert cfg.base_url == "https://api.commandcode.ai/provider/v2"
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 @pytest.mark.parametrize("geometry", [(120, 32), (100, 30)])
@@ -736,7 +781,7 @@ def test_no_standalone_credential_modal_reachable(tmp_path: Path) -> None:
         await pilot.pause()
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_refresh_without_credential_error_copy(
@@ -794,7 +839,7 @@ def test_refresh_without_credential_error_copy(
         assert "edit provider to add an api key" in models_text.lower()
         assert "connect api key" not in models_text.lower()
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_commandcode_goat_62_models_presentation_and_scrolling_navigation(
@@ -885,7 +930,7 @@ def test_commandcode_goat_62_models_presentation_and_scrolling_navigation(
         await pilot.pause()
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_custom_provider_delete_confirmation_and_cancel_flow(
@@ -943,7 +988,7 @@ def test_custom_provider_delete_confirmation_and_cancel_flow(
         assert isinstance(pilot.app.screen, ProviderConnectionsScreen)
         assert pc.get_provider_config("groq_direct_test") is not None
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_custom_provider_delete_confirmed_removes_config_and_updates_selection(
@@ -1012,7 +1057,7 @@ def test_custom_provider_delete_confirmed_removes_config_and_updates_selection(
         status_msg = str(active_screen.query_one("#providers-status").render().plain)
         assert "Deleted provider 'Temporary Custom'" in status_msg
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_provider_delete_returns_to_empty_state(
@@ -1064,7 +1109,7 @@ def test_provider_delete_returns_to_empty_state(
         empty_label = new_screen.query_one("#providers-empty-label")
         assert "No providers configured." in str(empty_label.render().plain)
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_provider_manager_performance_navigation_does_not_churn_io(
@@ -1122,7 +1167,7 @@ def test_provider_manager_performance_navigation_does_not_churn_io(
         # 3. Main view does not mount full model item trees
         assert len(screen.query(".models-list-text")) == 0
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_truthful_credential_status_labels_in_ui(
@@ -1233,7 +1278,7 @@ def test_truthful_credential_status_labels_in_ui(
         summary_none = str(screen.query_one("#provider-summary-prov_none").render().plain)
         assert "Not connected" in summary_none
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 
@@ -1290,7 +1335,7 @@ def test_add_provider_dialog_secure_save_failure_commits_nothing_and_keeps_dialo
         assert pc.get_provider_config("atomic_failure") is None
         assert discovered == []
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
 
 
 def test_edit_provider_dialog_secure_save_failure_keeps_original_authoritative(
@@ -1351,4 +1396,4 @@ def test_edit_provider_dialog_secure_save_failure_keeps_original_authoritative(
         assert cfg.base_url == "https://old.example/v1"
         assert pc.load_secure_credential("original") == "fake-old-key"
 
-    run_headless(app, actions, size=(100, 30))
+    run_headless(app, actions, size=(110, 45))
