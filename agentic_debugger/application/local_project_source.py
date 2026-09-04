@@ -160,7 +160,7 @@ def _split_command(cmd: str) -> list[str]:
     return stripped
 
 
-def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=None):
+def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=None, *, environment: Mapping[str, str]):
     """Run one user command in ``cwd`` through the accepted runtime runner.
 
     Uses ``runtime.command_runner.CommandRunner`` over the isolated workspace
@@ -168,6 +168,12 @@ def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=
     decoding, cooperative cancellation).  This deliberately does not spawn and
     drain pipes inline: a descendant that inherits the output pipes can never
     wedge the worker.  Returns ``(exit_code, stdout, stderr, elapsed_seconds)``.
+
+    ``environment`` is the explicit V2-01 project-command child environment
+    derived by the session execution authority (LEGACY PROJECT AMBIENT
+    bridge).  The runner no longer decides the product environment by
+    reading ``os.environ``; every Local Project call site passes the
+    role mapping explicitly.
     """
     from agentic_debugger.runtime.command_runner import CommandRunner
     from agentic_debugger.runtime.exceptions import CommandExecutionError
@@ -179,7 +185,7 @@ def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=
         return 127, "", f"parse failed: {exc}", time.monotonic() - start
     if not argv:
         return 127, "", "empty", time.monotonic() - start
-    runner = CommandRunner(_IsolatedWorkspace(cwd))
+    runner = CommandRunner(_IsolatedWorkspace(cwd), environment=environment)
     try:
         result = runner.run(argv, ".", timeout, cancel_check=cancel_check)
     except CommandExecutionError as exc:
@@ -351,13 +357,19 @@ class _IsolatedWorkspace:
 # ---------------------------------------------------------------------------
 
 class _LocalToolContext:
-    def __init__(self, *, isolated: Path, tracked: List[str], task: LocalProjectTask, probe: Optional[Any], observability: Any):
+    def __init__(self, *, isolated: Path, tracked: List[str], task: LocalProjectTask, probe: Optional[Any], observability: Any, command_environment: Mapping[str, str], pdb_worker_environment: Optional[Mapping[str, str]]):
         from agentic_debugger.runtime.patcher import PatchManager
         self.isolated = isolated
         self.tracked = tracked
         self.task = task
         self.probe = probe
         self.observability = observability
+        # V2-01 role environments derived by the session execution
+        # authority (LEGACY PROJECT AMBIENT bridge): the explicit child
+        # environment for project reproduction/regression commands, and
+        # the base mapping the product PDB worker receives.
+        self.command_environment = command_environment
+        self.pdb_worker_environment = pdb_worker_environment
         self.workspace = _IsolatedWorkspace(isolated)
         self.patch_manager = PatchManager(self.workspace, list(tracked), ["tests", "task.json"])
         self.candidate_patch = ""
@@ -528,7 +540,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         if context.task.reproduction_command is None:
             raise ToolExecutionError("no reproduction command configured for this project")
         # Execute the honest reproduction command in the isolated workspace
-        exit_code, out, err, elapsed = _run_command_bounded(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0)
+        exit_code, out, err, elapsed = _run_command_bounded(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0, environment=context.command_environment)
         passed = (exit_code == 0)
         # Baseline truth comes from the command itself: a non-zero exit is
         # the observed failure; a zero exit means the reported bug did NOT
@@ -561,7 +573,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             # external verifier will still mark UNRESOLVED.
             context.regression_passed = True
             return _ok({"exit_code": 0, "all_passed": True, "note": "no verification command"}, "no verification command; regression considered passed for controller")
-        exit_code, out, err, elapsed = _run_command_bounded(context.task.verification_command, Path(context.workspace.root), timeout=30.0)
+        exit_code, out, err, elapsed = _run_command_bounded(context.task.verification_command, Path(context.workspace.root), timeout=30.0, environment=context.command_environment)
         all_passed = (exit_code == 0)
         context.regression_passed = all_passed
         return _ok({"exit_code": exit_code, "all_passed": all_passed}, "verification command executed")
@@ -771,12 +783,16 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
     # -- PDB (honest, targets resolved repro script) -----------------------
     def create_pdb_session(workspace):  # type: ignore[no-untyped-def]
         probe = context.probe
+        # V2-01: the ordinary product PDB worker receives the explicit
+        # project/PDB role environment (LEGACY PROJECT AMBIENT bridge);
+        # Windows venv identity still travels through build_worker_env
+        # inside PdbSession.
         if probe is not None and getattr(probe, "exact_public_reproduction", False) and context.__dict__.get("pdb_session_factory", PdbSession) is PdbSession:
-            return PdbSession(workspace, startup_timeout=15.0, request_timeout=30.0, proof_pytest_dependencies=True)
+            return PdbSession(workspace, startup_timeout=15.0, request_timeout=30.0, proof_pytest_dependencies=True, worker_environment=context.pdb_worker_environment)
         # Local Project: one PDB request runs the whole reproduction script
         # (bounded at 30 s by the command contract), so the per-request
         # timeout must cover that whole run rather than the 5 s default.
-        return PdbSession(workspace, startup_timeout=15.0, request_timeout=60.0)
+        return PdbSession(workspace, startup_timeout=15.0, request_timeout=60.0, worker_environment=context.pdb_worker_environment)
 
     def handle_start_pdb(action, arguments):  # type: ignore[no-untyped-def]
         if pdb_policy is PdbPolicy.DISABLED:
@@ -928,6 +944,18 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     policy=DemoPolicy(validated["policy"])
     if ctx.emitter is None: raise ScenarioInputError("local_project requires emitter")
     if not isolated.is_dir(): raise ScenarioInputError(f"isolated workspace missing: {isolated}")
+    # V2-01 execution-environment authority: one snapshot/classification per
+    # session at the source boundary.  Project/PDB/verifier children receive
+    # explicit derived role environments (LEGACY PROJECT AMBIENT bridge);
+    # none of them inherits the worker process environment implicitly, so
+    # Agentic Debugger control/model/provider channels cannot leak into
+    # project execution.  Values stay inside these mappings — they are never
+    # logged, journaled, or exposed to the controller/model.
+    from agentic_debugger.application.execution_environment import ExecutionEnvironment, ExecutionRole
+    execution_environment=ExecutionEnvironment.snapshot_process()
+    project_command_environment=execution_environment.role_environment(ExecutionRole.PROJECT_COMMAND)
+    pdb_worker_environment=execution_environment.role_environment(ExecutionRole.PRODUCT_PDB)
+    verifier_command_environment=execution_environment.role_environment(ExecutionRole.VERIFIER)
     is_ollama = validated["is_ollama"]
     provider = validated["provider"]
     model_id = validated["model_id"]
@@ -991,7 +1019,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     tracked=_inventory_tracked_python_files(isolated)
     local_task, initial_state=_build_local_task(bug_description, repro_cmd, verify_cmd, isolated, tracked)
     if repro_cmd:
-        exit_code, out, err, _ = _run_command_bounded(repro_cmd, isolated, timeout=30.0, cancel_check=ctx.token.check)
+        exit_code, out, err, _ = _run_command_bounded(repro_cmd, isolated, timeout=30.0, cancel_check=ctx.token.check, environment=project_command_environment)
         repro_output=_bounded(out+err, 2000)
         try:
             observability.diagnosis_recorded(text=f"reproduction result exit {exit_code}: {repro_output[:500]}", file_path=None, symbol=None, confidence="observed")
@@ -1012,7 +1040,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             observability.source_snapshot(snap)
         except Exception:
             continue
-    demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability)
+    demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability, command_environment=project_command_environment, pdb_worker_environment=pdb_worker_environment)
     registry=_build_local_registry(demo_context, pdb_policy=pdb_policy_for(policy), interactive_debugger_controls=False)
     if provider_live_config is not None:
         live_config=provider_live_config
@@ -1147,9 +1175,22 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             timeout_seconds=30.0,
             workspace_parent=validated.get("parent_tmpdir"),
         )
+        # V2-01 verifier environment seam: the verifier keeps constructing
+        # its own CommandRunners through its factory, but the factory now
+        # closes over the FIXED verifier-role environment derived by the
+        # session execution authority (LEGACY PROJECT AMBIENT bridge — no
+        # Agentic Debugger control/provider authority).  The environment is
+        # never a model-selected tool argument and cannot be mutated once
+        # verification begins.
+        from agentic_debugger.runtime.command_runner import CommandRunner
+
+        def _verifier_runner_factory(workspace):  # type: ignore[no-untyped-def]
+            return CommandRunner(workspace, environment=verifier_command_environment)
+
         independent_verifier=LocalProjectVerifier(
             progress_observer=verifier_events,
             cancel_check=ctx.token.check,
+            command_runner_factory=_verifier_runner_factory,
         )
         verification_result=independent_verifier.evaluate(verification_plan)
         verifier_events.completed(verification_result)

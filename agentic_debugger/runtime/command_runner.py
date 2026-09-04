@@ -10,7 +10,7 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.runtime.exceptions import (
@@ -145,11 +145,46 @@ class CommandRunner:
     Children never inherit the parent's stdin (``DEVNULL``): a session
     worker's protocol stdin must not be shared with a subprocess, and
     non-interactive commands must observe EOF on stdin.
+
+    Execution authorities (exactly one per runner, never merged):
+
+    * ``execution_context`` — the existing specialized verified execution
+      authority (:class:`VerifiedExecutionContext`); behavior unchanged.
+    * ``environment`` — the V2 product authority: an explicit child
+      environment mapping derived and classified by the session's
+      execution-environment authority
+      (:class:`agentic_debugger.application.execution_environment.ExecutionEnvironment`).
+      Product Local Project call sites always supply it; the runner does
+      not decide the product environment by reading ``os.environ``.
+    * neither — narrow non-product compatibility (worker boundary harness,
+      generic tests): the historical full parent-environment inheritance.
+      This fallback is not the product path.
     """
 
-    def __init__(self, workspace: TaskWorkspace, execution_context: Optional[VerifiedExecutionContext] = None) -> None:
+    def __init__(
+        self,
+        workspace: TaskWorkspace,
+        execution_context: Optional[VerifiedExecutionContext] = None,
+        *,
+        environment: Optional[Mapping[str, str]] = None,
+    ) -> None:
+        if execution_context is not None and environment is not None:
+            raise CommandRequestError(
+                "conflicting execution authorities: a VerifiedExecutionContext "
+                "and an explicit product environment must not be supplied "
+                "together; they are never merged"
+            )
+        if environment is not None:
+            if not isinstance(environment, Mapping):
+                raise CommandRequestError("environment must be a string mapping or None")
+            for name, value in environment.items():
+                if not isinstance(name, str) or not name or not isinstance(value, str):
+                    raise CommandRequestError(
+                        "environment must map non-empty strings to strings"
+                    )
         self._workspace = workspace
         self._execution_context = execution_context
+        self._environment = dict(environment) if environment is not None else None
 
     def run(
         self,
@@ -193,7 +228,7 @@ class CommandRunner:
         stdout_lock = threading.Lock()
         stderr_lock = threading.Lock()
 
-        run_env = _build_env()
+        run_env = _product_environment(self._environment)
 
         try:
             proc = subprocess.Popen(
@@ -290,8 +325,21 @@ def _validate_timeout(timeout_seconds: float) -> None:
         raise CommandRequestError("timeout_seconds must be finite")
 
 
-def _build_env() -> Dict[str, str]:
-    env = dict(os.environ)
+def _product_environment(environment: Optional[Mapping[str, str]]) -> Dict[str, str]:
+    """Child environment for product/plain execution (non-verified mode).
+
+    V2-01: an explicit environment supplied by the session's
+    execution-environment authority is the product authority and is copied
+    here untouched.  ``None`` keeps the narrow non-product compatibility
+    fallback (full parent-environment inheritance) for the worker boundary
+    harness and generic test/harness callers; real Local Project call
+    sites always pass the V2-derived role environment.  The runner's own
+    IO-encoding contract (``PYTHONIOENCODING``) applies on both paths.
+    """
+    if environment is not None:
+        env = dict(environment)
+    else:
+        env = dict(os.environ)
     env["PYTHONIOENCODING"] = "utf-8"
     return env
 

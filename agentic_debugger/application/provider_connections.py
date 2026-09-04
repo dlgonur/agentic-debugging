@@ -2414,6 +2414,34 @@ def provider_environment_variable(kind: str) -> Optional[str]:
     return contract.env_var if contract is not None else None
 
 
+# Provider-owned environment authority that does not carry the Agentic
+# Debugger namespace prefix: the operator CLI auth-store location.  The
+# built-in credential variables and every private session hop variable are
+# derived from the contracts below so there is one authority, not a
+# duplicated drifting list at each child spawn site.
+_PROVIDER_CLI_AUTH_ENV_NAME = "OPENCODE_CONFIG_DIR"
+
+
+def provider_authority_environment_names() -> Tuple[str, ...]:
+    """Environment identities owned by the provider credential authority.
+
+    The centralized classification source for the V2 execution-environment
+    authority: built-in provider credential variables (``OPENCODE_API_KEY``,
+    ``COMMAND_CODE_API_KEY``, ``OLLAMA_API_KEY``), every built-in contract's
+    private session credential hop variable, and the provider CLI
+    auth-store location (``OPENCODE_CONFIG_DIR``).  The remainder of the
+    Agentic Debugger-owned control namespace is classified structurally by
+    its ``AGENTIC_DEBUGGER_`` prefix and is intentionally not duplicated
+    here.  Names only — never values.
+    """
+    names = {_PROVIDER_CLI_AUTH_ENV_NAME}
+    for contract in _BUILTIN_CONTRACTS.values():
+        if contract.env_var:
+            names.add(contract.env_var)
+        names.add(contract.session_env_var)
+    return tuple(sorted(names))
+
+
 def provider_session_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:

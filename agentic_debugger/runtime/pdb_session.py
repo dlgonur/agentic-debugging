@@ -12,7 +12,7 @@ import threading
 import time
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from agentic_debugger.runtime.exceptions import (
     PdbProtocolError,
@@ -260,6 +260,7 @@ class PdbSession:
         max_diagnostics: int = _DEFAULT_MAX_DIAGNOSTICS,
         max_line: int = _DEFAULT_MAX_LINE,
         proof_pytest_dependencies: bool = False,
+        worker_environment: Optional[Mapping[str, str]] = None,
     ) -> None:
         self._validate_timeout(startup_timeout, "startup_timeout")
         self._validate_timeout(request_timeout, "request_timeout")
@@ -273,6 +274,17 @@ class PdbSession:
                 f"({MAX_LINE_LENGTH})"
             )
 
+        if worker_environment is not None:
+            if not isinstance(worker_environment, Mapping):
+                raise PdbSessionError(
+                    "worker_environment must be a mapping of strings or None"
+                )
+            for name, value in worker_environment.items():
+                if type(name) is not str or not name or type(value) is not str:
+                    raise PdbSessionError(
+                        "worker_environment must map non-empty strings to strings"
+                    )
+
         self._workspace = workspace
         self._startup_timeout = startup_timeout
         self._request_timeout = request_timeout
@@ -285,6 +297,15 @@ class PdbSession:
         if type(proof_pytest_dependencies) is not bool:
             raise PdbSessionError("proof_pytest_dependencies must be a boolean")
         self._proof_pytest_dependencies = proof_pytest_dependencies
+        # V2-01: an explicit base environment for the ordinary product PDB
+        # worker (the project/PDB role derived by the session's
+        # execution-environment authority).  ``None`` preserves the
+        # historical inherit-from-parent behavior for harness/scientific
+        # callers; contained/scientific subclasses override
+        # ``_worker_env`` themselves either way.
+        self._worker_environment = (
+            dict(worker_environment) if worker_environment is not None else None
+        )
 
         self._state = PdbSessionState.NEW
         self._proc: Optional[subprocess.Popen] = None
@@ -390,15 +411,24 @@ class PdbSession:
     def _worker_env(self) -> Optional[Dict[str, str]]:
         """Environment for the worker subprocess (``None`` = inherit).
 
-        Inside a Windows virtual environment this carries the standard
-        ``__PYVENV_LAUNCHER__`` identity (CPython bpo-35797) so the
-        directly launched base interpreter computes the same
+        V2-01: the ordinary product PDB worker receives the explicit
+        project/PDB role environment derived by the session's
+        execution-environment authority (supplied via
+        ``worker_environment``); the mapping still passes through the
+        established :func:`build_worker_env` authority, which is the only
+        place Windows venv identity is decided.  ``None`` (no explicit
+        role environment — harness/scientific callers) preserves the
+        historical inherit-from-parent behavior unchanged.
+
+        Inside a Windows virtual environment either path carries the
+        standard ``__PYVENV_LAUNCHER__`` identity (CPython bpo-35797) so
+        the directly launched base interpreter computes the same
         ``sys.executable``/``sys.prefix``/``sys.path`` as the redirector
         would have.  A subclass that launches through a non-Python
         bridge (e.g. WSL) overrides this to ``None``: the launcher
         identity must never leak into a foreign PID namespace.
         """
-        return build_worker_env(None)
+        return build_worker_env(self._worker_environment)
 
     def _worker_cwd(self) -> str:
         """Windows-side ``Popen`` cwd for the worker process.

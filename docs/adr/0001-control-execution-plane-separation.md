@@ -1,6 +1,6 @@
 # ADR 0001 — Control/Execution Plane Separation as Logical Seams, Not Process Split
 
-**Status:** Accepted (target/migration decision — no V2 implementation has occurred)
+**Status:** Accepted (target/migration decision — V2-01 execution-environment authority + control/provider secret isolation implemented; V2-02 and later stages not implemented)
 **Date:** 2026-09-03 (rev. 04 — implementation-readiness reconciliation before V2-01)
 **Baseline:** `4606933`; plan candidate lineage `3481b58` → `3d414c6` → `ff81f44` → repair commit 04
 **Full analysis:** `docs/architecture/agentic-debugger-v2-plan.md`
@@ -233,3 +233,17 @@ trigger ever fires.
   boundary tests, or real user repro scripts that cannot be satisfied safely
   through the bridge plus explicit declaration — with the credential exposure
   then documented as residual risk.
+
+## V2-01 implementation note (status only — decision unchanged)
+
+V2-01 implements the Decision-item-1 first slice only: the product
+`ExecutionEnvironment` authority with `PROJECT_COMMAND` / `PRODUCT_PDB` /
+`VERIFIER` role derivations, LEGACY PROJECT AMBIENT bridge identity
+`legacy-project-ambient/v1`, explicit threading to Local Project commands,
+product PDB (via `build_worker_env`), and verifier commands (via
+`command_runner_factory`); conflicting verified/product authorities fail
+closed; `runtime/execution.py` and the model-adapter transport are unchanged.
+V2-02+ is not implemented. Proxy/TLS provenance: ordinary ambient
+`HTTPS_PROXY`/`NO_PROXY`/CA values pass through the V2-01 bridge unchanged
+(residual compatibility for V2-02); provider-derived transport overrides are
+never merged into project roles.

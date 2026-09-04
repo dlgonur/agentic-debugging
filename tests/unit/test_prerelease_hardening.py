@@ -182,11 +182,21 @@ def test_split_command_strips_windows_quotes():
 
 
 def test_run_command_bounded_timeout_and_utf8(tmp_path):
+    from agentic_debugger.application.execution_environment import (
+        ExecutionEnvironment,
+        ExecutionRole,
+    )
     from agentic_debugger.application.local_project_source import _run_command_bounded
 
+    # The product helper requires the explicit V2-01 project-command role
+    # environment; the real authority preserves the ambient PATH the bare
+    # ``python`` resolution depends on.
+    environment = ExecutionEnvironment.snapshot_process().role_environment(
+        ExecutionRole.PROJECT_COMMAND
+    )
     code = "import sys; sys.stdout.write('caf\\u00e9 ok\\n'); sys.stderr.write('err\\u00e9\\n')"
     exit_code, out, err, _ = _run_command_bounded(
-        f'python -c "{code}"', tmp_path, timeout=10.0
+        f'python -c "{code}"', tmp_path, timeout=10.0, environment=environment
     )
     assert exit_code == 0
     assert "café ok" in out
@@ -194,7 +204,7 @@ def test_run_command_bounded_timeout_and_utf8(tmp_path):
 
     start = time.monotonic()
     exit_code, out, err, _ = _run_command_bounded(
-        'python -c "import time; time.sleep(30)"', tmp_path, timeout=1.0
+        'python -c "import time; time.sleep(30)"', tmp_path, timeout=1.0, environment=environment
     )
     assert exit_code == 124
     assert "timed out" in err
@@ -768,6 +778,10 @@ def test_apply_to_project_runs_off_ui_thread(tmp_path, monkeypatch):
 def _dispatch_local_reproduction(isolated: Path, command: str, phase: str):
     """Dispatch run_reproduction through the REAL Local Project registry."""
     from agentic_debugger.agent.controller_policy import ActionName, ControllerState
+    from agentic_debugger.application.execution_environment import (
+        ExecutionEnvironment,
+        ExecutionRole,
+    )
     from agentic_debugger.application.local_project_source import (
         LocalProjectTask,
         _LocalToolContext,
@@ -775,6 +789,7 @@ def _dispatch_local_reproduction(isolated: Path, command: str, phase: str):
     )
     from agentic_debugger.events.schema import Action
 
+    _authority = ExecutionEnvironment.snapshot_process()
     context = _LocalToolContext(
         isolated=isolated,
         tracked=[],
@@ -784,6 +799,8 @@ def _dispatch_local_reproduction(isolated: Path, command: str, phase: str):
         ),
         probe=None,
         observability=None,
+        command_environment=_authority.role_environment(ExecutionRole.PROJECT_COMMAND),
+        pdb_worker_environment=_authority.role_environment(ExecutionRole.PRODUCT_PDB),
     )
     registry = _build_local_registry(context)
     state = (
