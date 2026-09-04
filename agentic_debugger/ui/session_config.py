@@ -108,6 +108,7 @@ ROW_PROJECT = "project"
 ROW_BUG = "bug"
 ROW_REPRO = "repro"
 ROW_VERIFY = "verify"
+ROW_PROJECT_ENV = "project_env"
 ROW_MODEL = "model"
 ROW_DEBUGGER = "debugger"
 ROW_TIME_LIMIT = "time_limit"
@@ -120,6 +121,7 @@ ROW_ORDER = (
     ROW_BUG,
     ROW_REPRO,
     ROW_VERIFY,
+    ROW_PROJECT_ENV,
     ROW_MODEL,
     ROW_DEBUGGER,
     ROW_TIME_LIMIT,
@@ -260,6 +262,7 @@ class SessionConfig:
     bug_description: str = ""
     reproduction_command: Optional[str] = None
     verification_command: Optional[str] = None
+    project_env_text: str = ""
     model: ModelChoice = OFFLINE_CHOICE
     debugger_policy: str = POLICY_ON_UNCERTAINTY
     time_limit_seconds: Optional[int] = None
@@ -336,6 +339,107 @@ def model_compatibility(
     return True, ""
 
 
+# -- project runtime environment declarations ----------------------------------
+#
+# V2-02 ingress (Local Project only): the user declares project
+# environment variable NAMES to import explicitly — never values.
+# Syntax (comma-separated): ``NAME`` (required inherit), ``NAME?``
+# (optional inherit), ``secret:NAME`` (required project-secret binding),
+# ``secret:NAME?`` (optional secret binding).  Secret VALUES are read
+# from the operator environment at session start and are never stored,
+# shown, journaled, or fingerprinted by Agentic Debugger.
+
+
+def parse_project_env_declarations(
+    text: str,
+) -> Tuple[Tuple[Tuple[str, bool], ...], Tuple[Tuple[str, bool], ...]]:
+    """Parse the ProjEnv textbox into inherit/secret NAME declarations.
+
+    Returns ``(inherit, secrets)`` where each entry is ``(name, required)``.
+    Raises :class:`ValueError` with a safe name-only message on invalid
+    input.  Values (``NAME=value``) are rejected: explicit values are an
+    API-level contract only, never a UI textbox.
+    """
+    from agentic_debugger.application.session_runtime import validate_env_name
+
+    if not isinstance(text, str):
+        raise ValueError("project environment declarations must be text")
+    inherit: list[Tuple[str, bool]] = []
+    secrets: list[Tuple[str, bool]] = []
+    if not text.strip():
+        return (), ()
+    seen: dict[str, str] = {}
+    for raw_token in text.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        is_secret = False
+        if token.lower().startswith("secret:"):
+            is_secret = True
+            token = token[len("secret:"):].strip()
+        required = True
+        if token.endswith("?"):
+            required = False
+            token = token[:-1].strip()
+        try:
+            validate_env_name(token)
+        except Exception:
+            raise ValueError(
+                f"invalid project environment declaration: {token[:64]!r}"
+            ) from None
+        if "=" in token or " " in token or "\t" in token:
+            raise ValueError(
+                f"invalid project environment declaration: {token[:64]!r}"
+            )
+        # Control/provider authorities can never be project runtime state
+        # (same central classification as the session authority); reject
+        # at readiness instead of failing only at session start.
+        try:
+            from agentic_debugger.application.provider_connections import (
+                provider_authority_environment_names,
+            )
+
+            _authority_names = frozenset(
+                name.lower() for name in provider_authority_environment_names()
+            )
+        except Exception:
+            _authority_names = frozenset()
+        if token.upper().startswith("AGENTIC_DEBUGGER_") or token.lower() in _authority_names:
+            raise ValueError(
+                f"project variable {token!r} is a control authority "
+                "and must not be declared"
+            )
+        key = token.upper()
+        if key in seen:
+            raise ValueError(
+                f"project variable {token!r} is declared more than once"
+            )
+        seen[key] = "secret" if is_secret else "inherit"
+        if is_secret:
+            secrets.append((token, required))
+        else:
+            inherit.append((token, required))
+    if len(inherit) + len(secrets) > 32:
+        raise ValueError("too many project environment declarations (max 32)")
+    return tuple(inherit), tuple(secrets)
+
+
+def summarize_project_env_declarations(text: str) -> str:
+    """One safe display line for declared NAMES (never values)."""
+    try:
+        inherit, secrets = parse_project_env_declarations(text)
+    except ValueError:
+        return "Invalid — edit to fix"
+    if not inherit and not secrets:
+        return "Not set (optional)"
+    parts = []
+    if inherit:
+        parts.append(f"{len(inherit)} inherit")
+    if secrets:
+        parts.append(f"{len(secrets)} secret")
+    return " · ".join(parts)
+
+
 def _row_states(target: str) -> dict:
     local = target == TARGET_LOCAL_PROJECT
     ladder = target == TARGET_LADDER
@@ -348,6 +452,7 @@ def _row_states(target: str) -> dict:
         ROW_BUG: RowState(local, "Local Project sessions only"),
         ROW_REPRO: RowState(local, "Local Project sessions only"),
         ROW_VERIFY: RowState(local, "Local Project sessions only"),
+        ROW_PROJECT_ENV: RowState(local, "Local Project sessions only"),
         ROW_MODEL: RowState(True),
         ROW_DEBUGGER: RowState(
             not (local or ladder),
@@ -583,6 +688,27 @@ def _local_readiness(config: SessionConfig, catalog: SessionCatalog, project: Pr
                     "Custom command profiles are trusted user configuration; "
                     "network isolation is not enforced."
                 )
+    # V2-02 ingress validation: declared NAMES only (values are never
+    # entered here).  A missing declared variable fails clearly at
+    # session start, not here — the worker launch environment is the
+    # authority, not this UI process view of it.
+    try:
+        _env_inherit, _env_secrets = parse_project_env_declarations(
+            config.project_env_text or ""
+        )
+    except ValueError as exc:
+        issues.append(ReadinessIssue(ROW_PROJECT_ENV, SEVERITY_ERROR, str(exc)))
+    else:
+        if _env_secrets:
+            notes.append(
+                "Project secret names are read from your environment at "
+                "session start and never stored or shown."
+            )
+        if _env_inherit or _env_secrets:
+            notes.append(
+                "Only the declared project variables reach project code; "
+                "undeclared environment variables are not inherited."
+            )
     return issues, notes
 
 
@@ -652,6 +778,7 @@ __all__ = [
     "ROW_MODEL",
     "ROW_ORDER",
     "ROW_PROJECT",
+    "ROW_PROJECT_ENV",
     "ROW_REPRO",
     "ROW_TARGET",
     "ROW_TASK",
@@ -670,4 +797,6 @@ __all__ = [
     "TARGET_LOCAL_PROJECT",
     "derive_readiness",
     "model_compatibility",
+    "parse_project_env_declarations",
+    "summarize_project_env_declarations",
 ]

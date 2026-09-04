@@ -32,7 +32,7 @@ architecture is `architecture/local-application-v1.md`; existing records include
 the MVP implementation plan, PDB trajectory post-mortem integration, verifier
 forwarder/cache repair, root-cause explanation metric, preference exporter, and
 repository RAG. `architecture/agentic-debugger-v2-plan.md` is the accepted V2
-target/migration **plan** (no V2 implementation has occurred).
+target/migration **plan** (V2-01 and V2-02 implemented; V2-03+ not implemented).
 
 ## adr/
 

@@ -59,7 +59,7 @@ from agentic_debugger.runtime.exceptions import (
 )
 
 LOCAL_PROJECT_SOURCE_NAME = "local_project"
-_KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspace","bug_description","reproduction_command","verification_command","config_root","profile_id","expected_fingerprint","parent_tmpdir","policy","is_ollama","ollama_alias","provider","model_id"})
+_KNOWN_PARAMS = frozenset({"project_repo_path","project_head","isolated_workspace","bug_description","reproduction_command","verification_command","config_root","profile_id","expected_fingerprint","parent_tmpdir","policy","is_ollama","ollama_alias","provider","model_id","project_runtime_spec"})
 _PROVIDER_KINDS = frozenset({"ollama_cloud","opencode_go","commandcode_goat","configured"})
 _MAX_CMD_CHARS=2048
 _MAX_BUG_CHARS=4096
@@ -132,7 +132,15 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
         if contains_credential_shape(model_id): raise ScenarioInputError("model_id contains credential shape")
     if provider and provider != "configured" and model_id is None:
         raise ScenarioInputError(f"provider {provider} requires model_id")
-    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id}
+    # V2-02 explicit project runtime ingress (safe transport: NAMES,
+    # required flags, and non-secret values only — never secret values).
+    # Absent/empty means the empty spec: platform essentials alone.
+    try:
+        from agentic_debugger.application.session_runtime import spec_from_param
+        project_runtime_spec = spec_from_param(params.get("project_runtime_spec"))
+    except Exception as exc:
+        raise ScenarioInputError(f"project runtime spec is invalid: {exc}") from exc
+    return {"project_repo_path":params["project_repo_path"],"project_head":params["project_head"],"isolated_workspace":params["isolated_workspace"],"bug_description":params["bug_description"],"reproduction_command":repro,"verification_command":verify,"config_root":config_root,"profile_id":profile_id,"expected_fingerprint":params.get("expected_fingerprint"),"parent_tmpdir":params.get("parent_tmpdir"),"policy":policy_str,"is_ollama":is_ollama,"ollama_alias":ollama_alias,"provider":provider,"model_id":model_id,"project_runtime_spec":project_runtime_spec}
 
 def _bounded(output: str, limit: int=4000) -> str:
     return output[:limit-3]+"..." if len(output)>limit else output
@@ -169,9 +177,9 @@ def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=
     drain pipes inline: a descendant that inherits the output pipes can never
     wedge the worker.  Returns ``(exit_code, stdout, stderr, elapsed_seconds)``.
 
-    ``environment`` is the explicit V2-01 project-command child environment
-    derived by the session execution authority (LEGACY PROJECT AMBIENT
-    bridge).  The runner no longer decides the product environment by
+    ``environment`` is the explicit project-command child environment
+    derived by the session execution authority (declarative project
+    runtime).  The runner no longer decides the product environment by
     reading ``os.environ``; every Local Project call site passes the
     role mapping explicitly.
     """
@@ -365,19 +373,23 @@ class _IsolatedWorkspace:
 # ---------------------------------------------------------------------------
 
 class _LocalToolContext:
-    def __init__(self, *, isolated: Path, tracked: List[str], task: LocalProjectTask, probe: Optional[Any], observability: Any, command_environment: Mapping[str, str], pdb_worker_environment: Optional[Mapping[str, str]]):
+    def __init__(self, *, isolated: Path, tracked: List[str], task: LocalProjectTask, probe: Optional[Any], observability: Any, command_environment: Mapping[str, str], pdb_worker_environment: Optional[Mapping[str, str]], executor: Optional[Any] = None, capabilities: Optional[Any] = None):
         from agentic_debugger.runtime.patcher import PatchManager
         self.isolated = isolated
         self.tracked = tracked
         self.task = task
         self.probe = probe
         self.observability = observability
-        # V2-01 role environments derived by the session execution
-        # authority (LEGACY PROJECT AMBIENT bridge): the explicit child
-        # environment for project reproduction/regression commands, and
-        # the base mapping the product PDB worker receives.
+        # V2-02 session execution authority: the fixed role environments
+        # derived by the SessionLaunch (declarative project runtime), the
+        # logical Executor seam over them, and the computed effective
+        # capabilities.  Direct unit/harness construction may leave the
+        # seam empty (legacy behavior through the explicit mappings);
+        # the real worker/source path always sets it.
         self.command_environment = command_environment
         self.pdb_worker_environment = pdb_worker_environment
+        self.executor = executor
+        self.capabilities = capabilities
         self.workspace = _IsolatedWorkspace(isolated)
         self.patch_manager = PatchManager(self.workspace, list(tracked), ["tests", "task.json"])
         self.candidate_patch = ""
@@ -417,6 +429,84 @@ class _LocalToolContext:
             fn()
         except Exception:
             pass
+
+    def require_capability(self, capability):  # type: ignore[no-untyped-def]
+        """Fail closed (tool-unavailable) when the session denies a capability.
+
+        Direct harness construction without a computed authority keeps the
+        historical ungated behavior; the real session path always carries
+        the computed EffectiveSessionCapabilities and enforces them.
+        """
+        if self.capabilities is None:
+            return
+        try:
+            self.capabilities.require(capability)
+        except Exception as exc:
+            raise ToolRejectedError(str(exc)) from exc
+
+    def run_project_command(self, cmd: str, cwd: Path, timeout: float = 30.0, cancel_check=None):  # type: ignore[no-untyped-def]
+        """Run one project command through the Executor seam when present."""
+        from agentic_debugger.application.session_runtime import SessionCapability
+
+        self.require_capability(SessionCapability.PROJECT_COMMAND)
+        if self.executor is not None:
+            from agentic_debugger.runtime.exceptions import CommandExecutionError
+
+            start = time.monotonic()
+            try:
+                argv = _split_command(cmd)
+            except ValueError as exc:
+                return 127, "", f"parse failed: {exc}", time.monotonic() - start
+            if not argv:
+                return 127, "", "empty", time.monotonic() - start
+            try:
+                result = self.executor.run_project_command(
+                    argv, _IsolatedWorkspace(cwd), timeout,
+                    cancel_check=cancel_check,
+                )
+            except CommandExecutionError as exc:
+                return 127, "", f"launch failed: {exc}", time.monotonic() - start
+            except CancellationError:
+                raise
+            if result.exit_code is not None:
+                exit_code = result.exit_code
+            elif result.timed_out:
+                exit_code = 124
+            else:
+                exit_code = 127
+            err = result.stderr or ""
+            if result.timed_out:
+                err = (err + f" timed out {timeout}s").strip()
+            return (
+                exit_code,
+                _bounded(result.stdout or ""),
+                _bounded(err),
+                time.monotonic() - start,
+            )
+        return _run_command_bounded(
+            cmd, cwd, timeout, cancel_check=cancel_check,
+            environment=self.command_environment,
+        )
+
+    def open_product_pdb(self, workspace):  # type: ignore[no-untyped-def]
+        """Create one product PDB session through the Executor seam when present."""
+        from agentic_debugger.application.session_runtime import SessionCapability
+        from agentic_debugger.runtime.pdb_session import PdbSession
+
+        self.require_capability(SessionCapability.PDB)
+        if self.executor is not None:
+            probe = self.probe
+            if probe is not None and getattr(probe, "exact_public_reproduction", False):
+                return self.executor.open_product_pdb(
+                    workspace,
+                    startup_timeout=15.0,
+                    request_timeout=30.0,
+                    proof_pytest_dependencies=True,
+                )
+            return self.executor.open_product_pdb(workspace)
+        if self.probe is not None and getattr(self.probe, "exact_public_reproduction", False) and self.__dict__.get("pdb_session_factory", PdbSession) is PdbSession:
+            return PdbSession(workspace, startup_timeout=15.0, request_timeout=30.0, proof_pytest_dependencies=True, worker_environment=self.pdb_worker_environment)
+        return PdbSession(workspace, startup_timeout=15.0, request_timeout=60.0, worker_environment=self.pdb_worker_environment)
 
     def record_error(self, action: str, exc: BaseException) -> None:
         from agentic_debugger.demo.tools import bounded_diagnostic
@@ -548,7 +638,9 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         if context.task.reproduction_command is None:
             raise ToolExecutionError("no reproduction command configured for this project")
         # Execute the honest reproduction command in the isolated workspace
-        exit_code, out, err, elapsed = _run_command_bounded(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0, environment=context.command_environment)
+        # through the session Executor seam (fixed role environment,
+        # capability-gated).
+        exit_code, out, err, elapsed = context.run_project_command(context.task.reproduction_command, Path(context.workspace.root), timeout=30.0)
         passed = (exit_code == 0)
         # Baseline truth comes from the command itself: a non-zero exit is
         # the observed failure; a zero exit means the reported bug did NOT
@@ -581,7 +673,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             # external verifier will still mark UNRESOLVED.
             context.regression_passed = True
             return _ok({"exit_code": 0, "all_passed": True, "note": "no verification command"}, "no verification command; regression considered passed for controller")
-        exit_code, out, err, elapsed = _run_command_bounded(context.task.verification_command, Path(context.workspace.root), timeout=30.0, environment=context.command_environment)
+        exit_code, out, err, elapsed = context.run_project_command(context.task.verification_command, Path(context.workspace.root), timeout=30.0)
         all_passed = (exit_code == 0)
         context.regression_passed = all_passed
         return _ok({"exit_code": exit_code, "all_passed": all_passed}, "verification command executed")
@@ -627,6 +719,8 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         return _ok(declared, "root-cause hypothesis recorded")
 
     def handle_apply_patch(action, arguments):  # type: ignore[no-untyped-def]
+        from agentic_debugger.application.session_runtime import SessionCapability
+        context.require_capability(SessionCapability.PATCH)
         context.clear_validation_evidence()
         diff = arguments["patch"]
         if context.patch_manager.has_active_patch and context.candidate_patch == diff:
@@ -723,6 +817,8 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         return _ok(_json_safe(payload, "apply_patch"), "candidate patch applied to the disposable workspace")
 
     def handle_revert_patch(action, arguments):  # type: ignore[no-untyped-def]
+        from agentic_debugger.application.session_runtime import SessionCapability
+        context.require_capability(SessionCapability.PATCH)
         try:
             result = context.patch_manager.revert_patch()
         except (
@@ -766,6 +862,8 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         return _ok({"reverted": True, "changed_files": list(changed_files)}, "accepted candidate patch reverted from the disposable workspace")
 
     def handle_syntax_check(action, arguments):  # type: ignore[no-untyped-def]
+        from agentic_debugger.application.session_runtime import SessionCapability
+        context.require_capability(SessionCapability.PATCH)
         try:
             result = context.patch_manager.syntax_check()
         except (
@@ -790,19 +888,17 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
 
     # -- PDB (honest, targets resolved repro script) -----------------------
     def create_pdb_session(workspace):  # type: ignore[no-untyped-def]
-        probe = context.probe
-        # V2-01: the ordinary product PDB worker receives the explicit
-        # project/PDB role environment (LEGACY PROJECT AMBIENT bridge);
-        # Windows venv identity still travels through build_worker_env
-        # inside PdbSession.
-        if probe is not None and getattr(probe, "exact_public_reproduction", False) and context.__dict__.get("pdb_session_factory", PdbSession) is PdbSession:
-            return PdbSession(workspace, startup_timeout=15.0, request_timeout=30.0, proof_pytest_dependencies=True, worker_environment=context.pdb_worker_environment)
-        # Local Project: one PDB request runs the whole reproduction script
-        # (bounded at 30 s by the command contract), so the per-request
-        # timeout must cover that whole run rather than the 5 s default.
-        return PdbSession(workspace, startup_timeout=15.0, request_timeout=60.0, worker_environment=context.pdb_worker_environment)
+        # V2-02: the ordinary product PDB worker is created through the
+        # session Executor seam (fixed PRODUCT_PDB role environment,
+        # PDB-capability-gated); Windows venv identity still travels
+        # through build_worker_env inside PdbSession.
+        return context.open_product_pdb(workspace)
 
     def handle_start_pdb(action, arguments):  # type: ignore[no-untyped-def]
+        from agentic_debugger.application.session_runtime import SessionCapability
+        # Session capability first (the computed session authority), then
+        # the existing task PDB policy: both fail closed as tool-unavailable.
+        context.require_capability(SessionCapability.PDB)
         if pdb_policy is PdbPolicy.DISABLED:
             raise ToolRejectedError("PDB access is disabled by evaluation policy")
         probe = context.probe
@@ -952,26 +1048,64 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     policy=DemoPolicy(validated["policy"])
     if ctx.emitter is None: raise ScenarioInputError("local_project requires emitter")
     if not isolated.is_dir(): raise ScenarioInputError(f"isolated workspace missing: {isolated}")
-    # V2-01 execution-environment authority: one snapshot/classification per
-    # session.  The worker creates it once before dispatch (see
-    # ``worker.run_worker``) and carries it on the ScenarioContext so the
-    # source, its project/PDB/verifier children, AND terminal worker
-    # cleanup all share one authority.  Direct (non-worker) callers have no
-    # context authority, so the source snapshots once here as the narrow
-    # fallback.  Project/PDB/verifier children receive explicit derived
-    # role environments (LEGACY PROJECT AMBIENT bridge); none of them
-    # inherits the worker process environment implicitly, so Agentic
-    # Debugger control/model/provider channels cannot leak into project
-    # execution.  Values stay inside these mappings — they are never
-    # logged, journaled, or exposed to the controller/model.
+    # V2-02 SessionLaunch authority: one launch binding per session.  The
+    # worker builds it once before dispatch (see ``worker.run_worker``)
+    # and carries it on the ScenarioContext so the source, its
+    # project/PDB/verifier children, AND terminal worker cleanup all share
+    # one authority without recomputing any session-start fact.  Direct
+    # (non-worker) callers have no context launch, so the source builds
+    # one here through the same factory as the narrow fallback.
+    # Project/PDB/verifier children receive explicit derived role
+    # environments (declarative project runtime: platform essentials plus
+    # the fixed per-session materialization — never arbitrary ambient
+    # inheritance); none of them inherits the worker process environment
+    # implicitly, so Agentic Debugger control/model/provider channels
+    # cannot leak into project execution.  Values stay inside these
+    # mappings — they are never logged, journaled, or exposed to the
+    # controller/model.
     from agentic_debugger.application.execution_environment import ExecutionEnvironment, ExecutionRole
-    _ctx_authority = getattr(ctx, "product_environment", None)
-    if _ctx_authority is not None and not isinstance(_ctx_authority, ExecutionEnvironment):
-        raise ScenarioInputError("local_project product_environment must be an ExecutionEnvironment or None")
-    execution_environment = _ctx_authority if _ctx_authority is not None else ExecutionEnvironment.snapshot_process()
+    from agentic_debugger.application.executor import ProductExecutor
+    from agentic_debugger.application.session_runtime import (
+        SessionLaunch,
+        build_local_project_launch,
+    )
+    _ctx_launch = getattr(ctx, "session_launch", None)
+    if _ctx_launch is not None:
+        if type(_ctx_launch) is not SessionLaunch:
+            raise ScenarioInputError("local_project session_launch must be a SessionLaunch or None")
+        if _ctx_launch.session_id != ctx.emitter.session_id:
+            raise ScenarioInputError("session launch identity does not match the session")
+        if _ctx_launch.task_id != ctx.emitter.task_id:
+            raise ScenarioInputError("session launch task does not match the session")
+        session_launch = _ctx_launch
+    else:
+        _ctx_authority = getattr(ctx, "product_environment", None)
+        if _ctx_authority is not None and not isinstance(_ctx_authority, ExecutionEnvironment):
+            raise ScenarioInputError("local_project product_environment must be an ExecutionEnvironment or None")
+        if _ctx_authority is not None and _ctx_authority.uses_legacy_bridge:
+            raise ScenarioInputError("local_project requires a declarative session authority")
+        try:
+            session_launch = build_local_project_launch(
+                session_id=ctx.emitter.session_id,
+                task_id=ctx.emitter.task_id,
+                policy=validated["policy"],
+                provider_id=validated["provider"],
+                model_id=validated["model_id"],
+                profile_id=validated["profile_id"],
+                launch_snapshot=dict(os.environ),
+                project_spec=validated["project_runtime_spec"],
+            )
+        except Exception as exc:
+            raise ScenarioInputError(f"session launch failed: {exc}") from exc
+    execution_environment = session_launch.execution_environment
     project_command_environment=execution_environment.role_environment(ExecutionRole.PROJECT_COMMAND)
     pdb_worker_environment=execution_environment.role_environment(ExecutionRole.PRODUCT_PDB)
     verifier_command_environment=execution_environment.role_environment(ExecutionRole.VERIFIER)
+    session_executor = ProductExecutor(
+        execution_environment=execution_environment,
+        capabilities=session_launch.capabilities,
+    )
+    session_capabilities = session_launch.capabilities
     is_ollama = validated["is_ollama"]
     provider = validated["provider"]
     model_id = validated["model_id"]
@@ -1035,7 +1169,37 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     tracked=_inventory_tracked_python_files(isolated, environment=project_command_environment)
     local_task, initial_state=_build_local_task(bug_description, repro_cmd, verify_cmd, isolated, tracked)
     if repro_cmd:
-        exit_code, out, err, _ = _run_command_bounded(repro_cmd, isolated, timeout=30.0, cancel_check=ctx.token.check, environment=project_command_environment)
+        # Baseline reproduction runs through the session Executor seam
+        # (fixed PROJECT_COMMAND role environment, capability-gated).
+        from agentic_debugger.runtime.exceptions import CommandExecutionError as _InitialCommandError
+        _start = time.monotonic()
+        try:
+            _initial_argv = _split_command(repro_cmd)
+        except ValueError as exc:
+            exit_code, out, err = 127, "", f"parse failed: {exc}"
+        else:
+            if not _initial_argv:
+                exit_code, out, err = 127, "", "empty"
+            else:
+                try:
+                    _initial_result = session_executor.run_project_command(
+                        _initial_argv, _IsolatedWorkspace(isolated), 30.0,
+                        cancel_check=ctx.token.check,
+                    )
+                except _InitialCommandError as exc:
+                    exit_code, out, err = 127, "", f"launch failed: {exc}"
+                else:
+                    if _initial_result.exit_code is not None:
+                        exit_code = _initial_result.exit_code
+                    elif _initial_result.timed_out:
+                        exit_code = 124
+                    else:
+                        exit_code = 127
+                    out, err = _initial_result.stdout or "", _initial_result.stderr or ""
+                    if _initial_result.timed_out:
+                        err = (err + " timed out 30.0s").strip()
+                    out, err = _bounded(out), _bounded(err)
+        repro_output=_bounded(out+err, 2000)
         repro_output=_bounded(out+err, 2000)
         try:
             observability.diagnosis_recorded(text=f"reproduction result exit {exit_code}: {repro_output[:500]}", file_path=None, symbol=None, confidence="observed")
@@ -1056,7 +1220,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             observability.source_snapshot(snap)
         except Exception:
             continue
-    demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability, command_environment=project_command_environment, pdb_worker_environment=pdb_worker_environment)
+    demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability, command_environment=project_command_environment, pdb_worker_environment=pdb_worker_environment, executor=session_executor, capabilities=session_capabilities)
     registry=_build_local_registry(demo_context, pdb_policy=pdb_policy_for(policy), interactive_debugger_controls=False)
     if provider_live_config is not None:
         live_config=provider_live_config
@@ -1161,7 +1325,9 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     patch_text: Optional[str]=demo_context.candidate_patch if has_active_candidate else None
     verification_result: Optional[Any]=None
     verified_fixed=False
-    if has_active_candidate and patch_text is not None:
+    from agentic_debugger.application.session_runtime import SessionCapability as _VerifierCapability
+    verifier_granted = session_capabilities.has(_VerifierCapability.VERIFIER)
+    if has_active_candidate and patch_text is not None and verifier_granted:
         from agentic_debugger.application.verifier_observer import (
             VerifierSessionEventAdapter,
         )
@@ -1191,9 +1357,9 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             timeout_seconds=30.0,
             workspace_parent=validated.get("parent_tmpdir"),
         )
-        # V2-01 verifier environment seam (single fixed authority): the
+        # V2-02 verifier environment seam (single fixed authority): the
         # session execution authority supplies ONE verifier-role mapping
-        # (LEGACY PROJECT AMBIENT bridge — no Agentic Debugger
+        # (declarative project runtime — no Agentic Debugger
         # control/provider authority).  The verifier copies it once and
         # uses it for BOTH its CommandRunner children and its owned Git
         # subprocesses; the environment is never a model-selected tool
@@ -1206,6 +1372,16 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         verification_result=independent_verifier.evaluate(verification_plan)
         verifier_events.completed(verification_result)
         verified_fixed=verification_result.resolved
+    elif has_active_candidate and patch_text is not None and not verifier_granted:
+        ctx.emitter.emit(
+            SessionEventKind.DIAGNOSIS_RECORDED,
+            {
+                "text": "independent verification not run: verifier capability is not available in this session",
+                "file_path": None,
+                "symbol": None,
+                "confidence": "system",
+            },
+        )
     else:
         ctx.emitter.emit(
             SessionEventKind.DIAGNOSIS_RECORDED,
@@ -1340,6 +1516,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                 model_runtime=_spec.model_runtime,
                 budgets=SessionBudgets(**_spec.budgets.to_mapping()),
                 created_at_utc=_spec.created_at_utc,
+                project_runtime=dict(_spec.project_runtime),
             )
             task_path.write_text(
                 json.dumps(_new_spec.to_mapping(), indent=2, sort_keys=True),

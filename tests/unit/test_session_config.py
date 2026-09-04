@@ -22,6 +22,7 @@ from agentic_debugger.ui.session_config import (
     ROW_DEBUGGER,
     ROW_MODEL,
     ROW_PROJECT,
+    ROW_PROJECT_ENV,
     ROW_TASK,
     ROW_TIME_LIMIT,
     SEVERITY_ERROR,
@@ -36,6 +37,8 @@ from agentic_debugger.ui.session_config import (
     TaskOption,
     derive_readiness,
     model_compatibility,
+    parse_project_env_declarations,
+    summarize_project_env_declarations,
 )
 
 
@@ -356,7 +359,7 @@ class TestRowStability:
         )
         expected = {
             "target", "task", "project", "bug", "repro", "verify",
-            "model", "debugger", "time_limit", "auto_retry",
+            "project_env", "model", "debugger", "time_limit", "auto_retry",
         }
         assert set(readiness.rows.keys()) == expected
 
@@ -370,6 +373,68 @@ class TestRowStability:
     def test_unknown_target_fails_closed(self):
         with pytest.raises(ValueError):
             _config().with_target("cloud")
+
+
+class TestProjectEnvDeclarations:
+    """V2-02 ingress: names-only declarations, validated fail-closed."""
+
+    def _local(self, **overrides):
+        defaults = dict(
+            target=TARGET_LOCAL_PROJECT,
+            task_id=None,
+            project_path="C:/repo",
+            bug_description="crash on empty input",
+            model=ModelChoice(PROVIDER_OLLAMA, "qwen3.5:cloud", "qwen3.5"),
+        )
+        defaults.update(overrides)
+        return SessionConfig(**defaults)
+
+    def test_valid_names_parse_to_inherit_and_secrets(self):
+        inherit, secrets = parse_project_env_declarations(
+            "FOO, BAR?, secret:DB_URL, secret:TOKEN?"
+        )
+        assert inherit == (("FOO", True), ("BAR", False))
+        assert secrets == (("DB_URL", True), ("TOKEN", False))
+
+    def test_empty_text_declares_nothing(self):
+        assert parse_project_env_declarations("") == ((), ())
+        assert parse_project_env_declarations("  ") == ((), ())
+
+    def test_values_and_bad_names_rejected(self):
+        for bad in ("FOO=bar", "HAS SPACE", "9LIVES", "AGENTIC_DEBUGGER_X"):
+            with pytest.raises(ValueError):
+                parse_project_env_declarations(bad)
+
+    def test_duplicate_declaration_rejected(self):
+        with pytest.raises(ValueError):
+            parse_project_env_declarations("FOO, secret:FOO")
+
+    def test_summary_never_shows_values(self):
+        assert summarize_project_env_declarations("") == "Not set (optional)"
+        summary = summarize_project_env_declarations("FOO, secret:DB_URL")
+        assert "inherit" in summary and "secret" in summary
+
+    def test_invalid_declaration_blocks_local_readiness(self):
+        config = self._local(project_env_text="NO GOOD")
+        readiness = derive_readiness(config, _catalog(), _CLEAN)
+        assert readiness.ready is False
+        assert any(
+            item.field == ROW_PROJECT_ENV and item.severity == SEVERITY_ERROR
+            for item in readiness.issues
+        )
+
+    def test_valid_declaration_keeps_readiness(self):
+        config = self._local(project_env_text="FOO, secret:DB_URL")
+        readiness = derive_readiness(config, _catalog(), _CLEAN)
+        assert not any(
+            item.field == ROW_PROJECT_ENV and item.severity == SEVERITY_ERROR
+            for item in readiness.issues
+        )
+        assert any("never stored" in note for note in readiness.notes)
+
+    def test_row_disabled_for_non_local_targets(self):
+        readiness = derive_readiness(_config(), _catalog(), _CLEAN)
+        assert readiness.rows[ROW_PROJECT_ENV].enabled is False
 
 
 class TestModelCompatibility:

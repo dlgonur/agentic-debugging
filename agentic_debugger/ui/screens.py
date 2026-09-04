@@ -91,6 +91,7 @@ from agentic_debugger.ui.session_config import (
     ROW_MODEL,
     ROW_ORDER,
     ROW_PROJECT,
+    ROW_PROJECT_ENV,
     ROW_REPRO,
     ROW_TARGET,
     ROW_TASK,
@@ -110,6 +111,7 @@ from agentic_debugger.ui.session_config import (
     TaskOption,
     derive_readiness,
     model_compatibility,
+    summarize_project_env_declarations,
 )
 from agentic_debugger.ui.widgets import (
     DebuggerPanel,
@@ -2493,6 +2495,7 @@ class StartSessionScreen(Screen):
                     yield SessionSettingRow("Bug", row_key=ROW_BUG, id="bug-row")
                     yield SessionSettingRow("Repro", row_key=ROW_REPRO, id="repro-row")
                     yield SessionSettingRow("Verify (P2P)", row_key=ROW_VERIFY, id="verify-row")
+                    yield SessionSettingRow("ProjEnv", row_key=ROW_PROJECT_ENV, id="project-env-row")
                     yield SessionSettingRow("Model", row_key=ROW_MODEL, id="model-row")
                     yield SessionSettingRow("Debugger", row_key=ROW_DEBUGGER, id="debugger-row")
                     yield SessionSettingRow("Time limit", row_key=ROW_TIME_LIMIT, id="time-limit-row")
@@ -2784,6 +2787,12 @@ class StartSessionScreen(Screen):
                 "Regression check command (optional; must pass BEFORE and after the fix)",
                 self._config.verification_command or "",
                 self._on_verify_saved,
+            )
+        elif row_key == ROW_PROJECT_ENV:
+            self._open_text_editor(
+                "Project env names (optional; e.g. FOO, BAR?, secret:DB_URL — names only, values never stored)",
+                self._config.project_env_text or "",
+                self._on_project_env_saved,
             )
         elif row_key == ROW_MODEL:
             self._open_model_picker()
@@ -3191,6 +3200,15 @@ class StartSessionScreen(Screen):
         self.render_state()
         self._focus_row(ROW_VERIFY)
 
+    def _on_project_env_saved(self, value: Optional[str]) -> None:
+        if value is None:
+            self.render_state()
+            self._focus_row(ROW_PROJECT_ENV)
+            return
+        self._config = replace(self._config, project_env_text=value.strip())
+        self.render_state()
+        self._focus_row(ROW_PROJECT_ENV)
+
     def _open_text_editor(
         self, title: str, current: str, on_save: Any, multiline: bool = False
     ) -> None:
@@ -3372,6 +3390,10 @@ class StartSessionScreen(Screen):
             ROW_VERIFY,
             (config.verification_command or "Not set (optional)") if local else "",
         )
+        fitted(
+            ROW_PROJECT_ENV,
+            (summarize_project_env_declarations(config.project_env_text or "") if local else ""),
+        )
         model_value, model_secondary = self._model_display()
         fitted(ROW_MODEL, model_value, model_secondary)
         fitted(ROW_DEBUGGER, self._debugger_display())
@@ -3432,6 +3454,7 @@ class StartSessionScreen(Screen):
             kv("Bug", self._bug_preview())
             kv("Repro", config.reproduction_command or "Not set")
             kv("Verify", config.verification_command or "Not set")
+            kv("ProjEnv", summarize_project_env_declarations(config.project_env_text or ""))
         model_value, model_secondary = self._model_display()
         kv("Model", model_value)
         kv("Provider", model_secondary)
@@ -3585,6 +3608,7 @@ class StartSessionScreen(Screen):
                     model_provider=provider,
                     max_elapsed_seconds=config.time_limit_seconds,
                     auto_retries=config.auto_retries,
+                    project_env_text=config.project_env_text or "",
                 )
                 return
             # Curated target: the model selection routes the source.

@@ -148,6 +148,8 @@ def test_started_cancellation_keeps_explicit_cleanup_authority(
         scenario_params={
             "parent_tmpdir": str(parent),
             "project_repo_path": str(repo),
+            "profile_id": "v207-profile",
+            "policy": "pdb-on-uncertainty",
         },
         max_elapsed_seconds=None,
         pre_start_delay_seconds=0.0,
@@ -191,15 +193,19 @@ def test_started_cancellation_keeps_explicit_cleanup_authority(
     )
     assert "UnboundLocalError" not in journal_text
 
-    # 6+7: cleanup Git children received explicit project-safe env.
+    # 6+7: cleanup Git children received the explicit least-authority
+    # CLEANUP role environment (platform essentials only).
     assert git_envs, "worker terminal cleanup Git children did not run"
     for env in git_envs:
         assert env, "cleanup Git child omitted env="
         assert SYNTHETIC_HOP_VAR not in env
         assert CONTROL_VAR not in env
         assert SYNTHETIC_HOP_VALUE not in list(env.values())
-        # 9: benign bridge state preserved through the same authority.
-        assert env[BENIGN_VAR] == BENIGN_VALUE
+        # 9 (V2-02 least authority): terminal cleanup needs no project
+        # application state to remove a worktree, so even benign project
+        # variables are not passed to cleanup Git children — while the
+        # project/PDB/verifier roles keep their declared inputs.
+        assert BENIGN_VAR not in env
 
 
 def test_started_cleanup_never_calls_cleanup_with_inherit() -> None:

@@ -1,12 +1,12 @@
-"""V2-01 real product-path execution-environment acceptance tests.
+"""V2-02 real product-path execution-environment acceptance tests.
 
 Exercises the product machinery itself — a real PDB worker spawn and a full
 Local Project session through the real worker/source/controller/verifier
 boundary with a fully local scripted model — and proves there that a
 synthetic private provider session credential present in the worker process
 never reaches a project command child, a product PDB target, or a verifier
-command child, while benign project ambient variables keep working through
-the LEGACY PROJECT AMBIENT bridge.
+command child, while an EXPLICITLY DECLARED project variable does (the
+V2-02 declarative ingress) and undeclared ambient variables do not.
 
 No external provider call; no real API key; synthetic values only.
 """
@@ -14,6 +14,7 @@ No external provider call; no real API key; synthetic values only.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -24,6 +25,11 @@ from agentic_debugger.application.events import SourceKind
 from agentic_debugger.application.execution_environment import (
     ExecutionEnvironment,
     ExecutionRole,
+)
+from agentic_debugger.application.session_runtime import (
+    ProjectEnvDeclaration,
+    ProjectRuntimeEnvironmentSpec,
+    spec_to_param,
 )
 from agentic_debugger.application.history import HistoryStore
 from agentic_debugger.application.journal import read_session_journal
@@ -45,6 +51,14 @@ SYNTHETIC_HOP_VAR = "AGENTIC_DEBUGGER_PROVIDER_T01_API_KEY"
 SYNTHETIC_HOP_VALUE = "sk-synthetic-v201-hop-value-not-a-real-credential"
 BENIGN_PROJECT_VAR = "V2_01_BENIGN_PROJECT_DSN"
 BENIGN_PROJECT_VALUE = "service://synthetic/test-dsn"
+UNDECLARED_AMBIENT_VAR = "V2_02_UNDECLARED_AMBIENT"
+
+
+def _declared_spec() -> ProjectRuntimeEnvironmentSpec:
+    """The V2-02 ingress declaration used by every session below."""
+    return ProjectRuntimeEnvironmentSpec(
+        inherit=(ProjectEnvDeclaration(BENIGN_PROJECT_VAR),)
+    )
 
 GOOD_PATCH = """--- a/calculator.py
 +++ b/calculator.py
@@ -106,13 +120,15 @@ def _write_local_profile(root: Path, profile_id: str, patch_path: Path) -> None:
 
 
 def _seed_session_environment(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Synthetic provider session hop + benign project ambient state.
+    """Synthetic provider session hop + declared + undeclared ambient state.
 
     The real worker process is spawned from this process, so the worker's
-    product ambient environment contains both — exactly the active V2-01
-    defect geometry."""
+    launch snapshot contains all three: the hop must never reach project
+    children, the declared benign variable must (explicit ingress), and
+    the undeclared ambient variable must not (no ambient inheritance)."""
     monkeypatch.setenv(SYNTHETIC_HOP_VAR, SYNTHETIC_HOP_VALUE)
     monkeypatch.setenv(BENIGN_PROJECT_VAR, BENIGN_PROJECT_VALUE)
+    monkeypatch.setenv(UNDECLARED_AMBIENT_VAR, "should-never-reach-project-code")
 
 
 # ---------------------------------------------------------------------------
@@ -121,15 +137,19 @@ def _seed_session_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def test_product_pdb_target_cannot_observe_provider_credential(tmp_path, monkeypatch):
     _seed_session_environment(monkeypatch)
-    authority = ExecutionEnvironment.snapshot_process()
+    authority = ExecutionEnvironment.for_local_project(
+        dict(os.environ), _declared_spec()
+    )
+    assert not authority.uses_legacy_bridge
     src = tmp_path / "src"
     src.mkdir()
     (src / "target.py").write_text(
         "import os\n"
         "leaked = ('" + SYNTHETIC_HOP_VAR + "' in os.environ)\n"
         "benign = ('" + BENIGN_PROJECT_VAR + "' in os.environ)\n"
+        "undeclared = ('" + UNDECLARED_AMBIENT_VAR + "' in os.environ)\n"
         "with open('env_facts.txt', 'w', encoding='ascii') as handle:\n"
-        "    handle.write('%s|%s' % (leaked, benign))\n"
+        "    handle.write('%s|%s|%s' % (leaked, benign, undeclared))\n"
         "x = 1\n"
         "y = 2\n",
         encoding="utf-8",
@@ -143,10 +163,10 @@ def test_product_pdb_target_cannot_observe_provider_credential(tmp_path, monkeyp
         )
         try:
             session.start()
-            started = session.start_paused_target("target.py", [6])
+            started = session.start_paused_target("target.py", [7])
             assert started.get("state") == "paused"
             facts = (Path(workspace.root) / "env_facts.txt").read_text(encoding="ascii")
-            assert facts == "False|True", facts
+            assert facts == "False|True|False", facts
         finally:
             session.stop()
 
@@ -169,13 +189,13 @@ def test_local_project_worker_children_have_clean_environment(tmp_path, monkeypa
     wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
     repro = (
         'python -c "import os, sys; '
-        f"env_clean = ('{SYNTHETIC_HOP_VAR}' not in os.environ) and ('{BENIGN_PROJECT_VAR}' in os.environ); "
+        f"env_clean = ('{SYNTHETIC_HOP_VAR}' not in os.environ) and ('{BENIGN_PROJECT_VAR}' in os.environ) and ('{UNDECLARED_AMBIENT_VAR}' not in os.environ); "
         'from calculator import add; '
         'sys.exit(0 if (env_clean and add(1,2)==3) else (3 if not env_clean else 1))"'
     )
     verify = (
         'python -c "import os, sys; '
-        f"env_clean = ('{SYNTHETIC_HOP_VAR}' not in os.environ) and ('{BENIGN_PROJECT_VAR}' in os.environ); "
+        f"env_clean = ('{SYNTHETIC_HOP_VAR}' not in os.environ) and ('{BENIGN_PROJECT_VAR}' in os.environ) and ('{UNDECLARED_AMBIENT_VAR}' not in os.environ); "
         'from calculator import add; '
         'sys.exit(0 if (env_clean and add(0,0)==0) else (3 if not env_clean else 1))"'
     )
@@ -208,6 +228,7 @@ def test_local_project_worker_children_have_clean_environment(tmp_path, monkeypa
             "expected_fingerprint": None,
             "parent_tmpdir": str(wt.parent_tmpdir),
             "policy": "pdb-on-uncertainty",
+            "project_runtime_spec": spec_to_param(_declared_spec()),
         },
         cooperative_grace_seconds=5.0,
         ready_timeout_seconds=30.0,
@@ -227,6 +248,7 @@ def test_local_project_worker_children_have_clean_environment(tmp_path, monkeypa
         model_runtime="v201-env-profile",
         budgets=SessionBudgets(max_elapsed_seconds=180),
         created_at_utc="2026-09-03T00:00:00Z",
+        project_runtime=_declared_spec().to_mapping(),
     )
     (worker.session_dir / "local_project_task.json").write_text(
         json.dumps(local_spec.to_mapping(), indent=2, sort_keys=True),
@@ -276,6 +298,122 @@ def test_local_project_worker_children_have_clean_environment(tmp_path, monkeypa
         ]
         assert cleanup_texts, "worker terminal cleanup did not complete"
         assert any(payload.get("verified") is True for payload in cleanup_texts)
+    finally:
+        try:
+            worker.close()
+        except Exception:
+            pass
+        try:
+            cleanup_parent_tmpdir(wt.parent_tmpdir, validated.repo_root)
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Missing required declaration: honest pre-start failure, no ambient fallback
+# ---------------------------------------------------------------------------
+
+
+def test_missing_required_variable_fails_session_start_closed(tmp_path, monkeypatch):
+    """A declared-but-missing required variable fails the session launch.
+
+    The worker never starts execution (no SESSION_STARTED, no cleanup
+    claimed), the terminal diagnostic names the variable WITHOUT any
+    value, and the journal carries no secret material.
+    """
+    _seed_session_environment(monkeypatch)
+    monkeypatch.delenv("V2_02_REQUIRED_MISSING", raising=False)
+    repo = _make_git_fixture(tmp_path, "proj-missing")
+    patch_path = tmp_path / "good.patch"
+    patch_path.write_text(GOOD_PATCH, encoding="utf-8")
+    store_root = tmp_path / "history"
+    store_root.mkdir()
+    store = HistoryStore(store_root)
+    _write_local_profile(store_root, "v202-missing-profile", patch_path)
+
+    validated = validate_local_project(str(repo), launch_cwd=tmp_path)
+    wt = create_isolated_worktree(validated.repo_root, validated.head_commit)
+    missing_spec = ProjectRuntimeEnvironmentSpec(
+        inherit=(ProjectEnvDeclaration("V2_02_REQUIRED_MISSING"),)
+    )
+    session_id = "sess-v202-missing-required"
+    from agentic_debugger.application.local_project import LocalProjectTaskSpec
+    from agentic_debugger.application.worker_process import SessionWorkerProcess
+
+    worker = SessionWorkerProcess(
+        session_dir=store.session_dir(session_id),
+        session_id=session_id,
+        spec=SessionSpec(
+            task_id="local-project-debug",
+            source=ExecutionSourceSpec(
+                kind=SourceKind.LOCAL_PROJECT,
+                task_id="local-project-debug",
+                model_config_ref="v202-missing-profile",
+            ),
+        ),
+        run_id=f"run-{session_id}",
+        scenario="local_project",
+        scenario_params={
+            "project_repo_path": str(repo),
+            "project_head": validated.head_commit,
+            "isolated_workspace": str(wt.isolated_path),
+            "bug_description": "add returns a - b",
+            "reproduction_command": "python -c \"import sys; sys.exit(1)\"",
+            "verification_command": None,
+            "config_root": str(store.root),
+            "profile_id": "v202-missing-profile",
+            "expected_fingerprint": None,
+            "parent_tmpdir": str(wt.parent_tmpdir),
+            "policy": "pdb-on-uncertainty",
+            "project_runtime_spec": spec_to_param(missing_spec),
+        },
+        cooperative_grace_seconds=5.0,
+        ready_timeout_seconds=30.0,
+        max_elapsed_seconds=120,
+    )
+    worker.session_dir.mkdir(parents=True, exist_ok=True)
+    local_spec = LocalProjectTaskSpec(
+        session_id=session_id,
+        source_repo_path=str(repo),
+        source_head_commit=validated.head_commit,
+        isolated_workspace_path=str(wt.isolated_path),
+        bug_description="add returns a - b",
+        reproduction_command="python -c \"import sys; sys.exit(1)\"",
+        verification_command=None,
+        model_runtime="v202-missing-profile",
+        budgets=SessionBudgets(max_elapsed_seconds=120),
+        created_at_utc="2026-09-03T00:00:00Z",
+        project_runtime=missing_spec.to_mapping(),
+    )
+    (worker.session_dir / "local_project_task.json").write_text(
+        json.dumps(local_spec.to_mapping(), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
+
+    try:
+        assert worker.start() is None
+        result = worker.wait()
+        # Honest pre-start failure: the launch authority could not resolve
+        # the required declaration, so the session never started.
+        assert result.status.value == "failed", getattr(result, "detail", None)
+        assert result.termination_reason.value == "controller_failed"
+        assert result.run_id is None
+        diagnostics_text = "\n".join(result.diagnostics)
+        assert "V2_02_REQUIRED_MISSING" in diagnostics_text
+        assert SYNTHETIC_HOP_VALUE not in diagnostics_text
+        assert BENIGN_PROJECT_VALUE not in diagnostics_text
+        # No session.started event: nothing began, nothing is cleaned.
+        journal = read_session_journal(
+            store.session_dir(session_id) / "session.events.jsonl"
+        )
+        kinds = [event.event_kind.value for event in journal.events]
+        assert "session.started" not in kinds
+        journal_text = "\n".join(
+            json.dumps(event.payload, sort_keys=True, default=str)
+            for event in journal.events
+        )
+        assert SYNTHETIC_HOP_VALUE not in journal_text
+        assert BENIGN_PROJECT_VALUE not in journal_text
     finally:
         try:
             worker.close()

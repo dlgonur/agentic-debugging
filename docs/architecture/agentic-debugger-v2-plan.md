@@ -1,7 +1,7 @@
 # Agentic Debugger V2 — Control/Execution Plane Separation Architecture Plan
 
 **Document type:** Architecture analysis and migration plan (decision record)
-**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 and later stages are not implemented.**
+**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are implemented (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 and later stages are not implemented.**
 **Lineage:** `01` `3481b58` defined V2 boundaries (Alternative B accepted in direction). `02` `3d414c6` tightened the execution and trust boundaries (security-first ordering, role-scoped environments, deferred verifier isolation, credential binding/materialization, truthful status semantics). `03` `ff81f44` finalized the authority rules (secret trust classes, positive/declarative environment target, capability intersection, `ModelBinding` ownership, credential sequencing, scientific fence, history-derived runtime metadata, verifier re-run deferral). `04` (this revision) reconciles two repository facts the prior revisions missed: the repository **already contains a typed verified execution authority** (`runtime/execution.py`) that V2 must not replace, and the positive `ProjectRuntimeEnvironment` target **has no current product ingress**, so V2-01 must use an explicit transitional compatibility bridge with documented residual risk, retired by a V2-02 ingress.
 **Baseline:** `4606933` (fix(providers): harden provider runtime and Windows harness), clean tree
 **Scope:** Determine whether the application runtime should adopt an explicit CONTROL / EXECUTION plane separation, and define the smallest coherent target architecture and incremental migration path
@@ -692,3 +692,79 @@ V2-01 implements the §11 first slice only: the product `ExecutionEnvironment` a
 Proxy/TLS provenance clarification demonstrated by the implementation: ordinary ambient `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` / `SSL_CERT_FILE` / `SSL_CERT_DIR` / `CURL_CA_BUNDLE` values that exist solely as parent ambient state pass through the LEGACY PROJECT AMBIENT bridge unchanged in V2-01 (there is no project-network ingress yet to authorize them separately — documented residual compatibility risk for V2-02). What V2-01 forbids by provenance is merging/copying a provider/model child environment or provider-derived transport override into project roles. Tests characterize this distinction rather than asserting ambient proxy absence.
 
 Repair 06 (same V2-01 slice, no architecture change): the one per-session authority is created once in the worker before source dispatch and carried on the scenario context, so it also covers the worker-owned direct Git utility children found by the 06 subprocess inventory — tracked-source inventory (`git ls-files`), all verifier-owned Git commands (`rev-parse`/`status`/`archive`/cleanup reinspection via the single verifier `_run_git` authority), and normal worker terminal cleanup (`git worktree prune`/`list`). The verifier takes ONE fixed product environment for both its CommandRunner and Git children (custom-factory + explicit-env fails closed). Direct `Git` helpers in `runtime/patcher.py` are proven unreachable from the normal Local Project controller/verifier path (behind `official_patch_compatibility`, default `False`) and are unchanged.
+
+## 16. V2-02 implementation note (status only — decision unchanged)
+
+V2-02 implements the §11 second slice only: the typed product
+session/runtime contracts with no new process and no provider-transport,
+scientific-identity, journal-schema, or UI-redesign changes:
+
+- **Session/SessionLaunch authority** (`application/session_runtime.py::SessionLaunch`,
+  built only via `build_local_project_launch`): binds session/task identity,
+  `AgentDefinition`, the session `ExecutionEnvironment`, the
+  `ProjectRuntimeEnvironmentSpec`, the computed `EffectiveSessionCapabilities`,
+  pre-ModelGateway provider/model request identity (`provider_id`/`model_id`/
+  `profile_id`), `DemoPolicy` value, budgets, and `retry_of`. `SessionSpec`
+  remains the serialized Task-1 compatibility representation; `SessionLaunch`
+  is the authoritative in-process binding (never deserialized). The worker
+  builds it once after the pre-start gate and carries it on the scenario
+  context; the source consumes it, falling back to the same factory for
+  direct non-worker callers.
+- **AgentDefinition** (same module): `controller_policy` (a `DemoPolicy`
+  value — references, never replaces, the existing policy authority),
+  requested `provider_id`/`model_id`, requested `allowed_capabilities`.
+  Excludes route/protocol/endpoint/transport-profile, credentials/bindings,
+  catalog, live status, and scientific qualification.
+- **EffectiveSessionCapabilities** (same module): requested ∩ available ∩
+  task policy, computed ONCE (`compute_effective_capabilities`). The
+  vocabulary is exactly `project_command` / `pdb` / `patch` / `verifier`
+  (no network capability: `Constraints.network_allowed` stays authoritative).
+  Task policy denies `pdb` for `static-baseline` sessions. All four are
+  enforced end-to-end (project commands + PDB through the Executor seam,
+  patch gates at the tool handlers, verifier invocation gate).
+- **ProjectRuntimeEnvironmentSpec ingress** (same module; UI `ProjEnv` row
+  → `SessionConfig.project_env_text` → `parse_project_env_declarations` →
+  `start_local_project_session(project_env_text=...)` → transported as the
+  safe `project_runtime_spec` scenario param, durable as safe
+  `LocalProjectTaskSpec.project_runtime`): explicit non-secret values,
+  inherit-by-NAME declarations (`NAME` required, `NAME?` optional), and
+  project-secret binding NAMES (`secret:NAME`, `secret:NAME?`).
+- **Secret-value lifetime**: declared names resolve ONCE at session launch
+  from the fixed launch snapshot (`materialize_project_runtime`); values
+  live only in trusted session-process memory and authorized project-role
+  child envs. Never in spec/params/history/journal/repr/fingerprints/
+  diagnostics/prompts/model channel; never provider credentials. No
+  CredentialVault (V2-04) and no plaintext secret textbox (values are
+  never entered in the UI).
+- **Materialization timing**: worker snapshot (or source fallback snapshot)
+  → fixed materialization → role derivation; every role derives from the
+  fixed mapping; post-start parent mutation is invisible (tested).
+- **Bridge retirement**: normal newly launched Local Project sessions use
+  `ExecutionEnvironment.for_local_project` (platform essentials allowlist +
+  fixed materialization; `uses_legacy_bridge is False`). The
+  `legacy-project-ambient/v1` constructor/`snapshot_process` path remains
+  ONLY for test-only compatibility and legacy direct-API callers
+  (V2-01 unit tests over it stay green); there is no full-environment
+  escape hatch in the UI or session API. Platform essentials were
+  determined from implementation evidence (`PATH`, Windows startup dirs,
+  temp/home/profile dirs incl. `APPDATA`/`LOCALAPPDATA` for user
+  site-packages resolution, locale).
+- **Executor seam** (`application/executor.py::ProductExecutor`):
+  in-process façade with exactly the adopted operations
+  (`run_project_command`, `open_product_pdb`, plus fixed
+  `verifier_environment`/`cleanup_environment` role mappings); existing
+  `CommandRunner`/`PdbSession` underneath; no process/RPC/queue. Patch and
+  verifier execution stay in their modules (compatibility delegation) but
+  are capability-gated at their call sites.
+- **Verifier parity**: the verifier receives the same VERIFIER-role fixed
+  mapping (declared project inputs, no control/provider secrets) through
+  its existing factory seam; construction independence, workspaces,
+  taxonomy, and cleanup proof unchanged. Terminal cleanup runs under the
+  new least-authority CLEANUP role (essentials only — no project
+  application variables or secrets). Verifier-owned Git children keep the
+  single fixed verifier environment (documented remaining gap for a later
+  bounded refinement).
+- **Deferred sub-pieces**: journal carries no new session-launch event
+  (provenance available via the safe task artifact + launch fingerprint);
+  explicit non-secret VALUES are API-level only (the UI exposes
+  names-only); no ModelGateway/CredentialVault/verifier-isolation work.

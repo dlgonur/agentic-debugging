@@ -568,69 +568,114 @@ def run_worker(request: StartRequest) -> int:
         if request.pre_start_delay_seconds > 0:
             time.sleep(request.pre_start_delay_seconds)
         token.check()  # pre-start gate: cancellation before any session work
-        # V2-01 one product ExecutionEnvironment per Local Project session:
+        # V2-02 one product SessionLaunch per Local Project session:
         # created once here — AFTER the true pre-start gate but BEFORE
         # SESSION_STARTED — so every STARTED Local Project lifecycle owns
-        # the explicit authority before any execution-owned disposable
-        # resource exists.  The source's project/PDB/verifier children AND
-        # the terminal worker cleanup below then share one
-        # snapshot/classification.  Other scenarios keep ``None``
+        # the explicit launch authority before any execution-owned
+        # disposable resource exists.  The launch binds the agent
+        # definition, the declarative project runtime spec (resolved once
+        # against this fixed launch snapshot), the computed effective
+        # capabilities, and the declarative ExecutionEnvironment; the
+        # source, its project/PDB/verifier children, AND terminal worker
+        # cleanup all share it.  Other scenarios keep ``None``
         # (unaffected).  Values never enter params, journals, or
         # diagnostics — only explicit derived child mappings do.  A
         # construction failure here fails honestly as a pre-start/startup
         # failure (started is still false, so no cleanup cycle is
         # claimed), exactly like any other startup failure.
         if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
-            from agentic_debugger.application.execution_environment import (
-                ExecutionEnvironment,
+            from agentic_debugger.application.session_runtime import (
+                build_local_project_launch,
+                spec_from_param,
             )
 
-            session_execution_environment = ExecutionEnvironment.snapshot_process()
-        else:
-            session_execution_environment = None
-        coordinator.emit(SessionEventKind.SESSION_STARTED, {})
-        # The disposable execution workspace is worker-owned and is created
-        # only now that execution is actually beginning; before
-        # ``session.started`` no execution-owned disposable resource exists,
-        # so pre-start cancel/timeout and every startup failure leave none
-        # behind (Task-1 pre-start rule).
-        try:
-            work_dir.mkdir(parents=False, exist_ok=False)
-        except OSError as exc:
-            raise RuntimeError(
-                f"cannot create the execution work directory {work_dir}: {exc}"
-            ) from exc
-        coordinator.emit_status(SessionPhase.EXECUTING_TOOL)
-        token.check()  # close the started -> scenario window
-        disposition = run_worker_source(
-            request.scenario,
-            ScenarioContext(
-                work_dir=work_dir,
-                token=token,
-                journal=journal,
-                emitter=coordinator.emitter,
-                run_id=request.run_id,
-                session_dir=Path(request.journal_path).resolve().parent,
-                liveness_reporter=_LivenessReporter(),
-                product_environment=session_execution_environment,
-            ),
-            request.scenario_params,
-        )
-        # Local Project terminal authority: the typed return value, never a
-        # sidecar file.  FIXED and UNRESOLVED are the only accepted
-        # dispositions; anything else is an honest controller failure.
-        if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
-            if disposition == "UNRESOLVED":
-                outcome = "unresolved"
-            elif disposition == "FIXED":
-                outcome = "completed"
-            else:
+            try:
+                _launch_spec = spec_from_param(
+                    request.scenario_params.get("project_runtime_spec")
+                )
+                _launch_params = request.scenario_params
+                session_launch = build_local_project_launch(
+                    session_id=request.session_id,
+                    task_id=request.spec.task_id,
+                    policy=(
+                        _launch_params.get("policy") or "pdb-on-uncertainty"
+                    ),
+                    provider_id=_launch_params.get("provider"),
+                    model_id=_launch_params.get("model_id"),
+                    profile_id=_launch_params.get("profile_id"),
+                    launch_snapshot=dict(os.environ),
+                    project_spec=_launch_spec,
+                    budgets=request.spec.budgets,
+                    retry_of=request.retry_of_session_id,
+                )
+            except Exception as exc:
                 diagnostics.append(
-                    _bounded_diagnostic(
-                        f"local_project source returned an invalid disposition: {disposition!r}"
-                    )
+                    _bounded_diagnostic(f"session launch failed: {exc}")
                 )
                 outcome = "failed"
+                session_launch = None
+                session_execution_environment = None
+                launch_failed = True
+            else:
+                session_execution_environment = (
+                    session_launch.execution_environment
+                )
+                launch_failed = False
+        else:
+            session_launch = None
+            session_execution_environment = None
+            launch_failed = False
+        if launch_failed:
+            # Honest pre-start failure: the launch authority could not be
+            # built (e.g. a declared required project variable is
+            # unavailable), so no session-owned work began and no cleanup
+            # cycle is claimed.  Fall through to the pre-start terminal.
+            pass
+        else:
+            coordinator.emit(SessionEventKind.SESSION_STARTED, {})
+            # The disposable execution workspace is worker-owned and is created
+            # only now that execution is actually beginning; before
+            # ``session.started`` no execution-owned disposable resource exists,
+            # so pre-start cancel/timeout and every startup failure leave none
+            # behind (Task-1 pre-start rule).
+            try:
+                work_dir.mkdir(parents=False, exist_ok=False)
+            except OSError as exc:
+                raise RuntimeError(
+                    f"cannot create the execution work directory {work_dir}: {exc}"
+                ) from exc
+            coordinator.emit_status(SessionPhase.EXECUTING_TOOL)
+            token.check()  # close the started -> scenario window
+            disposition = run_worker_source(
+                request.scenario,
+                ScenarioContext(
+                    work_dir=work_dir,
+                    token=token,
+                    journal=journal,
+                    emitter=coordinator.emitter,
+                    run_id=request.run_id,
+                    session_dir=Path(request.journal_path).resolve().parent,
+                    liveness_reporter=_LivenessReporter(),
+                    product_environment=session_execution_environment,
+                    session_launch=session_launch,
+                ),
+                request.scenario_params,
+            )
+            # Local Project terminal authority: the typed return value, never a
+            # sidecar file.  FIXED and UNRESOLVED are the only accepted
+            # dispositions; anything else is an honest controller failure.
+            if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
+                if disposition == "UNRESOLVED":
+                    outcome = "unresolved"
+                elif disposition == "FIXED":
+                    outcome = "completed"
+                else:
+                    diagnostics.append(
+                        _bounded_diagnostic(
+                            f"local_project source returned an invalid disposition: {disposition!r}"
+                        )
+                    )
+                    outcome = "failed"
     except CancellationError as exc:
         if exc.reason is CancellationReason.CANCELLED:
             try:
@@ -691,10 +736,12 @@ def run_worker(request: StartRequest) -> int:
                 if parent and repo:
                     try:
                         from agentic_debugger.application.local_project import cleanup_parent_tmpdir
-                        # V2-01: the same session-derived project-safe
-                        # authority covers terminal cleanup Git children
-                        # (``git worktree prune`` / ``git worktree list``),
-                        # so they never implicitly inherit worker
+                        # V2-02: terminal cleanup Git children (``git worktree
+                        # prune`` / ``git worktree list``) run under the
+                        # least-authority CLEANUP role (platform essentials
+                        # only — never project application variables or
+                        # project secrets, which cleanup does not need), so
+                        # they never implicitly inherit worker
                         # control/model/provider state.  The authority is
                         # created before SESSION_STARTED, so any STARTED
                         # Local Project lifecycle owns it; a missing
@@ -711,7 +758,7 @@ def run_worker(request: StartRequest) -> int:
 
                         cleanup_environment = dict(
                             session_execution_environment.role_environment(
-                                ExecutionRole.PROJECT_COMMAND
+                                ExecutionRole.CLEANUP
                             )
                         )
                         iso_ok = cleanup_parent_tmpdir(

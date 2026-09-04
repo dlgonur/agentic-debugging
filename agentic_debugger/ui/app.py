@@ -739,6 +739,7 @@ class LocalApplicationV1(App):
         max_elapsed_seconds: Optional[int] = None,
         retry_of_session_id: Optional[str] = None,
         auto_retries: int = 0,
+        project_env_text: str = "",
     ) -> None:
         """Start one Local Project Debug session.
 
@@ -807,6 +808,36 @@ class LocalApplicationV1(App):
                 raise RuntimeError(f"Selected model profile unavailable: {exc}") from exc
         if registry_provider is not None:
             model_config_ref = f"{registry_provider}:{profile_id}"
+        # V2-02 explicit project runtime ingress: the user declares
+        # variable NAMES only (values are never entered here).  Validated
+        # here — before any worktree or worker resource exists — so an
+        # invalid declaration fails with no execution resource created.
+        from agentic_debugger.application.session_runtime import (
+            ProjectEnvDeclaration,
+            ProjectRuntimeEnvironmentSpec,
+            spec_to_param,
+        )
+        from agentic_debugger.ui.session_config import (
+            parse_project_env_declarations,
+        )
+
+        try:
+            _env_inherit, _env_secrets = parse_project_env_declarations(
+                project_env_text or ""
+            )
+            project_runtime_spec = ProjectRuntimeEnvironmentSpec(
+                inherit=tuple(
+                    ProjectEnvDeclaration(name=name, required=required)
+                    for name, required in _env_inherit
+                ),
+                secrets=tuple(
+                    ProjectEnvDeclaration(name=name, required=required)
+                    for name, required in _env_secrets
+                ),
+            )
+            project_runtime_param = spec_to_param(project_runtime_spec)
+        except Exception as exc:
+            raise RuntimeError(f"Invalid project environment declaration: {exc}") from exc
         validated = validate_local_project(project_path, launch_cwd=launch_cwd)
         if validated.dirty:
             raise RuntimeError(
@@ -853,6 +884,7 @@ class LocalApplicationV1(App):
             model_runtime=profile_id,
             budgets=SessionBudgets(max_elapsed_seconds=max_elapsed_seconds),
             created_at_utc=created_at,
+            project_runtime=project_runtime_spec.to_mapping(),
         )
 
         # Pre-validate profile fingerprint for worker
@@ -871,6 +903,7 @@ class LocalApplicationV1(App):
                 "expected_fingerprint": expected_fp,
                 "parent_tmpdir": str(parent_tmpdir),
                 "policy": "pdb-on-uncertainty",
+                "project_runtime_spec": project_runtime_param,
             }
             # Mark the selected provider for the worker.  New registry-backed
             # Ollama selections use the same provider/model contract as the
@@ -933,6 +966,7 @@ class LocalApplicationV1(App):
                     max_elapsed_seconds=max_elapsed_seconds,
                     retry_of_session_id=retry_of,
                     auto_retries=remaining,
+                    project_env_text=project_env_text,
                 ),
             }
             self._live_auto_retry_budget = chain_budget

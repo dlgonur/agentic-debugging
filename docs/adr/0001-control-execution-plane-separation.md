@@ -1,6 +1,6 @@
 # ADR 0001 — Control/Execution Plane Separation as Logical Seams, Not Process Split
 
-**Status:** Accepted (target/migration decision — V2-01 execution-environment authority + control/provider secret isolation implemented; V2-02 and later stages not implemented)
+**Status:** Accepted (target/migration decision — V2-01 execution-environment authority + control/provider secret isolation implemented; V2-02 session/runtime contracts implemented — `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec` ingress + `ProductExecutor` seam with the LEGACY PROJECT AMBIENT bridge retired from the normal Local Project path; V2-03 and later stages not implemented)
 **Date:** 2026-09-03 (rev. 04 — implementation-readiness reconciliation before V2-01)
 **Baseline:** `4606933`; plan candidate lineage `3481b58` → `3d414c6` → `ff81f44` → repair commit 04
 **Full analysis:** `docs/architecture/agentic-debugger-v2-plan.md`
@@ -244,9 +244,19 @@ product PDB (via `build_worker_env`), and verifier commands (single fixed
 product environment for the verifier's CommandRunner and Git children);
 conflicting verified/product authorities fail
 closed; `runtime/execution.py` and the model-adapter transport are unchanged.
-V2-02+ is not implemented. Proxy/TLS provenance: ordinary ambient
-`HTTPS_PROXY`/`NO_PROXY`/CA values pass through the V2-01 bridge unchanged
-(residual compatibility for V2-02); provider-derived transport overrides are
-never merged into project roles. Repair 06 (same slice): the same one
-per-session authority additionally covers worker-owned direct Git children
-(inventory, verifier Git, terminal cleanup).
+V2-02 implements Decision-item-1's second slice only: the product
+`SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities` contracts,
+the `ProjectRuntimeEnvironmentSpec` ingress (names-only UI surface, safe
+transport + durable task artifact, ephemeral by-name secret resolution at
+session launch), the `ProductExecutor` logical seam (two adopted
+operations, no new process), and the declarative
+`ExecutionEnvironment.for_local_project` product path whose adoption
+retires the bridge — ordinary Local Project execution no longer requires
+arbitrary legacy ambient inheritance. V2-03+ is not implemented. Proxy/TLS
+provenance: ordinary ambient `HTTPS_PROXY`/`NO_PROXY`/CA values are NOT
+inherited by default in V2-02 (behavioral tightening); explicitly declaring
+the project variable makes it available to project roles, while the
+provider transport keeps its own unchanged authority. Repair 06 (same
+slice): the same one per-session authority additionally covers
+worker-owned direct Git children (inventory, verifier Git, terminal
+cleanup — terminal cleanup now under the least-authority CLEANUP role).

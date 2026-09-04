@@ -12,7 +12,7 @@ research harness.
 
 ## Highlights
 
-- Debug curated tasks or a local Git project without modifying the source tree.
+- Debug curated tasks or a local Git project without modifying the source tree (declare custom project variables in the `ProjEnv` row; undeclared variables are not inherited).
 - Inspect bounded source, tests, stack frames, locals, and safe expressions.
 - Apply model-authored patches through strict path and diff validation.
 - Accept repairs only after independent fail-to-pass and pass-to-pass checks.
@@ -59,7 +59,7 @@ claim is never treated as proof of a repair.
 
 Live execution is explicit. Providers are user-configured in the Model Providers manager
 (press `m`; fresh installs ship none) with an explicit transport profile; credentials stay in
-the OS secure store — never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
+the OS secure store - never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
 
 ## Current status
 

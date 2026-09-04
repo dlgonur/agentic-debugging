@@ -89,6 +89,12 @@ class ScenarioContext:
     #: the Local Project source treat it opaquely except for the
     #: documented Local Project contract.
     product_environment: Optional[Any] = None
+    #: One per-session V2-02 SessionLaunch authority (Local Project worker
+    #: lifecycle only; ``None`` otherwise).  The authoritative
+    #: session-start binding (agent definition, project runtime spec,
+    #: effective capabilities); the source consumes it without
+    #: recomputing any session-start fact.
+    session_launch: Optional[Any] = None
 
 
 def _require_int(params: Mapping[str, Any], key: str, minimum: int, maximum: int) -> int:

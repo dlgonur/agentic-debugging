@@ -29,7 +29,7 @@ import re
 import shutil
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Optional, Tuple
@@ -711,6 +711,11 @@ class LocalProjectTaskSpec:
     ``local_project_task.json``: the app pre-writes it before the worker
     starts, the source preserves it through terminal completion, and Apply
     To Project / history-reopen read it back.  No secrets are persisted.
+
+    ``project_runtime`` carries the safe V2-02
+    ``ProjectRuntimeEnvironmentSpec`` mapping (spec version, non-secret
+    explicit values, inherited/secret NAMES with required flags) — secret
+    values never exist here.
     """
 
     session_id: str
@@ -723,6 +728,7 @@ class LocalProjectTaskSpec:
     model_runtime: Optional[str]
     budgets: SessionBudgets
     created_at_utc: str
+    project_runtime: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         from agentic_debugger.application.events import validate_session_id, validate_utc_timestamp
@@ -755,6 +761,21 @@ class LocalProjectTaskSpec:
             raise ApplicationInputError("model_runtime must be a string or null")
         if type(self.budgets) is not SessionBudgets:
             raise ApplicationInputError("budgets must be a SessionBudgets")
+        if not isinstance(self.project_runtime, Mapping):
+            raise ApplicationInputError("project_runtime must be a mapping")
+        if self.project_runtime:
+            # Safe declarations only (names, flags, non-secret values);
+            # secret values can never be represented here.
+            try:
+                from agentic_debugger.application.session_runtime import (
+                    ProjectRuntimeEnvironmentSpec,
+                )
+
+                ProjectRuntimeEnvironmentSpec.from_mapping(dict(self.project_runtime))
+            except Exception as exc:
+                raise ApplicationInputError(
+                    f"project_runtime is invalid: {exc}"
+                ) from exc
         try:
             validate_utc_timestamp(self.created_at_utc)
         except Exception as exc:
@@ -772,6 +793,7 @@ class LocalProjectTaskSpec:
             "model_runtime": self.model_runtime,
             "budgets": self.budgets.to_mapping(),
             "created_at_utc": self.created_at_utc,
+            "project_runtime": dict(self.project_runtime),
         }
 
     @staticmethod
@@ -790,8 +812,13 @@ class LocalProjectTaskSpec:
             "budgets",
             "created_at_utc",
         }
-        if set(m) != required:
+        if set(m) != required and set(m) != (required | {"project_runtime"}):
             raise ApplicationInputError("spec mapping fields are invalid")
+        # Back-compat: artifacts written before the V2-02 ingress carry no
+        # ``project_runtime`` key and read back as the empty declaration.
+        project_runtime = m.get("project_runtime", {})
+        if project_runtime is None:
+            project_runtime = {}
         return LocalProjectTaskSpec(
             session_id=m["session_id"],
             source_repo_path=m["source_repo_path"],
@@ -803,6 +830,7 @@ class LocalProjectTaskSpec:
             model_runtime=m.get("model_runtime"),
             budgets=SessionBudgets(**m.get("budgets", {})),
             created_at_utc=m["created_at_utc"],
+            project_runtime=project_runtime,
         )
 
 
