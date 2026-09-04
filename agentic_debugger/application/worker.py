@@ -568,6 +568,26 @@ def run_worker(request: StartRequest) -> int:
         if request.pre_start_delay_seconds > 0:
             time.sleep(request.pre_start_delay_seconds)
         token.check()  # pre-start gate: cancellation before any session work
+        # V2-01 one product ExecutionEnvironment per Local Project session:
+        # created once here — AFTER the true pre-start gate but BEFORE
+        # SESSION_STARTED — so every STARTED Local Project lifecycle owns
+        # the explicit authority before any execution-owned disposable
+        # resource exists.  The source's project/PDB/verifier children AND
+        # the terminal worker cleanup below then share one
+        # snapshot/classification.  Other scenarios keep ``None``
+        # (unaffected).  Values never enter params, journals, or
+        # diagnostics — only explicit derived child mappings do.  A
+        # construction failure here fails honestly as a pre-start/startup
+        # failure (started is still false, so no cleanup cycle is
+        # claimed), exactly like any other startup failure.
+        if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
+            from agentic_debugger.application.execution_environment import (
+                ExecutionEnvironment,
+            )
+
+            session_execution_environment = ExecutionEnvironment.snapshot_process()
+        else:
+            session_execution_environment = None
         coordinator.emit(SessionEventKind.SESSION_STARTED, {})
         # The disposable execution workspace is worker-owned and is created
         # only now that execution is actually beginning; before
@@ -582,19 +602,6 @@ def run_worker(request: StartRequest) -> int:
             ) from exc
         coordinator.emit_status(SessionPhase.EXECUTING_TOOL)
         token.check()  # close the started -> scenario window
-        # V2-01 one product ExecutionEnvironment per Local Project session:
-        # created once here (outside the source) so the source's
-        # project/PDB/verifier children AND the terminal worker cleanup
-        # below share one snapshot/classification.  Other scenarios keep
-        # ``None`` (unaffected).  Values never enter params, journals, or
-        # diagnostics — only explicit derived child mappings do.
-        session_execution_environment = None
-        if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
-            from agentic_debugger.application.execution_environment import (
-                ExecutionEnvironment,
-            )
-
-            session_execution_environment = ExecutionEnvironment.snapshot_process()
         disposition = run_worker_source(
             request.scenario,
             ScenarioContext(
@@ -688,18 +695,25 @@ def run_worker(request: StartRequest) -> int:
                         # authority covers terminal cleanup Git children
                         # (``git worktree prune`` / ``git worktree list``),
                         # so they never implicitly inherit worker
-                        # control/model/provider state.
-                        cleanup_environment = None
-                        if session_execution_environment is not None:
-                            from agentic_debugger.application.execution_environment import (
-                                ExecutionRole,
+                        # control/model/provider state.  The authority is
+                        # created before SESSION_STARTED, so any STARTED
+                        # Local Project lifecycle owns it; a missing
+                        # authority here is a fail-closed bug, never a
+                        # silent fallback to full worker inheritance.
+                        if session_execution_environment is None:
+                            raise RuntimeError(
+                                "local_project session authority missing "
+                                "at terminal cleanup"
                             )
+                        from agentic_debugger.application.execution_environment import (
+                            ExecutionRole,
+                        )
 
-                            cleanup_environment = dict(
-                                session_execution_environment.role_environment(
-                                    ExecutionRole.PROJECT_COMMAND
-                                )
+                        cleanup_environment = dict(
+                            session_execution_environment.role_environment(
+                                ExecutionRole.PROJECT_COMMAND
                             )
+                        )
                         iso_ok = cleanup_parent_tmpdir(
                             Path(parent),
                             Path(repo),
