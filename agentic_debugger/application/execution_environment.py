@@ -63,14 +63,21 @@ from __future__ import annotations
 import os
 from enum import Enum
 from types import MappingProxyType
-from typing import Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional
 
 from agentic_debugger.application.session_runtime import (
+    PLATFORM_ESSENTIAL_NAMES,
     PROJECT_RUNTIME_SPEC_VERSION,
     ProjectRuntimeEnvironmentSpec,
     SessionCapability,
+    is_platform_essential_name,
     materialize_project_runtime,
+    resolve_env_name_platform,
 )
+
+#: Re-exported single authority for the platform-essentials allowlist
+#: (canonical owner: ``session_runtime``).  Kept importable here so
+#: existing importers keep working (see ``__all__`` below).
 
 #: Named compatibility identity of the retired transitional bridge.  Kept
 #: for test-only compatibility and legacy direct-API callers; the normal
@@ -79,40 +86,6 @@ from agentic_debugger.application.session_runtime import (
 BRIDGE_COMPATIBILITY_IDENTITY = "legacy-project-ambient/v1"
 
 _NAMESPACE_PREFIX = "AGENTIC_DEBUGGER_"
-
-#: Platform/runtime essentials allowlist (matched case-insensitively;
-#: the snapshot's original spelling is preserved).  These are NOT user
-#: project declarations: they are the fixed Windows/POSIX execution
-#: essentials plus interpreter-locale state the platform needs
-#: (``PATH`` for executable/Git resolution, ``SystemRoot``/drive vars for
-#: Windows process startup, temp dirs, home/profile dirs for tool config
-#: reads, ``APPDATA``/``LOCALAPPDATA`` so the interpreter resolves the
-#: same per-user site-packages as the parent, locale).  Everything else a
-#: project needs must be explicitly declared in the
-#: ProjectRuntimeEnvironmentSpec.  Deliberately excludes
-#: interpreter-override state (``PYTHONPATH``/``PYTHONHOME``/``VIRTUAL_ENV``:
-#: declare them if the project needs them), version-control state
-#: (``GIT_*``), and every Agentic Debugger control/provider authority.
-PLATFORM_ESSENTIAL_NAMES = frozenset(
-    {
-        "PATH",
-        "PATHEXT",
-        "COMSPEC",
-        "SYSTEMROOT",
-        "SYSTEMDRIVE",
-        "WINDIR",
-        "TEMP",
-        "TMP",
-        "TMPDIR",
-        "HOME",
-        "USERPROFILE",
-        "APPDATA",
-        "LOCALAPPDATA",
-        "LANG",
-        "LC_ALL",
-        "LC_CTYPE",
-    }
-)
 
 
 class ExecutionEnvironmentError(ValueError):
@@ -155,10 +128,6 @@ def is_control_or_provider_authority(name: str) -> bool:
     if uppered.startswith(_NAMESPACE_PREFIX):
         return True
     return name.lower() in _provider_authority_names_lower()
-
-
-def _is_platform_essential(name: str) -> bool:
-    return type(name) is str and bool(name) and name.upper() in PLATFORM_ESSENTIAL_NAMES
 
 
 class ExecutionEnvironment:
@@ -218,7 +187,7 @@ class ExecutionEnvironment:
         essentials = {
             name: value
             for name, value in copied.items()
-            if _is_platform_essential(name)
+            if is_platform_essential_name(name)
             and not is_control_or_provider_authority(name)
         }
         self._essentials = MappingProxyType(essentials)
@@ -237,13 +206,17 @@ class ExecutionEnvironment:
         cls,
         launch_snapshot: Mapping[str, str],
         project_spec: ProjectRuntimeEnvironmentSpec,
+        *,
+        platform: Any = None,
     ) -> "ExecutionEnvironment":
         """Build the declarative V2-02 product authority (normal path).
 
         ``launch_snapshot`` is the single fixed per-session parent view
         (copied on the boundary); declared project names resolve against
-        it exactly once.  Role environments are platform essentials plus
-        that fixed materialization — never arbitrary ambient inheritance.
+        it exactly once under the worker/canonical platform (live
+        ``sys.platform`` unless overridden for tests).  Role environments
+        are platform essentials plus that fixed materialization — never
+        arbitrary ambient inheritance.
         """
         if not isinstance(launch_snapshot, Mapping):
             raise ExecutionEnvironmentError(
@@ -253,6 +226,7 @@ class ExecutionEnvironment:
             raise ExecutionEnvironmentError(
                 "project_spec must be a ProjectRuntimeEnvironmentSpec"
             )
+        plat = resolve_env_name_platform(platform)
         copied: Dict[str, str] = {}
         for name, value in launch_snapshot.items():
             if type(name) is not str or not name:
@@ -265,13 +239,15 @@ class ExecutionEnvironment:
                 )
             copied[name] = value
         try:
-            materialization = materialize_project_runtime(project_spec, copied)
+            materialization = materialize_project_runtime(
+                project_spec, copied, platform=plat
+            )
         except Exception as exc:
             raise ExecutionEnvironmentError(str(exc)) from exc
         essentials = {
             name: value
             for name, value in copied.items()
-            if _is_platform_essential(name)
+            if is_platform_essential_name(name, platform=plat)
         }
         for name in essentials:
             if is_control_or_provider_authority(name):
@@ -280,13 +256,14 @@ class ExecutionEnvironment:
                 )
         materialized = materialization.to_child_mapping()
         for name in materialized:
-            # Defense in depth (the spec already rejects these): a control
-            # authority must never become project runtime state.
+            # Defense in depth (the spec ingress already rejects these):
+            # a control authority must never become project runtime state,
+            # and essentials must never be overridden by declarations.
             if is_control_or_provider_authority(name):
                 raise ExecutionEnvironmentError(
                     f"project variable {name!r} is a control authority"
                 )
-            if _is_platform_essential(name):
+            if is_platform_essential_name(name, platform=plat):
                 raise ExecutionEnvironmentError(
                     f"project variable {name!r} is a platform essential "
                     "and must not be declared"

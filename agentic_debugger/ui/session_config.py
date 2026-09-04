@@ -359,8 +359,21 @@ def parse_project_env_declarations(
     Raises :class:`ValueError` with a safe name-only message on invalid
     input.  Values (``NAME=value``) are rejected: explicit values are an
     API-level contract only, never a UI textbox.
+
+    All semantic validation (name shape, control/provider authorities,
+    platform-aware duplicates, platform essentials) is delegated to the
+    application-level
+    :class:`~agentic_debugger.application.session_runtime.ProjectRuntimeEnvironmentSpec`
+    authority — never reimplemented here — using this machine's live
+    platform.  The worker re-validates with its own platform before
+    materializing, so a platform-specific conflict still fails closed at
+    session start.
     """
-    from agentic_debugger.application.session_runtime import validate_env_name
+    from agentic_debugger.application.session_runtime import (
+        ProjectEnvDeclaration,
+        ProjectRuntimeEnvironmentSpec,
+        SessionRuntimeError,
+    )
 
     if not isinstance(text, str):
         raise ValueError("project environment declarations must be text")
@@ -368,7 +381,6 @@ def parse_project_env_declarations(
     secrets: list[Tuple[str, bool]] = []
     if not text.strip():
         return (), ()
-    seen: dict[str, str] = {}
     for raw_token in text.split(","):
         token = raw_token.strip()
         if not token:
@@ -381,44 +393,26 @@ def parse_project_env_declarations(
         if token.endswith("?"):
             required = False
             token = token[:-1].strip()
-        try:
-            validate_env_name(token)
-        except Exception:
-            raise ValueError(
-                f"invalid project environment declaration: {token[:64]!r}"
-            ) from None
-        if "=" in token or " " in token or "\t" in token:
+        if not token or "=" in token or " " in token or "\t" in token:
             raise ValueError(
                 f"invalid project environment declaration: {token[:64]!r}"
             )
-        # Control/provider authorities can never be project runtime state
-        # (same central classification as the session authority); reject
-        # at readiness instead of failing only at session start.
-        try:
-            from agentic_debugger.application.provider_connections import (
-                provider_authority_environment_names,
-            )
-
-            _authority_names = frozenset(
-                name.lower() for name in provider_authority_environment_names()
-            )
-        except Exception:
-            _authority_names = frozenset()
-        if token.upper().startswith("AGENTIC_DEBUGGER_") or token.lower() in _authority_names:
-            raise ValueError(
-                f"project variable {token!r} is a control authority "
-                "and must not be declared"
-            )
-        key = token.upper()
-        if key in seen:
-            raise ValueError(
-                f"project variable {token!r} is declared more than once"
-            )
-        seen[key] = "secret" if is_secret else "inherit"
         if is_secret:
             secrets.append((token, required))
         else:
             inherit.append((token, required))
+    try:
+        spec = ProjectRuntimeEnvironmentSpec(
+            inherit=tuple(
+                ProjectEnvDeclaration(name, required) for name, required in inherit
+            ),
+            secrets=tuple(
+                ProjectEnvDeclaration(name, required) for name, required in secrets
+            ),
+        )
+        spec.validate_for_platform()
+    except SessionRuntimeError as exc:
+        raise ValueError(str(exc)) from None
     if len(inherit) + len(secrets) > 32:
         raise ValueError("too many project environment declarations (max 32)")
     return tuple(inherit), tuple(secrets)

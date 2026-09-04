@@ -46,6 +46,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import sys
 from dataclasses import dataclass, field
 from enum import Enum
 from types import MappingProxyType
@@ -72,6 +73,40 @@ _MAX_EXPLICIT_VALUE_BYTES = 1024
 _MAX_ID_CHARS = 128
 
 _ENV_NAME_PATTERN = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+
+#: Platform/runtime essentials allowlist (canonical uppercase spelling).
+#: These are NOT user project declarations: they are the fixed
+#: Windows/POSIX execution essentials plus interpreter-locale state the
+#: platform needs (``PATH`` for executable/Git resolution,
+#: ``SystemRoot``/drive vars for Windows process startup, temp dirs,
+#: home/profile dirs for tool config reads, ``APPDATA``/``LOCALAPPDATA``
+#: so the interpreter resolves the same per-user site-packages as the
+#: parent, locale).  Everything else a project needs must be explicitly
+#: declared in the ProjectRuntimeEnvironmentSpec.  Deliberately excludes
+#: interpreter-override state (``PYTHONPATH``/``PYTHONHOME``/``VIRTUAL_ENV``:
+#: declare them if the project needs them), version-control state
+#: (``GIT_*``), and every Agentic Debugger control/provider authority.
+#: Single authority for this list: execution_environment.py re-exports it.
+PLATFORM_ESSENTIAL_NAMES = frozenset(
+    {
+        "PATH",
+        "PATHEXT",
+        "COMSPEC",
+        "SYSTEMROOT",
+        "SYSTEMDRIVE",
+        "WINDIR",
+        "TEMP",
+        "TMP",
+        "TMPDIR",
+        "HOME",
+        "USERPROFILE",
+        "APPDATA",
+        "LOCALAPPDATA",
+        "LANG",
+        "LC_ALL",
+        "LC_CTYPE",
+    }
+)
 
 
 class SessionRuntimeError(ValueError):
@@ -121,6 +156,52 @@ def validate_env_name(name: Any, *, label: str = "environment variable name") ->
     if _ENV_NAME_PATTERN.match(name) is None:
         raise SessionRuntimeError(f"{label} {name!r} is not a valid variable name")
     return name
+
+
+def resolve_env_name_platform(platform: Any = None) -> str:
+    """Resolve the platform governing environment-name identity.
+
+    Returns the live ``sys.platform`` when ``platform`` is None (the
+    worker/canonical behavior); an explicit value keeps tests deterministic
+    on any host without depending on running Windows.  Follows the
+    established injectable-platform pattern (cf. ``python_launcher``).
+    """
+    if platform is None:
+        return sys.platform
+    if type(platform) is not str or not platform:
+        raise SessionRuntimeError("platform must be a non-empty string")
+    return platform
+
+
+def canonical_env_name(name: str, *, platform: Any = None) -> str:
+    """Canonical identity for one environment variable NAME (never a value).
+
+    Environment variable names are case-insensitive on Windows and
+    case-sensitive on POSIX: on ``win32`` the canonical form is the
+    uppercased name, elsewhere the name itself.  The original spelling is
+    always preserved by callers for safe provenance/UI; the canonical form
+    is used ONLY for identity comparisons (duplicate detection,
+    snapshot lookup, essential/control-authority matching).  Secret VALUES
+    are never passed here and never inspected.
+    """
+    validate_env_name(name)
+    if resolve_env_name_platform(platform) == "win32":
+        return name.upper()
+    return name
+
+
+def is_platform_essential_name(name: str, *, platform: Any = None) -> bool:
+    """Whether one environment NAME is a platform/runtime essential.
+
+    Platform-correct: case-insensitive on Windows (``Path`` collides with
+    ``PATH`` there), exact-match on POSIX (``path`` and ``PATH`` are
+    distinct variables there).
+    """
+    if type(name) is not str or not name:
+        return False
+    if resolve_env_name_platform(platform) == "win32":
+        return name.upper() in PLATFORM_ESSENTIAL_NAMES
+    return name in PLATFORM_ESSENTIAL_NAMES
 
 
 def _reject_control_authority_name(name: str, *, label: str) -> None:
@@ -439,6 +520,51 @@ class ProjectRuntimeEnvironmentSpec:
             )
         )
 
+    def validate_for_platform(self, platform: Any = None) -> None:
+        """Fail closed on platform-specific declaration conflicts.
+
+        Applies the worker/canonical platform's environment-name identity
+        (case-insensitive on Windows, case-sensitive on POSIX) to:
+
+        - duplicate detection within AND across all three categories
+          (on Windows ``FOO``/``foo`` — e.g. ``inherit: FOO`` plus
+          ``secret: foo``, or explicit value ``Foo`` plus inherit ``FOO``
+          — are one variable and are rejected; on POSIX distinct
+          spellings remain distinct);
+        - platform-essential collisions (``PATH`` everywhere; ``Path`` or
+          ``SystemRoot``-case variants additionally on Windows): essentials
+          are derived by the execution environment and must never be
+          declared.
+
+        The worker always runs this with its own platform before
+        materializing, so a duplicate that is only judgable
+        platform-specifically still fails closed even if the declaring UI
+        ran its readiness check elsewhere.  Name-only errors; values are
+        never mentioned (secret values do not exist in this object).
+        """
+        plat = resolve_env_name_platform(platform)
+        seen: Dict[str, str] = {}
+
+        def _claim(original: str, kind: str) -> None:
+            canonical = canonical_env_name(original, platform=plat)
+            if canonical in seen:
+                raise SessionRuntimeError(
+                    f"project variable {original!r} is declared more than once"
+                )
+            seen[canonical] = kind
+            if is_platform_essential_name(original, platform=plat):
+                raise SessionRuntimeError(
+                    f"project variable {original!r} is a platform essential "
+                    "and must not be declared"
+                )
+
+        for entry in self.values:
+            _claim(entry.name, "explicit value")
+        for entry in self.inherit:
+            _claim(entry.name, "inherit")
+        for entry in self.secrets:
+            _claim(entry.name, "secret")
+
     def to_mapping(self) -> Dict[str, Any]:
         """Safe durable serialization: names, flags, non-secret values.
 
@@ -623,13 +749,20 @@ class ProjectRuntimeMaterialization:
 def materialize_project_runtime(
     spec: ProjectRuntimeEnvironmentSpec,
     launch_snapshot: Mapping[str, str],
+    *,
+    platform: Any = None,
 ) -> ProjectRuntimeMaterialization:
     """Resolve declared NAMES once against the launch snapshot.
 
     The snapshot is the single fixed per-session parent view (copied on
     the boundary); every later child derives from the returned fixed
-    mapping.  Missing REQUIRED names fail closed with a safe name-only
-    error; missing optional names are skipped.  No value is ever logged,
+    mapping.  Lookup uses the platform's environment-name identity
+    (case-insensitive on Windows: a ``MyProjectFlag`` declaration resolves
+    a ``MYPROJECTFLAG`` snapshot key; case-sensitive on POSIX).  A Windows
+    snapshot carrying conflicting case variants of one variable fails
+    closed (name-only error) rather than picking nondeterministically.
+    Missing REQUIRED names fail closed with a safe name-only error;
+    missing optional names are skipped.  No value is ever logged,
     fingerprinted, or rendered.
     """
     if type(spec) is not ProjectRuntimeEnvironmentSpec:
@@ -639,6 +772,28 @@ def materialize_project_runtime(
     for name, val in launch_snapshot.items():
         if type(name) is not str or type(val) is not str:
             raise ProjectRuntimeError("launch snapshot must map strings to strings")
+    plat = resolve_env_name_platform(platform)
+    try:
+        spec.validate_for_platform(plat)
+    except SessionRuntimeError as exc:
+        raise ProjectRuntimeError(str(exc)) from exc
+
+    # Canonical snapshot index (original spellings retained for the fixed
+    # mapping; canonical forms for lookup only — values never inspected).
+    index: Dict[str, Tuple[str, str]] = {}
+    for name, val in launch_snapshot.items():
+        try:
+            canonical = canonical_env_name(name, platform=plat)
+        except SessionRuntimeError:
+            continue
+        if canonical in index and index[canonical][0] != name:
+            raise ProjectRuntimeError(
+                f"Conflicting launch environment variables for {canonical!r}."
+            )
+        index.setdefault(canonical, (name, val))
+
+    def _lookup(name: str) -> Optional[Tuple[str, str]]:
+        return index.get(canonical_env_name(name, platform=plat))
 
     resolved: Dict[str, str] = {}
     provenance: list[Tuple[str, str, bool]] = []
@@ -646,17 +801,19 @@ def materialize_project_runtime(
         resolved[entry.name] = entry.value
         provenance.append((entry.name, "value", True))
     for entry in spec.inherit:
-        if entry.name in launch_snapshot:
-            resolved[entry.name] = launch_snapshot[entry.name]
-            provenance.append((entry.name, "inherit", entry.required))
+        found = _lookup(entry.name)
+        if found is not None:
+            resolved[found[0]] = found[1]
+            provenance.append((found[0], "inherit", entry.required))
         elif entry.required:
             raise ProjectRuntimeError(
                 f"Required project environment variable {entry.name} is unavailable."
             )
     for entry in spec.secrets:
-        if entry.name in launch_snapshot:
-            resolved[entry.name] = launch_snapshot[entry.name]
-            provenance.append((entry.name, "secret", entry.required))
+        found = _lookup(entry.name)
+        if found is not None:
+            resolved[found[0]] = found[1]
+            provenance.append((found[0], "secret", entry.required))
         elif entry.required:
             raise ProjectRuntimeError(
                 f"Required project environment variable {entry.name} is unavailable."
@@ -816,14 +973,16 @@ class SessionLaunch:
     """The authoritative in-process product-session launch object.
 
     Binds the immutable session-start inputs exactly once: task identity,
-    :class:`AgentDefinition`, the session
+    :class:`AgentDefinition` (which owns the requested controller policy
+    and provider/model identities — there is exactly one copy of each),
+    the session
     :class:`~agentic_debugger.application.execution_environment.ExecutionEnvironment`
     authority (input identity, never serialized here), the
     :class:`ProjectRuntimeEnvironmentSpec`, the computed
-    :class:`EffectiveSessionCapabilities`, the pre-ModelGateway
-    provider/model request identity, and the session budgets.  The worker
-    builds it once after the pre-start gate; the source consumes it
-    without recomputing any session-start fact.
+    :class:`EffectiveSessionCapabilities`, the pre-ModelGateway profile
+    request identity, and the session budgets.  The worker builds it once
+    after the pre-start gate; the source consumes it without recomputing
+    any session-start fact.
     """
 
     session_id: str
@@ -832,12 +991,24 @@ class SessionLaunch:
     execution_environment: Any
     project_spec: ProjectRuntimeEnvironmentSpec
     capabilities: EffectiveSessionCapabilities
-    provider_id: Optional[str]
-    model_id: Optional[str]
     profile_id: str
-    policy: str
     budgets: Any
     retry_of: Optional[str] = None
+
+    @property
+    def provider_id(self) -> Optional[str]:
+        """Requested provider identity (read-only view of the agent)."""
+        return self.agent.provider_id
+
+    @property
+    def model_id(self) -> Optional[str]:
+        """Requested model identity (read-only view of the agent)."""
+        return self.agent.model_id
+
+    @property
+    def policy(self) -> str:
+        """Requested controller-policy identity (read-only view of the agent)."""
+        return self.agent.controller_policy
 
     def __post_init__(self) -> None:
         from agentic_debugger.application.execution_environment import (
@@ -867,18 +1038,10 @@ class SessionLaunch:
             raise SessionRuntimeError(
                 "capabilities must be an EffectiveSessionCapabilities"
             )
-        object.__setattr__(
-            self, "provider_id", _bounded_id(self.provider_id, label="provider_id")
-        )
-        object.__setattr__(
-            self, "model_id", _bounded_id(self.model_id, label="model_id")
-        )
         if type(self.profile_id) is not str or not self.profile_id:
             raise SessionRuntimeError("profile_id must be a non-empty string")
         if len(self.profile_id.encode("utf-8")) > _MAX_ID_CHARS:
             raise SessionRuntimeError("profile_id exceeds the length bound")
-        if self.policy not in _demo_policy_values():
-            raise SessionRuntimeError(f"unknown controller_policy: {self.policy!r}")
         if type(self.budgets) is not SessionBudgets:
             raise SessionRuntimeError("budgets must be a SessionBudgets")
         if self.retry_of is not None:
@@ -934,6 +1097,7 @@ def build_local_project_launch(
     project_spec: ProjectRuntimeEnvironmentSpec,
     budgets: Any = None,
     retry_of: Optional[str] = None,
+    platform: Any = None,
 ) -> SessionLaunch:
     """Build the one Local Project SessionLaunch (single construction site).
 
@@ -941,7 +1105,8 @@ def build_local_project_launch(
     fallback (direct non-worker callers) construct through this factory so
     session-start facts are never independently reconstructed in multiple
     layers.  The launch snapshot is copied on the boundary; declared
-    project names resolve once here.
+    project names resolve once here under the worker/canonical platform
+    (live ``sys.platform`` unless overridden for tests).
     """
     from agentic_debugger.application.execution_environment import (
         ExecutionEnvironment,
@@ -960,7 +1125,7 @@ def build_local_project_launch(
     # The snapshot is copied by the environment authority; this factory
     # never retains the caller's mapping.
     environment = ExecutionEnvironment.for_local_project(
-        dict(launch_snapshot), project_spec
+        dict(launch_snapshot), project_spec, platform=platform
     )
     capabilities = compute_effective_capabilities(
         requested=agent.allowed_capabilities,
@@ -974,19 +1139,61 @@ def build_local_project_launch(
         execution_environment=environment,
         project_spec=project_spec,
         capabilities=capabilities,
-        provider_id=agent.provider_id,
-        model_id=agent.model_id,
         profile_id=profile_id,
-        policy=agent.controller_policy,
         budgets=budgets if budgets is not None else SessionBudgets(),
         retry_of=retry_of,
     )
+
+
+def check_launch_matches_params(
+    launch: SessionLaunch,
+    *,
+    policy: Any,
+    provider_id: Any,
+    model_id: Any,
+    profile_id: Any,
+    project_spec: Any,
+) -> None:
+    """Corroborate legacy transport params against the authoritative launch.
+
+    Legacy scenario params may corroborate the launch; they may never
+    override it.  Any difference in the mirrored session-start facts
+    (controller policy, requested provider/model, profile identity, or the
+    project runtime spec) fails closed with a safe name-only error before
+    any project/model execution.  Specs compare by safe fingerprint —
+    never by materialized values (which are not present here at all).
+    """
+    if type(launch) is not SessionLaunch:
+        raise SessionRuntimeError("launch must be a SessionLaunch")
+    if type(project_spec) is not ProjectRuntimeEnvironmentSpec:
+        raise SessionRuntimeError("project_spec must be a ProjectRuntimeEnvironmentSpec")
+    if policy != launch.agent.controller_policy:
+        raise SessionRuntimeError(
+            "session launch policy does not match the session params"
+        )
+    if provider_id != launch.agent.provider_id:
+        raise SessionRuntimeError(
+            "session launch provider does not match the session params"
+        )
+    if model_id != launch.agent.model_id:
+        raise SessionRuntimeError(
+            "session launch model does not match the session params"
+        )
+    if profile_id != launch.profile_id:
+        raise SessionRuntimeError(
+            "session launch profile does not match the session params"
+        )
+    if project_spec.fingerprint() != launch.project_spec.fingerprint():
+        raise SessionRuntimeError(
+            "session launch project runtime spec does not match the session params"
+        )
 
 
 __all__ = [
     "AgentDefinition",
     "CapabilityUnavailableError",
     "EffectiveSessionCapabilities",
+    "PLATFORM_ESSENTIAL_NAMES",
     "ProjectEnvDeclaration",
     "ProjectExplicitValue",
     "ProjectRuntimeEnvironmentSpec",
@@ -999,8 +1206,12 @@ __all__ = [
     "SessionRuntimeError",
     "SPEC_PARAM_MAX_CHARS",
     "build_local_project_launch",
+    "canonical_env_name",
+    "check_launch_matches_params",
     "compute_effective_capabilities",
+    "is_platform_essential_name",
     "materialize_project_runtime",
+    "resolve_env_name_platform",
     "spec_from_param",
     "spec_to_param",
     "task_allowed_capabilities",

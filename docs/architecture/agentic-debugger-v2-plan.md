@@ -768,3 +768,30 @@ scientific-identity, journal-schema, or UI-redesign changes:
   (provenance available via the safe task artifact + launch fingerprint);
   explicit non-secret VALUES are API-level only (the UI exposes
   names-only); no ModelGateway/CredentialVault/verifier-isolation work.
+
+## 17. V2-02 repair 09 note (status only — decision unchanged)
+
+A narrow post-review repair made the 08 contracts genuinely singular and
+Windows-correct, with no direction change:
+
+- **One session-start authority**: `AgentDefinition` owns the requested
+  controller policy/provider/model identity (the former duplicate
+  `SessionLaunch` fields are now read-only views, so contradiction is
+  unrepresentable). The source rebinds policy/provider/model/profile from
+  the launch after resolving it; legacy scenario params remain the worker
+  transport/compatibility input used to BUILD the launch, and a supplied
+  launch is additionally corroborated against them
+  (`check_launch_matches_params`) — corroboration-only, fail-closed on
+  mismatch before any project/model execution. Source-specific facts
+  (paths, bug text, repro/verify commands, config root, legacy Ollama
+  markers) stay on the validated params.
+- **Platform-aware environment-name identity**: one helper authority
+  (`canonical_env_name`, Windows case-insensitive / POSIX case-sensitive,
+  explicit-platform testable). Declaration duplicates, platform-essential
+  collisions (now rejected at the spec ingress, including `Path`-style
+  Windows variants), snapshot lookup, and essentials derivation all use
+  it; a Windows snapshot with conflicting case variants fails closed
+  name-only. Original spellings are preserved for provenance/UI. Durable
+  declarations stay names-only/platform-neutral; the worker's platform is
+  canonical at materialization. Secret semantics unchanged (names only in
+  the spec; values never normalized, serialized, or inspected).

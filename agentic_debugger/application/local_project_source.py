@@ -1043,9 +1043,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     repro_cmd=validated["reproduction_command"]
     verify_cmd=validated["verification_command"]
     config_root=validated["config_root"]
-    profile_id=validated["profile_id"]
     expected_fp=validated["expected_fingerprint"]
-    policy=DemoPolicy(validated["policy"])
     if ctx.emitter is None: raise ScenarioInputError("local_project requires emitter")
     if not isolated.is_dir(): raise ScenarioInputError(f"isolated workspace missing: {isolated}")
     # V2-02 SessionLaunch authority: one launch binding per session.  The
@@ -1077,6 +1075,25 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             raise ScenarioInputError("session launch identity does not match the session")
         if _ctx_launch.task_id != ctx.emitter.task_id:
             raise ScenarioInputError("session launch task does not match the session")
+        # Corroboration-only: legacy transport params may confirm the
+        # authoritative launch but never override it.  Any contradiction
+        # in a mirrored session-start fact fails closed here, before any
+        # project/model execution.  Comparison is by safe
+        # representation/fingerprint — never materialized values.
+        from agentic_debugger.application.session_runtime import (
+            check_launch_matches_params,
+        )
+        try:
+            check_launch_matches_params(
+                _ctx_launch,
+                policy=validated["policy"],
+                provider_id=validated["provider"],
+                model_id=validated["model_id"],
+                profile_id=validated["profile_id"],
+                project_spec=validated["project_runtime_spec"],
+            )
+        except Exception as exc:
+            raise ScenarioInputError(f"session launch mismatch: {exc}") from exc
         session_launch = _ctx_launch
     else:
         _ctx_authority = getattr(ctx, "product_environment", None)
@@ -1106,9 +1123,18 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         capabilities=session_launch.capabilities,
     )
     session_capabilities = session_launch.capabilities
+    # Single-authority rebind: from here on, the session-start facts owned
+    # by SessionLaunch come from the launch, never from the mirrored
+    # validated transport params above (those were only its construction
+    # input for the fallback, or corroboration for a supplied launch).
+    # Genuinely source-specific facts (repository/worktree paths, bug
+    # description, repro/verify commands, config root, legacy Ollama
+    # routing markers) stay on the validated params.
+    policy = DemoPolicy(session_launch.agent.controller_policy)
+    provider = session_launch.agent.provider_id
+    model_id = session_launch.agent.model_id
+    profile_id = session_launch.profile_id
     is_ollama = validated["is_ollama"]
-    provider = validated["provider"]
-    model_id = validated["model_id"]
     ollama_alias = validated["ollama_alias"] or (
         profile_id if provider is None and is_ollama else None
     )
@@ -1159,8 +1185,11 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             raise ScenarioInputError(f"model profile unavailable: {exc}") from exc
         if expected_fp is not None and profile.configuration_fingerprint!=expected_fp:
             raise ScenarioInputError("model profile fingerprint mismatch")
-    session_id=ctx.emitter.session_id
-    task_id=ctx.emitter.task_id
+    # Session/task identity likewise comes from the launch (proven equal
+    # to the emitter binding by the checks above / by fallback
+    # construction); run identity stays on the context (not launch-owned).
+    session_id=session_launch.session_id
+    task_id=session_launch.task_id
     source_kind=ctx.emitter.source_kind
     run_id=ctx.run_id or f"{task_id}--local"
     observability=SessionObservability(ObservabilityContext(session_id=session_id, task_id=task_id, source_kind=source_kind, run_id=ctx.run_id), emitter=ctx.emitter)
@@ -1199,7 +1228,6 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                     if _initial_result.timed_out:
                         err = (err + " timed out 30.0s").strip()
                     out, err = _bounded(out), _bounded(err)
-        repro_output=_bounded(out+err, 2000)
         repro_output=_bounded(out+err, 2000)
         try:
             observability.diagnosis_recorded(text=f"reproduction result exit {exit_code}: {repro_output[:500]}", file_path=None, symbol=None, confidence="observed")
