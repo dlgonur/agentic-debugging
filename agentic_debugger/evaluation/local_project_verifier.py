@@ -8,6 +8,19 @@ disposable :class:`~agentic_debugger.runtime.workspace.TaskWorkspace`.
 The boundary is trusted-local execution.  It protects the owner's repository
 from evaluator writes, but it is not an operating-system sandbox for hostile
 project code.
+
+V2-02 project-secret egress seal: the PRODUCT verifier path (an explicit
+``product_environment`` supplied by the Local Project session) also carries
+the session's ONE
+:class:`~agentic_debugger.application.execution_environment.ProjectSecretRedactor`
+(``product_secret_redactor``, derived by the session launch environment from
+the same materialization as the environment — never a second, independently
+resolvable authority).  Command stdout/stderr, subprocess-derived
+diagnostics, and verifier-owned Git error text are redacted through it before
+they enter externally consumable evidence (TestRecords, diagnostics,
+``to_mapping`` review structures).  Pass/fail classification and exit codes
+are untouched, and no redaction authority supplied means the historical
+behavior is preserved for direct legacy/scientific callers.
 """
 from __future__ import annotations
 
@@ -25,6 +38,9 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 from agentic_debugger.cancellation import CancellationError
+from agentic_debugger.application.execution_environment import (
+    ProjectSecretRedactor,
+)
 from agentic_debugger.evaluation.outcome_taxonomy import SemanticOutcome, classify_outcome
 from agentic_debugger.evaluation.runner import (
     EvaluationInputError,
@@ -291,6 +307,7 @@ class LocalProjectVerifier:
         command_runner_factory: Callable[[TaskWorkspace], CommandRunner] = CommandRunner,
         cancel_check: Optional[Callable[[], None]] = None,
         product_environment: Optional[Mapping[str, str]] = None,
+        product_secret_redactor: Optional[ProjectSecretRedactor] = None,
     ) -> None:
         if progress_observer is not None and not callable(getattr(progress_observer, "stage_started", None)):
             raise EvaluationInputError("progress_observer must implement stage_started")
@@ -315,6 +332,30 @@ class LocalProjectVerifier:
                     "product_environment must not be supplied together; "
                     "they are never merged"
                 )
+        # V2-02 project-secret egress seal: the redaction authority is the
+        # session's ONE ProjectSecretRedactor, supplied only alongside its
+        # own fixed product environment (fail-closed ownership — never
+        # merged with a legacy runner factory and never independent).
+        if product_secret_redactor is not None:
+            if type(product_secret_redactor) is not ProjectSecretRedactor:
+                raise EvaluationInputError(
+                    "product_secret_redactor must be the session "
+                    "ProjectSecretRedactor authority or None"
+                )
+            if product_environment is None:
+                raise EvaluationInputError(
+                    "conflicting verifier authorities: a product secret "
+                    "redaction authority requires the explicit "
+                    "product_environment it was derived from; they are "
+                    "never supplied or resolved independently"
+                )
+            if command_runner_factory is not _DEFAULT_RUNNER_FACTORY:
+                raise EvaluationInputError(
+                    "conflicting verifier authorities: a custom "
+                    "command_runner_factory and a product secret "
+                    "redaction authority must not be supplied together; "
+                    "they are never merged"
+                )
         self._observer = progress_observer
         self._workspace_factory = workspace_factory
         self._runner_factory = command_runner_factory
@@ -328,6 +369,14 @@ class LocalProjectVerifier:
         self._product_environment = (
             dict(product_environment) if product_environment is not None else None
         )
+        self._product_secret_redactor = product_secret_redactor
+
+    def _redact(self, value: Optional[str]) -> Optional[str]:
+        """Redact raw materialized project-secret values (identity for
+        legacy callers without a product redaction authority)."""
+        if self._product_secret_redactor is None or value is None:
+            return value
+        return self._product_secret_redactor.redact(value)
 
     def _make_runner(self, workspace: TaskWorkspace) -> CommandRunner:
         """One verifier CommandRunner under the single fixed authority.
@@ -357,7 +406,11 @@ class LocalProjectVerifier:
 
         try:
             self._checkpoint()
-            before = _inspect_source(plan.source_repo_path, environment=self._product_environment)
+            before = _inspect_source(
+                plan.source_repo_path,
+                environment=self._product_environment,
+                redactor=self._product_secret_redactor,
+            )
             if before.head != plan.source_head_commit:
                 state.status = EvaluationStatus.EVALUATOR_INVARIANT_FAILED
                 state.stop_reason = "source_head_mismatch"
@@ -380,7 +433,14 @@ class LocalProjectVerifier:
                 export_root = tempfile.mkdtemp(prefix=_EXPORT_PREFIX, dir=workspace_parent)
                 export_source = os.path.join(export_root, "source")
                 os.mkdir(export_source)
-                _export_commit(before.root, before.head, export_source, export_root, environment=self._product_environment)
+                _export_commit(
+                    before.root,
+                    before.head,
+                    export_source,
+                    export_root,
+                    environment=self._product_environment,
+                    redactor=self._product_secret_redactor,
+                )
                 prepared = True
             except Exception as exc:
                 state.status = EvaluationStatus.WORKSPACE_PREPARATION_FAILED
@@ -751,7 +811,7 @@ class LocalProjectVerifier:
                 cancel_check=self._cancel_check,
             )
         except CommandExecutionError as exc:
-            state.diagnostic = bounded_error(exc)
+            state.diagnostic = self._redact(bounded_error(exc))
             return TestRecord(
                 node_id, kind, tuple(argv), "<WORKSPACE>", plan.timeout_seconds,
                 None, TestRecordStatus.ERROR, False, "", state.diagnostic,
@@ -781,8 +841,11 @@ class LocalProjectVerifier:
             exit_code=result.exit_code,
             status=status,
             timed_out=result.timed_out,
-            stdout=normalize_output(result.stdout, workspace.root),
-            stderr=normalize_output(result.stderr, workspace.root),
+            # Egress seal: raw materialized project-secret values are
+            # redacted BEFORE the evidence is bounded/normalized; status,
+            # exit code, and truncation flags are untouched.
+            stdout=normalize_output(self._redact(result.stdout), workspace.root),
+            stderr=normalize_output(self._redact(result.stderr), workspace.root),
             stdout_truncated=result.stdout_truncated,
             stderr_truncated=result.stderr_truncated,
             counts=PytestCounts(),
@@ -818,7 +881,11 @@ class LocalProjectVerifier:
         after: Optional[_SourceState] = None
         source_error: Optional[str] = None
         try:
-            after = _inspect_source(plan.source_repo_path, environment=self._product_environment)
+            after = _inspect_source(
+                plan.source_repo_path,
+                environment=self._product_environment,
+                redactor=self._product_secret_redactor,
+            )
         except Exception as exc:
             source_error = bounded_error(exc)
         unchanged = bool(
@@ -884,7 +951,10 @@ class LocalProjectVerifier:
             p2p_passed=int(state.regression is not None and state.regression.passed),
             verification_command_count=state.command_count,
             timeout=state.timeout,
-            diagnostic=state.diagnostic,
+            # Defense in depth: the final externally consumable diagnostic
+            # passes through the same single redaction authority (Git text
+            # is already redacted at its source in ``_run_git``).
+            diagnostic=self._redact(state.diagnostic),
         )
 
     def _stage_started(self, stage: str) -> None:
@@ -945,6 +1015,7 @@ def _run_git(
     *,
     timeout: float = 30.0,
     environment: Optional[Mapping[str, str]] = None,
+    redactor: Optional[ProjectSecretRedactor] = None,
 ) -> subprocess.CompletedProcess[bytes]:
     """Run one verifier-owned Git command with an explicit environment.
 
@@ -953,6 +1024,10 @@ def _run_git(
     inheritance behavior for direct non-product callers; the real Local
     Project worker always supplies it so Git children never implicitly
     inherit worker control/model/provider state.
+
+    ``redactor`` is the session's project-secret redaction authority: Git
+    failure detail derives from raw child output, so on the product path it
+    is redacted BEFORE it enters any raised diagnostic.
     """
     if environment is not None:
         if not isinstance(environment, Mapping):
@@ -982,6 +1057,8 @@ def _run_git(
         raise EvaluationInputError(f"Git source operation could not run: {exc}") from exc
     if result.returncode != 0:
         detail = (result.stderr or result.stdout).decode("utf-8", "replace").strip()[:1000]
+        if redactor is not None:
+            detail = redactor.redact(detail)
         raise EvaluationInputError(f"Git {' '.join(arguments)} failed" + (f": {detail}" if detail else ""))
     return result
 
@@ -990,32 +1067,37 @@ def _inspect_source(
     path: str,
     *,
     environment: Optional[Mapping[str, str]] = None,
+    redactor: Optional[ProjectSecretRedactor] = None,
 ) -> _SourceState:
     root = os.path.realpath(path)
     if not os.path.isdir(root):
         raise EvaluationInputError("source_repo_path must identify an existing directory")
     inside = _run_git(
-        root, ["rev-parse", "--is-inside-work-tree"], environment=environment
+        root, ["rev-parse", "--is-inside-work-tree"],
+        environment=environment, redactor=redactor,
     ).stdout.decode("ascii", "strict").strip()
     if inside != "true":
         raise EvaluationInputError("source_repo_path must identify a Git working tree")
     reported_root = _run_git(
-        root, ["rev-parse", "--show-toplevel"], environment=environment
+        root, ["rev-parse", "--show-toplevel"],
+        environment=environment, redactor=redactor,
     ).stdout.decode("utf-8", "strict").strip()
     if os.path.normcase(os.path.realpath(reported_root)) != os.path.normcase(root):
         raise EvaluationInputError("source_repo_path must be the repository root")
     head = _run_git(
-        root, ["rev-parse", "--verify", "HEAD"], environment=environment
+        root, ["rev-parse", "--verify", "HEAD"],
+        environment=environment, redactor=redactor,
     ).stdout.decode("ascii", "strict").strip()
     tree = _run_git(
-        root, ["rev-parse", "--verify", "HEAD^{tree}"], environment=environment
+        root, ["rev-parse", "--verify", "HEAD^{tree}"],
+        environment=environment, redactor=redactor,
     ).stdout.decode("ascii", "strict").strip()
     if _HEAD_PATTERN.fullmatch(head) is None or _HEAD_PATTERN.fullmatch(tree) is None:
         raise EvaluationInputError("source repository returned malformed object identity")
     status = _run_git(
         root,
         ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
-        environment=environment,
+        environment=environment, redactor=redactor,
     ).stdout
     return _SourceState(root=root, head=head, tree=tree, clean=status == b"")
 
@@ -1027,12 +1109,13 @@ def _export_commit(
     export_root: str,
     *,
     environment: Optional[Mapping[str, str]] = None,
+    redactor: Optional[ProjectSecretRedactor] = None,
 ) -> None:
     archive_path = os.path.join(export_root, "source.tar")
     _run_git(
         repo,
         ["archive", "--format=tar", "--output", archive_path, head],
-        environment=environment,
+        environment=environment, redactor=redactor,
     )
     total_members = 0
     total_bytes = 0

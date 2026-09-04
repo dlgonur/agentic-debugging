@@ -732,10 +732,25 @@ scientific-identity, journal-schema, or UI-redesign changes:
 - **Secret-value lifetime**: declared names resolve ONCE at session launch
   from the fixed launch snapshot (`materialize_project_runtime`); values
   live only in trusted session-process memory and authorized project-role
-  child envs. Never in spec/params/history/journal/repr/fingerprints/
-  diagnostics/prompts/model channel; never provider credentials. No
-  CredentialVault (V2-04) and no plaintext secret textbox (values are
-  never entered in the UI).
+  child envs. The spec carries names only: never values in
+  spec/params/history/journal/repr/fingerprints; never provider
+  credentials. No CredentialVault (V2-04) and no plaintext secret textbox
+  (values are never entered in the UI).
+- **Secret egress seal (repair 10)**: the project child itself receives the
+  real secret; the enforceable boundary is the return direction. Raw
+  materialized project-secret values are redacted at the product
+  execution-result boundaries — `ProductExecutor.run_project_command`
+  stdout/stderr, product PDB tool/observability payloads, and product
+  `LocalProjectVerifier` evidence (TestRecord output, subprocess-derived
+  diagnostics, verifier-owned Git error text) — before any Agentic Debugger
+  journal/model/evidence exposure, by ONE per-session `ProjectSecretRedactor`
+  derived from the same `ProjectRuntimeMaterialization` as the role child
+  environments (no re-resolution from `os.environ`, no second secret
+  authority, non-serializable, values never repr'd). This is the
+  application-owned raw-value boundary, not a hostile-project DLP system:
+  a trusted project that deliberately transforms, encodes, hashes, splits,
+  or writes a secret into unrelated files is not detected, and no such
+  claim is made.
 - **Materialization timing**: worker snapshot (or source fallback snapshot)
   → fixed materialization → role derivation; every role derives from the
   fixed mapping; post-start parent mutation is invisible (tested).
@@ -763,7 +778,10 @@ scientific-identity, journal-schema, or UI-redesign changes:
   new least-authority CLEANUP role (essentials only — no project
   application variables or secrets). Verifier-owned Git children keep the
   single fixed verifier environment (documented remaining gap for a later
-  bounded refinement).
+  bounded refinement). Repair 10 adds the session redaction authority
+  alongside that fixed environment (fail-closed ownership, never merged
+  with a custom runner factory): verifier command evidence and Git error
+  text are redacted before entering review-facing structures.
 - **Deferred sub-pieces**: journal carries no new session-launch event
   (provenance available via the safe task artifact + launch fingerprint);
   explicit non-secret VALUES are API-level only (the UI exposes
@@ -795,3 +813,46 @@ Windows-correct, with no direction change:
   declarations stay names-only/platform-neutral; the worker's platform is
   canonical at materialization. Secret semantics unchanged (names only in
   the spec; values never normalized, serialized, or inspected).
+
+## 18. V2-02 repair 10 note (status only — decision unchanged)
+
+A narrow post-review repair sealed the one missing V2-02 boundary —
+project-secret EGRESS — with no direction change:
+
+- **One redaction authority per session**
+  (`application/execution_environment.py::ProjectSecretRedactor`): derived
+  ONCE by `ExecutionEnvironment.for_local_project` from the SAME
+  `ProjectRuntimeMaterialization` that supplies the role child environments.
+  Redaction values are the materialized values of exactly the declarations
+  whose provenance kind is `secret` (no shape guessing, no re-resolution
+  from `os.environ`, no second secret authority, no global registry).
+  Replacement is deterministic and bounded (`<PROJECT_SECRET:NAME>`
+  markers, non-empty exact values, longest first, single-pass so inserted
+  markers are never rescanned); empty secret values are excluded
+  explicitly. The redactor is non-serializable (no value API, pickle/copy
+  fail closed, count-only repr) and never enters params, journals, child
+  environments, or provider transport. The legacy bridge path exposes no
+  redaction authority and keeps its historical behavior.
+- **Boundaries sealed**: `ProductExecutor.run_project_command` redacts
+  child stdout/stderr before the `CommandResult` crosses back into the
+  Local Project/control plane (exit code, timeout state, argv, cwd, and
+  truncation flags untouched; generic `CommandRunner` unchanged); the
+  product PDB tool handlers sanitize each response ONCE (same sanitized
+  object for the observability event and the model payload — locals,
+  safe-eval, stack, execution control, start location, and PDB exception
+  diagnostics) without modifying the raw `PdbSession` protocol or PDB's
+  project-secret access; the PRODUCT `LocalProjectVerifier` path takes the
+  same authority alongside its fixed environment (fail-closed ownership:
+  never supplied without the environment, never merged with a custom
+  runner factory) and redacts TestRecord stdout/stderr,
+  subprocess-derived diagnostics, and verifier-owned Git error text before
+  they enter review-facing structures, with classification and exit codes
+  untouched. Provider/model transport is unchanged: redaction happens on
+  project-domain OUTPUT before the model sees a result; no secret
+  redaction material enters provider argv/env/prompts/config.
+- **FirstMate regression closed**: the reproduced leak (a declared project
+  secret echoed by a normal project command returning raw
+  `CommandResult.stdout`, then flowing into the durable journal via the
+  initial-reproduction diagnosis and into the model channel via the
+  `run_reproduction` `failure_output`) is now a redaction-marker
+  regression suite (`tests/unit/test_project_secret_redaction.py`).

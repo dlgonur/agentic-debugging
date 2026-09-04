@@ -37,6 +37,18 @@ user-facing "full environment" switch and no full-environment escape
 hatch.  :attr:`uses_legacy_bridge` lets tests prove which path an
 authority took.
 
+**V2-02 project-secret egress seal (repair 10).**  The declarative path
+derives ONE per-session project-secret redaction authority from the same
+fixed materialization that supplies the role child environments
+(:class:`ProjectSecretRedactor`, exposed via
+:meth:`ExecutionEnvironment.project_secret_redactor`).  The project child
+receives the exact raw secret; text (and string-bearing structures)
+crossing from the project execution domain back into the Agentic Debugger
+control/model/evidence domain (executor command output, product PDB
+responses, product verifier evidence) is redacted through that one
+authority before exposure.  The legacy bridge path exposes no redaction
+authority (``None``) and keeps its historical behavior.
+
 **Classification is provenance-based, not name-shape guessing.**  The
 principal exclusion authority identifies Agentic Debugger-owned channels
 structurally:
@@ -61,9 +73,10 @@ declarative path) only — never values.
 from __future__ import annotations
 
 import os
+import re
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, Mapping, Optional
+from typing import Any, Dict, Mapping, Optional, Tuple
 
 from agentic_debugger.application.session_runtime import (
     PLATFORM_ESSENTIAL_NAMES,
@@ -130,6 +143,166 @@ def is_control_or_provider_authority(name: str) -> bool:
     return name.lower() in _provider_authority_names_lower()
 
 
+#: Deterministic replacement marker for redacted raw project-secret values.
+#: The secret NAME inside the marker is already safe durable provenance
+#: (the spec carries names durably); the VALUE never appears.
+PROJECT_SECRET_MARKER_TEMPLATE = "<PROJECT_SECRET:{name}>"
+
+
+class ProjectSecretRedactor:
+    """One session's project-secret OUTPUT redaction authority.
+
+    Derived ONCE by :meth:`ExecutionEnvironment.for_local_project` from the
+    SAME
+    :class:`~agentic_debugger.application.session_runtime.ProjectRuntimeMaterialization`
+    that supplies the role child environments: the redaction values are the
+    materialized values of exactly those declarations whose provenance kind
+    is ``secret``.  The project child still receives the exact raw secret;
+    text (and string-bearing structures) crossing from the project execution
+    domain back into the Agentic Debugger control/model/evidence domain is
+    redacted through this one per-session authority first.
+
+    Honest scope: this seals the application-owned raw-value boundary
+    (``Agentic Debugger will not directly propagate the RAW materialized
+    project-secret value across the product execution-result boundary``).
+    It is not a hostile-project DLP system: a trusted project that
+    deliberately transforms, encodes, hashes, splits, or writes a secret
+    into unrelated files is not detected, and no such claim is made.
+
+    Non-serializable by construction: no ``to_mapping``/``secret_values``
+    API exists, pickling/copying fails closed, the repr exposes counts
+    only, and the redaction dictionary is never rendered, logged, or
+    journaled.  Replacement is deterministic: non-empty exact values only
+    (an empty secret value contains no bytes to redact), longest value
+    first with the name as tiebreak, and one single-pass combined match so
+    inserted markers are never rescanned.
+    """
+
+    __slots__ = ("_bindings", "_pattern", "_markers")
+
+    def __init__(self, bindings: Tuple[Tuple[str, str], ...]) -> None:
+        from agentic_debugger.application.session_runtime import (
+            validate_env_name,
+        )
+
+        if isinstance(bindings, (str, bytes)) or not isinstance(
+            bindings, (list, tuple)
+        ):
+            raise ExecutionEnvironmentError(
+                "secret bindings must be a tuple of (name, value) pairs"
+            )
+        seen: Dict[str, str] = {}
+        for entry in bindings:
+            if (
+                type(entry) is not tuple
+                or len(entry) != 2
+                or type(entry[0]) is not str
+                or type(entry[1]) is not str
+            ):
+                raise ExecutionEnvironmentError(
+                    "secret bindings must be (name, value) string pairs"
+                )
+            validate_env_name(entry[0])
+            if entry[0] in seen:
+                raise ExecutionEnvironmentError(
+                    f"duplicate secret binding for {entry[0]!r}"
+                )
+            seen[entry[0]] = entry[1]
+        # Deterministic order: longest exact value first, name as the
+        # tiebreak.  Empty values are excluded explicitly (no bytes to
+        # redact; naive empty-string replacement would be degenerate).
+        ordered = tuple(
+            sorted(
+                ((name, value) for name, value in seen.items() if value != ""),
+                key=lambda item: (-len(item[1]), item[0]),
+            )
+        )
+        self._bindings = ordered
+        if ordered:
+            self._pattern: Any = re.compile(
+                "|".join(re.escape(value) for _, value in ordered)
+            )
+            markers: Dict[str, str] = {}
+            for name, value in ordered:
+                markers.setdefault(
+                    value, PROJECT_SECRET_MARKER_TEMPLATE.format(name=name)
+                )
+            self._markers: Any = MappingProxyType(markers)
+        else:
+            self._pattern = None
+            self._markers = MappingProxyType({})
+
+    @classmethod
+    def from_materialization(
+        cls, materialization: Any
+    ) -> "ProjectSecretRedactor":
+        """Derive the redactor from the fixed session materialization.
+
+        Only declarations whose provenance kind is ``secret`` contribute
+        values; explicit values and benign inherits never do.
+        """
+        from agentic_debugger.application.session_runtime import (
+            ProjectRuntimeMaterialization,
+        )
+
+        if type(materialization) is not ProjectRuntimeMaterialization:
+            raise ExecutionEnvironmentError(
+                "materialization must be a ProjectRuntimeMaterialization"
+            )
+        bindings = tuple(
+            (name, materialization.resolved[name])
+            for name, kind, _required in materialization.provenance
+            if kind == "secret"
+        )
+        return cls(bindings)
+
+    def redact(self, text: str) -> str:
+        """Return ``text`` with every raw materialized secret value replaced.
+
+        Deterministic and bounded: values that never occur leave the text
+        unchanged; each occurrence is replaced by
+        ``<PROJECT_SECRET:NAME>``.
+        """
+        if type(text) is not str:
+            raise ExecutionEnvironmentError(
+                "project-secret redaction operates on text values only"
+            )
+        if self._pattern is None or not text:
+            return text
+        return self._pattern.sub(
+            lambda match: self._markers[match.group(0)], text
+        )
+
+    def redact_structure(self, value: Any) -> Any:
+        """Recursively redact strings inside mappings/lists/tuples.
+
+        Structural fields, keys, numbers, booleans, and ``None`` are
+        returned unchanged; only string VALUES are redacted.
+        """
+        if type(value) is str:
+            return self.redact(value)
+        if isinstance(value, Mapping):
+            return {
+                key: self.redact_structure(item)
+                for key, item in value.items()
+            }
+        if type(value) is list:
+            return [self.redact_structure(item) for item in value]
+        if type(value) is tuple:
+            return tuple(self.redact_structure(item) for item in value)
+        return value
+
+    def __getstate__(self) -> None:
+        raise TypeError(
+            "project secret redaction authority must never be serialized"
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"ProjectSecretRedactor(redactable_secrets={len(self._bindings)})"
+        )
+
+
 class ExecutionEnvironment:
     """The per-session product/local-session execution-environment authority.
 
@@ -150,6 +323,7 @@ class ExecutionEnvironment:
         "_project_spec",
         "_essentials",
         "_materialized",
+        "_secret_redactor",
         "_role_proxies",
     )
 
@@ -192,6 +366,10 @@ class ExecutionEnvironment:
         }
         self._essentials = MappingProxyType(essentials)
         self._materialized: Optional[Mapping[str, str]] = None
+        # The legacy bridge predates the declared project-secret contract;
+        # it carries no redaction authority and keeps its historical
+        # (unredacted) behavior for test-only/legacy callers.
+        self._secret_redactor: Optional[ProjectSecretRedactor] = None
         self._role_proxies = MappingProxyType(
             {
                 ExecutionRole.PROJECT_COMMAND: self._project_ambient,
@@ -275,6 +453,12 @@ class ExecutionEnvironment:
         authority._project_spec = project_spec
         authority._essentials = MappingProxyType(dict(essentials))
         authority._materialized = MappingProxyType(dict(materialized))
+        # V2-02 egress seal: one redaction authority per session, derived
+        # from the SAME materialization as the role child environments (no
+        # re-resolution from os.environ, no second secret authority).
+        authority._secret_redactor = ProjectSecretRedactor.from_materialization(
+            materialization
+        )
         project_env = MappingProxyType({**essentials, **materialized})
         authority._role_proxies = MappingProxyType(
             {
@@ -355,6 +539,16 @@ class ExecutionEnvironment:
             raise ExecutionEnvironmentError("role must be an ExecutionRole")
         return self._role_proxies[role]
 
+    def project_secret_redactor(self) -> Optional["ProjectSecretRedactor"]:
+        """The one per-session project-secret redaction authority.
+
+        Declarative path: a :class:`ProjectSecretRedactor` derived from the
+        same fixed materialization as the role child environments (a
+        no-op redactor when no secret is declared).  Legacy bridge path:
+        ``None`` (historical behavior, no declared-secret contract).
+        """
+        return self._secret_redactor
+
     def __repr__(self) -> str:
         if self._uses_legacy_bridge:
             return (
@@ -378,5 +572,7 @@ __all__ = [
     "ExecutionEnvironmentError",
     "ExecutionRole",
     "PLATFORM_ESSENTIAL_NAMES",
+    "PROJECT_SECRET_MARKER_TEMPLATE",
+    "ProjectSecretRedactor",
     "is_control_or_provider_authority",
 ]

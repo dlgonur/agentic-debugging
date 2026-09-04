@@ -390,6 +390,19 @@ class _LocalToolContext:
         self.pdb_worker_environment = pdb_worker_environment
         self.executor = executor
         self.capabilities = capabilities
+        # V2-02 project-secret egress seal: the session's ONE redaction
+        # authority (derived by the SessionLaunch ExecutionEnvironment from
+        # the same materialization as the role child environments).  Raw
+        # materialized project-secret values are redacted here before any
+        # product PDB response/observability payload crosses into the
+        # controller/model/evidence domain.  Absent on legacy direct
+        # harness construction (historical behavior preserved).
+        self.secret_redaction = (
+            executor.project_secret_redactor()
+            if executor is not None
+            and hasattr(executor, "project_secret_redactor")
+            else None
+        )
         self.workspace = _IsolatedWorkspace(isolated)
         self.patch_manager = PatchManager(self.workspace, list(tracked), ["tests", "task.json"])
         self.candidate_patch = ""
@@ -429,6 +442,14 @@ class _LocalToolContext:
             fn()
         except Exception:
             pass
+
+    def redact_project_output(self, value):  # type: ignore[no-untyped-def]
+        """Redact raw materialized project-secret values from one
+        product-output structure (identity when the session carries no
+        redaction authority).  One authority, never per-handler rules."""
+        if self.secret_redaction is None:
+            return value
+        return self.secret_redaction.redact_structure(value)
 
     def require_capability(self, capability):  # type: ignore[no-untyped-def]
         """Fail closed (tool-unavailable) when the session denies a capability.
@@ -925,12 +946,15 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             context.pdb_session_started = True
             started = session.start_paused_target(probe.script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
+            diag = context.redact_project_output(bounded_diagnostic(exc))
             context.release_pdb()
-            diag = bounded_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         if started.get("state") != "paused":
             context.release_pdb()
             raise ToolExecutionError("runtime probe did not reach the declared breakpoint", safe_diagnostic="runtime probe did not reach the declared breakpoint")
+        # Egress seal: one sanitized object feeds BOTH the observability
+        # event and the model payload (never raw-then-sanitized).
+        started = context.redact_project_output(started)
         if interactive_debugger_controls:
             context.interactive_pdb_session_started = True
         context.pdb_pause_generation = 1
@@ -946,8 +970,10 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             stack = session.get_stack_summary()
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = bounded_diagnostic(exc)
+            diag = context.redact_project_output(bounded_diagnostic(exc))
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        # Egress seal: sanitize once; the SAME object is observed and returned.
+        stack = context.redact_project_output(stack)
         generation = stack.get("pause_generation")
         if type(generation) is not int:
             raise ToolExecutionError("stack summary did not report a pause generation", safe_diagnostic="stack summary did not report a pause generation")
@@ -961,8 +987,10 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             result = session.get_frame_locals(int(arguments["frame_id"]), int(arguments["pause_generation"]))
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = bounded_diagnostic(exc)
+            diag = context.redact_project_output(bounded_diagnostic(exc))
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        # Egress seal: sanitize once; the SAME object is observed and returned.
+        result = context.redact_project_output(result)
         context.pdb_observation_names.append("get_frame_locals")
         context.observe(lambda: context.observability.locals_observed(dict(result)))
         return _ok(_json_safe(dict(result), "get_frame_locals"), "bounded frame locals collected")
@@ -972,8 +1000,10 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             result = session.safe_eval_expression(int(arguments["frame_id"]), int(arguments["pause_generation"]), str(arguments["expression"]))
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = bounded_diagnostic(exc)
+            diag = context.redact_project_output(bounded_diagnostic(exc))
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        # Egress seal: evaluated runtime values are project-domain output.
+        result = context.redact_project_output(result)
         context.pdb_observation_names.append("safe_eval_expression")
         return _ok(_json_safe(dict(result), "safe_eval_expression"), "restricted runtime expression evaluated")
 
@@ -984,8 +1014,10 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             result = operation()
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = bounded_diagnostic(exc)
+            diag = context.redact_project_output(bounded_diagnostic(exc))
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
+        # Egress seal: one sanitized object for observation and payload.
+        result = context.redact_project_output(result)
         if result.get("state") == "paused":
             context.pdb_pause_generation = (context.pdb_pause_generation or 0) + 1
             context.observe(lambda: context.observability.location_changed(result["script"], result["line"], result["function"], context.pdb_pause_generation))
@@ -1388,14 +1420,18 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         # V2-02 verifier environment seam (single fixed authority): the
         # session execution authority supplies ONE verifier-role mapping
         # (declarative project runtime — no Agentic Debugger
-        # control/provider authority).  The verifier copies it once and
-        # uses it for BOTH its CommandRunner children and its owned Git
-        # subprocesses; the environment is never a model-selected tool
-        # argument and cannot be mutated once verification begins.
+        # control/provider authority) plus the SAME per-session
+        # project-secret redaction authority (derived by the launch
+        # environment from the one materialization — never a second,
+        # independently resolvable one).  The verifier copies the mapping
+        # once and uses it for BOTH its CommandRunner children and its
+        # owned Git subprocesses; the environment is never a model-selected
+        # tool argument and cannot be mutated once verification begins.
         independent_verifier=LocalProjectVerifier(
             progress_observer=verifier_events,
             cancel_check=ctx.token.check,
             product_environment=dict(verifier_command_environment),
+            product_secret_redactor=execution_environment.project_secret_redactor(),
         )
         verification_result=independent_verifier.evaluate(verification_plan)
         verifier_events.completed(verification_result)
