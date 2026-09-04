@@ -60,11 +60,25 @@ class _BoundedStreamAccumulator:
     a head portion (first half) and a rolling tail window (last half).
     Subsequent output goes only into the tail window.
     Uses incremental UTF-8 decoding so multi-byte characters are not corrupted.
+
+    An optional neutral output ``sanitizer`` (duck-typed ``feed(str)->str`` /
+    ``flush()->str``, one independent instance per stream) is applied to the
+    complete decoded stream text BEFORE any bounding: text it emits is what
+    gets bounded.  When absent, behavior is byte-identical to the historical
+    runner.  When present, ``stdout_truncated``/``stderr_truncated`` keep
+    their truthful meaning with respect to the stream the caller exposes:
+    the flag reports that the produced (sanitized) output exceeded the
+    retention bound, not a claim about raw pre-sanitization bytes.
     """
 
-    def __init__(self, max_chars: int = _MAX_OUTPUT_CHARS) -> None:
+    def __init__(
+        self,
+        max_chars: int = _MAX_OUTPUT_CHARS,
+        sanitizer: Optional[Any] = None,
+    ) -> None:
         self._max = max_chars
         self._half = max_chars // 2
+        self._sanitizer = sanitizer
         self._decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self._buffer: List[str] = []
         self._buffered = 0
@@ -81,6 +95,10 @@ class _BoundedStreamAccumulator:
         text = self._decoder.decode(data)
         if not text:
             return
+        if self._sanitizer is not None:
+            text = self._sanitizer.feed(text)
+            if not text:
+                return
         self._add_text(text)
 
     def _add_text(self, text: str) -> None:
@@ -123,6 +141,10 @@ class _BoundedStreamAccumulator:
         residual = self._decoder.decode(b"", final=True)
         if residual:
             self._add_text(residual)
+        if self._sanitizer is not None:
+            flushed = self._sanitizer.flush()
+            if flushed:
+                self._add_text(flushed)
 
         self._sealed = True
         self._decoder = None
@@ -159,6 +181,19 @@ class CommandRunner:
     * neither — narrow non-product compatibility (worker boundary harness,
       generic tests): the historical full parent-environment inheritance.
       This fallback is not the product path.
+
+    Optional neutral output-sanitization seam (``output_sanitizer_factory``):
+    a zero-arg factory invoked once per output stream to build an object
+    with ``feed(str) -> str`` / ``flush() -> str`` that each decoded chunk
+    passes through BEFORE bounding.  It is plain duck typing — this module
+    never imports the application layer, the factory stays ``None`` on the
+    generic/scientific paths (byte-identical historical behavior), and the
+    seam is refused together with a ``VerifiedExecutionContext`` (verified
+    execution has no product secret authority to sanitize with).  The
+    product boundary supplies it so raw secret values are redacted from
+    the complete stream text before the head/tail bounding can cut a
+    fragment out of them.  Sanitizers must be deterministic and must not
+    raise on text input.
     """
 
     def __init__(
@@ -167,6 +202,7 @@ class CommandRunner:
         execution_context: Optional[VerifiedExecutionContext] = None,
         *,
         environment: Optional[Mapping[str, str]] = None,
+        output_sanitizer_factory: Optional[Callable[[], Any]] = None,
     ) -> None:
         if execution_context is not None and environment is not None:
             raise CommandRequestError(
@@ -174,6 +210,18 @@ class CommandRunner:
                 "and an explicit product environment must not be supplied "
                 "together; they are never merged"
             )
+        if output_sanitizer_factory is not None:
+            if execution_context is not None:
+                raise CommandRequestError(
+                    "conflicting execution authorities: an output "
+                    "sanitization seam and a VerifiedExecutionContext must "
+                    "not be supplied together; verified execution carries "
+                    "no product secret authority"
+                )
+            if not callable(output_sanitizer_factory):
+                raise CommandRequestError(
+                    "output_sanitizer_factory must be callable or None"
+                )
         if environment is not None:
             if not isinstance(environment, Mapping):
                 raise CommandRequestError("environment must be a string mapping or None")
@@ -185,6 +233,7 @@ class CommandRunner:
         self._workspace = workspace
         self._execution_context = execution_context
         self._environment = dict(environment) if environment is not None else None
+        self._output_sanitizer_factory = output_sanitizer_factory
 
     def run(
         self,
@@ -223,8 +272,17 @@ class CommandRunner:
         timed_out = False
         exit_code: Optional[int] = None
 
-        stdout_accum = _BoundedStreamAccumulator()
-        stderr_accum = _BoundedStreamAccumulator()
+        sanitizer_factory = self._output_sanitizer_factory
+        stdout_accum = _BoundedStreamAccumulator(
+            sanitizer=(
+                sanitizer_factory() if sanitizer_factory is not None else None
+            )
+        )
+        stderr_accum = _BoundedStreamAccumulator(
+            sanitizer=(
+                sanitizer_factory() if sanitizer_factory is not None else None
+            )
+        )
         stdout_lock = threading.Lock()
         stderr_lock = threading.Lock()
 

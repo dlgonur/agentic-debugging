@@ -384,8 +384,21 @@ class LocalProjectVerifier:
         With an explicit product environment the runner is constructed
         internally from that same mapping; otherwise the configured
         factory (legacy default ``CommandRunner``) is used unchanged.
+        The session's redaction authority supplies the neutral
+        pre-bounding sanitization seam so CommandRunner's own head/tail
+        truncation can never cut a raw secret fragment into the evidence
+        streams (the per-record redaction below stays as defense in
+        depth).
         """
         if self._product_environment is not None:
+            if self._product_secret_redactor is not None:
+                return CommandRunner(
+                    workspace,
+                    environment=self._product_environment,
+                    output_sanitizer_factory=(
+                        self._product_secret_redactor.stream_sanitizer_factory()
+                    ),
+                )
             return CommandRunner(workspace, environment=self._product_environment)
         return self._runner_factory(workspace)
 
@@ -1026,8 +1039,11 @@ def _run_git(
     inherit worker control/model/provider state.
 
     ``redactor`` is the session's project-secret redaction authority: Git
-    failure detail derives from raw child output, so on the product path it
-    is redacted BEFORE it enters any raised diagnostic.
+    failure detail derives from raw child output, so on the product path
+    the COMPLETE decoded child text is redacted BEFORE the public
+    1000-character diagnostic bound is applied (repair 11: bounding first
+    could cut a raw secret fragment the exact-value replacement could no
+    longer match).
     """
     if environment is not None:
         if not isinstance(environment, Mapping):
@@ -1056,9 +1072,10 @@ def _run_git(
     except (OSError, subprocess.SubprocessError) as exc:
         raise EvaluationInputError(f"Git source operation could not run: {exc}") from exc
     if result.returncode != 0:
-        detail = (result.stderr or result.stdout).decode("utf-8", "replace").strip()[:1000]
+        detail_text = (result.stderr or result.stdout).decode("utf-8", "replace")
         if redactor is not None:
-            detail = redactor.redact(detail)
+            detail_text = redactor.redact(detail_text)
+        detail = detail_text.strip()[:1000]
         raise EvaluationInputError(f"Git {' '.join(arguments)} failed" + (f": {detail}" if detail else ""))
     return result
 

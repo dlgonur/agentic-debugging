@@ -108,25 +108,35 @@ class ProductExecutor:
 
         Uses the existing :class:`CommandRunner` behavior unchanged
         (reader threads, kill ladder, bounded output, cooperative
-        cancellation); only the environment authority and the capability
-        gate are new.  Creates no process of its own.
+        cancellation); only the environment authority, the capability
+        gate, and the optional neutral output-sanitization seam are new.
+        Creates no process of its own.
 
-        Egress seal: after the runner returns, raw materialized
-        project-secret values in the child's stdout/stderr are replaced
-        through the session's one redaction authority before the result
-        crosses back into the Local Project/control plane.  Everything
-        else (exit code, timeout state, argv, cwd, duration, truncation
-        flags) is preserved exactly.
+        Egress seal: raw materialized project-secret values are redacted
+        from the child's complete decoded stdout/stderr text THROUGH the
+        session's one redaction authority BEFORE the runner's head/tail
+        bounding cuts the streams (repair 11 — the runner's own truncation
+        must never manufacture a raw secret fragment the exact-value
+        replacement can no longer match).  The post-return redaction below
+        is retained as defense in depth.  Everything else (exit code,
+        timeout state, argv, cwd, duration) is preserved exactly; the
+        truncation flags truthfully describe the produced (sanitized)
+        stream against the retention bound.
         """
         self.require(SessionCapability.PROJECT_COMMAND)
+        redactor = self._environment.project_secret_redactor()
         runner = CommandRunner(
             workspace,
             environment=self._environment.role_environment(
                 ExecutionRole.PROJECT_COMMAND
             ),
+            output_sanitizer_factory=(
+                redactor.stream_sanitizer_factory()
+                if redactor is not None
+                else None
+            ),
         )
         result = runner.run(argv, ".", timeout_seconds, cancel_check=cancel_check)
-        redactor = self._environment.project_secret_redactor()
         if redactor is not None and (result.stdout or result.stderr):
             result = _dataclass_replace(
                 result,

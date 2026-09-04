@@ -856,3 +856,44 @@ project-secret EGRESS — with no direction change:
   initial-reproduction diagnosis and into the model channel via the
   `run_reproduction` `failure_output`) is now a redaction-marker
   regression suite (`tests/unit/test_project_secret_redaction.py`).
+
+## 19. V2-02 repair 11 note (status only — decision unchanged)
+
+A narrow post-review repair closed the one remaining application-owned
+egress gap inside the repair-10 seal: BOUNDING/TRUNCATION BEFORE REDACTION.
+Several lower layers transform project output before the one
+`ProjectSecretRedactor` sees it; when such a cut goes through the middle of
+a secret, the complete value no longer exists in the text and exact-value
+replacement cannot match — the leaking fragment would be manufactured by
+Agentic Debugger itself.  This is distinct from the documented non-goal
+(a project deliberately transforming its own secret remains outside the
+DLP contract).  Implementation status:
+
+- **Repair 10** established raw-value product egress redaction (complete
+  exact values at the executor/PDB/verifier boundaries).
+- **Repair 11** closes application-owned pre-redaction
+  bounding/truncation fragment exposure, on the SAME one per-session
+  authority (no second resolver, no value API, no serializable state):
+  - `CommandRunner` gains an OPTIONAL neutral output-sanitization seam
+    (`output_sanitizer_factory`, duck-typed `feed`/`flush`, one instance
+    per stream, no application-layer import, refused together with a
+    `VerifiedExecutionContext`, byte-identical behavior when absent).
+    `ProductExecutor` and the product `LocalProjectVerifier` supply the
+    session redactor through it, so complete secret values are removed
+    from the stream text BEFORE the head/tail bound can cut a fragment;
+    truncation flags truthfully describe the produced (sanitized) stream.
+  - The redactor understands explicitly application-marked bounded
+    representations: PDB worker `kind:"str"`/`truncated:true` preview
+    structures (fragment replaced, `kind`/`type`/`size`/`truncated`
+    metadata untouched, recursion covers nested collections) and
+    marker-terminated bounded diagnostic texts (the PDB worker's `…`).
+    Unmarked text is never boundary-scanned.
+  - Ordering repairs: the verifier Git diagnostic now REDACTS the
+    complete decoded child text before the public 1000-character bound;
+    product PDB/tool exception diagnostics and `tool_errors` redact the
+    full exception text through the session authority before the
+    400-character diagnostic bound (`safe_project_diagnostic`).
+- Regression suite: `tests/unit/test_bounded_secret_fragment_redaction.py`
+  (FirstMate head/tail reproductions, verifier command/Git cases, PDB
+  long-local/safe-eval/nested previews, exception diagnostics, and
+  byte/behavior compatibility for ordinary and no-secret sessions).

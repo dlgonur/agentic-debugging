@@ -76,7 +76,7 @@ import os
 import re
 from enum import Enum
 from types import MappingProxyType
-from typing import Any, Dict, Mapping, Optional, Tuple
+from typing import Any, Callable, Dict, Mapping, Optional, Tuple
 
 from agentic_debugger.application.session_runtime import (
     PLATFORM_ESSENTIAL_NAMES,
@@ -148,6 +148,16 @@ def is_control_or_provider_authority(name: str) -> bool:
 #: (the spec carries names durably); the VALUE never appears.
 PROJECT_SECRET_MARKER_TEMPLATE = "<PROJECT_SECRET:{name}>"
 
+#: Bounded-text truncation marker appended by Agentic Debugger's own PDB
+#: worker when it renders a bounded exception/diagnostic text
+#: (``runtime/pdb_worker.py::_POST_MORTEM_TRUNCATION_MARKER``).  A text that
+#: ends with this marker is an explicitly application-truncated prefix, so a
+#: raw secret fragment at that cut boundary is application-owned egress and
+#: must be redacted (see :meth:`ProjectSecretRedactor.redact_bounded_text`).
+#: Kept here as a literal (with a drift test) so the application layer never
+#: imports the generic PDB worker module for redaction purposes.
+PDB_BOUNDED_TEXT_TRUNCATION_MARKER = "…"
+
 
 class ProjectSecretRedactor:
     """One session's project-secret OUTPUT redaction authority.
@@ -168,6 +178,19 @@ class ProjectSecretRedactor:
     It is not a hostile-project DLP system: a trusted project that
     deliberately transforms, encodes, hashes, splits, or writes a secret
     into unrelated files is not detected, and no such claim is made.
+
+    Repair 11 (application-owned bounding) strengthens the same authority:
+    when Agentic Debugger ITSELF bounds/truncates/previewed project output
+    BEFORE this redactor sees it, the complete secret no longer exists in
+    the text and plain replacement cannot match.  The redactor therefore
+    also owns those known application-created cut boundaries: pre-bounding
+    stream sanitization (:meth:`stream_sanitizer_factory` — the complete
+    value is redacted before any head/tail truncation can cut it), marked
+    bounded texts (:meth:`redact_bounded_text`), and explicitly marked
+    bounded string-preview structures (:meth:`redact_truncated_string_preview`
+    via :meth:`redact_structure`).  These operations remain deterministic,
+    structure-driven (never generic substring guessing), and expose no
+    secret values.
 
     Non-serializable by construction: no ``to_mapping``/``secret_values``
     API exists, pickling/copying fails closed, the repr exposes counts
@@ -273,15 +296,103 @@ class ProjectSecretRedactor:
             lambda match: self._markers[match.group(0)], text
         )
 
+    def _holdback(self) -> int:
+        """Streaming holdback: a proper prefix of a secret has at most
+        ``longest secret length - 1`` characters, so holding back that many
+        redacted characters between feeds can never lose a cut secret."""
+        return (len(self._bindings[0][1]) - 1) if self._bindings else 0
+
+    def _longest_trailing_proper_prefix(self, text: str) -> Tuple[int, str]:
+        """Longest suffix of ``text`` that is a PROPER prefix of one secret.
+
+        Returns ``(length, marker)``; ``(0, "")`` when no suffix matches.
+        Deterministic: the longest length wins; binding order (longest
+        value first, name tiebreak) decides equal-length ties.  Only ever
+        applied to text that Agentic Debugger itself is known to have cut
+        (a marked bounded text or a marked truncated preview) — never as a
+        generic heuristic on arbitrary project output.
+        """
+        best_k = 0
+        best_marker = ""
+        for _name, value in self._bindings:
+            limit = min(len(value) - 1, len(text))
+            for k in range(limit, best_k, -1):
+                if text.endswith(value[:k]):
+                    best_k = k
+                    best_marker = self._markers[value]
+                    break
+        return best_k, best_marker
+
+    def redact_bounded_text(self, text: str) -> str:
+        """Redact complete secret values and application-cut tail fragments.
+
+        Exact replacement first (as :meth:`redact`); then, when the text
+        ends with the PDB worker's bounded-text truncation marker, the cut
+        was created by Agentic Debugger and any raw fragment of a secret
+        left at that boundary is replaced by the secret's marker.  Texts
+        without the marker are never boundary-scanned: no guessing on
+        unmarked output.
+        """
+        redacted = self.redact(text)
+        if self._pattern is None or not redacted:
+            return redacted
+        marker = PDB_BOUNDED_TEXT_TRUNCATION_MARKER
+        if not redacted.endswith(marker):
+            return redacted
+        candidate = redacted[: -len(marker)]
+        cut, cut_marker = self._longest_trailing_proper_prefix(candidate)
+        if cut:
+            return candidate[: -cut] + cut_marker + marker
+        return redacted
+
+    def redact_truncated_string_preview(self, preview: str) -> str:
+        """Redact a bounded string preview that WE truncated.
+
+        Applied only to explicitly marked bounded-preview structures (the
+        PDB worker's ``truncated: True`` string summaries): the complete
+        original string no longer exists, so besides exact replacement any
+        trailing raw fragment of a secret left by the application's own
+        cut is replaced by the secret's marker.  Deterministic and
+        structure-scoped; never a generic substring search.
+        """
+        redacted = self.redact(preview)
+        if self._pattern is None or not redacted:
+            return redacted
+        cut, cut_marker = self._longest_trailing_proper_prefix(redacted)
+        if cut:
+            return redacted[: -cut] + cut_marker
+        return redacted
+
     def redact_structure(self, value: Any) -> Any:
         """Recursively redact strings inside mappings/lists/tuples.
 
         Structural fields, keys, numbers, booleans, and ``None`` are
         returned unchanged; only string VALUES are redacted.
+
+        The PDB worker's explicitly marked bounded string summaries
+        (``kind == "str"`` with ``truncated is True`` and a string
+        ``value``) are redacted through
+        :meth:`redact_truncated_string_preview`: the structure proves
+        Agentic Debugger performed the cut, so the cut-created fragment of
+        a longer secret is removed while ``kind``/``type``/``size``/
+        ``truncated`` and the collection structure stay untouched.
         """
         if type(value) is str:
             return self.redact(value)
         if isinstance(value, Mapping):
+            if (
+                value.get("kind") == "str"
+                and value.get("truncated") is True
+                and type(value.get("value")) is str
+            ):
+                return {
+                    key: (
+                        self.redact_truncated_string_preview(item)
+                        if key == "value"
+                        else self.redact_structure(item)
+                    )
+                    for key, item in value.items()
+                }
             return {
                 key: self.redact_structure(item)
                 for key, item in value.items()
@@ -292,6 +403,26 @@ class ProjectSecretRedactor:
             return tuple(self.redact_structure(item) for item in value)
         return value
 
+    def stream_sanitizer_factory(self) -> Callable[[], "_ProjectSecretStreamSanitizer"]:
+        """Zero-arg factory producing per-stream pre-bounding sanitizers.
+
+        Each product supplies ONE factory to its
+        :class:`~agentic_debugger.runtime.command_runner.CommandRunner`;
+        the runner calls it once per output stream (stdout/stderr) so each
+        stream keeps independent holdback state.  The sanitizer applies
+        :meth:`redact` incrementally to the complete decoded stream text
+        BEFORE the runner's head/tail bounding can cut it, so the
+        application's own truncation can never manufacture a raw secret
+        fragment.  The returned objects expose only ``feed``/``flush`` and
+        hold no secret material beyond what this authority already holds.
+        """
+        redactor = self
+
+        def _factory() -> "_ProjectSecretStreamSanitizer":
+            return _ProjectSecretStreamSanitizer(redactor)
+
+        return _factory
+
     def __getstate__(self) -> None:
         raise TypeError(
             "project secret redaction authority must never be serialized"
@@ -301,6 +432,62 @@ class ProjectSecretRedactor:
         return (
             f"ProjectSecretRedactor(redactable_secrets={len(self._bindings)})"
         )
+
+
+class _ProjectSecretStreamSanitizer:
+    """Incremental pre-bounding sanitizer for ONE command output stream.
+
+    The neutral seam object consumed by
+    :class:`~agentic_debugger.runtime.command_runner.CommandRunner` (plain
+    duck-typed ``feed``/``flush`` — the runtime never imports this module).
+    Between feeds it holds back the last ``longest secret length - 1``
+    redacted characters, so a secret value whose bytes arrive across
+    reader-thread chunks is still matched and replaced exactly once by the
+    single-pass authority; the complete value is therefore always removed
+    from the stream BEFORE any head/tail bounding can cut it, and ordinary
+    (secret-free) text passes through unchanged byte for byte.
+    """
+
+    __slots__ = ("_redactor", "_pending")
+
+    def __init__(self, redactor: "ProjectSecretRedactor") -> None:
+        self._redactor = redactor
+        self._pending: str = ""
+
+    def feed(self, text: str) -> str:
+        """Sanitize one decoded chunk; returns the emit-safe prefix."""
+        if not text:
+            return ""
+        buf = self._pending + text
+        hold = self._redactor._holdback()
+        if hold <= 0:
+            # No secrets (or only single-character values): every match is
+            # complete within any buffer, nothing can be half-cut.
+            processed = self._redactor.redact(buf)
+            self._pending = ""
+            return processed
+        if len(buf) <= hold:
+            self._pending = buf
+            return ""
+        processed = self._redactor.redact(buf)
+        split = len(processed) - hold
+        if split <= 0:
+            # Pathologically heavy replacement: keep everything pending
+            # (still bounded by chunk + holdback) rather than split inside
+            # possibly incomplete text.
+            self._pending = processed
+            return ""
+        self._pending = processed[split:]
+        return processed[:split]
+
+    def flush(self) -> str:
+        """Emit the final held-back text (end of stream)."""
+        out = self._redactor.redact(self._pending)
+        self._pending = ""
+        return out
+
+    def __repr__(self) -> str:
+        return f"_ProjectSecretStreamSanitizer(pending_chars={len(self._pending)})"
 
 
 class ExecutionEnvironment:
@@ -571,6 +758,7 @@ __all__ = [
     "ExecutionEnvironment",
     "ExecutionEnvironmentError",
     "ExecutionRole",
+    "PDB_BOUNDED_TEXT_TRUNCATION_MARKER",
     "PLATFORM_ESSENTIAL_NAMES",
     "PROJECT_SECRET_MARKER_TEMPLATE",
     "ProjectSecretRedactor",

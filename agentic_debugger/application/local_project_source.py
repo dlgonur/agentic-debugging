@@ -451,6 +451,30 @@ class _LocalToolContext:
             return value
         return self.secret_redaction.redact_structure(value)
 
+    def safe_project_diagnostic(self, exc, workspace_root=None):  # type: ignore[no-untyped-def]
+        """Product exception-diagnostic egress (redact BEFORE bounding).
+
+        The FULL exception text crosses the one session redaction
+        authority first — including application-created bounded-tail
+        fragments (repair 11: the PDB worker marks its own bounded
+        diagnostics, and Agentic Debugger-created cuts must never expose a
+        raw secret fragment) — and only then takes the established
+        ``MAX_DIAGNOSTIC_CHARS`` diagnostic bound.  Without a session
+        redaction authority this is the historical ``bounded_diagnostic``
+        exactly (legacy direct-harness behavior preserved).
+        """
+        if self.secret_redaction is None:
+            from agentic_debugger.demo.tools import bounded_diagnostic
+            return bounded_diagnostic(exc, workspace_root)
+        from agentic_debugger.demo.tools import bounded_diagnostic_text
+        try:
+            text = f"{type(exc).__name__}: {exc}"
+        except Exception:
+            text = f"{type(exc).__name__}: <unprintable exception>"
+        return bounded_diagnostic_text(
+            self.secret_redaction.redact_bounded_text(text), workspace_root
+        )
+
     def require_capability(self, capability):  # type: ignore[no-untyped-def]
         """Fail closed (tool-unavailable) when the session denies a capability.
 
@@ -530,9 +554,12 @@ class _LocalToolContext:
         return PdbSession(workspace, startup_timeout=15.0, request_timeout=60.0, worker_environment=self.pdb_worker_environment)
 
     def record_error(self, action: str, exc: BaseException) -> None:
-        from agentic_debugger.demo.tools import bounded_diagnostic
+        # Egress seal: tool_errors is a product surface; project-domain
+        # text carried by an exception (e.g. a PDB worker diagnostic) is
+        # redacted through the same session authority BEFORE the
+        # diagnostic bound, never after it.
         try:
-            diag = bounded_diagnostic(exc, self.workspace.root)
+            diag = self.safe_project_diagnostic(exc, self.workspace.root)
         except Exception:
             diag = str(exc)[:400]
         self.tool_errors.append({"action": action, "diagnostic": diag})
@@ -946,7 +973,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
             context.pdb_session_started = True
             started = session.start_paused_target(probe.script, [breakpoint_line])
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = context.redact_project_output(bounded_diagnostic(exc))
+            diag = context.safe_project_diagnostic(exc)
             context.release_pdb()
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         if started.get("state") != "paused":
@@ -970,7 +997,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             stack = session.get_stack_summary()
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = context.redact_project_output(bounded_diagnostic(exc))
+            diag = context.safe_project_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         # Egress seal: sanitize once; the SAME object is observed and returned.
         stack = context.redact_project_output(stack)
@@ -987,7 +1014,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             result = session.get_frame_locals(int(arguments["frame_id"]), int(arguments["pause_generation"]))
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = context.redact_project_output(bounded_diagnostic(exc))
+            diag = context.safe_project_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         # Egress seal: sanitize once; the SAME object is observed and returned.
         result = context.redact_project_output(result)
@@ -1000,7 +1027,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             result = session.safe_eval_expression(int(arguments["frame_id"]), int(arguments["pause_generation"]), str(arguments["expression"]))
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = context.redact_project_output(bounded_diagnostic(exc))
+            diag = context.safe_project_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         # Egress seal: evaluated runtime values are project-domain output.
         result = context.redact_project_output(result)
@@ -1014,7 +1041,7 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         try:
             result = operation()
         except (PdbSessionError, PdbSessionTimeoutError) as exc:
-            diag = context.redact_project_output(bounded_diagnostic(exc))
+            diag = context.safe_project_diagnostic(exc)
             raise ToolExecutionError(diag, safe_diagnostic=diag) from exc
         # Egress seal: one sanitized object for observation and payload.
         result = context.redact_project_output(result)
@@ -1026,7 +1053,9 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         if result.get("state") != "paused":
             errors = context.release_pdb()
             if errors:
-                diag = bounded_diagnostic(errors[0], context.workspace.root)
+                diag = context.safe_project_diagnostic(
+                    errors[0], context.workspace.root
+                )
                 raise ToolExecutionError(diag, safe_diagnostic=diag)
             control_payload["session_released"] = True
         return _ok(control_payload, f"debugger execution control completed: {action.name}")
@@ -1036,7 +1065,9 @@ def _build_local_registry(context: _LocalToolContext, *, pdb_policy: Any = None,
         had_workspace = context.pdb_workspace is not None
         errors = context.release_pdb()
         if errors:
-            diag = bounded_diagnostic(errors[0], context.workspace.root)
+            diag = context.safe_project_diagnostic(
+                errors[0], context.workspace.root
+            )
             raise ToolExecutionError(diag, safe_diagnostic=diag)
         return _ok({"stopped": context.pdb_session is None, "session_started": started, "workspace_removed": had_workspace and context.pdb_workspace is None}, "PDB session stopped and its workspace released")
 

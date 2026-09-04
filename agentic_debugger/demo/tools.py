@@ -162,6 +162,21 @@ def _observation_id_for_action(action: Action) -> str:
     return "observation-" + suffix
 
 
+def bounded_diagnostic_text(text: str, workspace_root: Optional[str] = None) -> str:
+    """Apply the established bounded-diagnostic pipeline to ready text.
+
+    The ``bounded_diagnostic`` pipeline after exception formatting
+    (normalize/bound, control-character strip, ``MAX_DIAGNOSTIC_CHARS``
+    cut).  Split out so callers that must transform the FULL text first
+    (e.g. redact before any cut) can reuse the identical bounding.
+    """
+    text = normalize_output(text, workspace_root)
+    text = "".join(char if 0x20 <= ord(char) != 0x7F else " " for char in text).strip()
+    if len(text) > MAX_DIAGNOSTIC_CHARS:
+        text = text[: MAX_DIAGNOSTIC_CHARS - 3] + "..."
+    return text or "tool failure"
+
+
 def bounded_diagnostic(exc: BaseException, workspace_root: Optional[str] = None) -> str:
     """Bound a diagnostic and strip disposable workspace paths out of it.
 
@@ -171,11 +186,7 @@ def bounded_diagnostic(exc: BaseException, workspace_root: Optional[str] = None)
     helper so the demo and the verifier redact identically.
     """
 
-    text = normalize_output(bounded_error(exc), workspace_root)
-    text = "".join(char if 0x20 <= ord(char) != 0x7F else " " for char in text).strip()
-    if len(text) > MAX_DIAGNOSTIC_CHARS:
-        text = text[: MAX_DIAGNOSTIC_CHARS - 3] + "..."
-    return text or "tool failure"
+    return bounded_diagnostic_text(bounded_error(exc), workspace_root)
 
 
 def _json_safe(value: Any, label: str) -> Any:
