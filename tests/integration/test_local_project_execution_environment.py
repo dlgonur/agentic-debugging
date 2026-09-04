@@ -265,6 +265,17 @@ def test_local_project_worker_children_have_clean_environment(tmp_path, monkeypa
             for event in journal.events
         )
         assert SYNTHETIC_HOP_VALUE not in journal_text
+        # The full worker lifecycle ran inside this session: the worker-side
+        # tracked-source inventory (git ls-files at session start) and the
+        # terminal worker cleanup (git worktree prune/list) both executed
+        # under the same explicit session authority, and cleanup verified.
+        cleanup_texts = [
+            event.payload
+            for event in journal.events
+            if event.event_kind.value == "cleanup.completed"
+        ]
+        assert cleanup_texts, "worker terminal cleanup did not complete"
+        assert any(payload.get("verified") is True for payload in cleanup_texts)
     finally:
         try:
             worker.close()

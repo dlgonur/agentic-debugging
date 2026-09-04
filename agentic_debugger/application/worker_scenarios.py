@@ -80,6 +80,15 @@ class ScenarioContext:
     #: Observer-only callback for bounded transport liveness.  It never
     #: affects source, controller, verifier, or cleanup behavior.
     liveness_reporter: Optional[Callable[[str], None]] = None
+    #: One per-session V2 product ExecutionEnvironment authority (Local
+    #: Project worker lifecycle only; ``None`` for every other scenario).
+    #: The worker creates it once before dispatch so the source, its
+    #: project/PDB/verifier children, and terminal cleanup all share one
+    #: snapshot/classification.  Typed as ``Any`` here to keep this
+    #: harness module free of product authority imports; the worker and
+    #: the Local Project source treat it opaquely except for the
+    #: documented Local Project contract.
+    product_environment: Optional[Any] = None
 
 
 def _require_int(params: Mapping[str, Any], key: str, minimum: int, maximum: int) -> int:

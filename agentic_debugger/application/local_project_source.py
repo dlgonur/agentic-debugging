@@ -208,13 +208,21 @@ def _run_command_bounded(cmd: str, cwd: Path, timeout: float=30.0, cancel_check=
         time.monotonic() - start,
     )
 
-def _inventory_tracked_python_files(isolated: Path) -> List[str]:
+def _inventory_tracked_python_files(
+    isolated: Path,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> List[str]:
     # One canonical bounded inventory (local_project.py); this boundary only
     # translates its input errors into the worker's scenario vocabulary.
+    # ``environment`` is the explicit project-safe child mapping from the
+    # session's V2 execution-environment authority; the real worker always
+    # supplies it so the inventory Git child never implicitly inherits
+    # worker control/model/provider state.
     from agentic_debugger.application.local_project import inventory_tracked_python_files
 
     try:
-        return inventory_tracked_python_files(isolated)
+        return inventory_tracked_python_files(isolated, environment=environment)
     except ApplicationInputError as exc:
         raise ScenarioInputError(str(exc)) from exc
 
@@ -945,14 +953,22 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     if ctx.emitter is None: raise ScenarioInputError("local_project requires emitter")
     if not isolated.is_dir(): raise ScenarioInputError(f"isolated workspace missing: {isolated}")
     # V2-01 execution-environment authority: one snapshot/classification per
-    # session at the source boundary.  Project/PDB/verifier children receive
-    # explicit derived role environments (LEGACY PROJECT AMBIENT bridge);
-    # none of them inherits the worker process environment implicitly, so
-    # Agentic Debugger control/model/provider channels cannot leak into
-    # project execution.  Values stay inside these mappings — they are never
+    # session.  The worker creates it once before dispatch (see
+    # ``worker.run_worker``) and carries it on the ScenarioContext so the
+    # source, its project/PDB/verifier children, AND terminal worker
+    # cleanup all share one authority.  Direct (non-worker) callers have no
+    # context authority, so the source snapshots once here as the narrow
+    # fallback.  Project/PDB/verifier children receive explicit derived
+    # role environments (LEGACY PROJECT AMBIENT bridge); none of them
+    # inherits the worker process environment implicitly, so Agentic
+    # Debugger control/model/provider channels cannot leak into project
+    # execution.  Values stay inside these mappings — they are never
     # logged, journaled, or exposed to the controller/model.
     from agentic_debugger.application.execution_environment import ExecutionEnvironment, ExecutionRole
-    execution_environment=ExecutionEnvironment.snapshot_process()
+    _ctx_authority = getattr(ctx, "product_environment", None)
+    if _ctx_authority is not None and not isinstance(_ctx_authority, ExecutionEnvironment):
+        raise ScenarioInputError("local_project product_environment must be an ExecutionEnvironment or None")
+    execution_environment = _ctx_authority if _ctx_authority is not None else ExecutionEnvironment.snapshot_process()
     project_command_environment=execution_environment.role_environment(ExecutionRole.PROJECT_COMMAND)
     pdb_worker_environment=execution_environment.role_environment(ExecutionRole.PRODUCT_PDB)
     verifier_command_environment=execution_environment.role_environment(ExecutionRole.VERIFIER)
@@ -1016,7 +1032,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     observability=SessionObservability(ObservabilityContext(session_id=session_id, task_id=task_id, source_kind=source_kind, run_id=ctx.run_id), emitter=ctx.emitter)
     ctx.token.check()
     observability.diagnosis_recorded(text=bug_description, file_path=None, symbol=None, confidence="user-reported", observed_values={"repo_basename": repo_root.name, "source_head": validated["project_head"][:12]})
-    tracked=_inventory_tracked_python_files(isolated)
+    tracked=_inventory_tracked_python_files(isolated, environment=project_command_environment)
     local_task, initial_state=_build_local_task(bug_description, repro_cmd, verify_cmd, isolated, tracked)
     if repro_cmd:
         exit_code, out, err, _ = _run_command_bounded(repro_cmd, isolated, timeout=30.0, cancel_check=ctx.token.check, environment=project_command_environment)
@@ -1175,22 +1191,17 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             timeout_seconds=30.0,
             workspace_parent=validated.get("parent_tmpdir"),
         )
-        # V2-01 verifier environment seam: the verifier keeps constructing
-        # its own CommandRunners through its factory, but the factory now
-        # closes over the FIXED verifier-role environment derived by the
-        # session execution authority (LEGACY PROJECT AMBIENT bridge — no
-        # Agentic Debugger control/provider authority).  The environment is
-        # never a model-selected tool argument and cannot be mutated once
-        # verification begins.
-        from agentic_debugger.runtime.command_runner import CommandRunner
-
-        def _verifier_runner_factory(workspace):  # type: ignore[no-untyped-def]
-            return CommandRunner(workspace, environment=verifier_command_environment)
-
+        # V2-01 verifier environment seam (single fixed authority): the
+        # session execution authority supplies ONE verifier-role mapping
+        # (LEGACY PROJECT AMBIENT bridge — no Agentic Debugger
+        # control/provider authority).  The verifier copies it once and
+        # uses it for BOTH its CommandRunner children and its owned Git
+        # subprocesses; the environment is never a model-selected tool
+        # argument and cannot be mutated once verification begins.
         independent_verifier=LocalProjectVerifier(
             progress_observer=verifier_events,
             cancel_check=ctx.token.check,
-            command_runner_factory=_verifier_runner_factory,
+            product_environment=dict(verifier_command_environment),
         )
         verification_result=independent_verifier.evaluate(verification_plan)
         verifier_events.completed(verification_result)

@@ -22,7 +22,7 @@ import tarfile
 import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable, Optional, Sequence, Tuple
+from typing import Any, Callable, Mapping, Optional, Sequence, Tuple
 
 from agentic_debugger.cancellation import CancellationError
 from agentic_debugger.evaluation.outcome_taxonomy import SemanticOutcome, classify_outcome
@@ -70,6 +70,11 @@ _MAX_TIMEOUT_SECONDS = 600.0
 _MAX_ARCHIVE_MEMBERS = 20_000
 _MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 _EXPORT_PREFIX = "agentic-debugger-local-verifier-"
+
+#: Default CommandRunner construction seam, saved at import time so the
+#: fail-closed custom-factory/product-environment conflict check below is
+#: immune to later rebinding of the module global (e.g. test doubles).
+_DEFAULT_RUNNER_FACTORY = CommandRunner
 
 
 @dataclass(frozen=True)
@@ -285,6 +290,7 @@ class LocalProjectVerifier:
         workspace_factory: Callable[..., TaskWorkspace] = TaskWorkspace,
         command_runner_factory: Callable[[TaskWorkspace], CommandRunner] = CommandRunner,
         cancel_check: Optional[Callable[[], None]] = None,
+        product_environment: Optional[Mapping[str, str]] = None,
     ) -> None:
         if progress_observer is not None and not callable(getattr(progress_observer, "stage_started", None)):
             raise EvaluationInputError("progress_observer must implement stage_started")
@@ -292,10 +298,47 @@ class LocalProjectVerifier:
             raise EvaluationInputError("progress_observer must implement stage_completed")
         if cancel_check is not None and not callable(cancel_check):
             raise EvaluationInputError("cancel_check must be callable or None")
+        if product_environment is not None:
+            if not isinstance(product_environment, Mapping):
+                raise EvaluationInputError(
+                    "product_environment must be a mapping of strings or None"
+                )
+            for name, value in product_environment.items():
+                if type(name) is not str or not name or type(value) is not str:
+                    raise EvaluationInputError(
+                        "product_environment must map non-empty strings to strings"
+                    )
+            if command_runner_factory is not _DEFAULT_RUNNER_FACTORY:
+                raise EvaluationInputError(
+                    "conflicting verifier authorities: a custom "
+                    "command_runner_factory and an explicit "
+                    "product_environment must not be supplied together; "
+                    "they are never merged"
+                )
         self._observer = progress_observer
         self._workspace_factory = workspace_factory
         self._runner_factory = command_runner_factory
         self._cancel_check = cancel_check
+        # V2-01 single fixed verifier authority (VERIFIER role): when the
+        # Local Project product path supplies it, it controls BOTH the
+        # verifier's CommandRunner children and its owned Git subprocesses.
+        # Copied once here; never merged with os.environ; never mutated by
+        # controller/model arguments afterwards.  ``None`` preserves the
+        # narrow legacy behavior for direct unit/scientific callers.
+        self._product_environment = (
+            dict(product_environment) if product_environment is not None else None
+        )
+
+    def _make_runner(self, workspace: TaskWorkspace) -> CommandRunner:
+        """One verifier CommandRunner under the single fixed authority.
+
+        With an explicit product environment the runner is constructed
+        internally from that same mapping; otherwise the configured
+        factory (legacy default ``CommandRunner``) is used unchanged.
+        """
+        if self._product_environment is not None:
+            return CommandRunner(workspace, environment=self._product_environment)
+        return self._runner_factory(workspace)
 
     def _checkpoint(self) -> None:
         if self._cancel_check is not None:
@@ -314,7 +357,7 @@ class LocalProjectVerifier:
 
         try:
             self._checkpoint()
-            before = _inspect_source(plan.source_repo_path)
+            before = _inspect_source(plan.source_repo_path, environment=self._product_environment)
             if before.head != plan.source_head_commit:
                 state.status = EvaluationStatus.EVALUATOR_INVARIANT_FAILED
                 state.stop_reason = "source_head_mismatch"
@@ -337,7 +380,7 @@ class LocalProjectVerifier:
                 export_root = tempfile.mkdtemp(prefix=_EXPORT_PREFIX, dir=workspace_parent)
                 export_source = os.path.join(export_root, "source")
                 os.mkdir(export_source)
-                _export_commit(before.root, before.head, export_source, export_root)
+                _export_commit(before.root, before.head, export_source, export_root, environment=self._product_environment)
                 prepared = True
             except Exception as exc:
                 state.status = EvaluationStatus.WORKSPACE_PREPARATION_FAILED
@@ -544,7 +587,7 @@ class LocalProjectVerifier:
                 plan,
                 state,
                 candidate_workspace,
-                self._runner_factory(candidate_workspace),
+                self._make_runner(candidate_workspace),
             )
             state.post_reproduction = post
         finally:
@@ -599,7 +642,7 @@ class LocalProjectVerifier:
                 plan,
                 state,
                 regression_workspace,
-                self._runner_factory(regression_workspace),
+                self._make_runner(regression_workspace),
             )
             state.regression = regression
         except (
@@ -684,7 +727,7 @@ class LocalProjectVerifier:
                 plan,
                 state,
                 workspace,
-                self._runner_factory(workspace),
+                self._make_runner(workspace),
             )
         finally:
             self._release_workspace(workspace, ledger)
@@ -775,7 +818,7 @@ class LocalProjectVerifier:
         after: Optional[_SourceState] = None
         source_error: Optional[str] = None
         try:
-            after = _inspect_source(plan.source_repo_path)
+            after = _inspect_source(plan.source_repo_path, environment=self._product_environment)
         except Exception as exc:
             source_error = bounded_error(exc)
         unchanged = bool(
@@ -896,7 +939,34 @@ def _validate_workspace_parent(value: Optional[str], source_root: str) -> Option
     return parent
 
 
-def _run_git(repo: str, arguments: Sequence[str], *, timeout: float = 30.0) -> subprocess.CompletedProcess[bytes]:
+def _run_git(
+    repo: str,
+    arguments: Sequence[str],
+    *,
+    timeout: float = 30.0,
+    environment: Optional[Mapping[str, str]] = None,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run one verifier-owned Git command with an explicit environment.
+
+    ``environment`` is the fixed verifier-role mapping from the session's
+    V2 execution-environment authority.  ``None`` preserves the historical
+    inheritance behavior for direct non-product callers; the real Local
+    Project worker always supplies it so Git children never implicitly
+    inherit worker control/model/provider state.
+    """
+    if environment is not None:
+        if not isinstance(environment, Mapping):
+            raise EvaluationInputError(
+                "environment must be a mapping of strings or None"
+            )
+        for name, value in environment.items():
+            if type(name) is not str or not name or type(value) is not str:
+                raise EvaluationInputError(
+                    "environment must map non-empty strings to strings"
+                )
+        child_env: Optional[dict[str, str]] = dict(environment)
+    else:
+        child_env = None
     try:
         result = subprocess.run(
             ["git", *arguments],
@@ -906,6 +976,7 @@ def _run_git(repo: str, arguments: Sequence[str], *, timeout: float = 30.0) -> s
             stderr=subprocess.PIPE,
             timeout=timeout,
             check=False,
+            env=child_env,
         )
     except (OSError, subprocess.SubprocessError) as exc:
         raise EvaluationInputError(f"Git source operation could not run: {exc}") from exc
@@ -915,30 +986,54 @@ def _run_git(repo: str, arguments: Sequence[str], *, timeout: float = 30.0) -> s
     return result
 
 
-def _inspect_source(path: str) -> _SourceState:
+def _inspect_source(
+    path: str,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> _SourceState:
     root = os.path.realpath(path)
     if not os.path.isdir(root):
         raise EvaluationInputError("source_repo_path must identify an existing directory")
-    inside = _run_git(root, ["rev-parse", "--is-inside-work-tree"]).stdout.decode("ascii", "strict").strip()
+    inside = _run_git(
+        root, ["rev-parse", "--is-inside-work-tree"], environment=environment
+    ).stdout.decode("ascii", "strict").strip()
     if inside != "true":
         raise EvaluationInputError("source_repo_path must identify a Git working tree")
-    reported_root = _run_git(root, ["rev-parse", "--show-toplevel"]).stdout.decode("utf-8", "strict").strip()
+    reported_root = _run_git(
+        root, ["rev-parse", "--show-toplevel"], environment=environment
+    ).stdout.decode("utf-8", "strict").strip()
     if os.path.normcase(os.path.realpath(reported_root)) != os.path.normcase(root):
         raise EvaluationInputError("source_repo_path must be the repository root")
-    head = _run_git(root, ["rev-parse", "--verify", "HEAD"]).stdout.decode("ascii", "strict").strip()
-    tree = _run_git(root, ["rev-parse", "--verify", "HEAD^{tree}"]).stdout.decode("ascii", "strict").strip()
+    head = _run_git(
+        root, ["rev-parse", "--verify", "HEAD"], environment=environment
+    ).stdout.decode("ascii", "strict").strip()
+    tree = _run_git(
+        root, ["rev-parse", "--verify", "HEAD^{tree}"], environment=environment
+    ).stdout.decode("ascii", "strict").strip()
     if _HEAD_PATTERN.fullmatch(head) is None or _HEAD_PATTERN.fullmatch(tree) is None:
         raise EvaluationInputError("source repository returned malformed object identity")
     status = _run_git(
         root,
         ["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
+        environment=environment,
     ).stdout
     return _SourceState(root=root, head=head, tree=tree, clean=status == b"")
 
 
-def _export_commit(repo: str, head: str, destination: str, export_root: str) -> None:
+def _export_commit(
+    repo: str,
+    head: str,
+    destination: str,
+    export_root: str,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> None:
     archive_path = os.path.join(export_root, "source.tar")
-    _run_git(repo, ["archive", "--format=tar", "--output", archive_path, head])
+    _run_git(
+        repo,
+        ["archive", "--format=tar", "--output", archive_path, head],
+        environment=environment,
+    )
     total_members = 0
     total_bytes = 0
     try:

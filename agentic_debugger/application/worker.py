@@ -582,6 +582,19 @@ def run_worker(request: StartRequest) -> int:
             ) from exc
         coordinator.emit_status(SessionPhase.EXECUTING_TOOL)
         token.check()  # close the started -> scenario window
+        # V2-01 one product ExecutionEnvironment per Local Project session:
+        # created once here (outside the source) so the source's
+        # project/PDB/verifier children AND the terminal worker cleanup
+        # below share one snapshot/classification.  Other scenarios keep
+        # ``None`` (unaffected).  Values never enter params, journals, or
+        # diagnostics — only explicit derived child mappings do.
+        session_execution_environment = None
+        if request.scenario == LOCAL_PROJECT_SOURCE_NAME:
+            from agentic_debugger.application.execution_environment import (
+                ExecutionEnvironment,
+            )
+
+            session_execution_environment = ExecutionEnvironment.snapshot_process()
         disposition = run_worker_source(
             request.scenario,
             ScenarioContext(
@@ -592,6 +605,7 @@ def run_worker(request: StartRequest) -> int:
                 run_id=request.run_id,
                 session_dir=Path(request.journal_path).resolve().parent,
                 liveness_reporter=_LivenessReporter(),
+                product_environment=session_execution_environment,
             ),
             request.scenario_params,
         )
@@ -670,7 +684,27 @@ def run_worker(request: StartRequest) -> int:
                 if parent and repo:
                     try:
                         from agentic_debugger.application.local_project import cleanup_parent_tmpdir
-                        iso_ok = cleanup_parent_tmpdir(Path(parent), Path(repo))
+                        # V2-01: the same session-derived project-safe
+                        # authority covers terminal cleanup Git children
+                        # (``git worktree prune`` / ``git worktree list``),
+                        # so they never implicitly inherit worker
+                        # control/model/provider state.
+                        cleanup_environment = None
+                        if session_execution_environment is not None:
+                            from agentic_debugger.application.execution_environment import (
+                                ExecutionRole,
+                            )
+
+                            cleanup_environment = dict(
+                                session_execution_environment.role_environment(
+                                    ExecutionRole.PROJECT_COMMAND
+                                )
+                            )
+                        iso_ok = cleanup_parent_tmpdir(
+                            Path(parent),
+                            Path(repo),
+                            environment=cleanup_environment,
+                        )
                         cleanup_ok = work_ok and iso_ok
                         if not iso_ok:
                             diagnostics.append(_bounded_diagnostic("isolated worktree cleanup failed or not verified"))

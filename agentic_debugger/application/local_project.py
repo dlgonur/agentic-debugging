@@ -136,7 +136,11 @@ def list_child_directories(directory: Path) -> list[Path]:
     return sorted(children)
 
 
-def inventory_tracked_python_files(isolated: Path) -> list[str]:
+def inventory_tracked_python_files(
+    isolated: Path,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> list[str]:
     """Return sorted tracked Python files via `git ls-files`, bounded.
 
     Uses `git ls-files -z` as authority (tracked files only, no untracked,
@@ -144,8 +148,29 @@ def inventory_tracked_python_files(isolated: Path) -> list[str]:
     symlink escape via `assert_path_inside_workspace`, and enforces a
     deterministic bound (200 files, 1 MiB each). If no Python files, fail
     clearly. If too large, fail clearly rather than silently dropping.
+
+    ``environment`` is an explicit child-process mapping supplied by the
+    session's V2 execution-environment authority (the project-command role
+    for Local Project worker use).  When ``None`` the historical
+    parent-inheritance behavior is preserved for direct non-product/UI
+    callers; the real Local Project worker always supplies it so the Git
+    child never implicitly inherits worker control/model/provider state.
     """
     import subprocess
+
+    if environment is not None:
+        if not isinstance(environment, Mapping):
+            raise ApplicationInputError(
+                "environment must be a mapping of strings or None"
+            )
+        for name, value in environment.items():
+            if type(name) is not str or not name or type(value) is not str:
+                raise ApplicationInputError(
+                    "environment must map non-empty strings to strings"
+                )
+        child_env: Optional[dict[str, str]] = dict(environment)
+    else:
+        child_env = None
 
     try:
         result = subprocess.run(["git", "ls-files", "-z"],
@@ -154,6 +179,7 @@ def inventory_tracked_python_files(isolated: Path) -> list[str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             timeout=10,
+            env=child_env,
         )
     except Exception as exc:
         raise ApplicationInputError(f"git ls-files failed: {exc}") from exc
@@ -552,12 +578,38 @@ def cleanup_isolated_worktree(
     return not isolated_path.exists()
 
 
-def cleanup_parent_tmpdir(parent_tmpdir: Path, repo_root: Path) -> bool:
+def cleanup_parent_tmpdir(
+    parent_tmpdir: Path,
+    repo_root: Path,
+    *,
+    environment: Optional[Mapping[str, str]] = None,
+) -> bool:
     """Cleanup the full parent temp dir and verify Git registration pruned.
 
     Verified means: isolated filesystem path gone, parent gone, and `git
     worktree list --porcelain` no longer contains the isolated path.
+
+    ``environment`` is the explicit project-safe child mapping from the
+    session's V2 execution-environment authority.  The normal Local
+    Project worker always supplies it so the ``git worktree prune`` /
+    ``git worktree list`` children never implicitly inherit worker
+    control/model/provider state.  ``None`` preserves the historical
+    inheritance behavior for direct non-product callers (supervisor
+    post-mortem, UI teardown, tests).
     """
+    if environment is not None:
+        if not isinstance(environment, Mapping):
+            raise ApplicationInputError(
+                "environment must be a mapping of strings or None"
+            )
+        for name, value in environment.items():
+            if type(name) is not str or not name or type(value) is not str:
+                raise ApplicationInputError(
+                    "environment must map non-empty strings to strings"
+                )
+        child_env: Optional[dict[str, str]] = dict(environment)
+    else:
+        child_env = None
     isolated_path = None
     try:
         cand = parent_tmpdir / "worktree"
@@ -577,6 +629,7 @@ def cleanup_parent_tmpdir(parent_tmpdir: Path, repo_root: Path) -> bool:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=10.0,
+                env=child_env,
             )
         except Exception:
             pass
@@ -592,6 +645,7 @@ def cleanup_parent_tmpdir(parent_tmpdir: Path, repo_root: Path) -> bool:
             text=True,
             encoding="utf-8",
             errors="replace",
+            env=child_env,
         )
         if result.returncode == 0:
             if isolated_path is not None:

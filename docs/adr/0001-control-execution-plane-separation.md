@@ -240,10 +240,13 @@ V2-01 implements the Decision-item-1 first slice only: the product
 `ExecutionEnvironment` authority with `PROJECT_COMMAND` / `PRODUCT_PDB` /
 `VERIFIER` role derivations, LEGACY PROJECT AMBIENT bridge identity
 `legacy-project-ambient/v1`, explicit threading to Local Project commands,
-product PDB (via `build_worker_env`), and verifier commands (via
-`command_runner_factory`); conflicting verified/product authorities fail
+product PDB (via `build_worker_env`), and verifier commands (single fixed
+product environment for the verifier's CommandRunner and Git children);
+conflicting verified/product authorities fail
 closed; `runtime/execution.py` and the model-adapter transport are unchanged.
 V2-02+ is not implemented. Proxy/TLS provenance: ordinary ambient
 `HTTPS_PROXY`/`NO_PROXY`/CA values pass through the V2-01 bridge unchanged
 (residual compatibility for V2-02); provider-derived transport overrides are
-never merged into project roles.
+never merged into project roles. Repair 06 (same slice): the same one
+per-session authority additionally covers worker-owned direct Git children
+(inventory, verifier Git, terminal cleanup).
