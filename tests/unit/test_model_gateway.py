@@ -1800,6 +1800,358 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     assert live_cfg_c is not None
 
 
+# ---------------------------------------------------------------------------
+# Candidate 17 Tests: Seal V2-03 registry and history identity
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_17_finding_1_generic_missing_cred_structured_facts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1A, 1B, 1E: Generic provider with missing credentials builds static direct binding
+    without calling resolve_provider_live_config, fails closed on incompatible protocol,
+    and never consults legacy CLI.
+    """
+    from unittest.mock import patch
+    from agentic_debugger.application.provider_connections import (
+        PROTOCOL_CHAT_COMPLETIONS,
+        TRANSPORT_GENERIC,
+    )
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Generic Provider 17",
+        base_url="https://api.generic17.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="gen_17",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    # 1A & 1E: Missing credential + valid config -> builds static direct binding directly.
+    # Verify resolve_provider_live_config and _legacy_for_config are NEVER called!
+    with patch(
+        "agentic_debugger.application.model_providers.resolve_provider_live_config"
+    ) as mock_live, patch(
+        "agentic_debugger.application.model_providers._legacy_for_config"
+    ) as mock_legacy:
+        binding = gateway.resolve("gen_17", "gpt-4o")
+        assert binding.route == ROUTE_DIRECT_API
+        assert binding.provider_id == "gen_17"
+        assert binding.model_id == "gpt-4o"
+        assert binding.effective_protocol == PROTOCOL_CHAT_COMPLETIONS
+        assert binding.config_fingerprint is None
+        assert binding.tool_version == "live-command-v1"
+        assert binding.provider_runtime_identity is not None
+        mock_live.assert_not_called()
+        mock_legacy.assert_not_called()
+
+    # 1B: Missing credential + incompatible model protocol -> IncompatibleModelError
+    with patch(
+        "agentic_debugger.application.model_gateway.effective_model_protocol",
+        side_effect=ProviderConnectionError("Unsupported protocol for model"),
+    ):
+        with pytest.raises(IncompatibleModelError, match="incompatible"):
+            gateway.resolve("gen_17", "bad-proto-model")
+
+
+def test_candidate_17_finding_1_historical_structural_adapter_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1C, 1D: Historical provider with missing direct credentials calls live resolution.
+    If legacy is available but constructor raises structural adapter error, it fails closed as ProviderConfigurationError.
+    """
+    from unittest.mock import patch
+    from agentic_debugger.application.model_providers import ProviderRegistryError
+    from agentic_debugger.application.provider_connections import (
+        TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="CommandCode 17",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="cc_17",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    # 1D: Legacy reports available, but resolve_provider_live_config raises ProviderRegistryError
+    # (e.g. structural adapter error). Must fail closed as ProviderConfigurationError!
+    with patch(
+        "agentic_debugger.application.model_providers._legacy_for_config",
+        return_value=(True, None),
+    ), patch(
+        "agentic_debugger.application.model_providers.resolve_provider_live_config",
+        side_effect=ProviderRegistryError("CommandCode adapter crashed: binary corrupted"),
+    ):
+        with pytest.raises(ProviderConfigurationError, match="legacy CLI resolution failed"):
+            gateway.resolve("cc_17", "goat-default")
+
+
+def test_candidate_17_finding_2_legacy_history_record_requires_all_fields_and_strict_format(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 2: Legacy fallback records lacking provider_runtime_identity require ALL explicit fields
+    (endpoint, auth_mode, endpoint_contract, api_format).
+    Strictly uses api_format, failing match if any is missing or if api_format drifted.
+    Tested on both typed events and raw JSON lines paths.
+    """
+    from unittest.mock import MagicMock, patch
+    from agentic_debugger.application.events import SessionEventKind
+    from agentic_debugger.application.provider_connections import (
+        PROTOCOL_CHAT_COMPLETIONS,
+        PROTOCOL_RESPONSES,
+        TRANSPORT_GENERIC,
+    )
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Strict Hist Prov",
+        base_url="http://127.0.0.1:9001",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="strict_hist_p",
+        auth_mode=AUTH_BEARER,
+        api_key="valid-key",
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    # --- Part A: Typed SessionEvents path ---
+    sess_dir_a = tmp_path / "sessions_typed" / "s1"
+    sess_dir_a.mkdir(parents=True)
+    # Put a dummy journal file so candidates list finds the session directory
+    (sess_dir_a / "journal.jsonl").write_text("{}", encoding="utf-8")
+
+    ev_conf = MagicMock()
+    ev_conf.event_kind = SessionEventKind.MODEL_CONFIGURED
+    ev_conf.payload = {
+        "provider": "strict_hist_p",
+        "endpoint": "http://127.0.0.1:9001",
+        "auth_mode": "bearer",
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "api_format": PROTOCOL_CHAT_COMPLETIONS,
+        "profile_id": "model-1",
+    }
+    ev_req = MagicMock()
+    ev_req.event_kind = SessionEventKind.MODEL_REQUEST_COMPLETED
+    ev_req.payload = {"status": "ok"}
+    ev_req.timestamp_utc = "2026-09-05T10:01:00Z"
+
+    mock_journal = MagicMock()
+    mock_journal.events = (ev_conf, ev_req)
+
+    with patch("agentic_debugger.application.journal.read_session_journal", return_value=mock_journal):
+        # 1. Matching legacy record (all 4 fields present, api_format matches)
+        succ_a = gateway.inspect_last_runtime_success("strict_hist_p", sessions_root=tmp_path / "sessions_typed")
+        assert succ_a == "2026-09-05T10:01:00Z"
+
+        # 2. Format drifted: current config updated to PROTOCOL_RESPONSES
+        update_provider_config("strict_hist_p", api_format=PROTOCOL_RESPONSES)
+        succ_drift = gateway.inspect_last_runtime_success("strict_hist_p", sessions_root=tmp_path / "sessions_typed")
+        assert succ_drift is None
+
+        # Reset format back to PROTOCOL_CHAT_COMPLETIONS
+        update_provider_config("strict_hist_p", api_format=PROTOCOL_CHAT_COMPLETIONS)
+
+        # 3. Missing api_format in event payload (has only api_protocol)
+        ev_conf.payload = {
+            "provider": "strict_hist_p",
+            "endpoint": "http://127.0.0.1:9001",
+            "auth_mode": "bearer",
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "api_protocol": PROTOCOL_CHAT_COMPLETIONS,  # ONLY api_protocol, NO api_format!
+            "profile_id": "model-1",
+        }
+        assert gateway.inspect_last_runtime_success("strict_hist_p", history_root=tmp_path / "sessions_typed") is None
+
+        # 4. Missing endpoint in event payload
+        ev_conf.payload = {
+            "provider": "strict_hist_p",
+            "endpoint": "",
+            "auth_mode": "bearer",
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "api_format": PROTOCOL_CHAT_COMPLETIONS,
+            "profile_id": "model-1",
+        }
+        assert gateway.inspect_last_runtime_success("strict_hist_p", history_root=tmp_path / "sessions_typed") is None
+
+    # --- Part B: Raw JSON lines path ---
+    raw_root = tmp_path / "raw_sessions"
+    raw_s1 = raw_root / "raw_ok"
+    raw_s1.mkdir(parents=True)
+    with open(raw_s1 / "events.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "kind": "model.configured",
+            "provider": "strict_hist_p",
+            "endpoint": "http://127.0.0.1:9001",
+            "auth_mode": "bearer",
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "api_format": PROTOCOL_CHAT_COMPLETIONS,
+            "model": "model-1",
+        }) + "\n")
+        f.write(json.dumps({
+            "kind": "llm.request",
+            "timestamp": "2026-09-05T11:00:00Z",
+            "status": "success",
+        }) + "\n")
+
+    assert gateway.inspect_last_runtime_success("strict_hist_p", history_root=raw_root) == "2026-09-05T11:00:00Z"
+
+    # Raw JSON lines with drifted format returns None
+    update_provider_config("strict_hist_p", api_format=PROTOCOL_RESPONSES)
+    assert gateway.inspect_last_runtime_success("strict_hist_p", history_root=raw_root) is None
+    update_provider_config("strict_hist_p", api_format=PROTOCOL_CHAT_COMPLETIONS)
+
+    # Raw JSON lines with only api_protocol (no api_format) must return None
+    raw_iso = tmp_path / "raw_isolated"
+    (raw_iso / "s_no_fmt").mkdir(parents=True)
+    with open(raw_iso / "s_no_fmt" / "events.jsonl", "w", encoding="utf-8") as f:
+        f.write(json.dumps({
+            "kind": "model.configured",
+            "provider": "strict_hist_p",
+            "endpoint": "http://127.0.0.1:9001",
+            "auth_mode": "bearer",
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "api_protocol": PROTOCOL_CHAT_COMPLETIONS,
+            "model": "model-1",
+        }) + "\n")
+        f.write(json.dumps({
+            "kind": "llm.request",
+            "timestamp": "2026-09-05T11:05:00Z",
+            "status": "success",
+        }) + "\n")
+    assert gateway.inspect_last_runtime_success("strict_hist_p", history_root=raw_iso) is None
+
+
+def test_candidate_17_finding_3_provider_runtime_identity_emission_and_model_binding_separation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 3:
+    1. provider_runtime_identity(cfg) removes all fallbacks to api_protocol/effective_protocol.
+    2. ModelBinding.model_configured_payload() emits provider_runtime_identity ONLY if captured at resolution time.
+    3. Qualified ladder, command profile, and offline bindings omit provider_runtime_identity.
+    4. Model-specific protocol keeps identical provider_runtime_identity while binding.fingerprint() differs.
+    """
+    from agentic_debugger.application.model_gateway import ROUTE_OFFLINE, ROUTE_CONFIGURED_PROFILE, ROUTE_QUALIFIED_LADDER
+    from agentic_debugger.application.provider_connections import (
+        PROTOCOL_CHAT_COMPLETIONS,
+        PROTOCOL_MESSAGES,
+        TRANSPORT_GENERIC,
+    )
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    # 1. provider_runtime_identity with dict having only api_protocol does NOT match config with api_format
+    dict_with_proto_only = {
+        "provider_id": "prov17",
+        "api_protocol": "chat_completions",
+        "auth_mode": "none",
+        "base_url": "http://127.0.0.1:8000",
+        "endpoint_contract": TRANSPORT_GENERIC,
+    }
+    dict_with_format = {
+        "provider_id": "prov17",
+        "api_format": "chat_completions",
+        "auth_mode": "none",
+        "base_url": "http://127.0.0.1:8000",
+        "endpoint_contract": TRANSPORT_GENERIC,
+    }
+    assert provider_runtime_identity(dict_with_proto_only) != provider_runtime_identity(dict_with_format)
+
+    # 2. Registry provider captures provider_runtime_identity from ProviderConfig; payload emits it
+    add_provider_config(
+        name="Candidate 17 Provider",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="c17_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+    cfg = get_provider_config("c17_p")
+    cfg_identity = provider_runtime_identity(cfg)
+
+    binding_chat = gateway.resolve("c17_p", "model-chat")
+    assert binding_chat.provider_runtime_identity == cfg_identity
+    payload_chat = binding_chat.model_configured_payload()
+    assert payload_chat["provider_runtime_identity"] == cfg_identity
+    assert payload_chat["provider"] == "c17_p"
+
+    # 3. Model-specific protocol keeps identical provider_runtime_identity while fingerprint() differs
+    binding_msg = ModelBinding(
+        provider_id="c17_p",
+        model_id="claude-3-7",
+        provider_model_id="claude-3-7",
+        display_name="Claude 3.7",
+        route=ROUTE_DIRECT_API,
+        effective_protocol=PROTOCOL_MESSAGES,
+        endpoint_contract=TRANSPORT_GENERIC,
+        endpoint="http://127.0.0.1:8000",
+        auth_mode=AUTH_NONE,
+        config_fingerprint=None,
+        tool_version="live-command-v1",
+        provider_runtime_identity=cfg_identity,
+    )
+    assert binding_msg.provider_runtime_identity == binding_chat.provider_runtime_identity
+    assert binding_msg.fingerprint() != binding_chat.fingerprint()
+    payload_msg = binding_msg.model_configured_payload()
+    assert payload_msg["provider_runtime_identity"] == cfg_identity
+
+    # 4. Qualified ladder binding omits provider_runtime_identity
+    binding_ladder = ModelBinding(
+        provider_id="ollama",
+        model_id="qwen3.5:cloud",
+        provider_model_id="qwen3.5:cloud",
+        display_name="Qwen 3.5 Cloud",
+        route=ROUTE_QUALIFIED_LADDER,
+        effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+        endpoint_contract=TRANSPORT_OLLAMA_CLOUD,
+        endpoint=None,
+        auth_mode=AUTH_BEARER,
+        config_fingerprint=None,
+        tool_version="1.0",
+    )
+    assert binding_ladder.provider_runtime_identity is None
+    payload_ladder = binding_ladder.model_configured_payload()
+    assert "provider_runtime_identity" not in payload_ladder
+    assert payload_ladder["provider"] == "ollama"
+
+    # 5. Configured command profile binding omits provider_runtime_identity
+    binding_cmd = ModelBinding(
+        provider_id="configured",
+        model_id="my-profile",
+        provider_model_id="my-profile",
+        display_name="My Profile",
+        route=ROUTE_CONFIGURED_PROFILE,
+        effective_protocol=None,
+        endpoint_contract=TRANSPORT_GENERIC,
+        endpoint=None,
+        auth_mode=None,
+        config_fingerprint=None,
+        tool_version="1.0",
+    )
+    assert binding_cmd.provider_runtime_identity is None
+    payload_cmd = binding_cmd.model_configured_payload()
+    assert "provider_runtime_identity" not in payload_cmd
+    assert payload_cmd["provider"] == "configured"
+
+    # 6. Offline binding omits provider_runtime_identity
+    binding_off = gateway.resolve(None, "offline")
+    assert binding_off.route == ROUTE_OFFLINE
+    assert binding_off.provider_runtime_identity is None
+    payload_off = binding_off.model_configured_payload()
+    assert "provider_runtime_identity" not in payload_off
+    assert "provider" not in payload_off
+
+
+
 
 
 

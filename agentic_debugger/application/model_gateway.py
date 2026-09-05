@@ -143,7 +143,7 @@ def provider_runtime_identity(cfg: Any) -> str:
 
     if isinstance(cfg, dict):
         raw = {
-            "api_format": cfg.get("api_format") or cfg.get("api_protocol") or "",
+            "api_format": cfg.get("api_format") or "",
             "auth_mode": cfg.get("auth_mode") or "",
             "base_url": (cfg.get("base_url") or cfg.get("endpoint") or "").strip().rstrip("/"),
             "endpoint_contract": cfg.get("endpoint_contract") or cfg.get("transport_profile") or "",
@@ -151,7 +151,7 @@ def provider_runtime_identity(cfg: Any) -> str:
         }
     else:
         raw = {
-            "api_format": getattr(cfg, "api_format", "") or getattr(cfg, "effective_protocol", "") or "",
+            "api_format": getattr(cfg, "api_format", "") or "",
             "auth_mode": getattr(cfg, "auth_mode", "") or "",
             "base_url": (getattr(cfg, "base_url", "") or getattr(cfg, "endpoint", "") or "").strip().rstrip("/"),
             "endpoint_contract": getattr(cfg, "transport_profile", "") or getattr(cfg, "endpoint_contract", "") or "",
@@ -424,9 +424,8 @@ class ModelBinding:
         }
         if self.provider_id:
             payload["provider"] = self.provider_id
-            payload["provider_runtime_identity"] = (
-                self.provider_runtime_identity or provider_runtime_identity(self)
-            )
+        if self.provider_runtime_identity:
+            payload["provider_runtime_identity"] = self.provider_runtime_identity
         if self.route:
             payload["route"] = self.route
         if self.effective_protocol:
@@ -789,15 +788,74 @@ class ModelGateway:
                     provider_runtime_identity=runtime_id,
                 )
 
-            # Delegate directly to accepted provider core's route resolution
+            # Delegate based on explicit structured provider facts
+            from agentic_debugger.application.model_providers import _legacy_for_config
+
             api_model = provider_api_model_id(cfg.provider_id, effective_model)
-            try:
-                live_config, provenance = resolve_provider_live_config(
-                    effective_provider,
-                    effective_model,
-                    logical_call_ceiling=logical_call_ceiling,
-                    request_timeout_seconds=request_timeout_seconds,
-                )
+            historical_profiles = (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT)
+            is_historical = endpoint_contract in historical_profiles
+            direct_cred_missing = (
+                cfg.auth_mode != AUTH_NONE and credential_source_for(cfg.provider_id) is None
+            )
+
+            if not is_historical:
+                # Direct-only / Generic provider
+                if direct_cred_missing:
+                    # Missing credentials on a direct-only provider:
+                    # Statically determine protocol executability without calling live resolution.
+                    try:
+                        proto = effective_model_protocol(cfg.provider_id, effective_model)
+                    except ProviderConnectionError as p_exc:
+                        raise IncompatibleModelError(
+                            f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
+                        ) from p_exc
+                    except Exception as p_exc:
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} protocol resolution error: {p_exc}"
+                        ) from p_exc
+
+                    if proto is None or not is_protocol_executable(cfg.provider_id, proto):
+                        raise IncompatibleModelError(
+                            f"Provider {effective_provider!r} model {effective_model!r} protocol {proto!r} is not executable"
+                        )
+
+                    return ModelBinding(
+                        provider_id=cfg.provider_id,
+                        model_id=effective_model,
+                        provider_model_id=api_model or effective_model,
+                        display_name=str(effective_model or cfg.name),
+                        route=ROUTE_DIRECT_API,
+                        effective_protocol=proto,
+                        endpoint_contract=endpoint_contract,
+                        endpoint=cfg.base_url,
+                        auth_mode=cfg.auth_mode,
+                        config_fingerprint=None,
+                        tool_version="live-command-v1",
+                        protocol_version="1.3",
+                        provider_runtime_identity=runtime_id,
+                    )
+
+                # Direct credentials present: resolve live config
+                try:
+                    live_config, provenance = resolve_provider_live_config(
+                        effective_provider,
+                        effective_model,
+                        logical_call_ceiling=logical_call_ceiling,
+                        request_timeout_seconds=request_timeout_seconds,
+                    )
+                except ProviderRegistryError as exc:
+                    try:
+                        proto = effective_model_protocol(cfg.provider_id, effective_model)
+                    except ProviderConnectionError as p_exc:
+                        raise IncompatibleModelError(
+                            f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
+                        ) from p_exc
+                    except Exception:
+                        pass
+                    raise ProviderConfigurationError(
+                        f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
+                    ) from exc
+
                 route = str(provenance.get("route") or ROUTE_DIRECT_API)
                 api_proto = provenance.get("api_protocol")
                 endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
@@ -817,46 +875,77 @@ class ModelGateway:
                     protocol_version=str(provenance.get("protocol_version") or "1.3"),
                     provider_runtime_identity=runtime_id,
                 )
-            except ProviderRegistryError as exc:
+            else:
+                # Historical provider (carrying TRANSPORT_OPENCODE_GO or TRANSPORT_COMMANDCODE_GOAT)
                 try:
-                    proto = effective_model_protocol(cfg.provider_id, effective_model)
-                except ProviderConnectionError as p_exc:
-                    raise IncompatibleModelError(
-                        f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
-                    ) from p_exc
-                except Exception:
-                    proto = resolve_model_protocol(cfg.provider_id, effective_model) or cfg.api_format
-
-                cred_source = credential_source_for(cfg.provider_id)
-                if (
-                    cfg.auth_mode != AUTH_NONE
-                    and cred_source is None
-                    and proto is not None
-                    and is_protocol_executable(cfg.provider_id, proto)
-                ):
+                    live_config, provenance = resolve_provider_live_config(
+                        effective_provider,
+                        effective_model,
+                        logical_call_ceiling=logical_call_ceiling,
+                        request_timeout_seconds=request_timeout_seconds,
+                    )
+                    route = str(provenance.get("route") or ROUTE_DIRECT_API)
+                    api_proto = provenance.get("api_protocol")
+                    endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
+                    auth = provenance.get("auth_mode") or (cfg.auth_mode if route == ROUTE_DIRECT_API else None)
                     return ModelBinding(
-                        provider_id=cfg.provider_id,
+                        provider_id=effective_provider,
                         model_id=effective_model,
-                        provider_model_id=api_model or effective_model,
-                        display_name=str(effective_model or cfg.name),
-                        route=ROUTE_DIRECT_API,
-                        effective_protocol=proto,
+                        provider_model_id=provenance.get("provider_model_id") or api_model or effective_model,
+                        display_name=str(provenance.get("display_name") or effective_model or disp_name),
+                        route=route,
+                        effective_protocol=api_proto,
                         endpoint_contract=endpoint_contract,
-                        endpoint=cfg.base_url,
-                        auth_mode=cfg.auth_mode,
-                        config_fingerprint=None,
-                        tool_version="live-command-v1",
-                        protocol_version="1.3",
+                        endpoint=endpoint,
+                        auth_mode=auth,
+                        config_fingerprint=live_config.configuration_fingerprint,
+                        tool_version=live_config.tool_version,
+                        protocol_version=str(provenance.get("protocol_version") or "1.3"),
                         provider_runtime_identity=runtime_id,
                     )
-                if proto is None or not is_protocol_executable(cfg.provider_id, proto):
-                    raise IncompatibleModelError(
-                        f"Provider {effective_provider!r} model {effective_model!r} incompatible: {exc}"
-                    ) from exc
+                except ProviderRegistryError as exc:
+                    legacy_ok, _ = _legacy_for_config(cfg)
+                    if legacy_ok:
+                        # Structural legacy failure must not be masked by missing direct creds
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} legacy CLI resolution failed: {exc}"
+                        ) from exc
 
-                raise ProviderConfigurationError(
-                    f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
-                ) from exc
+                    if direct_cred_missing:
+                        try:
+                            proto = effective_model_protocol(cfg.provider_id, effective_model)
+                        except ProviderConnectionError as p_exc:
+                            raise IncompatibleModelError(
+                                f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
+                            ) from p_exc
+                        except Exception as p_exc:
+                            raise ProviderConfigurationError(
+                                f"Provider {effective_provider!r} protocol resolution error: {p_exc}"
+                            ) from p_exc
+
+                        if proto is not None and is_protocol_executable(cfg.provider_id, proto):
+                            return ModelBinding(
+                                provider_id=cfg.provider_id,
+                                model_id=effective_model,
+                                provider_model_id=api_model or effective_model,
+                                display_name=str(effective_model or cfg.name),
+                                route=ROUTE_DIRECT_API,
+                                effective_protocol=proto,
+                                endpoint_contract=endpoint_contract,
+                                endpoint=cfg.base_url,
+                                auth_mode=cfg.auth_mode,
+                                config_fingerprint=None,
+                                tool_version="live-command-v1",
+                                protocol_version="1.3",
+                                provider_runtime_identity=runtime_id,
+                            )
+                        raise IncompatibleModelError(
+                            f"Provider {effective_provider!r} model {effective_model!r} incompatible: {exc}"
+                        ) from exc
+
+                    raise ProviderConfigurationError(
+                        f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
+                    ) from exc
 
         # 3. Custom command profile store (configured source / legacy profile)
         if effective_provider == PROVIDER_KIND_CONFIGURED or profile_id is not None:
@@ -1516,7 +1605,7 @@ class ModelGateway:
                         p_endpoint = (ev.payload.get("endpoint") or "").strip().rstrip("/")
                         p_auth = ev.payload.get("auth_mode")
                         p_contract = ev.payload.get("endpoint_contract") or ev.payload.get("transport_profile")
-                        p_format = ev.payload.get("api_format") or ev.payload.get("api_protocol")
+                        p_format = ev.payload.get("api_format")
                         p_runtime_id = ev.payload.get("provider_runtime_identity")
                         p_fp = ev.payload.get("config_fingerprint")
                         p_binding_fp = ev.payload.get("model_binding_fingerprint")
@@ -1535,16 +1624,21 @@ class ModelGateway:
                             cur_endpoint = (effective_target_cfg.base_url or "").strip().rstrip("/")
                             cur_contract = effective_target_cfg.transport_profile or TRANSPORT_GENERIC
                             cur_auth = effective_target_cfg.auth_mode
+                            cur_format = effective_target_cfg.api_format
                             cur_runtime_id = provider_runtime_identity(effective_target_cfg)
 
                             if p_runtime_id:
                                 session_matches_provider = (p_runtime_id == cur_runtime_id)
                             else:
-                                session_matches_provider = (
-                                    p_endpoint == cur_endpoint
-                                    and p_auth == cur_auth
-                                    and p_contract == cur_contract
-                                )
+                                if not (p_endpoint and p_auth and p_contract and p_format):
+                                    session_matches_provider = False
+                                else:
+                                    session_matches_provider = (
+                                        p_endpoint == cur_endpoint
+                                        and p_auth == cur_auth
+                                        and p_contract == cur_contract
+                                        and p_format == cur_format
+                                    )
                         else:
                             session_matches_provider = False
 
@@ -1574,12 +1668,7 @@ class ModelGateway:
                                     or raw.get("payload", {}).get("endpoint_contract")
                                     or raw.get("payload", {}).get("transport_profile")
                                 )
-                                p_format = (
-                                    raw.get("api_format")
-                                    or raw.get("api_protocol")
-                                    or raw.get("payload", {}).get("api_format")
-                                    or raw.get("payload", {}).get("api_protocol")
-                                )
+                                p_format = raw.get("api_format") or raw.get("payload", {}).get("api_format")
                                 p_runtime_id = (
                                     raw.get("provider_runtime_identity")
                                     or raw.get("payload", {}).get("provider_runtime_identity")
@@ -1604,16 +1693,21 @@ class ModelGateway:
                                     cur_endpoint = (effective_target_cfg.base_url or "").strip().rstrip("/")
                                     cur_contract = effective_target_cfg.transport_profile or TRANSPORT_GENERIC
                                     cur_auth = effective_target_cfg.auth_mode
+                                    cur_format = effective_target_cfg.api_format
                                     cur_runtime_id = provider_runtime_identity(effective_target_cfg)
 
                                     if p_runtime_id:
                                         session_matches_provider = (p_runtime_id == cur_runtime_id)
                                     else:
-                                        session_matches_provider = (
-                                            p_endpoint == cur_endpoint
-                                            and p_auth == cur_auth
-                                            and p_contract == cur_contract
-                                        )
+                                        if not (p_endpoint and p_auth and p_contract and p_format):
+                                            session_matches_provider = False
+                                        else:
+                                            session_matches_provider = (
+                                                p_endpoint == cur_endpoint
+                                                and p_auth == cur_auth
+                                                and p_contract == cur_contract
+                                                and p_format == cur_format
+                                            )
                                 else:
                                     session_matches_provider = False
 

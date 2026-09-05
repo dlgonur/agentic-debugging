@@ -1115,3 +1115,35 @@ and truthful status hierarchy:
    a hollow dot `○` when credentials are lost while preserving the historical
    timestamp `Live verified <time> UTC` in detail views.
 
+### 21.4 Candidate 17 final bounded authority repair (registry and history identity sealing)
+
+Following independent FirstMate review, Candidate 17 seals provider routing
+authority, legacy history matching, and runtime identity boundaries:
+
+1. **Structured Routing Facts (No Exception Recovery)**:
+   Exception handling (`try ... resolve_provider_live_config ... except ProviderRegistryError`)
+   as control flow is eliminated. For Direct-only/Generic providers (`TRANSPORT_GENERIC`),
+   if credentials are absent, `ModelGateway.resolve()` statically verifies protocol
+   executability and constructs a static direct non-runnable `ModelBinding` without
+   invoking live configuration resolution. Generic providers never consult or select
+   legacy CLI routes. For historical profiles (`TRANSPORT_OPENCODE_GO`,
+   `TRANSPORT_COMMANDCODE_GOAT`), `resolve_provider_live_config` is called; if it
+   fails when legacy CLI is reported available (`legacy_ok=True`), it fails closed as
+   `ProviderConfigurationError` so structural CLI adapter failures are never masked by
+   missing direct credentials.
+2. **Strict Legacy History Matching in History Inspection**:
+   In `inspect_last_runtime_success()`, legacy configuration records lacking
+   `provider_runtime_identity` must explicitly supply all four provider configuration
+   fields: `endpoint`, `auth_mode`, `endpoint_contract`, and `api_format`. The field
+   is strictly `api_format` (never falling back to `api_protocol`). If any field is
+   missing or if `api_format` has drifted from current configuration, the session match
+   fails closed (`session_matches_provider = False`).
+3. **Sealed Provider Runtime Identity vs ModelBinding Emission**:
+   `provider_runtime_identity(cfg)` computes the provider-level runtime contract hash
+   strictly from `api_format` (with no fallbacks to `api_protocol` or `effective_protocol`).
+   In `ModelBinding.model_configured_payload()`, `provider_runtime_identity` is emitted
+   only if it was captured at resolution time from a configured registry provider.
+   Qualified ladder, command profile, and offline bindings omit `provider_runtime_identity`
+   entirely, never synthesizing a fake configuration identity.
+
+
