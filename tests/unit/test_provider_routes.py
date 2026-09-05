@@ -190,9 +190,13 @@ class TestTransportEnvironment:
         assert env == {"AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": SECRET}
 
     def test_documented_env_var_forwarded(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        # V2-04: every source — including the endpoint-bound ambient
+        # environment variable — is materialized under the provider's
+        # single private credential channel, the only variable the
+        # adapter child consumes.
         monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-key-value")
         env = mp.provider_transport_environment("commandcode_goat")
-        assert env == {"COMMAND_CODE_API_KEY": "env-key-value"}
+        assert env == {"AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": "env-key-value"}
 
     def test_forwarded_worker_session_key_reaches_adapter_child(
         self, monkeypatch: pytest.MonkeyPatch

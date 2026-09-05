@@ -1,7 +1,7 @@
 # Agentic Debugger V2 — Control/Execution Plane Separation Architecture Plan
 
 **Document type:** Architecture analysis and migration plan (decision record)
-**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are implemented (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 ModelGateway + ModelBinding + truthful status semantics + vocabulary repair is implemented (`application/model_gateway.py`, `application/provider_connections.py`, `ui/screens.py` — see §21); V2-04 and later stages are not implemented.**
+**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are implemented (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 ModelGateway + ModelBinding + truthful status semantics + vocabulary repair is implemented (`application/model_gateway.py`, `application/provider_connections.py`, `ui/screens.py` — see §21); V2-04 CredentialVault + CredentialBinding + CredentialLease provider-secret authority is implemented (`application/credential_vault.py` — see §22); V2-05 remains an optional, trigger-gated evaluation. **
 **Lineage:** `01` `3481b58` defined V2 boundaries (Alternative B accepted in direction). `02` `3d414c6` tightened the execution and trust boundaries (security-first ordering, role-scoped environments, deferred verifier isolation, credential binding/materialization, truthful status semantics). `03` `ff81f44` finalized the authority rules (secret trust classes, positive/declarative environment target, capability intersection, `ModelBinding` ownership, credential sequencing, scientific fence, history-derived runtime metadata, verifier re-run deferral). `04` (this revision) reconciles two repository facts the prior revisions missed: the repository **already contains a typed verified execution authority** (`runtime/execution.py`) that V2 must not replace, and the positive `ProjectRuntimeEnvironment` target **has no current product ingress**, so V2-01 must use an explicit transitional compatibility bridge with documented residual risk, retired by a V2-02 ingress.
 **Baseline:** `4606933` (fix(providers): harden provider runtime and Windows harness), clean tree
 **Scope:** Determine whether the application runtime should adopt an explicit CONTROL / EXECUTION plane separation, and define the smallest coherent target architecture and incremental migration path
@@ -1217,6 +1217,121 @@ corroboration authority across static preflight and transport creation:
    `static_preflight` and `create_transport` share the exact same direct protocol corroboration
    authority, eliminating false-positive preflight readiness where execution would fail.
 
+## 22. V2-04 implementation note (status only — decision unchanged)
 
+V2-04 implements the §11 fourth slice: the `CredentialVault` binding/backend
+seam with honest secret lifetime, no storage rewrite, no new dependency, and
+byte-identical accepted provider-core credential behavior beneath the new
+authority:
 
-
+- **CredentialVault authority** (`application/credential_vault.py`): the
+  single product provider-secret authority.  `CredentialVault.default()` is
+  the product instance; `ModelGateway` holds it (`ModelGateway._vault`) and
+  every gateway credential fact (readiness, source kind, session hop,
+  transport materialization) routes through it.  The façade delegates to the
+  accepted provider-core primitives (`provider_connections.py`) through the
+  module namespace — the resolution ladder, canonical endpoint binding, and
+  quarantine rules are invoked verbatim, unchanged.
+- **CredentialBinding** (safe, frozen, serializable): `provider_id`,
+  `source_kind` (`saved` / `session_key` / `environment` / `cli_auth_store` /
+  `external_cli` / `none`), `source_ref` (safe NAME only: durable vault slot
+  name, private session credential variable name, or ambient environment
+  variable name), `auth_mode`, `provider_authority` (the V2-03
+  `provider_runtime_identity` hex at binding time), and `endpoint_bound`.
+  Deterministic `to_mapping()`/`fingerprint()`/`repr`; fail-closed
+  credential-shape scrubbing.  A binding never carries enough information to
+  reconstruct a secret.
+- **CredentialLease** (ephemeral, secret-bearing): resolved ONCE by
+  `CredentialVault.resolve_lease` from exactly the binding's named source
+  (source-faithful; no silent source switching).  Non-serializable
+  (pickle/`__reduce__`/copy/deepcopy fail closed), value-free repr, identity
+  equality, `__slots__`.  Exactly two capability methods:
+  `materialize_environment()` (the authorized model-adapter child
+  environment — the single private credential channel variable) and
+  `reveal()` (the documented trusted boundary for the in-process provider
+  HTTP paths: catalog refresh and connection checks).  No value
+  enumeration API exists anywhere on the vault.
+- **One resolution per session binding (§4/§15)**:
+  `ModelGateway.create_transport` resolves the lease once when the session
+  transport is established; the materialized mapping is held fixed by the
+  transport for every adapter request child.  Overwriting the durable slot
+  afterwards never drifts the session's lease; a new session resolves the
+  new value.  Environment-backed sources snapshot once at lease resolution
+  (parent `os.environ` mutation is invisible to an existing lease).
+- **Provider runtime authority enforcement (§5/§16)**: resolving an
+  explicit binding whose recorded `provider_authority` no longer matches
+  the current provider configuration raises `StaleCredentialBindingError` —
+  even when provider id, auth mode, and slot are unchanged.  The accepted
+  endpoint/credential rebinding rule in `update_provider_config` (blank-key
+  endpoint edits refused while ANY reusable credential source exists) is
+  preserved verbatim.
+- **Quarantine integration (§6)**: quarantine blocks resolution and
+  readiness (`credential_ready=false`, `recovery_required=true`) while the
+  provider remains configured; only an explicit coherent re-entry clears it
+  (accepted `_commit_provider_and_credential` arming/clearing semantics
+  unchanged, now invoked through `CredentialVault.commit_provider_save`).
+- **Issued-channel adapter contract (the §3.2 third resolution removed)**:
+  `scripts/provider_direct_api_adapter.py` no longer imports
+  `resolve_runtime_credential` and never re-resolves ambient state (OS
+  store, ambient provider environment, CLI auth store).  It consumes ONLY
+  the vault-issued channel: the provider's single private session
+  credential variable, materialized by
+  `provider_transport_credential_environment` for EVERY source kind
+  (endpoint-binding rules preserved) and read once by the child.
+- **External CLI credential authority (§27)**:
+  `CredentialVault.external_cli_authority` represents legacy-CLI-eligible
+  providers (explicit historical transport profile + accepted
+  presence-only availability probe) with a safe `external_cli` binding;
+  `resolve_lease` refuses to mint any fake lease for it; generic providers
+  never gain the authority; the CLI-owned secret is never read or copied.
+- **Product write path (§12)**:
+  `add_provider_config`/`update_provider_config` commit through
+  `CredentialVault.commit_provider_save`; deletion purges through
+  `CredentialVault.revoke_credential` (verified absence).  The Provider
+  Manager edit dialog renders credential status from
+  `ModelGateway.credential_readiness` (no direct credential-core access in
+  the UI), drops the raw key input on successful save, and never pre-fills
+  or echoes it.
+- **Restart semantics (§22 of the task contract)**: bindings are safe
+  metadata; readiness is re-derived from backend authority; a fresh
+  `CredentialVault` (or `ModelGateway`) resolves stored bindings; no lease
+  is ever serialized or restored (structurally impossible — leases fail
+  closed on serialization).  Covered by the existing native Windows
+  Credential Manager smoke (real OS store) and unit tests over a fresh
+  vault instance.
+- **Secret serialization guarantees (§20/§21)**: no credential value can
+  appear in any `CredentialBinding`/`CredentialReadiness` field, mapping,
+  fingerprint, or repr; in any vault error message; in any lease repr; in
+  provider config persistence; in journal events; or in `ModelBinding`
+  provenance payloads.  Adversarial synthetic-secret tests enforce this.
+- **Remaining direct provider-core credential calls (§29 inventory)**:
+  (A) `credential_vault.py` (the façade) and the `provider_connections.py`
+  backend beneath it — resolution ladder, wincred, session store,
+  quarantine, transactional commit, catalog/connection-check in-process
+  resolution, and the update-path rebinding guard; (A)
+  `model_providers.py` availability facts (`credential_source_for` in
+  `_direct_connection_available`/`_direct_runnable`) beneath the gateway
+  façade; (D) the retained
+  `model_providers.provider_session_credential_environment`/
+  `provider_transport_environment` compatibility wrappers delegating to the
+  same backend.  Category C production repair runtime: ZERO direct calls
+  (unchanged from V2-03).  UI/session runtime: ZERO direct calls (the two
+  former Provider Manager `credential_source_for` call sites and the
+  configured-source transport environment call now route through the
+  gateway/vault).
+- **Scientific boundary (§28)**: no frozen/scientific path was migrated or
+  touched; qualified-ladder, configured-profile, and offline routes are
+  behaviorally unchanged; no evidence-format change; no new dependency;
+  V2-05 remains an optional, trigger-gated evaluation.
+- **Pre-existing baseline findings (not V2-04 defects, reported for
+  FirstMate)**: (1) Local Project launch bindings resolve the live config
+  with the gateway default ceiling (64) while `create_transport` re-resolves
+  with the source constant (32), so the `--max-logical-model-calls` command
+  byte differs and `create_transport` fails closed as stale for direct-API
+  Local Project sessions reached through those code paths; (2)
+  `ModelBinding.model_configured_payload()` emits fields the current
+  `model.configured` journal schema rejects (`model_binding_fingerprint`,
+  `effective_protocol`, `endpoint_contract`, `transport_profile`,
+  `provider_runtime_identity`) — the configured-source path emits a
+  hand-built schema-clean payload, the Local Project source emits the full
+  payload.  Both reproduce on the clean V2-04 parent commit `47bc5ae`.

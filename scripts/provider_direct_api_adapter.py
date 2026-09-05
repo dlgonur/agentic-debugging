@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Mapping, Optional
@@ -53,9 +54,10 @@ except ImportError:  # pragma: no cover - defensive import path
 
 try:
     from agentic_debugger.application.provider_connections import (
+        credential_value_is_usable,
         inference_path_for,
         provider_api_model_id,
-        resolve_runtime_credential,
+        provider_session_credential_variable,
     )
     from agentic_debugger.application.provider_http import (
         ProviderHttpError,
@@ -65,9 +67,10 @@ try:
 except ImportError:  # pragma: no cover - defensive import path (bare child)
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from agentic_debugger.application.provider_connections import (
+        credential_value_is_usable,
         inference_path_for,
         provider_api_model_id,
-        resolve_runtime_credential,
+        provider_session_credential_variable,
     )
     from agentic_debugger.application.provider_http import (
         ProviderHttpError,
@@ -130,21 +133,28 @@ def _load_child_auth_mode(provider: str) -> str:
 
 
 def _resolve_credential(provider: str, auth_mode: str) -> Optional[str]:
-    """Resolve through the provider-owned runtime credential contract.
+    """Consume ONLY the vault-issued credential channel (V2-04 authority).
 
-    That contract covers the private session hop, supported provider
-    environment source, and consumable auth store without duplicating any
-    variable names here.  The value is never logged or echoed.  No-auth
-    providers resolve to ``None`` and send no credential header.
+    The trusted transport materializes the session's resolved credential
+    lease under the provider's single private session credential variable
+    (``AGENTIC_DEBUGGER_*_API_KEY``).  This child consumes exactly that
+    issued channel and NEVER re-resolves ambient state — the OS secure
+    store, ambient provider environment variables, and CLI auth stores are
+    deliberately invisible here, so the credential cannot silently drift
+    from the one the session's binding authorized.  The value is never
+    logged or echoed.  No-auth providers resolve to ``None`` and send no
+    credential header; a missing issued channel fails closed.
     """
 
     if auth_mode == "none":
         return None
-    value = resolve_runtime_credential(provider)
-    if value and value.strip():
+    channel = provider_session_credential_variable(provider)
+    value = os.environ.get(channel)
+    if credential_value_is_usable(value) and value.strip():
         return value.strip()
     raise ProviderDirectApiError(
-        "no usable credential source for the direct API route",
+        "the session credential channel was not issued for this direct API "
+        f"request ({channel} absent or unusable)",
         kind="configuration",
     )
 

@@ -1,6 +1,6 @@
 # ADR 0001 — Control/Execution Plane Separation as Logical Seams, Not Process Split
 
-**Status:** Accepted (target/migration decision — V2-01 execution-environment authority + control/provider secret isolation implemented; V2-02 session/runtime contracts implemented — `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec` ingress + `ProductExecutor` seam with the LEGACY PROJECT AMBIENT bridge retired from the normal Local Project path; V2-03 and later stages not implemented)
+**Status:** Accepted (target/migration decision — V2-01 execution-environment authority + control/provider secret isolation implemented; V2-02 session/runtime contracts implemented — `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec` ingress + `ProductExecutor` seam with the LEGACY PROJECT AMBIENT bridge retired from the normal Local Project path; V2-03 ModelGateway/ModelBinding + truthful status implemented; V2-04 CredentialVault binding/lease provider-secret authority implemented — `application/credential_vault.py`; V2-05 remains optional and trigger-gated)
 **Date:** 2026-09-03 (rev. 04 — implementation-readiness reconciliation before V2-01)
 **Baseline:** `4606933`; plan candidate lineage `3481b58` → `3d414c6` → `ff81f44` → repair commit 04
 **Full analysis:** `docs/architecture/agentic-debugger-v2-plan.md`
@@ -266,4 +266,16 @@ separating `Configured`, `Credential ready`, `Model runnable`, `Catalog
 refreshed at T`, `Live verified at T`, and `Runtime succeeded at T` (closing the
 incident where loopback offline CommandCode displayed `Connected`); user-facing
 vocabulary repair ("Endpoint contract", preset buttons); and automatic catalog
-cache invalidation on endpoint mutations. V2-04+ is not implemented.
+cache invalidation on endpoint mutations. V2-04 implements the
+Decision-item-1 fourth slice: the `CredentialVault` authority
+(`application/credential_vault.py`) separating the safe, serializable
+`CredentialBinding` from the ephemeral, non-serializable
+`CredentialLease` (resolved once per session binding; session-stable;
+provider-runtime-authority corroborated); quarantine and
+endpoint-binding rules preserved verbatim beneath the vault; the adapter
+child consuming only the vault-issued private credential channel (the
+§3.2 third ambient re-resolution removed); external CLI auth represented
+as a safe external authority without copying CLI-owned secrets; the UI
+and session runtime routed onto the gateway/vault with zero direct
+credential-core calls; no storage rewrite, no new dependency, no
+scientific-path change.

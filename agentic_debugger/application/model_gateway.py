@@ -57,7 +57,6 @@ from agentic_debugger.application.provider_connections import (
     TRANSPORT_OLLAMA_CLOUD,
     TRANSPORT_OPENCODE_GO,
     _PROVIDER_CREDENTIAL_SOURCE_LABELS,
-    credential_source_for,
     delete_cached_catalog,
     describe_transport_gap,
     effective_model_protocol,
@@ -70,13 +69,12 @@ from agentic_debugger.application.provider_connections import (
     protocol_blocker_reason,
     provider_api_model_id,
     provider_base_url,
-    provider_session_credential_environment,
     refresh_provider_catalog,
-    resolve_runtime_credential,
     test_provider_connection,
 )
-from agentic_debugger.application.model_providers import (
-    provider_transport_environment,
+from agentic_debugger.application.credential_vault import (
+    CredentialReadiness,
+    CredentialVault,
 )
 
 __all__ = [
@@ -727,6 +725,8 @@ class ModelGateway:
 
     def __init__(self, config_root: Optional[Any] = None) -> None:
         self.config_root = config_root
+        # V2-04: the single provider-secret authority beneath this gateway.
+        self._vault = CredentialVault.default()
         # In-memory record of explicit live probe outcomes during application run
         # Key: provider_id -> {"verified": bool, "timestamp": str, "error": Optional[str]}
         self._live_probe_results: Dict[str, Dict[str, Any]] = {}
@@ -855,9 +855,7 @@ class ModelGateway:
             api_model = provider_api_model_id(cfg.provider_id, effective_model)
             historical_profiles = (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT)
             is_historical = endpoint_contract in historical_profiles
-            direct_cred_missing = (
-                cfg.auth_mode != AUTH_NONE and credential_source_for(cfg.provider_id) is None
-            )
+            direct_cred_missing = not self._vault.readiness(cfg.provider_id).credential_ready
 
             if not is_historical:
                 # Direct-only / Generic provider
@@ -1083,7 +1081,7 @@ class ModelGateway:
             return False, "Provider is disabled"
         if is_provider_quarantined(provider_id):
             return False, "Credential state requires recovery (quarantined)"
-        if cfg.auth_mode != AUTH_NONE and credential_source_for(provider_id) is None:
+        if not self._vault.readiness(provider_id).credential_ready:
             return False, "No usable credential source found"
         if not cfg.base_url or not cfg.base_url.strip():
             return False, "Provider base URL is not configured"
@@ -1350,8 +1348,8 @@ class ModelGateway:
                         route=binding.route,
                     )
 
-                cred_source = credential_source_for(prov_id)
-                if cfg.auth_mode != AUTH_NONE and cred_source is None:
+                cred_ready = self._vault.readiness(prov_id).credential_ready
+                if cfg.auth_mode != AUTH_NONE and not cred_ready:
                     return ModelStaticPreflight(
                         provider_id=prov_id,
                         model_id=binding.model_id or "",
@@ -1508,7 +1506,7 @@ class ModelGateway:
         from agentic_debugger.application.model_providers import _legacy_for_config
         legacy_ok, legacy_reason = _legacy_for_config(cfg)
 
-        cred_source = credential_source_for(provider_id)
+        cred_source = self._vault.readiness(provider_id).source_kind
         direct_cred_ok = (cfg.auth_mode == AUTH_NONE or cred_source is not None)
         effective_proto = cfg.api_format
         direct_proto_ok = effective_proto is not None and is_protocol_executable(provider_id, effective_proto)
@@ -1878,12 +1876,9 @@ class ModelGateway:
         is_quarantined = is_provider_quarantined(provider_id)
         is_configured = True
 
-        cred_source = credential_source_for(provider_id)
-        if cfg.auth_mode == AUTH_NONE:
-            credential_ready = True
-            cred_source = "none"
-        else:
-            credential_ready = cred_source is not None
+        vault_readiness = self._vault.readiness(provider_id)
+        credential_ready = vault_readiness.credential_ready
+        cred_source = vault_readiness.source_kind
 
         # Provider-level static readiness
         is_ready, readiness_reason = self.provider_readiness(provider_id)
@@ -2011,22 +2006,37 @@ class ModelGateway:
 
     # -- Transport and Credential Environment Execution ----------------------
 
+    def credential_readiness(self, provider_id: str) -> CredentialReadiness:
+        """Safe credential readiness facts via the CredentialVault (V2-04).
+
+        The single credential-fact authority for this gateway: Provider
+        Manager and status snapshots consume these facts instead of
+        consulting credential stores or environment state directly.
+        """
+        return self._vault.readiness(provider_id)
+
     def session_credential_environment(
         self, provider_id: Optional[str]
     ) -> Optional[Dict[str, str]]:
-        """Worker spawn credential forwarding authority (inherited through V2-03)."""
+        """Worker spawn credential forwarding authority (vault-owned, V2-04)."""
         if not provider_id:
             return None
-        return provider_session_credential_environment(provider_id)
+        return self._vault.session_forwarding_environment(provider_id)
 
     def transport_environment(
         self, binding: ModelBinding
     ) -> Optional[Dict[str, str]]:
-        """Adapter child credential/TLS environment (model channel only)."""
+        """Adapter child credential environment (model channel only, V2-04).
+
+        Resolved through the CredentialVault: a fresh lease is resolved
+        once and materialized under the provider's single private
+        credential channel.  Legacy CLI routes whose credential is owned
+        by the external CLI authority forward nothing (the CLI reads its
+        own auth in place); no-auth providers forward nothing.
+        """
         if not binding.provider_id:
             return None
-        env = provider_transport_environment(binding.provider_id)
-        return dict(env) if env else None
+        return self._vault.transport_materialization(binding.provider_id)
 
     def create_transport(
         self,

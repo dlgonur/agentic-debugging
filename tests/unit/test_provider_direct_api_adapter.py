@@ -109,7 +109,10 @@ def fake_commandcode(monkeypatch: pytest.MonkeyPatch):
             pc.update_provider_config(
                 "commandcode_goat", base_url=server.base_url
             )
-            monkeypatch.setenv("COMMAND_CODE_API_KEY", SECRET)
+            # V2-04: the adapter consumes ONLY the vault-issued credential
+            # channel (the private session variable the trusted transport
+            # materializes) — never the ambient provider environment.
+            monkeypatch.setenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", SECRET)
             yield server
 
     return factory
@@ -136,6 +139,9 @@ def fake_opencode(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
             )
             monkeypatch.setattr(pc, "opencode_auth_store_path", lambda: store)
             monkeypatch.delenv("OPENCODE_API_KEY", raising=False)
+            # V2-04: the CLI-auth value is resolved worker-side and issued
+            # to the adapter under the private session credential channel.
+            monkeypatch.setenv("AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY", SECRET)
             yield server
 
     return factory
@@ -288,24 +294,27 @@ class TestCredentialBoundary:
             run_adapter()
         assert server.requests[0]["authorization"] == f"Bearer {SECRET}"
 
-    def test_injected_session_credential_wins(self, fake_commandcode, monkeypatch) -> None:
-        # The session key is installed after the fixture's endpoint
-        # configuration: an endpoint change with an already-associated
-        # credential requires explicit key re-entry (fail-closed binding).
+    def test_ambient_credential_is_never_reresolved(self, fake_commandcode, monkeypatch) -> None:
+        # V2-04: the adapter consumes only the vault-issued channel.  An
+        # ambient provider environment variable is invisible to the child
+        # even when it holds a usable value: the credential cannot drift
+        # from the one the session binding authorized.
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
-        ) as server:
-            pc.set_session_key("commandcode_goat", "session-key-value")
-            monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
+        ):
+            monkeypatch.delenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", raising=False)
+            monkeypatch.setenv("COMMAND_CODE_API_KEY", SECRET)
             code, out, err = run_adapter()
-            assert code == 0
-        assert server.requests[0]["authorization"] == "Bearer session-key-value"
+        assert code == 1
+        envelope = json.loads(err)
+        assert envelope["kind"] == "configuration"
+        assert SECRET not in err
 
     def test_missing_credential_fails_closed(self, fake_commandcode, monkeypatch) -> None:
         with fake_commandcode(
             lambda request: (200, scripted_chat_completion(_DIRECTIVE))
         ):
-            monkeypatch.delenv("COMMAND_CODE_API_KEY", raising=False)
+            monkeypatch.delenv("AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY", raising=False)
             code, out, err = run_adapter()
         assert code == 1
         envelope = json.loads(err)
@@ -559,7 +568,7 @@ class TestSubprocessContract:
                 cwd=str(tmp_path),
                 env={
                     "PATH": os.environ.get("PATH", ""),
-                    "COMMAND_CODE_API_KEY": SECRET,
+                    "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": SECRET,
                     "AGENTIC_DEBUGGER_PROVIDER_CONFIG_PATH": str(child_config),
                     "PYTHONIOENCODING": "utf-8",
                     "SystemRoot": os.environ.get("SystemRoot", ""),

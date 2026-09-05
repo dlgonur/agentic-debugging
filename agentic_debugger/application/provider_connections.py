@@ -89,8 +89,11 @@ __all__ = [
     "catalog_cache_path",
     "clear_all_session_keys",
     "clear_session_key",
+    "commit_provider_and_credential",
     "connection_statuses",
+    "credential_slot_name",
     "credential_source_for",
+    "credential_value_is_usable",
     "delete_cached_catalog",
     "delete_provider_config",
     "delete_secure_credential",
@@ -119,7 +122,9 @@ __all__ = [
     "provider_environment_variable",
     "provider_legacy_cli_auth_file",
     "provider_quarantine_path",
+    "provider_endpoint_binding_valid",
     "provider_session_credential_environment",
+    "provider_session_credential_variable",
     "provider_tls_signature_blocked",
     "provider_transport_credential_environment",
     "provider_transport_network_environment",
@@ -564,6 +569,22 @@ def has_secure_credential(provider_id: str) -> bool:
     """Presence-only check for a stored credential in the OS secure store."""
     val = load_secure_credential(provider_id)
     return bool(val)
+
+
+def credential_slot_name(provider_id: str) -> str:
+    """The durable vault slot NAME for one provider (safe metadata).
+
+    This is the Windows Credential Manager target name under which the
+    provider's credential is stored.  The name itself is non-secret safe
+    metadata (it identifies the SLOT, never the credential value) and is
+    the ``source_ref`` recorded by the V2-04 :class:`CredentialBinding`.
+    """
+    return _WIN_CRED_PREFIX + provider_id
+
+
+def credential_value_is_usable(value: Any) -> bool:
+    """Public presence/shape gate shared by every credential source."""
+    return _credential_is_usable(value)
 
 
 # -- OpenCode CLI auth store --------------------------------------------------
@@ -1320,7 +1341,7 @@ def quarantine_provider(provider_id: str) -> None:
     An existing but unreadable/corrupt quarantine file is UNKNOWN durable
     state and must remain fail-closed: the error is propagated, no mutation
     occurs, and the file is left untouched.  Callers (notably
-    _commit_provider_and_credential) abort before any credential mutation.
+    commit_provider_and_credential) abort before any credential mutation.
     """
     if not provider_id or not isinstance(provider_id, str):
         return
@@ -1490,16 +1511,9 @@ def _purge_provider_state_strict(provider_id: str) -> None:
     provider configuration on disk so deletion is retryable.
     """
 
-    previous_cred = load_secure_credential(provider_id)
-    if previous_cred is not None:
-        deleted = delete_secure_credential(provider_id)
-        remaining = load_secure_credential(provider_id)
-        if not deleted or remaining is not None:
-            raise ProviderConnectionError(
-                "provider credential cleanup could not be completed"
-            )
+    from agentic_debugger.application.credential_vault import CredentialVault
 
-    clear_session_key(provider_id)
+    CredentialVault.default().revoke_credential(provider_id)
     _purge_legacy_cached_catalog(provider_id)
     clear_provider_quarantine(provider_id)
     if is_provider_quarantined(provider_id):
@@ -1521,17 +1535,15 @@ def _migrate_legacy_builtin_records(
     raised and the durable legacy records remain on disk so migration remains
     retryable.
     """
-    for pid in legacy_ids:
-        previous_cred = load_secure_credential(pid)
-        if previous_cred is not None:
-            deleted = delete_secure_credential(pid)
-            remaining = load_secure_credential(pid)
-            if not deleted or remaining is not None:
-                raise ProviderConnectionError(
-                    f"legacy provider credential cleanup failed for {pid!r}"
-                )
+    from agentic_debugger.application.credential_vault import CredentialVault
 
-        clear_session_key(pid)
+    for pid in legacy_ids:
+        try:
+            CredentialVault.default().revoke_credential(pid)
+        except ProviderConnectionError:
+            raise ProviderConnectionError(
+                f"legacy provider credential cleanup failed for {pid!r}"
+            ) from None
         _purge_legacy_cached_catalog(pid)
         clear_provider_quarantine(pid)
         if is_provider_quarantined(pid):
@@ -1736,14 +1748,18 @@ def _generate_provider_id(name: str, existing: set[str]) -> str:
             )
 
 
-def _commit_provider_and_credential(
+def commit_provider_and_credential(
     provider_id: str,
     updated_configs: List[ProviderConfig],
     api_key: Optional[str],
 ) -> None:
     """Commit one logical provider save with pre-armed durable quarantine.
 
-    Invariant: NO credential mutation may begin unless the provider is already
+    Backend transaction beneath the V2-04 :class:`CredentialVault`: the
+    product write path invokes the vault
+    (``CredentialVault.commit_provider_save``), which delegates here
+    verbatim.  Invariant: NO credential mutation may begin unless the
+    provider is already
     protected by a restart-durable fail-closed marker.  The quarantine is
     armed BEFORE any secure-credential write; if arming fails the transaction
     aborts with no mutation.  After a fully coherent commit the quarantine is
@@ -1977,7 +1993,8 @@ def add_provider_config(
     )
     validate_provider_config_for_write(new_cfg)
     updated = [c for c in configs if c.provider_id != pid] + [new_cfg]
-    _commit_provider_and_credential(pid, updated, api_key)
+    from agentic_debugger.application.credential_vault import CredentialVault
+    CredentialVault.default().commit_provider_save(pid, updated, api_key)
     if api_key is not None and api_key.strip():
         clear_session_key(pid)
         try:
@@ -2140,7 +2157,8 @@ def update_provider_config(
     )
     validate_provider_config_for_write(updated_cfg)
     updated = [updated_cfg if c.provider_id == provider_id else c for c in configs]
-    _commit_provider_and_credential(provider_id, updated, api_key)
+    from agentic_debugger.application.credential_vault import CredentialVault
+    CredentialVault.default().commit_provider_save(provider_id, updated, api_key)
     if api_key is not None and api_key.strip():
         clear_session_key(provider_id)
         try:
@@ -2292,6 +2310,37 @@ def _session_env_var_for(kind: str) -> str:
         return contract.session_env_var
     normalized = re.sub(r"[^A-Za-z0-9_]", "_", kind.upper())
     return f"AGENTIC_DEBUGGER_PROVIDER_{normalized}_API_KEY"
+
+
+def provider_session_credential_variable(kind: str) -> str:
+    """The single private credential CHANNEL variable for one provider.
+
+    This variable is the vault-issued credential channel: the trusted
+    UI→worker hop and the trusted model-adapter transport materialization
+    both forward the winning credential VALUE under exactly this name, and
+    the adapter child consumes ONLY this channel (V2-04 removed the
+    adapter's ambient re-resolution).  The variable NAME is safe metadata;
+    its value must never enter argv, journals, evidence, or diagnostics.
+    """
+    return _session_env_var_for(kind)
+
+
+def provider_endpoint_binding_valid(kind: str) -> bool:
+    """Whether ambient canonical credentials remain bound to this endpoint.
+
+    Public authority wrapper over the accepted canonical-endpoint binding
+    rule: ambient environment / CLI-auth credentials are usable only while
+    the configured Base URL still matches the historical contract
+    endpoint.  Generic providers (no historical contract) are always
+    considered valid (nothing is ambient-bound).
+    """
+    try:
+        cfg = get_provider_config(kind)
+    except Exception:
+        return False
+    if cfg is None:
+        return False
+    return _endpoint_binding_valid(kind, cfg)
 
 
 def _canonical_base_for(kind: str) -> Optional[str]:
@@ -2507,19 +2556,22 @@ def provider_session_credential_environment(
 def provider_transport_credential_environment(
     kind: str,
 ) -> Optional[Mapping[str, str]]:
-    """Child environment forwarding for the direct adapter.
+    """Trusted model-channel credential materialization (one variable).
 
-    Forwards the winning credential source under the same authority as
-    :func:`resolve_runtime_credential`: saved/session/forwarded session
-    values are provider-identity-bound; ambient environment sources are
-    forwarded only while the endpoint binding remains valid.  The winning
-    CLI-auth credential is resolved once here and forwarded as a VALUE
-    under the provider's private session credential variable, so the
-    child direct adapter resolves it normally without rediscovering
-    operator auth state or requiring ``OPENCODE_CONFIG_DIR``.  No-auth
-    providers forward nothing.  The child transport starts from a minimal
-    environment, so only what is forwarded here (plus the bounded network
-    authority in the transport environment) can reach the adapter.
+    V2-04 authority: the winning credential source is materialized under
+    the provider's single private session credential variable — the ONLY
+    channel the direct adapter consumes (the adapter no longer re-resolves
+    ambient state).  Source rules are the accepted ladder verbatim:
+    saved/session/forwarded session values are provider-identity-bound;
+    ambient environment values are forwarded only while the endpoint
+    binding remains valid; the winning CLI-auth credential is resolved
+    once here and forwarded as a VALUE, so the child never rediscovers
+    operator auth state or requires ``OPENCODE_CONFIG_DIR``.  No-auth,
+    unconfigured, disabled, and quarantined providers forward nothing.
+    The child transport starts from a minimal environment, so only what is
+    forwarded here (plus the bounded network authority in the transport
+    environment) can reach the adapter.  Values must never enter argv,
+    journals, evidence, or diagnostics.
     """
     cfg = get_provider_config(kind)
     if cfg is None or not cfg.enabled:
@@ -2544,7 +2596,7 @@ def provider_transport_credential_environment(
             return None
         env_value = os.environ.get(contract.env_var)
         if _credential_is_usable(env_value):
-            return {contract.env_var: env_value.strip()}
+            return {session_var: env_value.strip()}
     if contract is not None and contract.auth_store_consumable:
         if not _endpoint_binding_valid(kind, cfg):
             return None

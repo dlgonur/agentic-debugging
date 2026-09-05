@@ -329,12 +329,11 @@ def run_configured_session(
         # Direct-API routes receive exactly one bounded credential
         # override in the adapter child environment (never argv, never
         # evidence); legacy CLI routes read the operator auth store in
-        # place and need no override.
-        from agentic_debugger.application.model_providers import (
-            provider_transport_environment,
-        )
+        # place and need no override.  V2-04: resolved through the
+        # CredentialVault authority, never by touching stores directly.
+        from agentic_debugger.application.credential_vault import CredentialVault
 
-        _env = provider_transport_environment(provider)
+        _env = CredentialVault.default().transport_materialization(provider)
         environment = dict(_env) if _env is not None else None
         ctx.emitter.emit(
             SessionEventKind.MODEL_CONFIGURED,

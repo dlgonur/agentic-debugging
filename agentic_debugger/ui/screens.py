@@ -1724,8 +1724,9 @@ class ModelProvidersScreen(Screen):
                 self.app.pop_screen()
                 new_screen = ModelProvidersScreen()
                 new_screen._selected_index = new_screen._index_of(new_cfg.provider_id)
-                from agentic_debugger.application.provider_connections import credential_source_for
-                if credential_source_for(new_cfg.provider_id) is not None:
+                if ModelGateway.default().credential_readiness(
+                    new_cfg.provider_id
+                ).has_credential_source:
                     # Consumed by the mounted screen: starting the refresh
                     # worker before the screen mounts would never run it.
                     new_screen._pending_refresh_provider = new_cfg.provider_id
@@ -2129,6 +2130,10 @@ class AddProviderDialogScreen(Screen):
                 catalog_mode=self._catalog,
                 transport_profile=self._profile,
             )
+            # V2-04: the raw key lived only in this widget; drop it as soon
+            # as the vault-owned save succeeded (never echoed back, never
+            # pre-filled into an edit dialog).
+            self.query_one("#input-key", Input).value = ""
             self.app.pop_screen()
             self._on_save(cfg)
         except Exception as exc:
@@ -2152,19 +2157,29 @@ class EditProviderDialogScreen(Screen):
         self._profile = getattr(config, "transport_profile", "generic")
 
     def compose(self) -> ComposeResult:
+        from agentic_debugger.application.model_gateway import ModelGateway
         from agentic_debugger.application.provider_connections import (
-            credential_source_for,
             CREDENTIAL_SOURCE_SAVED,
             CREDENTIAL_SOURCE_SESSION_KEY,
             CREDENTIAL_SOURCE_ENVIRONMENT,
             CREDENTIAL_SOURCE_CLI_AUTH_STORE,
         )
+        from agentic_debugger.application.credential_vault import (
+            CREDENTIAL_SOURCE_EXTERNAL_CLI,
+        )
 
         try:
-            source = credential_source_for(self._config.provider_id)
+            readiness = ModelGateway.default().credential_readiness(
+                self._config.provider_id
+            )
+            source = readiness.source_kind
+            recovery_required = readiness.recovery_required
         except Exception:
             source = None
-        if source == CREDENTIAL_SOURCE_SAVED:
+            recovery_required = False
+        if recovery_required:
+            cred_status = "Credential: recovery required (re-enter the API key)"
+        elif source == CREDENTIAL_SOURCE_SAVED:
             cred_status = "Credential: saved securely"
         elif source == CREDENTIAL_SOURCE_SESSION_KEY:
             cred_status = "Credential: session only"
@@ -2172,6 +2187,8 @@ class EditProviderDialogScreen(Screen):
             cred_status = "Credential: environment variable"
         elif source == CREDENTIAL_SOURCE_CLI_AUTH_STORE:
             cred_status = "Credential: CLI auth (read in place)"
+        elif source == CREDENTIAL_SOURCE_EXTERNAL_CLI:
+            cred_status = "Credential: CLI auth (external)"
         else:
             if getattr(self._config, "auth_mode", "bearer") == "none":
                 cred_status = "Credential: none required (loopback)"
@@ -2342,6 +2359,10 @@ class EditProviderDialogScreen(Screen):
                 catalog_mode=self._catalog,
                 transport_profile=self._profile,
             )
+            # V2-04: the raw key lived only in this widget; drop it as soon
+            # as the vault-owned save succeeded (never echoed back, never
+            # pre-filled into an edit dialog).
+            self.query_one("#input-key", Input).value = ""
             self.app.pop_screen()
             self._on_save(cfg)
         except Exception as exc:
