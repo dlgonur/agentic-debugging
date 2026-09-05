@@ -38,6 +38,7 @@ from agentic_debugger.application.worker_scenarios import (
     ScenarioContext,
     ScenarioInputError,
 )
+from agentic_debugger.application.model_gateway import ModelBinding
 from agentic_debugger.cancellation import CancellationToken
 from agentic_debugger.application.events import SourceKind
 
@@ -133,7 +134,20 @@ def _bomb_monkeypatch(monkeypatch: pytest.MonkeyPatch) -> dict:
 
 
 def test_launch_has_single_copy_of_request_identities():
-    launch = _launch(provider_id="commandcode_goat", model_id="goat-1")
+    binding = ModelBinding(
+        provider_id="commandcode_goat",
+        model_id="goat-1",
+        provider_model_id="goat-1",
+        display_name="goat-1",
+        route="direct_api",
+        effective_protocol="chat_completions",
+        endpoint_contract="generic",
+        endpoint="http://127.0.0.1:8000",
+        auth_mode=None,
+        config_fingerprint=None,
+        tool_version="1.0",
+    )
+    launch = _launch(provider_id="commandcode_goat", model_id="goat-1", model_binding=binding)
     assert launch.provider_id == "commandcode_goat" == launch.agent.provider_id
     assert launch.model_id == "goat-1" == launch.agent.model_id
     assert launch.policy == "pdb-on-uncertainty" == launch.agent.controller_policy

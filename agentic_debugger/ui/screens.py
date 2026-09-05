@@ -1336,30 +1336,20 @@ class ModelProvidersScreen(Screen):
         if self._statuses_cache is None or force_reload:
             from agentic_debugger.application.provider_connections import (
                 ProviderConnectionError,
-                connection_statuses,
             )
+            from agentic_debugger.application.model_gateway import ModelGateway
 
             try:
-                raw_statuses = connection_statuses()
-                self._config_error = None
-                from agentic_debugger.application.model_gateway import ModelGateway
                 gateway = ModelGateway.default()
                 history_root = None
                 if hasattr(self, "app") and hasattr(self.app, "history_store") and self.app.history_store is not None:
                     history_root = getattr(self.app.history_store, "root_dir", None)
-                enriched = []
-                for st in raw_statuses:
-                    probe_info = gateway._live_probe_results.get(st.kind)
-                    hist_time = gateway.inspect_last_runtime_success(st.kind, history_root=history_root) if history_root else None
-                    if probe_info or hist_time:
-                        live_v = probe_info.get("verified", False) if probe_info else getattr(st, "live_verified", False)
-                        live_t = probe_info.get("timestamp") if probe_info else getattr(st, "live_verified_at_utc", None)
-                        succ_t = hist_time or getattr(st, "runtime_succeeded_at_utc", None)
-                        from dataclasses import replace
-                        st = replace(st, live_verified=live_v, live_verified_at_utc=live_t, runtime_succeeded_at_utc=succ_t)
-                    enriched.append(st)
-                self._statuses_cache = enriched
+                self._statuses_cache = gateway.list_provider_statuses(history_root=history_root)
+                self._config_error = None
             except ProviderConnectionError as exc:
+                self._statuses_cache = []
+                self._config_error = str(exc)
+            except Exception as exc:
                 self._statuses_cache = []
                 self._config_error = str(exc)
         return self._statuses_cache
@@ -1382,7 +1372,7 @@ class ModelProvidersScreen(Screen):
                                 yield Static("No providers configured.", id="providers-empty-label", classes="providers-empty-text")
                             else:
                                 for index, st in enumerate(statuses):
-                                    is_live = getattr(st, "live_verified", False) or getattr(st, "runtime_succeeded_at_utc", None) is not None
+                                    is_live = bool(getattr(st, "live_verified", False))
                                     dot = "● " if is_live else "○ "
                                     label = f"{dot}{st.label}"
                                     yield Button(
@@ -1503,7 +1493,7 @@ class ModelProvidersScreen(Screen):
             btn_id = f"#provider-select-{status.kind}"
             try:
                 btn = self.query_one(btn_id, Button)
-                is_live = getattr(status, "live_verified", False) or getattr(status, "runtime_succeeded_at_utc", None) is not None
+                is_live = bool(getattr(status, "live_verified", False))
                 dot = "● " if is_live else "○ "
                 btn.label = f"{dot}{status.label}"
                 if index == self._selected_index:
@@ -1553,25 +1543,35 @@ class ModelProvidersScreen(Screen):
             # Truthful status facts:
             # "Connected" is never displayed based purely on static configuration or credential availability.
             # "Live verified" is reserved for explicit live verification.
-            if getattr(status, "live_verified", False):
+            if hasattr(status, "summary_headline"):
+                status_disp = status.summary_headline
+            elif getattr(status, "live_verified", False):
                 status_disp = "Live verified"
-                status_style = PRIMARY
             elif getattr(status, "runtime_succeeded_at_utc", None):
                 status_disp = "Runtime succeeded"
-                status_style = PRIMARY
             elif getattr(status, "credential_ready", False) or getattr(status, "connected", False):
                 if source:
                     status_disp = f"Configured · {source}"
                 elif getattr(status, "auth_mode", "") == "none":
-                    status_disp = "Configured · loopback"
+                    from agentic_debugger.application.model_gateway import is_loopback_url
+                    if is_loopback_url(status.base_url):
+                        status_disp = "Configured · loopback"
+                    else:
+                        status_disp = "Configured · no auth"
                 else:
                     status_disp = "Configured · credential ready"
-                status_style = FOREGROUND
             elif getattr(status, "is_configured", True) and getattr(status, "enabled", True) and not getattr(status, "is_quarantined", False):
                 status_disp = "Configured · no credential"
-                status_style = MUTED
             else:
                 status_disp = "Not configured"
+
+            if status_disp in ("Live verified", "Runtime succeeded"):
+                status_style = PRIMARY
+            elif status_disp.startswith("Configured") and "no credential" not in status_disp:
+                status_style = FOREGROUND
+            elif status_disp in ("Disabled", "Quarantined · recovery required", "Configured · no credential"):
+                status_style = MUTED
+            else:
                 status_style = FAINT
 
             summary.update(
@@ -1668,12 +1668,16 @@ class ModelProvidersScreen(Screen):
     def _refresh_catalog(self, kind: str):
         from agentic_debugger.application.provider_connections import (
             ProviderConnectionError,
-            refresh_provider_catalog,
+        )
+        from agentic_debugger.application.model_gateway import (
+            CatalogProbeError,
+            ModelGateway,
         )
 
         try:
-            snapshot = refresh_provider_catalog(kind)
-        except ProviderConnectionError as exc:
+            gateway = ModelGateway.default()
+            snapshot = gateway.refresh_catalog(kind)
+        except (ProviderConnectionError, CatalogProbeError) as exc:
             self.app.call_from_thread(self._refresh_finished, kind, False, str(exc))
             return
         except Exception:
@@ -1701,6 +1705,8 @@ class ModelProvidersScreen(Screen):
     def action_add_provider(self) -> None:
         def on_saved(new_cfg):
             if new_cfg:
+                from agentic_debugger.application.model_gateway import ModelGateway
+                ModelGateway.default().invalidate_provider(new_cfg.provider_id)
                 self._set_message(f"Added provider '{new_cfg.name}'")
                 # Reload screen to refresh widget tree
                 self.app.pop_screen()
@@ -1728,6 +1734,8 @@ class ModelProvidersScreen(Screen):
 
         def on_saved(updated_cfg):
             if updated_cfg:
+                from agentic_debugger.application.model_gateway import ModelGateway
+                ModelGateway.default().invalidate_provider(updated_cfg.provider_id)
                 self._set_message(f"Updated provider '{updated_cfg.name}'")
                 self._current_statuses(force_reload=True)
                 self.render_state()
@@ -1761,6 +1769,8 @@ class ModelProvidersScreen(Screen):
                 )
                 return
             if deleted:
+                from agentic_debugger.application.model_gateway import ModelGateway
+                ModelGateway.default().invalidate_provider(kind)
                 self.app.pop_screen()
                 new_screen = ModelProvidersScreen()
                 statuses = new_screen._current_statuses(force_reload=True)
@@ -1784,6 +1794,8 @@ class ModelProvidersScreen(Screen):
                 from agentic_debugger.application.provider_connections import add_manual_model
                 try:
                     add_manual_model(kind, model_id, display_name, protocol)
+                    from agentic_debugger.application.model_gateway import ModelGateway
+                    ModelGateway.default().invalidate_provider(kind)
                     self._set_message(f"Added model {model_id}")
                     self._current_statuses(force_reload=True)
                     self.render_state()

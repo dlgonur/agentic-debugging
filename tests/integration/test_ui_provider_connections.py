@@ -74,6 +74,28 @@ def fake_statuses(connected_opencode: bool = True, connected_goat: bool = False)
     ]
 
 
+_ORIGINAL_CONNECTION_STATUSES = pc.connection_statuses
+
+
+@pytest.fixture(autouse=True)
+def _patch_gateway_statuses_from_connection_statuses(monkeypatch: pytest.MonkeyPatch):
+    """Bridge test monkeypatching of connection_statuses to ModelGateway.list_provider_statuses."""
+    from agentic_debugger.application.model_gateway import ModelGateway
+
+    orig_list = ModelGateway.list_provider_statuses
+
+    def _bridged_list_provider_statuses(self, *, history_root=None):
+        if pc.connection_statuses is not _ORIGINAL_CONNECTION_STATUSES:
+            return pc.connection_statuses()
+        return orig_list(self, history_root=history_root)
+
+    monkeypatch.setattr(
+        ModelGateway,
+        "list_provider_statuses",
+        _bridged_list_provider_statuses,
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clean_session_keys():
     pc.clear_all_session_keys()

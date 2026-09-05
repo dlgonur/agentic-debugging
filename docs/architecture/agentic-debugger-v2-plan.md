@@ -967,3 +967,45 @@ semantics, and user-facing vocabulary repair:
 - **Regression suites**: `tests/unit/test_model_gateway.py`,
   `tests/unit/test_provider_status_semantics.py`, and
   `tests/unit/test_ui_provider_vocabulary.py`.
+
+### 21.1 Candidate 14 post-review repair (authoritative bindings and status facts)
+
+Following independent source-level architecture and runtime review by
+FirstMate, Candidate 14 repairs five critical runtime authority boundaries:
+
+1. **Binding Stability and Corroboration**: `ModelGateway.create_transport()`
+   corroborates `ModelBinding` against the authoritative current state before
+   instantiating child transports. For direct API routes, it validates that
+   `base_url`, `auth_mode`, `endpoint_contract`, `api_format`, and config
+   fingerprint have not drifted, and that the provider is enabled and not
+   quarantined. For profile routes, it corroborates `configuration_fingerprint`
+   and `tool_version` against `CommandModelConfigStore`. Any drift fails closed
+   with `StaleModelBindingError` before any model call is dispatched.
+2. **Fail-Closed Resolution & Compatibility**: `ModelGateway.resolve()` removes
+   broad `except Exception:` fallbacks. Unconfigured providers fail closed with
+   `ProviderConfigurationError`. Model and protocol compatibility are validated
+   against the authoritative endpoint contract, raising `IncompatibleModelError`
+   on mismatch. Missing credentials on configured providers yield safe static
+   bindings that fail preflight cleanly without fabricating credentials.
+3. **Runtime Identity Binding for Probes & Observational History**: Live probe
+   records are tied to a deterministic `provider_runtime_identity(cfg)` hash
+   (provider ID, base URL, endpoint contract, auth mode, API format). Mutating
+   provider configuration invalidates live verification immediately without
+   manual cache flushes. Session journal inspection (`inspect_last_runtime_success`)
+   verifies that `model.configured` recorded an `endpoint` identical to the
+   provider's current `base_url`, preventing stale or unbound history from
+   falsely certifying new endpoints.
+4. **Provider Manager UI Authority**: `ModelProvidersScreen` consumes the public
+   `ModelGateway.list_provider_statuses(history_root=...)` interface as the single
+   source of truth, eliminating out-of-band object assembly and private attribute
+   access. Solid dot `●` is driven exclusively by `live_verified`, NOT historical
+   `runtime_succeeded_at_utc`. Provider CRUD operations invalidate gateway probe
+   state via `gateway.invalidate_provider()`.
+5. **Qualified Ollama vs Direct API Route Distinction**: Qualified Ollama Cloud
+   ladder models use explicit `ROUTE_QUALIFIED_LADDER`, preventing shadowing or
+   misdirection to configured Ollama instances running under `ROUTE_DIRECT_API`.
+6. **Truthful Headline Semantics**: Providers with `auth_mode="none"` report
+   `Configured · loopback` only when the endpoint hostname is loopback (`127.0.0.1`,
+   `localhost`, `::1`); non-loopback endpoints report `Configured · no auth`.
+   Quarantined providers retain `is_configured=True` while reporting
+   `Quarantined · recovery required`.

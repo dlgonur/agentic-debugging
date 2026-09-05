@@ -1296,10 +1296,6 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
         raise ScenarioInputError(f"model profile unavailable: {exc}") from exc
 
     model_provenance_payload = model_binding.model_configured_payload()
-    if live_config.configuration_fingerprint:
-        model_provenance_payload["config_fingerprint"] = live_config.configuration_fingerprint
-    if live_config.model_name:
-        model_provenance_payload["display_name"] = live_config.model_name
     ctx.emitter.emit(SessionEventKind.MODEL_CONFIGURED, model_provenance_payload)
     adapters: list[Any]=[]
     def _model_factory(dctx, reg):  # type: ignore[no-untyped-def]

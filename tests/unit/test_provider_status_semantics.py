@@ -22,6 +22,7 @@ from agentic_debugger.application.provider_connections import (
     save_cached_catalog,
     load_cached_catalog,
     ProviderCatalogSnapshot,
+    quarantine_provider,
     PROTOCOL_CHAT_COMPLETIONS,
     AUTH_NONE,
     AUTH_BEARER,
@@ -110,6 +111,7 @@ def test_runtime_succeeded_derived_from_session_journal(
             "kind": "model.configured",
             "timestamp": "2026-09-05T09:00:00Z",
             "provider": "my_prov",
+            "endpoint": "http://127.0.0.1:8000",
             "model": "model-1",
         },
         {
@@ -188,3 +190,116 @@ def test_catalog_cache_invalidation_on_config_mutation(
     assert cfg is not None
     assert cfg.last_refresh_utc is None
     assert cfg.models == ()
+
+
+def test_non_loopback_auth_none_is_configured_no_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Non-loopback endpoint with auth_mode='none' must report 'Configured · no auth', never 'loopback'."""
+    from agentic_debugger.application.provider_connections import ProviderConfig
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+    cfg = ProviderConfig(
+        name="Remote None Auth",
+        base_url="https://api.remote-open.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="remote_none_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.get_provider_config",
+        lambda pid: cfg if pid == "remote_none_p" else None,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.model_gateway.get_provider_config",
+        lambda pid: cfg if pid == "remote_none_p" else None,
+    )
+
+    status = gateway.get_provider_status("remote_none_p")
+    assert status.is_configured is True
+    assert status.credential_ready is True
+    assert status.summary_headline == "Configured · no auth"
+    assert "loopback" not in status.summary_headline
+
+
+def test_quarantined_provider_is_configured_true_and_recovery_required(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Quarantined provider has is_configured=True and headline 'Quarantined · recovery required'."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+    add_provider_config(
+        name="Quarantined Provider",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="quarantine_sem_p",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+    quarantine_provider("quarantine_sem_p")
+
+    status = gateway.get_provider_status("quarantine_sem_p")
+    assert status.is_configured is True
+    assert status.is_quarantined is True
+    assert status.summary_headline == "Quarantined · recovery required"
+
+
+def test_ui_solid_dot_driven_only_by_live_verified_not_runtime_succeeded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Sidebar dot ● is driven exclusively by live_verified=True, NOT by historical runtime success."""
+    from agentic_debugger.ui.screens import ModelProvidersScreen
+    from textual.widgets import Button
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+    add_provider_config(
+        name="Historical Provider",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="hist_dot_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    # Set up session journal to create runtime success
+    sessions_dir = tmp_path / "sessions" / "s1"
+    sessions_dir.mkdir(parents=True)
+    events = [
+        {
+            "kind": "model.configured",
+            "timestamp": "2026-09-05T10:00:00Z",
+            "provider": "hist_dot_p",
+            "endpoint": "http://127.0.0.1:8000",
+            "model": "m1",
+        },
+        {
+            "kind": "llm.request",
+            "timestamp": "2026-09-05T10:01:00Z",
+            "provider": "hist_dot_p",
+            "status": "success",
+        },
+    ]
+    with open(sessions_dir / "journal.jsonl", "w", encoding="utf-8") as f:
+        for ev in events:
+            f.write(json.dumps(ev) + "\n")
+
+    status = gateway.get_provider_status("hist_dot_p", sessions_root=tmp_path / "sessions")
+    assert status.runtime_succeeded_at_utc is not None
+    assert status.live_verified is False
+
+    # In ModelProvidersScreen, the dot for hist_dot_p must be ○ because live_verified is False
+    screen = ModelProvidersScreen()
+    screen._statuses_cache = [status]
+    # Compose screen buttons
+    btn_labels = []
+    for st in screen._current_statuses():
+        is_live = bool(getattr(st, "live_verified", False))
+        dot = "● " if is_live else "○ "
+        btn_labels.append(f"{dot}{st.label}")
+
+    assert btn_labels == ["○ Historical Provider"]
+    assert "●" not in btn_labels[0]
+
