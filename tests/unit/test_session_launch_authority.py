@@ -157,7 +157,7 @@ def test_launch_has_single_copy_of_request_identities():
         effective_protocol="chat_completions",
         endpoint_contract="generic",
         endpoint="http://127.0.0.1:8000",
-        auth_mode=None,
+        auth_mode="none",
         config_fingerprint=None,
         tool_version="1.0",
     )

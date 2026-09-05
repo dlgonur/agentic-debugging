@@ -1065,3 +1065,53 @@ identity authority, binding invariants, and fail-closed status resolution:
    - **Category D (Cross-Cutting & Legacy Runners)**: Safety name classification
      in `execution_environment.py` / `session_runtime.py` and legacy ladder
      evaluation runners in `configured_source.py`.
+
+### 21.3 Candidate 16 final bounded authority repair (provider routing and runtime identity)
+
+Following independent FirstMate review, Candidate 16 establishes strict provider
+routing authority, structured error classification, distinct runtime identity,
+and truthful status hierarchy:
+
+1. **Legacy-CLI Fallback Preservation for Historical Profiles**:
+   `ModelGateway` delegates route authority to accepted provider core
+   (`model_providers.resolve_provider_live_config`), preserving `ROUTE_LEGACY_CLI`
+   when direct protocol is unresolved or credentials are absent for historical
+   profiles (`TRANSPORT_OPENCODE_GO`, `TRANSPORT_COMMANDCODE_GOAT`). Generic
+   providers (`TRANSPORT_GENERIC`) are isolated and never fall back to legacy CLI.
+   `static_preflight` truthfully reports `route=ROUTE_LEGACY_CLI` and
+   `is_runnable=True` when the legacy CLI route is ready.
+2. **Structured Provider Error Handling**:
+   Parsing of English exception strings (`str(exc)`) is completely eliminated.
+   Provider readiness and route selection evaluate structured provider facts
+   (`ProviderConfig`, `credential_source_for`, `_legacy_for_config`,
+   `is_provider_quarantined`). Unexpected registry failures fail closed as
+   `ProviderConfigurationError`.
+3. **Strict ModelBinding Route Invariants**:
+   `ROUTE_DIRECT_API` requires an explicit non-configured provider identity,
+   non-empty endpoint URL, `auth_mode in AUTH_MODES`, supported `effective_protocol`
+   (`chat_completions`, `messages`, `responses`), and recognized `endpoint_contract`.
+   `ROUTE_LEGACY_CLI` requires an explicit provider identity, non-empty model ID,
+   and historical contract profile (`TRANSPORT_OPENCODE_GO`, `TRANSPORT_COMMANDCODE_GOAT`),
+   strictly rejecting `TRANSPORT_GENERIC`. These invariants are enforced both in
+   `ModelBinding.__post_init__` and `ModelBinding.from_mapping()`.
+4. **Distinct Provider Runtime Identity vs ModelBinding Authority**:
+   `provider_runtime_identity(cfg)` captures the live provider endpoint, contract,
+   auth mode, and default protocol identity. `ModelBinding` captures full session
+   authority (provider runtime identity + model name + parameters + protocol variant
+   + configuration fingerprint). Model-specific protocol choices (e.g. Claude
+   `messages` on CommandCode default `chat_completions`) do not invalidate
+   provider-level runtime success in `inspect_last_runtime_success()`. When
+   `target_binding` is supplied, `model_binding_fingerprint` is strictly matched.
+5. **Fail-Closed Per-Event Journal Scanning**:
+   In `inspect_last_runtime_success()`, `session_matches_provider = False` is reset
+   at the start of evaluating every `model.configured` event sequentially. Each
+   configuration event defines the active provider for subsequent requests until
+   the next configuration event, preventing cross-provider success attribution
+   leakage in multi-configuration session journals.
+6. **Truthful Status Priority Over Historical Probes**:
+   Current operational deficits (missing credentials, unready, quarantined, disabled)
+   strictly supersede past `Live verified` probes in `summary_headline`. Solid dot `●`
+   in UI screens (`screens.py`) requires current readiness (`st.connected`), rendering
+   a hollow dot `○` when credentials are lost while preserving the historical
+   timestamp `Live verified <time> UTC` in detail views.
+

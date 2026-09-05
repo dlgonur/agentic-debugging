@@ -1372,7 +1372,7 @@ class ModelProvidersScreen(Screen):
                                 yield Static("No providers configured.", id="providers-empty-label", classes="providers-empty-text")
                             else:
                                 for index, st in enumerate(statuses):
-                                    is_live = bool(getattr(st, "live_verified", False))
+                                    is_live = bool(getattr(st, "connected", False))
                                     dot = "● " if is_live else "○ "
                                     label = f"{dot}{st.label}"
                                     yield Button(
@@ -1493,7 +1493,7 @@ class ModelProvidersScreen(Screen):
             btn_id = f"#provider-select-{status.kind}"
             try:
                 btn = self.query_one(btn_id, Button)
-                is_live = bool(getattr(status, "live_verified", False))
+                is_live = bool(getattr(status, "connected", False))
                 dot = "● " if is_live else "○ "
                 btn.label = f"{dot}{status.label}"
                 if index == self._selected_index:

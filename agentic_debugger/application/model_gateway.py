@@ -138,6 +138,9 @@ def provider_runtime_identity(cfg: Any) -> str:
 
     Excludes secret credentials, catalog timestamps, and mutable cached model list.
     """
+    if getattr(cfg, "provider_runtime_identity", None):
+        return getattr(cfg, "provider_runtime_identity")
+
     if isinstance(cfg, dict):
         raw = {
             "api_format": cfg.get("api_format") or cfg.get("api_protocol") or "",
@@ -233,6 +236,7 @@ class ModelBinding:
     - ``config_fingerprint``: safe configuration fingerprint.
     - ``tool_version``: adapter / tool contract version.
     - ``protocol_version``: wire protocol version (default "1.3").
+    - ``provider_runtime_identity``: provider configuration runtime contract fingerprint.
 
     Invariants:
     - Immutable (frozen dataclass).
@@ -254,6 +258,7 @@ class ModelBinding:
     config_fingerprint: Optional[str]
     tool_version: str
     protocol_version: str = "1.3"
+    provider_runtime_identity: Optional[str] = None
 
     def __post_init__(self) -> None:
         if not self.endpoint_contract or not self.endpoint_contract.strip():
@@ -277,6 +282,7 @@ class ModelBinding:
             "config_fingerprint",
             "tool_version",
             "protocol_version",
+            "provider_runtime_identity",
         ):
             val = getattr(self, f_name)
             if isinstance(val, str) and contains_credential_shape(val):
@@ -299,6 +305,16 @@ class ModelBinding:
             PROVIDER_KIND_CONFIGURED,
             PROVIDER_KIND_OLLAMA,
         )
+        from agentic_debugger.application.provider_connections import (
+            AUTH_MODES,
+            TRANSPORT_COMMANDCODE_GOAT,
+            TRANSPORT_MODES,
+            TRANSPORT_OLLAMA_CLOUD,
+            TRANSPORT_OPENCODE_GO,
+            PROTOCOL_CHAT_COMPLETIONS,
+            PROTOCOL_MESSAGES,
+            PROTOCOL_RESPONSES,
+        )
 
         if self.route == ROUTE_CONFIGURED_PROFILE:
             if self.provider_id not in (PROVIDER_KIND_CONFIGURED, None):
@@ -312,7 +328,9 @@ class ModelBinding:
                 raise ModelGatewayError("Route configured_profile cannot define an endpoint URL")
 
         elif self.route == ROUTE_QUALIFIED_LADDER:
-            if self.provider_id not in (PROVIDER_KIND_OLLAMA, "ollama"):
+            if not self.model_id or not str(self.model_id).strip():
+                raise ModelGatewayError("Route qualified_ladder requires non-empty model_id")
+            if self.provider_id not in (PROVIDER_KIND_OLLAMA, "ollama", "ollama_cloud"):
                 raise ModelGatewayError(
                     f"Route qualified_ladder requires provider_id={PROVIDER_KIND_OLLAMA!r} or 'ollama', "
                     f"got {self.provider_id!r}"
@@ -323,10 +341,38 @@ class ModelBinding:
                     f"got {self.endpoint_contract!r}"
                 )
 
-        elif self.route in (ROUTE_DIRECT_API, ROUTE_LEGACY_CLI):
+        elif self.route == ROUTE_DIRECT_API:
             if not self.provider_id or self.provider_id == PROVIDER_KIND_CONFIGURED:
                 raise ModelGatewayError(
-                    f"Route {self.route!r} requires an explicit provider identity and cannot be {self.provider_id!r}"
+                    f"Route direct_api requires an explicit provider identity and cannot be {self.provider_id!r}"
+                )
+            if not self.endpoint or not str(self.endpoint).strip():
+                raise ModelGatewayError("Route direct_api requires non-empty endpoint URL")
+            if self.auth_mode not in AUTH_MODES:
+                raise ModelGatewayError(
+                    f"Route direct_api requires auth_mode in {AUTH_MODES!r}, got {self.auth_mode!r}"
+                )
+            supported_protocols = (PROTOCOL_CHAT_COMPLETIONS, PROTOCOL_MESSAGES, PROTOCOL_RESPONSES)
+            if not self.effective_protocol or self.effective_protocol not in supported_protocols:
+                raise ModelGatewayError(
+                    f"Route direct_api requires supported effective_protocol in {supported_protocols!r}, got {self.effective_protocol!r}"
+                )
+            if self.endpoint_contract not in TRANSPORT_MODES:
+                raise ModelGatewayError(
+                    f"Route direct_api requires known endpoint_contract in {TRANSPORT_MODES!r}, got {self.endpoint_contract!r}"
+                )
+
+        elif self.route == ROUTE_LEGACY_CLI:
+            if not self.provider_id or self.provider_id == PROVIDER_KIND_CONFIGURED:
+                raise ModelGatewayError(
+                    f"Route legacy_cli requires an explicit provider identity and cannot be {self.provider_id!r}"
+                )
+            if not self.model_id or not str(self.model_id).strip():
+                raise ModelGatewayError("Route legacy_cli requires non-empty model_id")
+            historical_profiles = (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT)
+            if self.endpoint_contract not in historical_profiles:
+                raise ModelGatewayError(
+                    f"Route legacy_cli requires historical endpoint_contract in {historical_profiles!r}, got {self.endpoint_contract!r}"
                 )
 
         elif self.route == ROUTE_OFFLINE:
@@ -352,6 +398,7 @@ class ModelBinding:
             "config_fingerprint": self.config_fingerprint,
             "tool_version": self.tool_version,
             "protocol_version": self.protocol_version,
+            "provider_runtime_identity": self.provider_runtime_identity,
         }
 
     def fingerprint(self) -> str:
@@ -377,12 +424,14 @@ class ModelBinding:
         }
         if self.provider_id:
             payload["provider"] = self.provider_id
-            payload["provider_runtime_identity"] = provider_runtime_identity(self)
+            payload["provider_runtime_identity"] = (
+                self.provider_runtime_identity or provider_runtime_identity(self)
+            )
         if self.route:
             payload["route"] = self.route
         if self.effective_protocol:
             payload["api_protocol"] = self.effective_protocol
-            payload["api_format"] = self.effective_protocol
+            payload["effective_protocol"] = self.effective_protocol
         if self.endpoint_contract:
             payload["endpoint_contract"] = self.endpoint_contract
             payload["transport_profile"] = self.endpoint_contract
@@ -435,6 +484,7 @@ class ModelBinding:
             config_fingerprint=mapping.get("config_fingerprint"),
             tool_version=mapping.get("tool_version", "1.0"),
             protocol_version=mapping.get("protocol_version", "1.3"),
+            provider_runtime_identity=mapping.get("provider_runtime_identity"),
         )
 
     def __repr__(self) -> str:
@@ -514,8 +564,14 @@ class ProviderStatusSnapshot:
 
     @property
     def connected(self) -> bool:
-        """Connected is strictly reserved for explicit live verification."""
-        return self.live_verified
+        """Connected is strictly reserved for explicit live verification when currently ready."""
+        return bool(
+            self.live_verified
+            and self.credential_ready
+            and self.is_provider_ready
+            and not self.is_quarantined
+            and self.is_enabled
+        )
 
     @property
     def transport_profile(self) -> str:
@@ -546,22 +602,24 @@ class ProviderStatusSnapshot:
             return "Quarantined · recovery required"
         if not self.is_provider_ready and self.provider_readiness_reason and "Status evaluation error" in self.provider_readiness_reason:
             return "Degraded · status error"
+        if not self.credential_ready:
+            if self.is_configured:
+                return "Configured · no credential"
+            return "Not configured"
+        if not self.is_provider_ready:
+            return "Degraded · not ready"
         if self.live_verified:
             return "Live verified"
-        if self.credential_ready:
-            if self.auth_mode == "none":
-                if is_loopback_url(self.base_url):
-                    return "Configured · loopback"
-                return "Configured · no auth"
-            if self.credential_source and self.credential_source != "none":
-                src_label = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
-                    self.credential_source, self.credential_source
-                )
-                return f"Configured · {src_label}"
-            return "Configured · credential ready"
-        if self.is_configured:
-            return "Configured · no credential"
-        return "Not configured"
+        if self.auth_mode == "none":
+            if is_loopback_url(self.base_url):
+                return "Configured · loopback"
+            return "Configured · no auth"
+        if self.credential_source and self.credential_source != "none":
+            src_label = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
+                self.credential_source, self.credential_source
+            )
+            return f"Configured · {src_label}"
+        return "Configured · credential ready"
 
     @property
     def status_message(self) -> Optional[str]:
@@ -709,41 +767,12 @@ class ModelGateway:
 
             endpoint_contract = cfg.transport_profile or TRANSPORT_GENERIC
             disp_name = cfg.name
+            runtime_id = provider_runtime_identity(cfg)
 
             # Check static readiness conditions (disabled or quarantined)
             if not cfg.enabled or is_provider_quarantined(cfg.provider_id):
                 api_model = provider_api_model_id(cfg.provider_id, effective_model)
-                return ModelBinding(
-                    provider_id=cfg.provider_id,
-                    model_id=effective_model,
-                    provider_model_id=api_model or effective_model,
-                    display_name=str(effective_model or cfg.name),
-                    route=ROUTE_DIRECT_API,
-                    effective_protocol=cfg.api_format,
-                    endpoint_contract=endpoint_contract,
-                    endpoint=cfg.base_url,
-                    auth_mode=cfg.auth_mode,
-                    config_fingerprint=None,
-                    tool_version="live-command-v1",
-                    protocol_version="1.3",
-                )
-
-            # Protocol and model compatibility validation against authoritative contract
-            try:
-                proto = effective_model_protocol(cfg.provider_id, effective_model)
-            except ProviderConnectionError as exc:
-                raise IncompatibleModelError(
-                    f"Provider {effective_provider!r} model {effective_model!r} incompatible: {exc}"
-                ) from exc
-            if proto is None:
-                raise IncompatibleModelError(
-                    f"Provider {effective_provider!r} model {effective_model!r} has no resolved protocol"
-                )
-
-            api_model = provider_api_model_id(cfg.provider_id, effective_model)
-
-            cred_source = credential_source_for(cfg.provider_id)
-            if cfg.auth_mode != AUTH_NONE and cred_source is None:
+                proto = cfg.api_format
                 return ModelBinding(
                     provider_id=cfg.provider_id,
                     model_id=effective_model,
@@ -757,9 +786,11 @@ class ModelGateway:
                     config_fingerprint=None,
                     tool_version="live-command-v1",
                     protocol_version="1.3",
+                    provider_runtime_identity=runtime_id,
                 )
 
-            # Try resolving live config
+            # Delegate directly to accepted provider core's route resolution
+            api_model = provider_api_model_id(cfg.provider_id, effective_model)
             try:
                 live_config, provenance = resolve_provider_live_config(
                     effective_provider,
@@ -767,23 +798,42 @@ class ModelGateway:
                     logical_call_ceiling=logical_call_ceiling,
                     request_timeout_seconds=request_timeout_seconds,
                 )
+                route = str(provenance.get("route") or ROUTE_DIRECT_API)
+                api_proto = provenance.get("api_protocol")
+                endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
+                auth = provenance.get("auth_mode") or (cfg.auth_mode if route == ROUTE_DIRECT_API else None)
                 return ModelBinding(
                     provider_id=effective_provider,
                     model_id=effective_model,
-                    provider_model_id=provenance.get("provider_model_id") or api_model,
+                    provider_model_id=provenance.get("provider_model_id") or api_model or effective_model,
                     display_name=str(provenance.get("display_name") or effective_model or disp_name),
-                    route=str(provenance.get("route") or ROUTE_DIRECT_API),
-                    effective_protocol=provenance.get("api_protocol") or proto,
+                    route=route,
+                    effective_protocol=api_proto,
                     endpoint_contract=endpoint_contract,
-                    endpoint=provenance.get("endpoint") or cfg.base_url,
-                    auth_mode=provenance.get("auth_mode") or cfg.auth_mode,
+                    endpoint=endpoint,
+                    auth_mode=auth,
                     config_fingerprint=live_config.configuration_fingerprint,
                     tool_version=live_config.tool_version,
                     protocol_version=str(provenance.get("protocol_version") or "1.3"),
+                    provider_runtime_identity=runtime_id,
                 )
             except ProviderRegistryError as exc:
-                err_str = str(exc)
-                if "no usable credential source" in err_str or "credential recovery required" in err_str:
+                try:
+                    proto = effective_model_protocol(cfg.provider_id, effective_model)
+                except ProviderConnectionError as p_exc:
+                    raise IncompatibleModelError(
+                        f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
+                    ) from p_exc
+                except Exception:
+                    proto = resolve_model_protocol(cfg.provider_id, effective_model) or cfg.api_format
+
+                cred_source = credential_source_for(cfg.provider_id)
+                if (
+                    cfg.auth_mode != AUTH_NONE
+                    and cred_source is None
+                    and proto is not None
+                    and is_protocol_executable(cfg.provider_id, proto)
+                ):
                     return ModelBinding(
                         provider_id=cfg.provider_id,
                         model_id=effective_model,
@@ -797,8 +847,13 @@ class ModelGateway:
                         config_fingerprint=None,
                         tool_version="live-command-v1",
                         protocol_version="1.3",
+                        provider_runtime_identity=runtime_id,
                     )
-                # Structural/configuration failures must fail closed!
+                if proto is None or not is_protocol_executable(cfg.provider_id, proto):
+                    raise IncompatibleModelError(
+                        f"Provider {effective_provider!r} model {effective_model!r} incompatible: {exc}"
+                    ) from exc
+
                 raise ProviderConfigurationError(
                     f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
                 ) from exc
@@ -1011,100 +1066,165 @@ class ModelGateway:
                     cur_proto = cfg.api_format
             cur_api_model = provider_api_model_id(cfg.provider_id, binding.model_id or "") if binding.model_id else None
 
-            if binding.endpoint_contract != expected_contract:
+            if binding.route == ROUTE_DIRECT_API:
+                if binding.endpoint_contract != expected_contract:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} endpoint contract drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if clean_binding_endpoint != clean_cfg_endpoint:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} endpoint drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if binding.auth_mode != cfg.auth_mode:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} auth mode drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if binding.effective_protocol != cur_proto:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} effective protocol drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} model API id drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+
+                # Corroboration passed: evaluate current readiness for this binding
+                if not cfg.enabled:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason="Provider is disabled",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if is_provider_quarantined(prov_id):
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason="Credential state requires recovery (quarantined)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                cred_source = credential_source_for(prov_id)
+                if cfg.auth_mode != AUTH_NONE and cred_source is None:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason="No usable credential source found",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if binding.effective_protocol is not None and not is_protocol_executable(prov_id, binding.effective_protocol):
+                    blocker = protocol_blocker_reason(prov_id, binding.effective_protocol)
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=blocker or "Protocol not executable under current auth/contract",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
                 return ModelStaticPreflight(
                     provider_id=prov_id,
                     model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason=f"Provider {prov_id!r} endpoint contract drifted (stale binding)",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
-            if clean_binding_endpoint != clean_cfg_endpoint:
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason=f"Provider {prov_id!r} endpoint drifted (stale binding)",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
-            if binding.auth_mode != cfg.auth_mode:
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason=f"Provider {prov_id!r} auth mode drifted (stale binding)",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
-            if binding.effective_protocol != cur_proto:
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason=f"Provider {prov_id!r} effective protocol drifted (stale binding)",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
-            if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason=f"Provider {prov_id!r} model API id drifted (stale binding)",
+                    is_runnable=True,
+                    blocker_reason=None,
                     effective_protocol=binding.effective_protocol,
                     endpoint_contract=binding.endpoint_contract,
                     route=binding.route,
                 )
 
-            # Corroboration passed: evaluate current readiness for this binding
-            if not cfg.enabled:
+            elif binding.route == ROUTE_LEGACY_CLI:
+                historical_profiles = (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT)
+                if binding.endpoint_contract not in historical_profiles or binding.endpoint_contract != expected_contract:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} endpoint contract drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if not cfg.enabled:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason="Provider is disabled",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if is_provider_quarantined(prov_id):
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason="Credential state requires recovery (quarantined)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                from agentic_debugger.application.model_providers import _legacy_for_config
+                legacy_ok, legacy_reason = _legacy_for_config(cfg)
+                if not legacy_ok:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=legacy_reason or "Legacy CLI route is unavailable",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
                 return ModelStaticPreflight(
                     provider_id=prov_id,
                     model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason="Provider is disabled",
+                    is_runnable=True,
+                    blocker_reason=None,
                     effective_protocol=binding.effective_protocol,
                     endpoint_contract=binding.endpoint_contract,
                     route=binding.route,
                 )
-            if is_provider_quarantined(prov_id):
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason="Credential state requires recovery (quarantined)",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
-            cred_source = credential_source_for(prov_id)
-            if cfg.auth_mode != AUTH_NONE and cred_source is None:
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason="No usable credential source found",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
-            if binding.effective_protocol is not None and not is_protocol_executable(prov_id, binding.effective_protocol):
-                blocker = protocol_blocker_reason(prov_id, binding.effective_protocol)
-                return ModelStaticPreflight(
-                    provider_id=prov_id,
-                    model_id=binding.model_id or "",
-                    is_runnable=False,
-                    blocker_reason=blocker or "Protocol not executable under current auth/contract",
-                    effective_protocol=binding.effective_protocol,
-                    endpoint_contract=binding.endpoint_contract,
-                    route=binding.route,
-                )
+
             return ModelStaticPreflight(
                 provider_id=prov_id,
                 model_id=binding.model_id or "",
@@ -1149,58 +1269,58 @@ class ModelGateway:
                 route=None,
             )
 
-        # Check credential readiness
-        cred_source = credential_source_for(provider_id)
-        if cfg.auth_mode != AUTH_NONE and cred_source is None:
-            return ModelStaticPreflight(
-                provider_id=provider_id,
-                model_id=model_id or "",
-                is_runnable=False,
-                blocker_reason="No usable credential source found",
-                effective_protocol=None,
-                endpoint_contract=cfg.transport_profile,
-                route=None,
-            )
-
-        # Protocol resolution
-        effective_proto: Optional[str] = None
         if model_id:
             try:
-                effective_proto = effective_model_protocol(provider_id, model_id)
-            except ProviderConnectionError as exc:
+                binding = self.resolve(provider_id, model_id)
+                return self.static_preflight(binding)
+            except (IncompatibleModelError, ProviderConfigurationError) as exc:
                 return ModelStaticPreflight(
                     provider_id=provider_id,
                     model_id=model_id,
                     is_runnable=False,
                     blocker_reason=str(exc),
                     effective_protocol=None,
-                    endpoint_contract=cfg.transport_profile,
+                    endpoint_contract=cfg.transport_profile or TRANSPORT_GENERIC,
                     route=None,
                 )
-        else:
-            effective_proto = cfg.api_format
 
-        # Protocol executability
-        if effective_proto is not None and not is_protocol_executable(provider_id, effective_proto):
-            blocker = protocol_blocker_reason(provider_id, effective_proto)
+        from agentic_debugger.application.model_providers import _legacy_for_config
+        legacy_ok, legacy_reason = _legacy_for_config(cfg)
+
+        cred_source = credential_source_for(provider_id)
+        direct_cred_ok = (cfg.auth_mode == AUTH_NONE or cred_source is not None)
+        effective_proto = cfg.api_format
+        direct_proto_ok = effective_proto is not None and is_protocol_executable(provider_id, effective_proto)
+        if direct_cred_ok and direct_proto_ok:
             return ModelStaticPreflight(
                 provider_id=provider_id,
-                model_id=model_id or "",
-                is_runnable=False,
-                blocker_reason=blocker or "Protocol not executable under current auth/contract",
+                model_id="",
+                is_runnable=True,
+                blocker_reason=None,
                 effective_protocol=effective_proto,
                 endpoint_contract=cfg.transport_profile,
-                route=None,
+                route=ROUTE_DIRECT_API,
             )
 
+        if legacy_ok:
+            return ModelStaticPreflight(
+                provider_id=provider_id,
+                model_id="",
+                is_runnable=True,
+                blocker_reason=None,
+                effective_protocol=None,
+                endpoint_contract=cfg.transport_profile,
+                route=ROUTE_LEGACY_CLI,
+            )
+
+        blocker = "No usable credential source found" if not direct_cred_ok else (legacy_reason or "Provider is not runnable")
         return ModelStaticPreflight(
             provider_id=provider_id,
-            model_id=model_id or "",
-            is_runnable=True,
-            blocker_reason=None,
+            model_id="",
+            is_runnable=False,
+            blocker_reason=blocker,
             effective_protocol=effective_proto,
             endpoint_contract=cfg.transport_profile,
-            route=ROUTE_DIRECT_API,
         )
 
     # -- Explicit Probes (requires explicit user action) ----------------------
@@ -1389,47 +1509,44 @@ class ModelGateway:
             if events:
                 for ev in events:
                     if ev.event_kind is SessionEventKind.MODEL_CONFIGURED:
+                        session_matches_provider = False
                         p_prov = ev.payload.get("provider")
                         p_model = ev.payload.get("profile_id")
                         p_api_model = ev.payload.get("provider_model_id")
-                        p_endpoint = ev.payload.get("endpoint")
+                        p_endpoint = (ev.payload.get("endpoint") or "").strip().rstrip("/")
                         p_auth = ev.payload.get("auth_mode")
                         p_contract = ev.payload.get("endpoint_contract") or ev.payload.get("transport_profile")
                         p_format = ev.payload.get("api_format") or ev.payload.get("api_protocol")
                         p_runtime_id = ev.payload.get("provider_runtime_identity")
                         p_fp = ev.payload.get("config_fingerprint")
                         p_binding_fp = ev.payload.get("model_binding_fingerprint")
-                        if p_prov == provider_id:
-                            if model_id is not None and not (p_model == model_id or p_api_model == model_id):
-                                continue
-                            if effective_target_cfg is not None:
-                                cur_endpoint = (effective_target_cfg.base_url or "").strip().rstrip("/")
-                                cur_contract = effective_target_cfg.transport_profile or TRANSPORT_GENERIC
-                                cur_auth = effective_target_cfg.auth_mode
-                                cur_format = effective_target_cfg.api_format
-                                cur_runtime_id = provider_runtime_identity(effective_target_cfg)
 
-                                if not p_endpoint or p_endpoint.strip().rstrip("/") != cur_endpoint:
-                                    session_matches_provider = False
-                                elif not p_auth or p_auth != cur_auth:
-                                    session_matches_provider = False
-                                elif not p_contract or p_contract != cur_contract:
-                                    session_matches_provider = False
-                                elif not p_format or p_format != cur_format:
-                                    session_matches_provider = False
-                                elif p_runtime_id and p_runtime_id != cur_runtime_id:
-                                    session_matches_provider = False
-                                elif target_binding:
-                                    if target_binding.config_fingerprint and p_fp and p_fp != target_binding.config_fingerprint:
-                                        session_matches_provider = False
-                                    elif p_binding_fp and p_binding_fp != target_binding.fingerprint():
-                                        session_matches_provider = False
-                                    else:
-                                        session_matches_provider = True
-                                else:
-                                    session_matches_provider = True
+                        if p_prov != provider_id:
+                            continue
+                        if model_id is not None and not (p_model == model_id or p_api_model == model_id):
+                            continue
+
+                        if target_binding is not None:
+                            if p_binding_fp:
+                                session_matches_provider = (p_binding_fp == target_binding.fingerprint())
                             else:
                                 session_matches_provider = False
+                        elif effective_target_cfg is not None:
+                            cur_endpoint = (effective_target_cfg.base_url or "").strip().rstrip("/")
+                            cur_contract = effective_target_cfg.transport_profile or TRANSPORT_GENERIC
+                            cur_auth = effective_target_cfg.auth_mode
+                            cur_runtime_id = provider_runtime_identity(effective_target_cfg)
+
+                            if p_runtime_id:
+                                session_matches_provider = (p_runtime_id == cur_runtime_id)
+                            else:
+                                session_matches_provider = (
+                                    p_endpoint == cur_endpoint
+                                    and p_auth == cur_auth
+                                    and p_contract == cur_contract
+                                )
+                        else:
+                            session_matches_provider = False
 
                     elif ev.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
                         if session_matches_provider:
@@ -1440,12 +1557,16 @@ class ModelGateway:
                 try:
                     with open(journal_path, "r", encoding="utf-8") as f:
                         for line in f:
+                            if not line.strip():
+                                continue
                             raw = json.loads(line)
                             kind = raw.get("kind") or raw.get("event_kind")
                             if kind in ("model.configured", "model_configured"):
+                                session_matches_provider = False
                                 p_prov = raw.get("provider") or raw.get("payload", {}).get("provider")
                                 p_model = raw.get("model") or raw.get("profile_id") or raw.get("payload", {}).get("profile_id")
-                                p_endpoint = raw.get("endpoint") or raw.get("payload", {}).get("endpoint")
+                                p_api_model = raw.get("provider_model_id") or raw.get("payload", {}).get("provider_model_id")
+                                p_endpoint = (raw.get("endpoint") or raw.get("payload", {}).get("endpoint") or "").strip().rstrip("/")
                                 p_auth = raw.get("auth_mode") or raw.get("payload", {}).get("auth_mode")
                                 p_contract = (
                                     raw.get("endpoint_contract")
@@ -1468,37 +1589,34 @@ class ModelGateway:
                                     raw.get("model_binding_fingerprint")
                                     or raw.get("payload", {}).get("model_binding_fingerprint")
                                 )
-                                if p_prov == provider_id:
-                                    if model_id is not None and p_model != model_id:
-                                        continue
-                                    if effective_target_cfg is not None:
-                                        cur_endpoint = (effective_target_cfg.base_url or "").strip().rstrip("/")
-                                        cur_contract = effective_target_cfg.transport_profile or TRANSPORT_GENERIC
-                                        cur_auth = effective_target_cfg.auth_mode
-                                        cur_format = effective_target_cfg.api_format
-                                        cur_runtime_id = provider_runtime_identity(effective_target_cfg)
 
-                                        if not p_endpoint or p_endpoint.strip().rstrip("/") != cur_endpoint:
-                                            session_matches_provider = False
-                                        elif not p_auth or p_auth != cur_auth:
-                                            session_matches_provider = False
-                                        elif not p_contract or p_contract != cur_contract:
-                                            session_matches_provider = False
-                                        elif not p_format or p_format != cur_format:
-                                            session_matches_provider = False
-                                        elif p_runtime_id and p_runtime_id != cur_runtime_id:
-                                            session_matches_provider = False
-                                        elif target_binding:
-                                            if target_binding.config_fingerprint and p_fp and p_fp != target_binding.config_fingerprint:
-                                                session_matches_provider = False
-                                            elif p_binding_fp and p_binding_fp != target_binding.fingerprint():
-                                                session_matches_provider = False
-                                            else:
-                                                session_matches_provider = True
-                                        else:
-                                            session_matches_provider = True
+                                if p_prov != provider_id:
+                                    continue
+                                if model_id is not None and not (p_model == model_id or p_api_model == model_id):
+                                    continue
+
+                                if target_binding is not None:
+                                    if p_binding_fp:
+                                        session_matches_provider = (p_binding_fp == target_binding.fingerprint())
                                     else:
                                         session_matches_provider = False
+                                elif effective_target_cfg is not None:
+                                    cur_endpoint = (effective_target_cfg.base_url or "").strip().rstrip("/")
+                                    cur_contract = effective_target_cfg.transport_profile or TRANSPORT_GENERIC
+                                    cur_auth = effective_target_cfg.auth_mode
+                                    cur_runtime_id = provider_runtime_identity(effective_target_cfg)
+
+                                    if p_runtime_id:
+                                        session_matches_provider = (p_runtime_id == cur_runtime_id)
+                                    else:
+                                        session_matches_provider = (
+                                            p_endpoint == cur_endpoint
+                                            and p_auth == cur_auth
+                                            and p_contract == cur_contract
+                                        )
+                                else:
+                                    session_matches_provider = False
+
                             elif kind in ("llm.request", "model_request_completed", "step.action"):
                                 if session_matches_provider:
                                     st_val = raw.get("status") or raw.get("payload", {}).get("status")
@@ -1511,7 +1629,7 @@ class ModelGateway:
                 except Exception:
                     pass
 
-            if session_matches_provider and last_request_success_at:
+            if last_request_success_at:
                 return last_request_success_at
 
         return None
@@ -1821,33 +1939,40 @@ class ModelGateway:
                     f"Provider {binding.provider_id!r} endpoint contract drifted "
                     f"(expected {binding.endpoint_contract!r}, found {expected_contract!r})"
                 )
-            clean_binding_endpoint = (binding.endpoint or "").strip().rstrip("/")
-            clean_cfg_endpoint = (cfg.base_url or "").strip().rstrip("/")
-            if clean_binding_endpoint != clean_cfg_endpoint:
-                raise StaleModelBindingError(
-                    f"Provider {binding.provider_id!r} endpoint drifted "
-                    f"(expected {clean_binding_endpoint!r}, found {clean_cfg_endpoint!r})"
+            if binding.route == ROUTE_DIRECT_API:
+                clean_binding_endpoint = (binding.endpoint or "").strip().rstrip("/")
+                clean_cfg_endpoint = (cfg.base_url or "").strip().rstrip("/")
+                if clean_binding_endpoint != clean_cfg_endpoint:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} endpoint drifted "
+                        f"(expected {clean_binding_endpoint!r}, found {clean_cfg_endpoint!r})"
+                    )
+                if binding.auth_mode != cfg.auth_mode:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} auth mode drifted "
+                        f"(expected {binding.auth_mode!r}, found {cfg.auth_mode!r})"
+                    )
+                cur_api_model = (
+                    provider_api_model_id(cfg.provider_id, binding.model_id or "")
+                    if binding.model_id else None
                 )
-            if binding.auth_mode != cfg.auth_mode:
-                raise StaleModelBindingError(
-                    f"Provider {binding.provider_id!r} auth mode drifted "
-                    f"(expected {binding.auth_mode!r}, found {cfg.auth_mode!r})"
-                )
-            cur_api_model = (
-                provider_api_model_id(cfg.provider_id, binding.model_id or "")
-                if binding.model_id else None
-            )
-            if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
-                raise StaleModelBindingError(
-                    f"Provider {binding.provider_id!r} model {binding.model_id!r} API model id drifted "
-                    f"(expected {binding.provider_model_id!r}, found {cur_api_model!r})"
-                )
-            cur_proto = resolve_model_protocol(cfg.provider_id, binding.model_id or "") or cfg.api_format
-            if binding.effective_protocol != cur_proto:
-                raise StaleModelBindingError(
-                    f"Provider {binding.provider_id!r} effective protocol drifted "
-                    f"(expected {binding.effective_protocol!r}, found {cur_proto!r})"
-                )
+                if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} model {binding.model_id!r} API model id drifted "
+                        f"(expected {binding.provider_model_id!r}, found {cur_api_model!r})"
+                    )
+                cur_proto = resolve_model_protocol(cfg.provider_id, binding.model_id or "") or cfg.api_format
+                if binding.effective_protocol != cur_proto:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} effective protocol drifted "
+                        f"(expected {binding.effective_protocol!r}, found {cur_proto!r})"
+                    )
+            elif binding.route == ROUTE_LEGACY_CLI:
+                historical_profiles = (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT)
+                if binding.endpoint_contract not in historical_profiles:
+                    raise StaleModelBindingError(
+                        f"Legacy CLI route invalid for contract {binding.endpoint_contract!r}"
+                    )
 
             # Re-read live config only as corroboration
             try:

@@ -302,7 +302,7 @@ def test_ui_solid_dot_driven_only_by_live_verified_not_runtime_succeeded(
     # Compose screen buttons
     btn_labels = []
     for st in screen._current_statuses():
-        is_live = bool(getattr(st, "live_verified", False))
+        is_live = bool(getattr(st, "connected", False))
         dot = "● " if is_live else "○ "
         btn_labels.append(f"{dot}{st.label}")
 
@@ -465,5 +465,68 @@ def test_list_provider_statuses_produces_degraded_snapshot_on_evaluation_error(
     assert faulty_status.is_provider_ready is False
     assert "Status evaluation error" in (faulty_status.provider_readiness_reason or "")
     assert "RuntimeError" in (faulty_status.provider_readiness_reason or "")
+
+
+def test_historical_live_verified_does_not_mask_missing_credential(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 6: Live verified probe timestamp is preserved after credential deletion, but connected is False, headline reports no credential, and sidebar dot is ○."""
+    from agentic_debugger.ui.screens import ModelProvidersScreen
+    from agentic_debugger.application.provider_connections import (
+        save_cached_catalog,
+        delete_secure_credential,
+    )
+
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    # 1. Configure provider with credentials and record live verified probe in gateway
+    add_provider_config(
+        name="Live Probe Prov",
+        base_url="https://api.example.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="live_probe_p",
+        auth_mode=AUTH_BEARER,
+        api_key="sk-test-valid-key",
+        transport_profile=TRANSPORT_GENERIC,
+    )
+    from agentic_debugger.application.model_gateway import provider_runtime_identity
+    cfg = get_provider_config("live_probe_p")
+    cur_id = provider_runtime_identity(cfg)
+    gateway._live_probe_results["live_probe_p"] = {
+        "verified": True,
+        "timestamp": "2026-09-05T11:00:00Z",
+        "runtime_identity": cur_id,
+    }
+
+    status = gateway.get_provider_status("live_probe_p")
+    assert status.live_verified is True
+    assert status.live_verified_at_utc == "2026-09-05T11:00:00Z"
+    assert status.credential_ready is True
+    assert status.connected is True
+    assert "Live verified" in status.summary_headline
+
+    # 2. Delete the credential (now no credential available)
+    delete_secure_credential("live_probe_p")
+
+    status_no_cred = gateway.get_provider_status("live_probe_p")
+    # Live verified timestamp is preserved historically
+    assert status_no_cred.live_verified is True
+    assert status_no_cred.live_verified_at_utc == "2026-09-05T11:00:00Z"
+    # Current readiness is deficient
+    assert status_no_cred.credential_ready is False
+    assert status_no_cred.connected is False
+    # Headline reports current deficit rather than Live verified
+    assert status_no_cred.summary_headline == "Configured · no credential"
+
+    # UI renders hollow dot ○ rather than solid dot ●
+    screen = ModelProvidersScreen()
+    screen._statuses_cache = [status_no_cred]
+    for st in screen._current_statuses():
+        is_live = bool(getattr(st, "connected", False))
+        dot = "● " if is_live else "○ "
+        label = f"{dot}{st.label}"
+        assert label == "○ Live Probe Prov"
+
 
 
