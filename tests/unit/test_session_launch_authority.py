@@ -160,6 +160,7 @@ def test_launch_has_single_copy_of_request_identities():
         auth_mode="none",
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     launch = _launch(provider_id="commandcode_goat", model_id="goat-1", model_binding=binding)
     assert launch.provider_id == "commandcode_goat" == launch.agent.provider_id

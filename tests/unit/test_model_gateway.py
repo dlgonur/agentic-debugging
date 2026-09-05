@@ -10,9 +10,10 @@ from __future__ import annotations
 import dataclasses
 import http.server
 import json
+import re
 import threading
 from pathlib import Path
-from typing import Generator
+from typing import Any, Generator
 import pytest
 
 from agentic_debugger.application.model_gateway import (
@@ -30,11 +31,14 @@ from agentic_debugger.application.model_gateway import (
     ROUTE_DIRECT_API,
     ROUTE_CONFIGURED_PROFILE,
     ROUTE_QUALIFIED_LADDER,
+    ROUTE_LEGACY_CLI,
+    ROUTE_OFFLINE,
     contains_credential_shape,
     provider_runtime_identity,
     is_loopback_url,
 )
 from agentic_debugger.application.provider_connections import (
+    ProviderConfig,
     add_provider_config,
     get_provider_config,
     update_provider_config,
@@ -45,6 +49,8 @@ from agentic_debugger.application.provider_connections import (
     AUTH_NONE,
     TRANSPORT_GENERIC,
     TRANSPORT_OLLAMA_CLOUD,
+    TRANSPORT_COMMANDCODE_GOAT,
+    TRANSPORT_OPENCODE_GO,
     ProviderConnectionError,
 )
 
@@ -93,6 +99,7 @@ def test_model_binding_immutability() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     with pytest.raises(dataclasses.FrozenInstanceError):
         binding.provider_id = "anthropic"  # type: ignore[misc]
@@ -189,6 +196,7 @@ def test_model_binding_repr_is_secret_free() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     r = repr(binding)
     assert "provider='openai'" in r
@@ -209,6 +217,7 @@ def test_model_binding_deterministic_fingerprint() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     b2 = ModelBinding(
         provider_id="openai",
@@ -222,6 +231,7 @@ def test_model_binding_deterministic_fingerprint() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     assert b1.fingerprint() == b2.fingerprint()
     assert b1.binding_id == b2.binding_id
@@ -238,6 +248,7 @@ def test_model_binding_deterministic_fingerprint() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     assert b1.fingerprint() != b3.fingerprint()
 
@@ -255,6 +266,7 @@ def test_model_binding_serialization_roundtrip() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint="fp123",
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     mapping = original.to_mapping()
     restored = ModelBinding.from_mapping(mapping)
@@ -275,12 +287,14 @@ def test_model_binding_model_configured_payload() -> None:
         auth_mode=AUTH_BEARER,
         config_fingerprint="fp_configured",
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     payload = binding.model_configured_payload()
     assert payload["provider"] == "openai"
     assert payload["profile_id"] == "gpt-4o"
     assert payload["api_protocol"] == PROTOCOL_CHAT_COMPLETIONS
     assert payload["route"] == ROUTE_DIRECT_API
+    assert payload["provider_runtime_identity"] == "0" * 64
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +351,7 @@ def test_model_gateway_static_preflight_states(
         auth_mode=AUTH_NONE,
         config_fingerprint=None,
         tool_version="1.0",
+        provider_runtime_identity="0" * 64,
     )
     pf_unknown = gateway.static_preflight(unknown_binding)
     assert pf_unknown.is_runnable is False
@@ -2149,6 +2164,611 @@ def test_candidate_17_finding_3_provider_runtime_identity_emission_and_model_bin
     payload_off = binding_off.model_configured_payload()
     assert "provider_runtime_identity" not in payload_off
     assert "provider" not in payload_off
+
+
+# ---------------------------------------------------------------------------
+# Candidate 18 Tests: Findings 1, 2, 3, 4
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_18_finding_1_historical_missing_cred_decided_before_live_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1A: Historical provider with missing creds & legacy unavailable decides statically before live resolution."""
+    from unittest.mock import patch
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Historical CommandCode",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="cc_hist_18",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    def _bomb(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("resolve_provider_live_config must not be called")
+
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(False, "no CLI")), \
+         patch("agentic_debugger.application.model_providers.resolve_provider_live_config", side_effect=_bomb):
+        binding = gateway.resolve("cc_hist_18", "model-1")
+
+    assert binding.route == ROUTE_DIRECT_API
+    assert binding.auth_mode == AUTH_BEARER
+    assert binding.provider_id == "cc_hist_18"
+    assert binding.provider_runtime_identity == provider_runtime_identity(get_provider_config("cc_hist_18"))
+
+
+def test_candidate_18_finding_1_historical_incompatible_protocol_fails_before_live_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1B: Incompatible protocol on missing-cred historical provider fails before live resolution."""
+    from unittest.mock import patch
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Historical CC Incompatible",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="cc_incompat_18",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    def _bomb(*args: Any, **kwargs: Any) -> Any:
+        raise AssertionError("resolve_provider_live_config must not be called")
+
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(False, "no CLI")), \
+         patch("agentic_debugger.application.model_providers.resolve_provider_live_config", side_effect=_bomb), \
+         patch("agentic_debugger.application.model_gateway.is_protocol_executable", return_value=False):
+        with pytest.raises(IncompatibleModelError, match="not executable"):
+            gateway.resolve("cc_incompat_18", "model-1")
+
+
+def test_candidate_18_finding_1_historical_available_legacy_adapter_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1C: Historical provider with available legacy CLI fails closed on adapter error."""
+    from unittest.mock import patch
+    from agentic_debugger.application.model_providers import ProviderRegistryError
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Historical CC Adapter Error",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="cc_fail_18",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(True, None)), \
+         patch("agentic_debugger.application.model_providers.resolve_provider_live_config",
+               side_effect=ProviderRegistryError("CLI adapter binary crashed")):
+        with pytest.raises(ProviderConfigurationError, match="legacy CLI resolution failed"):
+            gateway.resolve("cc_fail_18", "model-1")
+
+
+def test_candidate_18_finding_1_historical_direct_creds_present_live_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1D: Historical provider with direct creds fails closed on ProviderRegistryError (no static fallback)."""
+    from unittest.mock import patch
+    from agentic_debugger.application.model_providers import ProviderRegistryError
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Historical CC Creds Present",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="cc_cred_18",
+        auth_mode=AUTH_BEARER,
+        api_key="sk-real-credential",
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(False, "no CLI")), \
+         patch("agentic_debugger.application.model_providers.resolve_provider_live_config",
+               side_effect=ProviderRegistryError("Remote service 503 unavailable")):
+        with pytest.raises(ProviderConfigurationError, match="live configuration resolution failed"):
+            gateway.resolve("cc_cred_18", "model-1")
+
+
+def test_candidate_18_finding_1_direct_only_provider_cred_present_live_failure_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 1E: Direct-only provider with creds present fails closed on live resolution error."""
+    from unittest.mock import patch
+    from agentic_debugger.application.model_providers import ProviderRegistryError
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Direct Generic Creds Present",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="gen_cred_18",
+        auth_mode=AUTH_BEARER,
+        api_key="sk-test-key",
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    with patch("agentic_debugger.application.model_providers.resolve_provider_live_config",
+               side_effect=ProviderRegistryError("Direct API connection refused")):
+        with pytest.raises(ProviderConfigurationError, match="live configuration resolution failed"):
+            gateway.resolve("gen_cred_18", "model-1")
+
+
+def test_candidate_18_finding_2_provider_runtime_identity_complete_facts_produce_valid_hex() -> None:
+    """Finding 2A: Complete 5 facts produce deterministic 64-char lowercase hex digest."""
+    data = {
+        "provider_id": "prov_alpha",
+        "base_url": "https://api.example.com/v1",
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "auth_mode": AUTH_BEARER,
+        "api_format": PROTOCOL_CHAT_COMPLETIONS,
+    }
+    digest = provider_runtime_identity(data)
+    assert digest is not None
+    assert len(digest) == 64
+    assert bool(re.fullmatch(r"[0-9a-f]{64}", digest))
+
+    cfg = ProviderConfig(
+        name="Prov Alpha",
+        base_url="https://api.example.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="prov_alpha",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+    assert provider_runtime_identity(cfg) == digest
+
+
+def test_candidate_18_finding_2_provider_runtime_identity_none_on_missing_or_empty_facts() -> None:
+    """Finding 2B: provider_runtime_identity returns None if any of the 5 safe facts is missing or empty."""
+    assert provider_runtime_identity(None) is None
+    assert provider_runtime_identity({}) is None
+
+    base = {
+        "provider_id": "p1",
+        "base_url": "https://api.example.com/v1",
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "auth_mode": AUTH_BEARER,
+        "api_format": PROTOCOL_CHAT_COMPLETIONS,
+    }
+
+    for key in ("provider_id", "base_url", "endpoint_contract", "auth_mode", "api_format"):
+        corrupted = dict(base)
+        corrupted[key] = ""
+        assert provider_runtime_identity(corrupted) is None, f"Expected None for empty {key}"
+
+        corrupted[key] = "   "
+        assert provider_runtime_identity(corrupted) is None, f"Expected None for whitespace {key}"
+
+        del corrupted[key]
+        assert provider_runtime_identity(corrupted) is None, f"Expected None for missing {key}"
+
+        corrupted[key] = None
+        assert provider_runtime_identity(corrupted) is None, f"Expected None for None {key}"
+
+        corrupted[key] = 12345
+        assert provider_runtime_identity(corrupted) is None, f"Expected None for non-string {key}"
+
+
+def test_candidate_18_finding_2_provider_runtime_identity_no_api_protocol_substitution() -> None:
+    """Finding 2C: api_protocol is never substituted for api_format in provider_runtime_identity."""
+    dict_proto_only = {
+        "provider_id": "p1",
+        "base_url": "https://api.example.com/v1",
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "auth_mode": AUTH_BEARER,
+        "api_protocol": PROTOCOL_CHAT_COMPLETIONS,
+    }
+    assert provider_runtime_identity(dict_proto_only) is None
+
+    dict_both = {
+        "provider_id": "p1",
+        "base_url": "https://api.example.com/v1",
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "auth_mode": AUTH_BEARER,
+        "api_format": PROTOCOL_CHAT_COMPLETIONS,
+        "api_protocol": "messages",
+    }
+    dict_standard = {
+        "provider_id": "p1",
+        "base_url": "https://api.example.com/v1",
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "auth_mode": AUTH_BEARER,
+        "api_format": PROTOCOL_CHAT_COMPLETIONS,
+    }
+    assert provider_runtime_identity(dict_both) == provider_runtime_identity(dict_standard)
+
+
+def test_candidate_18_finding_2_provider_runtime_identity_normalization() -> None:
+    """Finding 2D: provider_runtime_identity normalizes whitespace and trailing URL slashes."""
+    d1 = {
+        "provider_id": "  p1  ",
+        "base_url": "  https://api.example.com/v1/  ",
+        "endpoint_contract": "  generic  ",
+        "auth_mode": "  bearer  ",
+        "api_format": "  chat_completions  ",
+    }
+    d2 = {
+        "provider_id": "p1",
+        "base_url": "https://api.example.com/v1",
+        "endpoint_contract": "generic",
+        "auth_mode": "bearer",
+        "api_format": "chat_completions",
+    }
+    assert provider_runtime_identity(d1) == provider_runtime_identity(d2)
+
+
+def test_candidate_18_finding_3_direct_api_requires_valid_runtime_identity() -> None:
+    """Finding 3A: ROUTE_DIRECT_API requires provider_runtime_identity to be non-empty 64-char hex."""
+    valid_hex = "f" * 64
+
+    # None raises ModelGatewayError
+    with pytest.raises(ModelGatewayError, match="requires provider_runtime_identity"):
+        ModelBinding(
+            provider_id="p1",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_DIRECT_API,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint="http://127.0.0.1:8000",
+            auth_mode=AUTH_NONE,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity=None,
+        )
+
+    # Empty raises ModelGatewayError
+    with pytest.raises(ModelGatewayError, match="requires provider_runtime_identity"):
+        ModelBinding(
+            provider_id="p1",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_DIRECT_API,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint="http://127.0.0.1:8000",
+            auth_mode=AUTH_NONE,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity="",
+        )
+
+    # Invalid length raises ModelGatewayError
+    with pytest.raises(ModelGatewayError, match="invalid provider_runtime_identity shape"):
+        ModelBinding(
+            provider_id="p1",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_DIRECT_API,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint="http://127.0.0.1:8000",
+            auth_mode=AUTH_NONE,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity="f" * 63,
+        )
+
+    # Uppercase raises ModelGatewayError
+    with pytest.raises(ModelGatewayError, match="invalid provider_runtime_identity shape"):
+        ModelBinding(
+            provider_id="p1",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_DIRECT_API,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint="http://127.0.0.1:8000",
+            auth_mode=AUTH_NONE,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity="F" * 64,
+        )
+
+    # Valid lowercase 64-char hex succeeds
+    b = ModelBinding(
+        provider_id="p1",
+        model_id="m1",
+        provider_model_id="m1",
+        display_name="m1",
+        route=ROUTE_DIRECT_API,
+        effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+        endpoint_contract=TRANSPORT_GENERIC,
+        endpoint="http://127.0.0.1:8000",
+        auth_mode=AUTH_NONE,
+        config_fingerprint=None,
+        tool_version="1.0",
+        provider_runtime_identity=valid_hex,
+    )
+    assert b.provider_runtime_identity == valid_hex
+
+
+def test_candidate_18_finding_3_legacy_cli_requires_valid_runtime_identity() -> None:
+    """Finding 3B: ROUTE_LEGACY_CLI requires provider_runtime_identity to be non-empty 64-char hex."""
+    with pytest.raises(ModelGatewayError, match="requires provider_runtime_identity"):
+        ModelBinding(
+            provider_id="p1",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_LEGACY_CLI,
+            effective_protocol=None,
+            endpoint_contract=TRANSPORT_OPENCODE_GO,
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity=None,
+        )
+
+    with pytest.raises(ModelGatewayError, match="invalid provider_runtime_identity shape"):
+        ModelBinding(
+            provider_id="p1",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_LEGACY_CLI,
+            effective_protocol=None,
+            endpoint_contract=TRANSPORT_OPENCODE_GO,
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity="not_hex_chars!",
+        )
+
+    b = ModelBinding(
+        provider_id="p1",
+        model_id="m1",
+        provider_model_id="m1",
+        display_name="m1",
+        route=ROUTE_LEGACY_CLI,
+        effective_protocol=None,
+        endpoint_contract=TRANSPORT_OPENCODE_GO,
+        endpoint=None,
+        auth_mode=None,
+        config_fingerprint=None,
+        tool_version="1.0",
+        provider_runtime_identity="e" * 64,
+    )
+    assert b.provider_runtime_identity == "e" * 64
+
+
+def test_candidate_18_finding_3_non_registry_routes_forbid_runtime_identity() -> None:
+    """Finding 3C: Non-registry routes (profile, ladder, offline) must have provider_runtime_identity=None."""
+    hex64 = "a" * 64
+
+    # Profile route with identity fails
+    with pytest.raises(ModelGatewayError, match="cannot carry provider_runtime_identity"):
+        ModelBinding(
+            provider_id="configured",
+            model_id="prof1",
+            provider_model_id="prof1",
+            display_name="prof1",
+            route=ROUTE_CONFIGURED_PROFILE,
+            effective_protocol=None,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity=hex64,
+        )
+
+    # Qualified ladder with identity fails
+    with pytest.raises(ModelGatewayError, match="cannot carry provider_runtime_identity"):
+        ModelBinding(
+            provider_id="ollama",
+            model_id="qwen",
+            provider_model_id="qwen",
+            display_name="qwen",
+            route=ROUTE_QUALIFIED_LADDER,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_OLLAMA_CLOUD,
+            endpoint=None,
+            auth_mode=AUTH_BEARER,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity=hex64,
+        )
+
+    # Offline with identity fails
+    with pytest.raises(ModelGatewayError, match="cannot carry provider_runtime_identity"):
+        ModelBinding(
+            provider_id=None,
+            model_id="offline",
+            provider_model_id=None,
+            display_name="Offline",
+            route=ROUTE_OFFLINE,
+            effective_protocol=None,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint=None,
+            tool_version="1.0",
+            provider_runtime_identity=hex64,
+        )
+
+
+def test_candidate_18_finding_3_from_mapping_enforces_strict_runtime_identity_invariants() -> None:
+    """Finding 3D: ModelBinding.from_mapping enforces identical strict runtime identity validation."""
+    # Direct API mapping missing provider_runtime_identity
+    with pytest.raises(ModelGatewayError, match="requires provider_runtime_identity"):
+        ModelBinding.from_mapping({
+            "provider_id": "p1",
+            "model_id": "m1",
+            "route": ROUTE_DIRECT_API,
+            "effective_protocol": PROTOCOL_CHAT_COMPLETIONS,
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "endpoint": "http://127.0.0.1:8000",
+            "auth_mode": "none",
+        })
+
+    # Direct API mapping with non-hex identity
+    with pytest.raises(ModelGatewayError, match="invalid provider_runtime_identity shape"):
+        ModelBinding.from_mapping({
+            "provider_id": "p1",
+            "model_id": "m1",
+            "route": ROUTE_DIRECT_API,
+            "effective_protocol": PROTOCOL_CHAT_COMPLETIONS,
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "endpoint": "http://127.0.0.1:8000",
+            "auth_mode": "none",
+            "provider_runtime_identity": "short_not_hex",
+        })
+
+    # Profile mapping with non-None identity
+    with pytest.raises(ModelGatewayError, match="cannot carry provider_runtime_identity"):
+        ModelBinding.from_mapping({
+            "provider_id": "configured",
+            "model_id": "prof1",
+            "route": ROUTE_CONFIGURED_PROFILE,
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "provider_runtime_identity": "b" * 64,
+        })
+
+
+def test_candidate_18_finding_3_resolve_incomplete_provider_config_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 3E: resolve fails closed if provider configuration cannot establish valid runtime identity."""
+    from types import SimpleNamespace
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    incomplete_cfg = SimpleNamespace(
+        provider_id="incomplete_p",
+        name="Incomplete Provider",
+        base_url="",  # empty base_url!
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        auth_mode="none",
+        transport_profile=TRANSPORT_GENERIC,
+        enabled=True,
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.model_gateway.get_provider_config",
+        lambda p: incomplete_cfg if p == "incomplete_p" else None,
+    )
+
+    with pytest.raises(ProviderConfigurationError, match="missing runtime provenance facts"):
+        gateway.resolve("incomplete_p", "m1")
+
+
+def test_candidate_18_finding_4_static_preflight_direct_api_corroborates_runtime_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 4A: static_preflight for ROUTE_DIRECT_API corroborates runtime identity and fails on drift."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Preflight Corroborate",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="corrob_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    binding = gateway.resolve("corrob_p", "m1")
+    pf_init = gateway.static_preflight(binding)
+    assert pf_init.is_runnable is True
+
+    # Mutate binding runtime identity (drifts from current config)
+    tampered_binding = dataclasses.replace(binding, provider_runtime_identity="f" * 64)
+    pf_drift = gateway.static_preflight(tampered_binding)
+    assert pf_drift.is_runnable is False
+    assert "runtime configuration drifted (stale binding)" in str(pf_drift.blocker_reason).lower()
+
+
+def test_candidate_18_finding_4_static_preflight_legacy_cli_corroborates_runtime_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 4B: static_preflight for ROUTE_LEGACY_CLI corroborates runtime identity and fails on drift."""
+    from unittest.mock import patch
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Legacy Preflight Corroborate",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="leg_corrob_p",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_OPENCODE_GO,
+    )
+
+    cfg = get_provider_config("leg_corrob_p")
+    rt_id = provider_runtime_identity(cfg)
+
+    binding = ModelBinding(
+        provider_id="leg_corrob_p",
+        model_id="m1",
+        provider_model_id="m1",
+        display_name="m1",
+        route=ROUTE_LEGACY_CLI,
+        effective_protocol=None,
+        endpoint_contract=TRANSPORT_OPENCODE_GO,
+        endpoint=None,
+        auth_mode=None,
+        config_fingerprint=None,
+        tool_version="1.0",
+        provider_runtime_identity=rt_id,
+    )
+
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(True, None)):
+        pf = gateway.static_preflight(binding)
+        assert pf.is_runnable is True
+
+        # Mutate base_url (drifts runtime identity)
+        update_provider_config("leg_corrob_p", base_url="http://127.0.0.1:59999")
+        pf_drift = gateway.static_preflight(binding)
+        assert pf_drift.is_runnable is False
+        assert "runtime configuration drifted (stale binding)" in str(pf_drift.blocker_reason).lower()
+
+
+def test_candidate_18_finding_4_create_transport_corroborates_runtime_identity_and_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Finding 4C: create_transport fails closed with StaleModelBindingError on drifted runtime identity."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Transport Corroborate",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="trans_corrob_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    binding = gateway.resolve("trans_corrob_p", "m1")
+
+    # Initial transport creation succeeds
+    transport, live_cfg = gateway.create_transport(binding)
+    assert transport is not None
+
+    # Mutate binding runtime identity (drifts from current config)
+    tampered_binding = dataclasses.replace(binding, provider_runtime_identity="f" * 64)
+
+    with pytest.raises(StaleModelBindingError, match="runtime configuration drifted"):
+        gateway.create_transport(tampered_binding)
 
 
 

@@ -1146,4 +1146,49 @@ authority, legacy history matching, and runtime identity boundaries:
    Qualified ladder, command profile, and offline bindings omit `provider_runtime_identity`
    entirely, never synthesizing a fake configuration identity.
 
+### 21.5 Candidate 18 final bounded authority repair (provider identity authority and fail-closed validation)
+
+Following independent FirstMate review, Candidate 18 seals provider identity
+authority, deterministic hex hashing, fail-closed historical resolution, and
+runtime corroboration across all gateway boundaries:
+
+1. **Complete Safe-Fact Provenance Hashing (`provider_runtime_identity`)**:
+   `provider_runtime_identity(cfg)` computes a deterministic SHA-256 hex digest
+   over the complete explicit configuration provenance: `provider_id`, normalized
+   `base_url` (trailing slashes stripped), `endpoint_contract`, `auth_mode`, and
+   configured `api_format`. All 5 safe facts must be non-empty, valid strings; if
+   any fact is missing, empty, or whitespace, the function returns `None`. No
+   fallback to `api_protocol` is permitted.
+
+2. **Strict Route Invariants for Runtime Identity (`ModelBinding`)**:
+   - For registry routes (`ROUTE_DIRECT_API`, `ROUTE_LEGACY_CLI`), `ModelBinding`
+     requires `provider_runtime_identity` to be present, non-empty, and a valid
+     64-character lowercase hex string (`[0-9a-f]{64}`).
+   - For non-registry routes (`ROUTE_CONFIGURED_PROFILE`, `ROUTE_QUALIFIED_LADDER`,
+     `ROUTE_OFFLINE`), `provider_runtime_identity` is strictly forbidden and must
+     be `None`.
+   These invariants are enforced both at initialization (`__post_init__`) and
+   during deserialization (`from_mapping`).
+
+3. **Deterministic Fail-Closed Resolution (`ModelGateway.resolve`)**:
+   - For historical providers (`TRANSPORT_OPENCODE_GO`, `TRANSPORT_COMMANDCODE_GOAT`),
+     when direct credentials are missing and legacy CLI is unavailable (`legacy_ok=False`),
+     resolution decides statically before attempting live resolution, preventing
+     live adapter crashes on known credential deficits.
+   - When legacy CLI is available (`legacy_ok=True`) or direct credentials are present,
+     live resolution is invoked. If live resolution raises `ProviderRegistryError`,
+     it fails closed as `ProviderConfigurationError` and never falls back to an
+     uncredentialed direct API route.
+   - If `provider_runtime_identity(cfg)` evaluates to `None` due to missing provenance,
+     resolution immediately fails closed with `ProviderConfigurationError`.
+
+4. **Authoritative Runtime Identity Corroboration**:
+   - `ModelGateway.static_preflight(binding)` corroborates `binding.provider_runtime_identity`
+     against the current configuration store for both `ROUTE_DIRECT_API` and
+     `ROUTE_LEGACY_CLI`. A mismatch immediately reports `is_runnable=False` with
+     `blocker_reason="Provider '...' runtime configuration drifted (stale binding)"`.
+   - `ModelGateway.create_transport(binding)` corroborates `binding.provider_runtime_identity`
+     against current configuration, raising `StaleModelBindingError` on any drift.
+
+
 

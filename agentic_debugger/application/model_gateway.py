@@ -133,30 +133,57 @@ def is_loopback_url(url: Optional[str]) -> bool:
         return False
 
 
-def provider_runtime_identity(cfg: Any) -> str:
+def provider_runtime_identity(cfg: Any) -> Optional[str]:
     """Safe deterministic fingerprint representing current provider runtime contract.
+
+    Requires complete explicit provider configuration provenance:
+    all 5 safe facts (provider_id, base_url/endpoint, endpoint_contract/transport_profile,
+    auth_mode, api_format) must be present, strings, and non-empty.
+    If any fact is absent, non-string, or empty/whitespace, returns None.
 
     Excludes secret credentials, catalog timestamps, and mutable cached model list.
     """
-    if getattr(cfg, "provider_runtime_identity", None):
-        return getattr(cfg, "provider_runtime_identity")
+    if cfg is None:
+        return None
 
     if isinstance(cfg, dict):
-        raw = {
-            "api_format": cfg.get("api_format") or "",
-            "auth_mode": cfg.get("auth_mode") or "",
-            "base_url": (cfg.get("base_url") or cfg.get("endpoint") or "").strip().rstrip("/"),
-            "endpoint_contract": cfg.get("endpoint_contract") or cfg.get("transport_profile") or "",
-            "provider_id": cfg.get("provider_id") or cfg.get("provider") or "",
-        }
+        p_id = cfg.get("provider_id") or cfg.get("provider")
+        b_url = cfg.get("base_url") or cfg.get("endpoint")
+        e_contract = cfg.get("endpoint_contract") or cfg.get("transport_profile")
+        a_mode = cfg.get("auth_mode")
+        a_format = cfg.get("api_format")
     else:
-        raw = {
-            "api_format": getattr(cfg, "api_format", "") or "",
-            "auth_mode": getattr(cfg, "auth_mode", "") or "",
-            "base_url": (getattr(cfg, "base_url", "") or getattr(cfg, "endpoint", "") or "").strip().rstrip("/"),
-            "endpoint_contract": getattr(cfg, "transport_profile", "") or getattr(cfg, "endpoint_contract", "") or "",
-            "provider_id": getattr(cfg, "provider_id", "") or getattr(cfg, "provider", "") or "",
-        }
+        p_id = getattr(cfg, "provider_id", None) or getattr(cfg, "provider", None)
+        b_url = getattr(cfg, "base_url", None) or getattr(cfg, "endpoint", None)
+        e_contract = getattr(cfg, "transport_profile", None) or getattr(cfg, "endpoint_contract", None)
+        a_mode = getattr(cfg, "auth_mode", None)
+        a_format = getattr(cfg, "api_format", None)
+
+    if not (
+        isinstance(p_id, str)
+        and isinstance(b_url, str)
+        and isinstance(e_contract, str)
+        and isinstance(a_mode, str)
+        and isinstance(a_format, str)
+    ):
+        return None
+
+    p_id = p_id.strip()
+    b_url = b_url.strip().rstrip("/")
+    e_contract = e_contract.strip()
+    a_mode = a_mode.strip()
+    a_format = a_format.strip()
+
+    if not (p_id and b_url and e_contract and a_mode and a_format):
+        return None
+
+    raw = {
+        "api_format": a_format,
+        "auth_mode": a_mode,
+        "base_url": b_url,
+        "endpoint_contract": e_contract,
+        "provider_id": p_id,
+    }
     canonical = json.dumps(raw, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
@@ -326,6 +353,11 @@ class ModelBinding:
                 raise ModelGatewayError("Route configured_profile requires non-empty model_id")
             if self.endpoint:
                 raise ModelGatewayError("Route configured_profile cannot define an endpoint URL")
+            if self.provider_runtime_identity is not None:
+                raise ModelGatewayError(
+                    f"Route configured_profile cannot carry provider_runtime_identity; "
+                    f"got {self.provider_runtime_identity!r}"
+                )
 
         elif self.route == ROUTE_QUALIFIED_LADDER:
             if not self.model_id or not str(self.model_id).strip():
@@ -339,6 +371,11 @@ class ModelBinding:
                 raise ModelGatewayError(
                     f"Route qualified_ladder requires endpoint_contract={TRANSPORT_OLLAMA_CLOUD!r}, "
                     f"got {self.endpoint_contract!r}"
+                )
+            if self.provider_runtime_identity is not None:
+                raise ModelGatewayError(
+                    f"Route qualified_ladder cannot carry provider_runtime_identity; "
+                    f"got {self.provider_runtime_identity!r}"
                 )
 
         elif self.route == ROUTE_DIRECT_API:
@@ -361,6 +398,14 @@ class ModelBinding:
                 raise ModelGatewayError(
                     f"Route direct_api requires known endpoint_contract in {TRANSPORT_MODES!r}, got {self.endpoint_contract!r}"
                 )
+            if not self.provider_runtime_identity or not isinstance(self.provider_runtime_identity, str):
+                raise ModelGatewayError(
+                    f"Route direct_api requires provider_runtime_identity to be present"
+                )
+            if not re.fullmatch(r"[0-9a-f]{64}", self.provider_runtime_identity):
+                raise ModelGatewayError(
+                    f"Route direct_api has invalid provider_runtime_identity shape: {self.provider_runtime_identity!r}"
+                )
 
         elif self.route == ROUTE_LEGACY_CLI:
             if not self.provider_id or self.provider_id == PROVIDER_KIND_CONFIGURED:
@@ -374,6 +419,14 @@ class ModelBinding:
                 raise ModelGatewayError(
                     f"Route legacy_cli requires historical endpoint_contract in {historical_profiles!r}, got {self.endpoint_contract!r}"
                 )
+            if not self.provider_runtime_identity or not isinstance(self.provider_runtime_identity, str):
+                raise ModelGatewayError(
+                    f"Route legacy_cli requires provider_runtime_identity to be present"
+                )
+            if not re.fullmatch(r"[0-9a-f]{64}", self.provider_runtime_identity):
+                raise ModelGatewayError(
+                    f"Route legacy_cli has invalid provider_runtime_identity shape: {self.provider_runtime_identity!r}"
+                )
 
         elif self.route == ROUTE_OFFLINE:
             if self.provider_id is not None and self.provider_id not in ("", "offline"):
@@ -382,6 +435,11 @@ class ModelBinding:
                 )
             if self.endpoint:
                 raise ModelGatewayError("Route offline cannot define an endpoint URL")
+            if self.provider_runtime_identity is not None:
+                raise ModelGatewayError(
+                    f"Route offline cannot carry provider_runtime_identity; "
+                    f"got {self.provider_runtime_identity!r}"
+                )
 
     def to_mapping(self) -> Dict[str, Any]:
         """Safe serializable dictionary representation (no secrets exist)."""
@@ -767,6 +825,10 @@ class ModelGateway:
             endpoint_contract = cfg.transport_profile or TRANSPORT_GENERIC
             disp_name = cfg.name
             runtime_id = provider_runtime_identity(cfg)
+            if runtime_id is None:
+                raise ProviderConfigurationError(
+                    f"Provider {effective_provider!r} configuration is incomplete or missing runtime provenance facts"
+                )
 
             # Check static readiness conditions (disabled or quarantined)
             if not cfg.enabled or is_provider_quarantined(cfg.provider_id):
@@ -877,6 +939,43 @@ class ModelGateway:
                 )
             else:
                 # Historical provider (carrying TRANSPORT_OPENCODE_GO or TRANSPORT_COMMANDCODE_GOAT)
+                legacy_ok, _ = _legacy_for_config(cfg)
+                if not legacy_ok and direct_cred_missing:
+                    # Legacy CLI is not available AND direct credentials are missing:
+                    # Statically determine direct protocol executability from explicit structured facts BEFORE live resolution.
+                    try:
+                        proto = effective_model_protocol(cfg.provider_id, effective_model)
+                    except ProviderConnectionError as p_exc:
+                        raise IncompatibleModelError(
+                            f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
+                        ) from p_exc
+                    except Exception as p_exc:
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} protocol resolution error: {p_exc}"
+                        ) from p_exc
+
+                    if proto is not None and is_protocol_executable(cfg.provider_id, proto):
+                        return ModelBinding(
+                            provider_id=cfg.provider_id,
+                            model_id=effective_model,
+                            provider_model_id=api_model or effective_model,
+                            display_name=str(effective_model or cfg.name),
+                            route=ROUTE_DIRECT_API,
+                            effective_protocol=proto,
+                            endpoint_contract=endpoint_contract,
+                            endpoint=cfg.base_url,
+                            auth_mode=cfg.auth_mode,
+                            config_fingerprint=None,
+                            tool_version="live-command-v1",
+                            protocol_version="1.3",
+                            provider_runtime_identity=runtime_id,
+                        )
+                    raise IncompatibleModelError(
+                        f"Provider {effective_provider!r} model {effective_model!r} protocol {proto!r} is not executable"
+                    )
+
+                # Either legacy CLI is available OR direct credentials exist:
+                # Resolve live config. Any ProviderRegistryError fails closed!
                 try:
                     live_config, provenance = resolve_provider_live_config(
                         effective_provider,
@@ -884,68 +983,35 @@ class ModelGateway:
                         logical_call_ceiling=logical_call_ceiling,
                         request_timeout_seconds=request_timeout_seconds,
                     )
-                    route = str(provenance.get("route") or ROUTE_DIRECT_API)
-                    api_proto = provenance.get("api_protocol")
-                    endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
-                    auth = provenance.get("auth_mode") or (cfg.auth_mode if route == ROUTE_DIRECT_API else None)
-                    return ModelBinding(
-                        provider_id=effective_provider,
-                        model_id=effective_model,
-                        provider_model_id=provenance.get("provider_model_id") or api_model or effective_model,
-                        display_name=str(provenance.get("display_name") or effective_model or disp_name),
-                        route=route,
-                        effective_protocol=api_proto,
-                        endpoint_contract=endpoint_contract,
-                        endpoint=endpoint,
-                        auth_mode=auth,
-                        config_fingerprint=live_config.configuration_fingerprint,
-                        tool_version=live_config.tool_version,
-                        protocol_version=str(provenance.get("protocol_version") or "1.3"),
-                        provider_runtime_identity=runtime_id,
-                    )
                 except ProviderRegistryError as exc:
                     legacy_ok, _ = _legacy_for_config(cfg)
                     if legacy_ok:
-                        # Structural legacy failure must not be masked by missing direct creds
                         raise ProviderConfigurationError(
                             f"Provider {effective_provider!r} legacy CLI resolution failed: {exc}"
                         ) from exc
-
-                    if direct_cred_missing:
-                        try:
-                            proto = effective_model_protocol(cfg.provider_id, effective_model)
-                        except ProviderConnectionError as p_exc:
-                            raise IncompatibleModelError(
-                                f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
-                            ) from p_exc
-                        except Exception as p_exc:
-                            raise ProviderConfigurationError(
-                                f"Provider {effective_provider!r} protocol resolution error: {p_exc}"
-                            ) from p_exc
-
-                        if proto is not None and is_protocol_executable(cfg.provider_id, proto):
-                            return ModelBinding(
-                                provider_id=cfg.provider_id,
-                                model_id=effective_model,
-                                provider_model_id=api_model or effective_model,
-                                display_name=str(effective_model or cfg.name),
-                                route=ROUTE_DIRECT_API,
-                                effective_protocol=proto,
-                                endpoint_contract=endpoint_contract,
-                                endpoint=cfg.base_url,
-                                auth_mode=cfg.auth_mode,
-                                config_fingerprint=None,
-                                tool_version="live-command-v1",
-                                protocol_version="1.3",
-                                provider_runtime_identity=runtime_id,
-                            )
-                        raise IncompatibleModelError(
-                            f"Provider {effective_provider!r} model {effective_model!r} incompatible: {exc}"
-                        ) from exc
-
                     raise ProviderConfigurationError(
                         f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
                     ) from exc
+
+                route = str(provenance.get("route") or ROUTE_DIRECT_API)
+                api_proto = provenance.get("api_protocol")
+                endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
+                auth = provenance.get("auth_mode") or (cfg.auth_mode if route == ROUTE_DIRECT_API else None)
+                return ModelBinding(
+                    provider_id=effective_provider,
+                    model_id=effective_model,
+                    provider_model_id=provenance.get("provider_model_id") or api_model or effective_model,
+                    display_name=str(provenance.get("display_name") or effective_model or disp_name),
+                    route=route,
+                    effective_protocol=api_proto,
+                    endpoint_contract=endpoint_contract,
+                    endpoint=endpoint,
+                    auth_mode=auth,
+                    config_fingerprint=live_config.configuration_fingerprint,
+                    tool_version=live_config.tool_version,
+                    protocol_version=str(provenance.get("protocol_version") or "1.3"),
+                    provider_runtime_identity=runtime_id,
+                )
 
         # 3. Custom command profile store (configured source / legacy profile)
         if effective_provider == PROVIDER_KIND_CONFIGURED or profile_id is not None:
@@ -1143,6 +1209,7 @@ class ModelGateway:
                 )
 
             # Corroborate binding facts against current cfg
+            cur_identity = provider_runtime_identity(cfg)
             expected_contract = cfg.transport_profile or TRANSPORT_GENERIC
             clean_binding_endpoint = (binding.endpoint or "").strip().rstrip("/")
             clean_cfg_endpoint = (cfg.base_url or "").strip().rstrip("/")
@@ -1202,6 +1269,16 @@ class ModelGateway:
                         model_id=binding.model_id or "",
                         is_runnable=False,
                         blocker_reason=f"Provider {prov_id!r} model API id drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if cur_identity != binding.provider_runtime_identity:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} runtime configuration drifted (stale binding)",
                         effective_protocol=binding.effective_protocol,
                         endpoint_contract=binding.endpoint_contract,
                         route=binding.route,
@@ -1268,6 +1345,16 @@ class ModelGateway:
                         model_id=binding.model_id or "",
                         is_runnable=False,
                         blocker_reason=f"Provider {prov_id!r} endpoint contract drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                if cur_identity != binding.provider_runtime_identity:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} runtime configuration drifted (stale binding)",
                         effective_protocol=binding.effective_protocol,
                         endpoint_contract=binding.endpoint_contract,
                         route=binding.route,
@@ -2024,6 +2111,13 @@ class ModelGateway:
             if is_provider_quarantined(binding.provider_id):
                 raise StaleModelBindingError(
                     f"Provider {binding.provider_id!r} credential state requires recovery (quarantined)"
+                )
+
+            cur_identity = provider_runtime_identity(cfg)
+            if cur_identity != binding.provider_runtime_identity:
+                raise StaleModelBindingError(
+                    f"Provider {binding.provider_id!r} runtime configuration drifted (stale binding): "
+                    f"expected {binding.provider_runtime_identity!r}, found {cur_identity!r}"
                 )
 
             # Compare execution-critical facts:
