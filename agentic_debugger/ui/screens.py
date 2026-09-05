@@ -1597,6 +1597,18 @@ class ModelProvidersScreen(Screen):
                 lines.append("Catalog     No catalog yet — refresh models to discover the live catalog")
             else:
                 lines.append("Catalog     Not connected")
+
+            def _fmt_ts(ts: Optional[str]) -> Optional[str]:
+                if not ts:
+                    return None
+                w = ts.replace("T", " ").split(".", 1)[0]
+                return w.removesuffix("Z").removesuffix("+00:00").strip() + " UTC"
+
+            if getattr(status, "live_verified_at_utc", None):
+                lines.append(f"Live verified  {_fmt_ts(status.live_verified_at_utc)}")
+            if getattr(status, "runtime_succeeded_at_utc", None):
+                lines.append(f"Runtime success {_fmt_ts(status.runtime_succeeded_at_utc)}")
+
             if status.status_message:
                 lines.append(status.status_message)
             refresh_line.update("\n".join(lines) if lines else "")

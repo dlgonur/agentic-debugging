@@ -116,8 +116,8 @@ def _validate_params(params: Mapping[str, Any]) -> dict[str, Any]:
     provider=params.get("provider")
     if provider is not None:
         try:
-            from agentic_debugger.application.provider_connections import is_known_provider
-            is_valid_provider = provider in _PROVIDER_KINDS or is_known_provider(provider)
+            from agentic_debugger.application.model_gateway import ModelGateway
+            is_valid_provider = provider in _PROVIDER_KINDS or ModelGateway.is_known_provider(provider)
         except Exception:
             is_valid_provider = provider in _PROVIDER_KINDS
         if type(provider) is not str or not is_valid_provider:

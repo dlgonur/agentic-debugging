@@ -39,6 +39,7 @@ from agentic_debugger.application.provider_connections import (
     update_provider_config,
     quarantine_provider,
     PROTOCOL_CHAT_COMPLETIONS,
+    PROTOCOL_RESPONSES,
     AUTH_BEARER,
     AUTH_NONE,
     TRANSPORT_GENERIC,
@@ -677,6 +678,9 @@ def test_runtime_success_identity_bound_to_endpoint(
             "timestamp": "2026-09-05T10:00:00Z",
             "provider": "hist_p",
             "endpoint": "http://127.0.0.1:8000",
+            "auth_mode": "none",
+            "endpoint_contract": "generic",
+            "api_format": "chat_completions",
             "model": "m1",
         },
         {
@@ -785,4 +789,371 @@ def test_ollama_route_dispatch_distinction(
     cfg_binding = gateway.resolve("ollama", "qwen2.5-coder:7b", is_ollama=False)
     assert cfg_binding.route == ROUTE_DIRECT_API
     assert cfg_binding.endpoint == "http://127.0.0.1:11434"
+
+
+def test_configured_command_profile_missing_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 1: Configured command profile resolution fails closed when missing/unreadable."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    from agentic_debugger.application.command_config import (
+        CommandModelConfigStore,
+        COMMAND_CONFIG_SCHEMA_VERSION,
+    )
+    store = CommandModelConfigStore(tmp_path)
+    gateway = ModelGateway(config_root=tmp_path)
+
+    # Missing profile must fail closed immediately
+    with pytest.raises(ProviderConfigurationError) as excinfo:
+        gateway.resolve("configured", "nonexistent-profile", profile_id="nonexistent-profile")
+    assert "not found" in str(excinfo.value).lower()
+
+    # Create profile afterwards on disk in store
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    profile_data = {
+        "schema_version": COMMAND_CONFIG_SCHEMA_VERSION,
+        "profiles": [
+            {
+                "profile_id": "now-exists",
+                "display_name": "Now Exists",
+                "executable": "python",
+                "argv": ["-c", "pass"],
+                "tool_version": "live-v1",
+                "protocol_version": "1.3",
+            }
+        ],
+    }
+    (config_dir / "command-models.json").write_text(json.dumps(profile_data), encoding="utf-8")
+
+    profile = store.get("now-exists")
+
+    # Now resolving succeeds and captures real fingerprint and tool_version
+    binding = gateway.resolve("configured", "now-exists", profile_id="now-exists")
+    assert binding.route == ROUTE_CONFIGURED_PROFILE
+    assert binding.model_id == "now-exists"
+    assert binding.config_fingerprint == profile.configuration_fingerprint
+    assert binding.tool_version == "live-v1"
+
+
+def test_command_profile_stale_binding_on_fingerprint_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 1 & 4: Profile mutation invalidates old binding at preflight and transport."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+    from agentic_debugger.application.command_config import COMMAND_CONFIG_SCHEMA_VERSION
+
+    config_dir = tmp_path / "config"
+    config_dir.mkdir(parents=True, exist_ok=True)
+    profile_data_v1 = {
+        "schema_version": COMMAND_CONFIG_SCHEMA_VERSION,
+        "profiles": [
+            {
+                "profile_id": "profile-drift",
+                "display_name": "Drift Test",
+                "executable": "python",
+                "argv": ["-c", "print('v1')"],
+                "tool_version": "v1",
+                "protocol_version": "1.3",
+            }
+        ],
+    }
+    (config_dir / "command-models.json").write_text(json.dumps(profile_data_v1), encoding="utf-8")
+
+    binding = gateway.resolve("configured", "profile-drift", profile_id="profile-drift")
+    pf = gateway.static_preflight(binding)
+    assert pf.is_runnable is True
+
+    # Mutate profile command on disk (changes fingerprint)
+    profile_data_v2 = {
+        "schema_version": COMMAND_CONFIG_SCHEMA_VERSION,
+        "profiles": [
+            {
+                "profile_id": "profile-drift",
+                "display_name": "Drift Test",
+                "executable": "python",
+                "argv": ["-c", "print('v2')"],
+                "tool_version": "v1",
+                "protocol_version": "1.3",
+            }
+        ],
+    }
+    (config_dir / "command-models.json").write_text(json.dumps(profile_data_v2), encoding="utf-8")
+
+    # static_preflight detects fingerprint drift
+    pf_stale = gateway.static_preflight(binding)
+    assert pf_stale.is_runnable is False
+    assert "drifted" in str(pf_stale.blocker_reason).lower()
+
+    # create_transport raises StaleModelBindingError
+    with pytest.raises(StaleModelBindingError) as excinfo:
+        gateway.create_transport(binding)
+    assert "drifted" in str(excinfo.value).lower()
+
+
+def test_narrow_provider_registry_error_fallback(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 2: Only missing credential / recovery required falls back to static binding."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    from agentic_debugger.application import model_providers
+    from agentic_debugger.application.model_providers import ProviderRegistryError
+
+    gateway = ModelGateway(config_root=tmp_path)
+    add_provider_config(
+        name="Narrow Fallback Test",
+        base_url="https://api.example.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="narrow_p",
+        auth_mode=AUTH_BEARER,
+        api_key="test-bearer-key-123",
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    # Case A: Missing credential -> returns static binding
+    def _raise_missing_cred(*args, **kwargs):
+        raise ProviderRegistryError("no usable credential source available")
+
+    monkeypatch.setattr(model_providers, "resolve_provider_live_config", _raise_missing_cred)
+    binding_cred = gateway.resolve("narrow_p", "m1")
+    assert binding_cred.provider_id == "narrow_p"
+    assert binding_cred.config_fingerprint is None
+
+    # Case B: Credential recovery required -> returns static binding
+    def _raise_recovery_req(*args, **kwargs):
+        raise ProviderRegistryError("credential recovery required for profile")
+
+    monkeypatch.setattr(model_providers, "resolve_provider_live_config", _raise_recovery_req)
+    binding_rec = gateway.resolve("narrow_p", "m1")
+    assert binding_rec.provider_id == "narrow_p"
+    assert binding_rec.config_fingerprint is None
+
+    # Case C: Structural/configuration failure -> fails closed with ProviderConfigurationError
+    def _raise_structural(*args, **kwargs):
+        raise ProviderRegistryError("malformed adapter configuration in registry")
+
+    monkeypatch.setattr(model_providers, "resolve_provider_live_config", _raise_structural)
+    with pytest.raises(ProviderConfigurationError) as excinfo:
+        gateway.resolve("narrow_p", "m1")
+    assert "live configuration resolution failed" in str(excinfo.value)
+
+
+def test_strict_model_binding_semantic_invariants() -> None:
+    """Requirement 3: Strict route/provider invariants in constructor and from_mapping."""
+    from agentic_debugger.application.model_gateway import ROUTE_OFFLINE, ROUTE_LEGACY_CLI
+
+    # 1. ROUTE_CONFIGURED_PROFILE cannot have arbitrary provider_id
+    with pytest.raises(ModelGatewayError) as excinfo:
+        ModelBinding(
+            provider_id="arbitrary_provider",
+            model_id="prof1",
+            provider_model_id="prof1",
+            display_name="prof1",
+            route=ROUTE_CONFIGURED_PROFILE,
+            effective_protocol="live_command",
+            endpoint_contract="command_profile",
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint="fp",
+            tool_version="1.0",
+        )
+    assert "configured_profile requires provider_id" in str(excinfo.value)
+
+    # 2. ROUTE_CONFIGURED_PROFILE cannot have endpoint URL
+    with pytest.raises(ModelGatewayError) as excinfo:
+        ModelBinding(
+            provider_id="configured",
+            model_id="prof1",
+            provider_model_id="prof1",
+            display_name="prof1",
+            route=ROUTE_CONFIGURED_PROFILE,
+            effective_protocol="live_command",
+            endpoint_contract="command_profile",
+            endpoint="http://127.0.0.1:8000",
+            auth_mode=None,
+            config_fingerprint="fp",
+            tool_version="1.0",
+        )
+    assert "endpoint URL" in str(excinfo.value)
+
+    # 3. ROUTE_QUALIFIED_LADDER requires provider_id="ollama" and endpoint_contract="ollama_cloud"
+    with pytest.raises(ModelGatewayError) as excinfo:
+        ModelBinding(
+            provider_id="openai",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_QUALIFIED_LADDER,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_OLLAMA_CLOUD,
+            endpoint="http://127.0.0.1:11434",
+            auth_mode=AUTH_NONE,
+            config_fingerprint=None,
+            tool_version="1.0",
+        )
+    assert "qualified_ladder requires provider_id" in str(excinfo.value)
+
+    # 4. ROUTE_DIRECT_API cannot have provider_id="configured" or None
+    with pytest.raises(ModelGatewayError) as excinfo:
+        ModelBinding(
+            provider_id="configured",
+            model_id="m1",
+            provider_model_id="m1",
+            display_name="m1",
+            route=ROUTE_DIRECT_API,
+            effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint="http://127.0.0.1:8000",
+            auth_mode=AUTH_NONE,
+            config_fingerprint=None,
+            tool_version="1.0",
+        )
+    assert "explicit provider identity" in str(excinfo.value)
+
+    # 5. ROUTE_OFFLINE cannot carry provider execution identity or endpoint
+    with pytest.raises(ModelGatewayError) as excinfo:
+        ModelBinding(
+            provider_id="real_provider",
+            model_id=None,
+            provider_model_id=None,
+            display_name="Offline",
+            route=ROUTE_OFFLINE,
+            effective_protocol=None,
+            endpoint_contract="offline",
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint=None,
+            tool_version="1.0",
+        )
+    assert "offline cannot carry provider execution identity" in str(excinfo.value)
+
+    # 6. from_mapping propagates the same fail-closed semantics
+    bad_mapping = {
+        "provider_id": "configured",
+        "model_id": "m1",
+        "provider_model_id": "m1",
+        "display_name": "m1",
+        "route": ROUTE_DIRECT_API,
+        "effective_protocol": PROTOCOL_CHAT_COMPLETIONS,
+        "endpoint_contract": TRANSPORT_GENERIC,
+        "endpoint": "http://127.0.0.1:8000",
+        "auth_mode": "none",
+        "config_fingerprint": None,
+        "tool_version": "1.0",
+    }
+    with pytest.raises(ModelGatewayError):
+        ModelBinding.from_mapping(bad_mapping)
+
+
+def test_static_preflight_configuration_drift_detection(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 4: static_preflight detects drift in contract, endpoint, auth_mode, protocol."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Preflight Drift Provider",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="pf_drift_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    binding = gateway.resolve("pf_drift_p", "m1")
+    pf = gateway.static_preflight(binding)
+    assert pf.is_runnable is True
+
+    # 1. Endpoint drift
+    update_provider_config("pf_drift_p", base_url="http://127.0.0.1:9999")
+    pf_ep = gateway.static_preflight(binding)
+    assert pf_ep.is_runnable is False
+    assert "endpoint drifted" in str(pf_ep.blocker_reason).lower()
+
+    # Reset endpoint, mutate auth_mode
+    update_provider_config("pf_drift_p", base_url="http://127.0.0.1:8000", auth_mode=AUTH_BEARER)
+    pf_auth = gateway.static_preflight(binding)
+    assert pf_auth.is_runnable is False
+    assert "auth mode drifted" in str(pf_auth.blocker_reason).lower()
+
+    # Reset auth_mode, mutate transport_profile (endpoint contract)
+    update_provider_config("pf_drift_p", auth_mode=AUTH_NONE, transport_profile=TRANSPORT_OLLAMA_CLOUD)
+    pf_contract = gateway.static_preflight(binding)
+    assert pf_contract.is_runnable is False
+    assert "endpoint contract drifted" in str(pf_contract.blocker_reason).lower()
+
+
+def test_runtime_success_invalidated_by_contract_or_format_drift(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 5: Runtime success invalidated by contract or api_format drift despite identical URL/auth."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Contract Drift Provider",
+        base_url="https://api.example.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="contract_drift_p",
+        auth_mode=AUTH_BEARER,
+        api_key="test-bearer-key-123",
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    sessions_dir = tmp_path / "sessions" / "s_drift"
+    sessions_dir.mkdir(parents=True)
+    events = [
+        {
+            "kind": "model.configured",
+            "timestamp": "2026-09-05T10:00:00Z",
+            "provider": "contract_drift_p",
+            "endpoint": "https://api.example.com/v1",
+            "auth_mode": "bearer",
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "api_format": PROTOCOL_CHAT_COMPLETIONS,
+            "model": "m1",
+        },
+        {
+            "kind": "llm.request",
+            "timestamp": "2026-09-05T10:01:00Z",
+            "provider": "contract_drift_p",
+            "status": "success",
+        },
+    ]
+    with open(sessions_dir / "journal.jsonl", "w", encoding="utf-8") as f:
+        for ev in events:
+            f.write(json.dumps(ev) + "\n")
+
+    # Authoritative match succeeds
+    last_succ = gateway.inspect_last_runtime_success("contract_drift_p", sessions_root=tmp_path / "sessions")
+    assert last_succ == "2026-09-05T10:01:00Z"
+
+    # Drift contract (transport_profile) while keeping endpoint and auth identical
+    update_provider_config("contract_drift_p", transport_profile=TRANSPORT_OLLAMA_CLOUD)
+    assert gateway.inspect_last_runtime_success("contract_drift_p", sessions_root=tmp_path / "sessions") is None
+
+    # Reset transport_profile, drift api_format
+    update_provider_config("contract_drift_p", transport_profile=TRANSPORT_GENERIC, api_format=PROTOCOL_RESPONSES)
+    assert gateway.inspect_last_runtime_success("contract_drift_p", sessions_root=tmp_path / "sessions") is None
+
+
+def test_is_known_provider_authority(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Requirement 10: ModelGateway provides is_known_provider authority for runtime."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    assert not ModelGateway.is_known_provider(None)
+    assert not ModelGateway.is_known_provider("")
+    assert not ModelGateway.is_known_provider("unknown_provider_xyz")
+
+    from agentic_debugger.application.provider_connections import add_provider_config
+    add_provider_config(
+        name="Known Test",
+        base_url="http://127.0.0.1:8000/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        auth_mode="none",
+        provider_id="known_test_p",
+    )
+    assert ModelGateway.is_known_provider("known_test_p")
+
 

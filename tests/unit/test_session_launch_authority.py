@@ -59,6 +59,19 @@ def _base_params(**overrides):
 
 
 def _launch(**overrides):
+    default_binding = ModelBinding(
+        provider_id="configured",
+        model_id="test-profile",
+        provider_model_id="test-profile",
+        display_name="test-profile",
+        route="configured_profile",
+        effective_protocol="live_command",
+        endpoint_contract="command_profile",
+        endpoint=None,
+        auth_mode=None,
+        config_fingerprint="f" * 64,
+        tool_version="live-command-v1",
+    )
     fields = {
         "session_id": "sess-authority-001",
         "task_id": "local-project-debug",
@@ -68,6 +81,7 @@ def _launch(**overrides):
         "profile_id": "test-profile",
         "launch_snapshot": {"PATH": "/usr/bin"},
         "project_spec": ProjectRuntimeEnvironmentSpec(),
+        "model_binding": default_binding,
     }
     fields.update(overrides)
     return build_local_project_launch(**fields)

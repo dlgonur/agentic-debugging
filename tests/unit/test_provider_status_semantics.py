@@ -112,6 +112,9 @@ def test_runtime_succeeded_derived_from_session_journal(
             "timestamp": "2026-09-05T09:00:00Z",
             "provider": "my_prov",
             "endpoint": "http://127.0.0.1:8000",
+            "auth_mode": "none",
+            "endpoint_contract": "generic",
+            "api_format": "chat_completions",
             "model": "model-1",
         },
         {
@@ -129,10 +132,10 @@ def test_runtime_succeeded_derived_from_session_journal(
     last_succ = gateway.inspect_last_runtime_success("my_prov", sessions_root=tmp_path / "sessions")
     assert last_succ == "2026-09-05T09:01:00Z"
 
-    # Status snapshot derives runtime success
+    # Status snapshot derives runtime success without replacing current headline
     status = gateway.get_provider_status("my_prov", sessions_root=tmp_path / "sessions")
     assert status.runtime_succeeded_at_utc == "2026-09-05T09:01:00Z"
-    assert status.summary_headline == "Runtime succeeded"
+    assert status.summary_headline == "Configured · loopback"
 
 
 def test_catalog_cache_invalidation_on_config_mutation(
@@ -273,6 +276,9 @@ def test_ui_solid_dot_driven_only_by_live_verified_not_runtime_succeeded(
             "timestamp": "2026-09-05T10:00:00Z",
             "provider": "hist_dot_p",
             "endpoint": "http://127.0.0.1:8000",
+            "auth_mode": "none",
+            "endpoint_contract": "generic",
+            "api_format": "chat_completions",
             "model": "m1",
         },
         {
@@ -302,4 +308,162 @@ def test_ui_solid_dot_driven_only_by_live_verified_not_runtime_succeeded(
 
     assert btn_labels == ["○ Historical Provider"]
     assert "●" not in btn_labels[0]
+
+
+def test_runtime_success_does_not_mask_missing_credentials_headline(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 7: Historical runtime success does not mask missing credentials in summary_headline."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    # Provider requiring credentials, but none entered
+    add_provider_config(
+        name="Bearer Prov",
+        base_url="https://api.example.com/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="bearer_nocred_p",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    # Write a historical session journal
+    sessions_dir = tmp_path / "sessions" / "s_cred"
+    sessions_dir.mkdir(parents=True)
+    events = [
+        {
+            "kind": "model.configured",
+            "timestamp": "2026-09-05T10:00:00Z",
+            "provider": "bearer_nocred_p",
+            "endpoint": "https://api.example.com/v1",
+            "auth_mode": "bearer",
+            "endpoint_contract": TRANSPORT_GENERIC,
+            "api_format": PROTOCOL_CHAT_COMPLETIONS,
+            "model": "m1",
+        },
+        {
+            "kind": "llm.request",
+            "timestamp": "2026-09-05T10:01:00Z",
+            "provider": "bearer_nocred_p",
+            "status": "success",
+        },
+    ]
+    with open(sessions_dir / "journal.jsonl", "w", encoding="utf-8") as f:
+        for ev in events:
+            f.write(json.dumps(ev) + "\n")
+
+    status = gateway.get_provider_status("bearer_nocred_p", sessions_root=tmp_path / "sessions")
+    assert status.runtime_succeeded_at_utc == "2026-09-05T10:01:00Z"
+    # The headline MUST reflect missing credentials, NOT historical runtime success
+    assert status.summary_headline == "Configured · no credential"
+    assert status.is_provider_ready is False
+
+
+def test_ui_renders_separate_historical_timestamps() -> None:
+    """Requirement 8: UI renders Live verified and Runtime success as distinct timestamps."""
+    from types import SimpleNamespace
+    from agentic_debugger.ui.screens import ModelProvidersScreen
+    from agentic_debugger.application.model_gateway import ProviderStatusSnapshot
+
+    screen = ModelProvidersScreen()
+    status = ProviderStatusSnapshot(
+        provider_id="dual_ts_p",
+        label="Dual Timestamp Provider",
+        base_url="http://127.0.0.1:8000",
+        endpoint_contract=TRANSPORT_GENERIC,
+        auth_mode=AUTH_NONE,
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        is_configured=True,
+        is_enabled=True,
+        is_quarantined=False,
+        credential_ready=True,
+        credential_source=None,
+        is_provider_ready=True,
+        provider_readiness_reason="Ready",
+        live_verified=True,
+        live_verified_at_utc="2026-09-05T08:15:30Z",
+        runtime_succeeded_at_utc="2026-09-05T09:45:00Z",
+        catalog_model_count=1,
+    )
+
+    screen._statuses_cache = [status]
+    screen._selected_index = 0
+
+    captured_updates: dict = {}
+    class _MockWidget:
+        def __init__(self, wid: str):
+            self.wid = wid
+            self.display = True
+            self.label = ""
+        def update(self, val):
+            captured_updates[self.wid] = str(val)
+        def add_class(self, *a):
+            pass
+        def remove_class(self, *a):
+            pass
+
+    widgets = {
+        "#provider-select-dual_ts_p": _MockWidget("#provider-select-dual_ts_p"),
+        "#provider-panel-dual_ts_p": _MockWidget("#provider-panel-dual_ts_p"),
+        "#provider-summary-dual_ts_p": _MockWidget("#provider-summary-dual_ts_p"),
+        "#provider-refresh-dual_ts_p": _MockWidget("#provider-refresh-dual_ts_p"),
+        "#provider-models-helper-dual_ts_p": _MockWidget("#provider-models-helper-dual_ts_p"),
+    }
+    screen.query_one = lambda sel, *args, **kwargs: widgets.setdefault(sel, _MockWidget(sel))
+
+    screen.render_state()
+
+    refresh_text = captured_updates.get("#provider-refresh-dual_ts_p", "")
+    assert "Live verified  2026-09-05 08:15:30 UTC" in refresh_text
+    assert "Runtime success 2026-09-05 09:45:00 UTC" in refresh_text
+
+
+def test_list_provider_statuses_produces_degraded_snapshot_on_evaluation_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Requirement 9: Status evaluation failure produces degraded snapshot; provider never disappears."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Healthy Provider",
+        base_url="http://127.0.0.1:8001",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="healthy_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+    add_provider_config(
+        name="Faulty Provider",
+        base_url="http://127.0.0.1:8002",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="faulty_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    # Monkeypatch inspect_last_runtime_success to raise an error for faulty_p
+    orig_inspect = gateway.inspect_last_runtime_success
+    def _faulty_inspect(pid, *args, **kwargs):
+        if pid == "faulty_p":
+            raise RuntimeError("disk I/O error during journal scan")
+        return orig_inspect(pid, *args, **kwargs)
+
+    monkeypatch.setattr(gateway, "inspect_last_runtime_success", _faulty_inspect)
+
+    statuses = gateway.list_provider_statuses(history_root=tmp_path / "sessions")
+    status_map = {s.provider_id: s for s in statuses}
+
+    # Both providers must be present!
+    assert "healthy_p" in status_map
+    assert "faulty_p" in status_map
+
+    healthy_status = status_map["healthy_p"]
+    assert healthy_status.is_provider_ready is True
+
+    faulty_status = status_map["faulty_p"]
+    assert faulty_status.is_provider_ready is False
+    assert "Status evaluation error" in (faulty_status.provider_readiness_reason or "")
+    assert "RuntimeError" in (faulty_status.provider_readiness_reason or "")
+
 

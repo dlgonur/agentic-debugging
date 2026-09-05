@@ -1009,3 +1009,59 @@ FirstMate, Candidate 14 repairs five critical runtime authority boundaries:
    `localhost`, `::1`); non-loopback endpoints report `Configured · no auth`.
    Quarantined providers retain `is_configured=True` while reporting
    `Quarantined · recovery required`.
+
+### 21.2 Candidate 15 final authority repair (runtime identity and binding invariants)
+
+Following final FirstMate review, Candidate 15 establishes strict runtime
+identity authority, binding invariants, and fail-closed status resolution:
+
+1. **Fail-Closed Command Profile Resolution**: `ModelGateway.resolve()` resolves
+   `configured` profile models directly via `CommandModelConfigStore.get()`.
+   Missing or unparseable profiles fail closed immediately with
+   `ProviderConfigurationError`; successful resolutions capture the store's
+   authoritative `configuration_fingerprint` and `tool_version` without
+   speculative or unbound fallback.
+2. **Narrow Registry Fallback**: `resolve()` narrows `ProviderRegistryError`
+   fallback exclusively to missing credentials or quarantined recovery states,
+   producing safe static bindings that report `needs_auth` at preflight. All
+   structural failures, unknown models, or contract incompatibilities fail
+   closed as `ProviderConfigurationError`.
+3. **Strict ModelBinding Semantic Invariants**: Constructor and
+   `from_mapping()` enforce structural invariants: `ROUTE_CONFIGURED_PROFILE`
+   requires provider ID `configured` (or None); `ROUTE_QUALIFIED_LADDER`
+   requires provider ID `ollama`; `ROUTE_DIRECT_API` requires a concrete
+   configured provider ID, endpoint URL, and authentication mode.
+   `create_transport()` dispatches authoritatively by route and corroborates
+   these invariants before spawning any transport.
+4. **Binding Preflight Corroboration**: `static_preflight(ModelBinding)`
+   validates the binding against current durable configuration, failing closed
+   with descriptive blockers upon configuration drift (endpoint, contract,
+   auth mode, protocol, fingerprint, or tool version).
+5. **Complete Runtime-Identity History Corroboration**:
+   `inspect_last_runtime_success()` corroborates the full tuple: `endpoint`,
+   `auth_mode`, `endpoint_contract`, `api_format`, and
+   `provider_runtime_identity`. Historical journals lacking complete provenance
+   remain unbound and cannot certify modified endpoints.
+6. **Truthful Headline Priority**: `ProviderStatusSnapshot.summary_headline`
+   strictly prioritizes current operational readiness: Disabled → Quarantined →
+   Degraded → Live verified → Configured / Credential ready. Historical runtime
+   success never masks current credential deficits or configuration errors.
+7. **Provider Manager Dual Timestamps**: Detail pane renders separate, honest
+   lines for `Live verified <time> UTC` and `Runtime success <time> UTC`.
+8. **Resilient Status Enumeration**: `list_provider_statuses()` catches
+   per-provider evaluation exceptions and yields degraded `ProviderStatusSnapshot`
+   records (`is_provider_ready=False`), ensuring configured providers never
+   silently disappear from management views.
+9. **Zero Category C Production Repair Calls**: Production repair runtime
+   calls directly to provider-core are strictly eliminated. Parameter validation
+   in `local_project_source.py` routes through `ModelGateway.is_known_provider()`.
+   The complete production call inventory is:
+   - **Category A (ModelGateway Façade Internals)**: Authoritative delegation to
+     `provider_connections.py` and `model_providers.py`.
+   - **Category B (UI Provider Manager CRUD)**: Configuration store persistence
+     in `screens.py` and `session_config.py`.
+   - **Category C (Production Repair Runtime)**: **STRICTLY ZERO (0)** direct
+     calls; all access flows through `ModelGateway`.
+   - **Category D (Cross-Cutting & Legacy Runners)**: Safety name classification
+     in `execution_environment.py` / `session_runtime.py` and legacy ladder
+     evaluation runners in `configured_source.py`.
