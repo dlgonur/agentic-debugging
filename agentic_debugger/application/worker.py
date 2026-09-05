@@ -607,6 +607,9 @@ def run_worker(request: StartRequest) -> int:
                     project_spec=_launch_spec,
                     budgets=request.spec.budgets,
                     retry_of=request.retry_of_session_id,
+                    is_ollama=bool(_launch_params.get("is_ollama", False)),
+                    ollama_alias=_launch_params.get("ollama_alias"),
+                    config_root=_launch_params.get("config_root"),
                 )
             except Exception as exc:
                 diagnostics.append(

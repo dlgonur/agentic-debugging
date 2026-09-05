@@ -487,11 +487,9 @@ class LocalApplicationV1(App):
 
         if not model_provider:
             return None
-        from agentic_debugger.application.model_providers import (
-            provider_session_credential_environment,
-        )
+        from agentic_debugger.application.model_gateway import ModelGateway
 
-        return provider_session_credential_environment(model_provider)
+        return ModelGateway.default().session_credential_environment(model_provider)
 
     def start_live_session(
         self,
@@ -548,8 +546,9 @@ class LocalApplicationV1(App):
         # Provider models run through the configured command source's
         # registry parameter contract; any other pairing fails closed.
         if model_provider is not None:
-            from agentic_debugger.application.provider_connections import is_known_provider
-            if not is_known_provider(model_provider):
+            from agentic_debugger.application.model_gateway import ModelGateway
+            status = ModelGateway.default().get_provider_status(model_provider)
+            if not status.is_configured:
                 raise ValueError(f"unknown model provider: {model_provider!r}")
             if source_kind is not SourceKind.CONFIGURED_MODEL:
                 raise ValueError(
@@ -771,20 +770,15 @@ class LocalApplicationV1(App):
         if profile_id is None or not str(profile_id).strip():
             raise RuntimeError("Local Project Debug requires a selected model profile")
         registry_provider = None
-        from agentic_debugger.application.provider_connections import is_known_provider
-        if model_provider and is_known_provider(model_provider):
-            # Registry providers resolve through the unified registry,
-            # fail-closed before any worktree or worker resource exists.
-            from agentic_debugger.application.model_providers import (
-                ProviderRegistryError,
-                resolve_provider_live_config,
-            )
-
-            try:
-                resolve_provider_live_config(model_provider, profile_id)
-            except ProviderRegistryError as exc:
-                raise RuntimeError(f"Selected provider model unavailable: {exc}") from exc
-            registry_provider = model_provider
+        if model_provider:
+            from agentic_debugger.application.model_gateway import ModelGateway
+            gateway = ModelGateway.default()
+            status = gateway.get_provider_status(model_provider)
+            if status.is_configured:
+                preflight = gateway.static_preflight(model_provider, profile_id)
+                if not preflight.is_runnable:
+                    raise RuntimeError(f"Selected provider model unavailable: {preflight.blocker_reason}")
+                registry_provider = model_provider
         ollama_profile = None
         expected_fp = None
         model_config_ref = None

@@ -1,7 +1,7 @@
 # Agentic Debugger V2 — Control/Execution Plane Separation Architecture Plan
 
 **Document type:** Architecture analysis and migration plan (decision record)
-**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are implemented (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 and later stages are not implemented.**
+**Status:** Plan — owner/FirstMate reviews 02, 03, and 04 applied (see lineage). Revision 04 is the implementation-readiness reconciliation before V2-01. **Implementation status: V2-01 execution-environment authority + control/provider secret isolation is implemented (see `agentic_debugger/application/execution_environment.py`, `BRIDGE_COMPATIBILITY_IDENTITY = legacy-project-ambient/v1`); V2-02 session/runtime contracts are implemented (`application/session_runtime.py`: `SessionLaunch`/`AgentDefinition`/`EffectiveSessionCapabilities`/`ProjectRuntimeEnvironmentSpec`; `application/executor.py`: `ProductExecutor`; declarative `ExecutionEnvironment.for_local_project`; the bridge is retired from the normal product path — see §15); V2-03 ModelGateway + ModelBinding + truthful status semantics + vocabulary repair is implemented (`application/model_gateway.py`, `application/provider_connections.py`, `ui/screens.py` — see §21); V2-04 and later stages are not implemented.**
 **Lineage:** `01` `3481b58` defined V2 boundaries (Alternative B accepted in direction). `02` `3d414c6` tightened the execution and trust boundaries (security-first ordering, role-scoped environments, deferred verifier isolation, credential binding/materialization, truthful status semantics). `03` `ff81f44` finalized the authority rules (secret trust classes, positive/declarative environment target, capability intersection, `ModelBinding` ownership, credential sequencing, scientific fence, history-derived runtime metadata, verifier re-run deferral). `04` (this revision) reconciles two repository facts the prior revisions missed: the repository **already contains a typed verified execution authority** (`runtime/execution.py`) that V2 must not replace, and the positive `ProjectRuntimeEnvironment` target **has no current product ingress**, so V2-01 must use an explicit transitional compatibility bridge with documented residual risk, retired by a V2-02 ingress.
 **Baseline:** `4606933` (fix(providers): harden provider runtime and Windows harness), clean tree
 **Scope:** Determine whether the application runtime should adopt an explicit CONTROL / EXECUTION plane separation, and define the smallest coherent target architecture and incremental migration path
@@ -930,3 +930,40 @@ streaming overlap chunk-boundary sensitivity.
 - Regression suite: `tests/unit/test_marker_collision_and_stream_overlap.py`
   (FirstMate reproductions A1-A5, B1-B8, bounded text / string preview marker
   safety, and real `ProductExecutor` overlapping secret streaming regression).
+
+## 21. V2-03 implementation note (status only — decision unchanged)
+
+V2-03 implements the §11 third slice: the product `ModelGateway` facade,
+`ModelBinding` runtime provenance, truthful multi-dimensional provider status
+semantics, and user-facing vocabulary repair:
+
+- **ModelGateway & ModelBinding authority** (`application/model_gateway.py`):
+  logical provider/model requests resolve into an immutable, frozen
+  `ModelBinding` holding only safe runtime facts (provider ID, model ID, API
+  model ID, effective protocol, endpoint contract / transport profile, route,
+  safe endpoint identity, auth mode, tool version, protocol version, and safe
+  config fingerprint). It never carries credentials or secret material and
+  enforces fail-closed credential scrubbing (`contains_credential_shape`).
+  Transport creation (`create_transport`), static preflight (`static_preflight`),
+  explicit reachability probes (`probe_reachability`), and catalog refreshes
+  (`refresh_catalog`) are owned by `ModelGateway`.
+- **Truthful Status Semantics** (ADR 0001 §9, V2 Plan §9):
+  credential presence or static configuration is NEVER labeled "Connected".
+  The six distinguished factual dimensions (`Configured`, `Credential ready`,
+  `Model runnable / Ready`, `Catalog refreshed at T`, `Live verified at T`,
+  `Runtime succeeded at T`) are tracked independently. `Runtime succeeded at T`
+  is observational history derived from durable session journal events, never
+  mutating provider configuration. The owner-observed CommandCode GOAT defect
+  (loopback offline displayed as Connected) is closed.
+- **User-Facing Vocabulary Repair**:
+  primary "Transport Profile" labels are replaced with "Endpoint contract";
+  "(historical)" markers are removed from display labels; provider dialog preset
+  buttons are modernized to "Generic / OpenAI-compatible", "CommandCode",
+  "OpenCode", and "Ollama".
+- **Catalog Cache Invalidation**:
+  `update_provider_config` automatically purges cached catalog state and resets
+  `last_refresh_utc`/`models` when endpoint URL, auth mode, or transport profile
+  is mutated.
+- **Regression suites**: `tests/unit/test_model_gateway.py`,
+  `tests/unit/test_provider_status_semantics.py`, and
+  `tests/unit/test_ui_provider_vocabulary.py`.

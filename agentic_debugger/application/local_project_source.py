@@ -1201,53 +1201,22 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
     ollama_alias = validated["ollama_alias"] or (
         profile_id if provider is None and is_ollama else None
     )
-    profile = None
-    ollama_profile = None
-    provider_live_config = None
-    provider_provenance = None
-    if provider is not None and provider != "configured":
-        # Registry-authority routing: ANY enabled configured provider —
-        # including arbitrary user-configured direct-API providers —
-        # resolves through the unified registry, so there is one validated
-        # construction path, fail-closed availability, and no credential
-        # material anywhere near the journal.  The special ``configured``
-        # provider id remains the app-owned command-profile store contract
-        # handled below; an unconfigured provider id fails closed here.
-        from agentic_debugger.application.model_providers import (
-            ProviderRegistryError,
-            provider_transport_environment,
-            resolve_provider_live_config,
+
+    from agentic_debugger.application.model_gateway import ModelGateway
+    gateway = ModelGateway.default(config_root=config_root)
+    model_binding = session_launch.model_binding
+    if model_binding is None:
+        model_binding = gateway.resolve(
+            provider_id=provider,
+            model_id=model_id,
+            profile_id=profile_id,
+            is_ollama=is_ollama,
+            ollama_alias=ollama_alias,
+            config_root=config_root,
         )
-        try:
-            provider_live_config, provider_provenance = resolve_provider_live_config(
-                provider,
-                model_id,
-                logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS,
-            )
-        except ProviderRegistryError as exc:
-            raise ScenarioInputError(f"provider model unavailable: {exc}") from exc
-    elif provider is None and is_ollama and ollama_alias:
-        try:
-            from agentic_debugger.application.level32 import level32_model_profiles
-            for m in level32_model_profiles():
-                if m.alias == ollama_alias:
-                    ollama_profile = m
-                    break
-            if ollama_profile is None:
-                raise ScenarioInputError(f"Ollama model not in qualified roster: {ollama_alias}")
-        except ScenarioInputError:
-            raise
-        except Exception as exc:
-            raise ScenarioInputError(f"Ollama qualification failed: {exc}") from exc
-    else:
-        from agentic_debugger.application.command_config import CommandModelConfigStore, CommandConfigError
-        try:
-            store=CommandModelConfigStore(Path(config_root))
-            profile=store.get(profile_id)
-        except CommandConfigError as exc:
-            raise ScenarioInputError(f"model profile unavailable: {exc}") from exc
-        if expected_fp is not None and profile.configuration_fingerprint!=expected_fp:
-            raise ScenarioInputError("model profile fingerprint mismatch")
+
+    if expected_fp is not None and model_binding.config_fingerprint is not None and model_binding.config_fingerprint != expected_fp:
+        raise ScenarioInputError("model profile fingerprint mismatch")
     # Session/task identity likewise comes from the launch (proven equal
     # to the emitter binding by the checks above / by fallback
     # construction); run identity stays on the context (not launch-owned).
@@ -1313,53 +1282,24 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             continue
     demo_context=_LocalToolContext(isolated=isolated, tracked=tracked, task=local_task, probe=probe, observability=observability, command_environment=project_command_environment, pdb_worker_environment=pdb_worker_environment, executor=session_executor, capabilities=session_capabilities)
     registry=_build_local_registry(demo_context, pdb_policy=pdb_policy_for(policy), interactive_debugger_controls=False)
-    if provider_live_config is not None:
-        live_config=provider_live_config
-        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
-        # Direct-API routes receive exactly one bounded credential
-        # override in the adapter child environment (never argv, never
-        # evidence); legacy CLI routes read the operator auth store in
-        # place and need no override.
-        transport_environment = provider_transport_environment(provider)
-        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter, environment=dict(transport_environment) if transport_environment else None)
-    elif ollama_profile is not None:
-        from scripts.ollama_cloud_command_adapter import build_ollama_live_config
-        live_config = build_ollama_live_config(ollama_profile.alias, logical_call_ceiling=_DEFAULT_MAX_MODEL_REQUESTS)
-        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
-        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter)
-    else:
-        live_config=LiveModelConfig(model_name=profile.display_name, command=profile.live_command(), request_timeout_seconds=profile.request_timeout_seconds, tool_version=profile.tool_version)
-        limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
-        transport=CancellableJsonlCommandTransport(live_config, max_output_bytes=limits.max_response_bytes, cancel_check=ctx.token.check, activity_observer=ctx.liveness_reporter, cwd=profile.cwd, environment=dict(profile.environment) if profile.environment else None)
-    # Safe durable model provenance (same contract as the configured/ladder
-    # sources): the journal records which model actually serves this Local
-    # Project session, so replay needs no live workspace or sidecar file.
-    # MODEL_CONFIGURED is mandatory durable provenance: if the authoritative
-    # journal cannot record it, the emitter failure (EmitterFatalError)
-    # propagates through the existing journal-fatal worker contract and no
-    # model request may start.  The payload carries only profile identity
-    # fields, never credentials.
-    if provider_provenance is not None:
-        model_provenance_payload=dict(provider_provenance)
-        model_provenance_payload["config_fingerprint"]=live_config.configuration_fingerprint
-    elif ollama_profile is not None:
-        model_provenance_payload={
-            "provider": "ollama_cloud",
-            "profile_id": ollama_profile.alias,
-            "config_fingerprint": ollama_profile.transport_config_fingerprint,
-            "display_name": ollama_profile.display_name,
-            "protocol_version": "1.3",
-            "tool_version": live_config.tool_version,
-        }
-    else:
-        model_provenance_payload={
-            "provider": "configured",
-            "profile_id": profile.profile_id,
-            "config_fingerprint": profile.configuration_fingerprint,
-            "display_name": profile.display_name,
-            "protocol_version": profile.protocol_version,
-            "tool_version": profile.tool_version,
-        }
+    limits=LiveRunLimits(max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS, max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS, max_elapsed_seconds=None, max_retries=_DEFAULT_MAX_RETRIES, max_directive_repairs=_DEFAULT_MAX_RETRIES, max_response_bytes=MAX_MODEL_RESPONSE_BYTES)
+    try:
+        transport, live_config = gateway.create_transport(
+            model_binding,
+            cancel_check=ctx.token.check,
+            activity_observer=ctx.liveness_reporter,
+            max_model_requests=_DEFAULT_MAX_MODEL_REQUESTS,
+            max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
+            max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
+        )
+    except Exception as exc:
+        raise ScenarioInputError(f"model profile unavailable: {exc}") from exc
+
+    model_provenance_payload = model_binding.model_configured_payload()
+    if live_config.configuration_fingerprint:
+        model_provenance_payload["config_fingerprint"] = live_config.configuration_fingerprint
+    if live_config.model_name:
+        model_provenance_payload["display_name"] = live_config.model_name
     ctx.emitter.emit(SessionEventKind.MODEL_CONFIGURED, model_provenance_payload)
     adapters: list[Any]=[]
     def _model_factory(dctx, reg):  # type: ignore[no-untyped-def]

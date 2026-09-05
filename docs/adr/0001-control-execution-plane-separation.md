@@ -252,7 +252,7 @@ session launch), the `ProductExecutor` logical seam (two adopted
 operations, no new process), and the declarative
 `ExecutionEnvironment.for_local_project` product path whose adoption
 retires the bridge — ordinary Local Project execution no longer requires
-arbitrary legacy ambient inheritance. V2-03+ is not implemented. Proxy/TLS
+arbitrary legacy ambient inheritance. Proxy/TLS
 provenance: ordinary ambient `HTTPS_PROXY`/`NO_PROXY`/CA values are NOT
 inherited by default in V2-02 (behavioral tightening); explicitly declaring
 the project variable makes it available to project roles, while the
@@ -260,3 +260,10 @@ provider transport keeps its own unchanged authority. Repair 06 (same
 slice): the same one per-session authority additionally covers
 worker-owned direct Git children (inventory, verifier Git, terminal
 cleanup — terminal cleanup now under the least-authority CLEANUP role).
+V2-03 implements Decision-item-1's third slice: `ModelGateway` & `ModelBinding`
+as the single product provider-runtime seam; truthful provider status semantics
+separating `Configured`, `Credential ready`, `Model runnable`, `Catalog
+refreshed at T`, `Live verified at T`, and `Runtime succeeded at T` (closing the
+incident where loopback offline CommandCode displayed `Connected`); user-facing
+vocabulary repair ("Endpoint contract", preset buttons); and automatic catalog
+cache invalidation on endpoint mutations. V2-04+ is not implemented.

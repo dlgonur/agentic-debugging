@@ -1,0 +1,1205 @@
+"""V2-03 ModelGateway and ModelBinding product runtime authority.
+
+This module provides the single product/runtime seam for model providers:
+the rest of Agentic Debugger requests a logical provider/model binding, and
+:class:`ModelGateway` owns provider-runtime details beneath that boundary.
+
+Architecture contract (ADR 0001 / V2 Plan §6.2, §9, §11 V2-03):
+
+- :class:`ModelBinding` — immutable runtime/session provenance object containing
+  only SAFE runtime facts (logical provider id, logical model id, API model id,
+  effective protocol, endpoint contract / transport profile, resolved route,
+  safe endpoint identity, auth mode, tool version, protocol version, and safe
+  config fingerprint).  It NEVER carries credential values, API keys, CLI auth
+  store contents, or secret material.
+- :class:`ModelGateway` — the single product provider-runtime authority.
+  Resolves logical requests into :class:`ModelBinding`, performs static runtime
+  preflight, executes explicit reachability and catalog probes, inspects
+  authoritative session history for runtime-success facts, and produces
+  truthful :class:`ProviderStatusSnapshot` records.
+- Status semantics: truthful, precise status facts.  Credential/config presence
+  is NEVER reported as "Connected".  "Connected" / "Live verified" is reserved
+  for explicit live probes.  `Runtime succeeded at T` is observational history
+  derived from durable event history, never persisted as provider-config truth.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
+
+from agentic_debugger.application.events import (
+    contains_credential_shape,
+    MAX_IDENTIFIER_CHARS,
+    MAX_SHORT_TEXT_CHARS,
+)
+from agentic_debugger.application.provider_connections import (
+    AUTH_BEARER,
+    AUTH_MODES,
+    AUTH_NONE,
+    CATALOG_DISABLED,
+    CATALOG_OPENAI,
+    DiscoveredProviderModel,
+    ENDPOINT_CONTRACT_DISPLAY_LABELS,
+    PROTOCOL_CHAT_COMPLETIONS,
+    ProviderCatalogSnapshot,
+    ProviderConfig,
+    ProviderConnectionError,
+    TRANSPORT_COMMANDCODE_GOAT,
+    TRANSPORT_GENERIC,
+    TRANSPORT_MODES,
+    TRANSPORT_OLLAMA_CLOUD,
+    TRANSPORT_OPENCODE_GO,
+    credential_source_for,
+    delete_cached_catalog,
+    describe_transport_gap,
+    effective_model_protocol,
+    get_provider_config,
+    is_known_provider,
+    is_protocol_executable,
+    is_provider_quarantined,
+    list_configured_providers,
+    load_cached_catalog,
+    protocol_blocker_reason,
+    provider_api_model_id,
+    provider_base_url,
+    provider_session_credential_environment,
+    refresh_provider_catalog,
+    resolve_model_protocol,
+    resolve_runtime_credential,
+    test_provider_connection,
+)
+from agentic_debugger.application.model_providers import (
+    provider_transport_environment,
+)
+
+__all__ = [
+    "CatalogProbeError",
+    "CredentialUnavailableError",
+    "EndpointUnreachableError",
+    "IncompatibleModelError",
+    "ModelBinding",
+    "ModelGateway",
+    "ModelGatewayError",
+    "ModelRuntimeError",
+    "ModelStaticPreflight",
+    "ProtocolViolationError",
+    "ProviderConfigurationError",
+    "ProviderHttpRejectionError",
+    "ProviderStatusSnapshot",
+    "ROUTE_CONFIGURED_PROFILE",
+    "ROUTE_DIRECT_API",
+    "ROUTE_LEGACY_CLI",
+    "ROUTE_OFFLINE",
+]
+
+#: Explicit route identities recorded in ModelBinding and durable provenance.
+ROUTE_DIRECT_API = "direct_api"
+ROUTE_LEGACY_CLI = "legacy_cli"
+ROUTE_CONFIGURED_PROFILE = "configured_profile"
+ROUTE_OFFLINE = "offline"
+
+_DEFAULT_MAX_MODEL_REQUESTS = 64
+_DEFAULT_MAX_CONTROLLER_STEPS = 128
+_DEFAULT_MAX_RETRIES = 2
+_MAX_MODEL_RESPONSE_BYTES = 32 * 1024
+
+
+# ---------------------------------------------------------------------------
+# Error taxonomy
+# ---------------------------------------------------------------------------
+
+
+class ModelGatewayError(RuntimeError):
+    """Base error for ModelGateway operations (never carries credentials)."""
+
+
+class ProviderConfigurationError(ModelGatewayError):
+    """Provider configuration is invalid, missing, disabled, or quarantined."""
+
+
+class CredentialUnavailableError(ModelGatewayError):
+    """Required credential authority cannot be obtained or bound."""
+
+
+class IncompatibleModelError(ModelGatewayError):
+    """Requested model is incompatible with provider protocol or contract."""
+
+
+class EndpointUnreachableError(ModelGatewayError):
+    """Provider endpoint is offline or unreachable."""
+
+
+class CatalogProbeError(ModelGatewayError):
+    """Catalog discovery or models endpoint probe failed."""
+
+
+class ProviderHttpRejectionError(ModelGatewayError):
+    """Provider HTTP request was rejected by the remote service."""
+
+
+class ProtocolViolationError(ModelGatewayError):
+    """Adapter or provider violated the expected protocol contract."""
+
+
+class ModelRuntimeError(ModelGatewayError):
+    """Model execution failed at runtime."""
+
+
+# ---------------------------------------------------------------------------
+# ModelBinding
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ModelBinding:
+    """Immutable runtime/session model provenance object.
+
+    Produced by :class:`ModelGateway` from a logical provider/model request.
+    Carries only safe non-secret facts needed downstream for session
+    execution, observability, and durable event journaling:
+
+    - ``provider_id``: logical provider identifier (e.g. "commandcode_goat",
+      "opencode_go", "my-openai", or None for offline/profile).
+    - ``model_id``: logical / requested model identifier.
+    - ``provider_model_id``: API-level model identifier if distinct.
+    - ``display_name``: safe human-readable model label.
+    - ``route``: concrete execution route ("direct_api", "legacy_cli",
+      "configured_profile", "offline").
+    - ``effective_protocol``: resolved protocol family ("chat_completions",
+      "messages", "responses", or None).
+    - ``endpoint_contract``: explicit endpoint contract / transport profile
+      ("generic", "commandcode_goat", "opencode_go", "ollama_cloud").
+    - ``endpoint``: safe described endpoint URL or base URL (never credentials).
+    - ``auth_mode``: safe authentication mode metadata ("bearer", "anthropic",
+      "none", or None).
+    - ``config_fingerprint``: safe configuration fingerprint.
+    - ``tool_version``: adapter / tool contract version.
+    - ``protocol_version``: wire protocol version (default "1.3").
+
+    Invariants:
+    - Immutable (frozen dataclass).
+    - Contains NO secrets, NO API keys, NO CLI auth contents, NO environment
+      dictionaries, and NO bearer tokens.
+    - Session-stable: once bound to a :class:`SessionLaunch`, it does not
+      mutate if durable provider configuration changes later.
+    """
+
+    provider_id: Optional[str]
+    model_id: Optional[str]
+    provider_model_id: Optional[str]
+    display_name: str
+    route: str
+    effective_protocol: Optional[str]
+    endpoint_contract: str
+    endpoint: Optional[str]
+    auth_mode: Optional[str]
+    config_fingerprint: Optional[str]
+    tool_version: str
+    protocol_version: str = "1.3"
+
+    def __post_init__(self) -> None:
+        if not self.endpoint_contract or not self.endpoint_contract.strip():
+            raise ModelGatewayError("endpoint_contract cannot be empty")
+        if not self.route or not self.route.strip():
+            raise ModelGatewayError("route cannot be empty")
+        if not self.tool_version or not self.tool_version.strip():
+            raise ModelGatewayError("tool_version cannot be empty")
+
+        # Fail-closed secret scrubbing: verify no credential-shaped string leaked
+        for f_name in (
+            "provider_id",
+            "model_id",
+            "provider_model_id",
+            "display_name",
+            "route",
+            "effective_protocol",
+            "endpoint_contract",
+            "endpoint",
+            "auth_mode",
+            "config_fingerprint",
+            "tool_version",
+            "protocol_version",
+        ):
+            val = getattr(self, f_name)
+            if isinstance(val, str) and contains_credential_shape(val):
+                raise ModelGatewayError(
+                    f"ModelBinding field {f_name!r} contains a credential-shaped value"
+                )
+
+    def to_mapping(self) -> Dict[str, Any]:
+        """Safe serializable dictionary representation (no secrets exist)."""
+        return {
+            "provider_id": self.provider_id,
+            "model_id": self.model_id,
+            "provider_model_id": self.provider_model_id,
+            "display_name": self.display_name,
+            "route": self.route,
+            "effective_protocol": self.effective_protocol,
+            "endpoint_contract": self.endpoint_contract,
+            "endpoint": self.endpoint,
+            "auth_mode": self.auth_mode,
+            "config_fingerprint": self.config_fingerprint,
+            "tool_version": self.tool_version,
+            "protocol_version": self.protocol_version,
+        }
+
+    def fingerprint(self) -> str:
+        """Deterministic sha256 fingerprint of the safe binding metadata."""
+        canonical = json.dumps(
+            self.to_mapping(),
+            ensure_ascii=False,
+            allow_nan=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+    def model_configured_payload(self) -> Dict[str, Any]:
+        """Safe payload dictionary suitable for ``model.configured`` event emission."""
+        payload: Dict[str, Any] = {
+            "profile_id": self.model_id or "offline",
+            "config_fingerprint": self.config_fingerprint or self.fingerprint(),
+            "display_name": self.display_name,
+            "protocol_version": self.protocol_version,
+            "tool_version": self.tool_version,
+        }
+        if self.provider_id:
+            payload["provider"] = self.provider_id
+        if self.route:
+            payload["route"] = self.route
+        if self.effective_protocol:
+            payload["api_protocol"] = self.effective_protocol
+        if self.auth_mode:
+            payload["auth_mode"] = self.auth_mode
+        if self.provider_model_id:
+            payload["provider_model_id"] = self.provider_model_id
+        if self.endpoint:
+            payload["endpoint"] = self.endpoint
+        return payload
+
+    @property
+    def provider(self) -> Optional[str]:
+        """Convenience alias for provider_id."""
+        return self.provider_id
+
+    @property
+    def model(self) -> Optional[str]:
+        """Convenience alias for model_id."""
+        return self.model_id
+
+    @property
+    def transport_profile(self) -> str:
+        """Convenience alias for endpoint_contract."""
+        return self.endpoint_contract
+
+    @property
+    def base_url(self) -> Optional[str]:
+        """Convenience alias for endpoint."""
+        return self.endpoint
+
+    @property
+    def binding_id(self) -> str:
+        """Convenience alias for fingerprint."""
+        return self.fingerprint()
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, Any]) -> ModelBinding:
+        """Reconstitute a ModelBinding from a safe dictionary mapping."""
+        return cls(
+            provider_id=mapping.get("provider_id") or mapping.get("provider"),
+            model_id=mapping.get("model_id") or mapping.get("model"),
+            provider_model_id=mapping.get("provider_model_id") or mapping.get("api_model"),
+            display_name=mapping.get("display_name", ""),
+            route=mapping.get("route", ROUTE_DIRECT_API),
+            effective_protocol=mapping.get("effective_protocol") or mapping.get("protocol"),
+            endpoint_contract=mapping.get("endpoint_contract") or mapping.get("transport_profile", TRANSPORT_GENERIC),
+            endpoint=mapping.get("endpoint") or mapping.get("base_url"),
+            auth_mode=mapping.get("auth_mode"),
+            config_fingerprint=mapping.get("config_fingerprint"),
+            tool_version=mapping.get("tool_version", "1.0"),
+            protocol_version=mapping.get("protocol_version", "1.3"),
+        )
+
+    def __repr__(self) -> str:
+        return (
+            f"ModelBinding("
+            f"provider={self.provider_id!r}, "
+            f"model={self.model_id!r}, "
+            f"api_model={self.provider_model_id!r}, "
+            f"route={self.route!r}, "
+            f"protocol={self.effective_protocol!r}, "
+            f"contract={self.endpoint_contract!r})"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Status snapshot and preflight models
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class ProviderStatusSnapshot:
+    """Truthful provider status snapshot with distinct factual dimensions.
+
+    Minimum distinguished facts (ADR 0001 §9, V2 Plan §9):
+    - ``is_configured``: valid enabled durable configuration exists (no network claim);
+    - ``credential_ready``: credential authority required by auth mode is available (no network claim);
+    - ``is_runnable``: static auth × protocol × contract preflight succeeds (no network claim);
+    - ``catalog_refreshed_at_utc``: timestamp of last successful catalog refresh (historical fact);
+    - ``live_verified`` / ``live_verified_at_utc``: explicit live probe succeeded (historical evidence);
+    - ``runtime_succeeded_at_utc``: real session model request succeeded (derived observational history).
+    """
+
+    provider_id: str
+    label: str
+    base_url: str
+    endpoint_contract: str
+    auth_mode: str
+    api_format: str
+
+    # 1. Configured
+    is_configured: bool
+    is_enabled: bool
+    is_quarantined: bool
+
+    # 2. Credential ready
+    credential_ready: bool
+    credential_source: Optional[str]
+
+    # 3. Model runnable / Ready (static preflight for provider)
+    is_runnable: bool
+    runnable_reason: Optional[str]
+
+    # 4. Catalog refreshed at T
+    catalog_model_count: int
+    catalog_refreshed_at_utc: Optional[str]
+    catalog_refreshed_source: Optional[str]
+    catalog_stale: bool
+    catalog_error: Optional[str] = None
+
+    # 5. Live verified at T / Reachable at T
+    live_verified: bool = False
+    live_verified_at_utc: Optional[str] = None
+    live_probe_error: Optional[str] = None
+
+    # 6. Runtime succeeded at T (derived observational history)
+    runtime_succeeded_at_utc: Optional[str] = None
+
+    # Cached models
+    cached_models: Tuple[DiscoveredProviderModel, ...] = ()
+
+    # Backward compatibility property
+    @property
+    def kind(self) -> str:
+        return self.provider_id
+
+    @property
+    def connected(self) -> bool:
+        """Connected is strictly reserved for explicit live verification."""
+        return self.live_verified
+
+    @property
+    def transport_profile(self) -> str:
+        return self.endpoint_contract
+
+    @property
+    def model_count(self) -> int:
+        return self.catalog_model_count
+
+    @property
+    def last_refresh_utc(self) -> Optional[str]:
+        return self.catalog_refreshed_at_utc
+
+    @property
+    def last_refresh_source(self) -> Optional[str]:
+        return self.catalog_refreshed_source
+
+    @property
+    def stale(self) -> bool:
+        return self.catalog_stale
+
+    @property
+    def summary_headline(self) -> str:
+        """Truthful status headline adhering to ADR 0001 §9 and V2 Plan §9."""
+        if self.live_verified:
+            return "Live verified"
+        if self.runtime_succeeded_at_utc:
+            return "Runtime succeeded"
+        if self.credential_ready:
+            if self.auth_mode == "none":
+                return "Configured · loopback"
+            if self.credential_source and self.credential_source != "none":
+                return f"Configured · {self.credential_source}"
+            return "Configured · credential ready"
+        if self.is_configured and self.is_enabled and not self.is_quarantined:
+            return "Configured · no credential"
+        return "Not configured"
+
+    @property
+    def status_message(self) -> Optional[str]:
+        if not self.is_enabled:
+            return "Provider is disabled (edit provider to re-enable it)"
+        if self.is_quarantined:
+            return "Credential state requires recovery. Edit provider and save an API key again."
+        if not self.credential_ready:
+            return "Credential missing or rebinding required — edit provider to set an API key"
+        if not self.is_runnable:
+            return self.runnable_reason
+        if self.live_probe_error:
+            return f"Live verification failed: {self.live_probe_error}"
+        return None
+
+
+@dataclass(frozen=True)
+class ModelStaticPreflight:
+    """Static preflight result for a specific provider/model pair (no network)."""
+
+    provider_id: str
+    model_id: str
+    is_runnable: bool
+    blocker_reason: Optional[str]
+    effective_protocol: Optional[str]
+    endpoint_contract: str
+    route: Optional[str]
+
+
+# ---------------------------------------------------------------------------
+# ModelGateway
+# ---------------------------------------------------------------------------
+
+
+class ModelGateway:
+    """Single product provider-runtime authority façade.
+
+    Absorbs product-level calls that independently ask provider core for:
+    - configuration resolution;
+    - effective protocol resolution;
+    - route selection (direct API vs legacy CLI);
+    - API model id mapping;
+    - transport construction;
+    - static readiness/preflight;
+    - truthful status snapshots.
+    """
+
+    _default_instance: Optional[ModelGateway] = None
+
+    def __init__(self, config_root: Optional[Any] = None) -> None:
+        self.config_root = config_root
+        # In-memory record of explicit live probe outcomes during application run
+        # Key: provider_id -> {"verified": bool, "timestamp": str, "error": Optional[str]}
+        self._live_probe_results: Dict[str, Dict[str, Any]] = {}
+
+    @classmethod
+    def default(cls, config_root: Optional[Any] = None) -> ModelGateway:
+        if cls._default_instance is None:
+            cls._default_instance = cls(config_root=config_root)
+        elif config_root is not None:
+            cls._default_instance.config_root = config_root
+        return cls._default_instance
+
+    def invalidate_provider(self, provider_id: str) -> None:
+        """Clear cached probe results when a provider configuration changes."""
+        self._live_probe_results.pop(provider_id, None)
+
+    # -- Resolution ----------------------------------------------------------
+
+    def resolve(
+        self,
+        provider_id: Optional[str],
+        model_id: Optional[str],
+        *,
+        profile_id: Optional[str] = None,
+        logical_call_ceiling: int = _DEFAULT_MAX_MODEL_REQUESTS,
+        request_timeout_seconds: Optional[float] = None,
+        config_root: Optional[Any] = None,
+        is_ollama: bool = False,
+        ollama_alias: Optional[str] = None,
+    ) -> ModelBinding:
+        """Resolve a logical provider/model request into an immutable ModelBinding."""
+        from agentic_debugger.application.model_providers import (
+            format_model_display_name,
+            PROVIDER_KIND_COMMANDCODE,
+            PROVIDER_KIND_CONFIGURED,
+            PROVIDER_KIND_OLLAMA,
+            PROVIDER_KIND_OPENCODE,
+            ProviderRegistryError,
+            resolve_provider_live_config,
+        )
+
+        effective_provider = provider_id
+        effective_model = model_id or profile_id
+
+        # 1. Configured registry provider (e.g. commandcode, opencode, ollama, or custom)
+        if effective_provider is not None and effective_provider != PROVIDER_KIND_CONFIGURED:
+            cfg = get_provider_config(effective_provider)
+            try:
+                live_config, provenance = resolve_provider_live_config(
+                    effective_provider,
+                    effective_model or "",
+                    logical_call_ceiling=logical_call_ceiling,
+                    request_timeout_seconds=request_timeout_seconds,
+                )
+                endpoint_contract = (
+                    cfg.transport_profile if cfg is not None else TRANSPORT_GENERIC
+                )
+                return ModelBinding(
+                    provider_id=effective_provider,
+                    model_id=effective_model,
+                    provider_model_id=provenance.get("provider_model_id"),
+                    display_name=str(provenance.get("display_name") or effective_model or effective_provider),
+                    route=str(provenance.get("route") or ROUTE_DIRECT_API),
+                    effective_protocol=provenance.get("api_protocol"),
+                    endpoint_contract=endpoint_contract,
+                    endpoint=provenance.get("endpoint") or (cfg.base_url if cfg else None),
+                    auth_mode=provenance.get("auth_mode") or (cfg.auth_mode if cfg else None),
+                    config_fingerprint=live_config.configuration_fingerprint,
+                    tool_version=live_config.tool_version,
+                    protocol_version=str(provenance.get("protocol_version") or "1.3"),
+                )
+            except Exception:
+                if cfg is not None:
+                    try:
+                        proto = resolve_model_protocol(cfg.provider_id, effective_model or "") or cfg.api_format
+                    except Exception:
+                        proto = cfg.api_format
+                    try:
+                        api_model = provider_api_model_id(cfg.provider_id, effective_model or "") if effective_model else None
+                    except Exception:
+                        api_model = effective_model
+                    return ModelBinding(
+                        provider_id=cfg.provider_id,
+                        model_id=effective_model,
+                        provider_model_id=api_model or effective_model,
+                        display_name=cfg.name,
+                        route=ROUTE_DIRECT_API,
+                        effective_protocol=proto,
+                        endpoint_contract=cfg.transport_profile,
+                        endpoint=cfg.base_url,
+                        auth_mode=cfg.auth_mode,
+                        config_fingerprint=None,
+                        tool_version="live-command-v1",
+                        protocol_version="1.3",
+                    )
+                return ModelBinding(
+                    provider_id=effective_provider,
+                    model_id=effective_model,
+                    provider_model_id=effective_model,
+                    display_name=str(effective_model or effective_provider),
+                    route=ROUTE_DIRECT_API,
+                    effective_protocol=None,
+                    endpoint_contract=TRANSPORT_GENERIC,
+                    endpoint=None,
+                    auth_mode=None,
+                    config_fingerprint=None,
+                    tool_version="live-command-v1",
+                    protocol_version="1.3",
+                )
+
+        # 2. Qualified Ollama Cloud ladder model (primary ladder contract)
+        if (effective_provider is None or effective_provider == PROVIDER_KIND_OLLAMA) and is_ollama and ollama_alias:
+            from scripts.ollama_cloud_command_adapter import build_ollama_live_config
+            from agentic_debugger.application.level32 import level32_model_profiles
+
+            ollama_profile = None
+            for m in level32_model_profiles():
+                if m.alias == ollama_alias:
+                    ollama_profile = m
+                    break
+            if ollama_profile is None:
+                raise IncompatibleModelError(
+                    f"Ollama model not in qualified roster: {ollama_alias}"
+                )
+
+            live_config = build_ollama_live_config(
+                ollama_profile.alias, logical_call_ceiling=logical_call_ceiling
+            )
+            return ModelBinding(
+                provider_id=PROVIDER_KIND_OLLAMA,
+                model_id=ollama_profile.alias,
+                provider_model_id=ollama_profile.alias,
+                display_name=ollama_profile.display_name,
+                route=ROUTE_DIRECT_API,
+                effective_protocol=PROTOCOL_CHAT_COMPLETIONS,
+                endpoint_contract=TRANSPORT_OLLAMA_CLOUD,
+                endpoint=None,
+                auth_mode=AUTH_BEARER,
+                config_fingerprint=ollama_profile.transport_config_fingerprint,
+                tool_version=live_config.tool_version,
+                protocol_version="1.3",
+            )
+
+        # 3. Custom command profile store (configured source / legacy profile)
+        if effective_provider == PROVIDER_KIND_CONFIGURED or (effective_provider is None and profile_id and config_root):
+            display_name = profile_id or "Configured Profile"
+            tool_version = "live-command-v1"
+            config_fp = None
+            if profile_id and config_root:
+                from agentic_debugger.application.command_config import (
+                    CommandConfigError,
+                    CommandModelConfigStore,
+                )
+
+                try:
+                    store = CommandModelConfigStore(Path(config_root))
+                    profile = store.get(profile_id)
+                    display_name = profile.display_name
+                    tool_version = profile.tool_version
+                    config_fp = profile.configuration_fingerprint
+                except Exception:
+                    pass
+
+            return ModelBinding(
+                provider_id=PROVIDER_KIND_CONFIGURED,
+                model_id=profile_id or effective_model,
+                provider_model_id=profile_id or effective_model,
+                display_name=display_name,
+                route=ROUTE_CONFIGURED_PROFILE,
+                effective_protocol=None,
+                endpoint_contract=TRANSPORT_GENERIC,
+                endpoint=None,
+                auth_mode=None,
+                config_fingerprint=config_fp,
+                tool_version=tool_version,
+                protocol_version="1.3",
+            )
+
+        # 4. Offline mode / default fallback
+        return ModelBinding(
+            provider_id=None,
+            model_id=effective_model or "offline",
+            provider_model_id=None,
+            display_name="Offline",
+            route=ROUTE_OFFLINE,
+            effective_protocol=None,
+            endpoint_contract=TRANSPORT_GENERIC,
+            endpoint=None,
+            auth_mode=None,
+            config_fingerprint=None,
+            tool_version="offline-v1",
+            protocol_version="1.3",
+        )
+
+    # -- Static Preflight (no network) ---------------------------------------
+
+    def static_preflight(
+        self, provider_or_binding: Any, model_id: Optional[str] = None
+    ) -> ModelStaticPreflight:
+        """Perform static runtime preflight check without network I/O."""
+        if isinstance(provider_or_binding, ModelBinding):
+            provider_id = provider_or_binding.provider_id or ""
+            model_id = model_id or provider_or_binding.model_id
+        else:
+            provider_id = str(provider_or_binding)
+
+        cfg = get_provider_config(provider_id)
+        if cfg is None:
+            return ModelStaticPreflight(
+                provider_id=provider_id,
+                model_id=model_id or "",
+                is_runnable=False,
+                blocker_reason=f"Provider {provider_id!r} is not configured",
+                effective_protocol=None,
+                endpoint_contract=TRANSPORT_GENERIC,
+                route=None,
+            )
+        if not cfg.enabled:
+            return ModelStaticPreflight(
+                provider_id=provider_id,
+                model_id=model_id or "",
+                is_runnable=False,
+                blocker_reason="Provider is disabled",
+                effective_protocol=None,
+                endpoint_contract=cfg.transport_profile,
+                route=None,
+            )
+        if is_provider_quarantined(provider_id):
+            return ModelStaticPreflight(
+                provider_id=provider_id,
+                model_id=model_id or "",
+                is_runnable=False,
+                blocker_reason="Credential state requires recovery (quarantined)",
+                effective_protocol=None,
+                endpoint_contract=cfg.transport_profile,
+                route=None,
+            )
+
+        # Check credential readiness
+        cred_source = credential_source_for(provider_id)
+        if cfg.auth_mode != AUTH_NONE and cred_source is None:
+            return ModelStaticPreflight(
+                provider_id=provider_id,
+                model_id=model_id or "",
+                is_runnable=False,
+                blocker_reason="No usable credential source found",
+                effective_protocol=None,
+                endpoint_contract=cfg.transport_profile,
+                route=None,
+            )
+
+        # Protocol resolution
+        effective_proto: Optional[str] = None
+        if model_id:
+            try:
+                effective_proto = effective_model_protocol(provider_id, model_id)
+            except ProviderConnectionError as exc:
+                return ModelStaticPreflight(
+                    provider_id=provider_id,
+                    model_id=model_id,
+                    is_runnable=False,
+                    blocker_reason=str(exc),
+                    effective_protocol=None,
+                    endpoint_contract=cfg.transport_profile,
+                    route=None,
+                )
+        else:
+            effective_proto = cfg.api_format
+
+        # Protocol executability
+        if effective_proto is not None and not is_protocol_executable(provider_id, effective_proto):
+            blocker = protocol_blocker_reason(provider_id, effective_proto)
+            return ModelStaticPreflight(
+                provider_id=provider_id,
+                model_id=model_id or "",
+                is_runnable=False,
+                blocker_reason=blocker or "Protocol not executable under current auth/contract",
+                effective_protocol=effective_proto,
+                endpoint_contract=cfg.transport_profile,
+                route=None,
+            )
+
+        return ModelStaticPreflight(
+            provider_id=provider_id,
+            model_id=model_id or "",
+            is_runnable=True,
+            blocker_reason=None,
+            effective_protocol=effective_proto,
+            endpoint_contract=cfg.transport_profile,
+            route=ROUTE_DIRECT_API,
+        )
+
+    # -- Explicit Probes (requires explicit user action) ----------------------
+
+    def probe_reachability(
+        self,
+        provider_id: str,
+        *,
+        model_id: Optional[str] = None,
+        timeout_seconds: float = 10.0,
+        engine: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Perform an explicit reachability probe of the provider endpoint."""
+        now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            result = test_provider_connection(
+                provider_id,
+                model_id=model_id,
+                timeout_seconds=timeout_seconds,
+                engine=engine,
+            )
+        except ProviderConnectionError as exc:
+            self._live_probe_results[provider_id] = {
+                "verified": False,
+                "timestamp": now_utc,
+                "error": str(exc),
+            }
+            return {
+                "ok": False,
+                "connected": False,
+                "reachable": False,
+                "reason": str(exc),
+                "error": str(exc),
+                "verified_at_utc": None,
+                "timestamp": now_utc,
+                "endpoint": None,
+            }
+
+        ok = bool(result.get("ok", False))
+        reason = str(result.get("reason") or "")
+        if ok:
+            self._live_probe_results[provider_id] = {
+                "verified": True,
+                "timestamp": now_utc,
+                "error": None,
+            }
+            return {
+                "ok": True,
+                "connected": True,
+                "reachable": True,
+                "reason": reason,
+                "error": None,
+                "verified_at_utc": now_utc,
+                "timestamp": now_utc,
+                "endpoint": result.get("endpoint"),
+                "model_count": result.get("model_count", 0),
+            }
+        else:
+            self._live_probe_results[provider_id] = {
+                "verified": False,
+                "timestamp": now_utc,
+                "error": reason,
+            }
+            return {
+                "ok": False,
+                "connected": False,
+                "reachable": False,
+                "reason": reason,
+                "error": reason,
+                "verified_at_utc": None,
+                "timestamp": now_utc,
+                "endpoint": result.get("endpoint"),
+            }
+
+    def refresh_catalog(self, provider_id: str) -> ProviderCatalogSnapshot:
+        """Explicitly refresh the provider's live model catalog (GET /models)."""
+        now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            snapshot = refresh_provider_catalog(provider_id)
+        except ProviderConnectionError as exc:
+            self._live_probe_results[provider_id] = {
+                "verified": False,
+                "timestamp": now_utc,
+                "error": str(exc),
+            }
+            raise CatalogProbeError(str(exc)) from exc
+
+        # Successful catalog refresh is reachability evidence
+        self._live_probe_results[provider_id] = {
+            "verified": True,
+            "timestamp": now_utc,
+            "error": None,
+        }
+        return snapshot
+
+    # -- History-Derived Observational Metadata ------------------------------
+
+    def inspect_last_runtime_success(
+        self,
+        provider_id_or_history_root: Any,
+        second_arg: Any = None,
+        model_id: Optional[str] = None,
+        *,
+        history_root: Optional[Path | str] = None,
+        sessions_root: Optional[Path | str] = None,
+    ) -> Optional[str]:
+        """Derive the timestamp of the last successful model request from durable history.
+
+        Pure observational derivation: inspects authoritative session history
+        without mutating durable provider configuration.  Bounded to scanning
+        recent completed sessions.  Returns ISO UTC timestamp or None.
+        """
+        effective_root = history_root or sessions_root
+        if second_arg is not None:
+            # Called as inspect_last_runtime_success(history_root, provider_id)
+            # or inspect_last_runtime_success(provider_id, model_id, history_root=...)
+            if isinstance(provider_id_or_history_root, (Path, str)) and Path(str(provider_id_or_history_root)).is_dir():
+                effective_root = effective_root or provider_id_or_history_root
+                provider_id = str(second_arg)
+            else:
+                provider_id = str(provider_id_or_history_root)
+                model_id = str(second_arg)
+        else:
+            provider_id = str(provider_id_or_history_root)
+
+        if not effective_root:
+            return None
+        root_path = Path(effective_root)
+        if not root_path.is_dir():
+            return None
+
+        from agentic_debugger.application.history import JOURNAL_FILE_NAME
+        from agentic_debugger.application.events import ModelRequestStatus, SessionEventKind
+        from agentic_debugger.application.journal import read_session_journal
+
+        def _find_journal(s_dir: Path) -> Optional[Path]:
+            for name in (JOURNAL_FILE_NAME, "journal.jsonl", "events.jsonl", "session.jsonl"):
+                p = s_dir / name
+                if p.is_file():
+                    return p
+            return None
+
+        # Collect session dirs sorted by modification time (newest first), bounded to 30
+        try:
+            candidates = [
+                p for p in root_path.iterdir()
+                if p.is_dir() and _find_journal(p) is not None
+            ]
+            candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            candidates = candidates[:30]
+        except OSError:
+            return None
+
+        for s_dir in candidates:
+            journal_path = _find_journal(s_dir)
+            if journal_path is None:
+                continue
+            session_matches_provider = False
+            last_request_success_at: Optional[str] = None
+
+            try:
+                journal = read_session_journal(journal_path)
+                events = journal.events
+            except Exception:
+                events = ()
+
+            if events:
+                for ev in events:
+                    if ev.event_kind is SessionEventKind.MODEL_CONFIGURED:
+                        p_prov = ev.payload.get("provider")
+                        p_model = ev.payload.get("profile_id")
+                        p_api_model = ev.payload.get("provider_model_id")
+                        if p_prov == provider_id:
+                            if model_id is None or p_model == model_id or p_api_model == model_id:
+                                session_matches_provider = True
+
+                    elif ev.event_kind is SessionEventKind.MODEL_REQUEST_COMPLETED:
+                        if session_matches_provider:
+                            status_val = ev.payload.get("status")
+                            if status_val == ModelRequestStatus.OK.value or status_val == "ok":
+                                last_request_success_at = ev.timestamp_utc
+            elif journal_path.is_file():
+                try:
+                    with open(journal_path, "r", encoding="utf-8") as f:
+                        for line in f:
+                            raw = json.loads(line)
+                            kind = raw.get("kind") or raw.get("event_kind")
+                            if kind in ("model.configured", "model_configured"):
+                                p_prov = raw.get("provider") or raw.get("payload", {}).get("provider")
+                                p_model = raw.get("model") or raw.get("profile_id") or raw.get("payload", {}).get("profile_id")
+                                if p_prov == provider_id:
+                                    if model_id is None or p_model == model_id:
+                                        session_matches_provider = True
+                            elif kind in ("llm.request", "model_request_completed", "step.action"):
+                                if session_matches_provider:
+                                    st_val = raw.get("status") or raw.get("payload", {}).get("status")
+                                    if st_val in ("ok", "success"):
+                                        last_request_success_at = (
+                                            raw.get("timestamp")
+                                            or raw.get("timestamp_utc")
+                                            or raw.get("payload", {}).get("timestamp")
+                                        )
+                except Exception:
+                    pass
+
+            if session_matches_provider and last_request_success_at:
+                return last_request_success_at
+
+        return None
+
+    # -- Provider Status Facts -----------------------------------------------
+
+    def get_provider_status(
+        self,
+        provider_id: str,
+        *,
+        history_root: Optional[Path | str] = None,
+        sessions_root: Optional[Path | str] = None,
+    ) -> ProviderStatusSnapshot:
+        """Produce a truthful ProviderStatusSnapshot with distinct factual dimensions."""
+        cfg = get_provider_config(provider_id)
+        if cfg is None:
+            raise ProviderConfigurationError(f"Provider {provider_id!r} is not configured")
+
+        is_enabled = bool(cfg.enabled)
+        is_quarantined = is_provider_quarantined(provider_id)
+        is_configured = is_enabled and not is_quarantined
+
+        cred_source = credential_source_for(provider_id)
+        if cfg.auth_mode == AUTH_NONE:
+            credential_ready = True
+            cred_source = "none"
+        else:
+            credential_ready = cred_source is not None
+
+        # Static preflight for provider
+        preflight = self.static_preflight(provider_id)
+        is_runnable = preflight.is_runnable
+        runnable_reason = preflight.blocker_reason
+
+        # Catalog state
+        cat_snapshot = load_cached_catalog(provider_id)
+        if cat_snapshot is not None and cat_snapshot.models:
+            cat_count = len(cat_snapshot.models)
+            cat_refreshed = cat_snapshot.fetched_at_utc
+            cat_source = cat_snapshot.source
+            try:
+                fetched = datetime.fromisoformat(
+                    cat_snapshot.fetched_at_utc.replace("Z", "+00:00")
+                )
+                from datetime import timedelta
+                cat_stale = datetime.now(timezone.utc) - fetched > timedelta(days=7)
+            except ValueError:
+                cat_stale = False
+            cached_models = cat_snapshot.models
+        elif cfg.models:
+            cat_count = len(cfg.models)
+            cat_refreshed = cfg.last_refresh_utc
+            cat_source = cfg.last_refresh_source
+            cat_stale = False
+            cached_models = cfg.models
+        else:
+            cat_count = 0
+            cat_refreshed = None
+            cat_source = None
+            cat_stale = False
+            cached_models = ()
+
+        # Probe state
+        probe_record = self._live_probe_results.get(provider_id)
+        live_verified = False
+        live_verified_at = None
+        live_probe_error = None
+        if probe_record is not None:
+            live_verified = bool(probe_record.get("verified", False))
+            live_verified_at = probe_record.get("timestamp")
+            live_probe_error = probe_record.get("error")
+
+        # Runtime success fact derived from history
+        effective_history_root = history_root or sessions_root
+        runtime_succeeded_at = self.inspect_last_runtime_success(
+            provider_id, history_root=effective_history_root
+        )
+
+        return ProviderStatusSnapshot(
+            provider_id=provider_id,
+            label=cfg.name,
+            base_url=cfg.base_url,
+            endpoint_contract=cfg.transport_profile,
+            auth_mode=cfg.auth_mode,
+            api_format=cfg.api_format,
+            is_configured=is_configured,
+            is_enabled=is_enabled,
+            is_quarantined=is_quarantined,
+            credential_ready=credential_ready,
+            credential_source=cred_source,
+            is_runnable=is_runnable,
+            runnable_reason=runnable_reason,
+            catalog_model_count=cat_count,
+            catalog_refreshed_at_utc=cat_refreshed,
+            catalog_refreshed_source=cat_source,
+            catalog_stale=cat_stale,
+            live_verified=live_verified,
+            live_verified_at_utc=live_verified_at,
+            live_probe_error=live_probe_error,
+            runtime_succeeded_at_utc=runtime_succeeded_at,
+            cached_models=cached_models,
+        )
+
+    def list_provider_statuses(
+        self, *, history_root: Optional[Path | str] = None
+    ) -> List[ProviderStatusSnapshot]:
+        """Return truthful status snapshots for all configured providers."""
+        configs = list_configured_providers()
+        statuses = []
+        for c in configs:
+            try:
+                statuses.append(self.get_provider_status(c.provider_id, history_root=history_root))
+            except Exception:
+                continue
+        return statuses
+
+    # -- Model Listing -------------------------------------------------------
+
+    def list_models(self, *, include_ollama: bool = True) -> List[Any]:
+        """Return selectable models offered across configured providers."""
+        from agentic_debugger.application.model_providers import list_provider_models
+        return list_provider_models(include_ollama=include_ollama)
+
+    # -- Transport and Credential Environment Execution ----------------------
+
+    def session_credential_environment(
+        self, provider_id: Optional[str]
+    ) -> Optional[Dict[str, str]]:
+        """Worker spawn credential forwarding authority (inherited through V2-03)."""
+        if not provider_id:
+            return None
+        return provider_session_credential_environment(provider_id)
+
+    def transport_environment(
+        self, binding: ModelBinding
+    ) -> Optional[Dict[str, str]]:
+        """Adapter child credential/TLS environment (model channel only)."""
+        if not binding.provider_id:
+            return None
+        env = provider_transport_environment(binding.provider_id)
+        return dict(env) if env else None
+
+    def create_transport(
+        self,
+        binding: ModelBinding,
+        *,
+        cancel_check: Optional[Callable[[], None]] = None,
+        activity_observer: Optional[Callable[..., None]] = None,
+        max_model_requests: int = _DEFAULT_MAX_MODEL_REQUESTS,
+        max_controller_steps: int = _DEFAULT_MAX_CONTROLLER_STEPS,
+        max_response_bytes: int = _MAX_MODEL_RESPONSE_BYTES,
+    ) -> Tuple[Any, Any]:
+        """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair for a binding."""
+        from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
+        from agentic_debugger.evaluation.live import LiveModelConfig, LiveRunLimits
+        from agentic_debugger.application.model_providers import resolve_provider_live_config
+
+        if binding.route == ROUTE_OFFLINE:
+            raise ModelRuntimeError("Cannot create transport for offline binding")
+
+        if binding.provider_id and binding.provider_id != "configured":
+            live_config, _ = resolve_provider_live_config(
+                binding.provider_id,
+                binding.model_id or "",
+                logical_call_ceiling=max_model_requests,
+            )
+            env = self.transport_environment(binding)
+            transport = CancellableJsonlCommandTransport(
+                live_config,
+                max_output_bytes=max_response_bytes,
+                cancel_check=cancel_check,
+                activity_observer=activity_observer,
+                environment=env,
+            )
+            return transport, live_config
+
+        if binding.route == ROUTE_DIRECT_API and binding.provider_id == "ollama_cloud":
+            from scripts.ollama_cloud_command_adapter import build_ollama_live_config
+            live_config = build_ollama_live_config(
+                binding.model_id or "", logical_call_ceiling=max_model_requests
+            )
+            transport = CancellableJsonlCommandTransport(
+                live_config,
+                max_output_bytes=max_response_bytes,
+                cancel_check=cancel_check,
+                activity_observer=activity_observer,
+            )
+            return transport, live_config
+
+        if binding.route == ROUTE_CONFIGURED_PROFILE or binding.provider_id == "configured":
+            from agentic_debugger.application.command_config import (
+                CommandModelConfigStore,
+            )
+
+            store = CommandModelConfigStore(Path(self.config_root) if self.config_root else Path("."))
+            profile = store.get(binding.model_id or "")
+            live_config = LiveModelConfig(
+                model_name=profile.display_name,
+                command=profile.live_command(),
+                request_timeout_seconds=profile.request_timeout_seconds,
+                tool_version=profile.tool_version,
+            )
+            transport = CancellableJsonlCommandTransport(
+                live_config,
+                max_output_bytes=max_response_bytes,
+                cancel_check=cancel_check,
+                activity_observer=activity_observer,
+                cwd=profile.cwd,
+                environment=dict(profile.environment) if profile.environment else None,
+            )
+            return transport, live_config
+
+        raise ModelRuntimeError(
+            f"Unsupported binding route for transport creation: {binding.route!r}"
+        )

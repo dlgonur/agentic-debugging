@@ -1248,35 +1248,35 @@ def test_truthful_credential_status_labels_in_ui(
 
         # 1. Check prov_saved
         summary_saved = str(screen.query_one("#provider-summary-prov_saved").render().plain)
-        assert "Connected · saved" in summary_saved
+        assert "Configured · saved" in summary_saved
 
         # 2. Check prov_session
         screen._selected_index = screen._index_of("prov_session")
         screen.render_state()
         await pilot.pause()
         summary_session = str(screen.query_one("#provider-summary-prov_session").render().plain)
-        assert "Connected · session only" in summary_session
+        assert "Configured · session only" in summary_session
 
         # 3. Check prov_env
         screen._selected_index = screen._index_of("prov_env")
         screen.render_state()
         await pilot.pause()
         summary_env = str(screen.query_one("#provider-summary-prov_env").render().plain)
-        assert "Connected · environment" in summary_env
+        assert "Configured · environment" in summary_env
 
         # 4. Check prov_cli
         screen._selected_index = screen._index_of("prov_cli")
         screen.render_state()
         await pilot.pause()
         summary_cli = str(screen.query_one("#provider-summary-prov_cli").render().plain)
-        assert "Connected · CLI auth" in summary_cli
+        assert "Configured · CLI auth" in summary_cli
 
         # 5. Check prov_none
         screen._selected_index = screen._index_of("prov_none")
         screen.render_state()
         await pilot.pause()
         summary_none = str(screen.query_one("#provider-summary-prov_none").render().plain)
-        assert "Not connected" in summary_none
+        assert "Configured · no credential" in summary_none
 
     run_headless(app, actions, size=(110, 45))
 

@@ -1340,8 +1340,25 @@ class ModelProvidersScreen(Screen):
             )
 
             try:
-                self._statuses_cache = connection_statuses()
+                raw_statuses = connection_statuses()
                 self._config_error = None
+                from agentic_debugger.application.model_gateway import ModelGateway
+                gateway = ModelGateway.default()
+                history_root = None
+                if hasattr(self, "app") and hasattr(self.app, "history_store") and self.app.history_store is not None:
+                    history_root = getattr(self.app.history_store, "root_dir", None)
+                enriched = []
+                for st in raw_statuses:
+                    probe_info = gateway._live_probe_results.get(st.kind)
+                    hist_time = gateway.inspect_last_runtime_success(st.kind, history_root=history_root) if history_root else None
+                    if probe_info or hist_time:
+                        live_v = probe_info.get("verified", False) if probe_info else getattr(st, "live_verified", False)
+                        live_t = probe_info.get("timestamp") if probe_info else getattr(st, "live_verified_at_utc", None)
+                        succ_t = hist_time or getattr(st, "runtime_succeeded_at_utc", None)
+                        from dataclasses import replace
+                        st = replace(st, live_verified=live_v, live_verified_at_utc=live_t, runtime_succeeded_at_utc=succ_t)
+                    enriched.append(st)
+                self._statuses_cache = enriched
             except ProviderConnectionError as exc:
                 self._statuses_cache = []
                 self._config_error = str(exc)
@@ -1365,7 +1382,8 @@ class ModelProvidersScreen(Screen):
                                 yield Static("No providers configured.", id="providers-empty-label", classes="providers-empty-text")
                             else:
                                 for index, st in enumerate(statuses):
-                                    dot = "● " if st.connected else "○ "
+                                    is_live = getattr(st, "live_verified", False) or getattr(st, "runtime_succeeded_at_utc", None) is not None
+                                    dot = "● " if is_live else "○ "
                                     label = f"{dot}{st.label}"
                                     yield Button(
                                         label,
@@ -1485,7 +1503,8 @@ class ModelProvidersScreen(Screen):
             btn_id = f"#provider-select-{status.kind}"
             try:
                 btn = self.query_one(btn_id, Button)
-                dot = "● " if status.connected else "○ "
+                is_live = getattr(status, "live_verified", False) or getattr(status, "runtime_succeeded_at_utc", None) is not None
+                dot = "● " if is_live else "○ "
                 btn.label = f"{dot}{status.label}"
                 if index == self._selected_index:
                     btn.add_class("-selected")
@@ -1509,6 +1528,7 @@ class ModelProvidersScreen(Screen):
 
             from agentic_debugger.application.provider_connections import (
                 AUTH_DISPLAY_LABELS,
+                ENDPOINT_CONTRACT_DISPLAY_LABELS,
                 PROTOCOL_DISPLAY_LABELS,
                 TRANSPORT_DISPLAY_LABELS,
             )
@@ -1518,35 +1538,51 @@ class ModelProvidersScreen(Screen):
             auth_label = AUTH_DISPLAY_LABELS.get(
                 getattr(status, "auth_mode", "bearer"), getattr(status, "auth_mode", "")
             )
-            profile_label = TRANSPORT_DISPLAY_LABELS.get(
+            profile_label = ENDPOINT_CONTRACT_DISPLAY_LABELS.get(
                 getattr(status, "transport_profile", "generic"),
-                getattr(status, "transport_profile", ""),
+                TRANSPORT_DISPLAY_LABELS.get(
+                    getattr(status, "transport_profile", "generic"),
+                    getattr(status, "transport_profile", ""),
+                ),
             )
 
-            if status.connected:
-                source = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
-                    status.credential_source, status.credential_source or ""
-                )
-                source_disp = f"Connected · {source}" if source else "Connected"
-                summary.update(
-                    Text()
-                    .append(f"{status.label}", style=f"bold {FOREGROUND}")
-                    .append(f"   {source_disp}", style=f"{PRIMARY}")
-                    .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
-                    .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
-                    .append(f"\nAuth        {auth_label}", style=f"{MUTED}")
-                    .append(f"\nTransport   {profile_label}", style=f"{MUTED}")
-                )
+            source = _PROVIDER_CREDENTIAL_SOURCE_LABELS.get(
+                status.credential_source, status.credential_source or ""
+            )
+
+            # Truthful status facts:
+            # "Connected" is never displayed based purely on static configuration or credential availability.
+            # "Live verified" is reserved for explicit live verification.
+            if getattr(status, "live_verified", False):
+                status_disp = "Live verified"
+                status_style = PRIMARY
+            elif getattr(status, "runtime_succeeded_at_utc", None):
+                status_disp = "Runtime succeeded"
+                status_style = PRIMARY
+            elif getattr(status, "credential_ready", False) or getattr(status, "connected", False):
+                if source:
+                    status_disp = f"Configured · {source}"
+                elif getattr(status, "auth_mode", "") == "none":
+                    status_disp = "Configured · loopback"
+                else:
+                    status_disp = "Configured · credential ready"
+                status_style = FOREGROUND
+            elif getattr(status, "is_configured", True) and getattr(status, "enabled", True) and not getattr(status, "is_quarantined", False):
+                status_disp = "Configured · no credential"
+                status_style = MUTED
             else:
-                summary.update(
-                    Text()
-                    .append(f"{status.label}", style=f"bold {MUTED}")
-                    .append("   Not connected", style=FAINT)
-                    .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
-                    .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
-                    .append(f"\nAuth        {auth_label}", style=f"{MUTED}")
-                    .append(f"\nTransport   {profile_label}", style=f"{MUTED}")
-                )
+                status_disp = "Not configured"
+                status_style = FAINT
+
+            summary.update(
+                Text()
+                .append(f"{status.label}", style=f"bold {FOREGROUND}")
+                .append(f"   {status_disp}", style=status_style)
+                .append(f"\nBase URL    {status.base_url}", style=f"{MUTED}")
+                .append(f"\nProtocol    {proto_label}", style=f"{MUTED}")
+                .append(f"\nAuth        {auth_label}", style=f"{MUTED}")
+                .append(f"\nEndpoint    {profile_label}", style=f"{MUTED}")
+            )
 
             lines = []
             if status.model_count:
@@ -1555,7 +1591,9 @@ class ModelProvidersScreen(Screen):
                 suffix = " · stale/unverified" if status.stale else ""
                 lines.append(f"Catalog     {status.model_count} models")
                 lines.append(f"Updated     {when} UTC{suffix}" if when else "Updated     —")
-            elif status.connected:
+            elif getattr(status, "live_verified", False):
+                lines.append("Catalog     No catalog yet — refresh models to discover the live catalog")
+            elif getattr(status, "credential_ready", False) or getattr(status, "connected", False):
                 lines.append("Catalog     No catalog yet — refresh models to discover the live catalog")
             else:
                 lines.append("Catalog     Not connected")
@@ -1927,12 +1965,12 @@ class AddProviderDialogScreen(Screen):
             with Horizontal(id="catalog-buttons-row"):
                 yield Button("Auto (/models)", id="cat-auto", classes="fmt-btn -selected")
                 yield Button("Manual only", id="cat-manual", classes="fmt-btn")
-            yield Static("Transport Profile (generic unless a historical endpoint contract is intended)", classes="dialog-label")
+            yield Static("Endpoint contract", classes="dialog-label")
             with Horizontal(id="profile-buttons-row"):
-                yield Button("Generic", id="prof-generic", classes="fmt-btn -selected")
-                yield Button("Ollama Cloud", id="prof-ollama", classes="fmt-btn")
-                yield Button("OpenCode Go", id="prof-opencode", classes="fmt-btn")
+                yield Button("Generic / OpenAI-compatible", id="prof-generic", classes="fmt-btn -selected")
                 yield Button("CommandCode", id="prof-commandcode", classes="fmt-btn")
+                yield Button("OpenCode", id="prof-opencode", classes="fmt-btn")
+                yield Button("Ollama", id="prof-ollama", classes="fmt-btn")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save & discover", id="btn-save-dialog", classes="primary-action")
@@ -2139,12 +2177,12 @@ class EditProviderDialogScreen(Screen):
             with Horizontal(id="catalog-buttons-row"):
                 yield Button("Auto (/models)", id="cat-auto", classes=f"fmt-btn {'-selected' if self._catalog == 'openai' else ''}")
                 yield Button("Manual only", id="cat-manual", classes=f"fmt-btn {'-selected' if self._catalog == 'disabled' else ''}")
-            yield Static("Transport Profile (generic unless a historical endpoint contract is intended)", classes="dialog-label")
+            yield Static("Endpoint contract", classes="dialog-label")
             with Horizontal(id="profile-buttons-row"):
-                yield Button("Generic", id="prof-generic", classes=f"fmt-btn {'-selected' if self._profile == 'generic' else ''}")
-                yield Button("Ollama Cloud", id="prof-ollama", classes=f"fmt-btn {'-selected' if self._profile == 'ollama_cloud' else ''}")
-                yield Button("OpenCode Go", id="prof-opencode", classes=f"fmt-btn {'-selected' if self._profile == 'opencode_go' else ''}")
+                yield Button("Generic / OpenAI-compatible", id="prof-generic", classes=f"fmt-btn {'-selected' if self._profile == 'generic' else ''}")
                 yield Button("CommandCode", id="prof-commandcode", classes=f"fmt-btn {'-selected' if self._profile == 'commandcode_goat' else ''}")
+                yield Button("OpenCode", id="prof-opencode", classes=f"fmt-btn {'-selected' if self._profile == 'opencode_go' else ''}")
+                yield Button("Ollama", id="prof-ollama", classes=f"fmt-btn {'-selected' if self._profile == 'ollama_cloud' else ''}")
             yield Static("", id="dialog-feedback")
             with Horizontal(id="dialog-actions-row"):
                 yield Button("Save changes", id="btn-save-dialog", classes="primary-action")

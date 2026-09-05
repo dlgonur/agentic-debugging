@@ -994,6 +994,7 @@ class SessionLaunch:
     profile_id: str
     budgets: Any
     retry_of: Optional[str] = None
+    model_binding: Optional[Any] = None
 
     @property
     def provider_id(self) -> Optional[str]:
@@ -1049,11 +1050,15 @@ class SessionLaunch:
                 validate_session_id(self.retry_of)
             except Exception as exc:
                 raise SessionRuntimeError(f"invalid retry_of session id: {exc}") from exc
+        if self.model_binding is not None:
+            from agentic_debugger.application.model_gateway import ModelBinding
+            if not isinstance(self.model_binding, ModelBinding):
+                raise SessionRuntimeError("model_binding must be a ModelBinding")
 
     def to_mapping(self) -> Dict[str, Any]:
         """Safe launch provenance (never the execution environment itself,
         never secret values — the spec mapping carries secret NAMES only)."""
-        return {
+        mapping = {
             "session_id": self.session_id,
             "task_id": self.task_id,
             "agent": self.agent.to_mapping(),
@@ -1066,6 +1071,9 @@ class SessionLaunch:
             "budgets": self.budgets.to_mapping(),
             "retry_of": self.retry_of,
         }
+        if self.model_binding is not None:
+            mapping["model_binding"] = self.model_binding.to_mapping()
+        return mapping
 
     def fingerprint(self) -> str:
         canonical = json.dumps(
@@ -1098,6 +1106,10 @@ def build_local_project_launch(
     budgets: Any = None,
     retry_of: Optional[str] = None,
     platform: Any = None,
+    model_binding: Optional[Any] = None,
+    is_ollama: bool = False,
+    ollama_alias: Optional[str] = None,
+    config_root: Optional[Any] = None,
 ) -> SessionLaunch:
     """Build the one Local Project SessionLaunch (single construction site).
 
@@ -1132,6 +1144,19 @@ def build_local_project_launch(
         available=environment.available_capabilities,
         task_allowed=task_allowed_capabilities(agent.controller_policy),
     )
+
+    if model_binding is None:
+        from agentic_debugger.application.model_gateway import ModelGateway
+
+        gateway = ModelGateway.default(config_root=config_root)
+        model_binding = gateway.resolve(
+            provider_id=provider_id,
+            model_id=model_id,
+            profile_id=profile_id,
+            is_ollama=is_ollama,
+            ollama_alias=ollama_alias,
+        )
+
     return SessionLaunch(
         session_id=session_id,
         task_id=task_id,
@@ -1142,6 +1167,7 @@ def build_local_project_launch(
         profile_id=profile_id,
         budgets=budgets if budgets is not None else SessionBudgets(),
         retry_of=retry_of,
+        model_binding=model_binding,
     )
 
 
@@ -1187,6 +1213,21 @@ def check_launch_matches_params(
         raise SessionRuntimeError(
             "session launch project runtime spec does not match the session params"
         )
+    if launch.model_binding is not None:
+        if (
+            launch.agent.provider_id is not None
+            and launch.model_binding.provider_id != launch.agent.provider_id
+        ):
+            raise SessionRuntimeError(
+                "session launch model_binding provider does not match agent definition"
+            )
+        if (
+            launch.agent.model_id is not None
+            and launch.model_binding.model_id != launch.agent.model_id
+        ):
+            raise SessionRuntimeError(
+                "session launch model_binding model does not match agent definition"
+            )
 
 
 __all__ = [

@@ -68,6 +68,7 @@ __all__ = [
     "CREDENTIAL_SOURCE_SAVED",
     "CREDENTIAL_SOURCE_SESSION_KEY",
     "DIRECT_API_PROVIDER_KINDS",
+    "ENDPOINT_CONTRACT_DISPLAY_LABELS",
     "TRANSPORT_COMMANDCODE_GOAT",
     "TRANSPORT_GENERIC",
     "TRANSPORT_MODES",
@@ -214,11 +215,18 @@ HISTORICAL_TRANSPORT_PROFILES = frozenset(
     {TRANSPORT_OLLAMA_CLOUD, TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT}
 )
 
+ENDPOINT_CONTRACT_DISPLAY_LABELS = {
+    TRANSPORT_GENERIC: "Generic / OpenAI-compatible",
+    TRANSPORT_COMMANDCODE_GOAT: "CommandCode",
+    TRANSPORT_OPENCODE_GO: "OpenCode",
+    TRANSPORT_OLLAMA_CLOUD: "Ollama",
+}
+
 TRANSPORT_DISPLAY_LABELS = {
-    TRANSPORT_GENERIC: "Generic OpenAI-compatible",
-    TRANSPORT_OLLAMA_CLOUD: "Ollama Cloud (historical)",
-    TRANSPORT_OPENCODE_GO: "OpenCode Go (historical)",
-    TRANSPORT_COMMANDCODE_GOAT: "CommandCode GOAT (historical)",
+    TRANSPORT_GENERIC: "Generic / OpenAI-compatible",
+    TRANSPORT_OLLAMA_CLOUD: "Ollama",
+    TRANSPORT_OPENCODE_GO: "OpenCode",
+    TRANSPORT_COMMANDCODE_GOAT: "CommandCode",
 }
 
 
@@ -2085,6 +2093,7 @@ def update_provider_config(
     blank_key = api_key is None or not api_key.strip()
     endpoint_changed = new_url != existing.base_url
     auth_changed = new_auth != existing.auth_mode
+    profile_changed = new_profile != existing.transport_profile
     if (endpoint_changed or auth_changed) and blank_key and new_auth != AUTH_NONE:
         # Authority model: ANY pre-existing reusable credential source
         # blocks silent rebinding — not just saved/session.  Ambient
@@ -2101,14 +2110,26 @@ def update_provider_config(
     if new_auth == AUTH_NONE and api_key is not None and api_key.strip():
         raise ProviderConnectionError("no-auth providers must not store an API key")
 
+    # When endpoint, auth mode, or transport profile changes, the old
+    # catalog cache belongs to the previous endpoint and is invalidated.
+    if endpoint_changed or auth_changed or profile_changed:
+        delete_cached_catalog(provider_id)
+        if models is None:
+            new_models = ()
+        new_last_refresh_utc = None
+        new_last_refresh_source = None
+    else:
+        new_last_refresh_utc = existing.last_refresh_utc
+        new_last_refresh_source = existing.last_refresh_source
+
     updated_cfg = ProviderConfig(
         provider_id=existing.provider_id,
         name=new_name,
         base_url=new_url,
         api_format=new_format,
         models=new_models,
-        last_refresh_utc=existing.last_refresh_utc,
-        last_refresh_source=existing.last_refresh_source,
+        last_refresh_utc=new_last_refresh_utc,
+        last_refresh_source=new_last_refresh_source,
         enabled=new_enabled,
         is_builtin=existing.is_builtin,
         builtin_kind=existing.builtin_kind,
@@ -3070,6 +3091,11 @@ class ProviderConnectionStatus:
     transport_profile: str = TRANSPORT_GENERIC
     runnable: bool = False
     runnable_reason: Optional[str] = None
+    is_configured: bool = True
+    credential_ready: bool = False
+    live_verified: bool = False
+    live_verified_at_utc: Optional[str] = None
+    runtime_succeeded_at_utc: Optional[str] = None
 
 
 def _cached_status_fields(
@@ -3214,6 +3240,9 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
             runnable_reason = None
             message = None
 
+    is_configured = bool(enabled and not quarantined)
+    credential_ready = bool((auth_mode == AUTH_NONE) or (source is not None))
+
     return ProviderConnectionStatus(
         kind=kind,
         label=label,
@@ -3234,6 +3263,11 @@ def provider_connection_status(kind: str) -> ProviderConnectionStatus:
         transport_profile=transport_profile,
         runnable=runnable,
         runnable_reason=runnable_reason,
+        is_configured=is_configured,
+        credential_ready=credential_ready,
+        live_verified=False,
+        live_verified_at_utc=None,
+        runtime_succeeded_at_utc=None,
     )
 
 
