@@ -1190,5 +1190,33 @@ runtime corroboration across all gateway boundaries:
    - `ModelGateway.create_transport(binding)` corroborates `binding.provider_runtime_identity`
      against current configuration, raising `StaleModelBindingError` on any drift.
 
+### 21.6 Candidate 19 direct binding preflight authority alignment
+
+Following independent FirstMate review, Candidate 19 seals direct protocol
+corroboration authority across static preflight and transport creation:
+
+1. **Authoritative Effective Direct Protocol Semantics**:
+   For an existing `ROUTE_DIRECT_API` `ModelBinding`, both `ModelGateway.static_preflight(binding)`
+   and `ModelGateway.create_transport(binding)` corroborate the direct protocol authoritatively
+   via `effective_model_protocol(provider_id, model_id)`. Neither preflight nor transport creation
+   substitutes `cfg.api_format` when a historical model resolver returns `None`.
+
+2. **Historical Resolver `None` Is Never Rewritten**:
+   For explicit historical contracts (`TRANSPORT_OPENCODE_GO`, `TRANSPORT_COMMANDCODE_GOAT`),
+   a model resolver returning `None` indicates the model has no direct protocol. Preflight
+   reports `is_runnable=False` with an actionable blocker, and `create_transport` fails
+   closed with `StaleModelBindingError` before any request.
+
+3. **Fail-Closed Resolution Failures**:
+   Unexpected protocol-resolution or model API ID resolution exceptions are caught safely:
+   `static_preflight` returns `is_runnable=False` with a safe structured blocker (never
+   leaking raw exception details or assuming default protocols), and `create_transport`
+   fails closed before dispatch.
+
+4. **Static Preflight and Execution Alignment**:
+   `static_preflight` and `create_transport` share the exact same direct protocol corroboration
+   authority, eliminating false-positive preflight readiness where execution would fail.
+
+
 
 

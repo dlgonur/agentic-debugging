@@ -1755,6 +1755,9 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
         config_root=tmp_path,
     )
     assert launch_a.model_binding.route == ROUTE_DIRECT_API
+    pf_launch_a = gateway.static_preflight(launch_a.model_binding)
+    assert pf_launch_a.is_runnable is True
+    assert pf_launch_a.route == ROUTE_DIRECT_API
     transport_a, live_cfg_a = gateway.create_transport(launch_a.model_binding)
     assert transport_a is not None
     assert live_cfg_a is not None
@@ -1791,6 +1794,9 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
             config_root=tmp_path,
         )
         assert launch_b.model_binding.route == ROUTE_LEGACY_CLI
+        pf_launch_b = gateway.static_preflight(launch_b.model_binding)
+        assert pf_launch_b.is_runnable is True
+        assert pf_launch_b.route == ROUTE_LEGACY_CLI
         transport_b, live_cfg_b = gateway.create_transport(launch_b.model_binding)
         assert transport_b is not None
         assert live_cfg_b is not None
@@ -1810,6 +1816,9 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
         config_root=tmp_path,
     )
     assert launch_c.model_binding.route == ROUTE_QUALIFIED_LADDER
+    pf_launch_c = gateway.static_preflight(launch_c.model_binding)
+    assert pf_launch_c.is_runnable is True
+    assert pf_launch_c.route == ROUTE_QUALIFIED_LADDER
     transport_c, live_cfg_c = gateway.create_transport(launch_c.model_binding)
     assert transport_c is not None
     assert live_cfg_c is not None
@@ -2769,6 +2778,300 @@ def test_candidate_18_finding_4_create_transport_corroborates_runtime_identity_a
 
     with pytest.raises(StaleModelBindingError, match="runtime configuration drifted"):
         gateway.create_transport(tampered_binding)
+
+
+# ---------------------------------------------------------------------------
+# Candidate 19 Tests: Align V2-03 direct binding preflight authority
+# ---------------------------------------------------------------------------
+
+
+def test_candidate_19_firstmate_repro_a_resolver_exception_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduction A: Unexpected protocol resolver failure fails closed (non-runnable) in preflight and create_transport."""
+    from unittest.mock import patch
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Generic Direct API",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="gen_repro_a",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    binding = gateway.resolve("gen_repro_a", "model-direct")
+    assert binding.route == ROUTE_DIRECT_API
+    assert gateway.static_preflight(binding).is_runnable is True
+
+    # Inject unexpected protocol resolver failure
+    with patch(
+        "agentic_debugger.application.model_gateway.effective_model_protocol",
+        side_effect=RuntimeError("synthetic protocol resolver failure"),
+    ):
+        pf = gateway.static_preflight(binding)
+        assert pf.is_runnable is False
+        assert pf.blocker_reason == "Provider model protocol resolution failed"
+
+        with pytest.raises(StaleModelBindingError, match="direct protocol resolution failed"):
+            gateway.create_transport(binding)
+
+
+def test_candidate_19_firstmate_repro_b_historical_disabled_to_enabled_unresolved_direct(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Reproduction B: Historical provider disabled->enabled for undocumented model yields non-runnable preflight and fails transport before request."""
+    from unittest.mock import patch
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    # 1. Configure explicit historical OpenCode endpoint contract
+    # 2. Disabled initially
+    add_provider_config(
+        name="OpenCode Historical Repro",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="oc_repro_b",
+        auth_mode=AUTH_BEARER,
+        transport_profile=TRANSPORT_OPENCODE_GO,
+    )
+    update_provider_config("oc_repro_b", enabled=False)
+
+    # 3. Resolve undocumented model while disabled
+    old_binding = gateway.resolve("oc_repro_b", "undocumented-model-xyz")
+    assert old_binding.route == ROUTE_DIRECT_API
+    assert old_binding.effective_protocol == PROTOCOL_CHAT_COMPLETIONS
+
+    # While disabled, preflight returns truthful disabled blocker
+    pf_disabled = gateway.static_preflight(old_binding)
+    assert pf_disabled.is_runnable is False
+    assert pf_disabled.blocker_reason == "Provider is disabled"
+
+    # 4. Re-enable provider
+    # 5. Make direct credential available
+    update_provider_config("oc_repro_b", enabled=True, api_key="sk-synthetic-direct-key")
+
+    # 6. Legacy CLI is unavailable deterministically
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(False, "no CLI")):
+        # 7. static_preflight authoritatively discovers model has no direct protocol
+        pf_enabled = gateway.static_preflight(old_binding)
+        assert pf_enabled.is_runnable is False
+        assert "has no resolved protocol" in str(pf_enabled.blocker_reason)
+
+        # 8. create_transport fails closed with StaleModelBindingError BEFORE request
+        with pytest.raises(StaleModelBindingError, match="direct protocol unavailable"):
+            gateway.create_transport(old_binding)
+
+
+def test_candidate_19_valid_historical_direct_binding_remains_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario C: Documented model on explicit historical provider remains runnable and executable."""
+    from unittest.mock import patch
+    from agentic_debugger.evaluation.live import LiveModelConfig
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="OpenCode Valid Historical",
+        base_url="https://opencode.ai/zen/go/v1",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="oc_valid_c",
+        auth_mode=AUTH_BEARER,
+        api_key="sk-synthetic-key",
+        transport_profile=TRANSPORT_OPENCODE_GO,
+    )
+
+    binding = gateway.resolve("oc_valid_c", "opencode-go/deepseek-v4-flash")
+    assert binding.route == ROUTE_DIRECT_API
+    assert binding.effective_protocol == PROTOCOL_CHAT_COMPLETIONS
+
+    pf = gateway.static_preflight(binding)
+    assert pf.is_runnable is True
+    assert pf.blocker_reason is None
+
+    with patch(
+        "scripts.opencode_provider_adapter.build_opencode_live_config",
+        return_value=LiveModelConfig("opencode-go/deepseek-v4-flash", ("opencode",), 30.0, "1.0"),
+    ):
+        transport, live_cfg = gateway.create_transport(binding)
+        assert transport is not None
+        assert live_cfg is not None
+
+
+def test_candidate_19_legacy_binding_unaffected_by_direct_protocol(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario D: Legacy CLI binding is unaffected by direct-protocol requirements."""
+    from unittest.mock import patch
+    from agentic_debugger.evaluation.live import LiveModelConfig
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="CommandCode Legacy Route",
+        base_url="http://127.0.0.1:57788",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="cc_legacy_d",
+        auth_mode=AUTH_BEARER,  # No creds
+        transport_profile=TRANSPORT_COMMANDCODE_GOAT,
+    )
+
+    with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(True, None)), \
+         patch("scripts.commandcode_goat_adapter.build_commandcode_live_config",
+               return_value=LiveModelConfig("goat-default", ("cmdc",), 30.0, "1.0")):
+        binding = gateway.resolve("cc_legacy_d", "goat-default")
+        assert binding.route == ROUTE_LEGACY_CLI
+
+        # Even if effective_model_protocol would fail, legacy route does not consult it
+        with patch("agentic_debugger.application.model_gateway.effective_model_protocol",
+                   side_effect=RuntimeError("must not be called for legacy CLI")):
+            pf = gateway.static_preflight(binding)
+            assert pf.is_runnable is True
+            assert pf.route == ROUTE_LEGACY_CLI
+            assert pf.blocker_reason is None
+
+            transport, live_cfg = gateway.create_transport(binding)
+            assert transport is not None
+            assert live_cfg is not None
+
+
+def test_candidate_19_generic_default_protocol_remains_valid(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario E: Generic provider default protocol without model override resolves authoritatively and remains runnable."""
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Generic Prov Default",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="gen_default_e",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    binding = gateway.resolve("gen_default_e", "any-arbitrary-unlisted-model")
+    assert binding.route == ROUTE_DIRECT_API
+    assert binding.effective_protocol == PROTOCOL_CHAT_COMPLETIONS
+
+    pf = gateway.static_preflight(binding)
+    assert pf.is_runnable is True
+    assert pf.blocker_reason is None
+
+    transport, live_cfg = gateway.create_transport(binding)
+    assert transport is not None
+    assert live_cfg is not None
+
+
+def test_candidate_19_protocol_drift_detected_without_runtime_identity_change(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Scenario F: Protocol drift on same runtime identity detected in preflight and create_transport."""
+    from agentic_debugger.application.provider_connections import (
+        DiscoveredProviderModel,
+        PROTOCOL_RESPONSES,
+    )
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="Drift Provider",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="drift_p_19",
+        auth_mode=AUTH_BEARER,
+        api_key="sk-drift-test-key",
+        transport_profile=TRANSPORT_GENERIC,
+        models=(
+            DiscoveredProviderModel.create(
+                kind="drift_p_19",
+                model_id="m_drift",
+                display_name="M Drift",
+                protocol=PROTOCOL_CHAT_COMPLETIONS,
+            ),
+        ),
+    )
+
+    binding = gateway.resolve("drift_p_19", "m_drift")
+    assert binding.effective_protocol == PROTOCOL_CHAT_COMPLETIONS
+    assert gateway.static_preflight(binding).is_runnable is True
+
+    # Mutate provider model list so m_drift now maps to PROTOCOL_RESPONSES
+    # Note: provider_runtime_identity does NOT hash the model list, so runtime identity is unchanged!
+    update_provider_config(
+        "drift_p_19",
+        models=(
+            DiscoveredProviderModel.create(
+                kind="drift_p_19",
+                model_id="m_drift",
+                display_name="M Drift",
+                protocol=PROTOCOL_RESPONSES,
+            ),
+        ),
+    )
+
+    # Runtime identity still matches
+    cfg = get_provider_config("drift_p_19")
+    assert provider_runtime_identity(cfg) == binding.provider_runtime_identity
+
+    # But authoritative effective protocol drifted!
+    pf = gateway.static_preflight(binding)
+    assert pf.is_runnable is False
+    assert "effective protocol drifted (stale binding)" in str(pf.blocker_reason)
+
+    with pytest.raises(StaleModelBindingError, match="effective protocol drifted"):
+        gateway.create_transport(binding)
+
+
+def test_candidate_19_provider_api_model_id_corroboration_fails_closed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """provider_api_model_id corroboration fails closed in preflight and create_transport on resolver error."""
+    from unittest.mock import patch
+    from agentic_debugger.application.provider_connections import ProviderConnectionError
+    monkeypatch.setenv("AGENTIC_DEBUGGER_CONFIG_DIR", str(tmp_path))
+    gateway = ModelGateway(config_root=tmp_path)
+
+    add_provider_config(
+        name="API Model Corroborate",
+        base_url="http://127.0.0.1:8000",
+        api_format=PROTOCOL_CHAT_COMPLETIONS,
+        provider_id="api_model_p",
+        auth_mode=AUTH_NONE,
+        transport_profile=TRANSPORT_GENERIC,
+    )
+
+    binding = gateway.resolve("api_model_p", "m1")
+    assert gateway.static_preflight(binding).is_runnable is True
+
+    # ProviderConnectionError case
+    with patch(
+        "agentic_debugger.application.model_gateway.provider_api_model_id",
+        side_effect=ProviderConnectionError("invalid model identity"),
+    ):
+        pf = gateway.static_preflight(binding)
+        assert pf.is_runnable is False
+        assert "invalid model identity" in str(pf.blocker_reason)
+
+        with pytest.raises(StaleModelBindingError, match="model API id resolution failed"):
+            gateway.create_transport(binding)
+
+    # Unexpected Exception case
+    with patch(
+        "agentic_debugger.application.model_gateway.provider_api_model_id",
+        side_effect=RuntimeError("unexpected api model error"),
+    ):
+        pf = gateway.static_preflight(binding)
+        assert pf.is_runnable is False
+        assert pf.blocker_reason == "Provider model API id resolution failed"
+
+        with pytest.raises(StaleModelBindingError, match="model API id resolution failed"):
+            gateway.create_transport(binding)
+
 
 
 

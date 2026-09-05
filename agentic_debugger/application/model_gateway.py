@@ -72,7 +72,6 @@ from agentic_debugger.application.provider_connections import (
     provider_base_url,
     provider_session_credential_environment,
     refresh_provider_catalog,
-    resolve_model_protocol,
     resolve_runtime_credential,
     test_provider_connection,
 )
@@ -1211,18 +1210,10 @@ class ModelGateway:
             # Corroborate binding facts against current cfg
             cur_identity = provider_runtime_identity(cfg)
             expected_contract = cfg.transport_profile or TRANSPORT_GENERIC
-            clean_binding_endpoint = (binding.endpoint or "").strip().rstrip("/")
-            clean_cfg_endpoint = (cfg.base_url or "").strip().rstrip("/")
-            if not cfg.enabled or is_provider_quarantined(cfg.provider_id):
-                cur_proto = cfg.api_format
-            else:
-                try:
-                    cur_proto = resolve_model_protocol(cfg.provider_id, binding.model_id or "") or cfg.api_format
-                except Exception:
-                    cur_proto = cfg.api_format
-            cur_api_model = provider_api_model_id(cfg.provider_id, binding.model_id or "") if binding.model_id else None
 
             if binding.route == ROUTE_DIRECT_API:
+                clean_binding_endpoint = (binding.endpoint or "").strip().rstrip("/")
+                clean_cfg_endpoint = (cfg.base_url or "").strip().rstrip("/")
                 if binding.endpoint_contract != expected_contract:
                     return ModelStaticPreflight(
                         provider_id=prov_id,
@@ -1253,32 +1244,50 @@ class ModelGateway:
                         endpoint_contract=binding.endpoint_contract,
                         route=binding.route,
                     )
-                if binding.effective_protocol != cur_proto:
-                    return ModelStaticPreflight(
-                        provider_id=prov_id,
-                        model_id=binding.model_id or "",
-                        is_runnable=False,
-                        blocker_reason=f"Provider {prov_id!r} effective protocol drifted (stale binding)",
-                        effective_protocol=binding.effective_protocol,
-                        endpoint_contract=binding.endpoint_contract,
-                        route=binding.route,
-                    )
-                if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
-                    return ModelStaticPreflight(
-                        provider_id=prov_id,
-                        model_id=binding.model_id or "",
-                        is_runnable=False,
-                        blocker_reason=f"Provider {prov_id!r} model API id drifted (stale binding)",
-                        effective_protocol=binding.effective_protocol,
-                        endpoint_contract=binding.endpoint_contract,
-                        route=binding.route,
-                    )
                 if cur_identity != binding.provider_runtime_identity:
                     return ModelStaticPreflight(
                         provider_id=prov_id,
                         model_id=binding.model_id or "",
                         is_runnable=False,
                         blocker_reason=f"Provider {prov_id!r} runtime configuration drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+
+                # Corroborate provider_api_model_id
+                if binding.model_id:
+                    try:
+                        cur_api_model = provider_api_model_id(cfg.provider_id, binding.model_id)
+                    except ProviderConnectionError as exc:
+                        return ModelStaticPreflight(
+                            provider_id=prov_id,
+                            model_id=binding.model_id,
+                            is_runnable=False,
+                            blocker_reason=str(exc),
+                            effective_protocol=binding.effective_protocol,
+                            endpoint_contract=binding.endpoint_contract,
+                            route=binding.route,
+                        )
+                    except Exception:
+                        return ModelStaticPreflight(
+                            provider_id=prov_id,
+                            model_id=binding.model_id,
+                            is_runnable=False,
+                            blocker_reason="Provider model API id resolution failed",
+                            effective_protocol=binding.effective_protocol,
+                            endpoint_contract=binding.endpoint_contract,
+                            route=binding.route,
+                        )
+                else:
+                    cur_api_model = None
+
+                if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} model API id drifted (stale binding)",
                         effective_protocol=binding.effective_protocol,
                         endpoint_contract=binding.endpoint_contract,
                         route=binding.route,
@@ -1305,6 +1314,42 @@ class ModelGateway:
                         endpoint_contract=binding.endpoint_contract,
                         route=binding.route,
                     )
+
+                # Authoritatively resolve current effective direct protocol
+                try:
+                    cur_proto = effective_model_protocol(cfg.provider_id, binding.model_id or "")
+                except ProviderConnectionError as exc:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=str(exc),
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+                except Exception:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason="Provider model protocol resolution failed",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+
+                if binding.effective_protocol != cur_proto:
+                    return ModelStaticPreflight(
+                        provider_id=prov_id,
+                        model_id=binding.model_id or "",
+                        is_runnable=False,
+                        blocker_reason=f"Provider {prov_id!r} effective protocol drifted (stale binding)",
+                        effective_protocol=binding.effective_protocol,
+                        endpoint_contract=binding.endpoint_contract,
+                        route=binding.route,
+                    )
+
                 cred_source = credential_source_for(prov_id)
                 if cfg.auth_mode != AUTH_NONE and cred_source is None:
                     return ModelStaticPreflight(
@@ -2140,16 +2185,37 @@ class ModelGateway:
                         f"Provider {binding.provider_id!r} auth mode drifted "
                         f"(expected {binding.auth_mode!r}, found {cfg.auth_mode!r})"
                     )
-                cur_api_model = (
-                    provider_api_model_id(cfg.provider_id, binding.model_id or "")
-                    if binding.model_id else None
-                )
+                try:
+                    cur_api_model = (
+                        provider_api_model_id(cfg.provider_id, binding.model_id or "")
+                        if binding.model_id else None
+                    )
+                except ProviderConnectionError as exc:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} model API id resolution failed: {exc}"
+                    ) from exc
+                except Exception as exc:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} model API id resolution failed: {exc}"
+                    ) from exc
+
                 if binding.provider_model_id != cur_api_model and (binding.provider_model_id or cur_api_model):
                     raise StaleModelBindingError(
                         f"Provider {binding.provider_id!r} model {binding.model_id!r} API model id drifted "
                         f"(expected {binding.provider_model_id!r}, found {cur_api_model!r})"
                     )
-                cur_proto = resolve_model_protocol(cfg.provider_id, binding.model_id or "") or cfg.api_format
+
+                try:
+                    cur_proto = effective_model_protocol(cfg.provider_id, binding.model_id or "")
+                except ProviderConnectionError as exc:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} model {binding.model_id!r} direct protocol unavailable: {exc}"
+                    ) from exc
+                except Exception as exc:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} direct protocol resolution failed: {exc}"
+                    ) from exc
+
                 if binding.effective_protocol != cur_proto:
                     raise StaleModelBindingError(
                         f"Provider {binding.provider_id!r} effective protocol drifted "
