@@ -148,6 +148,43 @@ def is_control_or_provider_authority(name: str) -> bool:
 #: (the spec carries names durably); the VALUE never appears.
 PROJECT_SECRET_MARKER_TEMPLATE = "<PROJECT_SECRET:{name}>"
 
+
+def _select_safe_marker(name: str, all_secret_values: Tuple[str, ...]) -> str:
+    """Derive a deterministic replacement marker that contains NO secret value.
+
+    Every emitted marker is proven safe relative to the COMPLETE session
+    secret set: for every non-empty secret value S in the session, S not in marker
+    holds.  A name-bearing candidate is used when proven safe; if collisions
+    occur, deterministic safe generic candidates are tested; as a final
+    fail-safe, the empty string removes the value entirely rather than emit
+    raw secret material.
+    """
+    candidates = (
+        PROJECT_SECRET_MARKER_TEMPLATE.format(name=name),
+        f"[PROJECT_SECRET:{name}]",
+        f"<SECRET:{name}>",
+        f"[SECRET:{name}]",
+        f"<REDACTED:{name}>",
+        f"[REDACTED:{name}]",
+        f"<{name}>",
+        f"[{name}]",
+        "<PROJECT_SECRET>",
+        "[PROJECT_SECRET]",
+        "<SECRET>",
+        "[SECRET]",
+        "<REDACTED>",
+        "[REDACTED]",
+        "***",
+        "###",
+        "---",
+        "",
+    )
+    for cand in candidates:
+        if all(val not in cand for val in all_secret_values):
+            return cand
+    return ""
+
+
 #: Bounded-text truncation marker appended by Agentic Debugger's own PDB
 #: worker when it renders a bounded exception/diagnostic text
 #: (``runtime/pdb_worker.py::_POST_MORTEM_TRUNCATION_MARKER``).  A text that
@@ -245,11 +282,11 @@ class ProjectSecretRedactor:
             self._pattern: Any = re.compile(
                 "|".join(re.escape(value) for _, value in ordered)
             )
+            all_secret_values = tuple(dict.fromkeys(value for _, value in ordered))
             markers: Dict[str, str] = {}
             for name, value in ordered:
-                markers.setdefault(
-                    value, PROJECT_SECRET_MARKER_TEMPLATE.format(name=name)
-                )
+                if value not in markers:
+                    markers[value] = _select_safe_marker(name, all_secret_values)
             self._markers: Any = MappingProxyType(markers)
         else:
             self._pattern = None
@@ -440,12 +477,11 @@ class _ProjectSecretStreamSanitizer:
     The neutral seam object consumed by
     :class:`~agentic_debugger.runtime.command_runner.CommandRunner` (plain
     duck-typed ``feed``/``flush`` — the runtime never imports this module).
-    Between feeds it holds back the last ``longest secret length - 1``
-    redacted characters, so a secret value whose bytes arrive across
-    reader-thread chunks is still matched and replaced exactly once by the
-    single-pass authority; the complete value is therefore always removed
-    from the stream BEFORE any head/tail bounding can cut it, and ordinary
-    (secret-free) text passes through unchanged byte for byte.
+    Between feeds it holds back undecided raw stream text (at most
+    ``longest secret length - 1`` characters) so that overlapping and
+    longer secrets that arrive across reader chunks are never prematurely
+    committed.  Streaming redaction decisions are chunk-boundary invariant
+    and identical to full-input single-pass redaction.
     """
 
     __slots__ = ("_redactor", "_pending")
@@ -459,29 +495,48 @@ class _ProjectSecretStreamSanitizer:
         if not text:
             return ""
         buf = self._pending + text
+        pattern = self._redactor._pattern
+        if pattern is None:
+            self._pending = ""
+            return buf
         hold = self._redactor._holdback()
         if hold <= 0:
-            # No secrets (or only single-character values): every match is
-            # complete within any buffer, nothing can be half-cut.
-            processed = self._redactor.redact(buf)
             self._pending = ""
-            return processed
-        if len(buf) <= hold:
-            self._pending = buf
-            return ""
-        processed = self._redactor.redact(buf)
-        split = len(processed) - hold
-        if split <= 0:
-            # Pathologically heavy replacement: keep everything pending
-            # (still bounded by chunk + holdback) rather than split inside
-            # possibly incomplete text.
-            self._pending = processed
-            return ""
-        self._pending = processed[split:]
-        return processed[:split]
+            return self._redactor.redact(buf)
+
+        buf_len = len(buf)
+        max_len = hold + 1
+        markers = self._redactor._markers
+        out: list[str] = []
+        k = 0
+
+        while k < buf_len:
+            match = pattern.search(buf, k)
+            if match is None:
+                safe_end = max(k, buf_len - hold)
+                out.append(buf[k:safe_end])
+                self._pending = buf[safe_end:]
+                return "".join(out)
+
+            s = match.start()
+            e = match.end()
+            if s <= buf_len - max_len:
+                out.append(buf[k:s])
+                out.append(markers[match.group(0)])
+                k = e
+            else:
+                safe_end = max(k, buf_len - hold)
+                out.append(buf[k:safe_end])
+                self._pending = buf[safe_end:]
+                return "".join(out)
+
+        self._pending = ""
+        return "".join(out)
 
     def flush(self) -> str:
         """Emit the final held-back text (end of stream)."""
+        if not self._pending:
+            return ""
         out = self._redactor.redact(self._pending)
         self._pending = ""
         return out

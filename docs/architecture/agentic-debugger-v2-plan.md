@@ -897,3 +897,36 @@ DLP contract).  Implementation status:
   (FirstMate head/tail reproductions, verifier command/Git cases, PDB
   long-local/safe-eval/nested previews, exception diagnostics, and
   byte/behavior compatibility for ordinary and no-secret sessions).
+
+## 20. V2-02 repair 12 note (status only — decision unchanged)
+
+A targeted post-review repair resolved two defects inside the accepted
+project-secret redaction authority: marker self/cross collision leaks and
+streaming overlap chunk-boundary sensitivity.
+
+- **Replacement marker safety (Finding A)**:
+  - Every replacement marker emitted by `ProjectSecretRedactor` is proven
+    disjoint from all materialized session secret values at construction
+    time (`S not in marker` for every non-empty session secret S).
+  - A readable name-bearing marker is used when proven safe; if collisions
+    occur, deterministic safe generic candidates are selected; as a final
+    fail-safe, the empty string removes the value entirely rather than
+    emit a marker that contains raw secret material.
+  - Secret names remain safe durable metadata; marker selection state
+    remains non-serializable, non-logged, non-journaled, and deterministic.
+- **Streaming chunk-boundary invariance (Finding B)**:
+  - The streaming sanitizer undecided state holds raw stream text (at
+    most `longest secret length - 1` characters) rather than post-redaction
+    text.
+  - Redaction decisions are chunk-boundary invariant: for any complete
+    decoded text and any segmentation into read chunks, streaming output
+    is semantically identical to canonical single-pass full-input
+    redaction.
+  - Longest-first overlap decisions and equal-value tiebreak semantics are
+    preserved regardless of read chunk sizes; no raw secret fragment can
+    be manufactured across chunk boundaries.
+- Application-created secret fragments remain sealed; deliberate project
+  transformations remain outside the DLP claim.
+- Regression suite: `tests/unit/test_marker_collision_and_stream_overlap.py`
+  (FirstMate reproductions A1-A5, B1-B8, bounded text / string preview marker
+  safety, and real `ProductExecutor` overlapping secret streaming regression).
