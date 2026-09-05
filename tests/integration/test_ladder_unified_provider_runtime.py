@@ -482,6 +482,10 @@ def test_ladder_with_configured_provider_executes_through_direct_api(
 
 
 def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    # The harness fakes live-config resolution, so establish the
+    # synthetic credential the direct route would otherwise require
+    # (V2-04 repair 21: materialization fails closed without one).
+    pc.set_session_key("commandcode_goat", "ladder-budgets-synthetic-credential-not-real")
     """Direct budget regression: Level 18 and Level 6 via configured source must use 24/24/3600|600/0."""
     from agentic_debugger.application.ollama_cloud_source import (
         INTERACTIVE_LADDER_DIRECTIVE_REPAIRS,

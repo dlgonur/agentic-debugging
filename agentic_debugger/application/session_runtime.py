@@ -995,6 +995,13 @@ class SessionLaunch:
     budgets: Any
     retry_of: Optional[str] = None
     model_binding: Optional[Any] = None
+    #: V2-04 (repair 21): the SESSION credential authority, fixed at this
+    #: authoritative session-start boundary.  SAFE metadata only (a
+    #: CredentialBinding names exactly one credential source authority —
+    #: never a secret, never a lease): the transport materializes from
+    #: exactly this issued source, so durable credential state changed
+    #: after SESSION_STARTED can never silently switch this session.
+    credential_binding: Optional[Any] = None
 
     @property
     def provider_id(self) -> Optional[str]:
@@ -1054,6 +1061,14 @@ class SessionLaunch:
             from agentic_debugger.application.model_gateway import ModelBinding
             if not isinstance(self.model_binding, ModelBinding):
                 raise SessionRuntimeError("model_binding must be a ModelBinding")
+        if self.credential_binding is not None:
+            from agentic_debugger.application.credential_vault import (
+                CredentialBinding,
+            )
+            if not isinstance(self.credential_binding, CredentialBinding):
+                raise SessionRuntimeError(
+                    "credential_binding must be a CredentialBinding"
+                )
 
     def to_mapping(self) -> Dict[str, Any]:
         """Safe launch provenance (never the execution environment itself,
@@ -1073,6 +1088,8 @@ class SessionLaunch:
         }
         if self.model_binding is not None:
             mapping["model_binding"] = self.model_binding.to_mapping()
+        if self.credential_binding is not None:
+            mapping["credential_binding"] = self.credential_binding.to_mapping()
         return mapping
 
     def fingerprint(self) -> str:
@@ -1157,6 +1174,20 @@ def build_local_project_launch(
             ollama_alias=ollama_alias,
         )
 
+    # V2-04 (repair 21): fix the SESSION credential authority ONCE at this
+    # authoritative session-start boundary.  The binding is SAFE metadata
+    # (source identity, never a secret); the transport materializes from
+    # exactly this issued source, so mutable durable credential state
+    # changed after SESSION_STARTED can never silently switch this
+    # session.  Registry-provider routes only; the vault returns None for
+    # unconfigured/disabled/quarantined providers (transport construction
+    # fails closed later) and an explicit ``none`` binding for no-auth.
+    credential_binding = None
+    if provider_id is not None and provider_id != "configured":
+        from agentic_debugger.application.credential_vault import CredentialVault
+
+        credential_binding = CredentialVault.default().session_authority(provider_id)
+
     return SessionLaunch(
         session_id=session_id,
         task_id=task_id,
@@ -1168,6 +1199,7 @@ def build_local_project_launch(
         budgets=budgets if budgets is not None else SessionBudgets(),
         retry_of=retry_of,
         model_binding=model_binding,
+        credential_binding=credential_binding,
     )
 
 

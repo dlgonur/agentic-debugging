@@ -278,4 +278,16 @@ child consuming only the vault-issued private credential channel (the
 as a safe external authority without copying CLI-owned secrets; the UI
 and session runtime routed onto the gateway/vault with zero direct
 credential-core calls; no storage rewrite, no new dependency, no
-scientific-path change.
+scientific-path change.  Candidate 21 (post-review repair) closes the
+remaining authority gaps: product probe/catalog HTTP materializes only
+through the vault lease (explicit credential into the low-level HTTP
+functions); the session credential authority is fixed at SessionLaunch
+via `CredentialVault.session_authority` (the issued private session
+channel outranks durable state after SESSION_STARTED); CredentialBinding
+validation is structural (mandatory provider runtime authority, canonical
+per-kind source refs, derived endpoint binding); session-memory and
+forwarded-session are distinct source-faithful authorities; consumable
+CLI-auth-store bindings pin a safe location fingerprint; direct-route
+transport materialization fails closed instead of degrading to
+"no credential needed"; and configured/enabled remain separate readiness
+facts.

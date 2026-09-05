@@ -1335,3 +1335,67 @@ authority:
   `provider_runtime_identity`) — the configured-source path emits a
   hand-built schema-clean payload, the Local Project source emits the full
   payload.  Both reproduce on the clean V2-04 parent commit `47bc5ae`.
+
+### 22.1 Candidate 21 post-review repair (session-stable credential authority)
+
+Following independent FirstMate source/runtime review, Candidate 21 closes
+seven CredentialVault authority gaps with no direction change:
+
+1. **Product provider HTTP goes through the vault (F1)**:
+   `ModelGateway.probe_reachability` and `ModelGateway.refresh_catalog`
+   materialize the credential as safe binding -> one lease ->
+   `lease.reveal()` at that trusted HTTP boundary and pass it EXPLICITLY
+   into `test_provider_connection(..., credential=...)` /
+   `refresh_provider_catalog(..., credential=...)`.  The low-level
+   functions no longer rediscover a credential on the product path (their
+   internal resolution remains only as the documented legacy low-level
+   compatibility backend; no product/UI/session caller uses it).
+   Missing/quarantined/stale authorities fail safely BEFORE any HTTP
+   attempt; no-auth providers intentionally send no credential.
+2. **Session credential authority fixed at SessionLaunch (F2)**:
+   `build_local_project_launch` fixes the session's credential authority
+   ONCE via `CredentialVault.session_authority(provider_id)` and carries
+   the safe `CredentialBinding` on the `SessionLaunch`
+   (`credential_binding`; safe metadata only — never a lease or value).
+   The ISSUED private session credential channel (the UI-to-worker hop)
+   is the fixed session authority: durable state changed after
+   SESSION_STARTED can never outrank it.  The source is split honestly
+   (F4) and `create_transport(..., credential_binding=...)` materializes
+   from exactly that issued source (Local Project passes the launch's
+   binding).
+3. **Structural binding validation (F3)**: `CredentialBinding` fields are
+   validated by SEMANTIC SHAPE, not credential-shape heuristics (which
+   remain only as a secondary fail-safe): `provider_authority` is
+   MANDATORY (64-hex V2-03 runtime identity), `auth_mode` must be an
+   accepted mode, `source_ref` must be exactly the canonical safe
+   authority identity for the kind (slot name / private channel variable
+   name / accepted provider env-var name / safe normalized auth-store
+   location fingerprint / bounded external authority identity), and
+   `endpoint_bound` is derived from the kind (contradictory input fails).
+   `from_mapping` enforces identical invariants.  `resolve_lease`
+   corroborates authority and auth mode UNCONDITIONALLY — including
+   no-auth and external-CLI bindings, which certify no lease but never
+   certify a different configuration.
+4. **Source-faithful session authorities (F4)**: the conflated
+   ``session_key`` binding kind is split into ``session_memory``
+   (process-local store) and ``forwarded_session`` (the issued private
+   channel).  Explicit binding resolution reads ONLY the named source;
+   a disappeared source raises instead of silently switching.  New
+   bindings are minted per the unchanged provider-core ladder.
+5. **Consumable CLI-auth-store pinning (F5)**: ``cli_auth_store``
+   bindings carry a safe normalized LOCATION fingerprint (path-derived
+   hex, never secret content); a moved store is a different authority and
+   resolution fails closed.  CLI-owned secret bytes are never read for
+   identity purposes or copied.
+6. **Fail-closed transport materialization (F6)**:
+   `transport_materialization` no longer converts auth-required vault
+   failures into "no credential needed": no-auth and external-CLI routes
+   intentionally materialize nothing; a direct route with a
+   missing/stale/unavailable authority RAISES before transport
+   construction (configured_source surfaces it as a typed
+   ``ScenarioInputError``; no adapter child can start).
+7. **Truthful configured vocabulary (F7)**: `CredentialReadiness`
+   separates the facts — `is_configured` means a durable provider
+   configuration exists; a disabled provider is configured but
+   `is_enabled=False` / `credential_ready=False`.  V2-03
+   `ProviderStatusSnapshot` semantics unchanged.

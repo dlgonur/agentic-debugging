@@ -219,3 +219,88 @@ def test_vault_credential_reaches_provider_child_and_not_project_child(
     assert SECRET_A not in journal_text
     assert SECRET_B not in journal_text
     assert channel not in journal_text
+
+def test_session_credential_authority_fixed_at_launch_survives_slot_overwrite(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _hermetic_product_vault: dict,
+) -> None:
+    """F2 (repair 21): the SESSION credential authority is fixed at the
+    authoritative SessionLaunch boundary.
+
+    Reproduces the Candidate-20 product gap end-to-end: with the
+    UI-issued session channel committed to SECRET_A at launch, replacing
+    the durable slot with SECRET_B BEFORE transport creation must NOT
+    switch the running session — the fake endpoint still receives
+    SECRET_A.  A NEW session (no issued channel) resolves SECRET_B.
+    """
+
+    provider_id = "v204_lifecycle_gateway"
+    channel = "AGENTIC_DEBUGGER_PROVIDER_V204_LIFECYCLE_GATEWAY_API_KEY"
+    with FakeProviderServer(lambda request: (200, scripted_chat_completion(DIRECTIVE))) as server:
+        pc.add_provider_config(
+            name="V2-04 Lifecycle Gateway",
+            base_url=server.base_url,
+            api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+            provider_id=provider_id,
+            api_key=SECRET_A,
+        )
+        pc.add_manual_model(provider_id, "v204-lifecycle-x", "V2-04 Lifecycle X")
+
+        # The real worker receives the UI-issued hop in its environment at
+        # spawn; simulate exactly that issued session authority.
+        monkeypatch.setenv(channel, SECRET_A)
+
+        # Authoritative session-start boundary: the launch fixes the
+        # session credential authority (SAFE metadata only).
+        launch = build_local_project_launch(
+            session_id="sess-v204-lifecycle",
+            task_id="local-project-debug",
+            policy="static-baseline",
+            provider_id=provider_id,
+            model_id="v204-lifecycle-x",
+            profile_id="v204-lifecycle-x",
+            launch_snapshot=dict(os.environ),
+            project_spec=ProjectRuntimeEnvironmentSpec(),
+        )
+        authority = launch.credential_binding
+        assert authority is not None
+        assert authority.source_kind == "forwarded_session"
+        assert SECRET_A not in json.dumps(authority.to_mapping())
+
+        # Replace the durable slot BEFORE create_transport / first request.
+        _hermetic_product_vault[provider_id] = SECRET_B
+
+        gateway = ModelGateway()
+        transport, _live_config = gateway.create_transport(
+            launch.model_binding, credential_binding=authority
+        )
+        request = {
+            "protocol": {"version": "1.3", "logical_model_call_index": 0},
+            "context": {"task_id": "t", "state": "UNDERSTAND"},
+        }
+        result = transport.request(request, timeout_seconds=30.0)
+        assert result["directive_content"] == DIRECTIVE
+        # The SAME session still authenticates with the ISSUED SECRET_A.
+        assert server.requests[0]["authorization"] == f"Bearer {SECRET_A}"
+
+        # A NEW session (fresh process semantics: no issued channel)
+        # resolves the new durable state.
+        monkeypatch.delenv(channel, raising=False)
+        new_launch = build_local_project_launch(
+            session_id="sess-v204-lifecycle-2",
+            task_id="local-project-debug",
+            policy="static-baseline",
+            provider_id=provider_id,
+            model_id="v204-lifecycle-x",
+            profile_id="v204-lifecycle-x",
+            launch_snapshot=dict(os.environ),
+            project_spec=ProjectRuntimeEnvironmentSpec(),
+        )
+        assert new_launch.credential_binding is not None
+        assert new_launch.credential_binding.source_kind == "saved"
+        new_env = gateway.transport_environment(
+            new_launch.model_binding,
+            credential_binding=new_launch.credential_binding,
+        )
+        assert new_env == {channel: SECRET_B}

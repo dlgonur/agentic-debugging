@@ -74,7 +74,9 @@ from agentic_debugger.application.provider_connections import (
 )
 from agentic_debugger.application.credential_vault import (
     CredentialReadiness,
+    CredentialUnavailableError,
     CredentialVault,
+    StaleCredentialBindingError,
 )
 
 __all__ = [
@@ -1552,16 +1554,44 @@ class ModelGateway:
         timeout_seconds: float = 10.0,
         engine: Optional[str] = None,
     ) -> Dict[str, Any]:
-        """Perform an explicit reachability probe of the provider endpoint."""
+        """Perform an explicit reachability probe of the provider endpoint.
+
+        V2-04: the probe credential is materialized through the
+        CredentialVault (safe binding -> one lease -> explicit credential
+        at this trusted HTTP boundary).  A missing/quarantined/stale
+        credential authority fails safely BEFORE any HTTP attempt; the
+        low-level probe never rediscovers a credential for this product
+        path.
+        """
         cfg = get_provider_config(provider_id)
         current_identity = provider_runtime_identity(cfg) if cfg is not None else None
         now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+        try:
+            explicit_credential = self._probe_credential(provider_id)
+        except (CredentialUnavailableError, StaleCredentialBindingError) as exc:
+            self._live_probe_results[provider_id] = {
+                "verified": False,
+                "timestamp": now_utc,
+                "error": str(exc),
+                "runtime_identity": current_identity,
+            }
+            return {
+                "ok": False,
+                "connected": False,
+                "reachable": False,
+                "reason": str(exc),
+                "error": str(exc),
+                "verified_at_utc": None,
+                "timestamp": now_utc,
+                "endpoint": None,
+            }
         try:
             result = test_provider_connection(
                 provider_id,
                 model_id=model_id,
                 timeout_seconds=timeout_seconds,
                 engine=engine,
+                credential=explicit_credential,
             )
         except ProviderConnectionError as exc:
             self._live_probe_results[provider_id] = {
@@ -1619,15 +1649,58 @@ class ModelGateway:
                 "endpoint": result.get("endpoint"),
             }
 
+    def _probe_credential(self, provider_id: str) -> Optional[str]:
+        """Vault-issued credential for the trusted provider HTTP boundary.
+
+        The ONLY normal product materialization path for the in-process
+        provider HTTP operations (probe / catalog refresh): safe binding
+        -> one lease -> ``lease.reveal()`` HERE and only here.  Returns
+        ``None`` intentionally for no-auth providers; raises typed vault
+        errors (credential-free) when a required authority is missing,
+        quarantined, stale, or otherwise unavailable.
+        """
+        cfg = get_provider_config(provider_id)
+        if cfg is None or cfg.auth_mode == AUTH_NONE:
+            return None
+        binding = self._vault.safe_binding(provider_id)
+        if binding is None:
+            readiness = self._vault.readiness(provider_id)
+            raise CredentialUnavailableError(
+                f"Credential unavailable for provider {provider_id!r}: "
+                + (readiness.reason or "no usable credential source")
+            )
+        lease = self._vault.resolve_lease(binding)
+        return lease.reveal() if lease is not None else None
+
     def refresh_catalog(self, provider_id: str) -> ProviderCatalogSnapshot:
-        """Explicitly refresh the provider's live model catalog (GET /models)."""
+        """Explicitly refresh the provider's live model catalog (GET /models).
+
+        V2-04: the catalog credential is materialized through the
+        CredentialVault (safe binding -> one lease -> explicit credential
+        at this trusted HTTP boundary).  A missing/quarantined/stale
+        credential authority fails safely BEFORE any HTTP attempt; the
+        low-level refresh never rediscovers a credential for this product
+        path.
+        """
         cfg = get_provider_config(provider_id)
         current_identity = provider_runtime_identity(cfg) if cfg is not None else None
         now_utc = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
         try:
+            explicit_credential = self._probe_credential(provider_id)
+        except (CredentialUnavailableError, StaleCredentialBindingError) as exc:
+            self._live_probe_results[provider_id] = {
+                "verified": False,
+                "timestamp": now_utc,
+                "error": str(exc),
+                "runtime_identity": current_identity,
+            }
+            raise CatalogProbeError(str(exc)) from exc
+        try:
             from agentic_debugger.application import provider_connections as pc
 
-            snapshot = pc.refresh_provider_catalog(provider_id)
+            snapshot = pc.refresh_provider_catalog(
+                provider_id, credential=explicit_credential
+            )
         except ProviderConnectionError as exc:
             self._live_probe_results[provider_id] = {
                 "verified": False,
@@ -2024,19 +2097,28 @@ class ModelGateway:
         return self._vault.session_forwarding_environment(provider_id)
 
     def transport_environment(
-        self, binding: ModelBinding
+        self,
+        binding: ModelBinding,
+        credential_binding: Optional[Any] = None,
     ) -> Optional[Dict[str, str]]:
         """Adapter child credential environment (model channel only, V2-04).
 
-        Resolved through the CredentialVault: a fresh lease is resolved
-        once and materialized under the provider's single private
-        credential channel.  Legacy CLI routes whose credential is owned
-        by the external CLI authority forward nothing (the CLI reads its
-        own auth in place); no-auth providers forward nothing.
+        Resolved through the CredentialVault.  When the session-fixed
+        ``credential_binding`` (from the SessionLaunch) is supplied, the
+        lease is materialized EXACTLY from that issued session authority —
+        durable state changed after SESSION_STARTED can never outrank it.
+        Otherwise a fresh lease is resolved for the binding's route:
+        no-auth and external-CLI-authority routes intentionally forward
+        nothing; a direct route with a missing/stale authority FAILS
+        CLOSED here rather than producing a no-credential environment.
         """
         if not binding.provider_id:
             return None
-        return self._vault.transport_materialization(binding.provider_id)
+        return self._vault.transport_materialization(
+            binding.provider_id,
+            route=binding.route,
+            credential_binding=credential_binding,
+        )
 
     def create_transport(
         self,
@@ -2047,8 +2129,15 @@ class ModelGateway:
         max_model_requests: int = _DEFAULT_MAX_MODEL_REQUESTS,
         max_controller_steps: int = _DEFAULT_MAX_CONTROLLER_STEPS,
         max_response_bytes: int = _MAX_MODEL_RESPONSE_BYTES,
+        credential_binding: Optional[Any] = None,
     ) -> Tuple[Any, Any]:
-        """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair for a binding."""
+        """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair.
+
+        ``credential_binding`` (optional, V2-04): the session-fixed safe
+        credential authority established at the SessionLaunch boundary;
+        when supplied, the transport's credential channel is materialized
+        exactly from that issued session source.
+        """
         from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
         from agentic_debugger.evaluation.live import LiveModelConfig
         from agentic_debugger.application.model_providers import (
@@ -2267,7 +2356,9 @@ class ModelGateway:
                     f"(expected {binding.tool_version!r}, found {live_config.tool_version!r})"
                 )
 
-            env = self.transport_environment(binding)
+            env = self.transport_environment(
+                binding, credential_binding=credential_binding
+            )
             transport = CancellableJsonlCommandTransport(
                 live_config,
                 max_output_bytes=max_response_bytes,

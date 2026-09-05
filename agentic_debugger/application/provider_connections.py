@@ -3446,6 +3446,7 @@ def test_provider_connection(
     model_id: Optional[str] = None,
     timeout_seconds: float = _CATALOG_FETCH_TIMEOUT_SECONDS,
     engine: Optional[str] = None,
+    credential: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Bounded connection/model probe exercising the exact transport contract.
 
@@ -3457,6 +3458,12 @@ def test_provider_connection(
     plain mapping with ``ok``, ``reason``, ``endpoint`` (credential-free),
     ``auth_mode``, ``protocol``, and ``model_count``.  Raises
     :class:`ProviderConnectionError` for configuration failures.
+
+    V2-04: ``credential`` is the EXPLICIT vault-issued credential for the
+    normal ModelGateway product path — when supplied, this function never
+    rediscovers a credential.  The internal resolution fallback remains
+    ONLY as the documented compatibility backend for legacy low-level
+    callers (no product/UI/session caller).
     """
     cfg = get_provider_config(kind)
     if cfg is None or not cfg.enabled:
@@ -3511,7 +3518,13 @@ def test_provider_connection(
                 "protocol": protocol,
                 "model_count": len(cfg.models),
             }
-    if cfg.auth_mode != AUTH_NONE and resolve_runtime_credential(kind) is None:
+    if cfg.auth_mode == AUTH_NONE:
+        effective_credential = None
+    else:
+        effective_credential = (
+            credential if credential is not None else resolve_runtime_credential(kind)
+        )
+    if cfg.auth_mode != AUTH_NONE and effective_credential is None:
         return {
             "ok": False,
             "reason": "missing credential — edit provider to add an API key",
@@ -3555,7 +3568,7 @@ def test_provider_connection(
     # Catalog-enabled: one live probe, no persistence (last known-good
     # catalog is preserved on failure by construction).
     contract = _contract_for_config(cfg)
-    resolved = resolve_runtime_credential(kind) if cfg.auth_mode != AUTH_NONE else None
+    resolved = effective_credential if cfg.auth_mode != AUTH_NONE else None
     base = cfg.base_url.rstrip("/")
     catalog_path = contract.catalog_path if contract is not None else "/models"
     tls_blocked = (

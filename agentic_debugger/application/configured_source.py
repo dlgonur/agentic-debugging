@@ -331,9 +331,24 @@ def run_configured_session(
         # evidence); legacy CLI routes read the operator auth store in
         # place and need no override.  V2-04: resolved through the
         # CredentialVault authority, never by touching stores directly.
-        from agentic_debugger.application.credential_vault import CredentialVault
+        from agentic_debugger.application.credential_vault import (
+            CredentialVaultError,
+            CredentialVault,
+        )
 
-        _env = CredentialVault.default().transport_materialization(provider)
+        try:
+            _env = CredentialVault.default().transport_materialization(
+                provider,
+                route=str(provenance.get("route") or "direct_api"),
+            )
+        except CredentialVaultError as exc:
+            # V2-04 (repair 21): an auth-required direct route whose
+            # credential authority became unavailable between resolution
+            # and transport establishment fails closed as a typed
+            # session-start error (credential-free text).
+            raise ScenarioInputError(
+                f"provider credential is unavailable: {exc}"
+            ) from exc
         environment = dict(_env) if _env is not None else None
         ctx.emitter.emit(
             SessionEventKind.MODEL_CONFIGURED,
