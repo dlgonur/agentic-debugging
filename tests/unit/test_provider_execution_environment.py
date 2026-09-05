@@ -133,7 +133,15 @@ def test_custom_auth_store_direct_route_keeps_credential_authority(
     # restore custom home for the UI-hop read
     monkeypatch.setenv("OPENCODE_CONFIG_DIR", str(custom_home))
     hop = pc.provider_session_credential_environment("oc_custom_auth")
-    assert hop == {"AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": SYNTH_CLI_KEY}
+    assert hop == {
+        "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": SYNTH_CLI_KEY,
+        pc.provider_session_credential_authority_variable(
+            "oc_custom_auth"
+        ): __import__(
+            "agentic_debugger.application.model_gateway",
+            fromlist=["provider_runtime_identity"],
+        ).provider_runtime_identity(pc.get_provider_config("oc_custom_auth")),
+    }
 
 
 def test_custom_auth_store_credential_bytes_absent_from_argv_evidence(

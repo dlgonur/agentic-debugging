@@ -124,6 +124,7 @@ __all__ = [
     "provider_quarantine_path",
     "provider_endpoint_binding_valid",
     "provider_session_credential_environment",
+    "provider_session_credential_authority_variable",
     "provider_session_credential_variable",
     "provider_tls_signature_blocked",
     "provider_transport_credential_environment",
@@ -2325,6 +2326,22 @@ def provider_session_credential_variable(kind: str) -> str:
     return _session_env_var_for(kind)
 
 
+def provider_session_credential_authority_variable(kind: str) -> str:
+    """The private ISSUANCE-AUTHORITY companion variable for one provider.
+
+    Repair 22 (F5): whenever the trusted UI→worker hop forwards a
+    credential VALUE, it also forwards the SAFE provider runtime identity
+    under which that value was ISSUED in this companion variable (hex
+    identity only — never secret material, never secret-derived).  The
+    worker session boundary may pin the forwarded secret ONLY while this
+    issuance authority still equals the current provider configuration;
+    otherwise the channel is STALE and fails closed.  The name lives in
+    the same Agentic Debugger control namespace the V2-01 execution
+    authority structurally excludes from project/PDB/verifier children.
+    """
+    return _session_env_var_for(kind) + "_AUTHORITY"
+
+
 def provider_endpoint_binding_valid(kind: str) -> bool:
     """Whether ambient canonical credentials remain bound to this endpoint.
 
@@ -2509,6 +2526,7 @@ def provider_authority_environment_names() -> Tuple[str, ...]:
         if contract.env_var:
             names.add(contract.env_var)
         names.add(contract.session_env_var)
+        names.add(contract.session_env_var + "_AUTHORITY")
     return tuple(sorted(names))
 
 
@@ -2532,12 +2550,23 @@ def provider_session_credential_environment(
     cfg = get_provider_config(kind)
     if cfg is None or not cfg.enabled:
         return None
+    # Repair 22 (F5): every forwarded credential VALUE is accompanied by
+    # the SAFE provider runtime identity under which it was issued, so
+    # the worker can never stamp an old forwarded secret with a newer
+    # configuration authority (no secret-derived hashes; hex identity of
+    # safe configuration facts only).
+    from agentic_debugger.application.model_gateway import provider_runtime_identity
+
+    issuance_authority = provider_runtime_identity(cfg)
+    session_var = _session_env_var_for(kind)
+    authority_var = provider_session_credential_authority_variable(kind)
     secret = load_secure_credential(kind)
     if not secret or not _credential_is_usable(secret):
         secret = peek_session_key(kind)
     if secret and _credential_is_usable(secret):
-        session_var = _session_env_var_for(kind)
-        return {session_var: secret.strip()}
+        if issuance_authority is None:
+            return None
+        return {session_var: secret.strip(), authority_var: issuance_authority}
     contract = _contract_for_config(cfg)
     if contract is not None and contract.auth_store_consumable:
         if not _endpoint_binding_valid(kind, cfg):
@@ -2547,9 +2576,10 @@ def provider_session_credential_environment(
         except Exception:
             cli_key = None
         if _credential_is_usable(cli_key):
-            session_var = _session_env_var_for(kind)
+            if issuance_authority is None:
+                return None
             assert isinstance(cli_key, str)
-            return {session_var: cli_key.strip()}
+            return {session_var: cli_key.strip(), authority_var: issuance_authority}
     return None
 
 

@@ -77,6 +77,7 @@ __all__ = [
     "CredentialBinding",
     "CredentialLease",
     "CredentialReadiness",
+    "CredentialRouteError",
     "CredentialUnavailableError",
     "CredentialVault",
     "CredentialVaultError",
@@ -161,6 +162,30 @@ class StaleCredentialBindingError(CredentialVaultError):
     """A binding no longer certifies the current provider runtime authority."""
 
 
+class CredentialRouteError(CredentialVaultError):
+    """A credential authority is incompatible with the model transport route.
+
+    The ROUTE decides whether Agentic Debugger may materialize a raw
+    provider credential at all: legacy CLI routes use the external CLI
+    credential authority (never an Agentic-Debugger-held API key), and
+    profile/ladder/offline routes carry no registry-provider credential.
+    A supplied binding that contradicts the route fails closed BEFORE any
+    child construction — it is never silently leaked or reinterpreted.
+    """
+
+
+#: Source kinds for which an Agentic-Debugger-held secret lease may exist.
+_MATERIALABLE_SOURCE_KINDS = frozenset(
+    {
+        CREDENTIAL_SOURCE_SAVED,
+        CREDENTIAL_SOURCE_SESSION_MEMORY,
+        CREDENTIAL_SOURCE_FORWARDED_SESSION,
+        CREDENTIAL_SOURCE_ENVIRONMENT,
+        CREDENTIAL_SOURCE_CLI_AUTH_STORE,
+    }
+)
+
+
 def _scrub(field: str, value: Any) -> None:
     """Fail closed when a credential-shaped value reaches a safe field."""
     if isinstance(value, str) and contains_credential_shape(value):
@@ -220,12 +245,36 @@ class CredentialBinding:
         its source kind requires (from_mapping enforces the identical
         rules through this constructor).  Credential-shape detection remains
         only as a secondary fail-safe.
+
+        ERROR SAFETY (repair 22): rejection messages are constant text
+        naming the FIELD and the expectation — untrusted rejected field
+        values (source_ref, source_kind, auth_mode, provider_authority, an
+        unvalidated provider_id) are NEVER echoed, because a
+        malformed/from_mapping caller may supply arbitrary raw strings.
         """
         if not self.provider_id or not self.provider_id.strip():
-            raise CredentialVaultError("CredentialBinding requires a provider identity")
+            raise CredentialVaultError(
+                "CredentialBinding requires a non-empty provider identity"
+            )
         if self.source_kind not in _BINDING_SOURCE_KINDS:
             raise CredentialVaultError(
-                f"unknown credential source kind: {self.source_kind!r}"
+                "CredentialBinding source_kind is not an accepted credential "
+                "source kind"
+            )
+        # Auth-mode coherence is structural: a no-auth binding carries no
+        # credential source, and a credential-requiring auth mode can never
+        # carry a no-auth source.
+        if self.auth_mode not in _pc.AUTH_MODES:
+            raise CredentialVaultError(
+                "CredentialBinding auth_mode is not an accepted authentication mode"
+            )
+        if self.auth_mode == _pc.AUTH_NONE and self.source_kind != CREDENTIAL_SOURCE_NONE:
+            raise CredentialVaultError(
+                "CredentialBinding with no-auth mode must use the 'none' source kind"
+            )
+        if self.source_kind == CREDENTIAL_SOURCE_NONE and self.auth_mode != _pc.AUTH_NONE:
+            raise CredentialVaultError(
+                "CredentialBinding 'none' source kind requires the no-auth mode"
             )
         # provider_runtime_authority is MANDATORY: every binding certifies
         # one exact V2-03 provider runtime identity, and resolve_lease
@@ -235,29 +284,22 @@ class CredentialBinding:
             or _AUTHORITY_RE.fullmatch(self.provider_authority) is None
         ):
             raise CredentialVaultError(
-                "CredentialBinding requires a valid provider_runtime_authority "
-                "(64-hex provider runtime identity)"
-            )
-        if self.auth_mode not in _pc.AUTH_MODES:
-            raise CredentialVaultError(
-                f"CredentialBinding auth_mode must be one of {_pc.AUTH_MODES!r}, "
-                f"got {self.auth_mode!r}"
+                "CredentialBinding provider_authority is missing or malformed "
+                "(64-hex provider runtime identity required)"
             )
         # endpoint_bound is structural, not metadata: contradictory input
         # fails rather than silently disagreeing with the source semantics.
         structurally_bound = self.source_kind in _ENDPOINT_BOUND_SOURCE_KINDS
         if bool(self.endpoint_bound) is not structurally_bound:
             raise CredentialVaultError(
-                f"endpoint_bound={self.endpoint_bound!r} contradicts source kind "
-                f"{self.source_kind!r}"
+                "CredentialBinding endpoint_bound contradicts its source kind"
             )
         # source_ref must be exactly the canonical safe identity for the kind.
         expected_ref = _canonical_source_ref(self.provider_id, self.source_kind)
         if self.source_ref != expected_ref:
             raise CredentialVaultError(
-                f"source_ref {self.source_ref!r} is not the canonical safe "
-                f"{self.source_kind!r} credential authority identity for provider "
-                f"{self.provider_id!r}"
+                "CredentialBinding source_ref is not the canonical safe "
+                "credential authority identity for this provider and source kind"
             )
         for field_name in ("provider_id", "source_kind", "source_ref", "auth_mode", "provider_authority"):
             _scrub(field_name, getattr(self, field_name))
@@ -469,6 +511,13 @@ class CredentialVault:
 
     _default_instance: Optional["CredentialVault"] = None
 
+    def __init__(self) -> None:
+        # Process-private launch-lease registry (repair 22, F6): opaque
+        # random tickets -> (lease, binding) resolved at the authoritative
+        # session-start boundary.  Never serialized, never journaled;
+        # entries are released on redemption.
+        self._session_leases: Dict[str, tuple] = {}
+
     @classmethod
     def default(cls) -> "CredentialVault":
         if cls._default_instance is None:
@@ -626,17 +675,33 @@ class CredentialVault:
             # The provider-core ladder entry spans two concrete
             # authorities; mint the binding for the ONE that actually won
             # (ladder priority: process-local store before the private
-            # forwarded hop channel).
+            # forwarded hop channel).  A forwarded channel WITHOUT valid
+            # issuance provenance (repair 22, F5) is untrusted: the
+            # binding fails closed instead of stamping a foreign secret
+            # with the current authority.
             from agentic_debugger.application.provider_connections import (
                 _credential_is_usable,
                 peek_session_key,
+                provider_session_credential_authority_variable,
                 provider_session_credential_variable,
             )
 
             if _credential_is_usable(peek_session_key(provider_id)):
                 source_kind = CREDENTIAL_SOURCE_SESSION_MEMORY
             else:
-                source_kind = CREDENTIAL_SOURCE_FORWARDED_SESSION
+                import os
+
+                issued_authority = os.environ.get(
+                    provider_session_credential_authority_variable(provider_id)
+                )
+                if (
+                    isinstance(issued_authority, str)
+                    and _AUTHORITY_RE.fullmatch(issued_authority) is not None
+                    and issued_authority == _provider_authority(cfg)
+                ):
+                    source_kind = CREDENTIAL_SOURCE_FORWARDED_SESSION
+                else:
+                    return None
         return CredentialBinding(
             provider_id=provider_id,
             source_kind=source_kind,
@@ -678,38 +743,80 @@ class CredentialVault:
             endpoint_bound=True,
         )
 
-    def session_authority(self, provider_id: str) -> Optional[CredentialBinding]:
+    def session_authority(
+        self, provider_id: str, *, route: Optional[str] = None
+    ) -> Optional[CredentialBinding]:
         """The SESSION credential authority, fixed at the session-start boundary.
 
         Called ONCE by the authoritative launch boundary
-        (``build_local_project_launch``) in the worker.  The ISSUED private
-        session credential channel — the one variable the UI already
-        materialized into this process's environment at spawn — outranks
-        mutable durable state for the lifetime of the session: a durable
-        slot overwritten after SESSION_STARTED can never silently become
-        this session's credential.  When no channel was issued, the current
-        ladder binding is minted (ambient environment sources keep their
-        once-at-lease-resolution snapshot semantics).
+        (``build_local_project_launch``) with the resolved ModelBinding
+        ROUTE (repair 22, F2): the route decides whether Agentic Debugger
+        may hold a raw provider credential for this session at all.
+
+        - legacy CLI route: only the safe ``external_cli`` authority
+          (safe provenance; never a materializable API credential).
+        - configured-profile / qualified-ladder / offline routes: no
+          registry-provider credential authority (``None``).
+        - direct API route: the ISSUED private session credential channel
+          — the variable the UI materialized into this process's
+          environment at spawn together with its safe ISSUANCE AUTHORITY
+          metadata (repair 22, F5) — outranks mutable durable state for
+          the lifetime of the session.  A channel issued under a
+          different provider runtime authority than the CURRENT one is
+          STALE and raises instead of being stamped with the new
+          authority; a channel without valid issuance provenance fails
+          closed.  When no channel was issued, the current ladder binding
+          is minted (the launch resolves and retains the actual lease, so
+          the pinned SECRET — not just the source metadata — is fixed at
+          this boundary).
 
         Returns ``None`` for unconfigured/disabled/quarantined providers
-        and an explicit ``none`` binding for no-auth providers.  The result
-        is SAFE metadata only and may be carried on the SessionLaunch.
+        and an explicit ``none`` binding for no-auth providers.  The
+        result is SAFE metadata only and may be carried on the
+        SessionLaunch.
         """
         from agentic_debugger.application.provider_connections import (
             _credential_is_usable,
+            provider_session_credential_authority_variable,
             provider_session_credential_variable,
         )
 
         cfg = _pc.get_provider_config(provider_id)
         if cfg is None or not cfg.enabled or _pc.is_provider_quarantined(provider_id):
             return None
+        if route in ("configured_profile", "qualified_ladder", "offline"):
+            return None
+        if route == "legacy_cli":
+            return self.external_cli_authority(provider_id)
         if cfg.auth_mode == _pc.AUTH_NONE:
             return self.safe_binding(provider_id)
         channel = provider_session_credential_variable(provider_id)
+        authority_var = provider_session_credential_authority_variable(provider_id)
         import os
 
         issued = os.environ.get(channel)
         if _credential_is_usable(issued):
+            issued_authority = os.environ.get(authority_var)
+            current_authority = _provider_authority(cfg)
+            if (
+                not isinstance(issued_authority, str)
+                or _AUTHORITY_RE.fullmatch(issued_authority) is None
+            ):
+                raise CredentialUnavailableError(
+                    f"Credential channel for provider {provider_id!r} carries no "
+                    "valid safe issuance authority; the session credential cannot "
+                    "be pinned"
+                )
+            if issued_authority != current_authority:
+                # F5 TOCTOU gate: the secret was ISSUED under authority A
+                # but the provider configuration now says B.  The old
+                # secret is never stamped with (or leaked to) the new
+                # authority.
+                raise StaleCredentialBindingError(
+                    f"Credential channel for provider {provider_id!r} was issued "
+                    "under a different provider runtime configuration; re-enter "
+                    "the credential for the current authority"
+                )
             return CredentialBinding(
                 provider_id=provider_id,
                 source_kind=CREDENTIAL_SOURCE_FORWARDED_SESSION,
@@ -717,7 +824,7 @@ class CredentialVault:
                     provider_id, CREDENTIAL_SOURCE_FORWARDED_SESSION
                 ),
                 auth_mode=cfg.auth_mode,
-                provider_authority=_provider_authority(cfg),
+                provider_authority=issued_authority,
                 endpoint_bound=False,
             )
         return self.safe_binding(provider_id)
@@ -769,6 +876,32 @@ class CredentialVault:
 
         provider_id = binding.provider_id
 
+        # OPERATIONAL-STATE GATE (repair 22, F1): creating a NEW lease from
+        # ANY binding — explicit or provider-id — fails credential-free
+        # BEFORE any secret accessor is invoked when the CURRENT provider
+        # is missing, disabled, or quarantined.  The provider runtime
+        # identity does not encode these operational facts, so authority
+        # corroboration alone cannot substitute for this gate.
+        # Already-resolved leases are inert objects and remain
+        # session-stable; only NEW materialization is gated here.
+        cfg = _pc.get_provider_config(provider_id)
+        if cfg is None:
+            raise CredentialUnavailableError(
+                f"Credential unavailable for provider {provider_id!r}: "
+                "the provider is not configured"
+            )
+        if _pc.is_provider_quarantined(provider_id):
+            raise CredentialUnavailableError(
+                f"Credential unavailable for provider {provider_id!r}: "
+                "credential state requires recovery. Edit provider and save "
+                "an API key again."
+            )
+        if not cfg.enabled:
+            raise CredentialUnavailableError(
+                f"Credential unavailable for provider {provider_id!r}: "
+                "the provider is disabled"
+            )
+
         # Provider runtime authority corroboration (V2-03 identity rules)
         # is UNCONDITIONAL — including for no-auth and external-CLI
         # bindings, which certify no lease but must never certify a
@@ -777,15 +910,14 @@ class CredentialVault:
         # comparison is exact on both sides: a credential bound to
         # authority A is never materialized for authority B — even when
         # provider id, auth mode, and slot are unchanged.
-        cfg = _pc.get_provider_config(provider_id)
-        current_authority = _provider_authority(cfg) if cfg is not None else None
+        current_authority = _provider_authority(cfg)
         if current_authority != binding.provider_authority:
             raise StaleCredentialBindingError(
                 f"Credential binding is stale for provider {provider_id!r}: the "
                 "provider runtime configuration changed; re-enter the credential "
                 "for the current endpoint"
             )
-        if cfg is not None and binding.auth_mode != cfg.auth_mode:
+        if binding.auth_mode != cfg.auth_mode:
             raise StaleCredentialBindingError(
                 f"Credential binding is stale for provider {provider_id!r}: the "
                 "authentication mode changed; re-enter the credential for the "
@@ -801,6 +933,38 @@ class CredentialVault:
                 "this route"
             )
 
+        # SOURCE AUTHORIZATION (repair 22, F4): a structurally
+        # well-formed binding is not sufficient — the CURRENT provider
+        # contract must actually authorize the named source kind, and the
+        # accepted canonical endpoint-binding policy must still hold,
+        # BEFORE any secret read.
+        if binding.source_kind in (
+            CREDENTIAL_SOURCE_ENVIRONMENT,
+            CREDENTIAL_SOURCE_CLI_AUTH_STORE,
+        ):
+            from agentic_debugger.application.provider_connections import (
+                _contract_for_config,
+                provider_endpoint_binding_valid,
+            )
+
+            contract = _contract_for_config(cfg)
+            if binding.source_kind == CREDENTIAL_SOURCE_ENVIRONMENT:
+                contract_authorized = bool(
+                    contract is not None
+                    and contract.env_var
+                    and binding.source_ref == contract.env_var
+                )
+            else:
+                contract_authorized = bool(
+                    contract is not None and contract.auth_store_consumable
+                )
+            if not contract_authorized or not provider_endpoint_binding_valid(provider_id):
+                raise CredentialUnavailableError(
+                    f"Credential unavailable for provider {provider_id!r}: the "
+                    "current provider contract does not authorize this credential "
+                    "source for the current endpoint"
+                )
+
         value = _resolve_bound_value(provider_id, binding)
         if value is None:
             readiness = self.readiness(provider_id)
@@ -815,44 +979,131 @@ class CredentialVault:
             )
         return CredentialLease(provider_id, binding.source_kind, value)
 
+    def retain_lease(self, lease: "CredentialLease", binding: CredentialBinding) -> str:
+        """Retain one launch-resolved lease under an OPAQUE session ticket.
+
+        Used by the authoritative session-start boundary to pin the actual
+        SECRET AUTHORITY once (repair 22, F6): the lease is resolved from
+        the binding at launch and held ONLY in this process's private
+        memory under a random opaque handle.  The ticket is a safe
+        process-local capability — never a secret, never serialized, never
+        journaled — and is released when redeemed.
+        """
+        import uuid
+
+        if not isinstance(lease, CredentialLease):
+            raise CredentialVaultError("only a CredentialLease can be retained")
+        handle = uuid.uuid4().hex
+        self._session_leases[handle] = (lease, binding)
+        return handle
+
+    def redeem_lease(
+        self,
+        ticket: str,
+        expected_binding: Optional[CredentialBinding] = None,
+    ) -> "CredentialLease":
+        """Redeem (and release) the launch-fixed lease for a session ticket.
+
+        The redeemed lease is EXACTLY the one resolved at the session-start
+        boundary: durable slot or environment changes since launch cannot
+        alter it.  A ticket redeems exactly once, and only for the binding
+        it was retained with.
+        """
+        entry = self._session_leases.pop(str(ticket), None)
+        if entry is None:
+            raise CredentialUnavailableError(
+                "the session credential ticket is not redeemable (unknown or "
+                "already redeemed)"
+            )
+        lease, binding = entry
+        if expected_binding is not None and binding.fingerprint() != expected_binding.fingerprint():
+            raise StaleCredentialBindingError(
+                "the session credential ticket does not match the session's "
+                "credential binding"
+            )
+        return lease
+
     def transport_materialization(
         self,
         provider_or_binding: Any,
         *,
         route: Optional[str] = None,
         credential_binding: Optional[CredentialBinding] = None,
+        credential_ticket: Optional[str] = None,
     ) -> Optional[Dict[str, str]]:
         """Trusted model-channel child environment for ONE transport.
 
-        Called when the session transport is established; the lease is
-        resolved once here and the returned mapping is held fixed by the
-        transport for the session.  Semantics are explicit — exception
-        swallowing is never used to infer "no credential needed":
+        Called when the session transport is established.  The ROUTE is
+        examined FIRST (repair 22, F2): the model route decides whether
+        Agentic Debugger may materialize a raw provider credential at all.
 
-        - ``credential_binding`` supplied (the session-fixed authority
-          from the SessionLaunch): resolved EXACTLY as that binding;
-          missing/stale sources FAIL CLOSED.
-        - no-auth provider: ``None`` intentionally (no credential required).
-        - legacy CLI route whose credential is owned by the external CLI
-          authority: ``None`` intentionally (the CLI reads its own auth in
-          place).
+        - legacy CLI route: ``None`` — the route uses the external CLI
+          credential authority; a supplied binding that is not the
+          external/none authority raises :class:`CredentialRouteError`
+          (a direct credential binding is never leaked or reinterpreted
+          into this child).
+        - configured-profile / qualified-ladder / offline routes: a
+          supplied registry credential binding raises
+          :class:`CredentialRouteError`; without one, the accepted route
+          boundaries apply.
+        - direct API route with an ``external_cli`` binding: raises
+          :class:`CredentialRouteError` (an external authority is not a
+          direct-API secret lease).
+        - a retained session ticket (F6): the launch-fixed lease is
+          redeemed EXACTLY once and materialized — durable state changed
+          after launch cannot alter it.
+        - a supplied binding without a ticket: resolved EXACTLY as that
+          binding; missing/stale sources FAIL CLOSED.
+        - no-auth provider: ``None`` intentionally (no credential needed).
         - direct route requiring auth with a missing/stale/unavailable
           authority: RAISES — transport construction fails closed before
           any adapter child can start.
         """
+        if route in ("configured_profile", "qualified_ladder", "offline"):
+            if credential_binding is not None or credential_ticket is not None:
+                raise CredentialRouteError(
+                    "the session route does not accept a registry-provider "
+                    "credential authority"
+                )
+            return None
+        if route == "legacy_cli":
+            if credential_binding is not None and credential_binding.source_kind not in (
+                CREDENTIAL_SOURCE_EXTERNAL_CLI,
+                CREDENTIAL_SOURCE_NONE,
+            ):
+                raise CredentialRouteError(
+                    "the legacy CLI route uses the external CLI credential "
+                    "authority; a raw API credential binding is not authorized "
+                    "for this route"
+                )
+            return None
+
+        if credential_binding is not None and credential_binding.source_kind == (
+            CREDENTIAL_SOURCE_EXTERNAL_CLI
+        ):
+            raise CredentialRouteError(
+                "an external CLI credential authority does not authorize a "
+                "direct-API credential lease"
+            )
+
+        if credential_ticket is not None:
+            lease = self.redeem_lease(credential_ticket, expected_binding=credential_binding)
+            return lease.materialize_environment()
+
         if credential_binding is not None:
             lease = self.resolve_lease(credential_binding)
             return lease.materialize_environment() if lease is not None else None
 
         provider_id = str(provider_or_binding)
+        if route == "legacy_cli":
+            # F2: the external CLI authority owns this route's credential;
+            # an existing direct credential is NEVER materialized into the
+            # external CLI child merely because the source also exists.
+            return None
         readiness = self.readiness(provider_id)
         if readiness.source_kind == CREDENTIAL_SOURCE_NONE:
             return None
         if not readiness.credential_ready:
-            if route == "legacy_cli":
-                # The legacy CLI route keeps its external credential
-                # authority; the CLI reads its own auth in place.
-                return None
             raise CredentialUnavailableError(
                 f"Credential unavailable for provider {provider_id!r}: "
                 + (readiness.reason or "no usable credential source")

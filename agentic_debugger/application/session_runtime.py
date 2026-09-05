@@ -1002,6 +1002,12 @@ class SessionLaunch:
     #: exactly this issued source, so durable credential state changed
     #: after SESSION_STARTED can never silently switch this session.
     credential_binding: Optional[Any] = None
+    #: V2-04 (repair 22, F6): the OPAQUE process-local ticket redeeming the
+    #: lease that was resolved and pinned at THIS boundary.  This is a
+    #: safe in-process capability (random hex, no secret material); it is
+    #: deliberately EXCLUDED from to_mapping()/fingerprint() so it can
+    #: never enter durable provenance, and it is never serialized.
+    credential_ticket: Optional[str] = None
 
     @property
     def provider_id(self) -> Optional[str]:
@@ -1069,6 +1075,28 @@ class SessionLaunch:
                 raise SessionRuntimeError(
                     "credential_binding must be a CredentialBinding"
                 )
+        if self.credential_ticket is not None:
+            import re as _re
+
+            if (
+                not isinstance(self.credential_ticket, str)
+                or _re.fullmatch(r"[0-9a-f]{32}", self.credential_ticket) is None
+            ):
+                raise SessionRuntimeError(
+                    "credential_ticket must be a 32-hex opaque session ticket"
+                )
+        # Repair 22 (F3): the credential authority must be COHERENT with
+        # the model binding — same provider, same runtime authority, same
+        # auth mode, route-compatible source kind — at construction time,
+        # not only at the gateway boundary.
+        if self.credential_binding is not None and self.model_binding is not None:
+            from agentic_debugger.application.model_gateway import (
+                assert_credential_binding_coherent,
+            )
+
+            assert_credential_binding_coherent(
+                self.model_binding, self.credential_binding
+            )
 
     def to_mapping(self) -> Dict[str, Any]:
         """Safe launch provenance (never the execution environment itself,
@@ -1090,6 +1118,8 @@ class SessionLaunch:
             mapping["model_binding"] = self.model_binding.to_mapping()
         if self.credential_binding is not None:
             mapping["credential_binding"] = self.credential_binding.to_mapping()
+        # credential_ticket is deliberately EXCLUDED: it is a process-local
+        # redemption capability, never durable provenance.
         return mapping
 
     def fingerprint(self) -> str:
@@ -1174,19 +1204,42 @@ def build_local_project_launch(
             ollama_alias=ollama_alias,
         )
 
-    # V2-04 (repair 21): fix the SESSION credential authority ONCE at this
-    # authoritative session-start boundary.  The binding is SAFE metadata
-    # (source identity, never a secret); the transport materializes from
-    # exactly this issued source, so mutable durable credential state
-    # changed after SESSION_STARTED can never silently switch this
-    # session.  Registry-provider routes only; the vault returns None for
-    # unconfigured/disabled/quarantined providers (transport construction
-    # fails closed later) and an explicit ``none`` binding for no-auth.
+    # V2-04 (repairs 21+22): fix the SESSION credential authority ONCE at
+    # this authoritative session-start boundary, ROUTE-AWARE: the resolved
+    # ModelBinding route decides whether a registry-provider credential
+    # authority exists at all (legacy CLI routes carry only the safe
+    # external_cli authority; profile/ladder/offline routes carry none).
+    # For materializable authorities the vault resolves the lease ONCE
+    # here and retains it under an opaque process-local ticket, so the
+    # pinned SECRET — not just the source metadata — is fixed at this
+    # boundary; durable slot/environment changes after this point can
+    # never switch the session.  The binding is SAFE metadata and the
+    # ticket a safe in-process capability: neither carries secret
+    # material, and neither is durable.
     credential_binding = None
-    if provider_id is not None and provider_id != "configured":
-        from agentic_debugger.application.credential_vault import CredentialVault
+    credential_ticket = None
+    if (
+        provider_id is not None
+        and provider_id != "configured"
+        and model_binding is not None
+        and model_binding.route in ("direct_api", "legacy_cli")
+    ):
+        from agentic_debugger.application.credential_vault import (
+            _MATERIALABLE_SOURCE_KINDS,
+            CredentialVault,
+        )
 
-        credential_binding = CredentialVault.default().session_authority(provider_id)
+        vault = CredentialVault.default()
+        credential_binding = vault.session_authority(
+            provider_id, route=model_binding.route
+        )
+        if (
+            credential_binding is not None
+            and credential_binding.source_kind in _MATERIALABLE_SOURCE_KINDS
+        ):
+            lease = vault.resolve_lease(credential_binding)
+            if lease is not None:
+                credential_ticket = vault.retain_lease(lease, credential_binding)
 
     return SessionLaunch(
         session_id=session_id,
@@ -1200,6 +1253,7 @@ def build_local_project_launch(
         retry_of=retry_of,
         model_binding=model_binding,
         credential_binding=credential_binding,
+        credential_ticket=credential_ticket,
     )
 
 

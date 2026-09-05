@@ -49,7 +49,10 @@ from agentic_debugger.application.events import (  # noqa: E402
 )
 from agentic_debugger.application.journal import SessionEventJournal  # noqa: E402
 from agentic_debugger.application.emitter import SessionEventEmitter  # noqa: E402
-from agentic_debugger.application.model_gateway import ModelGateway  # noqa: E402
+from agentic_debugger.application.model_gateway import (  # noqa: E402
+    ModelGateway,
+    provider_runtime_identity,
+)
 from agentic_debugger.application.session import SourceKind  # noqa: E402
 from agentic_debugger.application.execution_environment import (  # noqa: E402
     ExecutionEnvironment,
@@ -165,14 +168,21 @@ def test_vault_credential_reaches_provider_child_and_not_project_child(
     #    variable (the UI→worker hop), yet the project role derivation
     #    structurally excludes every provider credential channel.
     hop = CredentialVault.default().session_forwarding_environment(provider_id)
-    assert hop == {channel: SECRET_B}
+    assert hop == {
+        channel: SECRET_B,
+        pc.provider_session_credential_authority_variable(
+            provider_id
+        ): provider_runtime_identity(pc.get_provider_config(provider_id)),
+    }
     snapshot = dict(os.environ)
     snapshot.update(hop)
     environment = ExecutionEnvironment.for_local_project(
         snapshot, ProjectRuntimeEnvironmentSpec()
     )
+    authority_var = pc.provider_session_credential_authority_variable(provider_id)
     for role in (ExecutionRole.PROJECT_COMMAND, ExecutionRole.PRODUCT_PDB, ExecutionRole.VERIFIER):
         assert channel not in environment.role_environment(role)
+        assert authority_var not in environment.role_environment(role)
 
     # 7. The durable journal never contains either credential value.
     journal_path = tmp_path / "session" / "session.events.jsonl"
@@ -247,8 +257,16 @@ def test_session_credential_authority_fixed_at_launch_survives_slot_overwrite(
         )
         pc.add_manual_model(provider_id, "v204-lifecycle-x", "V2-04 Lifecycle X")
 
-        # The real worker receives the UI-issued hop in its environment at
-        # spawn; simulate exactly that issued session authority.
+        # The real worker receives the UI-issued hop (channel VALUE plus
+        # the safe issuance-authority companion) at spawn; simulate it.
+        from agentic_debugger.application.model_gateway import (
+            provider_runtime_identity,
+        )
+
+        monkeypatch.setenv(
+            pc.provider_session_credential_authority_variable(provider_id),
+            provider_runtime_identity(pc.get_provider_config(provider_id)),
+        )
         monkeypatch.setenv(channel, SECRET_A)
 
         # Authoritative session-start boundary: the launch fixes the
@@ -304,3 +322,84 @@ def test_session_credential_authority_fixed_at_launch_survives_slot_overwrite(
             credential_binding=new_launch.credential_binding,
         )
         assert new_env == {channel: SECRET_B}
+
+def test_legacy_route_launch_materializes_no_direct_api_secret(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    _hermetic_product_vault: dict,
+) -> None:
+    """F2 (repair 22): a LEGACY_CLI session never carries or materializes
+    an Agentic-Debugger-held API credential — the external CLI credential
+    authority owns that route — and an incompatible direct binding
+    supplied to the legacy transport boundary fails closed."""
+
+    from agentic_debugger.application.model_gateway import ModelBinding
+
+    provider_id = "v204_legacy_gateway"
+    pc.add_provider_config(
+        name="V2-04 Legacy Gateway",
+        base_url="https://api.commandcode.ai/provider/v1",
+        api_format=pc.PROTOCOL_CHAT_COMPLETIONS,
+        provider_id=provider_id,
+        api_key=SECRET_A,  # a direct credential ALSO exists
+        transport_profile=pc.TRANSPORT_COMMANDCODE_GOAT,
+    )
+    identity = provider_runtime_identity(pc.get_provider_config(provider_id))
+    legacy_model_binding = ModelBinding(
+        provider_id=provider_id,
+        model_id="deepseek/deepseek-v4-flash",
+        provider_model_id="deepseek/deepseek-v4-flash",
+        display_name="deepseek/deepseek-v4-flash",
+        route="legacy_cli",
+        effective_protocol=None,
+        endpoint_contract=pc.TRANSPORT_COMMANDCODE_GOAT,
+        endpoint=None,
+        auth_mode="bearer",
+        config_fingerprint=None,
+        tool_version="legacy-command-v1",
+        provider_runtime_identity=identity,
+    )
+    channel = pc.provider_session_credential_variable(provider_id)
+
+    # The launch is ROUTE-AWARE: the legacy session authority is the safe
+    # external CLI authority (or none) — never a materializable direct
+    # credential authority.
+    launch = build_local_project_launch(
+        session_id="sess-v204-legacy",
+        task_id="local-project-debug",
+        policy="static-baseline",
+        provider_id=provider_id,
+        model_id="deepseek/deepseek-v4-flash",
+        profile_id="deepseek/deepseek-v4-flash",
+        launch_snapshot=dict(os.environ),
+        project_spec=ProjectRuntimeEnvironmentSpec(),
+        model_binding=legacy_model_binding,
+    )
+    assert launch.credential_binding is None or (
+        launch.credential_binding.source_kind == "external_cli"
+    )
+    # No secret can be pinned for this route: no ticket exists and the
+    # transport materialization produces NO Agentic-Debugger-held env.
+    assert launch.credential_ticket is None
+    gateway = ModelGateway()
+    env = gateway.transport_environment(
+        launch.model_binding, credential_binding=launch.credential_binding
+    )
+    assert env is None
+
+    # An explicit DIRECT credential binding supplied to the legacy
+    # boundary fails closed before any child construction.
+    direct_binding = CredentialVault.default().safe_binding(provider_id)
+    assert direct_binding is not None
+    assert direct_binding.source_kind == "saved"
+    from agentic_debugger.application.credential_vault import CredentialRouteError
+    from agentic_debugger.application.model_gateway import (
+        IncoherentCredentialBindingError,
+    )
+
+    with pytest.raises((CredentialRouteError, IncoherentCredentialBindingError)):
+        gateway.transport_environment(
+            legacy_model_binding, credential_binding=direct_binding
+        )
+    # Even the retained-secret path cannot inject it: no ticket exists.
+    assert launch.credential_ticket is None

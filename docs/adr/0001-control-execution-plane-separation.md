@@ -290,4 +290,15 @@ forwarded-session are distinct source-faithful authorities; consumable
 CLI-auth-store bindings pin a safe location fingerprint; direct-route
 transport materialization fails closed instead of degrading to
 "no credential needed"; and configured/enabled remain separate readiness
-facts.
+facts.  Candidate 22 seals the authorization boundaries: new-lease
+creation is gated on current operational state (missing/disabled/
+quarantined) before any secret access while resolved leases stay
+session-stable; the model route authorizes raw credential
+materialization (legacy CLI never receives an Agentic-Debugger-held API
+credential); ModelBinding/CredentialBinding pairs are proven coherent at
+both trust boundaries; environment/CLI-store sources are contract-
+authorized at resolution time; the forwarded session secret carries safe
+issuance authority and cannot be rebound across an issuance-to-worker
+configuration change; every supported session path pins the actual
+secret once at launch via an opaque in-process ticket; and structural
+rejection errors never echo rejected values.

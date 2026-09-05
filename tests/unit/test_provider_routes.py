@@ -221,7 +221,16 @@ class TestTransportEnvironment:
     ) -> None:
         pc.set_session_key("opencode_go", SECRET)
         hop = mp.provider_session_credential_environment("opencode_go")
-        assert hop == {"AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": SECRET}
+        from agentic_debugger.application.model_gateway import (
+            provider_runtime_identity,
+        )
+
+        assert hop == {
+            "AGENTIC_DEBUGGER_OPENCODE_GO_API_KEY": SECRET,
+            pc.provider_session_credential_authority_variable(
+                "opencode_go"
+            ): provider_runtime_identity(pc.get_provider_config("opencode_go")),
+        }
         monkeypatch.setenv("COMMAND_CODE_API_KEY", "env-key-value")
         assert mp.provider_session_credential_environment("commandcode_goat") is None
 

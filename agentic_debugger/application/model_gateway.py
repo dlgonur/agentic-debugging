@@ -84,6 +84,7 @@ __all__ = [
     "CredentialUnavailableError",
     "EndpointUnreachableError",
     "IncompatibleModelError",
+    "IncoherentCredentialBindingError",
     "ModelBinding",
     "ModelGateway",
     "ModelGatewayError",
@@ -99,6 +100,7 @@ __all__ = [
     "ROUTE_OFFLINE",
     "ROUTE_QUALIFIED_LADDER",
     "StaleModelBindingError",
+    "assert_credential_binding_coherent",
     "is_loopback_url",
     "provider_runtime_identity",
 ]
@@ -226,6 +228,88 @@ class ProviderHttpRejectionError(ModelGatewayError):
 
 class ProtocolViolationError(ModelGatewayError):
     """Adapter or provider violated the expected protocol contract."""
+
+
+class IncoherentCredentialBindingError(ModelGatewayError):
+    """A CredentialBinding does not certify the paired ModelBinding's authority.
+
+    Before any secret materialization, the credential authority must be
+    coherent with the model binding: same provider id, same provider
+    runtime authority, compatible auth mode, and a route-compatible
+    source kind.  A valid binding for provider Q never reaches provider
+    P's adapter child.
+    """
+
+
+def assert_credential_binding_coherent(
+    model_binding: Any, credential_binding: Any
+) -> None:
+    """Prove a CredentialBinding is coherent with its ModelBinding (repair 22, F3).
+
+    Applied at BOTH trust boundaries — SessionLaunch construction and the
+    ModelGateway transport boundary (defense in depth for direct callers)
+    — before any secret materialization:
+
+    - same provider id;
+    - for registry routes: same provider runtime authority and the same
+      auth mode;
+    - route/source-kind compatibility: a direct route never accepts an
+      ``external_cli`` authority; a legacy CLI route accepts only the
+      external/none authority; profile/ladder/offline routes accept no
+      registry credential authority at all.
+    """
+    from agentic_debugger.application.credential_vault import (
+        CREDENTIAL_SOURCE_EXTERNAL_CLI,
+        CREDENTIAL_SOURCE_NONE,
+    )
+
+    if credential_binding is None:
+        return
+    if model_binding is None:
+        raise IncoherentCredentialBindingError(
+            "a credential binding was supplied without a model binding"
+        )
+    if credential_binding.provider_id != model_binding.provider_id:
+        raise IncoherentCredentialBindingError(
+            "the credential binding certifies a different provider than the "
+            "model binding"
+        )
+    route = model_binding.route
+    if route in (ROUTE_DIRECT_API, ROUTE_LEGACY_CLI):
+        if credential_binding.provider_authority != model_binding.provider_runtime_identity:
+            raise StaleModelBindingError(
+                "the credential binding's provider runtime authority does not "
+                "match the model binding (stale pair)"
+            )
+    if route == ROUTE_DIRECT_API and credential_binding.auth_mode != model_binding.auth_mode:
+        # On the direct route the credential authenticates the HTTP
+        # contract itself; its auth mode must equal the model binding's.
+        # (A legacy CLI binding records the provider auth mode as safe
+        # metadata only — the model binding legitimately carries none.)
+        raise IncoherentCredentialBindingError(
+            "the credential binding's authentication mode does not match "
+            "the model binding"
+        )
+    if route == ROUTE_DIRECT_API and credential_binding.source_kind == (
+        CREDENTIAL_SOURCE_EXTERNAL_CLI
+    ):
+        raise IncoherentCredentialBindingError(
+            "an external CLI credential authority does not authorize a "
+            "direct-API credential lease"
+        )
+    if route == ROUTE_LEGACY_CLI and credential_binding.source_kind not in (
+        CREDENTIAL_SOURCE_EXTERNAL_CLI,
+        CREDENTIAL_SOURCE_NONE,
+    ):
+        raise IncoherentCredentialBindingError(
+            "the legacy CLI route uses the external CLI credential authority; "
+            "a raw API credential binding is not authorized for this route"
+        )
+    if route in (ROUTE_CONFIGURED_PROFILE, ROUTE_QUALIFIED_LADDER, ROUTE_OFFLINE):
+        raise IncoherentCredentialBindingError(
+            "the session route does not accept a registry-provider credential "
+            "authority"
+        )
 
 
 class ModelRuntimeError(ModelGatewayError):
@@ -2100,6 +2184,7 @@ class ModelGateway:
         self,
         binding: ModelBinding,
         credential_binding: Optional[Any] = None,
+        credential_ticket: Optional[str] = None,
     ) -> Optional[Dict[str, str]]:
         """Adapter child credential environment (model channel only, V2-04).
 
@@ -2114,10 +2199,12 @@ class ModelGateway:
         """
         if not binding.provider_id:
             return None
+        assert_credential_binding_coherent(binding, credential_binding)
         return self._vault.transport_materialization(
             binding.provider_id,
             route=binding.route,
             credential_binding=credential_binding,
+            credential_ticket=credential_ticket,
         )
 
     def create_transport(
@@ -2130,13 +2217,17 @@ class ModelGateway:
         max_controller_steps: int = _DEFAULT_MAX_CONTROLLER_STEPS,
         max_response_bytes: int = _MAX_MODEL_RESPONSE_BYTES,
         credential_binding: Optional[Any] = None,
+        credential_ticket: Optional[str] = None,
     ) -> Tuple[Any, Any]:
         """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair.
 
         ``credential_binding`` (optional, V2-04): the session-fixed safe
         credential authority established at the SessionLaunch boundary;
-        when supplied, the transport's credential channel is materialized
-        exactly from that issued session source.
+        ``credential_ticket`` (repair 22): the opaque session ticket that
+        redeems the lease resolved and pinned at that boundary.  The pair
+        is proven coherent with the ModelBinding (provider, runtime
+        authority, auth mode, route/source compatibility) before any
+        secret materialization.
         """
         from agentic_debugger.application.command_transport import CancellableJsonlCommandTransport
         from agentic_debugger.evaluation.live import LiveModelConfig
@@ -2240,6 +2331,11 @@ class ModelGateway:
                 raise StaleModelBindingError(
                     f"Route {binding.route!r} requires configured provider identity, got {binding.provider_id!r}"
                 )
+
+            # Repair 22 (F3): prove the credential authority is coherent
+            # with THIS model binding BEFORE any corroboration, live-config
+            # resolution, or secret materialization.
+            assert_credential_binding_coherent(binding, credential_binding)
 
 
             # Corroborate against current provider configuration
@@ -2357,7 +2453,9 @@ class ModelGateway:
                 )
 
             env = self.transport_environment(
-                binding, credential_binding=credential_binding
+                binding,
+                credential_binding=credential_binding,
+                credential_ticket=credential_ticket,
             )
             transport = CancellableJsonlCommandTransport(
                 live_config,

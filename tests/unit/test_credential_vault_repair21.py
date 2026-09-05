@@ -55,6 +55,7 @@ from agentic_debugger.application.credential_vault import (  # noqa: E402
 from agentic_debugger.application.model_gateway import (  # noqa: E402
     CatalogProbeError,
     ModelGateway,
+    provider_runtime_identity,
 )
 
 SECRET_A = "r21-synthetic-credential-alpha-not-real"
@@ -93,6 +94,18 @@ def _hermetic_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     yield store
     pc.clear_all_session_keys()
     pc._QUARANTINED_PROVIDERS.clear()
+
+
+def _issue_channel(monkeypatch: pytest.MonkeyPatch, provider_id: str, value: str) -> str:
+    """Simulate the UI-issued hop: channel VALUE + safe issuance authority."""
+    channel = pc.provider_session_credential_variable(provider_id)
+    authority_var = pc.provider_session_credential_authority_variable(provider_id)
+    cfg = pc.get_provider_config(provider_id)
+    identity = provider_runtime_identity(cfg)
+    assert identity is not None
+    monkeypatch.setenv(channel, value)
+    monkeypatch.setenv(authority_var, identity)
+    return channel
 
 
 def _configure_commandcode(base_url: str = "https://api.commandcode.ai/provider/v1") -> None:
@@ -246,10 +259,9 @@ class TestFinding2SessionAuthority:
     ) -> None:
         _configure_commandcode()
         _hermetic_vault["commandcode_goat"] = SECRET_A
-        # The real worker receives the UI-issued hop in its environment at
-        # spawn; simulate exactly that issued session authority.
-        channel = pc.provider_session_credential_variable("commandcode_goat")
-        monkeypatch.setenv(channel, SECRET_A)
+        # The real worker receives the UI-issued hop (channel + issuance
+        # authority) in its environment at spawn; simulate exactly that.
+        channel = _issue_channel(monkeypatch, "commandcode_goat", SECRET_A)
         vault = CredentialVault.default()
         authority = vault.session_authority("commandcode_goat")
         assert authority is not None
@@ -420,8 +432,7 @@ class TestFinding3StructuralBindings:
         self, _hermetic_vault, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _configure_commandcode()
-        channel = pc.provider_session_credential_variable("commandcode_goat")
-        monkeypatch.setenv(channel, SECRET_A)
+        channel = _issue_channel(monkeypatch, "commandcode_goat", SECRET_A)
         binding = CredentialVault.default().session_authority("commandcode_goat")
         assert binding is not None
         assert binding.source_kind == CREDENTIAL_SOURCE_FORWARDED_SESSION
@@ -459,8 +470,7 @@ class TestFinding4SourceFaithfulResolution:
         self, _hermetic_vault, monkeypatch: pytest.MonkeyPatch
     ) -> None:
         _configure_commandcode()
-        channel = pc.provider_session_credential_variable("commandcode_goat")
-        monkeypatch.setenv(channel, SECRET_A)  # A. forwarded A
+        channel = _issue_channel(monkeypatch, "commandcode_goat", SECRET_A)  # A.
         binding = CredentialVault.default().safe_binding("commandcode_goat")
         assert binding is not None
         assert binding.source_kind == CREDENTIAL_SOURCE_FORWARDED_SESSION

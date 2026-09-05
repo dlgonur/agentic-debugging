@@ -460,7 +460,15 @@ class TestGatewayVaultIntegration:
         binding = gateway.resolve("commandcode_goat", "deepseek/deepseek-v4-flash")
         assert isinstance(binding, ModelBinding)
         hop = gateway.session_credential_environment("commandcode_goat")
-        assert hop == {"AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": SECRET_B}
+        authority_var = pc.provider_session_credential_authority_variable(
+            "commandcode_goat"
+        )
+        assert hop == {
+            "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": SECRET_B,
+            authority_var: provider_runtime_identity(
+                pc.get_provider_config("commandcode_goat")
+            ),
+        }
         transport_env = gateway.transport_environment(binding)
         assert transport_env == {
             "AGENTIC_DEBUGGER_COMMANDCODE_GOAT_API_KEY": SECRET_B

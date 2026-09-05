@@ -1292,6 +1292,7 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
             max_controller_steps=_DEFAULT_MAX_CONTROLLER_STEPS,
             max_response_bytes=MAX_MODEL_RESPONSE_BYTES,
             credential_binding=session_launch.credential_binding,
+            credential_ticket=session_launch.credential_ticket,
         )
     except Exception as exc:
         raise ScenarioInputError(f"model profile unavailable: {exc}") from exc

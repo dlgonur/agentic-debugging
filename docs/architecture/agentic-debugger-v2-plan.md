@@ -1399,3 +1399,78 @@ seven CredentialVault authority gaps with no direction change:
    configuration exists; a disabled provider is configured but
    `is_enabled=False` / `credential_ready=False`.  V2-03
    `ProviderStatusSnapshot` semantics unchanged.
+
+### 22.2 Candidate 22 post-review repair (sealed authorization boundaries)
+
+Following a second independent FirstMate source-level review, Candidate 22
+seals the remaining credential authorization/lifetime boundaries with no
+direction change:
+
+1. **Operational-state gate on NEW lease creation (F1)**:
+   `CredentialVault.resolve_lease` — for explicit bindings and provider-id
+   resolution alike — fails credential-free BEFORE any secret accessor
+   when the CURRENT provider is missing/unconfigured, disabled, or
+   quarantined (the provider runtime identity does not encode these
+   operational facts).  Already-resolved leases are inert objects and
+   remain session-stable; later durable/operational mutation never
+   mutates them.
+2. **Route-aware credential authority (F2)**: the model ROUTE decides
+   whether Agentic Debugger may materialize a raw provider credential at
+   all.  `build_local_project_launch` fixes the session authority using
+   the resolved ModelBinding route: legacy CLI routes carry only the safe
+   ``external_cli`` authority (or none); configured-profile /
+   qualified-ladder / offline routes carry no registry-provider
+   credential authority.  Legacy-route transport materialization NEVER
+   produces an Agentic-Debugger-held API-key environment — not even when
+   a direct credential also exists — and a supplied route-incompatible
+   binding raises the new typed `CredentialRouteError` before any child
+   construction (never silently leaked or reinterpreted).
+3. **ModelBinding/CredentialBinding coherence (F3)**:
+   `assert_credential_binding_coherent` proves the pair before ANY secret
+   materialization at BOTH trust boundaries — SessionLaunch construction
+   and the ModelGateway transport boundary (defense in depth for direct
+   callers, before live-config corroboration): same provider id; for
+   registry routes, same provider runtime authority; for the direct
+   route, the same auth mode (a legacy model binding legitimately carries
+   no auth mode); route/source-kind compatibility (direct never accepts
+   ``external_cli``; legacy accepts only external/none; profile/ladder/
+   offline accept no registry credential authority).
+4. **Contract-authorized sources (F4)**: before any secret read for an
+   explicit binding, the CURRENT provider contract must authorize the
+   named source kind — ``environment`` requires the contract's own
+   accepted environment source and a still-valid canonical endpoint
+   binding; ``cli_auth_store`` requires an auth-store-consumable contract,
+   a valid endpoint binding, and the safe location fingerprint to match.
+   A fabricated safe-shaped binding can never make an arbitrary provider
+   read the OpenCode store.  Structural auth-mode coherence is enforced
+   at construction/from_mapping: ``none`` only with AUTH_NONE, and no raw
+   secret source under AUTH_NONE.
+5. **Forwarded-secret issuance provenance (F5)**: the private UI→worker
+   hop now forwards, alongside every credential VALUE, a SAFE issuance
+   authority companion variable (the provider runtime identity hex under
+   which the value was issued; no secret-derived hashes; same
+   ``AGENTIC_DEBUGGER_`` control namespace the V2-01 execution authority
+   structurally excludes from project/PDB/verifier children).  The worker
+   session boundary pins the forwarded secret ONLY while the issuance
+   authority equals the CURRENT configuration; an issuance-to-worker
+   configuration change (the TOCTOU window) raises
+   `StaleCredentialBindingError` so the old secret is never stamped with —
+   or leaked to — the new authority; a channel without valid provenance
+   fails closed.
+6. **Every supported session path pins the actual SECRET at launch (F6)**:
+   for materializable authorities the launch boundary resolves the lease
+   ONCE and retains it in vault process memory under an opaque random
+   ticket (``SessionLaunch.credential_ticket`` — a safe process-local
+   capability, excluded from launch mapping/fingerprint, never
+   serialized, redeemed exactly once and released); transport creation
+   redeems that exact launch-pinned lease, so durable slot or environment
+   changes between launch and transport cannot switch the session.  A new
+   session resolves and pins the new value.  (Configured-source live
+   sessions have no SessionLaunch boundary; their single
+   transport-materialization resolution point is unchanged and
+   documented.)
+7. **Error echo safety (F7)**: CredentialBinding structural rejection
+   messages are constant text naming the field and expectation — rejected
+   raw values (source_ref, source_kind, auth_mode, provider_authority, an
+   unvalidated provider_id, from_mapping payloads) are never echoed, with
+   adversarial exact-string absence tests.
