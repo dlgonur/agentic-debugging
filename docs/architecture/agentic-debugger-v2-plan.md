@@ -1511,7 +1511,29 @@ direction change:
    remains a dedicated short-lived child process, so this is bounded
    cleanup, not a lease server.
 
-Deferred post-V2-04 follow-ups (unchanged, NOT fixed in 23): (1) Local
+### 22.4 Candidate 24 post-review repair (issuance-bound leases, snapshot-coherent executables)
+
+Following FirstMate review of Candidate 23, Candidate 24 closes two remaining
+capability/ABA gaps with no direction change:
+
+1. **Issuance-bound leases (F1)**: every `CredentialLease` now carries its SAFE
+   issuance authority (the full `CredentialBinding` it was resolved under; safe
+   metadata only, never secret material, never serialized, secret-free repr).
+   `retain_lease()` proves fingerprint equality between issuance and supplied
+   binding, so `lease_A + binding_B` can never create a B-authorized ticket
+   when authorities differ.  Value-only rotation keeps the same fingerprint
+   and remains valid; no secret values are compared.
+2. **Snapshot-coherent executables (F2)**: the direct-provider resolver builds
+   endpoint/auth/authority from ONE authoritative configuration snapshot and
+   carries that snapshot authority in provenance (`provider_runtime_identity`).
+   `configured_source` binds executable authority (from provenance, not
+   before/after sampling) to credential egress; `ModelGateway.resolve` fails
+   when live provenance authority differs from its pre-captured runtime id.
+   ABA A->B->A during resolution can no longer pair B-executable with
+   A-credential.  Ceilings (general 64, lower-ladder task-specific) and route
+   behavior (legacy no raw credential, generic stays direct) are unchanged.
+
+Deferred post-V2-04 follow-ups (unchanged, NOT fixed in 24): (1) Local
 Project launch-vs-transport logical-call ceiling 64 vs 32; (2)
 `model.configured` ModelBinding payload vs journal schema mismatch;
 (3) `ModelGateway.default()` config_root singleton pollution.  V2-05 not

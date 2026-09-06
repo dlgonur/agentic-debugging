@@ -370,14 +370,30 @@ class CredentialLease:
     a model, or placed in project/PDB/verifier child environments.
     """
 
-    __slots__ = ("_provider_id", "_source_kind", "_value")
+    __slots__ = ("_provider_id", "_source_kind", "_value", "_issuance_binding")
 
-    def __init__(self, provider_id: str, source_kind: str, value: str) -> None:
+    def __init__(
+        self,
+        provider_id: str,
+        source_kind: str,
+        value: str,
+        issuance_binding: Optional["CredentialBinding"] = None,
+    ) -> None:
         # Constructed only by CredentialVault.resolve_lease; the value is
-        # held privately and never rendered by this object.
+        # held privately and never rendered by this object.  Repair 24
+        # (F1): the lease cryptographically/structurally binds the SAFE
+        # issuance authority it was resolved under (the full
+        # CredentialBinding, safe metadata only — never secret material).
+        # retain_lease() proves fingerprint equality so a lease issued
+        # under authority A can never be retained under authority B.
+        # issuance_binding is required for all vault-issued leases; None
+        # is accepted only to keep direct construction fail-closed at
+        # retain time (a lease without proven issuance can never be
+        # retained).
         object.__setattr__(self, "_provider_id", provider_id)
         object.__setattr__(self, "_source_kind", source_kind)
         object.__setattr__(self, "_value", value)
+        object.__setattr__(self, "_issuance_binding", issuance_binding)
 
     @property
     def provider_id(self) -> str:
@@ -1000,7 +1016,10 @@ class CredentialVault:
                 f"Credential unavailable for provider {provider_id!r}: "
                 + (readiness.reason or "the bound credential source is unavailable")
             )
-        return CredentialLease(provider_id, binding.source_kind, value)
+        # Repair 24 (F1): bind the SAFE issuance authority into the lease
+        # so retain can prove SAME-authority inseparability without ever
+        # comparing secret values.
+        return CredentialLease(provider_id, binding.source_kind, value, binding)
 
     def retain_lease(self, lease: "CredentialLease", binding: CredentialBinding) -> str:
         """Retain one launch-resolved lease under an OPAQUE session ticket.
@@ -1017,6 +1036,14 @@ class CredentialVault:
         requires pair coherence (same provider id, same source kind) and a
         materializable direct-provider authority; external/no-auth
         bindings are never retained.  No credential VALUES are compared.
+
+        Repair 24 (F1): the lease carries its SAFE issuance authority
+        (the full CredentialBinding it was resolved under).  Retain proves
+        fingerprint equality between issuance and supplied binding, so
+        ``lease_A + binding_B`` can never create a B-authorized ticket
+        when A and B differ in provider runtime authority or any other
+        binding identity.  Value-only rotation with unchanged authority
+        keeps the same fingerprint and remains valid.
         """
         import uuid
 
@@ -1038,6 +1065,17 @@ class CredentialVault:
             raise CredentialVaultError(
                 "only a materializable direct provider credential authority "
                 "may retain a session lease"
+            )
+        issuance = getattr(lease, "_issuance_binding", None)
+        if not isinstance(issuance, CredentialBinding):
+            raise StaleCredentialBindingError(
+                "the session credential lease carries no proven issuance "
+                "authority and can never be retained"
+            )
+        if issuance.fingerprint() != binding.fingerprint():
+            raise StaleCredentialBindingError(
+                "the session credential lease was issued under a different "
+                "credential authority and cannot be retained under this binding"
             )
         handle = uuid.uuid4().hex
         self._session_leases[handle] = (lease, binding)

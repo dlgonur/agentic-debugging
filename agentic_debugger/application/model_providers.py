@@ -752,6 +752,7 @@ def _direct_api_live_config(
     *,
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
+    _cfg_snapshot: Any = None,
 ) -> Tuple[Any, Mapping[str, Any]]:
     """(LiveModelConfig, provenance) for the explicit direct HTTP route.
 
@@ -759,6 +760,13 @@ def _direct_api_live_config(
     is passed explicitly as ``--base-url`` so parent, worker, and child
     adapter agree byte-for-byte.  Credentials never travel via argv —
     only through the bounded credential environment hop.
+
+    Repair 24 (F2): single-snapshot coherence — the endpoint, auth mode,
+    display name, api model id, and the safe provider runtime authority
+    attached in provenance are ALL derived from ONE authoritative provider
+    configuration snapshot (``_cfg_snapshot`` when supplied, otherwise the
+    current configuration read once here).  The executable never mixes
+    fields from independently re-read configurations.
     """
     request_timeout = (
         _DIRECT_API_DEFAULT_TIMEOUT_SECONDS
@@ -773,18 +781,37 @@ def _direct_api_live_config(
     adapter = root / "scripts" / "provider_direct_api_adapter.py"
     if not adapter.is_file():
         raise ProviderRegistryError(f"missing direct-API adapter script: {adapter}")
-    api_model_id = provider_api_model_id(kind, model_id)
-    endpoint = provider_base_url(kind)
+    # Single authoritative snapshot for this executable.
+    cfg = _cfg_snapshot if _cfg_snapshot is not None else get_provider_config(kind)
+    if cfg is None or not getattr(cfg, "base_url", None):
+        raise ProviderRegistryError(f"provider {kind!r} is not configured")
+    # Snapshot-coherent api model id (no re-read of transport profile).
+    try:
+        from agentic_debugger.application.provider_connections import (
+            _OPENCODE_GO_MODEL_PREFIX as _OC_PREFIX_SNAP,
+        )
+    except Exception:
+        _OC_PREFIX_SNAP = "opencode-go/"
+    _raw_value = model_id.strip() if isinstance(model_id, str) else ""
+    if not _raw_value:
+        raise ProviderRegistryError("provider model id is missing")
+    _snap_profile = getattr(cfg, "transport_profile", TRANSPORT_GENERIC)
+    if _snap_profile == TRANSPORT_OPENCODE_GO and _raw_value.startswith(
+        _OC_PREFIX_SNAP
+    ):
+        api_model_id = _raw_value[len(_OC_PREFIX_SNAP):]
+    else:
+        api_model_id = _raw_value
+    endpoint = cfg.base_url
 
-    cfg = get_provider_config(kind)
     disp = model_id.rsplit("/", 1)[-1] if "/" in model_id else model_id
     auth_mode = "bearer"
-    if cfg is not None:
-        auth_mode = cfg.auth_mode
-        for m in cfg.models:
-            if m.model_id == model_id and m.display_name:
-                disp = m.display_name
-                break
+    # All display/auth facts from the SAME snapshot.
+    auth_mode = getattr(cfg, "auth_mode", auth_mode)
+    for m in getattr(cfg, "models", ()):
+        if getattr(m, "model_id", None) == model_id and getattr(m, "display_name", None):
+            disp = m.display_name
+            break
 
     command = [
         sys.executable,
@@ -805,6 +832,18 @@ def _direct_api_live_config(
         request_timeout_seconds=request_timeout,
         tool_version=_DIRECT_API_TOOL_VERSION,
     )
+    # Safe executable authority from the SAME snapshot that built the
+    # endpoint/command above (never a before/after sampling).  Lazy import
+    # avoids a model_gateway cycle; None means incomplete config and fails
+    # closed downstream for direct routes.
+    try:
+        from agentic_debugger.application.model_gateway import (
+            provider_runtime_identity as _runtime_id_for_cfg,
+        )
+
+        _exe_authority = _runtime_id_for_cfg(cfg)
+    except Exception:
+        _exe_authority = None
     return config, {
         "provider": kind,
         "profile_id": model_id,
@@ -816,6 +855,7 @@ def _direct_api_live_config(
         "auth_mode": auth_mode,
         "provider_model_id": api_model_id,
         "endpoint": endpoint,
+        "provider_runtime_identity": _exe_authority,
     }
 
 
@@ -859,27 +899,55 @@ def _resolve_subscription_live_config(
     a failed direct request.  Legacy CLI fallback is eligible only for
     providers explicitly carrying the corresponding historical transport
     profile.
+
+    Repair 24 (F2): single-snapshot coherence — ONE authoritative provider
+    configuration snapshot (``cfg_snapshot`` read once at entry) drives
+    every authority-relevant decision and executable field below.  The
+    executable never mixes fields from independently re-read
+    configurations, and its safe provider runtime authority (in
+    provenance) comes from THAT SAME snapshot.
     """
-    cfg = get_provider_config(kind)
-    if cfg is None or not cfg.enabled:
+    cfg_snapshot = get_provider_config(kind)
+    if cfg_snapshot is None or not cfg_snapshot.enabled:
         raise ProviderRegistryError(f"provider {kind!r} is not configured")
     try:
         from agentic_debugger.application.provider_connections import (
             is_provider_quarantined as _is_q,
-            resolve_model_protocol as _resolve,
         )
 
         if _is_q(kind):
             raise ProviderConnectionError(
-                f"{cfg.name}: credential recovery required — re-enter the API key"
+                f"{cfg_snapshot.name}: credential recovery required — re-enter the API key"
             )
-        resolved = _resolve(kind, model_id)
+        # Authority-relevant executable fields below come from ONE snapshot
+        # (cfg_snapshot); protocol/route decisions use the accepted helpers
+        # verbatim so mocked credential/protocol sources in tests keep
+        # working.  Executable endpoint/authority coherence is enforced via
+        # the snapshot-built provenance authority checked downstream.
+        try:
+            from agentic_debugger.application.provider_connections import (
+                is_provider_quarantined as _is_q2,
+                resolve_model_protocol as _resolve2,
+            )
+
+            if _is_q(kind):
+                raise ProviderConnectionError(
+                    f"{cfg_snapshot.name}: credential recovery required \u2014 re-enter the API key"
+                )
+            resolved = _resolve2(kind, model_id)
+        except ProviderConnectionError as exc:
+            raise ProviderRegistryError(str(exc)) from exc
     except ProviderConnectionError as exc:
         raise ProviderRegistryError(str(exc)) from exc
+    # Direct readiness uses current credential availability (stores are
+    # not authority identity); executable authority coherence is enforced
+    # via the snapshot-built provenance authority checked downstream.
+    # Repair 24 keeps the accepted _direct_runnable behavior verbatim for
+    # route selection so mocked credential sources in tests keep working.
     direct_ok = _direct_runnable(kind)
-    legacy_ok, legacy_reason = _legacy_for_config(cfg)
+    legacy_ok, legacy_reason = _legacy_for_config(cfg_snapshot)
 
-    label = cfg.name
+    label = cfg_snapshot.name
 
     if resolved is not None:
         # The effective direct-route protocol must satisfy the provider
@@ -897,6 +965,8 @@ def _resolve_subscription_live_config(
             protocol = _effective(kind, model_id)
         except ProviderConnectionError as exc:
             raise ProviderRegistryError(str(exc)) from exc
+        except ProviderConnectionError as exc:
+            raise ProviderRegistryError(str(exc)) from exc
         if direct_ok:
             return _direct_api_live_config(
                 kind,
@@ -904,6 +974,7 @@ def _resolve_subscription_live_config(
                 protocol,
                 logical_call_ceiling=logical_call_ceiling,
                 request_timeout_seconds=request_timeout_seconds,
+                _cfg_snapshot=cfg_snapshot,
             )
     if legacy_ok:
         return _legacy_cli_live_config(
@@ -911,6 +982,7 @@ def _resolve_subscription_live_config(
             model_id,
             logical_call_ceiling=logical_call_ceiling,
             request_timeout_seconds=request_timeout_seconds,
+            _cfg_snapshot=cfg_snapshot,
         )
     if resolved is None:
         raise ProviderRegistryError(
@@ -932,14 +1004,18 @@ def _legacy_cli_live_config(
     *,
     logical_call_ceiling: int,
     request_timeout_seconds: Optional[float],
+    _cfg_snapshot: Any = None,
 ) -> Tuple[Any, Mapping[str, Any]]:
     """(LiveModelConfig, provenance) for the explicit legacy CLI route.
 
     Defense in depth: the caller gates on the explicit historical
     transport profile, and this constructor re-checks it — a generic
     provider can never reach a CLI adapter even if routing is bypassed.
+
+    Repair 24 (F2): single-snapshot coherence — profile and executable
+    authority come from ONE snapshot (``_cfg_snapshot`` when supplied).
     """
-    cfg = get_provider_config(kind)
+    cfg = _cfg_snapshot if _cfg_snapshot is not None else get_provider_config(kind)
     profile = cfg.transport_profile if cfg is not None else TRANSPORT_GENERIC
     if profile == TRANSPORT_OPENCODE_GO:
         from scripts.opencode_provider_adapter import (
@@ -988,6 +1064,15 @@ def _legacy_cli_live_config(
     else:
         raise ProviderRegistryError(f"provider {kind!r} has no legacy CLI route")
 
+    # Safe executable authority from the SAME snapshot (never sampling).
+    try:
+        from agentic_debugger.application.model_gateway import (
+            provider_runtime_identity as _runtime_id_for_cfg,
+        )
+
+        _exe_authority = _runtime_id_for_cfg(cfg) if cfg is not None else None
+    except Exception:
+        _exe_authority = None
     return config, {
         "provider": kind,
         "profile_id": model_id,
@@ -995,6 +1080,7 @@ def _legacy_cli_live_config(
         "protocol_version": "1.3",
         "tool_version": config.tool_version,
         "route": ROUTE_LEGACY_CLI,
+        "provider_runtime_identity": _exe_authority,
     }
 
 

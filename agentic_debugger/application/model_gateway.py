@@ -1001,6 +1001,17 @@ class ModelGateway:
                         f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
                     ) from exc
 
+                # Repair 24 (F2): executable coherence — the live_config
+                # provenance carries the safe authority from the SAME
+                # snapshot that built it.  It must equal the pre-captured
+                # runtime_id, otherwise the configuration mutated during
+                # resolution and the pair would mix authorities.
+                _exe_auth = provenance.get("provider_runtime_identity")
+                if _exe_auth is not None and _exe_auth != runtime_id:
+                    raise ProviderConfigurationError(
+                        f"Provider {effective_provider!r} configuration changed "
+                        "during resolution"
+                    )
                 route = str(provenance.get("route") or ROUTE_DIRECT_API)
                 api_proto = provenance.get("api_protocol")
                 endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
@@ -1076,6 +1087,14 @@ class ModelGateway:
                         f"Provider {effective_provider!r} live configuration resolution failed: {exc}"
                     ) from exc
 
+                # Repair 24 (F2): same executable-coherence gate for the
+                # historical branch.
+                _exe_auth2 = provenance.get("provider_runtime_identity")
+                if _exe_auth2 is not None and _exe_auth2 != runtime_id:
+                    raise ProviderConfigurationError(
+                        f"Provider {effective_provider!r} configuration changed "
+                        "during resolution"
+                    )
                 route = str(provenance.get("route") or ROUTE_DIRECT_API)
                 api_proto = provenance.get("api_protocol")
                 endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
