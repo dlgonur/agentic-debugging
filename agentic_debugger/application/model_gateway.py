@@ -2196,10 +2196,44 @@ class ModelGateway:
         no-auth and external-CLI-authority routes intentionally forward
         nothing; a direct route with a missing/stale authority FAILS
         CLOSED here rather than producing a no-credential environment.
+
+        Repair 23: a retained ticket is inseparable from its binding (a
+        ticket without its binding fails closed before materialization);
+        retained-ticket egress re-authorizes the SAFE binding against
+        CURRENT provider configuration; and a registry ModelBinding whose
+        captured provider runtime identity no longer equals CURRENT
+        configuration fails stale here (defense in depth — never rely
+        solely on an earlier create_transport validation).
         """
         if not binding.provider_id:
             return None
+        # Finding 1: a ticket without its binding authority is never
+        # redeemed — fail closed BEFORE any vault access.
+        if credential_ticket is not None and credential_binding is None:
+            raise IncoherentCredentialBindingError(
+                "a session credential ticket requires its credential binding"
+            )
         assert_credential_binding_coherent(binding, credential_binding)
+        # Finding 2: this public trusted egress boundary itself fails
+        # closed on stale model authority BEFORE credential
+        # materialization.  Safe comparison only — never a secret value.
+        if binding.route in (ROUTE_DIRECT_API, ROUTE_LEGACY_CLI):
+            if binding.provider_runtime_identity is not None:
+                current_cfg = get_provider_config(binding.provider_id)
+                current_identity = (
+                    provider_runtime_identity(current_cfg)
+                    if current_cfg is not None
+                    else None
+                )
+                if current_identity != binding.provider_runtime_identity:
+                    raise StaleModelBindingError(
+                        f"Provider {binding.provider_id!r} runtime configuration "
+                        "drifted (stale model binding)"
+                    )
+        # Finding 2: the SAFE credential binding must still certify
+        # CURRENT provider authority before ANY retained or fresh egress.
+        if credential_binding is not None:
+            self._vault.authorize_binding_for_transport(credential_binding)
         return self._vault.transport_materialization(
             binding.provider_id,
             route=binding.route,

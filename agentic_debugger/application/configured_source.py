@@ -323,9 +323,52 @@ def run_configured_session(
         ceiling = (
             ladder_contract.max_model_requests if is_lower_ladder else None
         )
+        # Repair 23 (Finding 3) executable-authority capture: record the
+        # CURRENT provider runtime identity BEFORE live-config resolution
+        # so a concurrent mutation DURING resolution is detectable below.
+        from agentic_debugger.application.model_gateway import (
+            provider_runtime_identity as _runtime_identity,
+        )
+        from agentic_debugger.application.provider_connections import (
+            get_provider_config as _get_cfg,
+        )
+
+        _cfg_before = _get_cfg(provider)
+        _authority_before = (
+            _runtime_identity(_cfg_before) if _cfg_before is not None else None
+        )
         live_config, provenance, fingerprint = _resolve_registry_model(
             provider, model_id, logical_call_ceiling=ceiling
         )
+        # Repair 23 (Finding 3): bind the provider route/config with its
+        # credential authority to ONE coherent session-start authority.
+        # The executable (live_config/provenance) was resolved under some
+        # provider runtime authority A; the credential below must certify
+        # THAT same authority — never a fresh credential B for executable
+        # A.  The ceiling above (general 64, lower-ladder task-specific)
+        # is the exact configured_source ceiling and is unchanged.
+
+        _cfg_after = _get_cfg(provider)
+        expected_authority = (
+            _runtime_identity(_cfg_after) if _cfg_after is not None else None
+        )
+        # A mutation DURING resolution (A -> B between the two reads)
+        # means the live_config authority is indeterminate — fail closed
+        # before any credential egress or model.configured emission.
+        if _authority_before != expected_authority:
+            raise ScenarioInputError(
+                "provider configuration changed during resolution"
+            )
+        # Direct-API routes require a well-formed executable authority;
+        # without it the executable/credential pair cannot be proven
+        # coherent and fails closed before any child construction.
+        _provenance_route = str(provenance.get("route") or "direct_api")
+        if _provenance_route == "direct_api" and (
+            not isinstance(expected_authority, str) or len(expected_authority) != 64
+        ):
+            raise ScenarioInputError(
+                "provider configuration is incomplete or changed during resolution"
+            )
         # Direct-API routes receive exactly one bounded credential
         # override in the adapter child environment (never argv, never
         # evidence); legacy CLI routes read the operator auth store in
@@ -339,7 +382,8 @@ def run_configured_session(
         try:
             _env = CredentialVault.default().transport_materialization(
                 provider,
-                route=str(provenance.get("route") or "direct_api"),
+                route=_provenance_route,
+                expected_provider_authority=expected_authority,
             )
         except CredentialVaultError as exc:
             # V2-04 (repair 21): an auth-required direct route whose

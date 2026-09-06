@@ -1085,6 +1085,34 @@ class SessionLaunch:
                 raise SessionRuntimeError(
                     "credential_ticket must be a 32-hex opaque session ticket"
                 )
+        # Repair 23 (Finding 1): a retained ticket is inseparable from its
+        # binding — it is NOT a free-floating capability.  A ticket without
+        # its binding fails construction, and only a materializable direct
+        # provider authority may carry a ticket (never external_cli / none,
+        # never a non-direct route).  The ModelBinding/CredentialBinding
+        # coherence check below remains mandatory.
+        if self.credential_ticket is not None:
+            if self.credential_binding is None:
+                raise SessionRuntimeError(
+                    "credential_ticket requires its credential_binding"
+                )
+            from agentic_debugger.application.credential_vault import (
+                _MATERIALABLE_SOURCE_KINDS,
+            )
+
+            if (
+                self.credential_binding.source_kind
+                not in _MATERIALABLE_SOURCE_KINDS
+            ):
+                raise SessionRuntimeError(
+                    "credential_ticket is not valid for this credential authority"
+                )
+            if self.model_binding is not None and getattr(
+                self.model_binding, "route", None
+            ) != "direct_api":
+                raise SessionRuntimeError(
+                    "credential_ticket is not valid for this session route"
+                )
         # Repair 22 (F3): the credential authority must be COHERENT with
         # the model binding — same provider, same runtime authority, same
         # auth mode, route-compatible source kind — at construction time,
@@ -1237,9 +1265,21 @@ def build_local_project_launch(
             credential_binding is not None
             and credential_binding.source_kind in _MATERIALABLE_SOURCE_KINDS
         ):
+            # Repair 23 (Finding 1): a session-stable DIRECT_API launch
+            # with a materializable binding MUST carry its retained ticket
+            # — never silently downgrade to later fresh secret resolution.
             lease = vault.resolve_lease(credential_binding)
-            if lease is not None:
-                credential_ticket = vault.retain_lease(lease, credential_binding)
+            if lease is None:
+                from agentic_debugger.application.credential_vault import (
+                    CredentialUnavailableError as _Unavailable,
+                )
+
+                raise _Unavailable(
+                    f"Credential unavailable for provider {provider_id!r}: "
+                    "the session credential authority is materializable but "
+                    "no lease could be pinned"
+                )
+            credential_ticket = vault.retain_lease(lease, credential_binding)
 
     return SessionLaunch(
         session_id=session_id,

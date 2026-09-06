@@ -775,6 +775,25 @@ def run_worker(request: StartRequest) -> int:
                     except Exception as exc:
                         diagnostics.append(_bounded_diagnostic(f"isolated worktree cleanup failed: {exc}"))
                         cleanup_ok = False
+            # Repair 23 (Finding 4): discard any retained session credential
+            # ticket that was pinned at launch but never redeemed (e.g. the
+            # transport never started in this still-live worker).  The worker
+            # is otherwise short-lived, but this makes abandonment explicit,
+            # credential-free, and idempotent.  Best-effort: never affects
+            # the terminal outcome or diagnostics.
+            try:
+                _launch_for_release = locals().get("session_launch", None)
+                _ticket_for_release = getattr(
+                    _launch_for_release, "credential_ticket", None
+                )
+                if _ticket_for_release is not None:
+                    from agentic_debugger.application.credential_vault import (
+                        CredentialVault as _VaultForRelease,
+                    )
+
+                    _VaultForRelease.default().release_ticket(_ticket_for_release)
+            except Exception:
+                pass
             coordinator.emit(SessionEventKind.CLEANUP_COMPLETED, {"verified": cleanup_ok})
         else:
             cleanup_ok = False

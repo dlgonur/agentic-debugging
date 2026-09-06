@@ -1474,3 +1474,45 @@ direction change:
    raw values (source_ref, source_kind, auth_mode, provider_authority, an
    unvalidated provider_id, from_mapping payloads) are never echoed, with
    adversarial exact-string absence tests.
+
+### 22.3 Candidate 23 post-review repair (ticket/execution-authority binding)
+
+Following a third independent FirstMate source-level review, Candidate 23
+binds the retained credential ticket to its execution authority with no
+direction change:
+
+1. **Ticket/binding inseparability (F1)**: a retained ticket is NOT a
+   free-floating capability — the coherent pair (CredentialBinding +
+   ticket) is the transport authority.  A ticket without its binding fails
+   closed before redemption; `retain_lease` requires same provider/source
+   and a materializable authority (never external/no-auth, never a value
+   comparison); `SessionLaunch` construction requires a materializable
+   direct-API binding for any ticket; the normal factory never silently
+   downgrades a session-stable launch to fresh resolution.
+2. **Current-authority gate for retained egress (F2)**: one safe
+   `authorize_binding_for_transport` seam (configured/enabled/quarantine,
+   current runtime identity, auth mode, contract authorization — never the
+   secret value) gates BOTH fresh leases and retained-ticket release.
+   Secret-value rotation with an unchanged identity keeps the pinned
+   SECRET_A (new launches see SECRET_B); provider authority drift,
+   disable, quarantine, or a stale ModelBinding fails closed before any
+   child construction.
+3. **Configured-source executable/credential coherence (F3)**:
+   `run_configured_session` captures the executable's provider runtime
+   identity at resolution time and `transport_materialization(...,
+   expected_provider_authority=A)` requires CURRENT == A before any
+   egress — a live_config A is never paired with a credential B.  The
+   configured_source ceiling (general 64, lower-ladder task-specific) and
+   event payload semantics are unchanged; legacy CLI routes still
+   materialize no raw secret; generic direct routes stay direct.
+4. **Retained-ticket lifecycle (F4)**: new idempotent credential-free
+   `release_ticket` discards an unredeemed ticket; the Local Project worker
+   terminal cleanup releases any abandoned ticket best-effort.  The worker
+   remains a dedicated short-lived child process, so this is bounded
+   cleanup, not a lease server.
+
+Deferred post-V2-04 follow-ups (unchanged, NOT fixed in 23): (1) Local
+Project launch-vs-transport logical-call ceiling 64 vs 32; (2)
+`model.configured` ModelBinding payload vs journal schema mismatch;
+(3) `ModelGateway.default()` config_root singleton pollution.  V2-05 not
+started.

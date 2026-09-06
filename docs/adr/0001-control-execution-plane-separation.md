@@ -301,4 +301,4 @@ authorized at resolution time; the forwarded session secret carries safe
 issuance authority and cannot be rebound across an issuance-to-worker
 configuration change; every supported session path pins the actual
 secret once at launch via an opaque in-process ticket; and structural
-rejection errors never echo rejected values.
+rejection errors never echo rejected values.  Candidate 23 binds the retained ticket to its execution authority: tickets are inseparable from their binding; retained egress re-authorizes the safe binding against CURRENT authority (value rotation preserves stability; drift/disabled/quarantined/stale model bindings fail closed); configured_source pins executable authority A and requires credential authority A; release_ticket covers abandoned tickets. Three pre-existing 47bc5ae follow-ups remain deferred; V2-05 not started.
