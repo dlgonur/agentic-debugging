@@ -67,6 +67,17 @@ SESSION_CAPABILITIES_VERSION = "session-capabilities/v1"
 #: strings of at most 4096 bytes, so the serialized spec must fit.
 SPEC_PARAM_MAX_CHARS = 4096
 
+#: The Local Project default effective model-call ceiling (Task-26): the
+#: ONE authority for the model-call dimension of a Local Project session.
+#: Launch-time ``ModelBinding`` resolution, transport materialization, the
+#: ``LiveModelAdapter`` request limit, and the ``DeterministicController``
+#: model-call limit all derive from the session budgets through
+#: :func:`local_project_model_call_ceiling` — never from independent
+#: defaults.  Explicit session budgets replace the default coherently;
+#: configured-source (64) and lower-ladder (task-specific) ceilings keep
+#: their own separate authorities.
+LOCAL_PROJECT_DEFAULT_MAX_MODEL_CALLS = 32
+
 _MAX_DECLARATIONS_PER_CATEGORY = 32
 _MAX_ENV_NAME_CHARS = 128
 _MAX_EXPLICIT_VALUE_BYTES = 1024
@@ -1168,6 +1179,27 @@ class SessionLaunch:
         )
 
 
+def local_project_model_call_ceiling(budgets: Any) -> int:
+    """The ONE effective model-call ceiling of a Local Project session.
+
+    The session-owned ``SessionBudgets.max_model_calls`` is authoritative
+    when explicitly supplied; otherwise the Local Project default (32)
+    applies.  Every model-call consumer of the session derives its limit
+    here — launch-time ``ModelBinding`` resolution, ``create_transport``
+    materialization, the live adapter request limit, and the controller
+    model-call limit — so no consumer can reconstruct a different
+    authority for the same session.  Fails closed on a non-SessionBudgets
+    input.
+    """
+    from agentic_debugger.application.session import SessionBudgets
+
+    if type(budgets) is not SessionBudgets:
+        raise SessionRuntimeError("budgets must be a SessionBudgets")
+    if budgets.max_model_calls is not None:
+        return budgets.max_model_calls
+    return LOCAL_PROJECT_DEFAULT_MAX_MODEL_CALLS
+
+
 def build_local_project_launch(
     *,
     session_id: str,
@@ -1204,6 +1236,8 @@ def build_local_project_launch(
         raise SessionRuntimeError("launch snapshot must be a mapping")
     if type(project_spec) is not ProjectRuntimeEnvironmentSpec:
         raise SessionRuntimeError("project_spec must be a ProjectRuntimeEnvironmentSpec")
+    if budgets is None:
+        budgets = SessionBudgets()
     agent = AgentDefinition(
         controller_policy=policy if isinstance(policy, str) and policy else "pdb-on-uncertainty",
         provider_id=provider_id,
@@ -1224,10 +1258,17 @@ def build_local_project_launch(
         from agentic_debugger.application.model_gateway import ModelGateway
 
         gateway = ModelGateway.default(config_root=config_root)
+        # Task-26: the ModelBinding is resolved under the SAME session
+        # model-call ceiling the session later uses for transport
+        # materialization and execution limits — an explicit session
+        # budget is authoritative, the Local Project default (32)
+        # otherwise.  The gateway's general configured-source default
+        # (64) must never silently enter a Local Project session here.
         model_binding = gateway.resolve(
             provider_id=provider_id,
             model_id=model_id,
             profile_id=profile_id,
+            logical_call_ceiling=local_project_model_call_ceiling(budgets),
             is_ollama=is_ollama,
             ollama_alias=ollama_alias,
         )
@@ -1289,7 +1330,7 @@ def build_local_project_launch(
         project_spec=project_spec,
         capabilities=capabilities,
         profile_id=profile_id,
-        budgets=budgets if budgets is not None else SessionBudgets(),
+        budgets=budgets,
         retry_of=retry_of,
         model_binding=model_binding,
         credential_binding=credential_binding,
@@ -1377,6 +1418,8 @@ __all__ = [
     "check_launch_matches_params",
     "compute_effective_capabilities",
     "is_platform_essential_name",
+    "local_project_model_call_ceiling",
+    "LOCAL_PROJECT_DEFAULT_MAX_MODEL_CALLS",
     "materialize_project_runtime",
     "resolve_env_name_platform",
     "spec_from_param",

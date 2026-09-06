@@ -1559,8 +1559,36 @@ mixed-snapshot and fallback gaps with no direction change:
 3. **Candidate-24 F1 preserved**: issuance-bound leases, retain fingerprint
    equality, value-rotation semantics, and P/Q closure unchanged.
 
-Deferred post-V2-04 follow-ups (unchanged, NOT fixed in 25): (1) Local
-Project launch-vs-transport logical-call ceiling 64 vs 32; (2)
-`model.configured` ModelBinding payload vs journal schema mismatch;
-(3) `ModelGateway.default()` config_root singleton pollution.  V2-05 not
-started.
+### 22.6 Candidate 26 post-review repair (one Local Project model-call ceiling authority)
+
+First explicitly deferred post-V2-04 follow-up, repaired with no V2
+authority-boundary change:
+
+1. **One effective model-call ceiling per Local Project session**: the
+   session-owned `SessionBudgets.max_model_calls` (or the Local Project
+   default of **32** when absent) is the single authority for the whole
+   model-call dimension — `SessionLaunch`/`ModelBinding` resolution,
+   `ModelGateway.create_transport` materialization, the
+   `LiveModelAdapter` request limit, and the `DeterministicController`
+   model-call limit.  `build_local_project_launch` resolves the
+   `ModelBinding` under that ceiling, and `local_project_source` derives
+   every consumer from `session_launch.budgets` through the shared
+   `local_project_model_call_ceiling` authority (session_runtime).  The
+   former silent conflict — launch resolving at the gateway general
+   default 64 while the source materialized transport at 32, failing
+   closed at `create_transport` on configuration-fingerprint drift — is
+   eliminated WITHOUT weakening stale-binding corroboration: the drift
+   check, configuration fingerprints, and executable-authority gates
+   (Candidates 23–25) are unchanged and remain mandatory.
+2. **Other budget dimensions untouched**: controller-step, elapsed-time,
+   retry, directive-repair, ladder, and evaluation budgets keep their
+   separate authorities.  General configured-source default remains 64;
+   lower-ladder ceilings remain task-specific; the legacy CLI stays
+   credential-free; generic providers stay direct; no secret material
+   enters budgets, bindings, provenance, events, or errors.
+
+Deferred post-V2-04 follow-ups: (1) Local Project launch-vs-transport
+logical-call ceiling 64 vs 32 — **RESOLVED in 26**; (2) `model.configured`
+ModelBinding payload vs journal schema mismatch — still deferred;
+(3) `ModelGateway.default()` config_root singleton pollution — still
+deferred.  V2-05 not started.

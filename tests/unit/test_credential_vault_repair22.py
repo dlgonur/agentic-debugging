@@ -636,6 +636,7 @@ class TestFinding6NoChannelSessionStability:
         from agentic_debugger.application.session_runtime import (
             ProjectRuntimeEnvironmentSpec,
             build_local_project_launch,
+            local_project_model_call_ceiling,
         )
 
         launch = build_local_project_launch(  # 2
@@ -654,8 +655,11 @@ class TestFinding6NoChannelSessionStability:
         # 3: durable slot overwritten BEFORE create_transport.
         _hermetic_vault["commandcode_goat"] = SECRET_B
         gateway = ModelGateway()
+        # Task-26: materialize the transport under the SAME session-owned
+        # model-call ceiling the launch resolved its ModelBinding with.
         transport, _config = gateway.create_transport(
             launch.model_binding,
+            max_model_requests=local_project_model_call_ceiling(launch.budgets),
             credential_binding=launch.credential_binding,
             credential_ticket=launch.credential_ticket,
         )

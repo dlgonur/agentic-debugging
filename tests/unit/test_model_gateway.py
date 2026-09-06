@@ -1739,6 +1739,7 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     from agentic_debugger.application.session_runtime import (
         ProjectRuntimeEnvironmentSpec,
         build_local_project_launch,
+        local_project_model_call_ceiling,
     )
     from agentic_debugger.evaluation.live import LiveModelConfig
 
@@ -1773,9 +1774,16 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     pf_launch_a = gateway.static_preflight(launch_a.model_binding)
     assert pf_launch_a.is_runnable is True
     assert pf_launch_a.route == ROUTE_DIRECT_API
-    transport_a, live_cfg_a = gateway.create_transport(launch_a.model_binding)
+    # Task-26: the transport is materialized under the SAME session-owned
+    # model-call ceiling the launch resolved its ModelBinding with (the
+    # Local Project default 32 here) — never the gateway general default.
+    transport_a, live_cfg_a = gateway.create_transport(
+        launch_a.model_binding,
+        max_model_requests=local_project_model_call_ceiling(launch_a.budgets),
+    )
     assert transport_a is not None
     assert live_cfg_a is not None
+    assert live_cfg_a.configuration_fingerprint == launch_a.model_binding.config_fingerprint
 
     # Case B: historical legacy CLI route
     add_provider_config(
@@ -1812,7 +1820,10 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
         pf_launch_b = gateway.static_preflight(launch_b.model_binding)
         assert pf_launch_b.is_runnable is True
         assert pf_launch_b.route == ROUTE_LEGACY_CLI
-        transport_b, live_cfg_b = gateway.create_transport(launch_b.model_binding)
+        transport_b, live_cfg_b = gateway.create_transport(
+            launch_b.model_binding,
+            max_model_requests=local_project_model_call_ceiling(launch_b.budgets),
+        )
         assert transport_b is not None
         assert live_cfg_b is not None
 
@@ -1834,7 +1845,10 @@ def test_finding_1_e_local_project_product_path_preserves_legacy_route_and_trans
     pf_launch_c = gateway.static_preflight(launch_c.model_binding)
     assert pf_launch_c.is_runnable is True
     assert pf_launch_c.route == ROUTE_QUALIFIED_LADDER
-    transport_c, live_cfg_c = gateway.create_transport(launch_c.model_binding)
+    transport_c, live_cfg_c = gateway.create_transport(
+        launch_c.model_binding,
+        max_model_requests=local_project_model_call_ceiling(launch_c.budgets),
+    )
     assert transport_c is not None
     assert live_cfg_c is not None
 
