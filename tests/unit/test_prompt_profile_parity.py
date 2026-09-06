@@ -332,7 +332,16 @@ class TestLevel32AndLadderContracts:
             from agentic_debugger.evaluation.live import LiveModelConfig
 
             cfg = LiveModelConfig(model_name=model_id, command=("echo", "hi"), request_timeout_seconds=30, tool_version="test")
-            return cfg, {"display_name": model_id, "route": "direct_api", "api_protocol": "chat_completions", "provider_model_id": model_id, "endpoint": "http://fake"}
+            try:
+                from agentic_debugger.application.model_gateway import provider_runtime_identity as _rid2
+                from agentic_debugger.application.provider_connections import get_provider_config as _gpc2
+                _c2 = _gpc2(provider)
+                _a2 = _rid2(_c2) if _c2 is not None else None
+            except Exception:
+                _a2 = None
+            if not isinstance(_a2, str) or len(_a2) != 64:
+                _a2 = "b" * 64
+            return cfg, {"display_name": model_id, "route": "direct_api", "api_protocol": "chat_completions", "provider_model_id": model_id, "endpoint": "http://fake", "provider_runtime_identity": _a2}
 
         monkeypatch.setattr(mp, "resolve_provider_live_config", fake_resolve)
         monkeypatch.setattr(cs, "_is_registry_provider", lambda p: True)

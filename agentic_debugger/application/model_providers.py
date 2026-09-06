@@ -910,40 +910,23 @@ def _resolve_subscription_live_config(
     cfg_snapshot = get_provider_config(kind)
     if cfg_snapshot is None or not cfg_snapshot.enabled:
         raise ProviderRegistryError(f"provider {kind!r} is not configured")
+    # Repair 25: every authority-relevant fact below comes from cfg_snapshot
+    # (ONE immutable snapshot).  Pure snapshot helpers never re-read mutable
+    # global config, so an A->B->A mutation DURING resolution cannot inject B
+    # facts into an A executable.
     try:
         from agentic_debugger.application.provider_connections import (
-            is_provider_quarantined as _is_q,
+            is_provider_quarantined as _is_q2,
+            resolve_model_protocol_for_config as _resolve_snap,
         )
 
-        if _is_q(kind):
+        if _is_q2(kind):
             raise ProviderConnectionError(
-                f"{cfg_snapshot.name}: credential recovery required — re-enter the API key"
+                f"{cfg_snapshot.name}: credential recovery required - re-enter the API key"
             )
-        # Authority-relevant executable fields below come from ONE snapshot
-        # (cfg_snapshot); protocol/route decisions use the accepted helpers
-        # verbatim so mocked credential/protocol sources in tests keep
-        # working.  Executable endpoint/authority coherence is enforced via
-        # the snapshot-built provenance authority checked downstream.
-        try:
-            from agentic_debugger.application.provider_connections import (
-                is_provider_quarantined as _is_q2,
-                resolve_model_protocol as _resolve2,
-            )
-
-            if _is_q(kind):
-                raise ProviderConnectionError(
-                    f"{cfg_snapshot.name}: credential recovery required \u2014 re-enter the API key"
-                )
-            resolved = _resolve2(kind, model_id)
-        except ProviderConnectionError as exc:
-            raise ProviderRegistryError(str(exc)) from exc
+        resolved = _resolve_snap(cfg_snapshot, model_id)
     except ProviderConnectionError as exc:
         raise ProviderRegistryError(str(exc)) from exc
-    # Direct readiness uses current credential availability (stores are
-    # not authority identity); executable authority coherence is enforced
-    # via the snapshot-built provenance authority checked downstream.
-    # Repair 24 keeps the accepted _direct_runnable behavior verbatim for
-    # route selection so mocked credential sources in tests keep working.
     direct_ok = _direct_runnable(kind)
     legacy_ok, legacy_reason = _legacy_for_config(cfg_snapshot)
 
@@ -959,12 +942,10 @@ def _resolve_subscription_live_config(
         # historical profiles.)
         try:
             from agentic_debugger.application.provider_connections import (
-                effective_model_protocol as _effective,
+                effective_model_protocol_for_config as _effective_snap,
             )
 
-            protocol = _effective(kind, model_id)
-        except ProviderConnectionError as exc:
-            raise ProviderRegistryError(str(exc)) from exc
+            protocol = _effective_snap(cfg_snapshot, model_id)
         except ProviderConnectionError as exc:
             raise ProviderRegistryError(str(exc)) from exc
         if direct_ok:

@@ -68,6 +68,9 @@ from agentic_debugger.application.provider_connections import (
     load_cached_catalog,
     protocol_blocker_reason,
     provider_api_model_id,
+    provider_api_model_id_for_config,
+    effective_model_protocol_for_config,
+    is_protocol_executable_for_config,
     provider_base_url,
     refresh_provider_catalog,
     test_provider_connection,
@@ -917,7 +920,7 @@ class ModelGateway:
 
             # Check static readiness conditions (disabled or quarantined)
             if not cfg.enabled or is_provider_quarantined(cfg.provider_id):
-                api_model = provider_api_model_id(cfg.provider_id, effective_model)
+                api_model = provider_api_model_id_for_config(cfg, effective_model)
                 proto = cfg.api_format
                 return ModelBinding(
                     provider_id=cfg.provider_id,
@@ -938,7 +941,7 @@ class ModelGateway:
             # Delegate based on explicit structured provider facts
             from agentic_debugger.application.model_providers import _legacy_for_config
 
-            api_model = provider_api_model_id(cfg.provider_id, effective_model)
+            api_model = provider_api_model_id_for_config(cfg, effective_model)
             historical_profiles = (TRANSPORT_OPENCODE_GO, TRANSPORT_COMMANDCODE_GOAT)
             is_historical = endpoint_contract in historical_profiles
             direct_cred_missing = not self._vault.readiness(cfg.provider_id).credential_ready
@@ -949,7 +952,7 @@ class ModelGateway:
                     # Missing credentials on a direct-only provider:
                     # Statically determine protocol executability without calling live resolution.
                     try:
-                        proto = effective_model_protocol(cfg.provider_id, effective_model)
+                        proto = effective_model_protocol_for_config(cfg, effective_model)
                     except ProviderConnectionError as p_exc:
                         raise IncompatibleModelError(
                             f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
@@ -959,7 +962,7 @@ class ModelGateway:
                             f"Provider {effective_provider!r} protocol resolution error: {p_exc}"
                         ) from p_exc
 
-                    if proto is None or not is_protocol_executable(cfg.provider_id, proto):
+                    if proto is None or not is_protocol_executable_for_config(cfg, proto):
                         raise IncompatibleModelError(
                             f"Provider {effective_provider!r} model {effective_model!r} protocol {proto!r} is not executable"
                         )
@@ -990,7 +993,7 @@ class ModelGateway:
                     )
                 except ProviderRegistryError as exc:
                     try:
-                        proto = effective_model_protocol(cfg.provider_id, effective_model)
+                        proto = effective_model_protocol_for_config(cfg, effective_model)
                     except ProviderConnectionError as p_exc:
                         raise IncompatibleModelError(
                             f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
@@ -1007,11 +1010,20 @@ class ModelGateway:
                 # runtime_id, otherwise the configuration mutated during
                 # resolution and the pair would mix authorities.
                 _exe_auth = provenance.get("provider_runtime_identity")
-                if _exe_auth is not None and _exe_auth != runtime_id:
-                    raise ProviderConfigurationError(
-                        f"Provider {effective_provider!r} configuration changed "
-                        "during resolution"
-                    )
+                # Repair 25: real direct executables must prove authority;
+                # missing/malformed authority fails closed (no fallback to CURRENT).
+                _exe_route = str(provenance.get("route") or ROUTE_DIRECT_API)
+                if _exe_route == ROUTE_DIRECT_API:
+                    import re as _re_auth
+                    if not isinstance(_exe_auth, str) or _re_auth.fullmatch(r"[0-9a-f]{64}", _exe_auth) is None:
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} executable authority is missing or malformed"
+                        )
+                    if _exe_auth != runtime_id:
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} configuration changed "
+                            "during resolution"
+                        )
                 route = str(provenance.get("route") or ROUTE_DIRECT_API)
                 api_proto = provenance.get("api_protocol")
                 endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)
@@ -1038,7 +1050,7 @@ class ModelGateway:
                     # Legacy CLI is not available AND direct credentials are missing:
                     # Statically determine direct protocol executability from explicit structured facts BEFORE live resolution.
                     try:
-                        proto = effective_model_protocol(cfg.provider_id, effective_model)
+                        proto = effective_model_protocol_for_config(cfg, effective_model)
                     except ProviderConnectionError as p_exc:
                         raise IncompatibleModelError(
                             f"Provider {effective_provider!r} model {effective_model!r} incompatible: {p_exc}"
@@ -1048,7 +1060,7 @@ class ModelGateway:
                             f"Provider {effective_provider!r} protocol resolution error: {p_exc}"
                         ) from p_exc
 
-                    if proto is not None and is_protocol_executable(cfg.provider_id, proto):
+                    if proto is not None and is_protocol_executable_for_config(cfg, proto):
                         return ModelBinding(
                             provider_id=cfg.provider_id,
                             model_id=effective_model,
@@ -1090,11 +1102,18 @@ class ModelGateway:
                 # Repair 24 (F2): same executable-coherence gate for the
                 # historical branch.
                 _exe_auth2 = provenance.get("provider_runtime_identity")
-                if _exe_auth2 is not None and _exe_auth2 != runtime_id:
-                    raise ProviderConfigurationError(
-                        f"Provider {effective_provider!r} configuration changed "
-                        "during resolution"
-                    )
+                _exe_route2 = str(provenance.get("route") or ROUTE_DIRECT_API)
+                if _exe_route2 == ROUTE_DIRECT_API:
+                    import re as _re_auth2
+                    if not isinstance(_exe_auth2, str) or _re_auth2.fullmatch(r"[0-9a-f]{64}", _exe_auth2) is None:
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} executable authority is missing or malformed"
+                        )
+                    if _exe_auth2 != runtime_id:
+                        raise ProviderConfigurationError(
+                            f"Provider {effective_provider!r} configuration changed "
+                            "during resolution"
+                        )
                 route = str(provenance.get("route") or ROUTE_DIRECT_API)
                 api_proto = provenance.get("api_protocol")
                 endpoint = provenance.get("endpoint") or (cfg.base_url if route == ROUTE_DIRECT_API else None)

@@ -335,33 +335,10 @@ def run_configured_session(
         # (general 64, lower-ladder task-specific) is unchanged.
         _provenance_route = str(provenance.get("route") or "direct_api")
         expected_authority = provenance.get("provider_runtime_identity")
-        # Compatibility: harnesses that fake live-config resolution return a
-        # provenance without the snapshot authority.  For those (tests only),
-        # fall back to CURRENT authority so the accepted fake-executable path
-        # keeps working; real resolver provenance always carries the snapshot
-        # authority and never takes this branch.  Incomplete real configs
-        # still fail below.
-        if not isinstance(expected_authority, str) or len(expected_authority) != 64:
-            try:
-                from agentic_debugger.application.model_gateway import (
-                    provider_runtime_identity as _runtime_fallback,
-                )
-                from agentic_debugger.application.provider_connections import (
-                    get_provider_config as _cfg_fallback,
-                )
-
-                _cur = _cfg_fallback(provider)
-                _cur_auth = _runtime_fallback(_cur) if _cur is not None else None
-            except Exception:
-                _cur_auth = None
-            # Only the fake-provenance harness path may use CURRENT here;
-            # a real direct executable without snapshot authority still fails.
-            # Detect fakes by the absence of the key entirely (real direct
-            # provenance always includes the key, even when None).
-            if "provider_runtime_identity" not in provenance and isinstance(
-                _cur_auth, str
-            ) and len(_cur_auth) == 64:
-                expected_authority = _cur_auth
+        # Repair 25: real direct execution requires proven executable authority.
+        # Missing/malformed authority fails closed (no CURRENT fallback — a
+        # missing key is unprovable, whether from a resolver regression or a
+        # stale fake).  Test fakes must carry a valid synthetic authority.
         # Direct-API routes require a well-formed executable authority;
         # without it the executable/credential pair cannot be proven
         # coherent and fails closed before any credential egress, event

@@ -538,7 +538,19 @@ def test_configured_direct_api_uses_ladder_contract_budgets(tmp_path: Path, monk
         resolved_ceilings[f"{provider}:{model_id}"] = kwargs.get("logical_call_ceiling")
         from agentic_debugger.evaluation.live import LiveModelConfig
         cfg = LiveModelConfig(model_name=model_id, command=("echo", "hi"), request_timeout_seconds=30, tool_version="test")
-        return cfg, {"display_name": model_id, "route": "direct_api", "api_protocol": "chat_completions", "provider_model_id": model_id, "endpoint": "http://fake"}
+        # Repair 25: fake provenance must carry a valid synthetic authority.
+        # Use CURRENT provider authority so the fake executable/credential
+        # pair remains coherent (no ABA in this harness).
+        try:
+            from agentic_debugger.application.model_gateway import provider_runtime_identity as _rid_fake
+            from agentic_debugger.application.provider_connections import get_provider_config as _gpc_fake
+            _c = _gpc_fake(provider)
+            _a = _rid_fake(_c) if _c is not None else None
+        except Exception:
+            _a = None
+        if not isinstance(_a, str) or len(_a) != 64:
+            _a = "a" * 64
+        return cfg, {"display_name": model_id, "route": "direct_api", "api_protocol": "chat_completions", "provider_model_id": model_id, "endpoint": "http://fake", "provider_runtime_identity": _a}
 
     monkeypatch.setattr(mp, "resolve_provider_live_config", wrapped_resolve)
 

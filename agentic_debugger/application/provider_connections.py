@@ -2758,6 +2758,76 @@ def effective_model_protocol(kind: str, model_id: str) -> str:
     return protocol
 
 
+def resolve_model_protocol_for_config(cfg: Any, model_id: str) -> Optional[str]:
+    """Snapshot-pure model protocol resolution (no global re-read).
+
+    Repair 25: all authority-relevant config facts come from the passed
+    ``cfg`` snapshot.  Global wrapper :func:`resolve_model_protocol` reads
+    current config once and delegates here, so normal behavior is unchanged
+    while snapshot resolution never observes a different authority.
+    """
+    if cfg is None or not getattr(cfg, "enabled", False):
+        raise ProviderConnectionError(f"provider {getattr(cfg, 'provider_id', '?')!r} is not configured")
+    if getattr(cfg, "transport_profile", None) == TRANSPORT_OPENCODE_GO:
+        return resolve_opencode_go_protocol(model_id)
+    if getattr(cfg, "transport_profile", None) == TRANSPORT_COMMANDCODE_GOAT:
+        return resolve_commandcode_protocol(model_id)
+    for m in getattr(cfg, "models", ()):
+        if getattr(m, "model_id", None) == model_id and getattr(m, "protocol", None):
+            return m.protocol
+    return getattr(cfg, "api_format", None)
+
+
+def effective_model_protocol_for_config(cfg: Any, model_id: str) -> str:
+    """Snapshot-pure effective protocol (no global re-read).
+
+    Repair 25: resolves via :func:`resolve_model_protocol_for_config` on the
+    SAME snapshot, then validates auth/profile/inference-path against THAT
+    snapshot only.
+    """
+    kind = getattr(cfg, "provider_id", "?")
+    protocol = resolve_model_protocol_for_config(cfg, model_id)
+    if protocol is None:
+        raise ProviderConnectionError(
+            f"provider {kind!r} model {model_id!r} has no resolved protocol"
+        )
+    try:
+        validate_auth_protocol_combination(getattr(cfg, "auth_mode", None), protocol)
+    except ProviderConnectionError as exc:
+        raise ProviderConnectionError(
+            f"provider {kind!r} model {model_id!r}: {exc}"
+        ) from None
+    try:
+        _inference_path_for_profile(
+            getattr(cfg, "transport_profile", TRANSPORT_GENERIC), protocol
+        )
+    except ProviderConnectionError as exc:
+        raise ProviderConnectionError(
+            f"provider {kind!r} model {model_id!r}: {exc}"
+        ) from None
+    return protocol
+
+
+def provider_api_model_id_for_config(cfg: Any, model_id: str) -> str:
+    """Snapshot-pure API model id (no global re-read)."""
+    if type(model_id) is not str or not model_id.strip():
+        raise ProviderConnectionError("provider model id is missing")
+    value = model_id.strip()
+    profile = getattr(cfg, "transport_profile", TRANSPORT_GENERIC)
+    if profile == TRANSPORT_OPENCODE_GO and value.startswith(
+        _OPENCODE_GO_MODEL_PREFIX
+    ):
+        value = value[len(_OPENCODE_GO_MODEL_PREFIX):]
+    return value
+
+
+def inference_path_for_config(cfg: Any, protocol: str) -> str:
+    """Snapshot-pure inference path (no global re-read)."""
+    return _inference_path_for_profile(
+        getattr(cfg, "transport_profile", TRANSPORT_GENERIC), protocol
+    )
+
+
 def protocol_blocker_reason(kind: str, protocol: Optional[str]) -> Optional[str]:
     """Credential-safe reason a protocol is not executable, or ``None``.
 
@@ -2783,6 +2853,31 @@ def protocol_blocker_reason(kind: str, protocol: Optional[str]) -> Optional[str]
     except ProviderConnectionError as exc:
         return str(exc)
     return None
+
+
+def protocol_blocker_reason_for_config(cfg: Any, protocol: Optional[str]) -> Optional[str]:
+    """Snapshot-pure protocol blocker reason (no global re-read)."""
+    kind = getattr(cfg, "provider_id", "?")
+    if cfg is None or not getattr(cfg, "enabled", False):
+        return f"provider {kind!r} is not configured"
+    if type(protocol) is not str or protocol not in _PROTOCOL_FAMILIES:
+        return f"unknown protocol: {protocol!r}"
+    try:
+        validate_auth_protocol_combination(getattr(cfg, "auth_mode", None), protocol)
+    except ProviderConnectionError as exc:
+        return str(exc)
+    try:
+        _inference_path_for_profile(
+            getattr(cfg, "transport_profile", TRANSPORT_GENERIC), protocol
+        )
+    except ProviderConnectionError as exc:
+        return str(exc)
+    return None
+
+
+def is_protocol_executable_for_config(cfg: Any, protocol: Optional[str]) -> bool:
+    """Snapshot-pure executability (no global re-read)."""
+    return protocol_blocker_reason_for_config(cfg, protocol) is None
 
 
 def is_protocol_executable(kind: str, protocol: Optional[str]) -> bool:

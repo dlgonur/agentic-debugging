@@ -613,6 +613,21 @@ def test_resolve_incompatible_model_protocol_raises_error(
             ProviderConnectionError("incompatible protocol format")
         ),
     )
+    # Repair 25: snapshot-pure helpers are the authority-relevant seam;
+    # mock them as well so the incompatible-protocol failure is exercised
+    # through the single-snapshot path.
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.resolve_model_protocol_for_config",
+        lambda cfg, model: (_ for _ in ()).throw(
+            ProviderConnectionError("incompatible protocol format")
+        ),
+    )
+    monkeypatch.setattr(
+        "agentic_debugger.application.provider_connections.effective_model_protocol_for_config",
+        lambda cfg, model: (_ for _ in ()).throw(
+            ProviderConnectionError("incompatible protocol format")
+        ),
+    )
 
     with pytest.raises(IncompatibleModelError, match="incompatible"):
         gateway.resolve("contract_p", "incompatible_model")
@@ -1873,8 +1888,12 @@ def test_candidate_17_finding_1_generic_missing_cred_structured_facts(
         mock_legacy.assert_not_called()
 
     # 1B: Missing credential + incompatible model protocol -> IncompatibleModelError
+    # Repair 25: snapshot-pure seam is authoritative; mock it as well.
     with patch(
         "agentic_debugger.application.model_gateway.effective_model_protocol",
+        side_effect=ProviderConnectionError("Unsupported protocol for model"),
+    ), patch(
+        "agentic_debugger.application.model_gateway.effective_model_protocol_for_config",
         side_effect=ProviderConnectionError("Unsupported protocol for model"),
     ):
         with pytest.raises(IncompatibleModelError, match="incompatible"):
@@ -2232,7 +2251,8 @@ def test_candidate_18_finding_1_historical_incompatible_protocol_fails_before_li
 
     with patch("agentic_debugger.application.model_providers._legacy_for_config", return_value=(False, "no CLI")), \
          patch("agentic_debugger.application.model_providers.resolve_provider_live_config", side_effect=_bomb), \
-         patch("agentic_debugger.application.model_gateway.is_protocol_executable", return_value=False):
+         patch("agentic_debugger.application.model_gateway.is_protocol_executable", return_value=False), \
+         patch("agentic_debugger.application.model_gateway.is_protocol_executable_for_config", return_value=False):
         with pytest.raises(IncompatibleModelError, match="not executable"):
             gateway.resolve("cc_incompat_18", "model-1")
 

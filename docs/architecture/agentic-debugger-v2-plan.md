@@ -1533,7 +1533,33 @@ capability/ABA gaps with no direction change:
    A-credential.  Ceilings (general 64, lower-ladder task-specific) and route
    behavior (legacy no raw credential, generic stays direct) are unchanged.
 
-Deferred post-V2-04 follow-ups (unchanged, NOT fixed in 24): (1) Local
+### 22.5 Candidate 25 post-review repair (single-snapshot executables, mandatory authority)
+
+Following FirstMate review of Candidate 24, Candidate 25 closes the residual
+mixed-snapshot and fallback gaps with no direction change:
+
+1. **Single-snapshot executables**: every authority-relevant executable fact
+   (endpoint/base URL, transport profile/contract, auth mode, provider default
+   format, model-specific protocol, model-id transformation, inference-path
+   compatibility, display metadata feeding the live config, and the safe
+   `provider_runtime_identity` in provenance) comes from ONE immutable
+   `ProviderConfig` snapshot via pure snapshot helpers
+   (`resolve_model_protocol_for_config`, `effective_model_protocol_for_config`,
+   `provider_api_model_id_for_config`, `inference_path_for_config`,
+   `protocol_blocker_reason_for_config`).  An A->B->A mutation DURING protocol
+   resolution cannot inject B protocol into an A executable.  Credential STORE
+   availability stays live (route selection), but never folds foreign config
+   facts into the executable.
+2. **Mandatory executable authority**: real direct provenance without a
+   well-formed `provider_runtime_identity` fails closed in both
+   `configured_source` (no CURRENT fallback) and `ModelGateway.resolve`
+   (direct live path requires present, well-formed, equal authority).
+   Fake/mock harnesses carry valid synthetic authority.  Legacy CLI stays
+   credential-free with snapshot-coherent provenance.
+3. **Candidate-24 F1 preserved**: issuance-bound leases, retain fingerprint
+   equality, value-rotation semantics, and P/Q closure unchanged.
+
+Deferred post-V2-04 follow-ups (unchanged, NOT fixed in 25): (1) Local
 Project launch-vs-transport logical-call ceiling 64 vs 32; (2)
 `model.configured` ModelBinding payload vs journal schema mismatch;
 (3) `ModelGateway.default()` config_root singleton pollution.  V2-05 not
