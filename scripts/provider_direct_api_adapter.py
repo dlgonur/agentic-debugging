@@ -364,26 +364,85 @@ def extract_completion(protocol: str, payload: Mapping[str, Any]) -> str:
     return extractor(payload)
 
 
+def _usage_count(value: Any) -> Optional[int]:
+    if type(value) is int and not isinstance(value, bool) and value >= 0:
+        return value
+    return None
+
+
+def _detail_count(usage: Mapping[str, Any], details_key: str) -> Optional[int]:
+    details = usage.get(details_key)
+    if not isinstance(details, Mapping):
+        return None
+    return _usage_count(details.get("cached_tokens"))
+
+
 def extract_usage(protocol: str, payload: Mapping[str, Any]) -> Optional[dict]:
-    """Provider-reported usage copied verbatim when present.
+    """Provider-reported usage normalized into the transport contract.
 
     Absence of usage is normal for some routes; nothing is fabricated.
+    Each dimension survives only as a valid non-negative integer count.
+
+    Cached-token semantics per protocol family:
+
+    - ``chat_completions``/``responses`` (OpenAI-compatible): the
+      provider's prompt/input count already includes cached tokens;
+      ``prompt_tokens_details``/``input_tokens_details`` carries the
+      cached subset, reported as ``cached_input_tokens``.
+    - ``messages`` (Anthropic): the provider reports disjoint input
+      buckets — base ``input_tokens`` plus ``cache_read_input_tokens``
+      plus ``cache_creation_input_tokens``.  Canonical input is the
+      complete effective input (their sum), ``cached_input_tokens`` is
+      the cache-read subset, and ``cache_write_input_tokens`` retains
+      the cache-creation count.
     """
 
     usage = payload.get("usage")
     if not isinstance(usage, Mapping):
         return None
-    prompt = usage.get("prompt_tokens", usage.get("input_tokens"))
-    completion = usage.get("completion_tokens", usage.get("output_tokens"))
-    total = usage.get("total_tokens")
     result: dict[str, Any] = {}
+    if protocol == "messages":
+        base = _usage_count(usage.get("input_tokens"))
+        has_read = "cache_read_input_tokens" in usage
+        has_write = "cache_creation_input_tokens" in usage
+        cache_read = _usage_count(usage.get("cache_read_input_tokens"))
+        cache_write = _usage_count(usage.get("cache_creation_input_tokens"))
+        if base is not None and not has_read and not has_write:
+            result["prompt_tokens"] = base
+        elif base is not None and cache_read is not None and cache_write is not None:
+            result["prompt_tokens"] = base + cache_read + cache_write
+        # Any present-but-invalid or partial cache dimension leaves input
+        # unknown rather than silently dropping uncounted tokens.
+        if cache_read is not None:
+            result["cached_input_tokens"] = cache_read
+        if cache_write is not None:
+            result["cache_write_input_tokens"] = cache_write
+        completion = _usage_count(usage.get("output_tokens"))
+        if completion is not None:
+            result["completion_tokens"] = completion
+        total = _usage_count(usage.get("total_tokens"))
+        if total is not None:
+            result["total_tokens"] = total
+        return result or None
+    prompt = _usage_count(usage.get("prompt_tokens"))
+    if prompt is None:
+        prompt = _usage_count(usage.get("input_tokens"))
+    completion = _usage_count(usage.get("completion_tokens"))
+    if completion is None:
+        completion = _usage_count(usage.get("output_tokens"))
+    total = _usage_count(usage.get("total_tokens"))
     for name, value in (
         ("prompt_tokens", prompt),
         ("completion_tokens", completion),
         ("total_tokens", total),
     ):
-        if type(value) is int and not isinstance(value, bool) and value >= 0:
+        if value is not None:
             result[name] = value
+    cached = _detail_count(usage, "prompt_tokens_details")
+    if cached is None:
+        cached = _detail_count(usage, "input_tokens_details")
+    if cached is not None:
+        result["cached_input_tokens"] = cached
     return result or None
 
 

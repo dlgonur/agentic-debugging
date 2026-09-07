@@ -30,7 +30,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, replace
 from enum import Enum
-from typing import Optional, Tuple
+from typing import Any, Mapping, Optional, Tuple
 
 __all__ = [
     "ChangeFileSummary",
@@ -640,6 +640,44 @@ def _coalesce_completed(
     return _append(entries, entry)
 
 
+def _token_usage_detail(payload: Mapping[str, Any]) -> Optional[str]:
+    """Compact per-request provider token usage (known dimensions only).
+
+    Unknown dimensions are omitted rather than rendered as fake zeroes;
+    a request with no usage block produces no detail at all.  Counts are
+    the durable event's validated provider-reported values — never
+    locally estimated.
+    """
+    usage = payload.get("token_usage")
+    if not isinstance(usage, Mapping):
+        return None
+    parts: list[str] = []
+    for label, field in (
+        ("Input", "input_tokens"),
+        ("Cached", "cached_input_tokens"),
+        ("Output", "output_tokens"),
+        ("Total", "total_tokens"),
+    ):
+        count = usage.get(field)
+        if type(count) is int:
+            parts.append(f"{label} {count:,}")
+    return " · ".join(parts) if parts else None
+
+
+def _active_model_request_detail(
+    entries: Tuple[WorkstreamEntry, ...], ordinal: int
+) -> Optional[str]:
+    for index in range(len(entries) - 1, -1, -1):
+        entry = entries[index]
+        if (
+            entry.kind is WorkstreamKind.MODEL_REQUEST
+            and entry.status is WorkstreamStatus.ACTIVE
+            and entry.ordinal == ordinal
+        ):
+            return entry.detail
+    return None
+
+
 def _tool_unit(tool_name: str) -> Tuple[WorkstreamKind, str]:
     """Map one tool identity to its human-facing work-unit class."""
     if tool_name in _SOURCE_READ_TOOLS:
@@ -845,13 +883,21 @@ def _fold_workstream_event(
                 error_detail = error_kind
             elif error_message:
                 error_detail = error_message
+        # Provider token usage (when reported) joins the row detail after
+        # the operational text: rejected directives and retried attempts
+        # consumed real tokens too.
+        usage_detail = _token_usage_detail(payload)
+        detail = error_detail
+        if usage_detail is not None:
+            base = detail if detail is not None else _active_model_request_detail(entries, ordinal)
+            detail = f"{base} · {usage_detail}" if base else usage_detail
         return _settle(
             entries,
             kind=WorkstreamKind.MODEL_REQUEST,
             status=WorkstreamStatus.FAILED if failed else WorkstreamStatus.COMPLETED,
             sequence=sequence,
             ordinal=ordinal,
-            detail=error_detail,
+            detail=detail,
             timestamp_utc=timestamp_utc,
             duration_seconds=duration_seconds,
         )

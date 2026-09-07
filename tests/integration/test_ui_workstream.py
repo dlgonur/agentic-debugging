@@ -212,6 +212,60 @@ class TestWorkstreamRendering:
 
         run_headless(app, scenario, size=(140, 40))
 
+    def test_live_pane_and_header_show_token_usage(self, tmp_path):
+        """Task-34: per-request usage in rows, cumulative total in the header."""
+        app = LocalApplicationV1(history_store=HistoryStore(tmp_path))
+        stream = Canned()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            {"action_name": "get_source_window", "directive_kind": "action", "target_state": None},
+        )
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "ok",
+                "token_usage": {
+                    "input_tokens": 8_420,
+                    "output_tokens": 734,
+                    "cached_input_tokens": 6_912,
+                    "total_tokens": 9_154,
+                },
+            },
+        )
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 1})
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 1,
+                "status": "ok",
+                "token_usage": {
+                    "input_tokens": 1_000,
+                    "output_tokens": 200,
+                    "cached_input_tokens": 600,
+                    "total_tokens": 1_200,
+                },
+            },
+        )
+
+        async def scenario(pilot):
+            workspace = push_live(app, stream)
+            await pilot.pause()
+            await pilot.pause()
+            body = pane_text(workspace, "#live-pane")
+            assert "Inspect source · Input 8,420 · Cached 6,912 · Output 734 · Total 9,154" in body
+            header = workspace.query_one("#status-header").render()
+            header_plain = header.plain if hasattr(header, "plain") else str(header)
+            # Cumulative: (8,420 + 1,000) + (734 + 200) = 10,354 tokens.
+            assert "Tokens 10.4k" in header_plain
+            assert "partial" not in header_plain
+            finish(app, workspace)
+
+        from ui_support import run_headless
+
+        run_headless(app, scenario, size=(140, 40))
+
     def test_forensic_panes_have_no_embedded_workstream(self, tmp_path):
         """Forensic panes (Source, Debugger, Patch, Verifier, Timeline) own only domain evidence."""
         app = LocalApplicationV1(history_store=HistoryStore(tmp_path))

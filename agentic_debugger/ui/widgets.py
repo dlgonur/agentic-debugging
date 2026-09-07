@@ -42,6 +42,7 @@ from agentic_debugger.application.events import (
 from agentic_debugger.application.presentation import (
     DebuggerViewState,
     PatchStage,
+    SessionTokenUsage,
     SessionViewState,
     TimelineEntry,
     VerifierSummaryView,
@@ -1412,6 +1413,57 @@ class StatusHeader(Static):
     """
 
 
+def format_token_count_compact(value: Optional[int]) -> str:
+    """Compact token count for summaries (``31842`` -> ``31.8k``).
+
+    Unknown (``None``) renders as the explicit unavailable marker ``—``,
+    never as zero.
+    """
+    if value is None:
+        return "—"
+    if value >= 1_000_000:
+        scaled, suffix = value / 1_000_000, "M"
+    elif value >= 1_000:
+        scaled, suffix = value / 1_000, "k"
+    else:
+        return f"{value:,}"
+    text = f"{scaled:.1f}".rstrip("0").rstrip(".")
+    return f"{text}{suffix}"
+
+
+def session_tokens_summary(usage: SessionTokenUsage) -> Optional[str]:
+    """Header-level cumulative summary (``Tokens 31.8k``).
+
+    Returns ``None`` when no completed request reported usable usage, so
+    sessions without coverage show no fake total.  A partial-coverage
+    session (some completed request reported no usage) is visibly
+    marked instead of presenting a complete total.
+    """
+    if not usage.usage_available:
+        return None
+    total = usage.effective_total_tokens
+    summary = f"Tokens {format_token_count_compact(total)}"
+    if not usage.complete:
+        summary += " (partial)"
+    return summary
+
+
+def session_tokens_breakdown(usage: SessionTokenUsage) -> str:
+    """Dimension breakdown (known dimensions only; unknown as ``—``)."""
+    if not usage.usage_available:
+        return "—"
+    parts = []
+    if usage.input_tokens is not None:
+        parts.append(f"In {format_token_count_compact(usage.input_tokens)}")
+    if usage.cached_input_tokens is not None:
+        parts.append(f"Cache {format_token_count_compact(usage.cached_input_tokens)}")
+    if usage.output_tokens is not None:
+        parts.append(f"Out {format_token_count_compact(usage.output_tokens)}")
+    if not parts:
+        return "—"
+    return " · ".join(parts)
+
+
 class LiveRunContextPanel(VerticalScroll):
     """Truthful runtime context for wide capability-ladder workspaces."""
 
@@ -1460,6 +1512,8 @@ class LiveRunContextPanel(VerticalScroll):
         model = view.model_provenance
         model_name = model.display_name if model and model.display_name else (model.profile_id if model and model.profile_id else "—")
 
+        tokens_summary = session_tokens_summary(view.token_usage)
+
         def row(label: str, value: str) -> str:
             return f"[{MUTED}]{label:<10}[/] [{FOREGROUND}]{_markup_escape(value)}[/]"
 
@@ -1476,6 +1530,9 @@ class LiveRunContextPanel(VerticalScroll):
                 row("PROJECT", repo_basename),
                 row("HEAD", head_short),
             ]
+            if tokens_summary is not None:
+                lines.insert(2, row("TOKENS", tokens_summary.replace("Tokens ", "")))
+                lines.insert(3, row("USAGE", session_tokens_breakdown(view.token_usage)))
             self._text.update("\n".join(lines))
             return
 
@@ -1488,6 +1545,9 @@ class LiveRunContextPanel(VerticalScroll):
             row("PATCH", patch_status),
             row("VERIFIER", verifier),
         ]
+        if tokens_summary is not None:
+            lines.insert(2, row("TOKENS", tokens_summary.replace("Tokens ", "")))
+            lines.insert(3, row("USAGE", session_tokens_breakdown(view.token_usage)))
         self._text.update("\n".join(lines))
 
     def update_execution(self, state: LiveExecutionState) -> None:
@@ -1547,6 +1607,9 @@ class LiveRunContextPanel(VerticalScroll):
                 row("PROJECT", repo_basename),
                 row("HEAD", head_short),
             ]
+            if session_tokens_summary(view.token_usage) is not None:
+                lines.insert(2, row("TOKENS", session_tokens_summary(view.token_usage).replace("Tokens ", "")))
+                lines.insert(3, row("USAGE", session_tokens_breakdown(view.token_usage)))
             self._text.update("\n".join(lines))
             return
 
@@ -1559,6 +1622,9 @@ class LiveRunContextPanel(VerticalScroll):
             row("PATCH", patch_status),
             row("VERIFIER", verifier),
         ]
+        if session_tokens_summary(view.token_usage) is not None:
+            lines.insert(2, row("TOKENS", session_tokens_summary(view.token_usage).replace("Tokens ", "")))
+            lines.insert(3, row("USAGE", session_tokens_breakdown(view.token_usage)))
         self._text.update("\n".join(lines))
 
 

@@ -28,6 +28,10 @@ from typing import Any, Dict, Optional, Sequence
 
 from agentic_debugger import SchemaValidationError
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.token_usage import (
+    TOKEN_USAGE_PAYLOAD_FIELDS,
+    usage_from_payload,
+)
 from agentic_debugger.application import ApplicationContractError
 from agentic_debugger.evaluation.outcome_taxonomy import SemanticOutcome
 from agentic_debugger.evaluation.runner import EvaluationStatus
@@ -987,7 +991,7 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(payload, Mapping):
         raise SchemaValidationError("model.request_completed payload must be a mapping")
     required = {"request_index", "status"}
-    optional = {"error_kind", "error_message"}
+    optional = {"error_kind", "error_message", "token_usage"}
     _check_required(payload, required, "model.request_completed payload")
     _check_no_unknown(payload, required | optional, "model.request_completed payload")
     result = {
@@ -1018,6 +1022,24 @@ def _payload_request_completed(payload: Mapping[str, Any]) -> dict[str, Any]:
             )
         result["error_kind"] = error_kind
         result["error_message"] = error_message
+    if "token_usage" in payload:
+        # Optional provider-reported counts (additive v1 field): strict
+        # non-negative integer dimensions, unknown-field rejection, and
+        # semantic consistency (total == input + output; cached <= input)
+        # where the fields are present.  Historical events without the
+        # block remain valid; nothing here is derived or defaulted.
+        try:
+            usage_from_payload(payload["token_usage"])
+        except ValueError as exc:
+            raise SchemaValidationError(
+                f"model.request_completed token_usage is invalid: {exc}"
+            ) from None
+        block = payload["token_usage"]
+        result["token_usage"] = {
+            field: block[field]
+            for field in TOKEN_USAGE_PAYLOAD_FIELDS
+            if field in block
+        }
     return result
 
 

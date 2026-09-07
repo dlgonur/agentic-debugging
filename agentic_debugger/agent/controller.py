@@ -6,7 +6,7 @@ import inspect
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Callable
+from typing import Callable, Optional
 
 from agentic_debugger.agent.controller_policy import (
     ActionName,
@@ -32,8 +32,10 @@ from agentic_debugger.agent.model_adapter import (
     ReviseHypothesisDirective,
     SetHypothesisStatusDirective,
     TransitionDirective,
+    UsageReportingModelAdapter,
     directive_kind,
 )
+from agentic_debugger.agent.token_usage import TokenUsage
 from agentic_debugger.agent.observer import (
     ControllerObservation,
     ControllerObservationKind,
@@ -954,6 +956,24 @@ class DeterministicController:
             if cancel_check is not None:
                 cancel_check()
 
+        def _completed_request_usage() -> Optional[TokenUsage]:
+            """Read provider-reported usage of the just-finished request.
+
+            Only adapters implementing the optional usage seam can report
+            it (live provider adapters aggregating transport retries and
+            directive repairs); scripted adapters legitimately report
+            none.  A seam failure or invalid value never fails the
+            controller request itself.
+            """
+            adapter = self.model_adapter
+            if not isinstance(adapter, UsageReportingModelAdapter):
+                return None
+            try:
+                usage = adapter.last_request_token_usage()
+            except Exception:
+                return None
+            return usage if isinstance(usage, TokenUsage) else None
+
         _emit(
             ControllerObservationKind.RUN_STARTED,
             model_call_index=snapshot.model_call_index,
@@ -1094,14 +1114,16 @@ class DeterministicController:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="model_script_exhausted",
-                      error_message="scripted model response is unavailable")
+                      error_message="scripted model response is unavailable",
+                      token_usage=_completed_request_usage())
                 failure_step(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED)
                 return result(ControllerStopReason.MODEL_SCRIPT_EXHAUSTED, state)
             except ModelScriptMismatchError:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="model_script_mismatch",
-                      error_message="scripted model response does not match controller state")
+                      error_message="scripted model response does not match controller state",
+                      token_usage=_completed_request_usage())
                 failure_step(ControllerStopReason.MODEL_SCRIPT_MISMATCH)
                 return result(ControllerStopReason.MODEL_SCRIPT_MISMATCH, state)
             except ModelAdapterError as exc:
@@ -1115,14 +1137,16 @@ class DeterministicController:
                           getattr(exc, "safe_message", None),
                           "model adapter rejected the request",
                           512,
-                      ))
+                      ),
+                      token_usage=_completed_request_usage())
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
             except Exception:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="unexpected_model_error",
-                      error_message="unexpected model request failure")
+                      error_message="unexpected model request failure",
+                      token_usage=_completed_request_usage())
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
@@ -1132,7 +1156,8 @@ class DeterministicController:
                 _emit(ControllerObservationKind.MODEL_REQUEST_COMPLETED,
                       model_call_index=model_call_index, state_before=state,
                       request_status="error", error_kind="invalid_directive",
-                      error_message="model response did not produce a canonical directive")
+                      error_message="model response did not produce a canonical directive",
+                      token_usage=_completed_request_usage())
                 failure_step(ControllerStopReason.MODEL_ERROR)
                 return result(ControllerStopReason.MODEL_ERROR, state)
 
@@ -1143,6 +1168,7 @@ class DeterministicController:
                 model_call_index=model_call_index - 1,
                 state_before=state_before,
                 request_status="ok",
+                token_usage=_completed_request_usage(),
             )
             if kind is ModelDirectiveKind.ACTION:
                 _check_cancelled()

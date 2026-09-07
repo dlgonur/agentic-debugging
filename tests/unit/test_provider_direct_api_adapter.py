@@ -578,3 +578,103 @@ class TestSubprocessContract:
         payload = json.loads(result.stdout.decode("utf-8"))
         assert payload["directive_content"] == _DIRECTIVE
         assert SECRET not in result.stdout.decode("utf-8")
+
+
+class TestExtractUsageNormalization:
+    """Task-34: per-family cached-token normalization (synthetic payloads)."""
+
+    def test_chat_completions_cached_detail_is_subset_of_prompt(self):
+        usage = adapter.extract_usage(
+            "chat_completions",
+            {
+                "usage": {
+                    "prompt_tokens": 10_000,
+                    "completion_tokens": 2_000,
+                    "total_tokens": 12_000,
+                    "prompt_tokens_details": {"cached_tokens": 7_000},
+                }
+            },
+        )
+        assert usage == {
+            "prompt_tokens": 10_000,
+            "completion_tokens": 2_000,
+            "total_tokens": 12_000,
+            "cached_input_tokens": 7_000,
+        }
+
+    def test_responses_input_tokens_details_cached(self):
+        usage = adapter.extract_usage(
+            "responses",
+            {
+                "usage": {
+                    "input_tokens": 8_420,
+                    "output_tokens": 734,
+                    "total_tokens": 9_154,
+                    "input_tokens_details": {"cached_tokens": 6_912},
+                }
+            },
+        )
+        assert usage == {
+            "prompt_tokens": 8_420,
+            "completion_tokens": 734,
+            "total_tokens": 9_154,
+            "cached_input_tokens": 6_912,
+        }
+
+    def test_messages_complete_effective_input_from_disjoint_cache_buckets(self):
+        usage = adapter.extract_usage(
+            "messages",
+            {
+                "usage": {
+                    "input_tokens": 300,
+                    "cache_read_input_tokens": 50_000,
+                    "cache_creation_input_tokens": 1_200,
+                    "output_tokens": 700,
+                }
+            },
+        )
+        assert usage == {
+            "prompt_tokens": 51_500,
+            "completion_tokens": 700,
+            "cached_input_tokens": 50_000,
+            "cache_write_input_tokens": 1_200,
+        }
+
+    def test_messages_without_cache_keys_unchanged(self):
+        usage = adapter.extract_usage(
+            "messages",
+            {"usage": {"input_tokens": 11, "output_tokens": 7}},
+        )
+        assert usage == {"prompt_tokens": 11, "completion_tokens": 7}
+
+    def test_messages_invalid_cache_dimension_leaves_input_unknown(self):
+        usage = adapter.extract_usage(
+            "messages",
+            {
+                "usage": {
+                    "input_tokens": 11,
+                    "cache_read_input_tokens": "many",
+                    "output_tokens": 7,
+                }
+            },
+        )
+        # Present-but-invalid cache detail cannot be silently dropped from
+        # the complete-input sum: input stays unreported.
+        assert usage == {"completion_tokens": 7}
+
+    def test_malformed_cached_detail_omitted(self):
+        usage = adapter.extract_usage(
+            "chat_completions",
+            {
+                "usage": {
+                    "prompt_tokens": 100,
+                    "completion_tokens": 20,
+                    "prompt_tokens_details": {"cached_tokens": -4},
+                }
+            },
+        )
+        assert usage == {"prompt_tokens": 100, "completion_tokens": 20}
+
+    def test_missing_usage_stays_absent_per_family(self):
+        for protocol in ("chat_completions", "responses", "messages"):
+            assert adapter.extract_usage(protocol, {"choices": []}) is None

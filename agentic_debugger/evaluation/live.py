@@ -22,6 +22,7 @@ from agentic_debugger.agent.controller_policy import (
     decide_pdb_access,
 )
 from agentic_debugger.agent.model_adapter import ActionDirective, AddHypothesisDirective, ControllerSnapshot, ModelAdapterError, ModelDirective, ReviseHypothesisDirective, SetHypothesisStatusDirective, TransitionDirective
+from agentic_debugger.agent.token_usage import TokenUsage, usage_from_transport
 from agentic_debugger.agent.state_machine import ControllerState, TRANSITION_GRAPH
 from agentic_debugger.agent.trajectory import project_controller_run
 from agentic_debugger.agent.observer import (
@@ -252,7 +253,7 @@ class LiveCaseStatus(str, Enum):
 _SECRET_KEY=re.compile(r"(?:api[_-]?key|access[_-]?key|auth(?:orization)?|credential|password|secret|token|private[_-]?key)",re.I)
 _SECRET_VALUE=re.compile(r"(?i)\b(?:bearer|basic)\s+\S+|\b(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|token)\s*[:=]\s*\S+")
 _SECRET_ARGUMENT=re.compile(r"^--?(?:api[_-]?key|access[_-]?token|authorization|credential|password|secret|private[_-]?key|token)(?:=|$)",re.I)
-_USAGE_FIELDS={"prompt_tokens","completion_tokens","total_tokens","provider_reported","missing_fields"}
+_USAGE_FIELDS={"prompt_tokens","completion_tokens","total_tokens","cached_input_tokens","cache_write_input_tokens","provider_reported","missing_fields"}
 def redact_for_recording(value:Any, *, _usage_context:bool=False, _event_metadata_context:bool=False)->Any:
     if isinstance(value,Mapping):
         result={}
@@ -262,7 +263,7 @@ def redact_for_recording(value:Any, *, _usage_context:bool=False, _event_metadat
                 result[name]=redact_for_recording(item,_usage_context=True,_event_metadata_context=False)
             elif name == "metadata" and isinstance(item,Mapping) and set(item).issubset({"duration_ms","tool_version","model","tokens","cost"}) and {"duration_ms","tool_version","model","tokens","cost"}.issubset(set(item)):
                 result[name]=redact_for_recording(item,_usage_context=False,_event_metadata_context=True)
-            elif _usage_context and name in _USAGE_FIELDS and ((name in {"prompt_tokens","completion_tokens","total_tokens"} and (type(item) is int or item is None)) or (name=="provider_reported" and type(item) is bool) or (name=="missing_fields" and isinstance(item,list))):
+            elif _usage_context and name in _USAGE_FIELDS and ((name in {"prompt_tokens","completion_tokens","total_tokens","cached_input_tokens","cache_write_input_tokens"} and (type(item) is int or item is None)) or (name=="provider_reported" and type(item) is bool) or (name=="missing_fields" and isinstance(item,list))):
                 result[name]=redact_for_recording(item,_usage_context=False,_event_metadata_context=False)
             elif _event_metadata_context and name=="tokens" and (type(item) is int or item is None):
                 result[name]=item
@@ -588,7 +589,7 @@ class JsonlCommandTransport:
 
 @dataclass
 class LiveModelMetrics:
-    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; stream_frame_count:int=0; thinking_bytes:int=0; action_content_bytes:int=0; retries:int=0; directive_repairs:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); directive_rejections:int=0; directive_rejection_categories:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
+    model_requests:int=0; model_responses:int=0; logical_model_calls:int=0; transport_attempts:int=0; cumulative_request_bytes:int=0; max_request_bytes:int=0; stream_frame_count:int=0; thinking_bytes:int=0; action_content_bytes:int=0; retries:int=0; directive_repairs:int=0; provider_errors:int=0; provider_error_kinds:list[str]=field(default_factory=list); directive_rejections:int=0; directive_rejection_categories:list[str]=field(default_factory=list); prompt_tokens:int|None=None; completion_tokens:int|None=None; total_tokens:int|None=None; cached_input_tokens:int|None=None; cache_write_input_tokens:int|None=None; usage_reported:bool=False; usage_missing_fields:list[str]=field(default_factory=list); termination_reason:str|None=None; controller_wall_duration_ms:int=0; verifier_wall_duration_ms:int=0
     def error(self,kind):
         self.provider_errors+=1
         if kind not in self.provider_error_kinds: self.provider_error_kinds.append(kind)
@@ -598,13 +599,16 @@ class LiveModelMetrics:
     def directive_repair(self):
         self.directive_repairs+=1
     def usage(self,value):
-        names=("prompt_tokens","completion_tokens","total_tokens")
+        # Session-cumulative provider-reported usage (the accepted evaluation
+        # usage authority).  Normalization, per-dimension unknownness, and
+        # the counts-only safety contract live in ``agent.token_usage``.
+        usage=usage_from_transport(value)
+        fields=(("prompt_tokens",usage.input_tokens),("completion_tokens",usage.output_tokens),("total_tokens",usage.total_tokens),("cached_input_tokens",usage.cached_input_tokens),("cache_write_input_tokens",usage.cache_write_input_tokens))
         if not isinstance(value,Mapping):
-            self.usage_missing_fields.extend(x for x in names if x not in self.usage_missing_fields); return
+            self.usage_missing_fields.extend(x for x in dict(fields) if x not in self.usage_missing_fields); return
         self.usage_reported=True
-        for name in names:
-            number=value.get(name)
-            if type(number) is int and number >= 0:
+        for name,number in fields:
+            if number is not None:
                 old=getattr(self,name); setattr(self,name,number if old is None else old+number)
             elif name not in self.usage_missing_fields: self.usage_missing_fields.append(name)
     def activity(self,value):
@@ -612,7 +616,49 @@ class LiveModelMetrics:
         for source,target in (("stream_frame_count","stream_frame_count"),("thinking_bytes","thinking_bytes"),("content_bytes","action_content_bytes")):
             number=value.get(source)
             if type(number) is int and number>=0: setattr(self,target,getattr(self,target)+number)
-    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"stream_frame_count":self.stream_frame_count,"thinking_bytes":self.thinking_bytes,"action_content_bytes":self.action_content_bytes,"retry_count":self.retries,"directive_repair_count":self.directive_repairs,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"directive_rejection_count":self.directive_rejections,"directive_rejection_categories":self.directive_rejection_categories,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
+    def to_mapping(self): return {"model_request_count":self.model_requests,"model_response_count":self.model_responses,"logical_model_call_count":self.logical_model_calls,"transport_attempt_count":self.transport_attempts,"cumulative_request_bytes":self.cumulative_request_bytes,"max_request_bytes":self.max_request_bytes,"stream_frame_count":self.stream_frame_count,"thinking_bytes":self.thinking_bytes,"action_content_bytes":self.action_content_bytes,"retry_count":self.retries,"directive_repair_count":self.directive_repairs,"provider_error_count":self.provider_errors,"provider_error_kinds":self.provider_error_kinds,"directive_rejection_count":self.directive_rejections,"directive_rejection_categories":self.directive_rejection_categories,"token_usage":{"prompt_tokens":self.prompt_tokens,"completion_tokens":self.completion_tokens,"total_tokens":self.total_tokens,"cached_input_tokens":self.cached_input_tokens,"cache_write_input_tokens":self.cache_write_input_tokens,"provider_reported":self.usage_reported,"missing_fields":sorted(set(self.usage_missing_fields))},"termination_reason":self.termination_reason,"controller_wall_duration_ms":self.controller_wall_duration_ms,"verifier_wall_duration_ms":self.verifier_wall_duration_ms}
+
+
+class _LogicalRequestUsage:
+    """Provider-reported usage aggregation for one logical model call.
+
+    Every provider-completed transport attempt inside the call counts,
+    including attempts whose directive was later rejected (directive
+    repairs) and attempts followed by transport retries: each reported
+    response consumed real tokens.  Transport attempts that failed
+    without a provider-completed response contribute nothing and never
+    receive fabricated counts.  A provider-completed response that omits
+    a dimension leaves that dimension unknown (``None``) for the whole
+    logical call; unknown is never treated as a zero contribution.
+    """
+
+    __slots__=("_total","_reported")
+
+    def __init__(self):
+        self._total: TokenUsage|None=None
+        self._reported=False
+
+    def add_provider_response(self,value):
+        usage=usage_from_transport(value)
+        if isinstance(value,Mapping):
+            self._reported=True
+        # The first reported response seeds the sum; later responses merge
+        # with unknown propagation (an omitted dimension poisons the sum
+        # for the whole logical call, never a zero contribution).
+        self._total=usage if self._total is None else self._total.added(usage)
+
+    def build(self)->TokenUsage|None:
+        """Canonical usage of the logical call, or ``None`` when unusable.
+
+        ``None`` means no provider-completed attempt reported any usable
+        dimension, or every reported dimension was poisoned to unknown by
+        a completed response that omitted it; either way no usage block
+        may be claimed for the request.
+        """
+        if not self._reported or self._total is None:
+            return None
+        usage=self._total.canonical()
+        return usage if usage.reported else None
 
 def _rejected(category: "DirectiveRejectionCategory", detail: str = "", *, stage: str | None = None, reason_code: str | None = None, content: str | None = None) -> LiveModelAdapterError:
     return LiveModelAdapterError("invalid model directive", category=category, detail=detail, stage=stage, reason_code=reason_code, content=content, directive_rejection=True)
@@ -1466,6 +1512,10 @@ class LiveModelAdapter:
         # to at most one append per logical call regardless of retry count.
         self._pdb_gate_decision_cache: tuple[int, Any] | None = None
         self._pdb_gate_recorded_for_index: int | None = None
+        # Provider-reported usage of the most recent logical model call
+        # (reset at the top of every ``next_directive``).  ``None`` until
+        # the first provider-completed response of the current call.
+        self._call_usage: _LogicalRequestUsage | None = None
 
     def reconcile_tool_dispatch(self, controller_result: Any) -> None:
         """Bind dispatch truth from completed controller/tool steps.
@@ -2221,6 +2271,9 @@ class LiveModelAdapter:
     def next_directive(self,snapshot):
         self._observe_snapshot(snapshot)
         self.metrics.logical_model_calls += 1
+        # One logical model call: per-call usage aggregation restarts here
+        # so a stale value from the previous call can never be reported.
+        self._call_usage=_LogicalRequestUsage()
         # The gate is consumed from ``UNDERSTAND``.  ``_runtime_transition_authorized``
         # marks that the controller is already inside an authorized RUNTIME_EVIDENCE
         # visit; it is reset to ``False`` whenever the controller has left that
@@ -2321,7 +2374,9 @@ class LiveModelAdapter:
                 response=self.transport.request(request,timeout_seconds)
                 if not isinstance(response,Mapping): raise LiveModelAdapterError("invalid model response",category=DirectiveRejectionCategory.MALFORMED_DIRECTIVE,detail="model response was not a JSON object")
                 self.metrics.model_responses+=1
-                self.metrics.usage(response.get("usage"))
+                usage=response.get("usage")
+                self.metrics.usage(usage)
+                self._call_usage.add_provider_response(usage)
                 self.metrics.activity(response.get("transport_activity"))
                 attempt_record={
                     "model_call_index": logical_request_index,
@@ -2428,6 +2483,19 @@ class LiveModelAdapter:
                 self.metrics.termination_reason="directive_rejected"; raise
             finally:
                 self.model_phase_elapsed_seconds += max(0.0,self.clock()-phase_started)
+
+    def last_request_token_usage(self) -> TokenUsage | None:
+        """Provider-reported usage of the most recent logical model call.
+
+        Optional adapter seam consumed by the controller after a model
+        request completes (success or failure).  The value aggregates
+        every provider-completed transport attempt inside that call —
+        transport retries and directive repairs included — under the
+        canonical counts-only contract.  ``None`` means no usable usage
+        was reported; it is never a zero claim.
+        """
+        return self._call_usage.build() if self._call_usage is not None else None
+
     def _remaining(self):
         left=self.limits.max_model_phase_seconds-self.model_phase_elapsed_seconds
         if left<=0: self.metrics.termination_reason="elapsed_time_limit"; raise LiveModelAdapterError("live elapsed time limit reached")
@@ -3008,6 +3076,9 @@ def _validate_case(case: Any):
     _require_fields(usage,("prompt_tokens","completion_tokens","total_tokens","provider_reported","missing_fields"),"case.measurements.token_usage")
     for field in ("prompt_tokens","completion_tokens","total_tokens"):
         if usage[field] is not None:
+            _count(usage[field],"case.measurements.token_usage."+field)
+    for field in ("cached_input_tokens","cache_write_input_tokens"):
+        if field in usage and usage[field] is not None:
             _count(usage[field],"case.measurements.token_usage."+field)
     _boolean(usage["provider_reported"],"case.measurements.token_usage.provider_reported")
     if not isinstance(usage["missing_fields"],list) or any(type(item) is not str or not item for item in usage["missing_fields"]):

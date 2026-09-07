@@ -221,7 +221,7 @@ ENGINEERING CAMPAIGN REMAINS OPEN; NO NEXT IMPLEMENTATION PRIORITY SELECTED**
 ## 1. What was built
 
 A verifier-backed, fail-closed, single-controller agentic debugging prototype
-(`agentic_debugging/`): typed deterministic controller/tools, disposable
+(`agentic_debugger/`): typed deterministic controller/tools, disposable
 workspaces, a real PDB session/worker/protocol backend, unified-diff +
 whole-file patch serialization with deterministic normalization, an
 independent EvaluationVerifier (F2P/P2P/full-suite/syntax/canonical
@@ -231,7 +231,17 @@ comparison/preference infrastructure, dataset adapters (QuixBugs WSL2 +
 Bubblewrap containment; BugsInPy license-gated), and professor-facing
 structured JSON trace export.
 
+Session Token Usage Telemetry v1 (Task 34, post-V2 capability): truthful
+provider-reported token usage per logical model request and cumulative per
+session (Input / Cached / Output / Total, Cached a subset of Input,
+Total = Input + Output) through the durable session event/journal path and
+the live/replay UI. Provider-reported counts only — no estimation, no
+pricing; unreported dimensions stay unknown (`—`), and partial coverage is
+marked rather than presented as a complete total. Recorded in
+`architecture/session-token-usage-v1.md`.
+
 ## 2. What was researched
+
 
 - S7 focused literature closeout (20 works): runtime evidence can help;
   raw debugger exposure alone is not reliably beneficial; ordinary

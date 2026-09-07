@@ -144,6 +144,184 @@ def replay_completed_stream():
     return tuple(events)
 
 
+def _usage_event(request_index: int, token_usage, sequence: int, status: str = "ok"):
+    return make_event(
+        SessionEventKind.MODEL_REQUEST_COMPLETED,
+        {
+            "request_index": request_index,
+            "status": status,
+            **({"token_usage": token_usage} if token_usage is not None else {}),
+        },
+        sequence=sequence,
+        run_id=VALID_RUN_ID,
+        controller_phase=ControllerState.REPRODUCE,
+    )
+
+
+class TestSessionTokenUsageReduction:
+    """Task-34: cumulative provider-reported usage derives from durable events."""
+
+    def test_multi_request_session_accumulates_without_double_counting_cached(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(
+                    0,
+                    {"input_tokens": 1_000, "output_tokens": 200,
+                     "cached_input_tokens": 600, "total_tokens": 1_200},
+                    sequence=3,
+                ),
+                _usage_event(
+                    1,
+                    {"input_tokens": 1_500, "output_tokens": 300,
+                     "cached_input_tokens": 1_000, "total_tokens": 1_800},
+                    sequence=4,
+                ),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.input_tokens == 2_500
+        assert usage.cached_input_tokens == 1_600
+        assert usage.output_tokens == 500
+        # Total is Input + Output; Cached is a subset and never added again.
+        assert usage.total_tokens == 3_000
+        assert usage.effective_total_tokens == 3_000
+        assert usage.requests_completed == 2
+        assert usage.requests_with_usage == 2
+        assert usage.complete
+        assert usage.usage_available
+
+    def test_retry_aggregated_request_counts_once(self):
+        # A logical request whose adapter already aggregated two provider
+        # attempts (220/120/50/270) is one durable completion event.
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(
+                    0,
+                    {"input_tokens": 220, "output_tokens": 50,
+                     "cached_input_tokens": 120, "total_tokens": 270},
+                    sequence=3,
+                ),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.input_tokens == 220
+        assert usage.cached_input_tokens == 120
+        assert usage.output_tokens == 50
+        assert usage.total_tokens == 270
+        assert usage.requests_completed == 1
+
+    def test_requests_without_usage_leave_no_usage_claim(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, None, sequence=3),
+                _usage_event(1, None, sequence=4),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.requests_completed == 2
+        assert usage.requests_with_usage == 0
+        assert not usage.usage_available
+        assert not usage.complete
+        assert usage.input_tokens is None
+        assert usage.effective_total_tokens is None
+
+    def test_mixed_session_is_partial_and_poisons_cumulative_counts(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(
+                    0,
+                    {"input_tokens": 1_000, "output_tokens": 200,
+                     "cached_input_tokens": 600, "total_tokens": 1_200},
+                    sequence=3,
+                ),
+                _usage_event(1, None, sequence=4),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.requests_completed == 2
+        assert usage.requests_with_usage == 1
+        assert not usage.complete
+        # The unreported request consumed an unknown amount; the totals
+        # become unknown rather than a silently complete lower bound.
+        assert usage.input_tokens is None
+        assert usage.total_tokens is None
+        assert usage.effective_total_tokens is None
+
+    def test_missing_dimension_poisons_only_that_dimension(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(
+                    0,
+                    {"input_tokens": 100, "output_tokens": 20,
+                     "cached_input_tokens": 40, "total_tokens": 120},
+                    sequence=3,
+                ),
+                _usage_event(
+                    1,
+                    {"input_tokens": 120, "output_tokens": 30, "total_tokens": 150},
+                    sequence=4,
+                ),
+            ),
+        )
+        usage = view.token_usage
+        assert usage.input_tokens == 220
+        assert usage.output_tokens == 50
+        assert usage.total_tokens == 270
+        assert usage.cached_input_tokens is None
+        assert usage.complete
+
+    def test_derived_total_when_events_report_no_total(self):
+        view = reduce_all(
+            state_running(),
+            (
+                _usage_event(0, {"input_tokens": 10, "output_tokens": 5}, sequence=3),
+            ),
+        )
+        assert view.token_usage.total_tokens is None
+        assert view.token_usage.effective_total_tokens == 15
+
+    def test_replay_reduces_identical_cumulative_usage(self):
+        events = (
+            _usage_event(
+                0,
+                {"input_tokens": 1_000, "output_tokens": 200,
+                 "cached_input_tokens": 600, "total_tokens": 1_200},
+                sequence=3,
+            ),
+            _usage_event(1, None, sequence=4),
+            _usage_event(
+                2,
+                {"input_tokens": 300, "output_tokens": 40, "total_tokens": 340},
+                sequence=5,
+                status="error",
+            ),
+        )
+        live_view = reduce_all(state_running(), events)
+        replay_events = []
+        for event in events:
+            mapping = event.to_mapping()
+            mapping["source_kind"] = SourceKind.SESSION_BUNDLE.value
+            replay_events.append(SessionEvent.from_mapping(mapping))
+        replay_view = reduce_all(
+            initial_session_view(
+                PresentationIdentity(
+                    task_id=VALID_TASK_ID,
+                    source_kind=SourceKind.SESSION_BUNDLE,
+                    session_id=VALID_SESSION_ID,
+                )
+            ),
+            tuple(replay_events),
+        )
+        assert replay_view.token_usage == live_view.token_usage
+        assert replay_view.token_usage.requests_completed == 3
+        assert replay_view.token_usage.requests_with_usage == 2
+
+
 class TestPresentationIdentity:
     """Blocker-1 coverage: unified live/replay provenance and fail-closed binding."""
 

@@ -25,6 +25,7 @@ from agentic_debugger.application.presentation import (
     DiagnosisView,
     ModelProvenanceView,
     PresentationIdentity,
+    SessionTokenUsage,
     SessionViewState,
     TimelineEntry,
     VerifierSummaryView,
@@ -42,6 +43,9 @@ from agentic_debugger.ui.widgets import (
     SourcePanel,
     TimelinePanel,
     VerifierPanel,
+    format_token_count_compact,
+    session_tokens_breakdown,
+    session_tokens_summary,
     _ACTIVITY_FILTER_KINDS,
     _KIND_STYLE,
     _highlight_source_lines,
@@ -349,6 +353,113 @@ class TestHeaderRendering:
         assert "Executing Tool" in plain
         assert "verifier pending" in plain
         assert "executing_tool" not in plain
+
+
+class TestTokenUsageRendering:
+    """Task-34: cumulative token summary in the header and panel helpers."""
+
+    def test_header_shows_compact_total_and_partial_marker(self):
+        view = replace(
+            fold(bracket_stream()),
+            token_usage=SessionTokenUsage(
+                input_tokens=27_400,
+                cached_input_tokens=18_100,
+                output_tokens=4_400,
+                total_tokens=31_800,
+                requests_completed=3,
+                requests_with_usage=2,
+            ),
+        )
+        plain = render_view_header(
+            view, mode="LIVE", mode_style="bold white on #1f6feb"
+        ).plain
+        assert "Tokens 31.8k (partial)" in plain
+        assert_no_style_tags(plain)
+
+    def test_header_complete_total_has_no_partial_marker(self):
+        view = replace(
+            fold(bracket_stream()),
+            token_usage=SessionTokenUsage(
+                input_tokens=27_400,
+                cached_input_tokens=18_100,
+                output_tokens=4_400,
+                total_tokens=31_800,
+                requests_completed=3,
+                requests_with_usage=3,
+            ),
+        )
+        plain = render_view_header(
+            view, mode="REPLAY", mode_style="bold white on #238636"
+        ).plain
+        assert "Tokens 31.8k" in plain
+        assert "partial" not in plain
+
+    def test_header_without_usage_shows_no_fake_total(self):
+        view = replace(
+            fold(bracket_stream()),
+            token_usage=SessionTokenUsage(requests_completed=2, requests_with_usage=0),
+        )
+        plain = render_view_header(
+            view, mode="LIVE", mode_style="bold white on #1f6feb"
+        ).plain
+        assert "Tokens" not in plain
+
+    def test_compact_formatting_thresholds(self):
+        assert format_token_count_compact(None) == "—"
+        assert format_token_count_compact(0) == "0"
+        assert format_token_count_compact(940) == "940"
+        assert format_token_count_compact(1_000) == "1k"
+        assert format_token_count_compact(4_400) == "4.4k"
+        assert format_token_count_compact(31_842) == "31.8k"
+        assert format_token_count_compact(2_400_000) == "2.4M"
+
+    def test_panel_breakdown_known_dimensions_only(self):
+        assert (
+            session_tokens_breakdown(SessionTokenUsage())
+            == "—"
+        )
+        assert session_tokens_breakdown(
+            SessionTokenUsage(requests_with_usage=1)
+        ) == "—"
+        assert session_tokens_breakdown(
+            SessionTokenUsage(
+                input_tokens=27_400,
+                cached_input_tokens=18_100,
+                output_tokens=4_400,
+                total_tokens=31_800,
+                requests_completed=3,
+                requests_with_usage=3,
+            )
+        ) == "In 27.4k · Cache 18.1k · Out 4.4k"
+        # Unknown cached dimension is omitted rather than zeroed.
+        assert session_tokens_breakdown(
+            SessionTokenUsage(
+                input_tokens=27_400,
+                output_tokens=4_400,
+                total_tokens=31_800,
+                requests_completed=1,
+                requests_with_usage=1,
+            )
+        ) == "In 27.4k · Out 4.4k"
+
+    def test_summary_derives_total_from_input_plus_output(self):
+        usage = SessionTokenUsage(
+            input_tokens=1_000,
+            output_tokens=200,
+            requests_completed=1,
+            requests_with_usage=1,
+        )
+        assert usage.effective_total_tokens == 1_200
+        assert session_tokens_summary(usage) == "Tokens 1.2k"
+
+    def test_summary_absent_without_reported_usage(self):
+        assert session_tokens_summary(SessionTokenUsage()) is None
+        assert (
+            session_tokens_summary(
+                SessionTokenUsage(requests_completed=4, requests_with_usage=0)
+            )
+            is None
+        )
 
 
 class TestPaneRendering:

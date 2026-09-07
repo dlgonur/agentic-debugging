@@ -99,6 +99,88 @@ class TestSessionEventSchema:
         with pytest.raises(SchemaValidationError):
             SessionEvent.from_mapping(mapping)
 
+    def test_model_request_token_usage_round_trips(self):
+        payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {
+                "input_tokens": 220,
+                "output_tokens": 50,
+                "cached_input_tokens": 120,
+                "total_tokens": 270,
+            },
+        }
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+        )
+        assert event.to_mapping()["payload"] == payload
+        back = SessionEvent.from_mapping(event.to_mapping())
+        assert back == event
+
+    def test_model_request_token_usage_may_be_partial(self):
+        payload = {
+            "request_index": 1,
+            "status": "error",
+            "error_kind": "malformed_directive",
+            "error_message": "directive was rejected",
+            "token_usage": {"input_tokens": 220, "output_tokens": 50, "total_tokens": 270},
+        }
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+        )
+        assert event.to_mapping()["payload"]["token_usage"] == {
+            "input_tokens": 220,
+            "output_tokens": 50,
+            "total_tokens": 270,
+        }
+
+    def test_model_request_without_token_usage_remains_valid(self):
+        # Historical shape: events predating token usage must still pass.
+        payload = {"request_index": 0, "status": "ok"}
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+        )
+        assert "token_usage" not in event.payload
+
+    @pytest.mark.parametrize(
+        "usage",
+        (
+            {},
+            {"input_tokens": -1},
+            {"input_tokens": 1.5},
+            {"input_tokens": True},
+            {"input_tokens": "220"},
+            {"total_tokens": "31.8k"},
+            {"input_tokens": 5, "output_tokens": 3, "total_tokens": 9},
+            {"input_tokens": 5, "cached_input_tokens": 6},
+            {"input_tokens": 5, "prompt": "leak"},
+            {"input_tokens": 5, "api_key": "sk-secret"},
+            {"prompt_tokens": 5},
+        ),
+    )
+    def test_invalid_token_usage_fails_closed(self, usage):
+        payload = {"request_index": 0, "status": "ok", "token_usage": usage}
+        with pytest.raises(SchemaValidationError):
+            SessionEvent.from_mapping(
+                make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+            )
+
+    def test_token_usage_is_not_derived_at_validation(self):
+        # The validator preserves exactly the recorded dimensions; it never
+        # invents a total for a block that did not carry one.
+        payload = {
+            "request_index": 0,
+            "status": "ok",
+            "token_usage": {"input_tokens": 7, "output_tokens": 3},
+        }
+        event = SessionEvent.from_mapping(
+            make_event_mapping(SessionEventKind.MODEL_REQUEST_COMPLETED, payload)
+        )
+        assert event.to_mapping()["payload"]["token_usage"] == {
+            "input_tokens": 7,
+            "output_tokens": 3,
+        }
+
     def test_missing_top_level_field_rejected(self):
         mapping = make_event_mapping(SessionEventKind.SESSION_CREATED)
         del mapping["payload"]

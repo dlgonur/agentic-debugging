@@ -1044,3 +1044,129 @@ def test_failed_run_then_valid_run_same_controller_has_no_cursor():
     assert valid.stop_reason is ControllerStopReason.MODEL_CALL_LIMIT
     assert valid.steps[0].action.action_id == "action-000000000"
     assert adapter.calls == 2
+
+
+class _UsageReportingAdapter(RecordingAdapter):
+    """Scripted adapter that also implements the optional usage seam."""
+
+    def __init__(self, directives, usages):
+        super().__init__(directives)
+        self._usages = list(usages)
+
+    @property
+    def model_name(self):
+        return "usage-reporting-test-model"
+
+    def next_directive(self, snapshot):
+        usage = self._usages.pop(0) if self._usages else None
+        try:
+            return super().next_directive(snapshot)
+        finally:
+            self.last_request_token_usage = lambda: usage
+
+
+class _ObservationRecorder:
+    def __init__(self):
+        self.observations = []
+
+    def notify(self, observation):
+        self.observations.append(observation)
+
+
+def test_completed_request_observations_carry_provider_reported_usage():
+    from agentic_debugger.agent.observer import ControllerObservationKind
+    from agentic_debugger.agent.token_usage import TokenUsage
+
+    registry, _ = registry_for(ActionName.RUN_TESTS)
+    adapter = _UsageReportingAdapter(
+        [
+            ActionDirective(ActionName.RUN_TESTS, {}),
+            TransitionDirective(ControllerState.UNDERSTAND, "done"),
+        ],
+        [
+            TokenUsage(input_tokens=1_000, output_tokens=200,
+                       cached_input_tokens=600, total_tokens=1_200),
+            TokenUsage(input_tokens=1_500, output_tokens=300,
+                       cached_input_tokens=1_000, total_tokens=1_800),
+        ],
+    )
+    recorder = _ObservationRecorder()
+    controller = DeterministicController(
+        registry, adapter, ControllerRunConfig(2), observer=recorder
+    )
+    result = controller.run(snapshot())
+    assert result.stop_reason is ControllerStopReason.MODEL_CALL_LIMIT
+    completions = [
+        observation
+        for observation in recorder.observations
+        if observation.kind is ControllerObservationKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert [observation.request_status for observation in completions] == ["ok", "ok"]
+    assert completions[0].token_usage == TokenUsage(
+        input_tokens=1_000, output_tokens=200, cached_input_tokens=600, total_tokens=1_200
+    )
+    assert completions[1].token_usage == TokenUsage(
+        input_tokens=1_500, output_tokens=300, cached_input_tokens=1_000, total_tokens=1_800
+    )
+
+
+def test_scripted_adapter_requests_report_no_usage():
+    from agentic_debugger.agent.observer import ControllerObservationKind
+
+    registry, _ = registry_for(ActionName.RUN_TESTS)
+    adapter = scripted(
+        [
+            ActionDirective(ActionName.RUN_TESTS, {}),
+            TransitionDirective(ControllerState.UNDERSTAND, "done"),
+        ],
+    )
+    recorder = _ObservationRecorder()
+    controller = DeterministicController(
+        registry, adapter, ControllerRunConfig(2), observer=recorder
+    )
+    result = controller.run(snapshot())
+    assert result.stop_reason is ControllerStopReason.MODEL_CALL_LIMIT
+    completions = [
+        observation
+        for observation in recorder.observations
+        if observation.kind is ControllerObservationKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert len(completions) == 2
+    assert all(observation.token_usage is None for observation in completions)
+
+
+def test_failed_model_request_still_carries_reported_usage():
+    from agentic_debugger.agent.model_adapter import ModelAdapterError
+    from agentic_debugger.agent.observer import ControllerObservationKind
+    from agentic_debugger.agent.token_usage import TokenUsage
+
+    class _FailingUsageAdapter(RecordingAdapter):
+        @property
+        def model_name(self):
+            return "usage-reporting-failing-model"
+
+        def next_directive(self, snapshot):
+            try:
+                raise ModelAdapterError("model transport failed")
+            finally:
+                self.last_request_token_usage = lambda: TokenUsage(
+                    input_tokens=220, output_tokens=50, total_tokens=270
+                )
+
+    registry, _ = registry_for(ActionName.RUN_TESTS)
+    recorder = _ObservationRecorder()
+    controller = DeterministicController(
+        registry, _FailingUsageAdapter([]), ControllerRunConfig(1), observer=recorder
+    )
+    result = controller.run(snapshot())
+    assert result.stop_reason is ControllerStopReason.MODEL_ERROR
+    completions = [
+        observation
+        for observation in recorder.observations
+        if observation.kind is ControllerObservationKind.MODEL_REQUEST_COMPLETED
+    ]
+    assert len(completions) == 1
+    assert completions[0].request_status == "error"
+    assert completions[0].token_usage == TokenUsage(
+        input_tokens=220, output_tokens=50, total_tokens=270
+    )

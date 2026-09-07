@@ -852,6 +852,27 @@ def parse_opencode_output(raw_stdout: str) -> Tuple[str, Optional[dict[str, Any]
                         usage["prompt_tokens"] = int(tok["input"])
                     if "output" in tok and isinstance(tok["output"], (int, float)):
                         usage["completion_tokens"] = int(tok["output"])
+                    # OpenCode reports Anthropic-style disjoint input
+                    # buckets: ``input`` is the uncached base and
+                    # ``cache.read``/``cache.write`` are additional input
+                    # tokens.  Canonical prompt_tokens reports the complete
+                    # effective input; cached stays the cache-read subset.
+                    cache = tok.get("cache")
+                    if isinstance(cache, dict):
+                        if type(cache.get("read")) is int and cache["read"] >= 0:
+                            usage["cached_input_tokens"] = cache["read"]
+                        if type(cache.get("write")) is int and cache["write"] >= 0:
+                            usage["cache_write_input_tokens"] = cache["write"]
+                    if (
+                        "cached_input_tokens" in usage
+                        and "cache_write_input_tokens" in usage
+                        and "prompt_tokens" in usage
+                    ):
+                        usage["prompt_tokens"] = (
+                            usage["prompt_tokens"]
+                            + usage["cached_input_tokens"]
+                            + usage["cache_write_input_tokens"]
+                        )
                 if "cost" in part and isinstance(part["cost"], (int, float)):
                     usage["cost"] = float(part["cost"])
             for key in ("observed_model", "observed_billing_route", "observed_model_substitution"):

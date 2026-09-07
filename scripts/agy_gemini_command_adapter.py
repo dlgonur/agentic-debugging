@@ -1139,15 +1139,31 @@ def parse_agy_stream(raw_stdout: str) -> Tuple[dict[str, Any], Optional[dict[str
 
 
 def _map_usage(raw: Any) -> Optional[dict[str, Any]]:
+    """Normalize AGY/Gemini-style usage into the transport contract.
+
+    ``input_tokens`` follows Gemini semantics and already includes cached
+    content, so ``cache_read_tokens`` is reported directly as the cached
+    subset of input.  ``thinking_tokens`` are generation-side tokens the
+    provider includes in its own total, so they fold into the completion
+    count to keep canonical total == input + output truthful.
+    Malformed or negative counts are omitted, never zeroed.
+    """
     if not isinstance(raw, Mapping):
         return None
     usage: dict[str, Any] = {}
     input_tokens = raw.get("input_tokens")
     output_tokens = raw.get("output_tokens")
-    if type(input_tokens) is int and not isinstance(input_tokens, bool):
+    thinking_tokens = raw.get("thinking_tokens")
+    cache_read = raw.get("cache_read_tokens")
+    if type(input_tokens) is int and not isinstance(input_tokens, bool) and input_tokens >= 0:
         usage["prompt_tokens"] = input_tokens
-    if type(output_tokens) is int and not isinstance(output_tokens, bool):
-        usage["completion_tokens"] = output_tokens
+    if type(output_tokens) is int and not isinstance(output_tokens, bool) and output_tokens >= 0:
+        completion = output_tokens
+        if type(thinking_tokens) is int and not isinstance(thinking_tokens, bool) and thinking_tokens >= 0:
+            completion += thinking_tokens
+        usage["completion_tokens"] = completion
+    if type(cache_read) is int and not isinstance(cache_read, bool) and cache_read >= 0:
+        usage["cached_input_tokens"] = cache_read
     cost = raw.get("cost")
     if type(cost) in (int, float) and not isinstance(cost, bool):
         usage["cost"] = float(cost)

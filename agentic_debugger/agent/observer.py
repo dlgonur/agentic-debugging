@@ -44,6 +44,7 @@ from enum import Enum
 from typing import Optional, Protocol
 
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.token_usage import TokenUsage
 from agentic_debugger.events.schema import ObservationStatus
 
 
@@ -161,6 +162,12 @@ class ControllerObservation:
     rejection_category: Optional[str] = None
     transition_reason: Optional[str] = None
     stop_reason: Optional[str] = None
+    #: Provider-reported token usage of the completed logical model
+    #: request (counts only).  ``None`` on ``MODEL_REQUEST_COMPLETED``
+    #: means no usable usage was reported — the truthful unavailable
+    #: state, never a zero claim.  Scripted/offline adapters never
+    #: fabricate it.
+    token_usage: Optional[TokenUsage] = None
 
     def __post_init__(self) -> None:
         if type(self.kind) is not ControllerObservationKind:
@@ -223,6 +230,8 @@ class ControllerObservation:
         object.__setattr__(
             self, "stop_reason", _short_text_or_none(self.stop_reason, "stop_reason")
         )
+        if self.token_usage is not None and type(self.token_usage) is not TokenUsage:
+            raise _invalid("token_usage")
 
 
 class ControllerObserver(Protocol):

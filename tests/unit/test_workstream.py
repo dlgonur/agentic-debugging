@@ -427,6 +427,79 @@ class TestWorkstreamProjection:
         assert entry.status is WorkstreamStatus.FAILED
         assert entry.detail == "transport"
 
+    def test_model_request_usage_joins_row_detail(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            {"action_name": "get_source_window", "directive_kind": "action", "target_state": None},
+        )
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "ok",
+                "token_usage": {
+                    "input_tokens": 8_420,
+                    "output_tokens": 734,
+                    "cached_input_tokens": 6_912,
+                    "total_tokens": 9_154,
+                },
+            },
+        )
+        entry = stream.view.workstream[-1]
+        assert entry.status is WorkstreamStatus.COMPLETED
+        assert entry.detail == (
+            "Inspect source · Input 8,420 · Cached 6,912 · Output 734 · Total 9,154"
+        )
+
+    def test_model_request_usage_without_cache_omits_dimension(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "ok",
+                "token_usage": {"input_tokens": 100, "output_tokens": 20, "total_tokens": 120},
+            },
+        )
+        entry = stream.view.workstream[-1]
+        # Unknown Cached is omitted, never rendered as a fake zero.
+        assert entry.detail == "Input 100 · Output 20 · Total 120"
+
+    def test_model_request_without_usage_adds_no_detail(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_DIRECTIVE_ACCEPTED,
+            {"action_name": "get_source_window", "directive_kind": "action", "target_state": None},
+        )
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED, {"request_index": 0, "status": "ok"}
+        )
+        entry = stream.view.workstream[-1]
+        assert entry.detail == "Inspect source"
+
+    def test_failed_model_request_keeps_usage_with_error(self) -> None:
+        stream = Stream()
+        stream.emit(SessionEventKind.MODEL_REQUEST_STARTED, {"request_index": 0})
+        stream.emit(
+            SessionEventKind.MODEL_REQUEST_COMPLETED,
+            {
+                "request_index": 0,
+                "status": "error",
+                "error_kind": "malformed_directive",
+                "error_message": "unrecognized target_state",
+                "token_usage": {"input_tokens": 220, "output_tokens": 50, "total_tokens": 270},
+            },
+        )
+        entry = stream.view.workstream[-1]
+        assert entry.status is WorkstreamStatus.FAILED
+        assert entry.detail == (
+            "malformed_directive · unrecognized target_state · Input 220 · Output 50 · Total 270"
+        )
+
     def test_settled_model_requests_retained_in_chronological_order(self) -> None:
         stream = Stream()
         for index in range(6):

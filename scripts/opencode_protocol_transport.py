@@ -161,7 +161,7 @@ def _redact(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             name = str(key)
-            if name in {"prompt_tokens", "completion_tokens", "total_tokens"} and (type(item) is int or item is None):
+            if name in {"prompt_tokens", "completion_tokens", "total_tokens", "cached_input_tokens", "cache_write_input_tokens"} and (type(item) is int or item is None):
                 result[name] = item
             else:
                 result[name] = "<redacted>" if _SECRET_KEY.search(name) else _redact(item)
@@ -641,6 +641,17 @@ def _provider_diagnostics(stdout: str, stderr: str, returncode: int) -> tuple[di
 
 
 def _usage(events: list[Any]) -> dict[str, Any] | None:
+    """Normalize the final provider usage into the transport contract.
+
+    OpenCode token events mirror the Anthropic SDK convention: ``input``
+    is the uncached base and ``cache.read``/``cache.write`` are disjoint
+    input buckets.  Canonical ``prompt_tokens`` therefore reports the
+    complete effective input (base + cache read + cache write) when the
+    cache dimensions are known, with ``cached_input_tokens`` as the
+    cache-read subset; absent cache dimensions leave those fields
+    unreported rather than zero.  ``reasoning`` and ``cost`` remain
+    provider telemetry, not usage counts.
+    """
     for event in reversed(events):
         if not isinstance(event, dict):
             continue
@@ -661,6 +672,22 @@ def _usage(events: list[Any]) -> dict[str, Any] | None:
                     if type(candidate.get(name)) is int and candidate[name] >= 0:
                         result[target] = candidate[name]
                         break
+            cache = candidate.get("cache")
+            if isinstance(cache, dict):
+                for target, name in (
+                    ("cached_input_tokens", "read"),
+                    ("cache_write_input_tokens", "write"),
+                ):
+                    if type(cache.get(name)) is int and cache[name] >= 0:
+                        result[target] = cache[name]
+            if "cached_input_tokens" in result and "cache_write_input_tokens" in result and "prompt_tokens" in result:
+                # Disjoint input buckets: complete effective input is the
+                # base plus both cache dimensions.
+                result["prompt_tokens"] = (
+                    result["prompt_tokens"]
+                    + result["cached_input_tokens"]
+                    + result["cache_write_input_tokens"]
+                )
             if result:
                 return result
     return None

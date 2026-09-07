@@ -122,6 +122,7 @@ from agentic_debugger.ui.widgets import (
     LiveRunContextPanel,
     PatchPanel,
     ReplayBar,
+    session_tokens_summary,
     SourcePanel,
     StatusHeader,
     TimelinePanel,
@@ -324,6 +325,12 @@ def render_view_header(
     if mode == "LIVE" and view.status is SessionStatus.RUNNING:
         if view.latest_model_request_index is not None:
             head.append(f"  ·  Request {view.latest_model_request_index + 1}")
+    # Cumulative provider-reported token usage (live and replay alike):
+    # absent when no completed request reported usable usage, visibly
+    # "(partial)" when coverage is incomplete, never a fabricated total.
+    tokens_summary = session_tokens_summary(view.token_usage)
+    if tokens_summary is not None:
+        head.append(f"  ·  {tokens_summary}")
     if include_verifier is None:
         include_verifier = (mode != "LIVE")
     if include_verifier:

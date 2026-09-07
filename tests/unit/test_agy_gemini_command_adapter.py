@@ -654,6 +654,36 @@ def test_parse_stream_accepts_reasoning_then_structured_result() -> None:
     assert usage == {"prompt_tokens": 9, "completion_tokens": 3}
 
 
+def test_map_usage_folds_thinking_and_keeps_cache_subset() -> None:
+    # Gemini-style semantics: input already includes cached content;
+    # thinking tokens are generation-side (the provider's own total
+    # 11 + 5 + 2 = 18 only closes when thinking folds into output).
+    usage = adapter._map_usage({
+        "input_tokens": 11,
+        "output_tokens": 5,
+        "thinking_tokens": 2,
+        "cache_read_tokens": 8,
+        "total_tokens": 18,
+        "cost": 0.001,
+    })
+    assert usage == {
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+        "cached_input_tokens": 8,
+        "cost": 0.001,
+    }
+
+
+def test_map_usage_omits_malformed_and_negative_counts() -> None:
+    usage = adapter._map_usage({
+        "input_tokens": -11,
+        "output_tokens": 5,
+        "thinking_tokens": "many",
+        "cache_read_tokens": 1.5,
+    })
+    assert usage == {"completion_tokens": 5}
+
+
 @pytest.mark.parametrize("tools", [
     [],
     ["ask_permission"],
@@ -821,7 +851,9 @@ def test_valid_structured_result_end_to_end(fake_agy: dict[str, str], tmp_path: 
         "name": "run_reproduction",
         "arguments": {"phase": "baseline"},
     }
-    assert response["usage"] == {"prompt_tokens": 11, "completion_tokens": 5}
+    # Task-34: thinking tokens are generation-side and fold into the
+    # completion count; cache read stays a subset of input.
+    assert response["usage"] == {"prompt_tokens": 11, "completion_tokens": 7, "cached_input_tokens": 0}
 
 
 def test_legal_transition_end_to_end(fake_agy: dict[str, str], tmp_path: Path) -> None:

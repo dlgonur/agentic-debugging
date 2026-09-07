@@ -187,8 +187,31 @@ class TestResultParsing:
     def test_success_result_line(self) -> None:
         text, usage, stop = adapter.parse_cli_result("\n".join(_SUCCESS_LINES))
         assert '"kind"' in text
-        assert usage is not None and usage.get("outputTokens") == 2
+        # Task-34: camelCase CLI usage is normalized into the canonical
+        # transport contract (the controller reads snake_case counts).
+        assert usage is not None and usage.get("prompt_tokens") == 10
+        assert usage.get("completion_tokens") == 2
         assert stop == "end_turn"
+
+    def test_cached_tokens_normalized_and_malformed_omitted(self) -> None:
+        lines = [
+            json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "finalText": '{"kind":"stop","reason":"done"}',
+                "usage": {"inputTokens": 10, "outputTokens": 2, "cachedInputTokens": 6},
+            }),
+            json.dumps({
+                "type": "result",
+                "subtype": "success",
+                "finalText": '{"kind":"stop","reason":"done"}',
+                "usage": {"inputTokens": -3, "outputTokens": 2},
+            }),
+        ]
+        _, usage, _ = adapter.parse_cli_result(lines[0])
+        assert usage == {"prompt_tokens": 10, "completion_tokens": 2, "cached_input_tokens": 6}
+        _, invalid, _ = adapter.parse_cli_result(lines[1])
+        assert invalid == {"completion_tokens": 2}
 
     def test_no_result_record(self) -> None:
         with pytest.raises(adapter.CommandCodeAdapterError) as excinfo:
@@ -224,7 +247,8 @@ class TestAdapterContract:
         payload = json.loads(stdout.text)
         assert payload["provider_completion_schema_version"] == adapter.PROVIDER_COMPLETION_SCHEMA_VERSION
         assert '"kind"' in payload["directive_content"]
-        assert payload["usage"]["inputTokens"] == 10
+        assert payload["usage"]["prompt_tokens"] == 10
+        assert payload["usage"]["completion_tokens"] == 2
 
     def test_logical_call_envelope(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         fake = _write_fake_cli(tmp_path, result_lines=_SUCCESS_LINES)

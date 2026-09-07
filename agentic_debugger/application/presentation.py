@@ -32,6 +32,7 @@ from enum import Enum
 from typing import Any, Mapping, Optional, Tuple
 
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.token_usage import TokenUsage, usage_from_payload
 from agentic_debugger.application import (
     ApplicationContractError,
     ApplicationInputError,
@@ -316,6 +317,99 @@ class ModelProvenanceView:
 
 
 @dataclass(frozen=True)
+class SessionTokenUsage:
+    """Cumulative provider-reported token usage over completed requests.
+
+    Reduced exclusively from durable ``model.request_completed`` events,
+    so live and replay derive the identical state.  A per-dimension count
+    becomes ``None`` (unknown, never zero) once any completed request
+    with reported usage lacked that dimension, or once any completed
+    request reported no usage at all.  ``requests_completed`` /
+    ``requests_with_usage`` carry the coverage truth a summary needs to
+    distinguish a complete total from a partial one.
+    """
+
+    input_tokens: Optional[int] = None
+    cached_input_tokens: Optional[int] = None
+    output_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    requests_completed: int = 0
+    requests_with_usage: int = 0
+
+    @property
+    def usage_available(self) -> bool:
+        """True once at least one request reported usable usage."""
+        return self.requests_with_usage > 0
+
+    @property
+    def complete(self) -> bool:
+        """True when every completed request reported usage."""
+        return (
+            self.requests_completed > 0
+            and self.requests_with_usage == self.requests_completed
+        )
+
+    @property
+    def effective_total_tokens(self) -> Optional[int]:
+        """Canonical total: ``total_tokens`` or input + output when known."""
+        if self.total_tokens is not None:
+            return self.total_tokens
+        if self.input_tokens is not None and self.output_tokens is not None:
+            return self.input_tokens + self.output_tokens
+        return None
+
+    def _fold(self, usage: Optional[TokenUsage]) -> "SessionTokenUsage":
+        completed = self.requests_completed + 1
+        if usage is None:
+            # A completed request that reported no usage consumed an
+            # unknown amount: every cumulative count becomes unknown.
+            return SessionTokenUsage(
+                requests_completed=completed,
+                requests_with_usage=self.requests_with_usage,
+            )
+        if self.requests_with_usage == 0:
+            # First reporting request seeds the cumulative counts.
+            return SessionTokenUsage(
+                input_tokens=usage.input_tokens,
+                cached_input_tokens=usage.cached_input_tokens,
+                output_tokens=usage.output_tokens,
+                total_tokens=usage.total_tokens,
+                requests_completed=completed,
+                requests_with_usage=1,
+            )
+
+        def _sum(left: Optional[int], right: Optional[int]) -> Optional[int]:
+            if left is None or right is None:
+                return None
+            return left + right
+
+        return SessionTokenUsage(
+            input_tokens=_sum(self.input_tokens, usage.input_tokens),
+            cached_input_tokens=_sum(self.cached_input_tokens, usage.cached_input_tokens),
+            output_tokens=_sum(self.output_tokens, usage.output_tokens),
+            total_tokens=_sum(self.total_tokens, usage.total_tokens),
+            requests_completed=completed,
+            requests_with_usage=self.requests_with_usage + 1,
+        )
+
+
+def _fold_request_usage(
+    state: SessionTokenUsage, payload: Mapping[str, Any]
+) -> SessionTokenUsage:
+    block = payload.get("token_usage")
+    if not isinstance(block, Mapping):
+        return state._fold(None)
+    try:
+        usage = usage_from_payload(block)
+    except ValueError:
+        # Defensive only: journal events were already schema-validated at
+        # write time; an unusable block degrades to no-usage coverage
+        # rather than failing the reduction.
+        return state._fold(None)
+    return state._fold(usage)
+
+
+@dataclass(frozen=True)
 class SessionViewState:
     """Immutable presentation state of one session or replay."""
 
@@ -357,6 +451,10 @@ class SessionViewState:
     #: target; it never claims more than the producing boundary recorded.
     current_tool_target: Optional[str] = None
     pdb_observed: bool = False
+    #: Cumulative provider-reported token usage over completed model
+    #: requests (reducer-derived from durable events; never a second
+    #: journal authority).
+    token_usage: SessionTokenUsage = SessionTokenUsage()
     #: Typed official-verifier milestone: True only after the operator
     #: observed real official test execution (never inferred from stage).
     official_execution_proven: Optional[bool] = None
@@ -1045,6 +1143,7 @@ def _reduce_event_core(state: SessionViewState, event: SessionEvent) -> SessionV
             latest_model_error_message=(
                 error_message if type(error_message) is str else state.latest_model_error_message
             ),
+            token_usage=_fold_request_usage(state.token_usage, payload),
             controller_phase=controller_phase, run_id=run_id, timeline=timeline,
         )
 

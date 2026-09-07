@@ -48,6 +48,7 @@ from agentic_debugger.agent.observer import (
     ControllerObservationKind,
 )
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.token_usage import TokenUsage
 from agentic_debugger.agent.tool_registry import ToolRegistry, ToolResult, ToolSpec
 from agentic_debugger.events.schema import ObservationStatus
 from application_support import (
@@ -297,6 +298,73 @@ class TestMapping:
             "status": "error",
             "error_kind": "http_error",
             "error_message": "Ollama HTTP request returned status 401",
+        }
+
+    def test_request_token_usage_mapped_into_event(self):
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="ok",
+            token_usage=TokenUsage(
+                input_tokens=220,
+                output_tokens=50,
+                cached_input_tokens=120,
+                total_tokens=270,
+            ),
+        ))
+        payload = dict(adapter.events()[-1].payload)
+        assert payload["request_index"] == 0
+        assert payload["status"] == "ok"
+        assert dict(payload["token_usage"]) == {
+            "input_tokens": 220,
+            "output_tokens": 50,
+            "cached_input_tokens": 120,
+            "total_tokens": 270,
+        }
+
+    def test_request_without_token_usage_maps_no_block(self):
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="ok",
+        ))
+        assert dict(adapter.events()[-1].payload) == {"request_index": 0, "status": "ok"}
+
+    def test_all_unknown_request_usage_omitted_not_emptied(self):
+        adapter = adapter_for()
+        adapter.notify(observation(
+            ControllerObservationKind.RUN_STARTED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+        ))
+        adapter.notify(observation(
+            ControllerObservationKind.MODEL_REQUEST_COMPLETED,
+            model_call_index=0,
+            state_before=ControllerState.REPRODUCE,
+            request_status="error",
+            error_kind="malformed_directive",
+            error_message="directive was rejected",
+            token_usage=TokenUsage(input_tokens=None, output_tokens=None),
+        ))
+        assert dict(adapter.events()[-1].payload) == {
+            "request_index": 0,
+            "status": "error",
+            "error_kind": "malformed_directive",
+            "error_message": "directive was rejected",
         }
 
     def test_credential_shaped_model_error_detail_is_replaced(self):

@@ -440,6 +440,13 @@ class ControllerSessionEventAdapter(ControllerObserver):
                 payload.update(
                     {"error_kind": error_kind, "error_message": error_message}
                 )
+            if observation.token_usage is not None:
+                # Canonical counts-only block from the typed observation
+                # value; an all-unknown usage carries no durable claim and
+                # is omitted rather than attached empty.
+                usage_block = observation.token_usage.to_payload()
+                if usage_block:
+                    payload["token_usage"] = usage_block
             self._emit(
                 SessionEventKind.MODEL_REQUEST_COMPLETED,
                 payload,

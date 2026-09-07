@@ -1582,7 +1582,9 @@ def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and
     assert adapter.metrics.model_responses == 2
     assert adapter.metrics.retries == 0
     assert adapter.metrics.directive_repairs == 1
-    assert adapter.metrics.to_mapping()["token_usage"] == {"prompt_tokens": 8, "completion_tokens": 10, "total_tokens": 18, "provider_reported": True, "missing_fields": []}
+    assert adapter.metrics.to_mapping()["token_usage"] == {"prompt_tokens": 8, "completion_tokens": 10, "total_tokens": 18, "cached_input_tokens": None, "cache_write_input_tokens": None, "provider_reported": True, "missing_fields": ["cache_write_input_tokens", "cached_input_tokens"]}
+    assert adapter.last_request_token_usage() is not None
+    assert adapter.last_request_token_usage().to_payload() == {"input_tokens": 8, "output_tokens": 10, "total_tokens": 18}
     assert captured[0]["protocol"]["logical_model_call_index"] == captured[1]["protocol"]["logical_model_call_index"] == 0
     assert captured[0]["protocol"]["transport_attempt_index"] == 1
     assert captured[1]["protocol"]["transport_attempt_index"] == 2
@@ -1590,6 +1592,89 @@ def test_provider_completed_invalid_directive_retries_and_retains_each_usage_and
     assert len(adapter.history) == 1
     assert captured[0]["directive_feedback"] is None
     assert captured[1]["directive_feedback"] == {"category": "malformed_directive", "message": "unrecognized target_state", "rejected_transport_attempt": 1}
+
+
+def test_logical_request_usage_aggregates_every_provider_completed_attempt():
+    """Task-34 acceptance: retries/repairs all count, Cached stays a subset.
+
+    Attempt 1 (input 100 / cached 40 / output 20) is provider-completed
+    but rejected as a malformed directive; attempt 2 (input 120 / cached
+    80 / output 30) succeeds.  The logical request reports the sum of
+    both provider responses, and Total is Input + Output (Cached is never
+    added again).
+    """
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    captured = []
+
+    class CachedRetryTransport:
+        def request(self, payload, timeout_seconds):
+            captured.append(payload)
+            if len(captured) == 1:
+                return {
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 20, "cached_input_tokens": 40},
+                    "directive": {"kind": "transition", "target_state": "NotAState", "reason": "invalid"},
+                }
+            return {
+                "usage": {"prompt_tokens": 120, "completion_tokens": 30, "cached_input_tokens": 80},
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "recovered"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=CachedRetryTransport(), limits=LiveRunLimits(max_model_requests=2, max_retries=1, max_directive_repairs=1), registry=_test_live_registry())
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    directive = adapter.next_directive(ControllerSnapshot("usage-run", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
+    assert directive.target_state is ControllerState.FAILED
+    assert adapter.metrics.directive_repairs == 1
+    usage = adapter.last_request_token_usage()
+    assert usage is not None
+    assert usage.to_payload() == {
+        "input_tokens": 220,
+        "output_tokens": 50,
+        "cached_input_tokens": 120,
+        "total_tokens": 270,
+    }
+    # The same aggregation is visible in the cumulative evaluation metrics.
+    assert adapter.metrics.to_mapping()["token_usage"]["prompt_tokens"] == 220
+    assert adapter.metrics.to_mapping()["token_usage"]["cached_input_tokens"] == 120
+
+
+def test_logical_request_usage_resets_between_calls_and_survives_failure():
+    task = DebugTask.from_mapping(json.loads((ROOT / "agentic_debugger/datasets/curated" / TASK_ID / "task.json").read_text()))
+    calls = []
+
+    class UsageThenNoUsageTransport:
+        def request(self, payload, timeout_seconds):
+            calls.append(payload)
+            if len(calls) == 1:
+                return {
+                    "usage": {"prompt_tokens": 1_000, "completion_tokens": 200, "cached_input_tokens": 600},
+                    "directive": {"kind": "transition", "target_state": "Failed", "reason": "first"},
+                }
+            return {
+                "directive": {"kind": "transition", "target_state": "Failed", "reason": "second"},
+            }
+
+    from agentic_debugger.agent.controller_policy import ControllerBudgetLimits, ControllerBudgetState, HypothesisLedger
+    from agentic_debugger.agent.model_adapter import ControllerSnapshot
+
+    adapter = LiveModelAdapter(task=task, policy=DemoPolicy.STATIC_BASELINE, config=config(), transport=UsageThenNoUsageTransport(), limits=LiveRunLimits(max_model_requests=4, max_retries=0, max_directive_repairs=1), registry=_test_live_registry())
+    limits = ControllerBudgetLimits.from_task_constraints(task.constraints)
+    first = adapter.next_directive(ControllerSnapshot("usage-run-2", task.task_id, ControllerState.REPRODUCE, 0, limits, ControllerBudgetState(), HypothesisLedger()))
+    assert first.target_state is ControllerState.FAILED
+    assert adapter.last_request_token_usage().to_payload() == {
+        "input_tokens": 1_000,
+        "output_tokens": 200,
+        "cached_input_tokens": 600,
+        "total_tokens": 1_200,
+    }
+    second = adapter.next_directive(ControllerSnapshot("usage-run-2", task.task_id, ControllerState.REPRODUCE, 1, limits, ControllerBudgetState(), HypothesisLedger()))
+    assert second.target_state is ControllerState.FAILED
+    # Provider-completed response without usage: no fabricated counts.
+    assert adapter.last_request_token_usage() is None
+    # Cumulative metrics keep the first call's provider-reported counts.
+    assert adapter.metrics.to_mapping()["token_usage"]["prompt_tokens"] == 1_000
 
 
 def test_stream_activity_is_aggregated_without_reasoning_content():
@@ -1671,8 +1756,10 @@ def test_non_string_or_unknown_directive_kind_is_bounded_and_recovers(bad_kind):
         "prompt_tokens": 4,
         "completion_tokens": 6,
         "total_tokens": 10,
+        "cached_input_tokens": None,
+        "cache_write_input_tokens": None,
         "provider_reported": True,
-        "missing_fields": [],
+        "missing_fields": ["cache_write_input_tokens", "cached_input_tokens"],
     }
     assert captured[0]["protocol"]["transport_attempt_index"] == 1
     assert captured[1]["protocol"]["transport_attempt_index"] == 2

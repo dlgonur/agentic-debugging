@@ -326,8 +326,31 @@ def parse_cli_result(raw_output: str) -> Tuple[str, Optional[Mapping[str, Any]],
             "CommandCode completion exceeds the response bound", kind=ERROR_KIND_RESPONSE_TOO_LARGE
         )
     usage = result.get("usage")
-    usage_mapping = usage if isinstance(usage, Mapping) else None
+    usage_mapping = _normalize_usage(usage)
     return final_text, usage_mapping, str(result.get("stopReason") or "")
+
+
+def _normalize_usage(raw: Any) -> Optional[Mapping[str, Any]]:
+    """Normalize the CLI's camelCase usage into the transport contract.
+
+    The CommandCode CLI reports ``inputTokens``/``outputTokens`` (and,
+    when its provider reports cache detail, ``cachedInputTokens``).  Only
+    valid non-negative integer counts survive; malformed values are
+    omitted rather than zeroed.  No cache-write dimension is known on
+    this route.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+    usage: dict[str, Any] = {}
+    for target, name in (
+        ("prompt_tokens", "inputTokens"),
+        ("completion_tokens", "outputTokens"),
+        ("cached_input_tokens", "cachedInputTokens"),
+    ):
+        value = raw.get(name)
+        if type(value) is int and not isinstance(value, bool) and value >= 0:
+            usage[target] = value
+    return usage or None
 
 
 def execute_inference(

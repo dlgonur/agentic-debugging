@@ -6,7 +6,7 @@ import json
 import math
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Protocol, TypeAlias
+from typing import Optional, Protocol, TypeAlias, runtime_checkable
 
 from agentic_debugger.agent.controller_policy import (
     ActionName,
@@ -21,6 +21,7 @@ from agentic_debugger.agent.controller_policy import (
     allowed_actions_for_state,
 )
 from agentic_debugger.agent.state_machine import ControllerState
+from agentic_debugger.agent.token_usage import TokenUsage
 from agentic_debugger.events.schema import Observation
 
 
@@ -495,6 +496,22 @@ class ModelAdapter(Protocol):
         snapshot: ControllerSnapshot,
     ) -> ModelDirective:
         ...
+
+
+@runtime_checkable
+class UsageReportingModelAdapter(Protocol):
+    """Optional :class:`ModelAdapter` seam for provider-reported usage.
+
+    Live provider adapters implement it to expose the provider-reported
+    token usage of the most recent logical model request (transport
+    retries and directive repairs aggregated under the canonical
+    counts-only contract).  Adapters without a live provider (scripted,
+    deterministic demo paths) do not implement it and legitimately report
+    no usage; absence is the truthful "not reported" state, never a zero
+    claim.
+    """
+
+    def last_request_token_usage(self) -> Optional[TokenUsage]: ...
 
 
 @dataclass(frozen=True)

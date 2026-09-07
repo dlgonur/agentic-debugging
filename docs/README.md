@@ -33,6 +33,9 @@ the MVP implementation plan, PDB trajectory post-mortem integration, verifier
 forwarder/cache repair, root-cause explanation metric, preference exporter, and
 repository RAG. `architecture/agentic-debugger-v2-plan.md` is the accepted V2
 architecture target and migration plan (V2-01 through V2-04 implemented, post-V2-04 follow-ups resolved, V2-05 evaluated as not justified / deferred, and V2 campaign closed at `e86ac2d`).
+`architecture/session-token-usage-v1.md` records the accepted Session Token
+Usage Telemetry v1 capability (provider-reported-only counts; no estimation,
+no pricing).
 
 ## adr/
 
