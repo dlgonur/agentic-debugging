@@ -2,13 +2,49 @@
 
 ## Status
 
-**GOAL-MODE CYCLE 3 COMPLETE (2026-08-29, owner-authorized goal mode).**
+**V2 ARCHITECTURE CAMPAIGN COMPLETE & CLOSED (2026-09-07).**
 
 Release tag `v0.1.0` exists at `d01f7a5`; cycle 1 closed at
-`docs/project-closeout.md`. Cycle 3 raised the terminal product from a
-functional developer shell to one coherent evidence-led visual system.
+`docs/project-closeout.md`. The V2 architecture campaign (Candidates 06–30)
+established logical control/execution plane separation, role-scoped execution
+environments, session runtime contracts, ModelGateway, CredentialVault,
+and closed the V2-05 verifier process-isolation evaluation as NOT JUSTIFIED / DEFERRED.
 
-## Cycle 3 outcomes
+Currently active: Task 31 repository-wide documentation, project-state, and
+hygiene pass. No next implementation priority has been chosen yet.
+
+## V2 architecture outcomes (completed 2026-09-07)
+
+- [x] **V2-01 — ExecutionEnvironment authority and secret isolation:**
+  Introduced `ExecutionEnvironment` policy authority deriving role-scoped child
+  environments (`PROJECT_COMMAND`, `PRODUCT_PDB`, `VERIFIER`, `CLEANUP`,
+  `MODEL_ADAPTER`); control, model, and provider credentials structurally
+  excluded from project, PDB, and verifier children; `VerifiedExecutionContext`
+  preserved for scientific paths.
+- [x] **V2-02 — Session runtime contracts:** Established `SessionLaunch`,
+  `AgentDefinition`, `EffectiveSessionCapabilities`, `ProductExecutor` logical
+  seam, and declarative `ProjectRuntimeEnvironmentSpec` (`ProjEnv`) ingress,
+  retiring the transitional compatibility bridge from the normal product path.
+- [x] **V2-03 — ModelGateway and truthful provider status:** Established
+  `ModelGateway` and `ModelBinding` as the product model seam; truthful
+  history-derived status vocabulary (`Configured`, `Credential ready`,
+  `Model runnable`, `Catalog refreshed at T`, `Live verified at T`, `Runtime
+  succeeded at T`); UI vocabulary repair and cache invalidation.
+- [x] **V2-04 — CredentialVault provider-secret authority:** Established
+  `CredentialVault`, separating non-secret serializable `CredentialBinding` from
+  ephemeral `CredentialLease`; single-snapshot executable and credential
+  authority; opaque in-process ticket binding; removed ambient adapter re-resolution.
+- [x] **Post-V2-04 follow-ups resolved:** Unified Local Project model-call
+  ceiling authority (Candidates 26–27); aligned `model.configured` event
+  schema with `ModelBinding` provenance (Candidate 28); isolated
+  `ModelGateway.default()` configuration roots (Candidate 29).
+- [x] **V2-05 — Verifier process-isolation evaluation:** Formally evaluated
+  against all four §5.6 triggers (lifecycle, environment isolation, security,
+  operations); outcome recorded as **NOT JUSTIFIED / DEFERRED** with zero
+  implementation created; verifier physical isolation remains trigger-gated;
+  campaign closed (Candidate 30).
+
+## Cycle 3 outcomes (completed 2026-08-29)
 
 - [x] Established one semantic Textual/Rich design system: cyan for live
   focus/action, amber for evidence and verifier authority, green for
@@ -22,13 +58,7 @@ functional developer shell to one coherent evidence-led visual system.
   prioritized verifier status in compact history, and disabled Local Project
   start while pre-flight gates are unmet.
 - [x] Added focused regression coverage, wide/compact visual evidence, and a
-  durable root `DESIGN.md`; review evidence is under the cycle's `_ai-review`
-  package.
-
-The requested checkpoint commits could not be created because the host Git
-guard rejected commit execution. The combined candidate remains split across
-the index and working tree for owner/FirstMate review; merge and push were not
-attempted.
+  durable root `DESIGN.md`.
 
 ## Cycle 2 outcomes (completed 2026-08-28)
 
@@ -58,24 +88,44 @@ failure visibility, and retry.
   GOAT `deepseek/deepseek-v4-flash` reached RESOLVED (F2P 1/1, P2P 1/1)
   with a model-authored correct patch; evidence in
   `_ai-review/goal-mode-2026-08-28`.
-
-## Follow-up candidates (not hidden debt)
-
-- [ ] OpenCode Go end-to-end Local Project session (adapters proven at
-  the transport level and by unit tests; a full product session on the
-  subscription remains to be run and recorded).
-- [x] Claude models through CommandCode route: the direct-API route
-  resolves Claude-family (`claude*`, `anthropic/*`) CommandCode models
-  to the Anthropic Messages protocol deterministically.
-- [ ] Headless Local Project CLI (the smoke script demonstrates the
-  worker path; a tracked operator CLI would make it a first-class entry).
 - [x] Providers management screen: the Model Providers manager (press
   `m`) owns the user-configured provider registry — availability, live
   GET /models catalog refresh, manual models, secure credentials, and
   deletion — with zero providers on a fresh installation.
+- [x] Claude models through CommandCode route: the direct-API route
+  resolves Claude-family (`claude*`, `anthropic/*`) CommandCode models
+  to the Anthropic Messages protocol deterministically.
+
+## Active near-term work
+
+- [x] Task 31 repository-wide documentation, project-state, and hygiene
+  pass after V2 closeout.
+- No next implementation priority has been chosen yet by repository authority.
+
+## Product backlog
+
+- [ ] OpenCode Go end-to-end Local Project session (adapters proven at
+  the transport level and by unit tests; a full product session on the
+  subscription remains to be run and recorded).
+- [ ] Headless Local Project CLI (the smoke script demonstrates the
+  worker path; a tracked operator CLI would make it a first-class entry).
 - [ ] Deterministic regeneration of the README welcome screenshot (the
   current PNG predates the Model Providers home action; no tracked
   regeneration script exists yet).
+
+## Future / trigger-gated architecture (not unfinished V2 debt)
+
+- Checkpoint/resume (§7 trigger: concrete operator requirement for resumable
+  sessions after unexpected termination).
+- Same-session verifier re-verification (§13 trigger: operator requirement to
+  re-verify retained candidates with separate evidence-lineage semantics).
+- Physical verifier subprocess isolation (§5.6 triggers: verifier crash/hang
+  threatening worker, in-process isolation failure, concrete untrusted-code
+  security boundary, or measured operational justification).
+- Project-secret storage/synchronization across machines.
+- macOS/Linux credential backends for CredentialVault.
+- ExecutionEnvironment / VerifiedExecutionContext unification (§6.2a trigger:
+  field evidence of divergence causing real defects).
 
 The former chronological TODO is retained at
 `outdated/roadmap/TODO-pre-closure-2026-08-28.md`.

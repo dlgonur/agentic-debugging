@@ -1,13 +1,12 @@
-# Agentic Debugging — Project Closeout (current, 2026-08-28)
+# Agentic Debugging — Project Closeout (current, 2026-09-07)
 
 **Project:** Agentic Debugger research prototype
 **Owner:** Repository owner
 **Execution control:** Repository owner
-**Document date:** 2026-08-28 (previous reconciliation: 2026-08-27)
-**Accepted docs baseline HEAD before this reconciliation (2026-08-27):**
-`8fbea883212d3fe4ad6434a366ca0898fbea68f1` (the accepted PRE-RELEASE-HARDENING-01
-commit; earlier historical docs-reconciliation baseline, 2026-08-24:
-`70804d226f7e2d014e1edfa0760c2758e92acf94`)
+**Document date:** 2026-09-07 (previous reconciliation: 2026-08-28)
+**Accepted baseline HEAD:** `e86ac2d25beb5114e9a3c805f6bc468f77905deb`
+(V2 architecture campaign closeout; earlier historical docs-reconciliation baselines:
+2026-08-28 `d01f7a5`, 2026-08-27 `8fbea883212d3fe4ad6434a366ca0898fbea68f1`)
 **Supersedes:** `outdated/docs-archive/status/project-closeout-2026-08-11.md` (the
 2026-08-11 S9 bounded-negative closeout, preserved unchanged as a historical
 snapshot) and the earlier `outdated/docs-archive/reports/final-report-v1.md`
@@ -17,6 +16,35 @@ This is the single current reviewer/handoff status document. The full
 technical narrative through 2026-08-13 is `docs/final-report.md`; the
 2026-08-11 scientific snapshot is archived verbatim at
 `outdated/docs-archive/reports/final-report-2026-08-11.md`.
+
+**2026-09-07 V2 architecture campaign closeout update:** the V2 architecture
+implementation campaign is **COMPLETE and CLOSED** at baseline `e86ac2d`.
+All numbered stages V2-01 through V2-04 are implemented:
+- V2-01 established `ExecutionEnvironment` policy authority deriving role-scoped
+  child environments with least authority, structurally excluding control,
+  model, and provider secrets from project, PDB, and verifier children.
+- V2-02 established typed session runtime contracts (`SessionLaunch`,
+  `AgentDefinition`, `EffectiveSessionCapabilities`), the `ProductExecutor` seam,
+  and the declarative `ProjectRuntimeEnvironmentSpec` (`ProjEnv`) ingress,
+  retiring the transitional compatibility bridge from the normal product path.
+- V2-03 established `ModelGateway` and `ModelBinding` as the product model seam,
+  truthful status facts (`Configured`, `Credential ready`, `Model runnable`,
+  `Catalog refreshed at T`, `Live verified at T`, `Runtime succeeded at T`),
+  and catalog cache invalidation.
+- V2-04 established `CredentialVault` authority separating safe serializable
+  `CredentialBinding` from ephemeral non-serializable `CredentialLease`,
+  single-snapshot executable and credential authority, and opaque ticket binding.
+- All three post-V2-04 deferred follow-ups were resolved (Candidates 26–29):
+  ceiling authority unification, `model.configured` event schema alignment, and
+  `ModelGateway.default()` configuration root isolation.
+- V2-05 verifier process isolation was formally evaluated against all four §5.6
+  triggers and closed as **NOT JUSTIFIED / DEFERRED** with zero implementation
+  created (Candidate 30). Physical verifier process isolation remains trigger-gated.
+- Future possibilities (checkpoint/resume, same-session re-verification, physical
+  verifier isolation, cross-machine secret sync, OS credential backends,
+  execution-authority unification) are recognized as trigger-gated future
+  architecture, not unfinished campaign debt. No required engineering campaign
+  remains open.
 
 **2026-08-28 closure update:** the mandatory project cycle is **CLOSED**.
 Release tag `v0.1.0` exists at `d01f7a5`. The post-tag application repair
@@ -178,9 +206,11 @@ ESTABLISHED; PROFESSOR TRACE DELIVERABLE COMPLETE; STRONGER R6 FINAL HOLDOUT
 INCOMPLETE DUE HARDWARE; R1-R6 DOCS CLOSEOUT COMMITTED, PUSHED, AND
 INTEGRATED TO MAIN; LEVEL-32 REPAIRED MATRIX COMPLETE; CAPABILITY ESCALATION
 PAUSED; LOCAL APPLICATION V1 + REAL LOCAL PROJECT PATH COMPLETE;
-PRE-RELEASE-HARDENING-01 ACCEPTED / FEATURE-FREEZE READY (8fbea88); NO KNOWN
-RED RELEASE BLOCKER REMAINS; NO ACTIVE REQUIRED ENGINEERING CAMPAIGN; NEXT
-PHASE: DOCUMENTATION / RELEASE / TAG / CLOSURE UNDER OWNER DECISION**
+PRE-RELEASE-HARDENING-01 ACCEPTED / FEATURE-FREEZE READY (8fbea88); RELEASE TAG
+v0.1.0 AT d01f7a5; V2 ARCHITECTURE CAMPAIGN COMPLETE & CLOSED AT e86ac2d
+(V2-01..V2-04 IMPLEMENTED; FOLLOW-UPS RESOLVED; V2-05 EVALUATED NOT JUSTIFIED /
+DEFERRED); NO REQUIRED ENGINEERING CAMPAIGN REMAINS OPEN; ACTIVE PRIORITY:
+TASK 31 REPOSITORY-STATE HYGIENE PASS**
 
 ---
 

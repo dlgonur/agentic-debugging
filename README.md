@@ -25,8 +25,7 @@ python -m agentic_debugger.ui --doctor
 python -m agentic_debugger.ui
 ```
 
-`--doctor` reports local application and model-provider readiness. The first
-curated task is an offline deterministic demo and contacts no provider.
+`--doctor` reports application and provider readiness; the first curated task is an offline deterministic demo.
 
 Run the scientific demo directly:
 
@@ -57,15 +56,15 @@ claim is never treated as proof of a repair.
 
 ## Model providers
 
-Live execution is explicit. Providers are user-configured in the Model Providers manager
-(press `m`; fresh installs ship none) with an explicit transport profile; credentials stay in
-the OS secure store - never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
+Live execution is explicit. Model access routes through `ModelGateway` and user-configured
+providers (press `m`; fresh installs configure none). Credentials stay in `CredentialVault`
+and the OS secure store—never in source, argv, or evidence ([architecture](docs/architecture/model-providers-v1.md)).
 
 ## Current status
 
-The accepted research cycle and Local Application V1 are complete. Release tag
-`v0.1.0` identifies the accepted release checkpoint; current source also
-contains later application and repository cleanup.
+The research cycle, Local Application V1, and V2 architecture campaign are
+complete. Release tag `v0.1.0` identifies the research release checkpoint;
+current source contains the accepted V2 architecture and later hygiene cleanup.
 
 Selected accepted evidence includes a verifier-resolved real-provider product
 session, three verifier-resolved exact-PDB ladder tasks, two authoritative
@@ -88,6 +87,7 @@ trace regeneration, and leakage auditing. It does not rerun external campaigns.
 ## Documentation
 
 - [Application architecture](docs/architecture/local-application-v1.md)
+- [V2 architecture plan](docs/architecture/agentic-debugger-v2-plan.md)
 - [Results and evidence index](docs/results-index.md)
 - [Final technical report](docs/final-report.md)
 - [Project closeout](docs/project-closeout.md)

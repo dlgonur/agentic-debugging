@@ -10,12 +10,12 @@ historical statements.
 
 | File | Purpose |
 |---|---|
-| `project-closeout.md` | **Current status authority** through the 2026-08-28 cycle closure |
+| `project-closeout.md` | **Current status authority** through the 2026-08-28 cycle closure and the V2 architecture campaign closure (2026-09-07) |
 | `release-closeout-2026-08-28.md` | Concise release, validation, and negative-boundary record |
 | `pre-release-hardening-2026-08-27.md` | Durable PRE-RELEASE-HARDENING-01 closeout record (feature-freeze ready at `8fbea88`; PRH-D01..D09 dispositions) |
 | `results-index.md` | Concise map from accepted conclusions to surviving evidence |
 | `final-report.md` | Current technical report through 2026-08-13 (R1-R6 phase; S8/S9 snapshot archived) |
-| `agentic-debugging-technical-project-report-2026-08-28.docx` | Concise Turkish project, architecture, evidence, validation, and closure report |
+| `agentic-debugging-technical-project-report-2026-08-31.docx` | Concise Turkish project, architecture, evidence, validation, and closure report |
 | `project-tracker.md` | Current execution tracker |
 
 Repository-level landing: root `README.md`; roadmap `TODO.md`. The historical
@@ -32,7 +32,7 @@ architecture is `architecture/local-application-v1.md`; existing records include
 the MVP implementation plan, PDB trajectory post-mortem integration, verifier
 forwarder/cache repair, root-cause explanation metric, preference exporter, and
 repository RAG. `architecture/agentic-debugger-v2-plan.md` is the accepted V2
-target/migration **plan** (V2-01 and V2-02 implemented; V2-03+ not implemented).
+architecture target and migration plan (V2-01 through V2-04 implemented, post-V2-04 follow-ups resolved, V2-05 evaluated as not justified / deferred, and V2 campaign closed at `e86ac2d`).
 
 ## adr/
 

@@ -215,7 +215,7 @@ The components below are Textual terminal primitives. The extension sidecar carr
 
 ### Session Setup
 
-The unified setup surface is the product's opening statement. One fixed stack of setting rows — Target, Task, Project, Bug, Repro, Verify, Model, Debugger, Time limit, Auto-retry — serves curated tasks, Local Project debugging, and the capability ladder alike. A letter-spaced display title, a thin rule, one tagline, and a semantic chip row (readiness, target, model, verifier) communicate what the application is, what is selected, and whether the session can run before any other element is read. Incompatible rows are never hidden: they dim with a parenthesized reason, and activation explains instead of acting. All readiness presentations — chip row, status line, Run button, pre-flight rail — render from one derived `SessionReadiness` object, so they cannot disagree.
+The unified setup surface is the product's opening statement. One fixed stack of setting rows — Target, Task, Project, Bug, Repro, Verify, ProjEnv, Model, Debugger, Time limit, Auto-retry — serves curated tasks, Local Project debugging, and the capability ladder alike (with `ProjEnv` providing declarative `ProjectRuntimeEnvironmentSpec` variable entry for local projects). A letter-spaced display title, a thin rule, one tagline, and a semantic chip row (readiness, target, model, verifier) communicate what the application is, what is selected, and whether the session can run before any other element is read. Incompatible rows are never hidden: they dim with a parenthesized reason, and activation explains instead of acting. All readiness presentations — chip row, status line, Run button, pre-flight rail — render from one derived `SessionReadiness` object, so they cannot disagree.
 
 ### Buttons
 
@@ -253,6 +253,16 @@ Headers are bold and muted on the surface layer. The current row is a full cyan 
 ### Independent Proof Chain
 
 The pre-flight proof-chain panel uses evidence amber for its label, foreground for the FAILURE → PDB EVIDENCE → PATCH → VERIFIER VERDICT sequence, and muted copy to state that run completion is not correctness.
+
+## Architectural Alignment
+
+The console interface reflects the accepted V2 architecture and its core correctness boundaries:
+
+- **Single controller & independent verifier:** The console drives a single deterministic controller. Visual hierarchy enforces the authority model: controller completion, patch application, or model confidence is never treated as success; green is reserved exclusively for the independent verifier.
+- **Logical plane separation:** Control-plane workflows (setup, history, replay) operate through logical seams (`SessionLaunch`, `ProductExecutor`, `ModelGateway`, `CredentialVault`) rather than long-lived worker processes ([ADR 0001](docs/adr/0001-control-execution-plane-separation.md), [V2 plan](docs/architecture/agentic-debugger-v2-plan.md)).
+- **Role-scoped least-authority execution:** Session execution derives role-scoped environments (`ExecutionEnvironment`). Control and provider credentials are structurally excluded from project commands, PDB sessions, and verifier executions ([Application architecture](docs/architecture/local-application-v1.md)).
+- **Declarative project environment (`ProjEnv`):** The Local Project form uses `ProjectRuntimeEnvironmentSpec` to capture declared non-secret variables and project-secret references; ambient host environment variables are not inherited.
+- **Truthful provider vocabulary:** The Model Providers manager (`m`) separates discrete status facts (`Configured`, `Credential ready`, `Model runnable`, `Catalog refreshed`, `Runtime succeeded`) rather than conflating configuration presence with live connectivity ([Model providers architecture](docs/architecture/model-providers-v1.md)).
 
 ## Do's and Don'ts
 

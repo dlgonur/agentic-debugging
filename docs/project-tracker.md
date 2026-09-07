@@ -2,17 +2,52 @@
 
 ## Current state
 
-**GOAL-MODE CYCLE 3 — COMPLETE (2026-08-29).**
+**V2 ARCHITECTURE CAMPAIGN — COMPLETE & CLOSED (2026-09-07).**
 
+- Baseline: `e86ac2d25beb5114e9a3c805f6bc468f77905deb`.
+- V2 architecture campaign (Candidates 06–30): logical control/execution plane
+  separation, role-scoped execution environments, session runtime contracts,
+  ModelGateway, CredentialVault, and formal V2-05 verifier process-isolation
+  trigger evaluation (NOT JUSTIFIED / DEFERRED). Campaign closed.
+- Provider-platform integrity convergence: COMPLETE (2026-09-03).
+- Goal-Mode Cycle 3 (shared visual language, welcome redesign, terminal UI polish): COMPLETE (2026-08-29).
 - Release tag: `v0.1.0` at `d01f7a5` (cycle 1 closed).
-- Cycle 3 (owner-authorized goal mode): shared visual language, welcome
-  redesign, full terminal UI polish, and UI bug repair — see `TODO.md`.
-- Git: requested local checkpoints were attempted, but the host Git guard
-  rejected commit execution; the combined candidate remains split across the
-  index and working tree.
-- Merge/push: none.
-- Full historical tracker:
+- Current priority: Task 31 repository-wide documentation, project-state, and
+  hygiene pass. No next implementation priority has been chosen yet.
+- Full historical tracker through cycle 1:
   `outdated/roadmap/project-tracker-pre-closure-2026-08-28.md`.
+
+## 2026-09-07 V2 architecture implementation campaign
+
+- [x] **V2-01 — ExecutionEnvironment authority and secret isolation (commits c8ec944, c42a703):**
+  Introduced `ExecutionEnvironment` policy authority deriving role-scoped child
+  environments (`PROJECT_COMMAND`, `PRODUCT_PDB`, `VERIFIER`, `CLEANUP`,
+  `MODEL_ADAPTER`); control, model, and provider credentials structurally
+  excluded from project, PDB, and verifier children; `legacy-project-ambient/v1` bridge;
+  `VerifiedExecutionContext` preserved for scientific paths.
+- [x] **V2-02 — Session runtime contracts (commits 1bab2f8, 4769b3e, 86fa02b, 1c044fd, d1f58e6):**
+  Established `SessionLaunch`, `AgentDefinition`, `EffectiveSessionCapabilities`,
+  `ProductExecutor` logical seam, and declarative `ProjectRuntimeEnvironmentSpec`
+  (`ProjEnv`) ingress; retired transitional compatibility bridge from normal product path;
+  project secret redaction with bounded markers.
+- [x] **V2-03 — ModelGateway and truthful provider status (commits 499cbec, fb61385, 62dc37e, 801d175, 101a5a6, 1353726, 47bc5ae):**
+  Established `ModelGateway` and `ModelBinding` product seam; truthful status
+  semantics separating `Configured`, `Credential ready`, `Model runnable`,
+  `Catalog refreshed at T`, `Live verified at T`, and `Runtime succeeded at T`;
+  UI vocabulary repair and catalog cache invalidation.
+- [x] **V2-04 — CredentialVault provider-secret authority (commits d516a4c, 69b892f, 18a38f8, a542629, 0e8a3e1, 8c680d1):**
+  Established `CredentialVault`, separating non-secret `CredentialBinding` from
+  ephemeral `CredentialLease`; single-snapshot executable and credential
+  authority; opaque in-process ticket binding; removed ambient adapter re-resolution.
+- [x] **Post-V2-04 follow-ups resolved (commits 1fda1db, 897eea6, d149dad, 0c72cf0):**
+  Unified Local Project model-call ceiling authority (Candidates 26–27); aligned
+  `model.configured` event schema with `ModelBinding` provenance (Candidate 28);
+  isolated `ModelGateway.default()` configuration roots (Candidate 29).
+- [x] **V2-05 — Verifier process-isolation evaluation (commit e86ac2d):**
+  Formally evaluated against §5.6 criteria (lifecycle, environment isolation,
+  security boundary, operational cost); recorded as **NOT JUSTIFIED / DEFERRED**
+  with zero implementation created; physical isolation remains trigger-gated;
+  campaign closed.
 
 ## 2026-08-29 goal-mode UI work
 
@@ -48,34 +83,27 @@ Validation evidence:
   CommandCode GOAT + configured profiles through one registry;
   doctor readiness; provider-grouped Local Project model picker;
   `provider` provenance in `model.configured` (additive schema field).
-- [x] Effort projection ("what the agent tried") in workspace modal,
-  terminal footer, and exported reports.
-- [x] Journal-linked retry (`retry_of_session_id`) with manual `r` and
-  bounded auto-retry (0-3, default 1) on retryable failures; the
-  remaining chain budget is carried forward so auto-retries=N yields at
-  most N automatic retries total, and manual retry starts with zero budget.
-- [x] Real product proof: Local Project session on CommandCode GOAT
-  `deepseek/deepseek-v4-flash` — RESOLVED, F2P 1/1, P2P 1/1, 13/13 model
+- [x] Effort visibility: journal-derived "what the agent tried"
+  projection in the workspace (`w`), terminal footer, and exported
+  reports — committed `2c4fbea`.
+- [x] Linked retry: journal-authoritative `retry_of_session_id` through
+  the worker protocol into manifests/history; manual `r` retry; bounded
+  auto-retry (0-3, default 1) for retryable Local Project failures —
+  committed `2c4fbea`.
+- [x] Real end-to-end proof: one Local Project session on CommandCode
+  GOAT `deepseek/deepseek-v4-flash` — RESOLVED, F2P 1/1, P2P 1/1, 13/13 model
   requests ok, model-authored correct one-line patch, 107 s.
-
-- Release tag: `v0.1.0` at `d01f7a5`.
-- Mandatory roadmap: complete.
-- Active required engineering campaign: provider-platform integrity
-  convergence (`fix/provider-platform-integrity-v1`, 2026-09-03) —
-  user-owned provider registry routing, endpoint/credential binding
-  safety, strict fail-closed persistence, and documentation/CI truth for
-  the Model Providers platform.
-- Merge/push during the 2026-08-28 closure pass: none.
-- Full historical tracker:
-  `outdated/roadmap/project-tracker-pre-closure-2026-08-28.md`.
 
 ## Accepted system
 
 | Area | Accepted outcome |
 |---|---|
 | Controller | One fail-closed controller with typed directives, state, policy, and budgets |
+| Control/Execution plane | Logical plane separation via `ExecutionEnvironment` (role-scoped least authority), `SessionLaunch`, `ProductExecutor`, `ModelGateway`, and `CredentialVault` |
 | Runtime | Bounded commands, disposable workspaces, patch lifecycle, test runner, PDB protocol/session/worker |
-| Verification | Independent baseline, F2P, P2P, syntax, full-suite, cleanup, and immutability authority |
+| Credential authority | `CredentialVault` separating safe `CredentialBinding` provenance from ephemeral `CredentialLease`; secret non-serialization; OS secure store |
+| Model gateway | `ModelGateway` & `ModelBinding` product seam; user-owned provider registry with truthful status facts |
+| Verification | Independent baseline, F2P, P2P, syntax, full-suite, cleanup, and immutability authority in clean disposable workspaces |
 | Evidence | Strict JSON-compatible events, durable journal, replay, golden trajectories, frozen evaluation traces |
 | Product | Terminal application with live/replay history, configured command, user-owned provider platform with capability ladder, and local-project debugging |
 | Research | R1-R6, RAG/comparison/preference infrastructure, Level-32 repaired treatment and matrix |
