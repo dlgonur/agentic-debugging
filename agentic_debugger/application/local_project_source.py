@@ -1173,6 +1173,9 @@ def run_local_project_session(ctx: ScenarioContext, params: Mapping[str, Any]) -
                 profile_id=validated["profile_id"],
                 launch_snapshot=dict(os.environ),
                 project_spec=validated["project_runtime_spec"],
+                is_ollama=validated["is_ollama"],
+                ollama_alias=validated["ollama_alias"],
+                config_root=validated["config_root"],
             )
         except Exception as exc:
             raise ScenarioInputError(f"session launch failed: {exc}") from exc

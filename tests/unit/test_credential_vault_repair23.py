@@ -88,8 +88,9 @@ def _hermetic_vault(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     pc._QUARANTINED_PROVIDERS.clear()
     vault = CredentialVault.default()
     vault._session_leases.clear()
-    # Fresh gateway singleton state (deferred defect 3 is untouched; tests
-    # use fresh ModelGateway() instances to avoid config_root pollution).
+    # Fresh gateway state (Task 29 resolved: ModelGateway.default() owns
+    # canonical process-level gateway state while contextual config_root
+    # instances remain isolated; tests preserve fresh ModelGateway() instances).
     yield store
     pc.clear_all_session_keys()
     pc._QUARANTINED_PROVIDERS.clear()

@@ -1621,5 +1621,7 @@ authority-boundary change:
 Deferred post-V2-04 follow-ups: (1) Local Project launch-vs-transport
 logical-call ceiling 64 vs 32 — **RESOLVED in 26**; (2) `model.configured`
 ModelBinding payload vs journal schema mismatch — **RESOLVED in 28**;
-(3) `ModelGateway.default()` config_root singleton pollution — still
-deferred.  V2-05 not started.
+(3) `ModelGateway.default()` `config_root` singleton pollution — **RESOLVED in 29**:
+`ModelGateway.default()` owns canonical process-level gateway state; context/session
+`config_root` is isolated and cannot mutate canonical or sibling gateway contexts.
+V2-05 not started.

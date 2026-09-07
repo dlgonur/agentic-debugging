@@ -813,20 +813,41 @@ class ModelGateway:
     _default_instance: Optional[ModelGateway] = None
 
     def __init__(self, config_root: Optional[Any] = None) -> None:
-        self.config_root = config_root
+        self._config_root = config_root
         # V2-04: the single provider-secret authority beneath this gateway.
         self._vault = CredentialVault.default()
         # In-memory record of explicit live probe outcomes during application run
         # Key: provider_id -> {"verified": bool, "timestamp": str, "error": Optional[str]}
         self._live_probe_results: Dict[str, Dict[str, Any]] = {}
 
+    @property
+    def config_root(self) -> Optional[Any]:
+        """Configured-profile store root for this gateway instance (immutable)."""
+        return self._config_root
+
     @classmethod
     def default(cls, config_root: Optional[Any] = None) -> ModelGateway:
+        """Process-level default gateway or context-scoped gateway.
+
+        - ``ModelGateway.default()``: returns the stable, process-global
+          canonical gateway singleton used for UI provider-runtime status,
+          credential readiness, and live probe state.  Its ``config_root`` is
+          always ``None`` and is never mutated by contextual callers.
+        - ``ModelGateway.default(config_root=X)``: returns a context-scoped
+          gateway instance bound to ``config_root=X`` (e.g. for a Local Project
+          session or configured profile store).  Contextual acquisition never
+          mutates the canonical default singleton or sibling gateway contexts.
+        """
+        if config_root is not None:
+            return cls(config_root=config_root)
         if cls._default_instance is None:
-            cls._default_instance = cls(config_root=config_root)
-        elif config_root is not None:
-            cls._default_instance.config_root = config_root
+            cls._default_instance = cls(config_root=None)
         return cls._default_instance
+
+    @classmethod
+    def _reset_default_instance(cls) -> None:
+        """Reset canonical process singleton (for test isolation)."""
+        cls._default_instance = None
 
     def invalidate_provider(self, provider_id: str) -> None:
         """Clear cached probe results when a provider configuration changes."""
@@ -1212,7 +1233,11 @@ class ModelGateway:
         return True, None
 
     def static_preflight(
-        self, provider_or_binding: Any, model_id: Optional[str] = None
+        self,
+        provider_or_binding: Any,
+        model_id: Optional[str] = None,
+        *,
+        config_root: Optional[Any] = None,
     ) -> ModelStaticPreflight:
         """Perform static runtime preflight check without network I/O.
 
@@ -1235,7 +1260,8 @@ class ModelGateway:
 
             if binding.route == ROUTE_CONFIGURED_PROFILE:
                 from agentic_debugger.application.command_config import CommandModelConfigStore
-                store = CommandModelConfigStore(Path(self.config_root) if self.config_root else Path("."))
+                effective_root = config_root if config_root is not None else self.config_root
+                store = CommandModelConfigStore(Path(effective_root) if effective_root else Path("."))
                 try:
                     profile = store.get(binding.model_id or "")
                 except Exception as exc:
@@ -2290,6 +2316,7 @@ class ModelGateway:
         max_response_bytes: int = _MAX_MODEL_RESPONSE_BYTES,
         credential_binding: Optional[Any] = None,
         credential_ticket: Optional[str] = None,
+        config_root: Optional[Any] = None,
     ) -> Tuple[Any, Any]:
         """Create the (CancellableJsonlCommandTransport, LiveModelConfig) pair.
 
@@ -2361,7 +2388,8 @@ class ModelGateway:
                 )
             from agentic_debugger.application.command_config import CommandModelConfigStore
 
-            store = CommandModelConfigStore(Path(self.config_root) if self.config_root else Path("."))
+            effective_root = config_root if config_root is not None else self.config_root
+            store = CommandModelConfigStore(Path(effective_root) if effective_root else Path("."))
             try:
                 profile = store.get(binding.model_id or "")
             except Exception as exc:
